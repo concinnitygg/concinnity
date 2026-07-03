@@ -40,28 +40,43 @@ pub(crate) struct Character {
 }
 
 // One `# heading` and everything under it. `choices`, when non-empty, is the
-// node's final content: a menu of links out.
+// node's final content: a menu of links out; the choice menu carries the
+// music and one-shot sounds current at the point the list appears.
 #[derive(Debug, Default)]
 pub(crate) struct Node {
     pub(crate) slug: String,
     pub(crate) heading: String,
     pub(crate) pages: Vec<Page>,
     pub(crate) choices: Vec<Choice>,
+    pub(crate) choice_music: Option<String>,
+    pub(crate) choice_sounds: Vec<String>,
 }
 
 // One click-through page. `jump` overrides the default advance (next page,
 // then the node's choices or fall-through) with an explicit node target.
+// `music` is the audio-file path current at this page (from the most recent
+// `[music]` directive in document order); `sounds` are the one-shots the
+// directives directly above this page queued.
 #[derive(Debug, Default)]
 pub(crate) struct Page {
     pub(crate) speaker: Option<String>,
     pub(crate) text: String,
     pub(crate) jump: Option<String>,
+    pub(crate) music: Option<String>,
+    pub(crate) sounds: Vec<String>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Choice {
     pub(crate) label: String,
     pub(crate) target: String,
+}
+
+// A media directive paragraph: a lone link whose label names the channel and
+// whose target is an audio file.
+enum Directive {
+    Music(String),
+    Sound(String),
 }
 
 // Replace every StoryImport asset with the UI asset entries its Markdown
@@ -180,6 +195,13 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     let mut in_list = false;
     let mut item_links: Vec<(String, String)> = Vec::new();
     let mut item_has_text = false;
+    // Media state in document order: the music current from the most recent
+    // `[music]` directive, and one-shot `[sound]`s waiting for the next page
+    // or choice list. A directive with nothing after it to attach to is dead
+    // and rejected at end of parse.
+    let mut current_music: Option<String> = None;
+    let mut pending_sounds: Vec<String> = Vec::new();
+    let mut unconsumed_directive: Option<usize> = None;
 
     let options = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
     for (event, range) in Parser::new_ext(src, options).into_offset_iter() {
@@ -243,12 +265,26 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                     continue;
                 }
                 if let Some(acc) = para.take() {
-                    let page = classify_paragraph(acc, &range, &line_of)?;
-                    cur_node
-                        .as_mut()
-                        .expect("paragraph start checked the node")
-                        .pages
-                        .push(page);
+                    match classify_paragraph(acc, &range, &line_of)? {
+                        ParaOut::Page(mut page) => {
+                            page.music = current_music.clone();
+                            page.sounds = std::mem::take(&mut pending_sounds);
+                            unconsumed_directive = None;
+                            cur_node
+                                .as_mut()
+                                .expect("paragraph start checked the node")
+                                .pages
+                                .push(page);
+                        }
+                        ParaOut::Directive(Directive::Music(path)) => {
+                            current_music = Some(path);
+                            unconsumed_directive = Some(line_of(&range));
+                        }
+                        ParaOut::Directive(Directive::Sound(path)) => {
+                            pending_sounds.push(path);
+                            unconsumed_directive = Some(line_of(&range));
+                        }
+                    }
                 }
             }
 
@@ -275,6 +311,12 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
             }
             Event::End(TagEnd::List(_)) => {
                 in_list = false;
+                // The choice menu is shown like a page, so it carries the
+                // current music and consumes any queued one-shots.
+                let node = cur_node.as_mut().expect("list start checked the node");
+                node.choice_music = current_music.clone();
+                node.choice_sounds = std::mem::take(&mut pending_sounds);
+                unconsumed_directive = None;
             }
             Event::Start(Tag::Item) => {
                 item_links.clear();
@@ -296,21 +338,23 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
             }
 
             Event::Start(Tag::Link { dest_url, .. }) => {
-                let Some(target) = dest_url.strip_prefix('#') else {
-                    return err(
-                        &range,
-                        format!("link '{}': only `#heading` targets are supported", dest_url),
-                    );
-                };
-                link = Some((target.to_string(), String::new()));
+                // Targets are classified when the enclosing construct closes:
+                // `#heading` jumps/choices, or audio-file media directives.
+                link = Some((dest_url.to_string(), String::new()));
             }
             Event::End(TagEnd::Link) => {
                 let (target, label) = link.take().unwrap_or_default();
                 if label.trim().is_empty() {
-                    return err(&range, format!("link to '#{}' has no label text", target));
+                    return err(&range, format!("link to '{}' has no label text", target));
                 }
                 if in_list {
-                    item_links.push((target, label.trim().to_string()));
+                    let Some(anchor) = target.strip_prefix('#') else {
+                        return err(
+                            &range,
+                            format!("choice '{}' must link to a `#heading`", label.trim()),
+                        );
+                    };
+                    item_links.push((anchor.to_string(), label.trim().to_string()));
                 } else if let Some(acc) = para.as_mut() {
                     acc.links.push((label.trim().to_string(), target));
                 } else {
@@ -429,6 +473,13 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
         }
     }
 
+    if let Some(line) = unconsumed_directive {
+        return Err(format!(
+            "line {}: a media directive needs a following paragraph or choice list to \
+             attach to",
+            line
+        ));
+    }
     if let Some(node) = cur_node.take() {
         let end = src.len()..src.len();
         finish_node(node, &mut story, &end, &line_of)?;
@@ -455,11 +506,20 @@ fn finish_node(
     Ok(())
 }
 
+// What one paragraph contributes: a page of the story, or a media directive
+// that styles the pages after it.
+enum ParaOut {
+    Page(Page),
+    Directive(Directive),
+}
+
+const AUDIO_EXTENSIONS: [&str; 4] = ["ogg", "wav", "mp3", "flac"];
+
 fn classify_paragraph(
     acc: ParaAcc,
     range: &Range<usize>,
     line_of: &dyn Fn(&Range<usize>) -> usize,
-) -> Result<Page, String> {
+) -> Result<ParaOut, String> {
     let line = line_of(range);
     match acc.links.len() {
         0 => {
@@ -467,23 +527,48 @@ fn classify_paragraph(
             if text.is_empty() {
                 return Err(format!("line {}: empty paragraph", line));
             }
-            Ok(Page {
+            Ok(ParaOut::Page(Page {
                 speaker: acc.speaker,
                 text,
-                jump: None,
-            })
+                ..Page::default()
+            }))
         }
         1 if !acc.has_plain_text && acc.speaker.is_none() => {
             let (label, target) = acc.links.into_iter().next().expect("length checked");
-            Ok(Page {
-                speaker: None,
-                text: label,
-                jump: Some(target),
-            })
+            if let Some(anchor) = target.strip_prefix('#') {
+                return Ok(ParaOut::Page(Page {
+                    text: label,
+                    jump: Some(anchor.to_string()),
+                    ..Page::default()
+                }));
+            }
+            let ext = std::path::Path::new(&target)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .unwrap_or_default();
+            if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                return Err(format!(
+                    "line {}: link '{}' targets neither a `#heading` (a jump) nor an \
+                     audio file ({})",
+                    line,
+                    target,
+                    AUDIO_EXTENSIONS.join("/")
+                ));
+            }
+            match label.as_str() {
+                "music" => Ok(ParaOut::Directive(Directive::Music(target))),
+                "sound" => Ok(ParaOut::Directive(Directive::Sound(target))),
+                other => Err(format!(
+                    "line {}: audio link label must be `music` (looping) or `sound` \
+                     (one-shot), got '{}'",
+                    line, other
+                )),
+            }
         }
         _ => Err(format!(
-            "line {}: a link must stand alone in its paragraph (a jump) or sit in a \
-             bullet list (choices)",
+            "line {}: a link must stand alone in its paragraph (a jump or media \
+             directive) or sit in a bullet list (choices)",
             line
         )),
     }
@@ -877,6 +962,9 @@ pub(crate) fn emit_story(
     if title_screen {
         view_names.push(title_view.clone());
     }
+    // Audio files referenced by media directives, deduplicated by path in
+    // first-use order; each becomes one AudioClip entry.
+    let mut clips: Vec<(String, String)> = Vec::new();
 
     for (ni, node) in story.nodes.iter().enumerate() {
         let node_name = node_asset(&node.slug);
@@ -945,6 +1033,24 @@ pub(crate) fn emit_story(
                 None,
                 &format!("view:show:{}", target),
             ));
+            if let Some(path) = &page.music {
+                let clip = clip_asset(prefix, &mut clips, path);
+                out.push(audio_cue(
+                    &format!("{}_music", page_view),
+                    &page_view,
+                    &clip,
+                    "music",
+                ));
+            }
+            for (si, path) in page.sounds.iter().enumerate() {
+                let clip = clip_asset(prefix, &mut clips, path);
+                out.push(audio_cue(
+                    &format!("{}_sfx{}", page_view, si),
+                    &page_view,
+                    &clip,
+                    "sound",
+                ));
+            }
         }
 
         if !node.choices.is_empty() {
@@ -978,6 +1084,24 @@ pub(crate) fn emit_story(
                     y0 + ci as f32 * 60.0,
                     win_w - 560.0,
                     &format!("view:show:{}", first_view_of(&choice.target)),
+                ));
+            }
+            if let Some(path) = &node.choice_music {
+                let clip = clip_asset(prefix, &mut clips, path);
+                out.push(audio_cue(
+                    &format!("{}_music", choice_view),
+                    &choice_view,
+                    &clip,
+                    "music",
+                ));
+            }
+            for (si, path) in node.choice_sounds.iter().enumerate() {
+                let clip = clip_asset(prefix, &mut clips, path);
+                out.push(audio_cue(
+                    &format!("{}_sfx{}", choice_view, si),
+                    &choice_view,
+                    &clip,
+                    "sound",
                 ));
             }
         }
@@ -1021,6 +1145,14 @@ pub(crate) fn emit_story(
         ));
     }
 
+    for (path, name) in &clips {
+        out.push(serde_json::json!({
+            "name": name,
+            "type": "AudioClip",
+            "args": { "source": path }
+        }));
+    }
+
     // UI assets attach to a View by name prefix, so one generated view name
     // must never be a `_`-extension of another or the members of the longer
     // view would be ambiguous.
@@ -1036,6 +1168,25 @@ pub(crate) fn emit_story(
     }
 
     Ok(out)
+}
+
+// The AudioClip asset name for an audio file path, allocating one on the
+// path's first use.
+fn clip_asset(prefix: &str, clips: &mut Vec<(String, String)>, path: &str) -> String {
+    if let Some((_, name)) = clips.iter().find(|(p, _)| p == path) {
+        return name.clone();
+    }
+    let name = format!("{}_clip{}", prefix, clips.len());
+    clips.push((path.to_string(), name.clone()));
+    name
+}
+
+fn audio_cue(name: &str, view: &str, clip: &str, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "type": "AudioCue",
+        "args": { "view": view, "clip": clip, "kind": kind }
+    })
 }
 
 fn font(name: &str, size_px: u32) -> serde_json::Value {
@@ -1344,6 +1495,106 @@ You walk together toward the morning.
         ];
         let err = expand_stories(&mut assets).unwrap_err();
         assert!(err.contains("collides"));
+    }
+
+    const SCORED: &str = r#"---
+title: T
+---
+
+# inn
+
+[music](assets/theme.ogg)
+
+First page.
+
+Second page.
+
+[sound](assets/door.wav)
+
+The door creaks.
+
+# crossroads
+
+[music](assets/tense.ogg)
+
+- [Left](#inn)
+- [Right](#crossroads)
+"#;
+
+    #[test]
+    fn media_directives_parse_and_propagate() {
+        let story = parse_story(SCORED).unwrap();
+        let inn = &story.nodes[0];
+        // Music persists from its directive across the following pages.
+        assert_eq!(inn.pages[0].music.as_deref(), Some("assets/theme.ogg"));
+        assert_eq!(inn.pages[1].music.as_deref(), Some("assets/theme.ogg"));
+        // The one-shot attaches only to the page directly after it.
+        assert!(inn.pages[1].sounds.is_empty());
+        assert_eq!(inn.pages[2].sounds, ["assets/door.wav"]);
+        // A pages-free choice node still carries the current music.
+        let crossroads = &story.nodes[1];
+        assert!(crossroads.pages.is_empty());
+        assert_eq!(crossroads.choice_music.as_deref(), Some("assets/tense.ogg"));
+    }
+
+    #[test]
+    fn media_directives_emit_cues_and_deduped_clips() {
+        let story = parse_story(SCORED).unwrap();
+        let entries = emit_story("s", &story, true).unwrap();
+
+        // Three distinct audio files -> three AudioClip entries; the theme is
+        // deduplicated to one clip despite two pages sharing its music cue.
+        let clips: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| type_norm(e) == "audioclip")
+            .collect();
+        assert_eq!(clips.len(), 3);
+        assert_eq!(clips[0]["args"]["source"], "assets/theme.ogg");
+
+        // Every page after the directive carries a music cue for its view.
+        let cue = find(&entries, "s_n_inn_p0_music");
+        assert_eq!(cue["args"]["view"], "s_n_inn_p0");
+        assert_eq!(cue["args"]["kind"], "music");
+        assert_eq!(cue["args"]["clip"], clips[0]["name"]);
+        assert!(entries.iter().any(|e| asset_name(e) == "s_n_inn_p1_music"));
+
+        // The one-shot lands on its page only.
+        let sfx = find(&entries, "s_n_inn_p2_sfx0");
+        assert_eq!(sfx["args"]["kind"], "sound");
+        assert!(!entries.iter().any(|e| asset_name(e) == "s_n_inn_p1_sfx0"));
+
+        // The choice menu carries the tense track.
+        let choice_cue = find(&entries, "s_n_crossroads_choice_music");
+        assert_eq!(choice_cue["args"]["clip"], clips[2]["name"]);
+    }
+
+    #[test]
+    fn trailing_media_directive_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n[sound](x.wav)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("needs a following"), "{err}");
+    }
+
+    #[test]
+    fn bad_audio_label_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n[loop](x.ogg)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("`music`"), "{err}");
+        assert!(err.contains("loop"), "{err}");
+    }
+
+    #[test]
+    fn non_audio_link_target_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n[music](x.txt)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("neither"), "{err}");
+    }
+
+    #[test]
+    fn choice_to_audio_file_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n- [music](x.ogg)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("must link to a `#heading`"), "{err}");
     }
 
     #[test]

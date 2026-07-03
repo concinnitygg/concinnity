@@ -99,6 +99,7 @@ crate::define_components! {
         DebugHud          => assets::DebugHud,          80,
         EngineDefaults    => assets::EngineDefaults,    81,
         StoryImport       => assets::StoryImport,       82,
+        AudioCue          => assets::AudioCue,          83,
 }
 
 #[cfg(test)]

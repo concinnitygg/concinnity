@@ -1,26 +1,38 @@
 // src/audio/system.rs
 //
-// 3D positional audio playback. An internal system (not a declarable asset):
-// `World::start` constructs one whenever the world contains any `AudioEmitter`,
-// so a world with no emitters never opens an audio device.
+// Audio playback: 3D positional emitters and view-triggered cues. An internal
+// system (not a declarable asset): `World::start` constructs one whenever the
+// world contains any `AudioEmitter` or `AudioCue`, so a world with neither
+// never opens an audio device.
 
 use std::collections::HashMap;
 
-use crate::assets::{AudioClip, AudioCommand, AudioEmitter, Camera3D, Transform};
+use crate::assets::{
+    AudioClip, AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, Transform, ViewShown,
+};
 use crate::audio::{AudioEngine, EmitterId};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::decompose::EntityByName;
 use crate::ecs::{PipelineContext, StepResult, System};
 
-// 3D positional audio behavior. Constructed internally by `World::start` when
-// the world declares any `AudioEmitter`; never a world-declared asset, so it
-// carries no config.
+// Audio behavior. Constructed internally by `World::start` when the world
+// declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
+// it carries no config.
 pub struct AudioSystem {
     engine: AudioEngine,
     // One entry per `AudioEmitter` that became a live engine emitter.
     emitters: Vec<EmitterBinding>,
+    // View-triggered cues, keyed by the View whose activation fires them.
+    cues: HashMap<AssetId, Vec<CueBinding>>,
+    // Encoded clip payloads for the cue clips, keyed by AudioClip id.
+    cue_clip_bytes: HashMap<AssetId, Vec<u8>>,
     // Cursor into the Events<AudioCommand> queue (live master-volume changes).
     audio_cmd_cursor: crate::ecs::EventCursor,
+    // Cursor into the Events<ViewShown> queue (cue triggers).
+    view_shown_cursor: crate::ecs::EventCursor,
+    // Cues that matched a shown view so far; observable engine-independent
+    // progress for headless tests (playback needs a device and a payload).
+    cues_matched: usize,
 }
 
 // Links one engine emitter to the world data that positions it.
@@ -30,23 +42,35 @@ struct EmitterBinding {
     follows: Option<AssetId>,
 }
 
+// One AudioCue resolved to its clip and playback style.
+struct CueBinding {
+    clip: AssetId,
+    kind: CueKind,
+    volume: f32,
+}
+
 impl std::fmt::Debug for AudioSystem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AudioSystem")
             .field("engine", &self.engine)
             .field("emitters", &self.emitters.len())
+            .field("cue_views", &self.cues.len())
             .finish()
     }
 }
 
 impl AudioSystem {
-    // Fresh audio engine with no live emitters. Emitters are bound from the
-    // world's `AudioEmitter` components in [`System::init`].
+    // Fresh audio engine with no live emitters or cues. Emitters and cues are
+    // bound from the world's components in [`System::init`].
     pub fn new() -> Self {
         Self {
             engine: AudioEngine::new(),
             emitters: Vec::new(),
+            cues: HashMap::new(),
+            cue_clip_bytes: HashMap::new(),
             audio_cmd_cursor: crate::ecs::EventCursor::default(),
+            view_shown_cursor: crate::ecs::EventCursor::default(),
+            cues_matched: 0,
         }
     }
 }
@@ -94,9 +118,39 @@ impl System for AudioSystem {
             });
         }
 
+        // Bind the view-triggered cues and cache their clip payloads, so
+        // firing a cue never touches the blob mid-frame.
+        let cue_snaps: Vec<AudioCue> = ctx.query::<AudioCue>().cloned().collect();
+        for cue in cue_snaps {
+            let (Some(view), Some(clip)) = (cue.view, cue.clip) else {
+                tracing::warn!("AudioSystem: cue without a view and a clip, ignored");
+                continue;
+            };
+            if let std::collections::hash_map::Entry::Vacant(slot) = self.cue_clip_bytes.entry(clip)
+            {
+                match clip_locators.get(&clip) {
+                    Some(locator) => match ctx.read_payload(locator) {
+                        Ok(bytes) => {
+                            slot.insert(bytes.to_vec());
+                        }
+                        Err(e) => tracing::warn!("AudioSystem: cue payload read failed: {e}"),
+                    },
+                    None => {
+                        tracing::warn!("AudioSystem: cue clip has no compiled payload, silent")
+                    }
+                }
+            }
+            self.cues.entry(view).or_default().push(CueBinding {
+                clip,
+                kind: cue.kind,
+                volume: cue.volume,
+            });
+        }
+
         tracing::info!(
-            "AudioSystem: {} emitter(s), engine {}",
+            "AudioSystem: {} emitter(s), {} cue view(s), engine {}",
             self.emitters.len(),
+            self.cues.len(),
             if self.engine.is_enabled() {
                 "enabled"
             } else {
@@ -111,6 +165,37 @@ impl System for AudioSystem {
         if let Some(events) = ctx.events::<AudioCommand>() {
             for cmd in events.read(&mut self.audio_cmd_cursor) {
                 self.engine.set_master_volume(cmd.master_volume);
+            }
+        }
+
+        // Fire cues for views shown since the last step. UiInputSystem runs
+        // after this system, so a navigation is heard one tick later.
+        if !self.cues.is_empty()
+            && let Some(events) = ctx.events::<ViewShown>()
+        {
+            let shown: Vec<AssetId> = events
+                .read(&mut self.view_shown_cursor)
+                .into_iter()
+                .map(|e| e.view)
+                .collect();
+            for view in shown {
+                let Some(bindings) = self.cues.get(&view) else {
+                    continue;
+                };
+                self.cues_matched += bindings.len();
+                for cue in bindings {
+                    let Some(bytes) = self.cue_clip_bytes.get(&cue.clip) else {
+                        continue;
+                    };
+                    match cue.kind {
+                        CueKind::Music => {
+                            self.engine.play_music(cue.clip.0 as u64, bytes, cue.volume);
+                        }
+                        CueKind::Sound => {
+                            self.engine.play_sound(bytes, cue.volume);
+                        }
+                    }
+                }
             }
         }
 
@@ -163,6 +248,58 @@ mod tests {
         let mut world = World::new_empty();
         world.start().unwrap();
         assert!(world.systems().is_empty());
+    }
+
+    // An `AudioCue` alone (no emitter) also spawns the audio system: a UI-only
+    // world can play view-triggered audio.
+    #[test]
+    fn audio_cue_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::AudioCue::default());
+        world.start().unwrap();
+
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert!(names.contains(&"AudioSystem"), "{names:?}");
+    }
+
+    // The full trigger chain: the initial view's activation (announced by
+    // UiInputSystem at init) reaches the audio system, which matches the
+    // view's cue on the first step. Playback itself needs a device and a
+    // compiled payload, so the test observes the match counter.
+    #[test]
+    fn initial_view_fires_its_cue() {
+        use crate::assets::{AudioClip, AudioCue, View};
+        use crate::ecs::asset_id::AssetId;
+
+        let mut world = World::new_empty();
+        let view = AssetId(90);
+        let clip = AssetId(91);
+        world.add_component(View {
+            asset_id: view,
+            initial: true,
+            fade_in_secs: 0.0,
+        });
+        world.add_component(AudioClip {
+            asset_id: clip,
+            ..Default::default()
+        });
+        world.add_component(AudioCue {
+            view: Some(view),
+            clip: Some(clip),
+            ..Default::default()
+        });
+        world.start().unwrap();
+        world.step();
+
+        let matched = world
+            .systems()
+            .iter()
+            .find_map(|s| match s {
+                crate::ecs::SystemAsset::AudioSystem(a) => Some(a.cues_matched),
+                _ => None,
+            })
+            .expect("world has an AudioSystem");
+        assert_eq!(matched, 1, "the initial view's cue should have matched");
     }
 
     // The live master gain the world's AudioSystem currently holds. Mirrors how

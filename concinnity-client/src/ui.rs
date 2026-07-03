@@ -5,7 +5,7 @@
 
 use crate::assets::{
     FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
-    Sprite, TextLabel, View, ViewCommand,
+    Sprite, TextLabel, View, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -346,10 +346,13 @@ impl System for UiInputSystem {
             }
         }
 
-        // Activate the initial view (if any) by showing its elements.
+        // Activate the initial view (if any) by showing its elements. The
+        // activation is announced like any navigation so view-triggered
+        // consumers (AudioCue music) fire for the first screen too.
         if let Some(id) = initial {
             self.set_view_visibility(id, true, ctx);
             self.views.active = Some(id);
+            ctx.events_mut::<ViewShown>().send(ViewShown { view: id });
         }
 
         // Solve the initial scroll layout so frame 0 already shows the right
@@ -881,6 +884,8 @@ impl UiInputSystem {
         }
         if let Some(next) = new_active {
             self.set_view_visibility(next, true, ctx);
+            // Announce the activation for view-triggered consumers (AudioCue).
+            ctx.events_mut::<ViewShown>().send(ViewShown { view: next });
         }
         self.views.active = new_active;
         self.views.prev = new_prev;
@@ -2763,6 +2768,46 @@ mod tests {
         });
         world.step();
         assert!(produced_setting_commands(&world).is_empty());
+    }
+
+    // Every ViewShown announcement so far, read with a fresh cursor.
+    fn shown_views(world: &World) -> Vec<AssetId> {
+        let mut cursor = crate::ecs::EventCursor::default();
+        world
+            .events::<ViewShown>()
+            .map(|e| e.read(&mut cursor).into_iter().map(|s| s.view).collect())
+            .unwrap_or_default()
+    }
+
+    // Both the initial view at start and a Show navigation announce the newly
+    // active view, so view-triggered consumers (AudioCue) hear every screen.
+    #[test]
+    fn view_activation_emits_view_shown() {
+        let mut world = World::new_empty();
+        let first = AssetId(80);
+        let second = AssetId(81);
+        for (id, initial) in [(first, true), (second, false)] {
+            world.add_component(View {
+                asset_id: id,
+                initial,
+                fade_in_secs: 0.0,
+            });
+        }
+        world.start().unwrap();
+        assert_eq!(shown_views(&world), vec![first]);
+
+        world
+            .events_mut::<ViewCommand>()
+            .send(ViewCommand::Show(second));
+        world.step();
+        assert_eq!(shown_views(&world), vec![first, second]);
+
+        // Showing the already-active view is a no-op: no repeat announcement.
+        world
+            .events_mut::<ViewCommand>()
+            .send(ViewCommand::Show(second));
+        world.step();
+        assert_eq!(shown_views(&world), vec![first, second]);
     }
 
     #[test]

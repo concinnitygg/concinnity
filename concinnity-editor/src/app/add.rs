@@ -448,6 +448,16 @@ fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
             serde_json::json!({ "lib_path": "", "model_path": path_str }),
         )?]),
 
+        // Audio files: an AudioClip whose payload is compiled (and decode-
+        // validated) at build. Played through an AudioEmitter (positional) or
+        // an AudioCue (view-triggered). Stem only, like fonts, so emitter and
+        // cue declarations read naturally.
+        "ogg" | "wav" | "mp3" | "flac" => Ok(vec![validated_entry(
+            &stem,
+            "AudioClip",
+            serde_json::json!({ "source": path_str }),
+        )?]),
+
         // File-backed assets: path is stored as-is; build compiles the blob
         "obj" | "mtl" | "png" | "jpg" | "jpeg" | "bmp" | "tga" | "gif" => {
             Ok(vec![validated_entry(
@@ -1223,6 +1233,22 @@ mod tests {
         assert_eq!(lf_entry["args"]["content"], "line one\nline two");
         let crlf_entry = &entry_from_path(crlf.to_str().unwrap()).unwrap()[0];
         assert_eq!(crlf_entry["args"]["content"], "line one\r\nline two");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_file_becomes_audio_clip() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("door_creak.wav");
+        std::fs::write(&path, b"not-really-audio").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry["type"], "AudioClip");
+        assert_eq!(entry["name"], "door_creak");
+        assert_eq!(entry["args"]["source"], path.to_str().unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

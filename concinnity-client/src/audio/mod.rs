@@ -20,7 +20,7 @@ pub(crate) mod system;
 use std::io::Cursor;
 
 use kira::listener::ListenerHandle;
-use kira::sound::static_sound::StaticSoundData;
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{SpatialTrackBuilder, SpatialTrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween};
 
@@ -34,6 +34,10 @@ struct Active {
     listener: ListenerHandle,
     // One spatial track per emitter, indexed by `EmitterId`.
     emitters: Vec<SpatialTrackHandle>,
+    // The looping non-spatial music track, keyed by the caller's clip key so
+    // a replay of the same clip keeps the track running instead of
+    // restarting it.
+    music: Option<(u64, StaticSoundHandle)>,
 }
 
 // A 3D positional audio engine.
@@ -96,6 +100,7 @@ impl AudioEngine {
             manager,
             listener,
             emitters: Vec::new(),
+            music: None,
         })
     }
 
@@ -129,21 +134,66 @@ impl AudioEngine {
         let Some(track) = active.emitters.get_mut(id.0) else {
             return false;
         };
-        let mut data = match StaticSoundData::from_cursor(Cursor::new(encoded.to_vec())) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("audio clip decode failed: {e}");
-                return false;
-            }
+        let Some(data) = decode_clip(encoded, looping, gain) else {
+            return false;
         };
-        data = data.volume(Decibels(gain_to_db(gain)));
-        if looping {
-            data = data.loop_region(..);
-        }
         match track.play(data) {
             Ok(_) => true,
             Err(e) => {
                 tracing::warn!("audio clip play failed: {e}");
+                false
+            }
+        }
+    }
+
+    // Play a looping music clip flat on the main mix, replacing the current
+    // music. `key` identifies the clip: requesting the key that is already
+    // playing is a no-op, so navigation between views sharing a music cue
+    // never restarts the track. Returns false when the engine is disabled or
+    // the clip could not be decoded / played.
+    pub fn play_music(&mut self, key: u64, encoded: &[u8], gain: f32) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        if let Some((current, _)) = &active.music
+            && *current == key
+        {
+            return true;
+        }
+        let Some(data) = decode_clip(encoded, true, gain) else {
+            return false;
+        };
+        // The default tween fades the outgoing track briefly so the swap is
+        // click-free.
+        if let Some((_, mut handle)) = active.music.take() {
+            handle.stop(Tween::default());
+        }
+        match active.manager.play(data) {
+            Ok(handle) => {
+                active.music = Some((key, handle));
+                true
+            }
+            Err(e) => {
+                tracing::warn!("music play failed: {e}");
+                false
+            }
+        }
+    }
+
+    // Play a one-shot clip flat on the main mix (UI feedback, story effects).
+    // Fire-and-forget: the sound runs to completion. Returns false when the
+    // engine is disabled or the clip could not be decoded / played.
+    pub fn play_sound(&mut self, encoded: &[u8], gain: f32) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        let Some(data) = decode_clip(encoded, false, gain) else {
+            return false;
+        };
+        match active.manager.play(data) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!("sound play failed: {e}");
                 false
             }
         }
@@ -204,6 +254,23 @@ fn vec3(p: [f32; 3]) -> mint::Vector3<f32> {
     }
 }
 
+// Decode a whole encoded audio file into playable sound data with the gain
+// and looping applied. Logs and returns `None` on a decode failure.
+fn decode_clip(encoded: &[u8], looping: bool, gain: f32) -> Option<StaticSoundData> {
+    let mut data = match StaticSoundData::from_cursor(Cursor::new(encoded.to_vec())) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("audio clip decode failed: {e}");
+            return None;
+        }
+    };
+    data = data.volume(Decibels(gain_to_db(gain)));
+    if looping {
+        data = data.loop_region(..);
+    }
+    Some(data)
+}
+
 // Convert a linear gain multiplier to decibels. A gain of 1.0 maps to 0 dB;
 // gains at or below ~-80 dB are clamped so silence does not yield `-inf`.
 fn gain_to_db(gain: f32) -> f32 {
@@ -248,6 +315,8 @@ mod tests {
         engine.set_master_volume(0.5);
         assert!((engine.last_master_volume - 0.5).abs() < 1.0e-6);
         assert!(!engine.play_clip(EmitterId(0), &[], true, 1.0));
+        assert!(!engine.play_music(0, &[], 1.0));
+        assert!(!engine.play_sound(&[], 1.0));
     }
 
     #[test]

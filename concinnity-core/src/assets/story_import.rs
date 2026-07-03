@@ -23,6 +23,10 @@ use crate::ecs::{AssetOrigin, Component};
 ///   (`[Into the wood](#the-wood)`)
 /// - a paragraph that is a single link shows its label and jumps to its
 ///   target when clicked
+/// - a lone link to an audio file is a media directive: `music` loops from
+///   the next page onward until replaced, `sound` plays once when the next
+///   page shows (`[music](assets/theme.ogg)`, `[sound](assets/door.wav)`);
+///   these expand to [AudioClip](#audioclip) + [AudioCue](#audiocue) entries
 /// - a node whose last page has no link falls through to the next heading
 ///   in document order; the final node ends the story
 ///

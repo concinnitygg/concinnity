@@ -493,13 +493,14 @@ impl World {
             .map(|_| crate::gfx::animation::AnimationSystem::new().into())
     }
 
-    // AudioSystem: present whenever the world declares any `AudioEmitter`.
-    // Building it opens an audio device, so a world with no emitters stays silent
-    // and device-free.
+    // AudioSystem: present whenever the world declares any `AudioEmitter`
+    // (positional sound) or `AudioCue` (view-triggered sound). Building it
+    // opens an audio device, so a world with neither stays silent and
+    // device-free.
     fn build_audio(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::AudioEmitter>()
-            .next()
-            .map(|_| crate::audio::system::AudioSystem::new().into())
+        let needs = self.query::<crate::assets::AudioEmitter>().next().is_some()
+            || self.query::<crate::assets::AudioCue>().next().is_some();
+        needs.then(|| crate::audio::system::AudioSystem::new().into())
     }
 
     // UiInputSystem: present whenever the world declares any `HitRegion`, `View`,
