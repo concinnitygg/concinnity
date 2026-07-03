@@ -162,7 +162,8 @@ pub(super) fn build_text_pipeline(
         .newFunctionWithName(&ns_str("text_fragment_main"))
         .ok_or("text_fragment_main not found")?;
 
-    // Vertex layout: pos (float2) @ 0, uv (float2) @ 8, color (float4) @ 16; buffer(1).
+    // Vertex layout: pos (float2) @ 0, uv (float2) @ 8, color (float3) @ 16,
+    // mode (float) @ 28; buffer(1). Mirrors TextVertex in render_types.rs.
     let vert_desc = MTLVertexDescriptor::new();
     unsafe {
         let a0 = vert_desc.attributes().objectAtIndexedSubscript(0);
@@ -177,6 +178,10 @@ pub(super) fn build_text_pipeline(
         a2.setFormat(MTLVertexFormat::Float3);
         a2.setOffset(16);
         a2.setBufferIndex(1);
+        let a3 = vert_desc.attributes().objectAtIndexedSubscript(3);
+        a3.setFormat(MTLVertexFormat::Float);
+        a3.setOffset(28);
+        a3.setBufferIndex(1);
         let layout = vert_desc.layouts().objectAtIndexedSubscript(1);
         layout.setStride(32);
         layout.setStepFunction(MTLVertexStepFunction::PerVertex);

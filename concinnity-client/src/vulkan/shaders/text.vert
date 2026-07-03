@@ -3,6 +3,7 @@
 layout(location = 0) in vec2 in_pos;
 layout(location = 1) in vec2 in_uv;
 layout(location = 2) in vec3 in_color;
+layout(location = 3) in float in_mode;
 
 layout(push_constant) uniform TextPush {
     float win_width;
@@ -13,6 +14,7 @@ layout(push_constant) uniform TextPush {
 
 layout(location = 0) out vec2 frag_uv;
 layout(location = 1) out vec3 frag_color;
+layout(location = 2) out float frag_mode;
 
 void main() {
     // in_pos is in pixels, origin top-left. Text renders in the composite
@@ -23,4 +25,5 @@ void main() {
     gl_Position = vec4(nx, ny, 0.0, 1.0);
     frag_uv    = in_uv;
     frag_color = in_color;
+    frag_mode  = in_mode;
 }

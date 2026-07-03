@@ -11,6 +11,7 @@ struct VsIn
     float2 pos   : POSITION;
     float2 uv    : TEXCOORD0;
     float3 color : COLOR;
+    float  mode  : TEXCOORD1;
 };
 
 struct VsOut
@@ -18,6 +19,7 @@ struct VsOut
     float4 sv_pos : SV_POSITION;
     float2 uv     : TEXCOORD0;
     float3 color  : TEXCOORD1;
+    float  mode   : TEXCOORD2;
 };
 
 VsOut main(VsIn v)
@@ -28,5 +30,6 @@ VsOut main(VsIn v)
     o.sv_pos = float4(nx, ny, 0.0, 1.0);
     o.uv     = v.uv;
     o.color  = v.color;
+    o.mode   = v.mode;
     return o;
 }

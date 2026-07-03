@@ -112,7 +112,7 @@ fn push_arrow(call: &mut TextDrawCall, origin: (f32, f32), size: f32, color: [f3
             // sentinel u < 0 -> solid-fill path; v carries alpha
             uv: [-1.0, alpha],
             color,
-            _pad: 0.0,
+            mode: 0.0,
         });
     }
     for tri in ARROW_TRIS {

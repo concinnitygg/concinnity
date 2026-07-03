@@ -27,6 +27,10 @@ use crate::ecs::{AssetOrigin, Component};
 ///   the next page onward until replaced, `sound` plays once when the next
 ///   page shows (`[music](assets/theme.ogg)`, `[sound](assets/door.wav)`);
 ///   these expand to [AudioClip](#audioclip) + [AudioCue](#audiocue) entries
+/// - `![bg](assets/inn.png)` sets the backdrop image from the next page
+///   onward until the next `![bg]`; it expands to a [Texture](#texture)
+///   entry drawn by each page's backdrop [Sprite](#sprite). Directives may
+///   stack on adjacent lines in one paragraph
 /// - a node whose last page has no link falls through to the next heading
 ///   in document order; the final node ends the story
 ///

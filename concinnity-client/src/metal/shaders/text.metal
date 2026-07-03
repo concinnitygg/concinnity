@@ -7,12 +7,14 @@ struct TextVtxIn {
     float2 pos   [[attribute(0)]];
     float2 uv    [[attribute(1)]];
     float3 color [[attribute(2)]];
+    float  mode  [[attribute(3)]];
 };
 
 struct TextVtxOut {
     float4 position [[position]];
     float2 uv;
     float3 color;
+    float  mode;
 };
 
 vertex TextVtxOut text_vertex_main(
@@ -26,6 +28,7 @@ vertex TextVtxOut text_vertex_main(
         0.0, 1.0);
     out.uv    = in.uv;
     out.color = in.color;
+    out.mode  = in.mode;
     return out;
 }
 
@@ -39,6 +42,13 @@ fragment float4 text_fragment_main(
     // sample.
     if (in.uv.x < 0.0) {
         return float4(in.color, in.uv.y);
+    }
+    // A positive mode marks a textured quad (a Sprite with a texture): the
+    // bound atlas is the sprite's own RGBA image, tinted by the vertex colour
+    // with the mode value as the quad's alpha multiplier.
+    if (in.mode > 0.0) {
+        float4 tex = atlas.sample(smp, in.uv);
+        return float4(tex.rgb * in.color, tex.a * in.mode);
     }
     // Atlas stores a signed distance field: 0.5 = edge, >0.5 = inside, <0.5 = outside.
     // fwidth gives the screen-space derivative of d, so the smoothstep spans exactly

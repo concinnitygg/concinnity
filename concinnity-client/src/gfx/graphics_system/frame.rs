@@ -513,6 +513,7 @@ impl GraphicsSystem {
             let mut calls = gfx_sprite::build_sprite_calls(
                 &scene_sprites,
                 default_atlas_slot,
+                &self.sprite_texture_slots,
                 [win_w, win_h],
                 &self.clip_rects,
             );
@@ -539,6 +540,7 @@ impl GraphicsSystem {
                 calls.extend(gfx_sprite::build_sprite_calls(
                     &sprite_refs,
                     default_atlas_slot,
+                    &self.sprite_texture_slots,
                     [win_w, win_h],
                     &no_clips,
                 ));

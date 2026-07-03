@@ -50,6 +50,7 @@ pub(crate) struct Node {
     pub(crate) choices: Vec<Choice>,
     pub(crate) choice_music: Option<String>,
     pub(crate) choice_sounds: Vec<String>,
+    pub(crate) choice_bg: Option<String>,
 }
 
 // One click-through page. `jump` overrides the default advance (next page,
@@ -64,6 +65,7 @@ pub(crate) struct Page {
     pub(crate) jump: Option<String>,
     pub(crate) music: Option<String>,
     pub(crate) sounds: Vec<String>,
+    pub(crate) bg: Option<String>,
 }
 
 #[derive(Debug)]
@@ -73,10 +75,11 @@ pub(crate) struct Choice {
 }
 
 // A media directive paragraph: a lone link whose label names the channel and
-// whose target is an audio file.
+// whose target is an audio file, or a lone `![bg](image)`.
 enum Directive {
     Music(String),
     Sound(String),
+    Bg(String),
 }
 
 // Replace every StoryImport asset with the UI asset entries its Markdown
@@ -172,6 +175,7 @@ struct ParaAcc {
     speaker: Option<String>,
     text: String,
     links: Vec<(String, String)>,
+    images: Vec<(String, String)>,
     has_plain_text: bool,
 }
 
@@ -192,6 +196,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     let mut meta_text: Option<String> = None;
     let mut strong_text: Option<String> = None;
     let mut link: Option<(String, String)> = None; // (target, label so far)
+    let mut image: Option<(String, String)> = None; // (target, alt so far)
     let mut in_list = false;
     let mut item_links: Vec<(String, String)> = Vec::new();
     let mut item_has_text = false;
@@ -200,6 +205,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     // or choice list. A directive with nothing after it to attach to is dead
     // and rejected at end of parse.
     let mut current_music: Option<String> = None;
+    let mut current_bg: Option<String> = None;
     let mut pending_sounds: Vec<String> = Vec::new();
     let mut unconsumed_directive: Option<usize> = None;
 
@@ -268,6 +274,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                     match classify_paragraph(acc, &range, &line_of)? {
                         ParaOut::Page(mut page) => {
                             page.music = current_music.clone();
+                            page.bg = current_bg.clone();
                             page.sounds = std::mem::take(&mut pending_sounds);
                             unconsumed_directive = None;
                             cur_node
@@ -276,12 +283,14 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                                 .pages
                                 .push(page);
                         }
-                        ParaOut::Directive(Directive::Music(path)) => {
-                            current_music = Some(path);
-                            unconsumed_directive = Some(line_of(&range));
-                        }
-                        ParaOut::Directive(Directive::Sound(path)) => {
-                            pending_sounds.push(path);
+                        ParaOut::Directives(directives) => {
+                            for directive in directives {
+                                match directive {
+                                    Directive::Music(path) => current_music = Some(path),
+                                    Directive::Sound(path) => pending_sounds.push(path),
+                                    Directive::Bg(path) => current_bg = Some(path),
+                                }
+                            }
                             unconsumed_directive = Some(line_of(&range));
                         }
                     }
@@ -315,6 +324,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                 // current music and consumes any queued one-shots.
                 let node = cur_node.as_mut().expect("list start checked the node");
                 node.choice_music = current_music.clone();
+                node.choice_bg = current_bg.clone();
                 node.choice_sounds = std::mem::take(&mut pending_sounds);
                 unconsumed_directive = None;
             }
@@ -338,8 +348,15 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
             }
 
             Event::Start(Tag::Link { dest_url, .. }) => {
+                if image.is_some() {
+                    return err(
+                        &range,
+                        "links are not supported in image alt text".to_string(),
+                    );
+                }
                 // Targets are classified when the enclosing construct closes:
-                // `#heading` jumps/choices, or audio-file media directives.
+                // `#heading` jumps/choices, audio-file media directives, or
+                // image directives.
                 link = Some((dest_url.to_string(), String::new()));
             }
             Event::End(TagEnd::Link) => {
@@ -413,6 +430,8 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                     meta.push_str(&t);
                 } else if let Some(s) = strong_text.as_mut() {
                     s.push_str(&t);
+                } else if let Some((_, alt)) = image.as_mut() {
+                    alt.push_str(&t);
                 } else if let Some((_, label)) = link.as_mut() {
                     label.push_str(&t);
                 } else if let Some(h) = heading_text.as_mut() {
@@ -439,8 +458,21 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                 }
             }
 
-            Event::Start(Tag::Image { .. }) => {
-                return err(&range, "images are not supported yet".to_string());
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                if para.is_none() || in_list {
+                    return err(
+                        &range,
+                        "images may only appear alone in their own paragraph".to_string(),
+                    );
+                }
+                image = Some((dest_url.to_string(), String::new()));
+            }
+            Event::End(TagEnd::Image) => {
+                let (target, alt) = image.take().unwrap_or_default();
+                para.as_mut()
+                    .expect("image start checked the paragraph")
+                    .images
+                    .push((alt.trim().to_string(), target));
             }
             Event::Start(Tag::CodeBlock(_)) => {
                 return err(&range, "code blocks are not supported yet".to_string());
@@ -506,14 +538,24 @@ fn finish_node(
     Ok(())
 }
 
-// What one paragraph contributes: a page of the story, or a media directive
-// that styles the pages after it.
+// What one paragraph contributes: a page of the story, or media directives
+// that style the pages after it. Directives stack: a paragraph made only of
+// `![bg]` / `[music]` / `[sound]` lines applies them all.
 enum ParaOut {
     Page(Page),
-    Directive(Directive),
+    Directives(Vec<Directive>),
 }
 
 const AUDIO_EXTENSIONS: [&str; 4] = ["ogg", "wav", "mp3", "flac"];
+const IMAGE_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
+
+fn file_extension(target: &str) -> String {
+    std::path::Path::new(target)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
 
 fn classify_paragraph(
     acc: ParaAcc,
@@ -521,6 +563,82 @@ fn classify_paragraph(
     line_of: &dyn Fn(&Range<usize>) -> usize,
 ) -> Result<ParaOut, String> {
     let line = line_of(range);
+
+    // A jump: exactly one `#heading` link and nothing else.
+    if acc.links.len() == 1
+        && acc.images.is_empty()
+        && !acc.has_plain_text
+        && acc.speaker.is_none()
+        && acc.links[0].1.starts_with('#')
+    {
+        let (label, target) = acc.links.into_iter().next().expect("length checked");
+        return Ok(ParaOut::Page(Page {
+            text: label,
+            jump: Some(target[1..].to_string()),
+            ..Page::default()
+        }));
+    }
+
+    // A directives paragraph: images and file links only, no prose. They
+    // often stack (a backdrop plus music at a scene top), so each line of
+    // the paragraph is classified on its own.
+    if !acc.images.is_empty() || acc.links.iter().any(|(_, t)| !t.starts_with('#')) {
+        if acc.has_plain_text || acc.speaker.is_some() {
+            return Err(format!(
+                "line {}: media directives must stand alone in their own paragraph",
+                line
+            ));
+        }
+        let mut directives = Vec::new();
+        for (alt, target) in acc.images {
+            if alt != "bg" {
+                return Err(format!(
+                    "line {}: image role '{}' is not supported; use `![bg](image.png)` \
+                     for a backdrop",
+                    line, alt
+                ));
+            }
+            if !IMAGE_EXTENSIONS.contains(&file_extension(&target).as_str()) {
+                return Err(format!(
+                    "line {}: image '{}' must be a {} file",
+                    line,
+                    target,
+                    IMAGE_EXTENSIONS.join("/")
+                ));
+            }
+            directives.push(Directive::Bg(target));
+        }
+        for (label, target) in acc.links {
+            if target.starts_with('#') {
+                return Err(format!(
+                    "line {}: a jump link cannot share a paragraph with media directives",
+                    line
+                ));
+            }
+            if !AUDIO_EXTENSIONS.contains(&file_extension(&target).as_str()) {
+                return Err(format!(
+                    "line {}: link '{}' targets neither a `#heading` (a jump) nor an \
+                     audio file ({})",
+                    line,
+                    target,
+                    AUDIO_EXTENSIONS.join("/")
+                ));
+            }
+            match label.as_str() {
+                "music" => directives.push(Directive::Music(target)),
+                "sound" => directives.push(Directive::Sound(target)),
+                other => {
+                    return Err(format!(
+                        "line {}: audio link label must be `music` (looping) or `sound` \
+                         (one-shot), got '{}'",
+                        line, other
+                    ));
+                }
+            }
+        }
+        return Ok(ParaOut::Directives(directives));
+    }
+
     match acc.links.len() {
         0 => {
             let text = acc.text.trim().to_string();
@@ -532,39 +650,6 @@ fn classify_paragraph(
                 text,
                 ..Page::default()
             }))
-        }
-        1 if !acc.has_plain_text && acc.speaker.is_none() => {
-            let (label, target) = acc.links.into_iter().next().expect("length checked");
-            if let Some(anchor) = target.strip_prefix('#') {
-                return Ok(ParaOut::Page(Page {
-                    text: label,
-                    jump: Some(anchor.to_string()),
-                    ..Page::default()
-                }));
-            }
-            let ext = std::path::Path::new(&target)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_ascii_lowercase())
-                .unwrap_or_default();
-            if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
-                return Err(format!(
-                    "line {}: link '{}' targets neither a `#heading` (a jump) nor an \
-                     audio file ({})",
-                    line,
-                    target,
-                    AUDIO_EXTENSIONS.join("/")
-                ));
-            }
-            match label.as_str() {
-                "music" => Ok(ParaOut::Directive(Directive::Music(target))),
-                "sound" => Ok(ParaOut::Directive(Directive::Sound(target))),
-                other => Err(format!(
-                    "line {}: audio link label must be `music` (looping) or `sound` \
-                     (one-shot), got '{}'",
-                    line, other
-                )),
-            }
         }
         _ => Err(format!(
             "line {}: a link must stand alone in its paragraph (a jump or media \
@@ -963,8 +1048,10 @@ pub(crate) fn emit_story(
         view_names.push(title_view.clone());
     }
     // Audio files referenced by media directives, deduplicated by path in
-    // first-use order; each becomes one AudioClip entry.
+    // first-use order; each becomes one AudioClip entry. Same for backdrop
+    // images, which become Texture entries sampled by the page bg Sprites.
     let mut clips: Vec<(String, String)> = Vec::new();
+    let mut images: Vec<(String, String)> = Vec::new();
 
     for (ni, node) in story.nodes.iter().enumerate() {
         let node_name = node_asset(&node.slug);
@@ -984,13 +1071,13 @@ pub(crate) fn emit_story(
             view_names.push(page_view.clone());
             let initial = !title_screen && ni == 0 && pi == 0;
             out.push(view(&page_view, initial));
-            out.push(sprite(
+            out.push(backdrop(
                 &format!("{}_bg", page_view),
-                0.0,
-                0.0,
+                page.bg.as_deref(),
+                prefix,
+                &mut images,
                 win_w,
                 win_h,
-                [0.05, 0.06, 0.09, 1.0],
             ));
             if let Some(id) = &page.speaker {
                 let character = &story.characters[id];
@@ -1058,13 +1145,13 @@ pub(crate) fn emit_story(
             view_names.push(choice_view.clone());
             let initial = !title_screen && ni == 0 && node.pages.is_empty();
             out.push(view(&choice_view, initial));
-            out.push(sprite(
+            out.push(backdrop(
                 &format!("{}_bg", choice_view),
-                0.0,
-                0.0,
+                node.choice_bg.as_deref(),
+                prefix,
+                &mut images,
                 win_w,
                 win_h,
-                [0.05, 0.06, 0.09, 1.0],
             ));
             out.push(sprite(
                 &format!("{}_panel", choice_view),
@@ -1152,6 +1239,13 @@ pub(crate) fn emit_story(
             "args": { "source": path }
         }));
     }
+    for (path, name) in &images {
+        out.push(serde_json::json!({
+            "name": name,
+            "type": "Texture",
+            "args": { "source": path }
+        }));
+    }
 
     // UI assets attach to a View by name prefix, so one generated view name
     // must never be a `_`-extension of another or the members of the longer
@@ -1168,6 +1262,45 @@ pub(crate) fn emit_story(
     }
 
     Ok(out)
+}
+
+// A page or choice-menu backdrop: a full-canvas Sprite showing the current
+// `![bg]` image (white tint, texture sampled by the text pass), or the flat
+// dark fill when the story has not set one.
+fn backdrop(
+    name: &str,
+    bg: Option<&str>,
+    prefix: &str,
+    images: &mut Vec<(String, String)>,
+    win_w: f32,
+    win_h: f32,
+) -> serde_json::Value {
+    match bg {
+        Some(path) => {
+            let texture = image_asset(prefix, images, path);
+            serde_json::json!({
+                "name": name,
+                "type": "Sprite",
+                "args": {
+                    "x": 0.0, "y": 0.0, "width": win_w, "height": win_h,
+                    "tint": [1.0, 1.0, 1.0, 1.0],
+                    "texture": texture,
+                }
+            })
+        }
+        None => sprite(name, 0.0, 0.0, win_w, win_h, [0.05, 0.06, 0.09, 1.0]),
+    }
+}
+
+// The Texture asset name for a backdrop image path, allocating one on the
+// path's first use.
+fn image_asset(prefix: &str, images: &mut Vec<(String, String)>, path: &str) -> String {
+    if let Some((_, name)) = images.iter().find(|(p, _)| p == path) {
+        return name.clone();
+    }
+    let name = format!("{}_img{}", prefix, images.len());
+    images.push((path.to_string(), name.clone()));
+    name
 }
 
 // The AudioClip asset name for an audio file path, allocating one on the
@@ -1569,6 +1702,103 @@ The door creaks.
     }
 
     #[test]
+    fn bg_directive_parses_propagates_and_emits_textured_backdrops() {
+        let src = "---\ntitle: T\n---\n\n# inn\n\n![bg](assets/inn.png)\n\nFirst.\n\nSecond.\n\n# out\n\n![bg](assets/street.png)\n\n- [Stay](#inn)\n";
+        let story = parse_story(src).unwrap();
+        // The backdrop persists across the pages after its directive.
+        assert_eq!(
+            story.nodes[0].pages[0].bg.as_deref(),
+            Some("assets/inn.png")
+        );
+        assert_eq!(
+            story.nodes[0].pages[1].bg.as_deref(),
+            Some("assets/inn.png")
+        );
+        // A pages-free choice node carries the current backdrop.
+        assert_eq!(
+            story.nodes[1].choice_bg.as_deref(),
+            Some("assets/street.png")
+        );
+
+        let entries = emit_story("s", &story, true).unwrap();
+        // Two distinct images -> two Texture entries.
+        let textures: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| type_norm(e) == "texture")
+            .collect();
+        assert_eq!(textures.len(), 2);
+        assert_eq!(textures[0]["args"]["source"], "assets/inn.png");
+
+        // Backdrop sprites sample the image with a white tint; both pages of
+        // the node share the deduplicated texture.
+        let bg = find(&entries, "s_n_inn_p0_bg");
+        assert_eq!(bg["args"]["texture"], textures[0]["name"]);
+        assert_eq!(bg["args"]["tint"], serde_json::json!([1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(
+            find(&entries, "s_n_inn_p1_bg")["args"]["texture"],
+            textures[0]["name"]
+        );
+        assert_eq!(
+            find(&entries, "s_n_out_choice_bg")["args"]["texture"],
+            textures[1]["name"]
+        );
+        // The title screen keeps its flat fill (no texture key at all).
+        assert!(
+            find(&entries, "s_title_bg")["args"]
+                .get("texture")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn stacked_directives_in_one_paragraph_all_apply() {
+        // Adjacent directive lines form one Markdown paragraph; all apply.
+        let src =
+            "---\ntitle: T\n---\n\n# a\n\n![bg](x.png)\n[music](m.ogg)\n[sound](s.wav)\n\nhi\n";
+        let story = parse_story(src).unwrap();
+        let page = &story.nodes[0].pages[0];
+        assert_eq!(page.bg.as_deref(), Some("x.png"));
+        assert_eq!(page.music.as_deref(), Some("m.ogg"));
+        assert_eq!(page.sounds, ["s.wav"]);
+    }
+
+    #[test]
+    fn jump_link_mixed_with_directives_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![bg](x.png)\n[go](#a)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("cannot share"), "{err}");
+    }
+
+    #[test]
+    fn unknown_image_role_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![portrait](x.png)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("'portrait'"), "{err}");
+        assert!(err.contains("![bg]"), "{err}");
+    }
+
+    #[test]
+    fn non_image_bg_target_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![bg](x.gif)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("png/jpg/jpeg"), "{err}");
+    }
+
+    #[test]
+    fn image_mixed_with_text_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nlook: ![bg](x.png)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("stand alone"), "{err}");
+    }
+
+    #[test]
+    fn trailing_bg_directive_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n![bg](x.png)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("needs a following"), "{err}");
+    }
+
+    #[test]
     fn trailing_media_directive_is_an_error() {
         let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n[sound](x.wav)\n";
         let err = parse_story(src).unwrap_err();
@@ -1685,7 +1915,6 @@ The door creaks.
     fn unsupported_constructs_are_errors() {
         let base = "---\ntitle: T\n---\n\n# a\n\n";
         for (body, needle) in [
-            ("![img](x.png)\n", "images"),
             ("```\ncode\n```\n", "code blocks"),
             ("> quoted\n", "block quotes"),
             ("## sub\n", "headings"),

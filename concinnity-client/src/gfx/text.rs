@@ -233,7 +233,7 @@ pub(crate) fn build_text_calls(
                 pos: [x, y],
                 uv: [-1.0, ba],
                 color: bg,
-                _pad: 0.0,
+                mode: 0.0,
             };
             vertices.extend_from_slice(&[
                 box_vtx(x0b, y0b),
@@ -280,25 +280,25 @@ pub(crate) fn build_text_calls(
                     pos: [gx, gy],
                     uv: [u0, v0],
                     color: label.color,
-                    _pad: 0.0,
+                    mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx + gw, gy],
                     uv: [u1, v0],
                     color: label.color,
-                    _pad: 0.0,
+                    mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx + gw, gy + gh],
                     uv: [u1, v1],
                     color: label.color,
-                    _pad: 0.0,
+                    mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx, gy + gh],
                     uv: [u0, v1],
                     color: label.color,
-                    _pad: 0.0,
+                    mode: 0.0,
                 },
             ]);
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);

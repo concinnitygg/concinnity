@@ -552,7 +552,7 @@ fn skinned_shadow_vertex_input() -> (
 // TextVertex binding (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + pad.
 fn text_vertex_input() -> (
     [vk::VertexInputBindingDescription; 1],
-    [vk::VertexInputAttributeDescription; 3],
+    [vk::VertexInputAttributeDescription; 4],
 ) {
     let binding = vk::VertexInputBindingDescription::default()
         .binding(0)
@@ -574,6 +574,11 @@ fn text_vertex_input() -> (
             .location(2)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(16),
+        vk::VertexInputAttributeDescription::default()
+            .binding(0)
+            .location(3)
+            .format(vk::Format::R32_SFLOAT)
+            .offset(28),
     ];
     ([binding], attrs)
 }

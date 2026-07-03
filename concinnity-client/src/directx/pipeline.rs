@@ -294,6 +294,15 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
             InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
             InstanceDataStepRate: 0,
         },
+        D3D12_INPUT_ELEMENT_DESC {
+            SemanticName: windows::core::s!("TEXCOORD"),
+            SemanticIndex: 1,
+            Format: DXGI_FORMAT_R32_FLOAT,
+            InputSlot: 0,
+            AlignedByteOffset: 28,
+            InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+            InstanceDataStepRate: 0,
+        },
     ]
 }
 
