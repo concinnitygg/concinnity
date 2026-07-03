@@ -58,7 +58,8 @@ pub struct FrameInput {
     pub escape: bool,
     /// The canonical key pressed this frame, for one frame, or `None`. Surfaced
     /// regardless of menu state (unlike the gameplay keys, which freeze while a
-    /// menu is open) so the settings menu can capture a key for rebinding.
+    /// menu is open) so the settings menu can capture a key for rebinding and
+    /// scrollable menu lists can react to the arrow keys.
     pub captured_key: Option<crate::assets::Key>,
 }
 

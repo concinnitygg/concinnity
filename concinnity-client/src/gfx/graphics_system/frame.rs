@@ -317,6 +317,7 @@ fn build_dropdown_overlay(
     const BORDER: [f32; 4] = [0.28, 0.34, 0.52, 1.0];
     const SELECTED_BG: [f32; 4] = [0.14, 0.20, 0.34, 1.0];
     const HOVER_BG: [f32; 4] = [0.22, 0.30, 0.48, 1.0];
+    const TRACK: [f32; 4] = [0.12, 0.15, 0.25, 0.95];
     const THUMB: [f32; 4] = [0.45, 0.52, 0.70, 0.9];
     const TEXT_PAD: f32 = 10.0;
     const BORDER_PX: f32 = 2.0;
@@ -371,8 +372,11 @@ fn build_dropdown_overlay(
     {
         sprites.push(mk_sprite(*rect, HOVER_BG));
     }
-    // A scrolled list gets a slim scrollbar thumb inside its right edge so the
-    // window's position in the full list is visible.
+    // A scrolled list gets a scrollbar inside its right edge: a faint
+    // full-height track with the draggable thumb over it.
+    if let Some(rect) = dropdown::track_rect(&layout, count) {
+        sprites.push(mk_sprite(rect, TRACK));
+    }
     if let Some(rect) = dropdown::thumb_rect(&layout, first, count) {
         sprites.push(mk_sprite(rect, THUMB));
     }

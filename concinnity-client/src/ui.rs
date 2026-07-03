@@ -4,7 +4,7 @@
 // view overlays, and key bindings each frame.
 
 use crate::assets::{
-    FrameInput, HitRegion, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
+    FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
     Sprite, TextLabel, View, ViewCommand,
 };
 use crate::ecs::asset_id::AssetId;
@@ -140,6 +140,10 @@ struct OpenDropdownState {
     scroll_rows: f32,
     // The option under the cursor this frame, if any (highlighted as hovered).
     hovered: Option<usize>,
+    // The grab offset (cursor y minus thumb top) while the list's scrollbar
+    // thumb is being dragged, or `None`. Keeps the thumb from jumping under
+    // the cursor on grab; a drag suppresses hover and the pick/dismiss click.
+    thumb_drag: Option<f32>,
     // The view the row belongs to (drives reference-space vs window hit-testing
     // and rendering), or `None` for a view-less row.
     view: Option<AssetId>,
@@ -661,13 +665,15 @@ impl System for UiInputSystem {
 impl UiInputSystem {
     // Advance an open dropdown for one frame: track the option under the cursor,
     // and on a click pick it (a SetIndex command) or dismiss (a click outside
-    // the list); Escape also dismisses. The wheel scrolls the shown window of a
-    // list longer than `dropdown::MAX_VISIBLE` (it never dismisses). Clears
-    // `open_dropdown` when the list closes.
+    // the list); Escape also dismisses. The wheel, the Up/Down arrow keys, and
+    // a scrollbar-thumb drag all scroll the shown window of a list longer than
+    // `dropdown::MAX_VISIBLE` (never dismissing). Clears `open_dropdown` when
+    // the list closes.
     fn step_open_dropdown(&mut self, input: &FrameInput, ctx: &mut PipelineContext) {
         let Some(state) = self.open_dropdown.as_mut() else {
             return;
         };
+        let count = state.options.len();
         // View-owned rows hit-test in reference space; a view-less row in window
         // pixels (matches the region hit-test in `step`).
         let overlay = OverlayTransform::from_viewport(input.viewport);
@@ -676,26 +682,63 @@ impl UiInputSystem {
         } else {
             (input.mouse_x, input.mouse_y)
         };
+        let max = dropdown::max_first(count) as f32;
         // Wheel: scroll the shown window (same feel as the settings panel:
         // wheel distance in pixels, converted to rows by the row height).
         if input.scroll_delta != 0.0 {
             let item_h = state.anchor[3].max(1.0);
-            let max = dropdown::max_first(state.options.len()) as f32;
             state.scroll_rows = (state.scroll_rows
                 + input.scroll_delta * WHEEL_SCROLL_SPEED / item_h)
                 .clamp(0.0, max);
         }
+        // Up/Down arrows: scroll the window one row per press.
+        match input.captured_key {
+            Some(Key::Up) => state.scroll_rows = (state.scroll_rows - 1.0).clamp(0.0, max),
+            Some(Key::Down) => state.scroll_rows = (state.scroll_rows + 1.0).clamp(0.0, max),
+            _ => {}
+        }
+
+        let layout = dropdown::layout(state.anchor, count);
+
+        // Scrollbar-thumb drag: a press on the thumb grabs it (keeping the
+        // cursor's offset within it); a press elsewhere in the scrollbar strip
+        // jumps the thumb there. While the button stays down the cursor's y
+        // maps back to the window's scroll position, even outside the list.
+        if !input.left_button_down {
+            state.thumb_drag = None;
+        } else {
+            if state.thumb_drag.is_none()
+                && input.left_click
+                && let Some(thumb) = dropdown::thumb_rect(&layout, state.first(), count)
+                && let Some(track) = dropdown::track_rect(&layout, count)
+            {
+                if point_in_rect(qx, qy, thumb) {
+                    state.thumb_drag = Some(qy - thumb[1]);
+                } else if point_in_rect(qx, qy, track) {
+                    state.thumb_drag = Some(thumb[3] / 2.0);
+                }
+            }
+            if let Some(grab) = state.thumb_drag {
+                state.scroll_rows = dropdown::first_for_thumb_top(&layout, count, qy - grab);
+            }
+        }
+        let dragging = state.thumb_drag.is_some();
+
         let first = state.first();
-        let layout = dropdown::layout(state.anchor, state.options.len());
-        // Rows show options `first..`; hovered is the OPTION index.
-        state.hovered = dropdown::item_at(&layout, qx, qy).map(|row| first + row);
+        // Rows show options `first..`; hovered is the OPTION index. No hover
+        // while the thumb is dragged (the drag owns the cursor).
+        state.hovered = if dragging {
+            None
+        } else {
+            dropdown::item_at(&layout, qx, qy).map(|row| first + row)
+        };
 
         // Escape dismisses without changing the value.
         if input.escape {
             self.open_dropdown = None;
             return;
         }
-        if input.left_click {
+        if input.left_click && !dragging {
             match state.hovered {
                 // Pick the hovered option: send the absolute index, then close.
                 Some(i) => {
@@ -760,6 +803,7 @@ impl UiInputSystem {
             options,
             selected,
             hovered: None,
+            thumb_drag: None,
             view: req.view,
             font,
             scale: req.scale.unwrap_or(1.0),
@@ -995,9 +1039,10 @@ impl UiInputSystem {
         Some([panel.track_x, thumb_y, panel.track_w, panel.thumb_h])
     }
 
-    // Apply scroll-wheel + scrollbar-thumb input to the active view's panel.
-    // Returns true while the thumb is being dragged so the caller suppresses the
-    // slider + click passes. The solver clamps the resulting scroll offset.
+    // Apply scroll-wheel + arrow-key + scrollbar-thumb input to the active
+    // view's panel. Returns true while the thumb is being dragged so the caller
+    // suppresses the slider + click passes. The solver clamps the resulting
+    // scroll offset.
     fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
@@ -1015,6 +1060,21 @@ impl UiInputSystem {
             && point_in_rect(qx, qy, self.panels[pi].band)
         {
             self.panels[pi].scroll += input.scroll_delta * WHEEL_SCROLL_SPEED;
+        }
+
+        // Up/Down arrows: scroll the active panel one row per press (keyboard
+        // input needs no cursor position).
+        if let Some(pi) = active_panel {
+            let step = match input.captured_key {
+                Some(Key::Up) => -1.0,
+                Some(Key::Down) => 1.0,
+                _ => 0.0,
+            };
+            if step != 0.0 {
+                let panel = &mut self.panels[pi];
+                let row_h = panel.rows.first().map(|r| r.height).unwrap_or(0.0);
+                panel.scroll += step * row_h;
+            }
         }
 
         // Thumb drag: begin on the press edge over the thumb, then map the
@@ -1688,6 +1748,114 @@ mod tests {
         world.step();
         assert!(produced_setting_commands(&world).is_empty());
         assert!(!dropdown_is_open(&world));
+    }
+
+    // The open list's first shown option, from the published OpenDropdown
+    // resource.
+    fn dropdown_first(world: &World) -> usize {
+        world
+            .resource::<crate::ecs::OpenDropdown>()
+            .and_then(|d| d.0.as_ref())
+            .map(|dv| dv.first)
+            .expect("dropdown should be open")
+    }
+
+    // Dragging the open list's scrollbar thumb scrolls the window: a press on
+    // the thumb neither picks nor dismisses, the held cursor's y drives the
+    // window, and after release a click picks again.
+    #[test]
+    fn dropdown_thumb_drag_scrolls_window_without_picking() {
+        let mut world = scrolled_dropdown_world();
+
+        // Open: 20 options, window starts at first = 6 (selection centered).
+        // The list is [400, 140, 200, 320]; the 28px thumb sits at y = 286
+        // (halfway along its 292px travel, first 6 of max 12).
+        world.add_component(make_frame_input(500.0, 120.0, true));
+        world.step();
+        assert_eq!(dropdown_first(&world), 6);
+
+        // Press on the thumb (thumb x 584..598): the drag begins, nothing is
+        // picked even though an option row sits under the cursor.
+        world.add_component(FrameInput {
+            mouse_x: 590.0,
+            mouse_y: 290.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(dropdown_is_open(&world), "a thumb press must not pick");
+        assert!(produced_setting_commands(&world).is_empty());
+        assert_eq!(dropdown_first(&world), 6, "grab does not jump the window");
+
+        // Drag past the bottom of the list: the window clamps to the end.
+        world.add_component(FrameInput {
+            mouse_x: 590.0,
+            mouse_y: 600.0,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(dropdown_is_open(&world));
+        assert_eq!(dropdown_first(&world), 12);
+
+        // Release, then click the top shown row: picking works again and maps
+        // to the dragged window (option 12).
+        world.add_component(make_frame_input(590.0, 400.0, false));
+        world.step();
+        world.add_component(make_frame_input(500.0, 150.0, true));
+        world.step();
+        let cmds = produced_setting_commands(&world);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0].op, SettingOp::SetIndex(12)));
+        assert!(!dropdown_is_open(&world));
+    }
+
+    // A press on the scrollbar strip beside the thumb jumps the window there
+    // (and starts a drag) instead of picking the option row behind it.
+    #[test]
+    fn dropdown_track_click_jumps_instead_of_picking() {
+        let mut world = scrolled_dropdown_world();
+        world.add_component(make_frame_input(500.0, 120.0, true));
+        world.step();
+        assert_eq!(dropdown_first(&world), 6);
+
+        // Press near the top of the strip (x 582..600), well above the thumb.
+        world.add_component(FrameInput {
+            mouse_x: 590.0,
+            mouse_y: 145.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(dropdown_is_open(&world), "a track press must not pick");
+        assert!(produced_setting_commands(&world).is_empty());
+        assert_eq!(dropdown_first(&world), 0, "the window jumps to the press");
+    }
+
+    // The Up/Down arrow keys scroll the open list's window one row per press.
+    #[test]
+    fn dropdown_arrow_keys_scroll_window() {
+        let mut world = scrolled_dropdown_world();
+        world.add_component(make_frame_input(500.0, 120.0, true));
+        world.step();
+        assert_eq!(dropdown_first(&world), 6);
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert!(dropdown_is_open(&world), "arrow keys must not dismiss");
+        assert_eq!(dropdown_first(&world), 7);
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Up),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(dropdown_first(&world), 6);
     }
 
     // When a region's hover_scale equals its label's scale (what the generated
@@ -2365,6 +2533,130 @@ mod tests {
         });
         world.step();
         assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
+    }
+
+    // A panel whose content overflows its band, with scrollbar-track geometry
+    // so the thumb is grabbable: three 40px rows (120px) in a 60px band, the
+    // track beside it (thumb = 30px, travel = 30px, max scroll = 60px).
+    fn scrollbar_panel_world() -> (World, AssetId) {
+        let mut world = World::new_empty();
+        let view = AssetId(60);
+        let e0 = AssetId(61);
+        world.add_component(View {
+            asset_id: view,
+            initial: true,
+            fade_in_secs: 0.0,
+        });
+        world.add_component(panel_label(61, 0.0, view, "Row0"));
+        world.add_component(ScrollPanel {
+            view: Some(view),
+            x: 0.0,
+            y: 0.0,
+            width: 300.0,
+            height: 60.0,
+            rows: vec![
+                ScrollRow {
+                    elements: vec![e0],
+                    base_y: 0.0,
+                    height: 40.0,
+                    group: -1,
+                },
+                ScrollRow {
+                    elements: vec![],
+                    base_y: 40.0,
+                    height: 40.0,
+                    group: -1,
+                },
+                ScrollRow {
+                    elements: vec![],
+                    base_y: 80.0,
+                    height: 40.0,
+                    group: -1,
+                },
+            ],
+            groups: vec![],
+            thumb: None,
+            track: None,
+            track_x: 305.0,
+            track_y: 0.0,
+            track_w: 8.0,
+            track_h: 60.0,
+        });
+        world.start().unwrap();
+        (world, e0)
+    }
+
+    // Dragging the panel's scrollbar thumb scrolls the content: a press on the
+    // thumb grabs it and the held cursor's y maps onto the scroll range.
+    #[test]
+    fn thumb_drag_scrolls_panel_content() {
+        let (mut world, e0) = scrollbar_panel_world();
+        assert_eq!(label_field(&world, e0, |l| l.y), 0.0);
+
+        // Press on the thumb (at rest: [305, 0, 8, 30]).
+        world.add_component(FrameInput {
+            mouse_x: 306.0,
+            mouse_y: 5.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), 0.0);
+
+        // Drag halfway along the 30px travel: scroll = half of the 60px max.
+        world.add_component(FrameInput {
+            mouse_x: 306.0,
+            mouse_y: 20.0,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -30.0);
+
+        // Drag far past the end: the scroll clamps to the max.
+        world.add_component(FrameInput {
+            mouse_x: 306.0,
+            mouse_y: 500.0,
+            left_button_down: true,
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
+
+        // Release: the drag ends and the cursor no longer moves the content.
+        world.add_component(make_frame_input(306.0, 5.0, false));
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
+    }
+
+    // The Up/Down arrow keys scroll the active panel one row per press,
+    // clamped to the content, with no cursor involvement.
+    #[test]
+    fn arrow_keys_scroll_panel_content() {
+        let (mut world, e0) = scrollbar_panel_world();
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -40.0);
+
+        // Another press would overshoot the 60px max: it clamps.
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Up),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -20.0);
     }
 
     // A rebind row: a value TextLabel showing the current key + a HitRegion over

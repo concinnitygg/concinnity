@@ -95,20 +95,31 @@ pub fn contains(layout: &DropdownLayout, px: f32, py: f32) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
 }
 
+// Scrollbar-thumb styling: a chunky near-square handle inside the list's right
+// edge. The height leans on the shown fraction but clamps to a narrow range so
+// the handle stays grabbable and square-ish instead of a long sliver.
+const THUMB_W: f32 = 14.0;
+const THUMB_PAD: f32 = 2.0;
+const THUMB_MIN_H: f32 = 16.0;
+const THUMB_MAX_H: f32 = 28.0;
+
+fn thumb_height(list_h: f32, count: usize) -> f32 {
+    let frac = visible_count(count) as f32 / count.max(1) as f32;
+    (list_h * frac).clamp(THUMB_MIN_H, THUMB_MAX_H)
+}
+
 // The scrollbar-thumb rectangle for a scrolled list (drawn inside the list's
 // right edge), or `None` when every option fits and no scrollbar is needed.
-// The thumb's height and position mirror the shown window's fraction and
-// scroll position, like the settings ScrollPanel's thumb.
+// The thumb's position mirrors the shown window's scroll position, like the
+// settings ScrollPanel's thumb; a drag maps back through
+// `first_for_thumb_top`.
 pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
-    const THUMB_W: f32 = 4.0;
-    const THUMB_PAD: f32 = 2.0;
     let visible = visible_count(count);
     if count <= visible || visible == 0 {
         return None;
     }
     let [lx, ly, lw, lh] = layout.list;
-    let frac = visible as f32 / count as f32;
-    let thumb_h = (lh * frac).max(8.0);
+    let thumb_h = thumb_height(lh, count);
     let travel = lh - thumb_h;
     let pos = first as f32 / max_first(count) as f32;
     Some([
@@ -117,6 +128,31 @@ pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option
         THUMB_W,
         thumb_h,
     ])
+}
+
+// The full-height scrollbar strip (the thumb's travel column, pads included)
+// for a scrolled list, or `None` when every option fits. A press inside it is
+// scrollbar input (a thumb grab, or a jump to the pressed spot), never an
+// option pick.
+pub fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
+    if count <= visible_count(count) {
+        return None;
+    }
+    let [lx, ly, lw, lh] = layout.list;
+    let w = THUMB_W + 2.0 * THUMB_PAD;
+    Some([lx + lw - w, ly, w, lh])
+}
+
+// Map a dragged thumb-top y back to the window's first shown option, as the
+// fractional row offset the caller accumulates (its scroll position). Clamps
+// to the scrollable range, so any cursor y is safe.
+pub fn first_for_thumb_top(layout: &DropdownLayout, count: usize, top: f32) -> f32 {
+    let [_, ly, _, lh] = layout.list;
+    let travel = lh - thumb_height(lh, count);
+    if travel <= 0.0 {
+        return 0.0;
+    }
+    ((top - ly) / travel).clamp(0.0, 1.0) * max_first(count) as f32
 }
 
 #[cfg(test)]
@@ -178,15 +214,56 @@ mod tests {
     #[test]
     fn thumb_tracks_the_scroll_position() {
         let l = layout([0.0, 100.0, 100.0, 40.0], 16); // window 8 of 16
-        // Top of the range: thumb at the list top, half the list tall.
+        // Top of the range: thumb at the list top.
         let top = thumb_rect(&l, 0, 16).unwrap();
         assert_eq!(top[1], l.list[1]);
-        assert_eq!(top[3], l.list[3] / 2.0);
         // Bottom of the range: thumb ends at the list bottom.
         let bottom = thumb_rect(&l, 8, 16).unwrap();
         assert_eq!(bottom[1] + bottom[3], l.list[1] + l.list[3]);
         // A fitting list has no thumb.
         assert!(thumb_rect(&layout([0.0, 100.0, 100.0, 40.0], 4), 0, 4).is_none());
+    }
+
+    #[test]
+    fn thumb_height_clamps_to_a_grabbable_handle() {
+        // 8 of 1000 shown: the proportional height would be a sliver; it
+        // clamps up to the minimum handle size.
+        let l = layout([0.0, 100.0, 100.0, 40.0], 1000);
+        assert_eq!(thumb_rect(&l, 0, 1000).unwrap()[3], THUMB_MIN_H);
+        // 8 of 9 shown: proportional would nearly fill the track; it clamps
+        // down so the handle still reads as a handle.
+        let l = layout([0.0, 100.0, 100.0, 40.0], 9);
+        assert_eq!(thumb_rect(&l, 0, 9).unwrap()[3], THUMB_MAX_H);
+    }
+
+    #[test]
+    fn track_strip_spans_the_list_and_contains_the_thumb() {
+        let l = layout([0.0, 100.0, 200.0, 40.0], 16);
+        let track = track_rect(&l, 16).unwrap();
+        // Full list height, flush with the list's right edge.
+        assert_eq!(track[1], l.list[1]);
+        assert_eq!(track[3], l.list[3]);
+        assert_eq!(track[0] + track[2], l.list[0] + l.list[2]);
+        // The thumb travels inside the strip.
+        let thumb = thumb_rect(&l, 4, 16).unwrap();
+        assert!(thumb[0] >= track[0]);
+        assert!(thumb[0] + thumb[2] <= track[0] + track[2]);
+        // A fitting list has no track.
+        assert!(track_rect(&layout([0.0, 100.0, 200.0, 40.0], 4), 4).is_none());
+    }
+
+    #[test]
+    fn thumb_top_maps_back_to_the_scroll_range() {
+        let l = layout([0.0, 100.0, 100.0, 40.0], 16); // window 8 of 16
+        let [_, ly, _, lh] = l.list;
+        let th = thumb_rect(&l, 0, 16).unwrap()[3];
+        // The travel endpoints map to the ends of the scroll range, the middle
+        // to its middle, and out-of-range tops clamp.
+        assert_eq!(first_for_thumb_top(&l, 16, ly), 0.0);
+        assert_eq!(first_for_thumb_top(&l, 16, ly + lh - th), 8.0);
+        assert_eq!(first_for_thumb_top(&l, 16, ly + (lh - th) / 2.0), 4.0);
+        assert_eq!(first_for_thumb_top(&l, 16, ly - 100.0), 0.0);
+        assert_eq!(first_for_thumb_top(&l, 16, ly + lh), 8.0);
     }
 
     #[test]
