@@ -98,6 +98,7 @@ crate::define_components! {
         Spawner           => assets::Spawner,           79,
         DebugHud          => assets::DebugHud,          80,
         EngineDefaults    => assets::EngineDefaults,    81,
+        StoryImport       => assets::StoryImport,       82,
 }
 
 #[cfg(test)]

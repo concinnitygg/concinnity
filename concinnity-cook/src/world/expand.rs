@@ -14,6 +14,7 @@ use super::room::expand_room_textures;
 use super::scene_import::expand_scene_imports;
 use super::shader::normalize_shader_types;
 use super::slider::expand_sliders;
+use super::story::expand_stories;
 
 use crate::world::load_world;
 
@@ -80,6 +81,10 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
     expand_scene_imports(assets)?;
+    // Stories expand to External UI assets (Views, TextLabels, HitRegions)
+    // that need no further expansion but must exist before companion
+    // injection so their TextLabels pull in GraphicsConfig + Font companions.
+    expand_stories(assets)?;
     expand_camera_shots(assets);
     expand_light_rigs(assets);
     expand_material_palettes(assets);

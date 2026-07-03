@@ -54,6 +54,7 @@
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
 - [Sprite](Sprite.md) - Screen-space 2D rectangle drawn as a UI overlay each frame.
 - [StatHud](StatHud.md) - Requests the default on-screen stats HUD. Drives a set of [TextLabel](TextLabel.md) chips with live engine stats, refreshed on a fixed interval.
+- [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
 - [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
