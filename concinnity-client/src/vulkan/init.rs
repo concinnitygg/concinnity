@@ -1,12 +1,11 @@
 // src/vulkan/init.rs
 //
-// VkContext construction: GLFW window creation and the one-time GPU
+// VkContext construction: platform window creation and the one-time GPU
 // resource setup performed by VkContext::new.
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 
 use ash::vk;
-use ash::vk::Handle;
 
 use crate::gfx::render_types::*;
 
@@ -131,8 +130,8 @@ impl VkContext {
         let taa_enabled = taa_enabled || temporal_upscaling;
         let frames = frames_in_flight.max(1);
 
-        //  GLFW window
-        let mut window = crate::vulkan::window::GlfwWindow::new(
+        //  Platform window (native Win32 on Windows, GLFW on Linux)
+        let mut window = super::PlatformWindow::new(
             title,
             width,
             height,
@@ -279,8 +278,7 @@ impl VkContext {
 
         //  Surface
         let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
-        let surface_handle = window.create_surface(instance.handle().as_raw() as usize)?;
-        let surface = vk::SurfaceKHR::from_raw(surface_handle as u64);
+        let surface = window.create_surface(&entry, &instance)?;
 
         //  Physical device
         let (physical_device, graphics_family, present_family) =

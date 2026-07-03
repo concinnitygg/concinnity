@@ -9,13 +9,12 @@ use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, SetWindowLongPtrW};
 use windows::core::Interface;
 
 use crate::directx::context::FRAMES;
 use crate::directx::texture::HDR_FORMAT;
-use crate::directx::window::{WindowState, create_window};
 use crate::gfx::hdr_output::HdrOutputMode;
+use crate::win32::window::{WindowState, create_window};
 
 pub(super) struct DeviceAndWindow {
     pub win_state: Box<WindowState>,
@@ -68,31 +67,9 @@ pub(super) fn setup(
         unsafe { d.EnableDebugLayer() };
     }
 
-    // Win32 window
-    let (hwnd, mut win_state) = create_window(title, width, height)?;
-
-    // Register for raw mouse input (for captured-cursor delta).
-    let rid = windows::Win32::UI::Input::RAWINPUTDEVICE {
-        usUsagePage: 0x01,
-        usUsage: 0x02, // mouse
-        dwFlags: windows::Win32::UI::Input::RIDEV_INPUTSINK,
-        hwndTarget: hwnd,
-    };
-    let _ = unsafe {
-        windows::Win32::UI::Input::RegisterRawInputDevices(
-            &[rid],
-            std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>() as u32,
-        )
-    };
-
-    // Store win_state pointer in GWLP_USERDATA so wnd_proc can reach it.
-    unsafe {
-        SetWindowLongPtrW(
-            hwnd,
-            GWLP_USERDATA,
-            &mut *win_state as *mut WindowState as isize,
-        )
-    };
+    // Win32 window (create_window also registers raw mouse input and installs
+    // the GWLP_USERDATA state pointer for the wnd_proc).
+    let (hwnd, win_state) = create_window(title, width, height)?;
 
     // DXGI factory
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional

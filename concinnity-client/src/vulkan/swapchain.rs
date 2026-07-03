@@ -75,7 +75,7 @@ impl VkContext {
         self.last_present_index = None;
         self.destroy_swapchain_resources();
 
-        let (width, height) = self.window.window.get_framebuffer_size();
+        let (width, height) = self.window.framebuffer_size();
         let (sc, imgs, fmt, ext) = create_swapchain_inner(
             &self.instance,
             &self.device,

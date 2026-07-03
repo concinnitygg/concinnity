@@ -123,8 +123,8 @@ toolchain is still required):
    If `SHADERC_LIB_DIR` is unset, `shaderc` is compiled from source instead,
    which additionally requires **CMake**, **Python 3**, and **Git** on `PATH`.
 
-The GLFW runtime (`glfw3.dll`) is bundled next to the binary automatically; no
-separate GLFW install is needed.
+Windowing and input use the native Win32 window (shared with the DirectX
+backend), so no windowing-library install or runtime DLL is involved.
 
 ### Build
 

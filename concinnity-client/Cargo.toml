@@ -17,10 +17,10 @@ doctest = false
 # DirectX one. Linux always uses Vulkan and macOS always uses Metal regardless
 # of this feature; build.rs resolves the backend cfg from the target and this
 # feature. On non-Windows targets the feature is inert (the deps it activates
-# are Windows-only optional deps).
+# are Windows-only optional deps). Windows Vulkan uses the shared native Win32
+# window layer (no glfw; GLFW is the Linux windowing layer only).
 vulkan = [
     "dep:ash",
-    "dep:glfw",
     "dep:shaderc",
     "concinnity-core/vulkan",
 ]
@@ -78,13 +78,13 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Activated by the `vulkan` feature for a Vulkan build on Windows. `ash` loads
-# Vulkan dynamically (no build-time linking); `glfw` provides windowing/input;
-# `shaderc` compiles GLSL to SPIR-V (used by both the build pipeline and the
-# Vulkan backend's runtime shader compilation). `shaderc` links the Vulkan
-# SDK's prebuilt library when SHADERC_LIB_DIR points at it, otherwise it builds
-# from source -- see README/docs.
+# Vulkan dynamically (no build-time linking); windowing/input comes from the
+# shared native Win32 layer (src/win32), not glfw; `shaderc` compiles GLSL to
+# SPIR-V (used by both the build pipeline and the Vulkan backend's runtime
+# shader compilation). `shaderc` links the Vulkan SDK's prebuilt library when
+# SHADERC_LIB_DIR points at it, otherwise it builds from source -- see
+# README/docs.
 ash = { version = "0.38", optional = true }
-glfw = { version = "0.61.0", optional = true }
 shaderc = { version = "0.10.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

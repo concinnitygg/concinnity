@@ -1291,8 +1291,8 @@ pub struct VkContext {
     // Deferred buffer destruction (text transient buffers)
     pub(super) deferred_destroy: RefCell<Vec<DeferredBuffer>>,
 
-    // Window + input
-    pub(super) window: crate::vulkan::window::GlfwWindow,
+    // Window + input (native Win32 on Windows, GLFW on Linux)
+    pub(super) window: super::PlatformWindow,
 
     // Optional validation debug messenger
     pub(super) debug_utils: Option<ash::ext::debug_utils::Instance>,
@@ -1919,29 +1919,11 @@ impl VkContext {
     }
 
     pub fn take_input(&mut self) -> InputState {
-        let raw = self.window.take_input();
-        InputState {
-            forward: raw.forward,
-            backward: raw.backward,
-            left: raw.left,
-            right: raw.right,
-            sprint: raw.sprint,
-            interact: raw.interact,
-            jump: raw.jump,
-            mouse_dx: raw.mouse_dx,
-            mouse_dy: raw.mouse_dy,
-            scroll_delta: raw.scroll_delta,
-            mouse_x: raw.mouse_x,
-            mouse_y: raw.mouse_y,
-            left_click: raw.left_click,
-            left_button_down: raw.left_button_down,
-            hud_toggle: raw.hud_toggle,
-            escape: raw.escape,
-            captured_key: raw.captured_key,
-        }
+        // Both platform windows snapshot straight into the shared RenderInput.
+        self.window.take_input()
     }
 
-    // Replace the runtime movement key map. The GLFW key callback decodes events
+    // Replace the runtime movement key map. The window's key decode routes
     // through it, so a settings-menu rebind takes effect immediately.
     pub fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
         self.window.set_keymap(keymap);

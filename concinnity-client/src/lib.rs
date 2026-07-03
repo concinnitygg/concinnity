@@ -16,6 +16,10 @@ pub mod ecs;
 pub mod metal;
 #[cfg(backend_vk)]
 pub mod vulkan;
+// Native Win32 window/input/display-mode layer shared by the HWND-rendering
+// backends (DirectX always; Vulkan on Windows instead of GLFW).
+#[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
+pub(crate) mod win32;
 
 // Renderer-free foundation shared with the build/validate pipeline lives in
 // concinnity-core. Re-export its modules under the historical crate::* paths so

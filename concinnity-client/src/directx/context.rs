@@ -16,14 +16,14 @@ use crate::gfx::render_types::*;
 use super::auto_exposure::AutoExposureResources;
 use super::decal::*;
 use super::fog::*;
-use super::input::*;
 use super::particle::{ParticleEmitterGpuState, ParticleResources};
 use super::post::gbuffer::GbufferResources;
 use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
 use super::texture::*;
-use super::window::*;
+use crate::win32::input::*;
+use crate::win32::window::*;
 
 // Constants
 pub(super) const FRAMES: usize = 3; // triple-buffered
@@ -669,7 +669,7 @@ pub struct DxContext {
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
-    pub(super) fullscreen_display: super::display_mode::FullscreenDisplayMode,
+    pub(super) fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
 
     // D3D12 core
     pub(super) device: ID3D12Device,
@@ -1716,28 +1716,9 @@ impl DxContext {
 
 impl DxContext {
     pub fn window_closed(&mut self) -> bool {
-        pump_messages();
-        // Refresh the in-engine cursor's window-exit / fullscreen-confinement
-        // state now this frame's messages are drained (mirrors the tail of
-        // Metal's `pump_ns_events`). GraphicsSystem reads `cursor_outside_window`
-        // later this same frame.
-        update_ui_cursor_confinement(&mut self.win_state);
-        // Converge the monitor on the chosen Resolution mode: held while the
-        // window is in (borderless) fullscreen, restored otherwise (mirrors
-        // Metal's per-frame reconcile in draw_frame). When the monitor mode
-        // just changed under a monitor-covering window (a fullscreen switch,
-        // or a restore on the way out to borderless), re-cover the monitor's
-        // new bounds; a windowed window keeps its own rect.
-        let mode = self.win_state.window_mode;
-        let fullscreen = matches!(mode, crate::assets::WindowMode::Fullscreen);
-        if self
-            .fullscreen_display
-            .reconcile(self.win_state.hwnd, fullscreen)
-            && !matches!(mode, crate::assets::WindowMode::Windowed)
-        {
-            do_set_window_mode(&mut self.win_state, mode);
-        }
-        self.win_state.closed
+        // Message pump + cursor window-exit / fullscreen-confinement refresh +
+        // the Resolution-mode reconcile, shared with the Vulkan Windows window.
+        frame_tick(&mut self.win_state, &mut self.fullscreen_display)
     }
 
     pub fn wait_idle(&self) {
@@ -1836,13 +1817,13 @@ impl DxContext {
     // The display modes (resolution + refresh rate) of the monitor the window
     // sits on, feeding the Resolution settings row (the caller dedups + sorts).
     pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
-        super::display_mode::enumerate(self.win_state.hwnd)
+        crate::win32::display_mode::enumerate(self.win_state.hwnd)
     }
 
     // The mode the window's monitor is currently running (what the Resolution
     // row shows before the user ever picks one).
     pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
-        super::display_mode::current(self.win_state.hwnd)
+        crate::win32::display_mode::current(self.win_state.hwnd)
     }
 
     // Remember the display mode to hold while the window is in fullscreen.
@@ -1941,20 +1922,7 @@ impl DxContext {
     }
 
     pub fn take_input(&mut self) -> InputState {
-        let dx = self.win_state.mouse_dx;
-        let dy = self.win_state.mouse_dy;
-        let mx = self.win_state.mouse_x;
-        let my = self.win_state.mouse_y;
-        let lc = self.win_state.left_click_pending;
-        // Held-button (UI drag) persists across the drain until WM_LBUTTONUP;
-        // the accumulated scroll delta is one-shot and reset like the mouse delta.
-        let lbd = self.win_state.left_button_down;
-        let scroll = self.win_state.scroll_delta;
-        self.win_state.mouse_dx = 0.0;
-        self.win_state.mouse_dy = 0.0;
-        self.win_state.left_click_pending = false;
-        self.win_state.scroll_delta = 0.0;
-        self.win_state.key.take(dx, dy, mx, my, lc, lbd, scroll)
+        take_input_snapshot(&mut self.win_state)
     }
 
     // Live window size for overlay (view-owned UI) scaling and cursor

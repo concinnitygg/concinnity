@@ -104,11 +104,8 @@ pub fn setup_graphics_sdks(backend: Backend, opts: SdkOptions) {
         Backend::Vk if target_os == "windows" => {
             // DLSS (NGX) and XeSS expose Vulkan entry points from the same
             // binaries the DirectX backend uses, so the setup helpers are
-            // backend-agnostic and reused here. GLFW links dynamically on the
-            // Windows Vulkan build, so its DLL is bundled too.
-            if opts.bundle_dlls {
-                setup_glfw_runtime();
-            }
+            // backend-agnostic and reused here. Windowing comes from the
+            // shared native Win32 layer (no GLFW DLL to bundle).
             setup_fidelityfx_vk_sdk(opts.bundle_dlls);
             setup_dlss_sdk(opts.bundle_dlls);
             setup_xess_sdk(opts.bundle_dlls);
@@ -427,33 +424,6 @@ fn setup_dxc_sdk() {
     println!("cargo::rustc-cfg=dxc_bundled");
 }
 
-// GLFW runtime DLL for the Windows Vulkan build (GLFW links dynamically there).
-// Copy-only.
-fn setup_glfw_runtime() {
-    if !enabled("CN_ENABLE_GLFW_DLL") {
-        println!(
-            "cargo::warning=GLFW runtime bundling skipped (CN_ENABLE_GLFW_DLL=0); \
-             the Vulkan client needs glfw3.dll beside the .exe or on PATH to launch"
-        );
-        return;
-    }
-
-    let Some(profile_dir) = target_profile_dir() else {
-        return;
-    };
-    let build_dir = profile_dir.join("build");
-    let Some(dll_src) = find_glfw_dll(&build_dir) else {
-        println!(
-            "cargo::warning=glfw3.dll not found under {} - the Vulkan client may fail \
-             to launch with a missing-DLL error. It is produced by the `glfw-sys` \
-             dependency; a clean rebuild usually regenerates it.",
-            build_dir.display()
-        );
-        return;
-    };
-    copy_next_to_exe(&dll_src, "glfw3.dll");
-}
-
 // Copy `src` to `<target>/<profile>/<file_name>` so `LoadLibrary` (which
 // searches the .exe directory first) finds it. Returns false on failure after
 // emitting a `cargo::warning`.
@@ -546,49 +516,6 @@ fn sorted_version_dirs(mut dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     dirs
 }
 
-// Locate `glfw3.dll` inside the `glfw-sys` build output under
-// `build/glfw-sys-*/out/`, preferring the newest-MSVC `lib-vc2022` variant.
-fn find_glfw_dll(build_dir: &Path) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(build_dir).ok()?.flatten() {
-        let p = entry.path();
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        if p.is_dir() && name.starts_with("glfw-sys-") {
-            collect_files_named(&p.join("out"), "glfw3.dll", &mut candidates, 0);
-        }
-    }
-    prefer_path_containing(candidates, "lib-vc2022")
-}
-
-// From a set of candidates, prefer the first whose path contains `needle`,
-// otherwise the first overall.
-fn prefer_path_containing(candidates: Vec<PathBuf>, needle: &str) -> Option<PathBuf> {
-    candidates
-        .iter()
-        .find(|p| p.to_string_lossy().contains(needle))
-        .cloned()
-        .or_else(|| candidates.into_iter().next())
-}
-
-// Recursively collect files named `name` under `dir`, depth-bounded so a stray
-// symlink loop cannot run away.
-fn collect_files_named(dir: &Path, name: &str, out: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 6 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            collect_files_named(&p, name, out, depth + 1);
-        } else if p.file_name().and_then(|n| n.to_str()) == Some(name) {
-            out.push(p);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,34 +590,5 @@ mod tests {
                 PathBuf::from("10.0.22621.0"),
             ]
         );
-    }
-
-    #[test]
-    fn glfw_candidate_prefers_vc2022() {
-        let candidates = vec![
-            PathBuf::from("/out/lib-vc2019/glfw3.dll"),
-            PathBuf::from("/out/lib-vc2022/glfw3.dll"),
-        ];
-        assert_eq!(
-            prefer_path_containing(candidates, "lib-vc2022"),
-            Some(PathBuf::from("/out/lib-vc2022/glfw3.dll"))
-        );
-    }
-
-    #[test]
-    fn glfw_candidate_falls_back_to_first() {
-        let candidates = vec![
-            PathBuf::from("/out/lib-mingw/glfw3.dll"),
-            PathBuf::from("/out/lib-other/glfw3.dll"),
-        ];
-        assert_eq!(
-            prefer_path_containing(candidates.clone(), "lib-vc2022"),
-            Some(PathBuf::from("/out/lib-mingw/glfw3.dll"))
-        );
-    }
-
-    #[test]
-    fn glfw_candidate_empty_is_none() {
-        assert_eq!(prefer_path_containing(Vec::new(), "lib-vc2022"), None);
     }
 }

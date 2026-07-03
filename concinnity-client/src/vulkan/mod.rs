@@ -39,7 +39,18 @@ mod shadow;
 mod swapchain;
 mod texture;
 mod transient_pool;
+#[cfg(target_os = "windows")]
+mod win32_window;
+#[cfg(not(target_os = "windows"))]
 pub(crate) mod window;
+
+// The platform window VkContext owns: the shared native Win32 layer on
+// Windows (one window/input implementation with the DirectX backend), GLFW on
+// Linux.
+#[cfg(target_os = "windows")]
+pub(crate) use win32_window::Win32Window as PlatformWindow;
+#[cfg(not(target_os = "windows"))]
+pub(crate) use window::GlfwWindow as PlatformWindow;
 
 pub use context::VkContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
