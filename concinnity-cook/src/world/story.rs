@@ -41,7 +41,8 @@ pub(crate) struct Character {
 
 // One `# heading` and everything under it. `choices`, when non-empty, is the
 // node's final content: a menu of links out; the choice menu carries the
-// music and one-shot sounds current at the point the list appears.
+// stage dressing, music, and one-shot sounds current at the point the list
+// appears.
 #[derive(Debug, Default)]
 pub(crate) struct Node {
     pub(crate) slug: String,
@@ -50,7 +51,18 @@ pub(crate) struct Node {
     pub(crate) choices: Vec<Choice>,
     pub(crate) choice_music: Option<String>,
     pub(crate) choice_sounds: Vec<String>,
-    pub(crate) choice_bg: Option<String>,
+    pub(crate) choice_stage: Stage,
+}
+
+// The visual dressing current at a page: the backdrop image and the
+// character portraits standing at each side. A `![bg]` directive replaces
+// the backdrop AND clears both portraits (a scene change); `![left]` /
+// `![right]` swap one portrait and persist until the next scene change.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Stage {
+    pub(crate) bg: Option<String>,
+    pub(crate) left: Option<String>,
+    pub(crate) right: Option<String>,
 }
 
 // One click-through page. `jump` overrides the default advance (next page,
@@ -65,7 +77,7 @@ pub(crate) struct Page {
     pub(crate) jump: Option<String>,
     pub(crate) music: Option<String>,
     pub(crate) sounds: Vec<String>,
-    pub(crate) bg: Option<String>,
+    pub(crate) stage: Stage,
 }
 
 #[derive(Debug)]
@@ -75,11 +87,13 @@ pub(crate) struct Choice {
 }
 
 // A media directive paragraph: a lone link whose label names the channel and
-// whose target is an audio file, or a lone `![bg](image)`.
+// whose target is an audio file, or an image whose alt names its stage role.
 enum Directive {
     Music(String),
     Sound(String),
     Bg(String),
+    Left(String),
+    Right(String),
 }
 
 // Replace every StoryImport asset with the UI asset entries its Markdown
@@ -131,8 +145,13 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
         })?;
         let story = parse_story(&content)
             .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
-        let entries = emit_story(&sanitize_name(&import_name), &story, title_screen)
-            .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
+        let entries = emit_story(
+            &sanitize_name(&import_name),
+            &story,
+            title_screen,
+            &probe_image_dims,
+        )
+        .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
 
         for entry in entries {
             let name = asset_name(&entry);
@@ -205,7 +224,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     // or choice list. A directive with nothing after it to attach to is dead
     // and rejected at end of parse.
     let mut current_music: Option<String> = None;
-    let mut current_bg: Option<String> = None;
+    let mut current_stage = Stage::default();
     let mut pending_sounds: Vec<String> = Vec::new();
     let mut unconsumed_directive: Option<usize> = None;
 
@@ -274,7 +293,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                     match classify_paragraph(acc, &range, &line_of)? {
                         ParaOut::Page(mut page) => {
                             page.music = current_music.clone();
-                            page.bg = current_bg.clone();
+                            page.stage = current_stage.clone();
                             page.sounds = std::mem::take(&mut pending_sounds);
                             unconsumed_directive = None;
                             cur_node
@@ -288,7 +307,16 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                                 match directive {
                                     Directive::Music(path) => current_music = Some(path),
                                     Directive::Sound(path) => pending_sounds.push(path),
-                                    Directive::Bg(path) => current_bg = Some(path),
+                                    // A backdrop change is a scene change:
+                                    // the portraits leave with the old scene.
+                                    Directive::Bg(path) => {
+                                        current_stage = Stage {
+                                            bg: Some(path),
+                                            ..Stage::default()
+                                        };
+                                    }
+                                    Directive::Left(path) => current_stage.left = Some(path),
+                                    Directive::Right(path) => current_stage.right = Some(path),
                                 }
                             }
                             unconsumed_directive = Some(line_of(&range));
@@ -324,7 +352,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                 // current music and consumes any queued one-shots.
                 let node = cur_node.as_mut().expect("list start checked the node");
                 node.choice_music = current_music.clone();
-                node.choice_bg = current_bg.clone();
+                node.choice_stage = current_stage.clone();
                 node.choice_sounds = std::mem::take(&mut pending_sounds);
                 unconsumed_directive = None;
             }
@@ -538,6 +566,10 @@ fn finish_node(
     Ok(())
 }
 
+// Reads an image file's pixel dimensions. Injected into emission (the real
+// reader probes file headers) so tests run without image files on disk.
+type ImageDims<'a> = &'a dyn Fn(&str) -> Result<(u32, u32), String>;
+
 // What one paragraph contributes: a page of the story, or media directives
 // that style the pages after it. Directives stack: a paragraph made only of
 // `![bg]` / `[music]` / `[sound]` lines applies them all.
@@ -591,13 +623,6 @@ fn classify_paragraph(
         }
         let mut directives = Vec::new();
         for (alt, target) in acc.images {
-            if alt != "bg" {
-                return Err(format!(
-                    "line {}: image role '{}' is not supported; use `![bg](image.png)` \
-                     for a backdrop",
-                    line, alt
-                ));
-            }
             if !IMAGE_EXTENSIONS.contains(&file_extension(&target).as_str()) {
                 return Err(format!(
                     "line {}: image '{}' must be a {} file",
@@ -606,7 +631,18 @@ fn classify_paragraph(
                     IMAGE_EXTENSIONS.join("/")
                 ));
             }
-            directives.push(Directive::Bg(target));
+            match alt.as_str() {
+                "bg" => directives.push(Directive::Bg(target)),
+                "left" => directives.push(Directive::Left(target)),
+                "right" => directives.push(Directive::Right(target)),
+                other => {
+                    return Err(format!(
+                        "line {}: image role '{}' is not supported; use `![bg]` for a \
+                         backdrop or `![left]` / `![right]` for portraits",
+                        line, other
+                    ));
+                }
+            }
         }
         for (label, target) in acc.links {
             if target.starts_with('#') {
@@ -959,11 +995,14 @@ pub(crate) fn wrap_text(text: &str, columns: usize) -> String {
 }
 
 // Emit the UI asset entries for one parsed story. `prefix` is the sanitized
-// import name; every generated name starts with it.
+// import name; every generated name starts with it. `image_dims` reads an
+// image file's pixel size (portrait layout needs the aspect ratio); tests
+// stub it so emission stays free of file IO.
 pub(crate) fn emit_story(
     prefix: &str,
     story: &Story,
     title_screen: bool,
+    image_dims: ImageDims,
 ) -> Result<Vec<serde_json::Value>, String> {
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let node_asset = |slug: &str| slug.replace('-', "_");
@@ -1073,12 +1112,20 @@ pub(crate) fn emit_story(
             out.push(view(&page_view, initial));
             out.push(backdrop(
                 &format!("{}_bg", page_view),
-                page.bg.as_deref(),
+                page.stage.bg.as_deref(),
                 prefix,
                 &mut images,
                 win_w,
                 win_h,
             ));
+            out.extend(portraits(
+                &page_view,
+                &page.stage,
+                prefix,
+                &mut images,
+                image_dims,
+                win_h,
+            )?);
             if let Some(id) = &page.speaker {
                 let character = &story.characters[id];
                 out.push(label(
@@ -1147,12 +1194,20 @@ pub(crate) fn emit_story(
             out.push(view(&choice_view, initial));
             out.push(backdrop(
                 &format!("{}_bg", choice_view),
-                node.choice_bg.as_deref(),
+                node.choice_stage.bg.as_deref(),
                 prefix,
                 &mut images,
                 win_w,
                 win_h,
             ));
+            out.extend(portraits(
+                &choice_view,
+                &node.choice_stage,
+                prefix,
+                &mut images,
+                image_dims,
+                win_h,
+            )?);
             out.push(sprite(
                 &format!("{}_panel", choice_view),
                 160.0,
@@ -1289,6 +1344,72 @@ fn backdrop(
             })
         }
         None => sprite(name, 0.0, 0.0, win_w, win_h, [0.05, 0.06, 0.09, 1.0]),
+    }
+}
+
+// Character portraits: bottom-anchored beside the dialog box, scaled to a
+// fixed display height with the width following the image's aspect ratio.
+const PORTRAIT_HEIGHT: f32 = 620.0;
+const PORTRAIT_LEFT_CENTER_X: f32 = 320.0;
+const PORTRAIT_RIGHT_CENTER_X: f32 = 960.0;
+
+fn portraits(
+    view: &str,
+    stage: &Stage,
+    prefix: &str,
+    images: &mut Vec<(String, String)>,
+    image_dims: ImageDims,
+    win_h: f32,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut out = Vec::new();
+    for (side, path, center_x) in [
+        ("left", &stage.left, PORTRAIT_LEFT_CENTER_X),
+        ("right", &stage.right, PORTRAIT_RIGHT_CENTER_X),
+    ] {
+        let Some(path) = path else { continue };
+        let (iw, ih) = image_dims(path)?;
+        if iw == 0 || ih == 0 {
+            return Err(format!("portrait '{}' has a zero dimension", path));
+        }
+        let h = PORTRAIT_HEIGHT;
+        let w = h * iw as f32 / ih as f32;
+        let texture = image_asset(prefix, images, path);
+        out.push(serde_json::json!({
+            "name": format!("{}_{}", view, side),
+            "type": "Sprite",
+            "args": {
+                "x": center_x - w / 2.0,
+                "y": win_h - h,
+                "width": w,
+                "height": h,
+                "tint": [1.0, 1.0, 1.0, 1.0],
+                "texture": texture,
+            }
+        }));
+    }
+    Ok(out)
+}
+
+// Read an image file's pixel dimensions from its header, without decoding
+// the pixels.
+fn probe_image_dims(path: &str) -> Result<(u32, u32), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+    if file_extension(path) == "png" {
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
+        let reader = decoder
+            .read_info()
+            .map_err(|e| format!("'{}': {}", path, e))?;
+        let info = reader.info();
+        Ok((info.width, info.height))
+    } else {
+        let mut decoder = jpeg_decoder::Decoder::new(std::io::BufReader::new(file));
+        decoder
+            .read_info()
+            .map_err(|e| format!("'{}': {}", path, e))?;
+        let info = decoder
+            .info()
+            .ok_or_else(|| format!("'{}': no image info", path))?;
+        Ok((info.width as u32, info.height as u32))
     }
 }
 
@@ -1470,6 +1591,11 @@ The signpost points two ways.
 You walk together toward the morning.
 "#;
 
+    // Fixed portrait-shaped dimensions so emission tests need no image files.
+    fn stub_dims(_path: &str) -> Result<(u32, u32), String> {
+        Ok((456, 700))
+    }
+
     fn find<'a>(entries: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
         entries
             .iter()
@@ -1527,7 +1653,7 @@ You walk together toward the morning.
     #[test]
     fn emits_wired_views() {
         let story = parse_story(CROSSROADS).unwrap();
-        let entries = emit_story("story", &story, true).unwrap();
+        let entries = emit_story("story", &story, true, &stub_dims).unwrap();
 
         // Title screen starts the flow at the first node's first page.
         let title = find(&entries, "story_title");
@@ -1587,7 +1713,7 @@ You walk together toward the morning.
     #[test]
     fn no_title_screen_makes_first_page_initial() {
         let story = parse_story(CROSSROADS).unwrap();
-        let entries = emit_story("story", &story, false).unwrap();
+        let entries = emit_story("story", &story, false, &stub_dims).unwrap();
         assert!(!entries.iter().any(|e| asset_name(e) == "story_title"));
         assert_eq!(find(&entries, "story_n_inn_p0")["args"]["initial"], true);
         let back = find(&entries, "story_ending_back_btn");
@@ -1673,7 +1799,7 @@ The door creaks.
     #[test]
     fn media_directives_emit_cues_and_deduped_clips() {
         let story = parse_story(SCORED).unwrap();
-        let entries = emit_story("s", &story, true).unwrap();
+        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
 
         // Three distinct audio files -> three AudioClip entries; the theme is
         // deduplicated to one clip despite two pages sharing its music cue.
@@ -1707,20 +1833,20 @@ The door creaks.
         let story = parse_story(src).unwrap();
         // The backdrop persists across the pages after its directive.
         assert_eq!(
-            story.nodes[0].pages[0].bg.as_deref(),
+            story.nodes[0].pages[0].stage.bg.as_deref(),
             Some("assets/inn.png")
         );
         assert_eq!(
-            story.nodes[0].pages[1].bg.as_deref(),
+            story.nodes[0].pages[1].stage.bg.as_deref(),
             Some("assets/inn.png")
         );
         // A pages-free choice node carries the current backdrop.
         assert_eq!(
-            story.nodes[1].choice_bg.as_deref(),
+            story.nodes[1].choice_stage.bg.as_deref(),
             Some("assets/street.png")
         );
 
-        let entries = emit_story("s", &story, true).unwrap();
+        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
         // Two distinct images -> two Texture entries.
         let textures: Vec<&serde_json::Value> = entries
             .iter()
@@ -1757,7 +1883,7 @@ The door creaks.
             "---\ntitle: T\n---\n\n# a\n\n![bg](x.png)\n[music](m.ogg)\n[sound](s.wav)\n\nhi\n";
         let story = parse_story(src).unwrap();
         let page = &story.nodes[0].pages[0];
-        assert_eq!(page.bg.as_deref(), Some("x.png"));
+        assert_eq!(page.stage.bg.as_deref(), Some("x.png"));
         assert_eq!(page.music.as_deref(), Some("m.ogg"));
         assert_eq!(page.sounds, ["s.wav"]);
     }
@@ -1770,11 +1896,46 @@ The door creaks.
     }
 
     #[test]
+    fn portraits_persist_and_bg_change_clears_them() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![bg](room.png)\n![left](ana.png)\n\nOne.\n\n![right](ben.png)\n\nTwo.\n\n![bg](street.png)\n\nThree.\n";
+        let story = parse_story(src).unwrap();
+        let pages = &story.nodes[0].pages;
+        // Page one: left portrait only.
+        assert_eq!(pages[0].stage.left.as_deref(), Some("ana.png"));
+        assert_eq!(pages[0].stage.right, None);
+        // Page two: the right portrait joins; the left persists.
+        assert_eq!(pages[1].stage.left.as_deref(), Some("ana.png"));
+        assert_eq!(pages[1].stage.right.as_deref(), Some("ben.png"));
+        // Page three: the scene change cleared both portraits.
+        assert_eq!(pages[2].stage.bg.as_deref(), Some("street.png"));
+        assert_eq!(pages[2].stage.left, None);
+        assert_eq!(pages[2].stage.right, None);
+    }
+
+    #[test]
+    fn portrait_sprites_are_scaled_by_aspect_and_bottom_anchored() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![left](ana.png)\n\nhi\n";
+        let story = parse_story(src).unwrap();
+        // stub_dims reports 456x700, so at 620 display height the width is
+        // 620 * 456/700 and the sprite is bottom-anchored on the canvas.
+        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
+        let p = find(&entries, "s_n_a_p0_left");
+        let w = 620.0_f32 * 456.0 / 700.0;
+        assert!((p["args"]["width"].as_f64().unwrap() as f32 - w).abs() < 1e-3);
+        assert_eq!(p["args"]["height"], 620.0);
+        assert_eq!(p["args"]["y"], 100.0);
+        let x = p["args"]["x"].as_f64().unwrap() as f32;
+        assert!((x - (320.0 - w / 2.0)).abs() < 1e-3);
+        // The portrait image becomes a Texture entry like a backdrop.
+        assert_eq!(p["args"]["texture"], find(&entries, "s_img0")["name"]);
+    }
+
+    #[test]
     fn unknown_image_role_is_an_error() {
         let src = "---\ntitle: T\n---\n\n# a\n\n![portrait](x.png)\n\nhi\n";
         let err = parse_story(src).unwrap_err();
         assert!(err.contains("'portrait'"), "{err}");
-        assert!(err.contains("![bg]"), "{err}");
+        assert!(err.contains("![left]"), "{err}");
     }
 
     #[test]
@@ -1947,7 +2108,7 @@ The door creaks.
         // page-0 view of "wood".
         let src = "---\ntitle: T\n---\n\n# wood\n\nhi\n\n# wood p0\n\nbye\n";
         let story = parse_story(src).unwrap();
-        let err = emit_story("s", &story, true).unwrap_err();
+        let err = emit_story("s", &story, true, &stub_dims).unwrap_err();
         assert!(err.contains("name-prefix"), "{err}");
     }
 

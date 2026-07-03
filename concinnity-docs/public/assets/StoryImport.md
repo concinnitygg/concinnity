@@ -28,9 +28,12 @@ block:
   page shows (`[music](assets/theme.ogg)`, `[sound](assets/door.wav)`);
   these expand to [AudioClip](AudioClip.md) + [AudioCue](AudioCue.md) entries
 - `![bg](assets/inn.png)` sets the backdrop image from the next page
-  onward until the next `![bg]`; it expands to a [Texture](Texture.md)
-  entry drawn by each page's backdrop [Sprite](Sprite.md). Directives may
-  stack on adjacent lines in one paragraph
+  onward; `![left](ana.png)` / `![right](ben.png)` place a character
+  portrait on that side, bottom-anchored and scaled by the image's aspect
+  ratio. Portraits persist until replaced; a `![bg]` change is a scene
+  change and clears both. Images expand to [Texture](Texture.md) entries
+  drawn by [Sprite](Sprite.md)s. Directives may stack on adjacent lines in
+  one paragraph
 - a node whose last page has no link falls through to the next heading
   in document order; the final node ends the story
 
