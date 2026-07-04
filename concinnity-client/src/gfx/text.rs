@@ -4,7 +4,7 @@
 // renderer uploads the atlas textures; this module only builds the quad
 // geometry from TextLabel components each frame.
 
-use crate::assets::{LabelBox, TextLabel};
+use crate::assets::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -159,6 +159,9 @@ pub(crate) fn build_text_calls(
     // them to the live window so menus scale with the window. HUD labels
     // (view == None) keep literal window pixels.
     let overlay = OverlayTransform::from_viewport([win_w, win_h]);
+    // Alternate mappings a view-owned label may opt into via `fit`.
+    let bottom = OverlayTransform::bottom_anchored_from_viewport([win_w, win_h]);
+    let cover = OverlayTransform::cover_from_viewport([win_w, win_h]);
     let mut calls = Vec::new();
     for label in labels {
         if !label.visible {
@@ -187,11 +190,39 @@ pub(crate) fn build_text_calls(
             let tw = measure_text_width(&label.content, font, scale);
             let th = h1 * scale;
             ((win_w - tw) / 2.0, (win_h - th) / 2.0, scale)
-        } else if label.view.is_some() {
-            let (sx, sy) = overlay.forward(label.x, label.y);
-            (sx, sy, label.scale * overlay.scale())
         } else {
-            (label.x, label.y, label.scale)
+            // The anchor point and scale: a view-owned label maps through its
+            // `fit` transform, a HUD label stays in literal window pixels.
+            let (ax, ay, scale) = if label.view.is_some() {
+                let t = match label.fit {
+                    SpriteFit::Bottom => bottom,
+                    SpriteFit::Cover => cover,
+                    SpriteFit::Fit => overlay,
+                };
+                let (sx, sy) = t.forward(label.x, label.y);
+                (sx, sy, label.scale * t.scale())
+            } else {
+                (label.x, label.y, label.scale)
+            };
+            // Horizontal alignment shifts the anchor by the rendered width,
+            // measured with the real metrics so centered UI text sits exactly
+            // on its anchor at any scale (centering by the widest line).
+            let x0 = match label.align {
+                TextAlign::Left => ax,
+                TextAlign::Center | TextAlign::Right => {
+                    let w = label
+                        .content
+                        .split('\n')
+                        .map(|line| measure_text_width(line, font, scale))
+                        .fold(0.0_f32, f32::max);
+                    if label.align == TextAlign::Center {
+                        ax - w / 2.0
+                    } else {
+                        ax - w
+                    }
+                }
+            };
+            (x0, ay, scale)
         };
 
         let mut x_cursor = x0;
@@ -375,6 +406,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,

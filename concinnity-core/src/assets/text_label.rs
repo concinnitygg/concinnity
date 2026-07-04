@@ -1,7 +1,25 @@
 // src/assets/text_label.rs
 
+use crate::assets::SpriteFit;
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
 use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+
+/// Horizontal alignment of a [TextLabel](#textlabel) relative to its `x`.
+///
+/// `Center` and `Right` measure the rendered text with the real font metrics
+/// each frame, so a label stays visually centered (or right-aligned) at any
+/// scale without the author estimating glyph widths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TextAlign {
+    /// `x` is the left edge of the text (the default).
+    #[default]
+    Left,
+    /// `x` is the horizontal center of the text.
+    Center,
+    /// `x` is the right edge of the text.
+    Right,
+}
 
 /// Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 ///
@@ -51,6 +69,13 @@ pub struct TextLabel {
     pub scale: f32,
     /// When true, center the label in the viewport each frame; x and y are ignored.
     pub centered: bool,
+    /// Horizontal alignment relative to `x` (measured with the real font
+    /// metrics). Ignored when `centered` is set.
+    pub align: TextAlign,
+    /// How a view-owned label maps from the reference canvas to the window when
+    /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`). `Bottom`
+    /// keeps a label flush with a bottom-anchored sprite it labels.
+    pub fit: SpriteFit,
     /// RGBA fill of a box drawn behind the text. An alpha of 0 (the default)
     /// draws no box; any alpha > 0 draws the box at that opacity.
     pub background: [f32; 4],
@@ -77,6 +102,8 @@ impl Default for TextLabel {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,

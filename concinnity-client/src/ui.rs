@@ -5,13 +5,13 @@
 
 use crate::assets::{
     FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
-    Sprite, StoryCommand, TextLabel, View, ViewCommand, ViewShown,
+    Sprite, SpriteFit, StoryCommand, TextLabel, View, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::settings;
 use concinnity_core::gfx::dropdown;
-use concinnity_core::gfx::overlay::OverlayTransform;
+use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use concinnity_core::gfx::scroll_layout::{self, RowSpec};
 use std::collections::HashMap;
 
@@ -54,6 +54,15 @@ struct RegionEntry {
     // Set by the scroll reflow when this region's row is hidden (its group is
     // collapsed); a hidden region never hovers or fires.
     hidden: bool,
+    // For a `follow_label` region: its label id and the captured `region.y -
+    // label.y` offset. Each frame the region's y is re-synced to the label
+    // (so a runtime-laid-out menu stays clickable) and the region is inert
+    // while the label is empty (a hidden entry catches no clicks).
+    follow: Option<(AssetId, f32)>,
+    // How the region maps from the reference canvas to the window (matches the
+    // sprite/label `fit`); a region spanning the whole canvas covers the full
+    // window regardless.
+    fit: SpriteFit,
 }
 
 // Per-view bookkeeping.
@@ -285,6 +294,18 @@ impl System for UiInputSystem {
             let slider_key = slider_key_from_action(&region.action);
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
+            // A follow-label region captures the y offset to its label now, so
+            // the runtime layout can move the label and the region tracks it.
+            let follow = if region.follow_label {
+                region.label.and_then(|lid| {
+                    ctx.query::<TextLabel>()
+                        .find(|l| l.asset_id == lid)
+                        .map(|l| (lid, region.y - l.y))
+                })
+            } else {
+                None
+            };
+            let fit = region.fit;
             self.regions.push(RegionEntry {
                 region,
                 original_color,
@@ -296,6 +317,8 @@ impl System for UiInputSystem {
                 region_base_y,
                 group_toggle,
                 hidden: false,
+                follow,
+                fit,
             });
         }
 
@@ -442,6 +465,11 @@ impl System for UiInputSystem {
         // before testing it against their (reference-space) rects. View-less
         // regions stay in window pixels (see crate::gfx::overlay).
         let overlay = OverlayTransform::from_viewport(input.viewport);
+        // Alternate mappings a region may opt into via `fit` (bottom-anchored
+        // dialog furniture); the fit transform above stays the default.
+        let overlay_bottom = OverlayTransform::bottom_anchored_from_viewport(input.viewport);
+        let overlay_cover = OverlayTransform::cover_from_viewport(input.viewport);
+        let [vw, vh] = input.viewport;
 
         // Scroll-wheel + scrollbar-thumb input for the active view's panel; both
         // adjust the panel's scroll offset (clamped later in the apply pass). A
@@ -545,11 +573,29 @@ impl System for UiInputSystem {
                     .is_some_and(|rest| {
                         disabled_rows.contains(rest.split(':').next().unwrap_or(""))
                     });
+            // A follow-label region tracks its label's y and goes inert while
+            // the label is empty (a hidden menu entry catches no clicks).
+            let follow_inert = if let Some((label_id, offset)) = entry.follow {
+                match ctx
+                    .query::<TextLabel>()
+                    .find(|l| l.asset_id == label_id)
+                    .map(|l| (l.y, l.content.is_empty()))
+                {
+                    Some((ly, empty)) => {
+                        entry.region.y = ly + offset;
+                        empty
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            };
             let inert = thumb_active
                 || entry.slider_key.is_some()
                 || entry.view != active_view
                 || (entry.scroll_row.is_some() && entry.hidden)
-                || disabled;
+                || disabled
+                || follow_inert;
             if inert {
                 if entry.was_hovered {
                     set_label_style(
@@ -563,16 +609,27 @@ impl System for UiInputSystem {
                 continue;
             }
 
-            // Overlay (view-owned) regions hit-test in reference space; HUD
-            // regions in window pixels.
-            let (qx, qy) = if entry.view.is_some() {
-                overlay.inverse(mx, my)
-            } else {
+            // Overlay (view-owned) regions hit-test in reference space (through
+            // the region's own `fit`); HUD regions in window pixels. A region
+            // spanning the whole reference canvas covers the full window (so a
+            // full-canvas advance region catches clicks in the letterbox too).
+            let full_window = entry.view.is_some() && region_covers_canvas(&entry.region);
+            let (qx, qy) = if entry.view.is_none() {
                 (mx, my)
+            } else {
+                match entry.fit {
+                    SpriteFit::Bottom => overlay_bottom.inverse(mx, my),
+                    SpriteFit::Cover => overlay_cover.inverse(mx, my),
+                    SpriteFit::Fit => overlay.inverse(mx, my),
+                }
             };
             let group_toggle = entry.group_toggle;
             let r = &entry.region;
-            let mut hovered = qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height;
+            let mut hovered = if full_window {
+                mx >= 0.0 && mx < vw && my >= 0.0 && my < vh
+            } else {
+                qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height
+            };
             // A scroll-content region only counts as hovered inside its band, so
             // a row scrolled past the edge does not catch clicks over the chrome.
             if let Some((pi, _)) = entry.scroll_row
@@ -1260,6 +1317,16 @@ fn point_in_rect(x: f32, y: f32, rect: [f32; 4]) -> bool {
     x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3]
 }
 
+// Whether a region spans the whole reference canvas (a full-screen "click
+// anywhere" region). Such a region covers the entire live window, including any
+// letterbox margin, rather than only the fitted canvas rect.
+fn region_covers_canvas(r: &HitRegion) -> bool {
+    r.x <= 0.0
+        && r.y <= 0.0
+        && r.x + r.width >= UI_REFERENCE_SIZE[0]
+        && r.y + r.height >= UI_REFERENCE_SIZE[1]
+}
+
 // Write the given color + scale onto a region's referenced label, if any.
 // Drives hover-in (hover style), hover-out (captured style), and the restore
 // applied when a hovered region goes inert (its view hides, its row collapses,
@@ -1445,6 +1512,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1473,6 +1542,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1490,6 +1561,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1546,6 +1619,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1563,6 +1638,8 @@ mod tests {
             drag_handle: None,
             view: Some(menu),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1614,6 +1691,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1632,6 +1711,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, view)
@@ -1699,6 +1780,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1716,6 +1799,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.insert_resource(crate::ecs::DisplayModes(modes));
@@ -1905,6 +1990,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 0.66,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1923,6 +2010,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1954,6 +2043,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1982,6 +2073,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2088,6 +2181,8 @@ mod tests {
             drag_handle: None,
             view: Some(view_id),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world
@@ -2142,6 +2237,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2177,6 +2274,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2200,6 +2299,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2221,6 +2322,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2247,6 +2350,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2293,6 +2398,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: true,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2323,6 +2430,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2355,6 +2464,8 @@ mod tests {
             drag_handle: Some(AssetId(8)),
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2425,6 +2536,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         // Body click region (a settings action; a content region, so it is
         // bucketed into its row and gated by the collapse).
@@ -2440,6 +2553,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
             view: Some(view),
@@ -2705,6 +2820,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2722,6 +2839,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, value)

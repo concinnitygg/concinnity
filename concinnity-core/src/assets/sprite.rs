@@ -64,8 +64,9 @@ pub struct Sprite {
     pub corner_radius: f32,
 }
 
-/// How a view-owned [Sprite](#sprite) maps from the 1280x720 reference canvas
-/// to the live window when their aspect ratios differ.
+/// How a view-owned overlay element (a [Sprite](#sprite), [TextLabel](#textlabel),
+/// or [HitRegion](#hitregion)) maps from the 1280x720 reference canvas to the
+/// live window when their aspect ratios differ.
 ///
 /// View-owned UI is authored against a fixed reference canvas and uniformly
 /// scaled to the window at runtime.
@@ -82,6 +83,12 @@ pub enum SpriteFit {
     /// character portraits) reaches the window edges without distorting, and
     /// content anchored to a canvas edge stays flush with the window edge.
     Cover,
+    /// The canvas keeps the `fit` scale (no cropping), but the whole overlay is
+    /// shifted so the reference bottom edge lands on the window bottom edge.
+    /// Bottom-anchored furniture (a visual-novel dialog box and its controls)
+    /// hugs the window bottom at any aspect ratio instead of floating above a
+    /// letterbox margin.
+    Bottom,
 }
 
 impl Default for Sprite {

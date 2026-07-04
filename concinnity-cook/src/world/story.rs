@@ -31,6 +31,9 @@ pub(crate) struct Story {
     pub(crate) title: String,
     pub(crate) characters: BTreeMap<String, Character>,
     pub(crate) nodes: Vec<Node>,
+    // Optional title-screen backdrop image (frontmatter `background`), drawn
+    // full-bleed behind the title menu.
+    pub(crate) background: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1032,6 +1035,7 @@ fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), String> {
             };
             match key.trim() {
                 "title" => story.title = unquote(value.trim()).to_string(),
+                "background" => story.background = Some(unquote(value.trim()).to_string()),
                 "characters" => {
                     if !value.trim().is_empty() {
                         return err("`characters` takes an indented block".to_string());
@@ -1040,7 +1044,8 @@ fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), String> {
                 }
                 other => {
                     return err(format!(
-                        "unknown key '{}'; supported keys are `title` and `characters`",
+                        "unknown key '{}'; supported keys are `title`, `background`, and \
+                         `characters`",
                         other
                     ));
                 }
@@ -1287,70 +1292,65 @@ pub(crate) fn emit_story(
         font(&font_dialog, DIALOG_FONT_PX),
     ];
 
+    // Audio files referenced by media directives, deduplicated by path in
+    // first-use order; each becomes one AudioClip entry. Same for stage
+    // images (and the optional menu backdrop), which become Texture entries the
+    // sprites sample.
+    let mut clips: Vec<(String, String)> = Vec::new();
+    let mut images: Vec<(String, String)> = Vec::new();
+
     if title_screen {
         out.push(view(&title_view, true));
-        out.push(sprite(
-            &format!("{}_bg", title_view),
-            0.0,
-            0.0,
-            win_w,
-            win_h,
-            [0.05, 0.06, 0.12, 1.0],
-        ));
+        // The menu backdrop: a full-bleed image when the frontmatter set one,
+        // else a flat dark fill.
+        match &story.background {
+            Some(path) => {
+                let texture = image_asset(prefix, &mut images, path);
+                out.push(textured_cover_sprite(
+                    &format!("{}_bg", title_view),
+                    [0.0, 0.0, win_w, win_h],
+                    &texture,
+                ));
+            }
+            None => out.push(sprite(
+                &format!("{}_bg", title_view),
+                0.0,
+                0.0,
+                win_w,
+                win_h,
+                [0.05, 0.06, 0.12, 1.0],
+            )),
+        }
         out.push(label(
             &format!("{}_heading", title_view),
             &font_title,
             &story.title,
             LabelStyle {
-                x: centered_x(&story.title, TITLE_FONT_PX, win_w),
+                x: win_w / 2.0,
                 y: 180.0,
                 color: [1.0, 0.92, 0.78],
+                align: Some("center"),
                 ..LabelStyle::default()
             },
         ));
-        out.extend(button(
-            &format!("{}_start", title_view),
-            &font_menu,
-            "Start",
-            win_w / 2.0 - 120.0,
-            430.0,
-            240.0,
-            "story:start",
-        ));
-        out.extend(button(
-            &format!("{}_continue", title_view),
-            &font_menu,
-            "Continue",
-            win_w / 2.0 - 120.0,
-            490.0,
-            240.0,
-            "story:continue",
-        ));
-        out.extend(button(
-            &format!("{}_load", title_view),
-            &font_menu,
-            "Load",
-            win_w / 2.0 - 120.0,
-            550.0,
-            240.0,
-            "story:load",
-        ));
-        out.extend(button(
-            &format!("{}_quit", title_view),
-            &font_menu,
-            "Quit",
-            win_w / 2.0 - 120.0,
-            610.0,
-            240.0,
-            "quit",
-        ));
+        // The four menu buttons at default contiguous positions; the story
+        // re-lays them out at runtime (Continue and Load only when a save
+        // exists), so their hit regions follow their labels.
+        for (key, text, y, action) in [
+            ("start", "Start", 430.0, "story:start"),
+            ("continue", "Continue", 490.0, "story:continue"),
+            ("load", "Load", 550.0, "story:load"),
+            ("quit", "Quit", 610.0, "quit"),
+        ] {
+            out.extend(title_button(
+                &format!("{}_{}", title_view, key),
+                &font_menu,
+                text,
+                y,
+                action,
+            ));
+        }
     }
-
-    // Audio files referenced by media directives, deduplicated by path in
-    // first-use order; each becomes one AudioClip entry. Same for stage
-    // images, which become Texture entries the stage sprites sample.
-    let mut clips: Vec<(String, String)> = Vec::new();
-    let mut images: Vec<(String, String)> = Vec::new();
 
     // Compile the node graph. Jump and choice targets become node indices
     // (validated against slugs during parse); media paths become the
@@ -1446,6 +1446,8 @@ pub(crate) fn emit_story(
     let option_boxes: Vec<String> = (0..max_choices)
         .map(|i| format!("{}_opt{}_box", stage_view, i))
         .collect();
+    let start_label = title_screen.then(|| format!("{}_start_lbl", title_view));
+    let quit_label = title_screen.then(|| format!("{}_quit_lbl", title_view));
     let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
     let load_label = title_screen.then(|| format!("{}_load_lbl", title_view));
     let slot_boxes: Vec<String> = (0..SAVE_SLOTS)
@@ -1474,6 +1476,8 @@ pub(crate) fn emit_story(
                 "text_label": format!("{}_text", stage_view),
                 "option_boxes": option_boxes,
                 "options": option_labels,
+                "start_label": start_label,
+                "quit_label": quit_label,
                 "continue_label": continue_label,
                 "title": title_screen.then(|| title_view.clone()),
                 "load_label": load_label,
@@ -1509,11 +1513,15 @@ pub(crate) fn emit_story(
             false,
         ));
     }
-    out.push(rounded_sprite(
+    // The dialog box and everything on it are bottom-anchored (fit scale, but
+    // pinned to the window bottom) so the box hugs the bottom edge at any
+    // aspect ratio instead of floating above the letterbox margin.
+    out.push(rounded_sprite_fit(
         &format!("{}_box", stage_view),
         DIALOG_BOX,
         [0.0, 0.0, 0.0, 0.55],
         DIALOG_BOX_RADIUS,
+        Some("bottom"),
     ));
     // The name plate sits inside the dialog box so the speaker reads against
     // its dark backdrop, with the dialogue below it.
@@ -1525,6 +1533,7 @@ pub(crate) fn emit_story(
             x: DIALOG_BOX.0 + 30.0,
             y: DIALOG_BOX.1 + 14.0,
             color: [1.0, 1.0, 1.0],
+            fit: Some("bottom"),
             ..LabelStyle::default()
         },
     ));
@@ -1536,15 +1545,13 @@ pub(crate) fn emit_story(
             x: DIALOG_BOX.0 + 30.0,
             y: DIALOG_BOX.1 + 58.0,
             color: [1.0, 0.95, 0.85],
+            fit: Some("bottom"),
             ..LabelStyle::default()
         },
     ));
     out.push(hit_region(
         &format!("{}_advance", stage_view),
-        0.0,
-        0.0,
-        win_w,
-        win_h,
+        (0.0, 0.0, win_w, win_h),
         None,
         "story:advance",
     ));
@@ -1557,7 +1564,7 @@ pub(crate) fn emit_story(
     // The advance marker: a small rounded square at the dialog box's lower
     // right that the story system pulses while a fully revealed page waits
     // for a click.
-    out.push(rounded_sprite(
+    out.push(rounded_sprite_fit(
         &format!("{}_marker", stage_view),
         (
             DIALOG_BOX.0 + DIALOG_BOX.2 - 50.0,
@@ -1567,6 +1574,7 @@ pub(crate) fn emit_story(
         ),
         [1.0, 0.95, 0.85, 0.0],
         4.0,
+        Some("bottom"),
     ));
 
     // The quick row: small always-clickable controls along the dialog box's
@@ -1574,16 +1582,17 @@ pub(crate) fn emit_story(
     // system in page mode and cleared elsewhere; the hit regions stay active
     // the whole time and out-of-mode commands are ignored, like the choice
     // buttons.
+    // The story fills each label's text (Log / Auto / Skip / Save) at runtime.
     let quick = [
-        ("qlog", "Log", "story:log"),
-        ("qauto", "Auto", "story:auto"),
-        ("qskip", "Skip", "story:skip"),
-        ("qsave", "Save", "story:save"),
+        ("qlog", "story:log"),
+        ("qauto", "story:auto"),
+        ("qskip", "story:skip"),
+        ("qsave", "story:save"),
     ];
     let quick_y = DIALOG_BOX.1 + DIALOG_BOX.3 - 38.0;
     let quick_w = 80.0;
     let quick_x0 = DIALOG_BOX.0 + DIALOG_BOX.2 - 30.0 - quick.len() as f32 * 90.0;
-    for (i, (key, text, action)) in quick.iter().enumerate() {
+    for (i, (key, action)) in quick.iter().enumerate() {
         let x = quick_x0 + i as f32 * 90.0;
         let lbl = format!("{}_{}_lbl", stage_view, key);
         out.push(serde_json::json!({
@@ -1592,21 +1601,21 @@ pub(crate) fn emit_story(
             "args": {
                 "font": font_dialog,
                 "content": "",
-                "x": x + centered_x(text, DIALOG_FONT_PX, quick_w),
+                "x": x + quick_w / 2.0,
                 "y": quick_y + 2.0,
                 "color": [0.75, 0.75, 0.75],
                 "scale": 1.0,
+                "align": "center",
+                "fit": "bottom",
                 "visible": false,
             }
         }));
-        out.push(hit_region(
+        out.push(hit_region_fit(
             &format!("{}_{}_btn", stage_view, key),
-            x,
-            quick_y,
-            quick_w,
-            30.0,
+            (x, quick_y, quick_w, 30.0),
             Some(&lbl),
             action,
+            Some("bottom"),
         ));
     }
 
@@ -1638,10 +1647,11 @@ pub(crate) fn emit_story(
                 "args": {
                     "font": font_menu,
                     "content": "",
-                    "x": 280.0,
+                    "x": win_w / 2.0,
                     "y": y + 8.0,
                     "color": [0.92, 0.92, 0.92],
                     "scale": 1.0,
+                    "align": "center",
                     "visible": false,
                 }
             }));
@@ -1690,9 +1700,10 @@ pub(crate) fn emit_story(
         &font_menu,
         "",
         LabelStyle {
-            x: 280.0,
+            x: win_w / 2.0,
             y: 160.0,
             color: [1.0, 0.92, 0.78],
+            align: Some("center"),
             ..LabelStyle::default()
         },
     ));
@@ -1716,19 +1727,17 @@ pub(crate) fn emit_story(
             "args": {
                 "font": font_menu,
                 "content": "",
-                "x": 310.0,
+                "x": win_w / 2.0,
                 "y": y + 14.0,
                 "color": [0.92, 0.92, 0.92],
                 "scale": 1.0,
+                "align": "center",
                 "visible": false,
             }
         }));
         out.push(hit_region(
             &format!("{}_slot{}_btn", stage_view, i),
-            280.0,
-            y,
-            win_w - 560.0,
-            56.0,
+            (280.0, y, win_w - 560.0, 56.0),
             Some(&lbl),
             &format!("story:slot:{}", i),
         ));
@@ -1750,9 +1759,10 @@ pub(crate) fn emit_story(
         &font_title,
         "~ fin ~",
         LabelStyle {
-            x: centered_x("~ fin ~", TITLE_FONT_PX, win_w),
+            x: win_w / 2.0,
             y: 260.0,
             color: [0.95, 0.88, 0.7],
+            align: Some("center"),
             ..LabelStyle::default()
         },
     ));
@@ -1983,27 +1993,41 @@ fn rounded_sprite(
     tint: [f32; 4],
     radius: f32,
 ) -> serde_json::Value {
+    rounded_sprite_fit(name, rect, tint, radius, None)
+}
+
+// A rounded sprite with an explicit `fit`. `Some("bottom")` pins the sprite to
+// the window bottom (the dialog box and its marker) instead of the letterbox.
+fn rounded_sprite_fit(
+    name: &str,
+    rect: (f32, f32, f32, f32),
+    tint: [f32; 4],
+    radius: f32,
+    fit: Option<&'static str>,
+) -> serde_json::Value {
+    let mut args = serde_json::json!({
+        "x": rect.0, "y": rect.1, "width": rect.2, "height": rect.3,
+        "tint": tint,
+        "corner_radius": radius,
+    });
+    if let Some(fit) = fit {
+        args["fit"] = serde_json::json!(fit);
+    }
+    serde_json::json!({ "name": name, "type": "Sprite", "args": args })
+}
+
+// A full-bleed textured sprite (cover fit) for a menu backdrop image.
+fn textured_cover_sprite(name: &str, rect: [f32; 4], texture: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "type": "Sprite",
         "args": {
-            "x": rect.0, "y": rect.1, "width": rect.2, "height": rect.3,
-            "tint": tint,
-            "corner_radius": radius,
+            "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
+            "texture": texture,
+            "tint": [1.0, 1.0, 1.0, 1.0],
+            "fit": "cover",
         }
     })
-}
-
-// Approximate text width for horizontal centering: this stage has no font
-// metrics, so glyph advance is estimated from the font size. `centered` on
-// TextLabel is not usable here; the renderer treats it as splash text and
-// auto-scales it to fill the viewport.
-fn est_text_width(text: &str, font_px: u32) -> f32 {
-    text.chars().count() as f32 * 0.6 * font_px as f32
-}
-
-fn centered_x(text: &str, font_px: u32, span: f32) -> f32 {
-    ((span - est_text_width(text, font_px)) / 2.0).max(0.0)
 }
 
 #[derive(Default)]
@@ -2012,6 +2036,12 @@ struct LabelStyle {
     y: f32,
     color: [f32; 3],
     background: Option<[f32; 4]>,
+    // Horizontal alignment relative to `x` ("center" centers text around it,
+    // measured with real metrics at draw time). `None` = left, the default.
+    align: Option<&'static str>,
+    // Reference-to-window mapping ("bottom" hugs the window bottom). `None` =
+    // fit, the default.
+    fit: Option<&'static str>,
 }
 
 fn label(name: &str, font: &str, content: &str, style: LabelStyle) -> serde_json::Value {
@@ -2027,23 +2057,38 @@ fn label(name: &str, font: &str, content: &str, style: LabelStyle) -> serde_json
         args["background"] = serde_json::json!(bg);
         args["padding"] = serde_json::json!(20.0);
     }
+    if let Some(align) = style.align {
+        args["align"] = serde_json::json!(align);
+    }
+    if let Some(fit) = style.fit {
+        args["fit"] = serde_json::json!(fit);
+    }
     serde_json::json!({ "name": name, "type": "TextLabel", "args": args })
 }
 
 fn hit_region(
     name: &str,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
+    rect: (f32, f32, f32, f32),
     label: Option<&str>,
     action: &str,
 ) -> serde_json::Value {
+    hit_region_fit(name, rect, label, action, None)
+}
+
+// A hit region with an explicit `fit` (reference-to-window mapping). `Some`
+// keeps a region aligned with bottom-anchored furniture it covers.
+fn hit_region_fit(
+    name: &str,
+    rect: (f32, f32, f32, f32),
+    label: Option<&str>,
+    action: &str,
+    fit: Option<&'static str>,
+) -> serde_json::Value {
     let mut args = serde_json::json!({
-        "x": x,
-        "y": y,
-        "width": w,
-        "height": h,
+        "x": rect.0,
+        "y": rect.1,
+        "width": rect.2,
+        "height": rect.3,
         "action": action,
     });
     if let Some(l) = label {
@@ -2051,12 +2096,15 @@ fn hit_region(
         args["hover_color"] = serde_json::json!([1.0, 0.85, 0.3]);
         args["hover_scale"] = serde_json::json!(1.06);
     }
+    if let Some(fit) = fit {
+        args["fit"] = serde_json::json!(fit);
+    }
     serde_json::json!({ "name": name, "type": "HitRegion", "args": args })
 }
 
 // A clickable menu row: a TextLabel and the HitRegion that styles and fires
-// it. The label is centered in the region by estimated text width; buttons
-// always use the menu font.
+// it. The label is centered in the region with real metrics (align center on
+// the box center); buttons always use the menu font.
 fn button(
     name: &str,
     font: &str,
@@ -2073,13 +2121,56 @@ fn button(
             font,
             text,
             LabelStyle {
-                x: x + centered_x(text, MENU_FONT_PX, w).min(w - 20.0),
+                x: x + w / 2.0,
                 y: y + 6.0,
                 color: [0.92, 0.92, 0.92],
+                align: Some("center"),
                 ..LabelStyle::default()
             },
         ),
-        hit_region(&format!("{}_btn", name), x, y, w, 40.0, Some(&lbl), action),
+        hit_region(
+            &format!("{}_btn", name),
+            (x, y, w, 40.0),
+            Some(&lbl),
+            action,
+        ),
+    ]
+}
+
+// A title-menu button: like `button`, but its hit region follows the label the
+// story lays out at runtime (and goes inert while the label is empty), so the
+// menu keeps only the applicable buttons contiguous with no dead click zones.
+fn title_button(
+    name: &str,
+    font: &str,
+    text: &str,
+    y: f32,
+    action: &str,
+) -> Vec<serde_json::Value> {
+    let win_w = UI_REFERENCE_SIZE[0];
+    let x = win_w / 2.0 - 120.0;
+    let lbl = format!("{}_lbl", name);
+    let mut region = hit_region(
+        &format!("{}_btn", name),
+        (x, y, 240.0, 40.0),
+        Some(&lbl),
+        action,
+    );
+    region["args"]["follow_label"] = serde_json::json!(true);
+    vec![
+        label(
+            &lbl,
+            font,
+            text,
+            LabelStyle {
+                x: win_w / 2.0,
+                y: y + 6.0,
+                color: [0.92, 0.92, 0.92],
+                align: Some("center"),
+                ..LabelStyle::default()
+            },
+        ),
+        region,
     ]
 }
 
@@ -2320,6 +2411,63 @@ You walk together toward the morning.
             find(&entries, "story_ending_back_lbl")["args"]["content"],
             "Restart"
         );
+    }
+
+    // The dialog furniture is bottom-anchored, its labels centered/aligned,
+    // and the title menu buttons follow their labels so the story can lay the
+    // menu out at runtime.
+    #[test]
+    fn dialog_is_bottom_anchored_and_title_buttons_follow() {
+        let story = parse_story(CROSSROADS).unwrap();
+        let entries = emit_story("story", &story, true, 30.0, &stub_dims).unwrap();
+
+        // The box, its text, its marker, and the quick row all hug the bottom.
+        assert_eq!(find(&entries, "story_stage_box")["args"]["fit"], "bottom");
+        assert_eq!(find(&entries, "story_stage_text")["args"]["fit"], "bottom");
+        assert_eq!(
+            find(&entries, "story_stage_marker")["args"]["fit"],
+            "bottom"
+        );
+        assert_eq!(
+            find(&entries, "story_stage_qauto_btn")["args"]["fit"],
+            "bottom"
+        );
+
+        // The heading and menu buttons center on their anchor with real
+        // metrics; each title button's region follows its label.
+        assert_eq!(
+            find(&entries, "story_title_heading")["args"]["align"],
+            "center"
+        );
+        let start = find(&entries, "story_title_start_btn");
+        assert_eq!(start["args"]["follow_label"], true);
+        assert_eq!(start["args"]["label"], "story_title_start_lbl");
+        assert_eq!(
+            find(&entries, "story_title_start_lbl")["args"]["align"],
+            "center"
+        );
+        let scaffold = &find(&entries, "story")["args"]["scaffold"];
+        assert_eq!(scaffold["start_label"], "story_title_start_lbl");
+        assert_eq!(scaffold["quit_label"], "story_title_quit_lbl");
+    }
+
+    // A `background` frontmatter draws the title menu over a full-bleed image
+    // (a cover-fit textured sprite + one Texture entry).
+    #[test]
+    fn menu_background_becomes_a_cover_sprite() {
+        let src = CROSSROADS.replace(
+            "title: The Crossroads\n",
+            "title: The Crossroads\nbackground: assets/menu.png\n",
+        );
+        let story = parse_story(&src).unwrap();
+        assert_eq!(story.background.as_deref(), Some("assets/menu.png"));
+        let entries = emit_story("story", &story, true, 30.0, &stub_dims).unwrap();
+        let bg = &find(&entries, "story_title_bg")["args"];
+        assert_eq!(bg["fit"], "cover");
+        let texture = bg["texture"].as_str().unwrap();
+        let tex = find(&entries, texture);
+        assert_eq!(type_norm(tex), "texture");
+        assert_eq!(tex["args"]["source"], "assets/menu.png");
     }
 
     #[test]

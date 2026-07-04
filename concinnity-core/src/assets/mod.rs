@@ -198,7 +198,7 @@ pub use story::{
 pub use story_command::StoryCommand;
 pub use story_import::StoryImport;
 pub use streaming_config::StreamingConfig;
-pub use text_label::TextLabel;
+pub use text_label::{TextAlign, TextLabel};
 pub use texture::Texture;
 pub use view::View;
 pub use view_command::ViewCommand;

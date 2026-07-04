@@ -404,6 +404,8 @@ fn build_dropdown_overlay(
             color: view.color,
             scale: view.scale,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,

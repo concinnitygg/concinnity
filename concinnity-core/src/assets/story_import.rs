@@ -14,7 +14,8 @@ use crate::ecs::{AssetOrigin, Component};
 /// The `source` file is CommonMark Markdown opening with a YAML frontmatter
 /// block:
 ///
-/// - frontmatter declares the story `title` and its `characters`
+/// - frontmatter declares the story `title`, its `characters`, and an
+///   optional `background` (a full-bleed image drawn behind the title menu)
 /// - each `# heading` starts a node (a jump target)
 /// - each paragraph is one click-through page of narration
 /// - a paragraph opening `**id:**` attributes the line to a declared
@@ -57,7 +58,10 @@ use crate::ecs::{AssetOrigin, Component};
 /// Play position and variables auto-save page by page (under the project's
 /// `.concinnity/data/`); the generated title screen's Continue resumes
 /// them, and finishing the story clears the auto-save. Save writes one of
-/// three numbered slots, resumed from the title screen's Load.
+/// three numbered slots, resumed from the title screen's Load. The title
+/// menu keeps only the buttons that apply, laid out contiguously: Continue
+/// appears once an auto-save exists and Load once a slot does, so a fresh
+/// project shows just Start and Quit with no gap.
 ///
 /// Under the editor's debug run, saving the `source` file hot-reloads the
 /// story: the graph re-compiles and swaps into the running game in place,

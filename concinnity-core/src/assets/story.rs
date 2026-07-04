@@ -81,6 +81,15 @@ pub struct StoryScaffold {
     pub option_boxes: Vec<AssetId>,
     /// Choice button [TextLabel](#textlabel)s, one per option slot.
     pub options: Vec<AssetId>,
+    /// The title screen's Start [TextLabel](#textlabel). The story lays the
+    /// title menu out at runtime, keeping only the buttons that apply
+    /// contiguous (Continue and Load appear only when a save exists), so these
+    /// labels are moved and cleared per the save state on disk.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub start_label: Option<AssetId>,
+    /// The title screen's Quit [TextLabel](#textlabel).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub quit_label: Option<AssetId>,
     /// The title screen's Continue [TextLabel](#textlabel), hidden while no
     /// save exists.
     #[serde(deserialize_with = "de_opt_asset_ref")]

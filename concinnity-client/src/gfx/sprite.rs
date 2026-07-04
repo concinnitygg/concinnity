@@ -50,6 +50,7 @@ pub(crate) fn build_sprite_calls(
     };
     let overlay = OverlayTransform::from_viewport(viewport);
     let cover = OverlayTransform::cover_from_viewport(viewport);
+    let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
     let [vw, vh] = viewport;
     let mut calls = Vec::new();
     for s in sprites {
@@ -67,6 +68,12 @@ pub(crate) fn build_sprite_calls(
                 // anchored content (a bottom-anchored portrait) stays flush.
                 let (ax, ay) = cover.forward(s.x, s.y);
                 let (bx, by) = cover.forward(s.x + s.width, s.y + s.height);
+                (ax, ay, bx, by)
+            } else if s.fit == SpriteFit::Bottom {
+                // Bottom-anchored furniture (a dialog box): fit scale, but
+                // pinned to the window bottom rather than the letterbox margin.
+                let (ax, ay) = bottom.forward(s.x, s.y);
+                let (bx, by) = bottom.forward(s.x + s.width, s.y + s.height);
                 (ax, ay, bx, by)
             } else if covers_canvas(s) && vw > 0.0 && vh > 0.0 {
                 // A view-owned sprite spanning the whole reference canvas is a

@@ -19,6 +19,8 @@ story system mutates page by page.
 - `text_label`: A string. Dialog text [TextLabel](TextLabel.md). Optional.
 - `option_boxes`: An array of strings. Choice button box [Sprite](Sprite.md)s, one per option slot.
 - `options`: An array of strings. Choice button [TextLabel](TextLabel.md)s, one per option slot.
+- `start_label`: A string. The title screen's Start [TextLabel](TextLabel.md). The story lays the title menu out at runtime, keeping only the buttons that apply contiguous (Continue and Load appear only when a save exists), so these labels are moved and cleared per the save state on disk. Optional.
+- `quit_label`: A string. The title screen's Quit [TextLabel](TextLabel.md). Optional.
 - `continue_label`: A string. The title screen's Continue [TextLabel](TextLabel.md), hidden while no save exists. Optional.
 - `title`: A string. The title screen [View](View.md), returned to when the load overlay is dismissed before play started. Optional.
 - `load_label`: A string. The title screen's Load [TextLabel](TextLabel.md), hidden while no slot save exists. Optional.

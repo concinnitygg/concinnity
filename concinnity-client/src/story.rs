@@ -19,11 +19,14 @@ use crate::assets::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 
-// The stage scaffolding's menu font size; choice labels center by the same
-// glyph-width estimate the build uses (no font metrics at either stage).
-const MENU_FONT_PX: f32 = 28.0;
-const CHOICE_BUTTON_X: f32 = 280.0;
-const CHOICE_BUTTON_W: f32 = 720.0;
+// Horizontal center of the choice / slot buttons (the build authors their
+// labels as centered around this x, so the story only fills the text).
+const MENU_CENTER_X: f32 = 640.0;
+// Title menu layout: the story keeps only the applicable buttons (Start,
+// Continue when an auto-save exists, Load when a slot exists, Quit) and stacks
+// them contiguously and centered, so an absent button leaves no gap.
+const TITLE_MENU_CENTER_Y: f32 = 500.0;
+const TITLE_MENU_SPACING: f32 = 62.0;
 // Shown tint of a choice option's box; matches the color the build authors
 // (with zero alpha) on the generated `_opt<N>_box` sprites. An occupied menu
 // slot re-tints its box to this; hiding is alpha zero, never `visible` (view
@@ -65,7 +68,11 @@ struct StageIds {
     // out-of-menu choose (or an in-menu advance) a no-op, so the overlap
     // with the full-canvas advance region resolves without touching them.
     options: Vec<AssetId>,
-    // The title screen's Continue label, hidden while no save exists.
+    // The title screen's menu button labels. The story lays the title menu out
+    // at runtime, keeping only the applicable buttons contiguous, so Continue
+    // and Load appear only when a save exists.
+    start_label: Option<AssetId>,
+    quit_label: Option<AssetId>,
     continue_label: Option<AssetId>,
     // The title screen view (returned to when a load overlay opened from the
     // title is dismissed) and its Load label, hidden while no slot exists.
@@ -103,6 +110,8 @@ impl StageIds {
             text: scaffold.text_label,
             option_boxes: scaffold.option_boxes.clone(),
             options: scaffold.options.clone(),
+            start_label: scaffold.start_label,
+            quit_label: scaffold.quit_label,
             continue_label: scaffold.continue_label,
             title_view: scaffold.title,
             load_label: scaffold.load_label,
@@ -330,30 +339,26 @@ impl StorySystem {
         }
     }
 
-    // Auto-save the current position and variables; the title screen's
-    // Continue lights up once one exists.
-    fn persist_position(&mut self, ctx: &mut PipelineContext) {
+    // Auto-save the current position and variables. The title menu reads the
+    // save state on disk when it is next shown, so Continue appears from here
+    // on without touching its label mid-play.
+    fn persist_position(&mut self, _ctx: &mut PipelineContext) {
         if self.story.save_key.is_empty() {
             return;
         }
         let save = self.current_save();
         if let Err(e) = write_save(&save_file(&self.save_dir, &self.story.save_key), &save) {
             tracing::warn!("StorySystem: save failed: {e}");
-            return;
         }
-        let continue_label = self.ids.as_ref().and_then(|i| i.continue_label);
-        set_label(ctx, continue_label, |l| l.content = "Continue".to_string());
     }
 
-    // A finished story starts fresh next time: drop the auto-save and dim
-    // Continue. Slot saves stay.
-    fn clear_save(&mut self, ctx: &mut PipelineContext) {
+    // A finished story starts fresh next time: drop the auto-save (the title
+    // menu drops Continue when it next reads disk). Slot saves stay.
+    fn clear_save(&mut self, _ctx: &mut PipelineContext) {
         if self.story.save_key.is_empty() {
             return;
         }
         let _ = std::fs::remove_file(save_file(&self.save_dir, &self.story.save_key));
-        let continue_label = self.ids.as_ref().and_then(|i| i.continue_label);
-        set_label(ctx, continue_label, |l| l.content.clear());
     }
 
     // Whether any manual slot save exists (the title's Load lights up).
@@ -361,6 +366,59 @@ impl StorySystem {
         !self.story.save_key.is_empty()
             && (0..self.ids.as_ref().map_or(0, |i| i.slot_boxes.len()))
                 .any(|i| slot_file(&self.save_dir, &self.story.save_key, i).exists())
+    }
+
+    // Lay out the title screen menu from the save state on disk: Start and Quit
+    // always, Continue only when an auto-save exists, Load only when a slot
+    // does. The applicable buttons stack contiguously and centered, so an
+    // absent one leaves no gap; each button's hit region follows its label
+    // (and goes inert while the label is empty), so a hidden button neither
+    // shows nor catches clicks. Runs at init and whenever the title is shown.
+    fn layout_title_menu(&mut self, ctx: &mut PipelineContext) {
+        let (title_view, start, cont, load, quit) = match self.ids.as_ref() {
+            Some(ids) => (
+                ids.title_view,
+                ids.start_label,
+                ids.continue_label,
+                ids.load_label,
+                ids.quit_label,
+            ),
+            None => return,
+        };
+        if title_view.is_none() {
+            return;
+        }
+        let has_save = !self.story.save_key.is_empty()
+            && read_save(&save_file(&self.save_dir, &self.story.save_key)).is_some();
+        let has_slots = self.any_slot_save();
+
+        let mut buttons: Vec<(Option<AssetId>, &str)> = vec![(start, "Start")];
+        if has_save {
+            buttons.push((cont, "Continue"));
+        }
+        if has_slots {
+            buttons.push((load, "Load"));
+        }
+        buttons.push((quit, "Quit"));
+
+        let n = buttons.len() as f32;
+        let top = TITLE_MENU_CENTER_Y - (n - 1.0) * TITLE_MENU_SPACING / 2.0;
+        for (i, (id, text)) in buttons.into_iter().enumerate() {
+            let y = top + i as f32 * TITLE_MENU_SPACING;
+            let text = text.to_string();
+            set_label(ctx, id, |l| {
+                l.content = text;
+                l.y = y;
+            });
+        }
+        // Clear whichever optional buttons are absent this time so their
+        // follow-regions go inert (an empty label renders nothing).
+        if !has_save {
+            set_label(ctx, cont, |l| l.content.clear());
+        }
+        if !has_slots {
+            set_label(ctx, load, |l| l.content.clear());
+        }
     }
 
     // Apply a run of variable operations.
@@ -659,11 +717,12 @@ impl StorySystem {
             match menu.get(i).map(|&c| &node.choices[c]) {
                 Some(choice) => {
                     let text = choice.label.clone();
-                    let width = est_text_width(&text);
+                    // The build authors the label centered around MENU_CENTER_X
+                    // (real-metric alignment), so the story only fills the text.
                     set_label(ctx, Some(*label_id), |l| {
                         l.content = text;
                         l.visible = true;
-                        l.x = CHOICE_BUTTON_X + ((CHOICE_BUTTON_W - width) / 2.0).max(0.0);
+                        l.x = MENU_CENTER_X;
                     });
                 }
                 None => set_label(ctx, Some(*label_id), |l| l.content.clear()),
@@ -902,8 +961,8 @@ impl StorySystem {
                 if let Err(e) = write_save(&path, &save) {
                     tracing::warn!("StorySystem: slot save failed: {e}");
                 }
-                let load_label = self.ids.as_ref().and_then(|i| i.load_label);
-                set_label(ctx, load_label, |l| l.content = "Load".to_string());
+                // The title menu picks up the new slot (its Load button) when
+                // it is next shown.
                 self.close_overlay(ctx);
             }
             Overlay::LoadMenu => {
@@ -1022,25 +1081,13 @@ impl System for StorySystem {
         // compiled blob (`cn run`) and the interpreted debug path.
         match StageIds::from_scaffold(&self.story.scaffold) {
             Some(ids) => {
-                let continue_label = ids.continue_label;
-                let load_label = ids.load_label;
                 self.ids = Some(ids);
-                // Continue / Load light up only when a resumable save exists.
-                // View activation force-shows every member label, so presence
-                // is carried by the content (an empty label renders nothing).
-                let has_save = !self.story.save_key.is_empty()
-                    && read_save(&save_file(&self.save_dir, &self.story.save_key)).is_some();
-                set_label(ctx, continue_label, |l| {
-                    if !has_save {
-                        l.content.clear();
-                    }
-                });
-                let has_slots = self.any_slot_save();
-                set_label(ctx, load_label, |l| {
-                    if !has_slots {
-                        l.content.clear();
-                    }
-                });
+                // Lay the title menu out from the save state on disk: only the
+                // applicable buttons show, contiguous (view activation
+                // force-shows every member label, so presence is carried by the
+                // content -- an empty label renders nothing, and its
+                // follow-region goes inert).
+                self.layout_title_menu(ctx);
             }
             None => {
                 tracing::warn!(
@@ -1099,6 +1146,12 @@ impl System for StorySystem {
             {
                 self.start(ctx);
             }
+            // Re-lay the title menu each time the title is shown: the save
+            // state may have changed while a story played (a fresh auto-save,
+            // a new slot, or a finished story clearing its auto-save).
+            if Some(view) == self.ids.as_ref().and_then(|i| i.title_view) {
+                self.layout_title_menu(ctx);
+            }
         }
 
         let commands: Vec<StoryCommand> = match ctx.events::<StoryCommand>() {
@@ -1113,18 +1166,27 @@ impl System for StorySystem {
         // and the button (every hovered region fires). The mode guards
         // absorb the wrong-mode half, but two same-tick rules remain: a
         // command that flips the page/menu mode must not let the click's
-        // other half act in the new mode, and a click on a quick-row /
-        // slot button must not also advance (or choose).
-        let button_tick = commands.iter().any(|c| {
-            matches!(
-                c,
-                StoryCommand::ToggleAuto
-                    | StoryCommand::ToggleSkip
-                    | StoryCommand::ToggleLog
-                    | StoryCommand::OpenSave
-                    | StoryCommand::OpenLoad
-                    | StoryCommand::Slot(_)
-            )
+        // other half act in the new mode, and a click on a currently-shown
+        // quick-row / slot button must not also advance (or choose).
+        //
+        // The suppression only counts a button that is actually shown right
+        // now: the quick-row and slot regions stay hit-active the whole time
+        // and overlap other furniture (the slot rows overlap the choice
+        // buttons), so an out-of-mode button command is a no-op that must not
+        // eat the click's advance/choose half.
+        let button_tick = commands.iter().any(|c| match c {
+            StoryCommand::ToggleAuto | StoryCommand::ToggleSkip | StoryCommand::OpenSave => {
+                self.page_mode()
+            }
+            // Log opens from page mode and closes from the backlog; both are a
+            // real click on the (shown or last-shown) Log button.
+            StoryCommand::ToggleLog => self.page_mode() || self.overlay == Overlay::Backlog,
+            // Slot rows are only shown while the slot overlay is up.
+            StoryCommand::Slot(_) => {
+                matches!(self.overlay, Overlay::SaveMenu | Overlay::LoadMenu)
+            }
+            // Load lives on the title screen, where no stage advance overlaps.
+            _ => false,
         });
         let mut mode_flipped = false;
         for command in commands {
@@ -1235,11 +1297,6 @@ fn play(ctx: &mut PipelineContext, clip: Option<AssetId>, kind: CueKind) {
     });
 }
 
-// The build centers labels by the same estimate (0.6 em per glyph).
-fn est_text_width(text: &str) -> f32 {
-    text.chars().count() as f32 * 0.6 * MENU_FONT_PX
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1284,6 +1341,8 @@ mod tests {
             text_label: Some(intern("s_stage_text")),
             option_boxes: vec![intern("s_stage_opt0_box")],
             options: vec![intern("s_stage_opt0_lbl")],
+            start_label: None,
+            quit_label: None,
             continue_label: None,
             title: None,
             load_label: None,
@@ -2162,5 +2221,52 @@ mod tests {
             .send(StoryCommand::Slot(0));
         world.step();
         assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+    }
+
+    // A choice button's hit region overlaps a slot row's (always-active) hit
+    // region, so a click on the option fires both Choose and a stray Slot. The
+    // slot command is a no-op outside the slot overlay and must not suppress
+    // the choose, or the first option would stop working.
+    #[test]
+    fn choice_survives_a_spurious_slot_click() {
+        let story = Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![page("Pick.")],
+                    choices: vec![StoryChoice {
+                        label: "Go".to_string(),
+                        target: 1,
+                        condition: None,
+                    }],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "b".to_string(),
+                    pages: vec![page("Picked.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(story);
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
+
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Choose(0));
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Slot(1));
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
     }
 }
