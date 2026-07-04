@@ -288,6 +288,13 @@ fn menu_background_becomes_a_cover_sprite() {
     let entries = emit_story("story", &story, true, 30.0, &stub_dims).unwrap();
     let bg = &find(&entries, "story_title_bg")["args"];
     assert_eq!(bg["fit"], "cover");
+    // The backdrop image is dimmed (tint < 1) so the light title/menu text
+    // stays readable over a bright photo.
+    let tint = bg["tint"].as_array().unwrap();
+    assert!(
+        tint[0].as_f64().unwrap() < 1.0,
+        "backdrop should be dimmed, got {tint:?}"
+    );
     let texture = bg["texture"].as_str().unwrap();
     let tex = find(&entries, texture);
     assert_eq!(type_norm(tex), "texture");

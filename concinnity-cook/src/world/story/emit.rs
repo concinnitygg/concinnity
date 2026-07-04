@@ -12,6 +12,11 @@ const TITLE_FONT_PX: u32 = 56;
 const MENU_FONT_PX: u32 = 28;
 const DIALOG_FONT_PX: u32 = 22;
 
+// Multiplied into the title backdrop image so the light menu text keeps its
+// contrast on a bright photo. The gray value dims the image to this fraction
+// of its brightness; alpha stays opaque so the backdrop still fully covers.
+const TITLE_BACKDROP_DIM: [f32; 4] = [0.35, 0.35, 0.35, 1.0];
+
 // The fixed dialog box the stage's name plate and dialog text sit on: nearly
 // flush with the canvas bottom, tall enough for the name plate to sit inside
 // against the box's dark backdrop.
@@ -82,10 +87,15 @@ pub(crate) fn emit_story(
         match &story.background {
             Some(path) => {
                 let texture = image_asset(prefix, &mut images, path);
+                // Darken the backdrop image (its tint multiplies the texture)
+                // so the light title and menu text stay readable over a bright
+                // photo. The image still shows through; the flat-fill case
+                // below is already dark enough to need no dimming.
                 out.push(textured_cover_sprite(
                     &format!("{}_bg", title_view),
                     [0.0, 0.0, win_w, win_h],
                     &texture,
+                    TITLE_BACKDROP_DIM,
                 ));
             }
             None => out.push(sprite(
@@ -743,15 +753,22 @@ fn rounded_sprite_fit(
     serde_json::json!({ "name": name, "type": "Sprite", "args": args })
 }
 
-// A full-bleed textured sprite (cover fit) for a menu backdrop image.
-fn textured_cover_sprite(name: &str, rect: [f32; 4], texture: &str) -> serde_json::Value {
+// A full-bleed textured sprite (cover fit) for a menu backdrop image. `tint`
+// multiplies the sampled texture, so a gray tint darkens the image (used to
+// keep light menu text readable) while [1, 1, 1, 1] leaves it at full color.
+fn textured_cover_sprite(
+    name: &str,
+    rect: [f32; 4],
+    texture: &str,
+    tint: [f32; 4],
+) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "type": "Sprite",
         "args": {
             "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
             "texture": texture,
-            "tint": [1.0, 1.0, 1.0, 1.0],
+            "tint": tint,
             "fit": "cover",
         }
     })

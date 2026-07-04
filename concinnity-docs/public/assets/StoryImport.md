@@ -15,7 +15,8 @@ The `source` file is CommonMark Markdown opening with a YAML frontmatter
 block:
 
 - frontmatter declares the story `title`, its `characters`, and an
-  optional `background` (a full-bleed image drawn behind the title menu)
+  optional `background` (a full-bleed image drawn behind the title menu,
+  dimmed so the light menu text stays readable over a bright photo)
 - each `# heading` starts a node (a jump target)
 - each paragraph is one click-through page of narration
 - a paragraph opening `**id:**` attributes the line to a declared
