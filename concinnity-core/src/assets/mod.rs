@@ -191,7 +191,9 @@ pub use slider::Slider;
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use sprite::{Sprite, SpriteFit};
-pub use story::{Story, StoryChoice, StoryImage, StoryNode, StoryPage, StorySpeaker, StoryStage};
+pub use story::{
+    Story, StoryChoice, StoryImage, StoryNode, StoryPage, StoryScaffold, StorySpeaker, StoryStage,
+};
 pub use story_command::StoryCommand;
 pub use story_import::StoryImport;
 pub use streaming_config::StreamingConfig;

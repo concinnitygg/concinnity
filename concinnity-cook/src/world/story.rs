@@ -1142,7 +1142,20 @@ pub(crate) fn emit_story(
         }));
     }
     // The compiled graph takes the import's own name: the one declaration the
-    // author wrote stays the one asset that carries the story.
+    // author wrote stays the one asset that carries the story. The scaffold
+    // block references the generated stage assets by name; the build resolves
+    // them to ids like every other cross-reference, so the runtime never
+    // needs the names.
+    let max_choices = story
+        .nodes
+        .iter()
+        .map(|n| n.choices.len())
+        .max()
+        .unwrap_or(0);
+    let option_labels: Vec<String> = (0..max_choices)
+        .map(|i| format!("{}_opt{}_lbl", stage_view, i))
+        .collect();
+    let panel = (max_choices > 0).then(|| format!("{}_panel", stage_view));
     out.push(serde_json::json!({
         "name": prefix,
         "type": "Story",
@@ -1150,6 +1163,19 @@ pub(crate) fn emit_story(
             "title": story.title,
             "nodes": nodes_json,
             "text_speed": text_speed,
+            "scaffold": {
+                "view": &stage_view,
+                "ending": &ending_view,
+                "bg": format!("{}_bg", stage_view),
+                "left": format!("{}_left", stage_view),
+                "center": format!("{}_center", stage_view),
+                "right": format!("{}_right", stage_view),
+                "dialog_box": format!("{}_box", stage_view),
+                "name_label": format!("{}_name", stage_view),
+                "text_label": format!("{}_text", stage_view),
+                "panel": panel,
+                "options": option_labels,
+            },
         }
     }));
 
@@ -1221,12 +1247,6 @@ pub(crate) fn emit_story(
     // choice. The buttons stay hit-active the whole time; the story system
     // ignores a choose action outside a menu (and an advance inside one), so
     // the overlap with the full-canvas advance region resolves by mode.
-    let max_choices = story
-        .nodes
-        .iter()
-        .map(|n| n.choices.len())
-        .max()
-        .unwrap_or(0);
     if max_choices > 0 {
         out.push(stage_sprite(
             &format!("{}_panel", stage_view),
@@ -1711,6 +1731,16 @@ You walk together toward the morning.
             find(&entries, "story_stage_opt0_lbl")["args"]["visible"],
             false
         );
+
+        // The scaffold block names the generated stage assets; the build
+        // resolves these to ids so the compiled blob never needs the names.
+        let scaffold = &graph["scaffold"];
+        assert_eq!(scaffold["view"], "story_stage");
+        assert_eq!(scaffold["ending"], "story_ending");
+        assert_eq!(scaffold["text_label"], "story_stage_text");
+        assert_eq!(scaffold["panel"], "story_stage_panel");
+        assert_eq!(scaffold["options"][0], "story_stage_opt0_lbl");
+        assert_eq!(scaffold["options"].as_array().unwrap().len(), 2);
         assert!(
             entries
                 .iter()

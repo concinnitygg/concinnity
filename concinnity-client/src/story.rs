@@ -14,7 +14,7 @@ use crate::assets::{
     CueKind, PlayCue, Sprite, Story, StoryCommand, StoryImage, StoryStage, TextLabel, ViewCommand,
     ViewShown,
 };
-use crate::ecs::asset_id::{AssetId, intern};
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 
 // The stage scaffolding's menu font size; choice labels center by the same
@@ -23,19 +23,20 @@ const MENU_FONT_PX: f32 = 28.0;
 const CHOICE_BUTTON_X: f32 = 280.0;
 const CHOICE_BUTTON_W: f32 = 720.0;
 
-// The generated stage assets this system mutates, resolved once from the
-// story's name prefix (`<name>_stage_*`).
+// The generated stage assets this system mutates, taken from the story's
+// build-resolved scaffold references. An unset optional slot (e.g. a story
+// with no choice panel) makes its mutations a no-op.
 struct StageIds {
     view: AssetId,
     ending_view: AssetId,
-    bg: AssetId,
-    left: AssetId,
-    center: AssetId,
-    right: AssetId,
-    dialog_box: AssetId,
-    name: AssetId,
-    text: AssetId,
-    panel: AssetId,
+    bg: Option<AssetId>,
+    left: Option<AssetId>,
+    center: Option<AssetId>,
+    right: Option<AssetId>,
+    dialog_box: Option<AssetId>,
+    name: Option<AssetId>,
+    text: Option<AssetId>,
+    panel: Option<AssetId>,
     // One label per choice slot. The buttons' hit regions live inside
     // UiInputSystem and stay active the whole time; mode guards here make an
     // out-of-menu choose (or an in-menu advance) a no-op, so the overlap
@@ -220,9 +221,9 @@ impl StorySystem {
             self.ids.as_ref().expect("resolved at init"),
             &page.stage,
         );
-        play(ctx, page.music.as_deref(), CueKind::Music);
+        play(ctx, page.music, CueKind::Music);
         for sound in &page.sounds {
-            play(ctx, Some(sound), CueKind::Sound);
+            play(ctx, Some(*sound), CueKind::Sound);
         }
     }
 
@@ -234,9 +235,9 @@ impl StorySystem {
         let ids = self.ids.as_ref().expect("resolved at init");
 
         apply_stage(ctx, ids, &node.choice_stage);
-        play(ctx, node.choice_music.as_deref(), CueKind::Music);
+        play(ctx, node.choice_music, CueKind::Music);
         for sound in &node.choice_sounds {
-            play(ctx, Some(sound), CueKind::Sound);
+            play(ctx, Some(*sound), CueKind::Sound);
         }
 
         set_label(ctx, ids.name, |l| l.content.clear());
@@ -251,13 +252,13 @@ impl StorySystem {
                 Some(choice) => {
                     let text = choice.label.clone();
                     let width = est_text_width(&text);
-                    set_label(ctx, *label_id, |l| {
+                    set_label(ctx, Some(*label_id), |l| {
                         l.content = text;
                         l.visible = true;
                         l.x = CHOICE_BUTTON_X + ((CHOICE_BUTTON_W - width) / 2.0).max(0.0);
                     });
                 }
-                None => set_label(ctx, *label_id, |l| l.visible = false),
+                None => set_label(ctx, Some(*label_id), |l| l.visible = false),
             }
         }
     }
@@ -269,7 +270,7 @@ impl StorySystem {
         set_sprite(ctx, ids.dialog_box, |s| s.visible = true);
         set_sprite(ctx, ids.panel, |s| s.visible = false);
         for label_id in &ids.options {
-            set_label(ctx, *label_id, |l| l.visible = false);
+            set_label(ctx, Some(*label_id), |l| l.visible = false);
         }
     }
 
@@ -299,37 +300,33 @@ impl StorySystem {
 
 impl System for StorySystem {
     fn init(&mut self, _ctx: &mut PipelineContext) {
-        // Resolve the generated stage assets by the name convention the build
-        // expansion guarantees. Interning is idempotent: these are the same
-        // ids the blob loader gave the components.
-        let names = crate::ecs::asset_id::name_table();
-        let prefix = names
-            .get(self.story.asset_id.0 as usize)
-            .cloned()
-            .unwrap_or_default();
-        let stage = format!("{}_stage", prefix);
-        let max_choices = self
-            .story
-            .nodes
-            .iter()
-            .map(|n| n.choices.len())
-            .max()
-            .unwrap_or(0);
-        self.ids = Some(StageIds {
-            view: intern(&stage),
-            ending_view: intern(&format!("{}_ending", prefix)),
-            bg: intern(&format!("{}_bg", stage)),
-            left: intern(&format!("{}_left", stage)),
-            center: intern(&format!("{}_center", stage)),
-            right: intern(&format!("{}_right", stage)),
-            dialog_box: intern(&format!("{}_box", stage)),
-            name: intern(&format!("{}_name", stage)),
-            text: intern(&format!("{}_text", stage)),
-            panel: intern(&format!("{}_panel", stage)),
-            options: (0..max_choices)
-                .map(|i| intern(&format!("{}_opt{}_lbl", stage, i)))
-                .collect(),
-        });
+        // The scaffold references were resolved to ids at build time, like
+        // every other cross-reference, so this works identically for a
+        // compiled blob (`cn run`) and the interpreted debug path.
+        let scaffold = &self.story.scaffold;
+        match (scaffold.view, scaffold.ending) {
+            (Some(view), Some(ending_view)) => {
+                self.ids = Some(StageIds {
+                    view,
+                    ending_view,
+                    bg: scaffold.bg,
+                    left: scaffold.left,
+                    center: scaffold.center,
+                    right: scaffold.right,
+                    dialog_box: scaffold.dialog_box,
+                    name: scaffold.name_label,
+                    text: scaffold.text_label,
+                    panel: scaffold.panel,
+                    options: scaffold.options.clone(),
+                });
+            }
+            _ => {
+                tracing::warn!(
+                    "StorySystem: story '{}' has no stage scaffold; story input is ignored",
+                    self.story.title,
+                );
+            }
+        }
         tracing::info!(
             "StorySystem: '{}', {} node(s), text speed {} cps",
             self.story.title,
@@ -393,15 +390,18 @@ impl System for StorySystem {
     }
 }
 
-// Mutate the first component with the given asset id; a missing id (a stage
-// asset the world never declared) is a silent no-op.
-fn set_label(ctx: &mut PipelineContext, id: AssetId, apply: impl FnOnce(&mut TextLabel)) {
+// Mutate the first component with the given asset id; an unset reference or
+// a missing component (a stage asset the world never declared) is a silent
+// no-op.
+fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
+    let Some(id) = id else { return };
     if let Some(label) = ctx.query_mut::<TextLabel>().find(|l| l.asset_id == id) {
         apply(label);
     }
 }
 
-fn set_sprite(ctx: &mut PipelineContext, id: AssetId, apply: impl FnOnce(&mut Sprite)) {
+fn set_sprite(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
+    let Some(id) = id else { return };
     if let Some(sprite) = ctx.query_mut::<Sprite>().find(|s| s.asset_id == id) {
         apply(sprite);
     }
@@ -412,7 +412,7 @@ fn set_sprite(ctx: &mut PipelineContext, id: AssetId, apply: impl FnOnce(&mut Sp
 fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
     match &stage.bg {
         Some(image) => {
-            let texture = intern(&image.texture);
+            let texture = image.texture;
             set_sprite(ctx, ids.bg, |s| {
                 s.texture = Some(texture);
                 s.tint = [1.0, 1.0, 1.0, 1.0];
@@ -432,11 +432,11 @@ fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
     }
 }
 
-fn apply_portrait(ctx: &mut PipelineContext, slot: AssetId, image: Option<&StoryImage>) {
+fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Option<&StoryImage>) {
     match image {
         Some(image) => {
-            let texture = intern(&image.texture);
-            let (x, y, w, h) = (image.x, image.y, image.width, image.height);
+            let (texture, x, y, w, h) =
+                (image.texture, image.x, image.y, image.width, image.height);
             set_sprite(ctx, slot, |s| {
                 s.visible = true;
                 s.texture = Some(texture);
@@ -450,10 +450,10 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: AssetId, image: Option<&Story
     }
 }
 
-fn play(ctx: &mut PipelineContext, clip: Option<&str>, kind: CueKind) {
+fn play(ctx: &mut PipelineContext, clip: Option<AssetId>, kind: CueKind) {
     let Some(clip) = clip else { return };
     ctx.events_mut::<PlayCue>().send(PlayCue {
-        clip: intern(clip),
+        clip,
         kind,
         volume: 1.0,
     });
@@ -467,8 +467,11 @@ fn est_text_width(text: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Story, StoryChoice, StoryNode, StoryPage, StorySpeaker, View};
+    use crate::assets::{
+        Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker, View,
+    };
     use crate::ecs::World;
+    use crate::ecs::asset_id::intern;
 
     fn page(text: &str) -> StoryPage {
         StoryPage {
@@ -491,12 +494,30 @@ mod tests {
         }
     }
 
+    // The build-resolved scaffold references for a story named "s".
+    fn scaffold() -> StoryScaffold {
+        StoryScaffold {
+            view: Some(intern("s_stage")),
+            ending: Some(intern("s_ending")),
+            bg: Some(intern("s_stage_bg")),
+            left: Some(intern("s_stage_left")),
+            center: Some(intern("s_stage_center")),
+            right: Some(intern("s_stage_right")),
+            dialog_box: Some(intern("s_stage_box")),
+            name_label: Some(intern("s_stage_name")),
+            text_label: Some(intern("s_stage_text")),
+            panel: Some(intern("s_stage_panel")),
+            options: vec![intern("s_stage_opt0_lbl")],
+        }
+    }
+
     // A world with the stage scaffolding the build expansion would generate
     // for a story named "s", plus the compiled graph itself.
     fn story_world(story: Story) -> World {
         let mut world = World::new_empty();
         let mut story = story;
         story.asset_id = intern("s");
+        story.scaffold = scaffold();
         world.add_component(story);
         for view in ["s_stage", "s_ending"] {
             world.add_component(View {
@@ -679,14 +700,14 @@ mod tests {
         let mut story = two_page_story();
         story.nodes[0].pages[0].stage = StoryStage {
             bg: Some(StoryImage {
-                texture: "s_img0".to_string(),
+                texture: intern("s_img0"),
                 x: 0.0,
                 y: 0.0,
                 width: 1280.0,
                 height: 720.0,
             }),
             center: Some(StoryImage {
-                texture: "s_img1".to_string(),
+                texture: intern("s_img1"),
                 x: 412.0,
                 y: 20.0,
                 width: 456.0,
@@ -729,8 +750,8 @@ mod tests {
     #[test]
     fn page_audio_sends_play_cues() {
         let mut story = two_page_story();
-        story.nodes[0].pages[0].music = Some("s_clip0".to_string());
-        story.nodes[0].pages[0].sounds = vec!["s_clip1".to_string()];
+        story.nodes[0].pages[0].music = Some(intern("s_clip0"));
+        story.nodes[0].pages[0].sounds = vec![intern("s_clip1")];
         let mut world = story_world(story);
         world.start().unwrap();
         world.step();

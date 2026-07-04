@@ -93,6 +93,7 @@
 - [StoryImage](StoryImage.md) - One placed stage image: which [Texture](Texture.md) to sample and where it sits on the reference canvas.
 - [StoryNode](StoryNode.md) - One jump target in a [Story](Story.md): a run of pages optionally ending in a choice menu.
 - [StoryPage](StoryPage.md) - One click-through page of a [StoryNode](StoryNode.md).
+- [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [View](View.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
 - [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).
 - [StoryStage](StoryStage.md) - The stage dressing current at a page or choice menu: the backdrop and the character portraits standing on stage.
 - [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.

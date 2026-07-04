@@ -1581,7 +1581,7 @@ impl GraphicsSystem {
                         .into_iter()
                         .flatten()
                     {
-                        ids.push(concinnity_core::ecs::asset_id::intern(&image.texture));
+                        ids.push(image.texture);
                     }
                 }
             }

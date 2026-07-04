@@ -25,3 +25,4 @@ from the first node.
 - `title`: A string. The story title, as shown on the generated title screen.
 - `nodes`: An array of [StoryNode](StoryNode.md) objects. The node graph in document order. Play starts at the first node; a node whose last page has no jump and no choices falls through to the next node, and the last node ends the story.
 - `text_speed`: A float. Dialogue reveal speed in characters per second. `0` shows each page instantly. Defaults to `45.0`.
+- `scaffold`: A [StoryScaffold](StoryScaffold.md) object. The generated stage assets the story system drives. All references are resolved to ids at build time, like every other cross-reference.

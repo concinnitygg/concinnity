@@ -1,6 +1,6 @@
 // src/assets/story.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
 use crate::ecs::{AssetOrigin, Component};
 
 /// A compiled branching story graph, played at runtime by the story system.
@@ -35,6 +35,50 @@ pub struct Story {
     /// Dialogue reveal speed in characters per second. `0` shows each page
     /// instantly.
     pub text_speed: f32,
+    /// The generated stage assets the story system drives. All references
+    /// are resolved to ids at build time, like every other cross-reference.
+    pub scaffold: StoryScaffold,
+}
+
+/// The stage scaffolding a [Story](#story)'s build expansion generated: the
+/// [View](#view)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
+/// story system mutates page by page.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StoryScaffold {
+    /// The stage [View](#view) the story plays inside.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub view: Option<AssetId>,
+    /// The [View](#view) shown when the story ends.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub ending: Option<AssetId>,
+    /// Backdrop [Sprite](#sprite).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub bg: Option<AssetId>,
+    /// Stage-left portrait [Sprite](#sprite).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub left: Option<AssetId>,
+    /// Stage-center portrait [Sprite](#sprite).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub center: Option<AssetId>,
+    /// Stage-right portrait [Sprite](#sprite).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub right: Option<AssetId>,
+    /// Dialog box backdrop [Sprite](#sprite).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub dialog_box: Option<AssetId>,
+    /// Speaker name-plate [TextLabel](#textlabel).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub name_label: Option<AssetId>,
+    /// Dialog text [TextLabel](#textlabel).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub text_label: Option<AssetId>,
+    /// Choice menu panel [Sprite](#sprite). `None` when the story has no
+    /// choice menus.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub panel: Option<AssetId>,
+    /// Choice button [TextLabel](#textlabel)s, one per option slot.
+    pub options: Vec<AssetId>,
 }
 
 /// One jump target in a [Story](#story): a run of pages optionally ending in
@@ -50,10 +94,11 @@ pub struct StoryNode {
     pub choices: Vec<StoryChoice>,
     /// Stage dressing current at the choice menu.
     pub choice_stage: StoryStage,
-    /// Music current at the choice menu ([AudioClip](#audioclip) asset name).
-    pub choice_music: Option<String>,
+    /// Music current at the choice menu ([AudioClip](#audioclip) reference).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub choice_music: Option<AssetId>,
     /// One-shots played when the choice menu shows.
-    pub choice_sounds: Vec<String>,
+    pub choice_sounds: Vec<AssetId>,
 }
 
 /// One click-through page of a [StoryNode](#storynode).
@@ -67,11 +112,12 @@ pub struct StoryPage {
     /// Node index advancing jumps to, overriding the default next-page /
     /// fall-through order.
     pub jump: Option<u32>,
-    /// Music current at this page ([AudioClip](#audioclip) asset name).
+    /// Music current at this page ([AudioClip](#audioclip) reference).
     /// Re-triggering the already-playing track is seamless.
-    pub music: Option<String>,
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub music: Option<AssetId>,
     /// One-shot effects played when the page shows.
-    pub sounds: Vec<String>,
+    pub sounds: Vec<AssetId>,
     /// Stage dressing current at this page.
     pub stage: StoryStage,
 }
@@ -106,8 +152,8 @@ pub struct StoryStage {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StoryImage {
-    /// [Texture](#texture) asset name.
-    pub texture: String,
+    /// [Texture](#texture) to sample.
+    pub texture: AssetId,
     /// Left edge on the reference canvas.
     pub x: f32,
     /// Top edge on the reference canvas.
@@ -135,6 +181,7 @@ impl Default for Story {
             title: String::new(),
             nodes: Vec::new(),
             text_speed: 45.0,
+            scaffold: StoryScaffold::default(),
         }
     }
 }
@@ -168,10 +215,17 @@ mod tests {
     }
 
     #[test]
-    fn graph_round_trips() {
+    fn graph_round_trips_and_resolves_references() {
         let json = r#"{
             "title": "T",
             "text_speed": 30.0,
+            "scaffold": {
+                "view": "s_stage",
+                "ending": "s_ending",
+                "bg": "s_stage_bg",
+                "text_label": "s_stage_text",
+                "options": ["s_stage_opt0_lbl"]
+            },
             "nodes": [{
                 "slug": "inn",
                 "pages": [{
@@ -196,7 +250,18 @@ mod tests {
         assert_eq!(page.speaker.as_ref().unwrap().name, "Ayame");
         assert_eq!(page.stage.center.as_ref().unwrap().width, 456.0);
         assert_eq!(s.nodes[0].choices[1].target, 2);
+        // Name-string references resolved to ids through the interner (the
+        // build-time path); the panel was omitted and stays unset.
+        use crate::ecs::asset_id::intern;
+        assert_eq!(s.scaffold.view, Some(intern("s_stage")));
+        assert_eq!(s.scaffold.options, vec![intern("s_stage_opt0_lbl")]);
+        assert_eq!(s.scaffold.panel, None);
+        assert_eq!(page.music, Some(intern("s_clip0")));
+        assert_eq!(page.sounds, vec![intern("s_clip1")]);
+        assert_eq!(page.stage.bg.as_ref().unwrap().texture, intern("s_img0"));
+        // Ids serialize back out as integers (the blob path carries only
+        // numbers).
         let back = serde_json::to_value(&s).unwrap();
-        assert_eq!(back["nodes"][0]["pages"][0]["music"], "s_clip0");
+        assert!(back["nodes"][0]["pages"][0]["music"].is_number());
     }
 }
