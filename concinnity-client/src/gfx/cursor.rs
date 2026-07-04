@@ -151,6 +151,7 @@ mod tests {
             visible: true,
             view: None,
             fit: crate::assets::SpriteFit::Fit,
+            corner_radius: 0.0,
         }
     }
 

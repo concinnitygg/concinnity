@@ -34,3 +34,4 @@ Without one, the tint is drawn as a solid-coloured rectangle.
 - `visible`: A boolean. When false the sprite is skipped each frame. Defaults to `true`.
 - `view`: A string. [View](View.md) this sprite belongs to. Resolved automatically from the naming convention (`<view>_*`); you don't set this directly. `None` means the sprite is always visible (e.g. a scene background). Optional.
 - `fit`: A string (see [SpriteFit](SpriteFit.md)). How a view-owned sprite maps from the reference canvas to the window when their aspect ratios differ.
+- `corner_radius`: A float. Corner rounding radius in the sprite's own pixel space. `0` keeps sharp corners; larger values round each corner with a quarter-circle arc (clamped to half the sprite's shorter side). The rounded edge is softly anti-aliased. Defaults to `0.0`.

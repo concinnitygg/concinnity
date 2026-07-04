@@ -17,6 +17,6 @@ story system mutates page by page.
 - `dialog_box`: A string. Dialog box backdrop [Sprite](Sprite.md). Optional.
 - `name_label`: A string. Speaker name-plate [TextLabel](TextLabel.md). Optional.
 - `text_label`: A string. Dialog text [TextLabel](TextLabel.md). Optional.
-- `panel`: A string. Choice menu panel [Sprite](Sprite.md). `None` when the story has no choice menus. Optional.
+- `option_boxes`: An array of strings. Choice button box [Sprite](Sprite.md)s, one per option slot.
 - `options`: An array of strings. Choice button [TextLabel](TextLabel.md)s, one per option slot.
 - `continue_label`: A string. The title screen's Continue [TextLabel](TextLabel.md), hidden while no save exists. Optional.

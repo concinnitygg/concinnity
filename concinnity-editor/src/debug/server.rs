@@ -283,6 +283,15 @@ impl DebugServer {
                 applied
             );
         }
+
+        // Hand freshly re-compiled story graphs to the story system, which
+        // swaps them in while keeping the play position. tick() runs before
+        // the world step, so the swap lands the same frame.
+        for story in effects.story_updates {
+            world
+                .events_mut::<crate::assets::StoryReload>()
+                .send(crate::assets::StoryReload { story });
+        }
     }
 }
 

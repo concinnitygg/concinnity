@@ -57,6 +57,11 @@ pub struct Sprite {
     /// How a view-owned sprite maps from the reference canvas to the window
     /// when their aspect ratios differ.
     pub fit: SpriteFit,
+    /// Corner rounding radius in the sprite's own pixel space. `0` keeps
+    /// sharp corners; larger values round each corner with a quarter-circle
+    /// arc (clamped to half the sprite's shorter side). The rounded edge is
+    /// softly anti-aliased.
+    pub corner_radius: f32,
 }
 
 /// How a view-owned [Sprite](#sprite) maps from the 1280x720 reference canvas
@@ -93,6 +98,7 @@ impl Default for Sprite {
             visible: true,
             view: None,
             fit: SpriteFit::Fit,
+            corner_radius: 0.0,
         }
     }
 }
@@ -148,6 +154,15 @@ mod tests {
         assert_eq!(s.width, 100.0);
         assert!(!s.follow_cursor);
         assert_eq!(s.fit, SpriteFit::Fit);
+        assert_eq!(s.corner_radius, 0.0);
+    }
+
+    #[test]
+    fn corner_radius_round_trips() {
+        let s: Sprite = serde_json::from_str(r#"{"corner_radius":12.5}"#).unwrap();
+        assert_eq!(s.corner_radius, 12.5);
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["corner_radius"], 12.5);
     }
 
     #[test]

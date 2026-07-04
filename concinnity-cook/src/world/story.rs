@@ -1375,7 +1375,9 @@ pub(crate) fn emit_story(
     let option_labels: Vec<String> = (0..max_choices)
         .map(|i| format!("{}_opt{}_lbl", stage_view, i))
         .collect();
-    let panel = (max_choices > 0).then(|| format!("{}_panel", stage_view));
+    let option_boxes: Vec<String> = (0..max_choices)
+        .map(|i| format!("{}_opt{}_box", stage_view, i))
+        .collect();
     let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
     out.push(serde_json::json!({
         "name": prefix,
@@ -1395,7 +1397,7 @@ pub(crate) fn emit_story(
                 "dialog_box": format!("{}_box", stage_view),
                 "name_label": format!("{}_name", stage_view),
                 "text_label": format!("{}_text", stage_view),
-                "panel": panel,
+                "option_boxes": option_boxes,
                 "options": option_labels,
                 "continue_label": continue_label,
             },
@@ -1420,21 +1422,21 @@ pub(crate) fn emit_story(
             false,
         ));
     }
-    out.push(sprite(
+    out.push(rounded_sprite(
         &format!("{}_box", stage_view),
-        DIALOG_BOX.0,
-        DIALOG_BOX.1,
-        DIALOG_BOX.2,
-        DIALOG_BOX.3,
+        DIALOG_BOX,
         [0.0, 0.0, 0.0, 0.55],
+        DIALOG_BOX_RADIUS,
     ));
+    // The name plate sits inside the dialog box so the speaker reads against
+    // its dark backdrop, with the dialogue below it.
     out.push(label(
         &format!("{}_name", stage_view),
         &font_menu,
         "",
         LabelStyle {
-            x: 160.0,
-            y: 478.0,
+            x: DIALOG_BOX.0 + 30.0,
+            y: DIALOG_BOX.1 + 14.0,
             color: [1.0, 1.0, 1.0],
             ..LabelStyle::default()
         },
@@ -1444,8 +1446,8 @@ pub(crate) fn emit_story(
         &font_dialog,
         "",
         LabelStyle {
-            x: 160.0,
-            y: 530.0,
+            x: DIALOG_BOX.0 + 30.0,
+            y: DIALOG_BOX.1 + 58.0,
             color: [1.0, 0.95, 0.85],
             ..LabelStyle::default()
         },
@@ -1465,22 +1467,28 @@ pub(crate) fn emit_story(
         "args": { "key": "Space", "action": "story:advance" }
     }));
 
-    // Choice furniture, sized for the widest menu in the story: a dim panel
-    // and one button per option, hidden until the story system reaches a
-    // choice. The buttons stay hit-active the whole time; the story system
-    // ignores a choose action outside a menu (and an advance inside one), so
-    // the overlap with the full-canvas advance region resolves by mode.
+    // Choice furniture, sized for the widest menu in the story: one rounded
+    // box + label per option, hidden until the story system reaches a
+    // choice (each box is re-tinted visible with its slot). The buttons stay
+    // hit-active the whole time; the story system ignores a choose action
+    // outside a menu (and an advance inside one), so the overlap with the
+    // full-canvas advance region resolves by mode.
     if max_choices > 0 {
-        out.push(stage_sprite(
-            &format!("{}_panel", stage_view),
-            [160.0, 180.0, win_w - 320.0, 360.0],
-            [0.0, 0.0, 0.0, 0.0],
-            false,
-        ));
         let y0 = win_h / 2.0 - max_choices as f32 * 30.0;
         for ci in 0..max_choices {
             let lbl = format!("{}_opt{}_lbl", stage_view, ci);
             let y = y0 + ci as f32 * 60.0;
+            out.push(rounded_sprite(
+                &format!("{}_opt{}_box", stage_view, ci),
+                (280.0, y, win_w - 560.0, 44.0),
+                [
+                    CHOICE_BOX_COLOR[0],
+                    CHOICE_BOX_COLOR[1],
+                    CHOICE_BOX_COLOR[2],
+                    0.0,
+                ],
+                CHOICE_BOX_RADIUS,
+            ));
             out.push(serde_json::json!({
                 "name": lbl,
                 "type": "TextLabel",
@@ -1488,7 +1496,7 @@ pub(crate) fn emit_story(
                     "font": font_menu,
                     "content": "",
                     "x": 280.0,
-                    "y": y + 6.0,
+                    "y": y + 8.0,
                     "color": [0.92, 0.92, 0.92],
                     "scale": 1.0,
                     "visible": false,
@@ -1501,7 +1509,7 @@ pub(crate) fn emit_story(
                     "x": 280.0,
                     "y": y,
                     "width": win_w - 560.0,
-                    "height": 40.0,
+                    "height": 44.0,
                     "label": lbl,
                     "hover_color": [1.0, 0.85, 0.3],
                     "hover_scale": 1.06,
@@ -1583,8 +1591,17 @@ pub(crate) fn emit_story(
     Ok(out)
 }
 
-// The fixed dialog box the stage's name plate and dialog text sit on.
-const DIALOG_BOX: (f32, f32, f32, f32) = (140.0, 505.0, 1000.0, 190.0);
+// The fixed dialog box the stage's name plate and dialog text sit on: nearly
+// flush with the canvas bottom, tall enough for the name plate to sit inside
+// against the box's dark backdrop.
+const DIALOG_BOX: (f32, f32, f32, f32) = (140.0, 500.0, 1000.0, 210.0);
+const DIALOG_BOX_RADIUS: f32 = 14.0;
+// Choice option rows: each option gets its own rounded box behind the label
+// so the menu stands apart from the dialog box's dark backdrop. The color
+// must match the story system's shown tint (it re-tints the boxes to show
+// and hide them at runtime).
+const CHOICE_BOX_COLOR: [f32; 3] = [0.16, 0.20, 0.35];
+const CHOICE_BOX_RADIUS: f32 = 10.0;
 
 // The compiled stage entry for a page or choice menu: the backdrop and
 // portrait images with their on-canvas rectangles, ready for the story
@@ -1738,6 +1755,23 @@ fn sprite(name: &str, x: f32, y: f32, w: f32, h: f32, tint: [f32; 4]) -> serde_j
         "name": name,
         "type": "Sprite",
         "args": { "x": x, "y": y, "width": w, "height": h, "tint": tint }
+    })
+}
+
+fn rounded_sprite(
+    name: &str,
+    rect: (f32, f32, f32, f32),
+    tint: [f32; 4],
+    radius: f32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "type": "Sprite",
+        "args": {
+            "x": rect.0, "y": rect.1, "width": rect.2, "height": rect.3,
+            "tint": tint,
+            "corner_radius": radius,
+        }
     })
 }
 
@@ -1983,9 +2017,25 @@ You walk together toward the morning.
         assert_eq!(scaffold["view"], "story_stage");
         assert_eq!(scaffold["ending"], "story_ending");
         assert_eq!(scaffold["text_label"], "story_stage_text");
-        assert_eq!(scaffold["panel"], "story_stage_panel");
+        assert_eq!(scaffold["option_boxes"][0], "story_stage_opt0_box");
         assert_eq!(scaffold["options"][0], "story_stage_opt0_lbl");
         assert_eq!(scaffold["options"].as_array().unwrap().len(), 2);
+
+        // Each option slot gets its own rounded box behind the label, and the
+        // dialog box sits nearly flush with the canvas bottom with the name
+        // plate inside its bounds.
+        let opt0_box = find(&entries, "story_stage_opt0_box");
+        assert_eq!(opt0_box["args"]["corner_radius"], CHOICE_BOX_RADIUS);
+        assert_eq!(opt0_box["args"]["tint"][3], 0.0);
+        let dialog = &find(&entries, "story_stage_box")["args"];
+        assert_eq!(dialog["corner_radius"], DIALOG_BOX_RADIUS);
+        let box_bottom = dialog["y"].as_f64().unwrap() + dialog["height"].as_f64().unwrap();
+        assert!((700.0..=720.0).contains(&box_bottom));
+        let name = &find(&entries, "story_stage_name")["args"];
+        assert!(name["y"].as_f64().unwrap() > dialog["y"].as_f64().unwrap());
+        let text = &find(&entries, "story_stage_text")["args"];
+        assert!(text["y"].as_f64().unwrap() > name["y"].as_f64().unwrap());
+        assert!(!entries.iter().any(|e| asset_name(e).contains("_panel")));
         assert!(
             entries
                 .iter()

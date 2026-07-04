@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryStage, TextLabel,
-    ViewCommand, ViewShown,
+    CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryReload,
+    StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -24,10 +24,15 @@ use crate::ecs::{PipelineContext, StepResult, System};
 const MENU_FONT_PX: f32 = 28.0;
 const CHOICE_BUTTON_X: f32 = 280.0;
 const CHOICE_BUTTON_W: f32 = 720.0;
+// Shown tint of a choice option's box; matches the color the build authors
+// (with zero alpha) on the generated `_opt<N>_box` sprites. An occupied menu
+// slot re-tints its box to this; hiding is alpha zero, never `visible` (view
+// re-activation force-shows every member).
+const CHOICE_BOX_TINT: [f32; 4] = [0.16, 0.20, 0.35, 0.92];
 
 // The generated stage assets this system mutates, taken from the story's
 // build-resolved scaffold references. An unset optional slot (e.g. a story
-// with no choice panel) makes its mutations a no-op.
+// with no dialog box) makes its mutations a no-op.
 struct StageIds {
     view: AssetId,
     ending_view: AssetId,
@@ -38,7 +43,8 @@ struct StageIds {
     dialog_box: Option<AssetId>,
     name: Option<AssetId>,
     text: Option<AssetId>,
-    panel: Option<AssetId>,
+    // One box sprite per choice slot, shown behind its label.
+    option_boxes: Vec<AssetId>,
     // One label per choice slot. The buttons' hit regions live inside
     // UiInputSystem and stay active the whole time; mode guards here make an
     // out-of-menu choose (or an in-menu advance) a no-op, so the overlap
@@ -46,6 +52,27 @@ struct StageIds {
     options: Vec<AssetId>,
     // The title screen's Continue label, hidden while no save exists.
     continue_label: Option<AssetId>,
+}
+
+impl StageIds {
+    // The stage references out of a build-resolved scaffold; `None` when the
+    // scaffold is missing its stage or ending view (a story with no stage).
+    fn from_scaffold(scaffold: &StoryScaffold) -> Option<Self> {
+        Some(Self {
+            view: scaffold.view?,
+            ending_view: scaffold.ending?,
+            bg: scaffold.bg,
+            left: scaffold.left,
+            center: scaffold.center,
+            right: scaffold.right,
+            dialog_box: scaffold.dialog_box,
+            name: scaffold.name_label,
+            text: scaffold.text_label,
+            option_boxes: scaffold.option_boxes.clone(),
+            options: scaffold.options.clone(),
+            continue_label: scaffold.continue_label,
+        })
+    }
 }
 
 // A story's persisted position and raised flags, auto-written page by page
@@ -119,6 +146,7 @@ pub struct StorySystem {
     active_view: Option<AssetId>,
     command_cursor: crate::ecs::EventCursor,
     view_shown_cursor: crate::ecs::EventCursor,
+    reload_cursor: crate::ecs::EventCursor,
 }
 
 impl std::fmt::Debug for StorySystem {
@@ -149,6 +177,7 @@ impl StorySystem {
             active_view: None,
             command_cursor: crate::ecs::EventCursor::default(),
             view_shown_cursor: crate::ecs::EventCursor::default(),
+            reload_cursor: crate::ecs::EventCursor::default(),
         }
     }
 
@@ -360,13 +389,9 @@ impl StorySystem {
         self.enter_node(target, ctx);
     }
 
-    // Fill the stage for the current page: name plate, dialogue reveal,
-    // backdrop and portraits, page audio.
+    // Arrive on the current page: run its flag ops, fill the stage, fire its
+    // one-shots, and auto-save.
     fn apply_page(&mut self, ctx: &mut PipelineContext) {
-        let (name_id, text_id) = {
-            let ids = self.ids.as_ref().expect("resolved at init");
-            (ids.name, ids.text)
-        };
         let page = self.story.nodes[self.node].pages[self.page].clone();
         for op in &page.ops {
             if op.clear {
@@ -375,6 +400,23 @@ impl StorySystem {
                 self.flags.insert(op.flag.clone());
             }
         }
+        self.render_page(ctx);
+        for sound in &page.sounds {
+            play(ctx, Some(*sound), CueKind::Sound);
+        }
+        self.persist_position(ctx);
+    }
+
+    // Fill the stage for the current page: name plate, dialogue reveal,
+    // backdrop and portraits, page music. No arrival side effects (flag ops,
+    // one-shots, the auto-save), so a hot-reload can re-render in place;
+    // re-playing the page's music is a same-key no-op.
+    fn render_page(&mut self, ctx: &mut PipelineContext) {
+        let (name_id, text_id) = {
+            let ids = self.ids.as_ref().expect("resolved at init");
+            (ids.name, ids.text)
+        };
+        let page = self.story.nodes[self.node].pages[self.page].clone();
 
         let (speaker, color) = match &page.speaker {
             Some(s) => (s.name.clone(), s.color),
@@ -402,17 +444,11 @@ impl StorySystem {
             &page.stage,
         );
         play(ctx, page.music, CueKind::Music);
-        for sound in &page.sounds {
-            play(ctx, Some(*sound), CueKind::Sound);
-        }
-        self.persist_position(ctx);
     }
 
-    // Show the current node's choice menu over its stage dressing; stage
-    // clicks are inert until an option is picked. Gated options are left off
-    // the menu, and the button slots fill from the visible options in order.
+    // Arrive on the current node's choice menu: run its flag ops, show the
+    // menu, and fire its one-shots.
     fn enter_choice(&mut self, ctx: &mut PipelineContext) {
-        self.in_choice = true;
         let node = self.story.nodes[self.node].clone();
         for op in &node.choice_ops {
             if op.clear {
@@ -421,15 +457,25 @@ impl StorySystem {
                 self.flags.insert(op.flag.clone());
             }
         }
+        self.render_choice(ctx);
+        for sound in &node.choice_sounds {
+            play(ctx, Some(*sound), CueKind::Sound);
+        }
+    }
+
+    // Show the current node's choice menu over its stage dressing; stage
+    // clicks are inert until an option is picked. Gated options are left off
+    // the menu, and the button slots fill from the visible options in order.
+    // No arrival side effects, so a hot-reload can re-render an open menu.
+    fn render_choice(&mut self, ctx: &mut PipelineContext) {
+        self.in_choice = true;
+        let node = self.story.nodes[self.node].clone();
         self.menu = self.visible_choices(self.node);
         let menu = self.menu.clone();
         let ids = self.ids.as_ref().expect("resolved at init");
 
         apply_stage(ctx, ids, &node.choice_stage);
         play(ctx, node.choice_music, CueKind::Music);
-        for sound in &node.choice_sounds {
-            play(ctx, Some(*sound), CueKind::Sound);
-        }
 
         set_label(ctx, ids.name, |l| l.content.clear());
         set_label(ctx, ids.text, |l| l.content.clear());
@@ -437,11 +483,22 @@ impl StorySystem {
         // rather than relying on `visible`: view re-activation (a pause
         // overlay dismissing back to the stage) force-shows every member.
         set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
-        set_sprite(ctx, ids.panel, |s| {
-            s.visible = true;
-            s.tint = [0.0, 0.0, 0.0, 0.55];
-        });
+        let boxes = ids.option_boxes.clone();
         for (i, label_id) in ids.options.iter().enumerate() {
+            let occupied = menu.get(i).is_some();
+            set_sprite(ctx, boxes.get(i).copied(), |s| {
+                s.visible = true;
+                s.tint = if occupied {
+                    CHOICE_BOX_TINT
+                } else {
+                    [
+                        CHOICE_BOX_TINT[0],
+                        CHOICE_BOX_TINT[1],
+                        CHOICE_BOX_TINT[2],
+                        0.0,
+                    ]
+                };
+            });
             match menu.get(i).map(|&c| &node.choices[c]) {
                 Some(choice) => {
                     let text = choice.label.clone();
@@ -462,10 +519,64 @@ impl StorySystem {
         self.in_choice = false;
         let ids = self.ids.as_ref().expect("resolved at init");
         set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.55]);
-        set_sprite(ctx, ids.panel, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
+        let boxes = ids.option_boxes.clone();
+        for box_id in boxes {
+            set_sprite(ctx, Some(box_id), |s| s.tint[3] = 0.0);
+        }
         for label_id in &ids.options {
             set_label(ctx, Some(*label_id), |l| l.content.clear());
         }
+    }
+
+    // Swap in a freshly compiled graph (the editor re-expands the story when
+    // its Markdown source is saved), keeping the current position and raised
+    // flags so the edit lands in place in the running game. Position is
+    // matched by node slug; a deleted node restarts the story.
+    fn reload(&mut self, new: Story, ctx: &mut PipelineContext) {
+        // A multi-story world reloads every story; only ours applies.
+        if new.scaffold.view != self.story.scaffold.view {
+            return;
+        }
+        let slug = self.story.nodes.get(self.node).map(|n| n.slug.clone());
+        let was_in_choice = self.in_choice;
+        self.story = new;
+        // Refresh the stage references: the scaffold's option-slot count can
+        // change with the story's widest menu (slots the running world never
+        // declared are silent no-ops until a restart).
+        if let Some(ids) = StageIds::from_scaffold(&self.story.scaffold) {
+            self.ids = Some(ids);
+        }
+        if !self.started {
+            return;
+        }
+        let node = slug.and_then(|s| self.story.nodes.iter().position(|n| n.slug == s));
+        let Some(node) = node else {
+            self.start(ctx);
+            return;
+        };
+        self.node = node;
+        let has_choices = !self.story.nodes[node].choices.is_empty();
+        let page_count = self.story.nodes[node].pages.len();
+        if was_in_choice && has_choices && !self.visible_choices(node).is_empty() {
+            self.render_choice(ctx);
+        } else if page_count > 0 {
+            self.exit_choice_ui(ctx);
+            self.page = self.page.min(page_count - 1);
+            self.render_page(ctx);
+            // Editing flow: show the whole revised page at once rather than
+            // re-typing it out.
+            self.typewriter.shown = self.typewriter.full.len();
+            let text = self.typewriter.text();
+            let text_id = self.ids.as_ref().expect("resolved at init").text;
+            set_label(ctx, text_id, |l| l.content = text);
+        } else {
+            // The node lost its pages (and any open menu no longer applies):
+            // re-enter it fresh so gates and fall-through resolve.
+            self.exit_choice_ui(ctx);
+            self.enter_node(node, ctx);
+            return;
+        }
+        self.persist_position(ctx);
     }
 
     fn show_ending(&mut self, ctx: &mut PipelineContext) {
@@ -498,35 +609,22 @@ impl System for StorySystem {
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.
-        let scaffold = &self.story.scaffold;
-        match (scaffold.view, scaffold.ending) {
-            (Some(view), Some(ending_view)) => {
-                self.ids = Some(StageIds {
-                    view,
-                    ending_view,
-                    bg: scaffold.bg,
-                    left: scaffold.left,
-                    center: scaffold.center,
-                    right: scaffold.right,
-                    dialog_box: scaffold.dialog_box,
-                    name: scaffold.name_label,
-                    text: scaffold.text_label,
-                    panel: scaffold.panel,
-                    options: scaffold.options.clone(),
-                    continue_label: scaffold.continue_label,
-                });
+        match StageIds::from_scaffold(&self.story.scaffold) {
+            Some(ids) => {
+                let continue_label = ids.continue_label;
+                self.ids = Some(ids);
                 // Continue lights up only when a resumable save exists. View
                 // activation force-shows every member label, so presence is
                 // carried by the content (an empty label renders nothing).
                 let has_save = !self.story.save_key.is_empty()
                     && read_save(&self.save_dir, &self.story.save_key).is_some();
-                set_label(ctx, scaffold.continue_label, |l| {
+                set_label(ctx, continue_label, |l| {
                     if !has_save {
                         l.content.clear();
                     }
                 });
             }
-            _ => {
+            None => {
                 tracing::warn!(
                     "StorySystem: story '{}' has no stage scaffold; story input is ignored",
                     self.story.title,
@@ -548,6 +646,20 @@ impl System for StorySystem {
             .map(|t| (now - t).as_secs_f32())
             .unwrap_or(0.0);
         self.last_step = Some(now);
+
+        // Freshly re-compiled graphs from the editor's source hot-reload
+        // swap in before any input is handled.
+        let reloads: Vec<Story> = match ctx.events::<StoryReload>() {
+            Some(events) => events
+                .read(&mut self.reload_cursor)
+                .into_iter()
+                .map(|e| e.story.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+        for story in reloads {
+            self.reload(story, ctx);
+        }
 
         // Track the active view; auto-start when the stage itself is the
         // world's initial view (no title screen).
@@ -716,7 +828,7 @@ mod tests {
             dialog_box: Some(intern("s_stage_box")),
             name_label: Some(intern("s_stage_name")),
             text_label: Some(intern("s_stage_text")),
-            panel: Some(intern("s_stage_panel")),
+            option_boxes: vec![intern("s_stage_opt0_box")],
             options: vec![intern("s_stage_opt0_lbl")],
             continue_label: None,
         }
@@ -743,7 +855,7 @@ mod tests {
             "s_stage_center",
             "s_stage_right",
             "s_stage_box",
-            "s_stage_panel",
+            "s_stage_opt0_box",
         ] {
             world.add_component(Sprite {
                 view: Some(intern("s_stage")),
@@ -874,14 +986,13 @@ mod tests {
         world.step();
         assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
         assert_eq!(label_content(&world, "s_stage_text"), "");
-        let panel = intern("s_stage_panel");
-        assert!(
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == panel)
-                .unwrap()
-                .visible
-        );
+        let opt_box = intern("s_stage_opt0_box");
+        let shown = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == opt_box)
+            .unwrap();
+        assert!(shown.visible);
+        assert!(shown.tint[3] > 0.0, "occupied slot's box is opaque");
 
         // Advancing during a choice is ignored.
         world
@@ -900,7 +1011,7 @@ mod tests {
         // members, so `visible` cannot carry menu state).
         let alpha = world
             .query::<Sprite>()
-            .find(|s| s.asset_id == panel)
+            .find(|s| s.asset_id == opt_box)
             .unwrap()
             .tint[3];
         assert_eq!(alpha, 0.0);
@@ -1242,5 +1353,117 @@ mod tests {
             .send(StoryCommand::Advance);
         world.step();
         assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
+    }
+
+    // A hot-reloaded graph swaps in without losing the play position: the
+    // revised page under the cursor re-renders in full.
+    #[test]
+    fn reload_swaps_the_graph_in_place() {
+        let mut world = story_world(two_page_story());
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+
+        let mut edited = two_page_story();
+        edited.nodes[0].pages[1] = page("Second page, revised.");
+        edited.scaffold = scaffold();
+        world
+            .events_mut::<StoryReload>()
+            .send(StoryReload { story: edited });
+        world.step();
+        assert_eq!(
+            label_content(&world, "s_stage_text"),
+            "Second page, revised."
+        );
+
+        // A reload for some other story's stage is ignored.
+        let mut foreign = two_page_story();
+        foreign.nodes[0].pages[1] = page("Not ours.");
+        world
+            .events_mut::<StoryReload>()
+            .send(StoryReload { story: foreign });
+        world.step();
+        assert_eq!(
+            label_content(&world, "s_stage_text"),
+            "Second page, revised."
+        );
+    }
+
+    // Deleting the node under the cursor restarts the story from the top.
+    #[test]
+    fn reload_with_the_node_deleted_restarts() {
+        let mut world = story_world(two_page_story());
+        world.start().unwrap();
+        world.step();
+
+        let mut edited = two_page_story();
+        edited.nodes[0].slug = "renamed".to_string();
+        edited.nodes[0].pages[0] = page("Fresh start.");
+        edited.scaffold = scaffold();
+        world
+            .events_mut::<StoryReload>()
+            .send(StoryReload { story: edited });
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Fresh start.");
+    }
+
+    // A reload while a menu is open re-renders the revised options and stays
+    // in choice mode.
+    #[test]
+    fn reload_refreshes_an_open_menu() {
+        let choice_story = |label: &str| Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![page("Pick.")],
+                    choices: vec![StoryChoice {
+                        label: label.to_string(),
+                        target: 1,
+                        condition: None,
+                    }],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "b".to_string(),
+                    pages: vec![page("Picked.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(choice_story("Go"));
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
+
+        let mut edited = choice_story("Go north");
+        edited.scaffold = scaffold();
+        world
+            .events_mut::<StoryReload>()
+            .send(StoryReload { story: edited });
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go north");
+
+        // Still a menu: advancing stays inert, choosing works.
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "");
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Choose(0));
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
     }
 }

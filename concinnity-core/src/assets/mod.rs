@@ -193,7 +193,7 @@ pub use spawner::Spawner;
 pub use sprite::{Sprite, SpriteFit};
 pub use story::{
     Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp, StoryPage,
-    StoryScaffold, StorySpeaker, StoryStage,
+    StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
 pub use story_command::StoryCommand;
 pub use story_import::StoryImport;

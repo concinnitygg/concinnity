@@ -82,29 +82,43 @@ pub(crate) fn build_sprite_calls(
             (s.x, s.y, s.x + s.width, s.y + s.height)
         };
         let texture_slot = s.texture.and_then(|t| texture_slots.get(&t).copied());
-        let v = |x: f32, y: f32, u: f32, vv: f32| match texture_slot {
+        // UVs derive from the vertex position inside the rect so arbitrary
+        // boundary geometry (the rounded-corner path) samples correctly; for
+        // the plain quad this reproduces the 0..1 corner UVs exactly.
+        let (w, h) = ((x1 - x0).max(f32::EPSILON), (y1 - y0).max(f32::EPSILON));
+        let v = |x: f32, y: f32, alpha: f32| match texture_slot {
             // Textured quad: real UVs, tint in color, alpha in mode.
             Some(_) => TextVertex {
                 pos: [x, y],
-                uv: [u, vv],
+                uv: [(x - x0) / w, (y - y0) / h],
                 color: [r, g, b],
-                mode: a,
+                mode: alpha,
             },
             // Solid fill: sentinel u < 0, alpha carried in v.
             None => TextVertex {
                 pos: [x, y],
-                uv: [-1.0, a],
+                uv: [-1.0, alpha],
                 color: [r, g, b],
                 mode: 0.0,
             },
         };
-        let vertices = vec![
-            v(x0, y0, 0.0, 0.0),
-            v(x1, y0, 1.0, 0.0),
-            v(x1, y1, 1.0, 1.0),
-            v(x0, y1, 0.0, 1.0),
-        ];
-        let indices = vec![0, 1, 2, 0, 2, 3];
+        // The corner radius is authored in the sprite's own pixel space; map
+        // it through the same scale the rect took (the overlay transforms are
+        // uniform; the full-canvas stretch takes the smaller axis).
+        let scale = if s.width > 0.0 && s.height > 0.0 {
+            ((x1 - x0) / s.width).min((y1 - y0) / s.height)
+        } else {
+            1.0
+        };
+        let radius = (s.corner_radius * scale).min(w / 2.0).min(h / 2.0);
+        let (vertices, indices) = if radius > 0.5 {
+            rounded_rect_geometry(x0, y0, x1, y1, radius, a, v)
+        } else {
+            (
+                vec![v(x0, y0, a), v(x1, y0, a), v(x1, y1, a), v(x0, y1, a)],
+                vec![0, 1, 2, 0, 2, 3],
+            )
+        };
         calls.push(TextDrawCall {
             vertices,
             indices,
@@ -115,6 +129,64 @@ pub(crate) fn build_sprite_calls(
         });
     }
     calls
+}
+
+// Arc steps per rounded corner. Six segments keep a 10-15 px UI radius
+// visually smooth once the feathered edge blends the silhouette.
+const CORNER_SEGMENTS: usize = 6;
+// Width (window pixels) of the soft edge ring. The solid interior stops this
+// far inside the authored boundary and fades to transparent at it, so the
+// silhouette never grows past the authored rect.
+const EDGE_FEATHER: f32 = 1.25;
+
+// Tessellate a rounded rectangle in window space: a solid convex polygon
+// inset one feather width inside the authored boundary, fanned from its first
+// point, plus a fading ring out to the boundary for anti-aliasing. Vertex
+// alpha carries the fade (both sprite modes read per-vertex alpha).
+fn rounded_rect_geometry(
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    radius: f32,
+    alpha: f32,
+    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
+) -> (Vec<TextVertex>, Vec<u16>) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    // Corner arc centers in polygon order, each with its start angle; y grows
+    // downward so the arcs sweep clockwise around the boundary.
+    let corners = [
+        (x0 + radius, y0 + radius, PI),
+        (x1 - radius, y0 + radius, 1.5 * PI),
+        (x1 - radius, y1 - radius, 0.0),
+        (x0 + radius, y1 - radius, FRAC_PI_2),
+    ];
+    let mut boundary = Vec::with_capacity(4 * (CORNER_SEGMENTS + 1));
+    for &(cx, cy, start) in &corners {
+        for i in 0..=CORNER_SEGMENTS {
+            let t = start + (i as f32 / CORNER_SEGMENTS as f32) * FRAC_PI_2;
+            boundary.push((cx, cy, t.cos(), t.sin()));
+        }
+    }
+    let m = boundary.len();
+    let inner_r = (radius - EDGE_FEATHER).max(0.0);
+    let mut vertices = Vec::with_capacity(2 * m);
+    for &(cx, cy, cos, sin) in &boundary {
+        vertices.push(v(cx + inner_r * cos, cy + inner_r * sin, alpha));
+    }
+    for &(cx, cy, cos, sin) in &boundary {
+        vertices.push(v(cx + radius * cos, cy + radius * sin, 0.0));
+    }
+    let mut indices = Vec::with_capacity(3 * (m - 2) + 6 * m);
+    for i in 1..m - 1 {
+        indices.extend([0, i as u16, (i + 1) as u16]);
+    }
+    for i in 0..m {
+        let j = (i + 1) % m;
+        let (i, j, m) = (i as u16, j as u16, m as u16);
+        indices.extend([i, j, m + j, i, m + j, m + i]);
+    }
+    (vertices, indices)
 }
 
 #[cfg(test)]
@@ -143,6 +215,7 @@ mod tests {
             visible: true,
             view: None,
             fit: SpriteFit::Fit,
+            corner_radius: 0.0,
         }
     }
 
@@ -188,6 +261,64 @@ mod tests {
             assert_eq!(v.color, [1.0, 0.9, 0.8]);
             assert!((v.mode - 0.75).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn rounded_sprite_tessellates_with_a_feathered_edge() {
+        let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
+        s.corner_radius = 20.0;
+        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [0.0, 0.0], &no_clips());
+        assert_eq!(calls.len(), 1);
+        let vs = &calls[0].vertices;
+        // An inner solid ring and an outer transparent ring, 4 corner arcs of
+        // CORNER_SEGMENTS + 1 points each.
+        let ring = 4 * (CORNER_SEGMENTS + 1);
+        assert_eq!(vs.len(), 2 * ring);
+        for v in &vs[..ring] {
+            assert!(
+                (v.uv[1] - 0.9).abs() < 1e-5,
+                "inner ring carries the tint alpha"
+            );
+        }
+        for v in &vs[ring..] {
+            assert!(v.uv[1].abs() < 1e-5, "outer ring fades to transparent");
+        }
+        // Every vertex stays inside the authored rect, and the outer ring
+        // reaches the rect edges at the flat sides.
+        for v in vs {
+            assert!(v.pos[0] >= 100.0 - 1e-3 && v.pos[0] <= 500.0 + 1e-3);
+            assert!(v.pos[1] >= 100.0 - 1e-3 && v.pos[1] <= 300.0 + 1e-3);
+        }
+        let min_x = vs.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
+        assert!((min_x - 100.0).abs() < 1e-3);
+        // The corner point itself is never touched: the arc cuts it off.
+        assert!(!vs.iter().any(|v| v.pos == [100.0, 100.0]));
+    }
+
+    #[test]
+    fn rounded_view_sprite_scales_its_radius_with_the_window() {
+        // A 2x window doubles the radius: the outer ring's leftmost point
+        // sits at the transformed rect's left edge, and the top-left corner
+        // arc starts (2 * radius) transformed pixels down from the rect top.
+        let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
+        s.view = Some(AssetId(7));
+        s.corner_radius = 20.0;
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [2.0 * UI_REFERENCE_SIZE[0], 2.0 * UI_REFERENCE_SIZE[1]],
+            &no_clips(),
+        );
+        let vs = &calls[0].vertices;
+        let min_x = vs.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
+        let top_left_arc_y = vs
+            .iter()
+            .filter(|v| (v.pos[0] - min_x).abs() < 1e-3)
+            .map(|v| v.pos[1])
+            .fold(f32::MAX, f32::min);
+        assert!((min_x - 200.0).abs() < 1e-3);
+        assert!((top_left_arc_y - (200.0 + 40.0)).abs() < 1e-3);
     }
 
     #[test]

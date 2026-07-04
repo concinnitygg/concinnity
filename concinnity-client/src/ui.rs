@@ -2006,6 +2006,7 @@ mod tests {
             visible: true, // intentionally true to confirm init hides it
             view: Some(view_id),
             fit: crate::assets::SpriteFit::Fit,
+            corner_radius: 0.0,
         });
         world.start().unwrap();
 
@@ -2889,6 +2890,7 @@ mod tests {
                 visible: false,
                 view: Some(view),
                 fit: crate::assets::SpriteFit::Fit,
+                corner_radius: 0.0,
             });
         }
         world.add_component(KeyBinding {

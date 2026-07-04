@@ -49,6 +49,11 @@ Play position and flags auto-save page by page (under the project's
 `.concinnity/data/`); the generated title screen's Continue resumes
 them, and finishing the story clears the save.
 
+Under the editor's debug run, saving the `source` file hot-reloads the
+story: the graph re-compiles and swaps into the running game in place,
+keeping the current position (matched by heading). New image or audio
+files still need a restart.
+
 Any other Markdown construct (tables, other code fences, inline
 emphasis, ...) is an error at build time, as are links to headings that
 do not exist, undeclared speakers, and duplicate headings.

@@ -77,10 +77,8 @@ pub struct StoryScaffold {
     /// Dialog text [TextLabel](#textlabel).
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub text_label: Option<AssetId>,
-    /// Choice menu panel [Sprite](#sprite). `None` when the story has no
-    /// choice menus.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub panel: Option<AssetId>,
+    /// Choice button box [Sprite](#sprite)s, one per option slot.
+    pub option_boxes: Vec<AssetId>,
     /// Choice button [TextLabel](#textlabel)s, one per option slot.
     pub options: Vec<AssetId>,
     /// The title screen's Continue [TextLabel](#textlabel), hidden while no
@@ -257,6 +255,18 @@ impl Component for Story {
     }
 }
 
+/// Runtime event carrying a freshly re-compiled [Story](#story) graph. The
+/// story system swaps its graph for the new one in place, keeping the
+/// current position (matched by node slug) and raised flags, so edits to a
+/// story's source land in the running game. A plain event, not a declarable
+/// asset.
+#[derive(Debug, Clone)]
+pub struct StoryReload {
+    /// The replacement graph. Matched to its story system by the scaffold's
+    /// stage view reference.
+    pub story: Story,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +288,7 @@ mod tests {
                 "ending": "s_ending",
                 "bg": "s_stage_bg",
                 "text_label": "s_stage_text",
+                "option_boxes": ["s_stage_opt0_box"],
                 "options": ["s_stage_opt0_lbl"]
             },
             "nodes": [{
@@ -305,11 +316,12 @@ mod tests {
         assert_eq!(page.stage.center.as_ref().unwrap().width, 456.0);
         assert_eq!(s.nodes[0].choices[1].target, 2);
         // Name-string references resolved to ids through the interner (the
-        // build-time path); the panel was omitted and stays unset.
+        // build-time path); the omitted dialog_box stays unset.
         use crate::ecs::asset_id::intern;
         assert_eq!(s.scaffold.view, Some(intern("s_stage")));
         assert_eq!(s.scaffold.options, vec![intern("s_stage_opt0_lbl")]);
-        assert_eq!(s.scaffold.panel, None);
+        assert_eq!(s.scaffold.option_boxes, vec![intern("s_stage_opt0_box")]);
+        assert_eq!(s.scaffold.dialog_box, None);
         assert_eq!(page.music, Some(intern("s_clip0")));
         assert_eq!(page.sounds, vec![intern("s_clip1")]);
         assert_eq!(page.stage.bg.as_ref().unwrap().texture, intern("s_img0"));

@@ -347,6 +347,7 @@ fn build_dropdown_overlay(
         visible: true,
         view: view.view,
         fit: crate::assets::SpriteFit::Fit,
+        corner_radius: 0.0,
     };
 
     // Border quad (a little larger, drawn first) then the panel fill on top.

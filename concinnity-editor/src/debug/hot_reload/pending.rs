@@ -38,6 +38,13 @@ pub(crate) fn take_pending_world() -> bool {
     PENDING_WORLD.swap(false, Ordering::SeqCst)
 }
 
+// "Markdown story source changed" signal. Consumed by the story reload poll
+// to re-expand the world's `StoryImport`s and hand each freshly compiled
+// `Story` graph to the running story system. Kept separate from
+// `PENDING_WORLD` so a dialogue save does not also kick the procedural-mesh
+// and fog passes.
+static PENDING_STORIES: AtomicBool = AtomicBool::new(false);
+
 // Raise the "world-loaded ShaderStage source changed" flag. Called by the
 // asset hot-reload watcher when a captured `.metal` / `.hlsl` / `.glsl` source
 // is saved and by the debug WS `reload-assets` handler.
@@ -50,6 +57,20 @@ pub(crate) fn set_pending_shader_stages() {
 // `true` result kicks the per-stage recompile + pipeline rebuild pass.
 pub(crate) fn take_pending_shader_stages() -> bool {
     PENDING_SHADER_STAGES.swap(false, Ordering::SeqCst)
+}
+
+// Raise the "Markdown story source changed" flag. Called by the asset
+// hot-reload watcher when a `.md` save fires in a watched story-source
+// directory.
+pub(crate) fn set_pending_stories() {
+    PENDING_STORIES.store(true, Ordering::SeqCst);
+}
+
+// Swap the "Markdown story source changed" flag to `false`, returning whether
+// it was set. The reload poll calls this at frame start; a `true` result
+// kicks the story re-expansion pass.
+pub(crate) fn take_pending_stories() -> bool {
+    PENDING_STORIES.swap(false, Ordering::SeqCst)
 }
 
 #[cfg(test)]
@@ -66,6 +87,18 @@ mod tests {
         assert!(!take_pending_world());
         if prior {
             set_pending_world();
+        }
+    }
+
+    #[test]
+    fn stories_flag_round_trips() {
+        let prior = take_pending_stories();
+        assert!(!take_pending_stories());
+        set_pending_stories();
+        assert!(take_pending_stories());
+        assert!(!take_pending_stories());
+        if prior {
+            set_pending_stories();
         }
     }
 
