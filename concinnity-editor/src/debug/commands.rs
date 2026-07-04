@@ -450,6 +450,44 @@ pub(super) fn handle_despawn(text: &str) -> String {
     }
 }
 
+// Drive the story system: `action` is `start`, `advance`, or `choose` (the
+// latter with an `option` index).
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct StoryCmdRequest {
+    #[serde(skip)]
+    _cmd: String,
+    action: String,
+    option: usize,
+}
+
+// Send the story system the same `StoryCommand` a stage click or key press
+// fires, so a headless harness can start, advance, and choose through a
+// story and screenshot each page. `cn debug` only. The reply fires once the
+// command is queued.
+pub(super) fn handle_story(text: &str) -> String {
+    let req: StoryCmdRequest = match serde_json::from_str(text) {
+        Ok(r) => r,
+        Err(e) => return error_reply(&format!("story: {e}")),
+    };
+    let command = match req.action.as_str() {
+        "start" => crate::assets::StoryCommand::Start,
+        "advance" => crate::assets::StoryCommand::Advance,
+        "choose" => crate::assets::StoryCommand::Choose(req.option),
+        other => return error_reply(&format!("story: unknown action '{other}'")),
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Story {
+        command,
+        reply: tx,
+    });
+    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
+        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
+        Ok(Err(e)) => error_reply(&e),
+        Err(_) => error_reply("story: timed out waiting for engine"),
+    }
+}
+
 // Re-parent an authored placement. `child` is moved under `parent`; a null or
 // omitted `parent` detaches the child to a root.
 #[derive(serde::Deserialize, Default)]
@@ -691,6 +729,19 @@ mod tests {
             serde_json::from_str::<CameraMoveRequest>(r#"{"cmd":"camera-move","frames":"lots"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn story_request_parses_action_and_option() {
+        let req: StoryCmdRequest =
+            serde_json::from_str(r#"{"cmd":"story","action":"choose","option":1}"#)
+                .expect("valid parses");
+        assert_eq!(req.action, "choose");
+        assert_eq!(req.option, 1);
+        let req: StoryCmdRequest =
+            serde_json::from_str(r#"{"cmd":"story","action":"advance"}"#).expect("valid parses");
+        assert_eq!(req.action, "advance");
+        assert_eq!(req.option, 0);
     }
 
     #[test]

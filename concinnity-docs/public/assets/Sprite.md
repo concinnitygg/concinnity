@@ -7,9 +7,9 @@ Screen-space 2D rectangle drawn as a UI overlay each frame.
 Sprites are pixel-anchored quads with an RGBA tint. They draw alongside
 [TextLabel](TextLabel.md)s, ordered behind labels so text sits on top.
 
-Currently only the tint is drawn (solid-coloured rectangles). The `texture`
-field is reserved for forward compatibility: a sprite with `texture` set
-renders exactly as if it were unset.
+A sprite with a `texture` draws that image, multiplied by the tint (use a
+white tint to show the image unchanged; the tint's alpha fades it).
+Without one, the tint is drawn as a solid-coloured rectangle.
 
 ```jsonl
 {
@@ -33,3 +33,4 @@ renders exactly as if it were unset.
 - `follow_cursor`: A boolean. When true, the sprite acts as an in-engine cursor: it is drawn on top of the other overlays as an arrow pointer tracking the mouse, with the pointer at the arrow's tip. `tint` is the arrow fill (a contrasting outline is added automatically) and `height` its size; `width` is ignored so the arrow keeps its shape. The system cursor is hidden while a visible `follow_cursor` sprite exists. Defaults to `false`.
 - `visible`: A boolean. When false the sprite is skipped each frame. Defaults to `true`.
 - `view`: A string. [View](View.md) this sprite belongs to. Resolved automatically from the naming convention (`<view>_*`); you don't set this directly. `None` means the sprite is always visible (e.g. a scene background). Optional.
+- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a view-owned sprite maps from the reference canvas to the window when their aspect ratios differ.

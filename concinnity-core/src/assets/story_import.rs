@@ -28,12 +28,13 @@ use crate::ecs::{AssetOrigin, Component};
 ///   page shows (`[music](assets/theme.ogg)`, `[sound](assets/door.wav)`);
 ///   these expand to [AudioClip](#audioclip) + [AudioCue](#audiocue) entries
 /// - `![bg](assets/inn.png)` sets the backdrop image from the next page
-///   onward; `![left](ana.png)` / `![right](ben.png)` place a character
-///   portrait on that side, bottom-anchored and scaled by the image's aspect
-///   ratio. Portraits persist until replaced; a `![bg]` change is a scene
-///   change and clears both. Images expand to [Texture](#texture) entries
-///   drawn by [Sprite](#sprite)s. Directives may stack on adjacent lines in
-///   one paragraph
+///   onward; `![left](ana.png)` / `![center](mid.png)` / `![right](ben.png)`
+///   place a character portrait at that stage position, bottom-anchored at
+///   the image's own pixel size (scaled down if taller than the canvas).
+///   Portraits persist until replaced; a `![bg]` change is a scene change
+///   and clears them all. Images expand to [Texture](#texture) entries drawn
+///   by [Sprite](#sprite)s. Directives may stack on adjacent lines in one
+///   paragraph
 /// - a node whose last page has no link falls through to the next heading
 ///   in document order; the final node ends the story
 ///
@@ -81,6 +82,9 @@ pub struct StoryImport {
     /// the initial view and the generated ending offers a Restart instead of
     /// Back to title.
     pub title_screen: bool,
+    /// Dialogue reveal speed in characters per second. `0` shows each page
+    /// instantly.
+    pub text_speed: f32,
 }
 
 impl Default for StoryImport {
@@ -88,6 +92,7 @@ impl Default for StoryImport {
         Self {
             source: String::new(),
             title_screen: true,
+            text_speed: 45.0,
         }
     }
 }

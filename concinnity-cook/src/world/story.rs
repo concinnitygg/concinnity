@@ -55,13 +55,15 @@ pub(crate) struct Node {
 }
 
 // The visual dressing current at a page: the backdrop image and the
-// character portraits standing at each side. A `![bg]` directive replaces
-// the backdrop AND clears both portraits (a scene change); `![left]` /
-// `![right]` swap one portrait and persist until the next scene change.
+// character portraits standing on stage. A `![bg]` directive replaces
+// the backdrop AND clears all portraits (a scene change); `![left]` /
+// `![center]` / `![right]` swap one portrait and persist until the next
+// scene change.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Stage {
     pub(crate) bg: Option<String>,
     pub(crate) left: Option<String>,
+    pub(crate) center: Option<String>,
     pub(crate) right: Option<String>,
 }
 
@@ -93,6 +95,7 @@ enum Directive {
     Sound(String),
     Bg(String),
     Left(String),
+    Center(String),
     Right(String),
 }
 
@@ -136,6 +139,10 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             .get("title_screen")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        let text_speed = args
+            .get("text_speed")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(45.0) as f32;
 
         let content = std::fs::read_to_string(&source).map_err(|e| {
             format!(
@@ -149,6 +156,7 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             &sanitize_name(&import_name),
             &story,
             title_screen,
+            text_speed,
             &probe_image_dims,
         )
         .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
@@ -316,6 +324,7 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                                         };
                                     }
                                     Directive::Left(path) => current_stage.left = Some(path),
+                                    Directive::Center(path) => current_stage.center = Some(path),
                                     Directive::Right(path) => current_stage.right = Some(path),
                                 }
                             }
@@ -634,11 +643,12 @@ fn classify_paragraph(
             match alt.as_str() {
                 "bg" => directives.push(Directive::Bg(target)),
                 "left" => directives.push(Directive::Left(target)),
+                "center" => directives.push(Directive::Center(target)),
                 "right" => directives.push(Directive::Right(target)),
                 other => {
                     return Err(format!(
                         "line {}: image role '{}' is not supported; use `![bg]` for a \
-                         backdrop or `![left]` / `![right]` for portraits",
+                         backdrop or `![left]` / `![center]` / `![right]` for portraits",
                         line, other
                     ));
                 }
@@ -994,45 +1004,29 @@ pub(crate) fn wrap_text(text: &str, columns: usize) -> String {
     lines.join("\n")
 }
 
-// Emit the UI asset entries for one parsed story. `prefix` is the sanitized
-// import name; every generated name starts with it. `image_dims` reads an
-// image file's pixel size (portrait layout needs the aspect ratio); tests
-// stub it so emission stays free of file IO.
+// Emit the runtime assets for one parsed story: the compiled Story graph
+// plus the stage scaffolding the story system drives at runtime. Instead of
+// a View per page, the whole story plays inside one stage view whose labels
+// and sprites are mutated page by page; the title and ending screens stay
+// build-generated. `prefix` is the sanitized import name; every generated
+// name starts with it. `image_dims` reads an image file's pixel size
+// (portrait layout needs the aspect ratio); tests stub it so emission stays
+// free of file IO.
 pub(crate) fn emit_story(
     prefix: &str,
     story: &Story,
     title_screen: bool,
+    text_speed: f32,
     image_dims: ImageDims,
 ) -> Result<Vec<serde_json::Value>, String> {
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
-    let node_asset = |slug: &str| slug.replace('-', "_");
-
-    // Node views live under a reserved `n` segment so a heading named
-    // "title" or "ending" can never collide with the generated title and
-    // ending views. First view of a node: its first page, or its choice menu
-    // when it has no pages of its own.
-    let first_view = |node: &Node| {
-        if node.pages.is_empty() {
-            format!("{}_n_{}_choice", prefix, node_asset(&node.slug))
-        } else {
-            format!("{}_n_{}_p0", prefix, node_asset(&node.slug))
-        }
-    };
-    let first_view_of = |slug: &str| {
-        story
-            .nodes
-            .iter()
-            .find(|n| n.slug == slug)
-            .map(&first_view)
-            .expect("targets validated against node slugs")
-    };
 
     let font_title = format!("{}_font_title", prefix);
     let font_menu = format!("{}_font_menu", prefix);
     let font_dialog = format!("{}_font_dialog", prefix);
     let title_view = format!("{}_title", prefix);
+    let stage_view = format!("{}_stage", prefix);
     let ending_view = format!("{}_ending", prefix);
-    let entry_view = first_view(&story.nodes[0]);
 
     let mut out = vec![
         font(&font_title, TITLE_FONT_PX),
@@ -1068,7 +1062,7 @@ pub(crate) fn emit_story(
             win_w / 2.0 - 120.0,
             430.0,
             240.0,
-            &format!("view:show:{}", entry_view),
+            "story:start",
         ));
         out.extend(button(
             &format!("{}_quit", title_view),
@@ -1081,211 +1075,235 @@ pub(crate) fn emit_story(
         ));
     }
 
-    let mut ending_used = false;
-    let mut view_names: Vec<String> = Vec::new();
-    if title_screen {
-        view_names.push(title_view.clone());
-    }
     // Audio files referenced by media directives, deduplicated by path in
-    // first-use order; each becomes one AudioClip entry. Same for backdrop
-    // images, which become Texture entries sampled by the page bg Sprites.
+    // first-use order; each becomes one AudioClip entry. Same for stage
+    // images, which become Texture entries the stage sprites sample.
     let mut clips: Vec<(String, String)> = Vec::new();
     let mut images: Vec<(String, String)> = Vec::new();
 
-    for (ni, node) in story.nodes.iter().enumerate() {
-        let node_name = node_asset(&node.slug);
-        // Where the node goes when its last page advances: its own choices,
-        // or the next node in document order, or the ending.
-        let node_exit = if !node.choices.is_empty() {
-            format!("{}_n_{}_choice", prefix, node_name)
-        } else if let Some(next) = story.nodes.get(ni + 1) {
-            first_view(next)
-        } else {
-            ending_used = true;
-            ending_view.clone()
-        };
-
-        for (pi, page) in node.pages.iter().enumerate() {
-            let page_view = format!("{}_n_{}_p{}", prefix, node_name, pi);
-            view_names.push(page_view.clone());
-            let initial = !title_screen && ni == 0 && pi == 0;
-            out.push(view(&page_view, initial));
-            out.push(backdrop(
-                &format!("{}_bg", page_view),
-                page.stage.bg.as_deref(),
-                prefix,
-                &mut images,
-                win_w,
-                win_h,
-            ));
-            out.extend(portraits(
-                &page_view,
-                &page.stage,
-                prefix,
-                &mut images,
-                image_dims,
-                win_h,
-            )?);
-            if let Some(id) = &page.speaker {
+    // Compile the node graph. Jump and choice targets become node indices
+    // (validated against slugs during parse); media paths become the
+    // deduplicated asset names; speakers resolve to their display name and
+    // color; dialog text is pre-wrapped.
+    let node_index = |slug: &str| -> u32 {
+        story
+            .nodes
+            .iter()
+            .position(|n| n.slug == slug)
+            .expect("targets validated against node slugs") as u32
+    };
+    let mut nodes_json = Vec::new();
+    for node in &story.nodes {
+        let mut pages_json = Vec::new();
+        for page in &node.pages {
+            let speaker = page.speaker.as_ref().map(|id| {
                 let character = &story.characters[id];
-                out.push(label(
-                    &format!("{}_name", page_view),
-                    &font_menu,
-                    &character.name,
-                    LabelStyle {
-                        x: 160.0,
-                        y: 478.0,
-                        color: character.color,
-                        ..LabelStyle::default()
-                    },
-                ));
-            }
-            out.push(label(
-                &format!("{}_text", page_view),
-                &font_dialog,
-                &wrap_text(&page.text, WRAP_COLUMNS),
-                LabelStyle {
-                    x: 160.0,
-                    y: 530.0,
-                    color: [1.0, 0.95, 0.85],
-                    background: Some([0.0, 0.0, 0.0, 0.55]),
-                },
-            ));
-            let target = match &page.jump {
-                Some(slug) => first_view_of(slug),
-                None if pi + 1 < node.pages.len() => {
-                    format!("{}_n_{}_p{}", prefix, node_name, pi + 1)
+                serde_json::json!({ "name": character.name, "color": character.color })
+            });
+            let music = page
+                .music
+                .as_ref()
+                .map(|p| clip_asset(prefix, &mut clips, p));
+            let sounds: Vec<String> = page
+                .sounds
+                .iter()
+                .map(|p| clip_asset(prefix, &mut clips, p))
+                .collect();
+            pages_json.push(serde_json::json!({
+                "speaker": speaker,
+                "text": wrap_text(&page.text, WRAP_COLUMNS),
+                "jump": page.jump.as_deref().map(&node_index),
+                "music": music,
+                "sounds": sounds,
+                "stage": stage_entry(&page.stage, prefix, &mut images, image_dims)?,
+            }));
+        }
+        let choices: Vec<serde_json::Value> = node
+            .choices
+            .iter()
+            .map(|c| serde_json::json!({ "label": c.label, "target": node_index(&c.target) }))
+            .collect();
+        let choice_music = node
+            .choice_music
+            .as_ref()
+            .map(|p| clip_asset(prefix, &mut clips, p));
+        let choice_sounds: Vec<String> = node
+            .choice_sounds
+            .iter()
+            .map(|p| clip_asset(prefix, &mut clips, p))
+            .collect();
+        nodes_json.push(serde_json::json!({
+            "slug": node.slug,
+            "pages": pages_json,
+            "choices": choices,
+            "choice_stage": stage_entry(&node.choice_stage, prefix, &mut images, image_dims)?,
+            "choice_music": choice_music,
+            "choice_sounds": choice_sounds,
+        }));
+    }
+    // The compiled graph takes the import's own name: the one declaration the
+    // author wrote stays the one asset that carries the story.
+    out.push(serde_json::json!({
+        "name": prefix,
+        "type": "Story",
+        "args": {
+            "title": story.title,
+            "nodes": nodes_json,
+            "text_speed": text_speed,
+        }
+    }));
+
+    // The stage: one view the story system drives. Sprites and labels are
+    // placeholders here; the system fills text, swaps textures, and toggles
+    // visibility page by page. Declaration order is draw order.
+    out.push(view(&stage_view, !title_screen));
+    out.push(stage_sprite(
+        &format!("{}_bg", stage_view),
+        [0.0, 0.0, win_w, win_h],
+        [0.05, 0.06, 0.09, 1.0],
+        true,
+    ));
+    for side in ["left", "center", "right"] {
+        out.push(stage_sprite(
+            &format!("{}_{}", stage_view, side),
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            false,
+        ));
+    }
+    out.push(sprite(
+        &format!("{}_box", stage_view),
+        DIALOG_BOX.0,
+        DIALOG_BOX.1,
+        DIALOG_BOX.2,
+        DIALOG_BOX.3,
+        [0.0, 0.0, 0.0, 0.55],
+    ));
+    out.push(label(
+        &format!("{}_name", stage_view),
+        &font_menu,
+        "",
+        LabelStyle {
+            x: 160.0,
+            y: 478.0,
+            color: [1.0, 1.0, 1.0],
+            ..LabelStyle::default()
+        },
+    ));
+    out.push(label(
+        &format!("{}_text", stage_view),
+        &font_dialog,
+        "",
+        LabelStyle {
+            x: 160.0,
+            y: 530.0,
+            color: [1.0, 0.95, 0.85],
+            ..LabelStyle::default()
+        },
+    ));
+    out.push(hit_region(
+        &format!("{}_advance", stage_view),
+        0.0,
+        0.0,
+        win_w,
+        win_h,
+        None,
+        "story:advance",
+    ));
+    out.push(serde_json::json!({
+        "name": format!("{}_advance_key", prefix),
+        "type": "KeyBinding",
+        "args": { "key": "Space", "action": "story:advance" }
+    }));
+
+    // Choice furniture, sized for the widest menu in the story: a dim panel
+    // and one button per option, hidden until the story system reaches a
+    // choice. The buttons stay hit-active the whole time; the story system
+    // ignores a choose action outside a menu (and an advance inside one), so
+    // the overlap with the full-canvas advance region resolves by mode.
+    let max_choices = story
+        .nodes
+        .iter()
+        .map(|n| n.choices.len())
+        .max()
+        .unwrap_or(0);
+    if max_choices > 0 {
+        out.push(stage_sprite(
+            &format!("{}_panel", stage_view),
+            [160.0, 180.0, win_w - 320.0, 360.0],
+            [0.0, 0.0, 0.0, 0.0],
+            false,
+        ));
+        let y0 = win_h / 2.0 - max_choices as f32 * 30.0;
+        for ci in 0..max_choices {
+            let lbl = format!("{}_opt{}_lbl", stage_view, ci);
+            let y = y0 + ci as f32 * 60.0;
+            out.push(serde_json::json!({
+                "name": lbl,
+                "type": "TextLabel",
+                "args": {
+                    "font": font_menu,
+                    "content": "",
+                    "x": 280.0,
+                    "y": y + 6.0,
+                    "color": [0.92, 0.92, 0.92],
+                    "scale": 1.0,
+                    "visible": false,
                 }
-                None => node_exit.clone(),
-            };
-            out.push(hit_region(
-                &format!("{}_next", page_view),
-                0.0,
-                0.0,
-                win_w,
-                win_h,
-                None,
-                &format!("view:show:{}", target),
-            ));
-            if let Some(path) = &page.music {
-                let clip = clip_asset(prefix, &mut clips, path);
-                out.push(audio_cue(
-                    &format!("{}_music", page_view),
-                    &page_view,
-                    &clip,
-                    "music",
-                ));
-            }
-            for (si, path) in page.sounds.iter().enumerate() {
-                let clip = clip_asset(prefix, &mut clips, path);
-                out.push(audio_cue(
-                    &format!("{}_sfx{}", page_view, si),
-                    &page_view,
-                    &clip,
-                    "sound",
-                ));
-            }
-        }
-
-        if !node.choices.is_empty() {
-            let choice_view = format!("{}_n_{}_choice", prefix, node_name);
-            view_names.push(choice_view.clone());
-            let initial = !title_screen && ni == 0 && node.pages.is_empty();
-            out.push(view(&choice_view, initial));
-            out.push(backdrop(
-                &format!("{}_bg", choice_view),
-                node.choice_stage.bg.as_deref(),
-                prefix,
-                &mut images,
-                win_w,
-                win_h,
-            ));
-            out.extend(portraits(
-                &choice_view,
-                &node.choice_stage,
-                prefix,
-                &mut images,
-                image_dims,
-                win_h,
-            )?);
-            out.push(sprite(
-                &format!("{}_panel", choice_view),
-                160.0,
-                180.0,
-                win_w - 320.0,
-                360.0,
-                [0.0, 0.0, 0.0, 0.55],
-            ));
-            let y0 = win_h / 2.0 - node.choices.len() as f32 * 30.0;
-            for (ci, choice) in node.choices.iter().enumerate() {
-                out.extend(button(
-                    &format!("{}_opt{}", choice_view, ci),
-                    &font_menu,
-                    &choice.label,
-                    280.0,
-                    y0 + ci as f32 * 60.0,
-                    win_w - 560.0,
-                    &format!("view:show:{}", first_view_of(&choice.target)),
-                ));
-            }
-            if let Some(path) = &node.choice_music {
-                let clip = clip_asset(prefix, &mut clips, path);
-                out.push(audio_cue(
-                    &format!("{}_music", choice_view),
-                    &choice_view,
-                    &clip,
-                    "music",
-                ));
-            }
-            for (si, path) in node.choice_sounds.iter().enumerate() {
-                let clip = clip_asset(prefix, &mut clips, path);
-                out.push(audio_cue(
-                    &format!("{}_sfx{}", choice_view, si),
-                    &choice_view,
-                    &clip,
-                    "sound",
-                ));
-            }
+            }));
+            out.push(serde_json::json!({
+                "name": format!("{}_opt{}_btn", stage_view, ci),
+                "type": "HitRegion",
+                "args": {
+                    "x": 280.0,
+                    "y": y,
+                    "width": win_w - 560.0,
+                    "height": 40.0,
+                    "label": lbl,
+                    "hover_color": [1.0, 0.85, 0.3],
+                    "hover_scale": 1.06,
+                    "action": format!("story:choose:{}", ci),
+                }
+            }));
         }
     }
 
-    if ending_used {
-        view_names.push(ending_view.clone());
-        out.push(view(&ending_view, false));
-        out.push(sprite(
-            &format!("{}_bg", ending_view),
-            0.0,
-            0.0,
-            win_w,
-            win_h,
-            [0.03, 0.03, 0.05, 1.0],
-        ));
-        out.push(label(
-            &format!("{}_fin", ending_view),
-            &font_title,
-            "~ fin ~",
-            LabelStyle {
-                x: centered_x("~ fin ~", TITLE_FONT_PX, win_w),
-                y: 260.0,
-                color: [0.95, 0.88, 0.7],
-                ..LabelStyle::default()
-            },
-        ));
-        let (back_label, back_target) = if title_screen {
-            ("Back to title", title_view.clone())
-        } else {
-            ("Restart", entry_view.clone())
-        };
-        out.extend(button(
-            &format!("{}_back", ending_view),
-            &font_menu,
-            back_label,
-            win_w / 2.0 - 160.0,
-            490.0,
-            320.0,
-            &format!("view:show:{}", back_target),
-        ));
-    }
+    // The ending screen, shown by the story system when the last node runs
+    // out of pages.
+    out.push(view(&ending_view, false));
+    out.push(sprite(
+        &format!("{}_bg", ending_view),
+        0.0,
+        0.0,
+        win_w,
+        win_h,
+        [0.03, 0.03, 0.05, 1.0],
+    ));
+    out.push(label(
+        &format!("{}_fin", ending_view),
+        &font_title,
+        "~ fin ~",
+        LabelStyle {
+            x: centered_x("~ fin ~", TITLE_FONT_PX, win_w),
+            y: 260.0,
+            color: [0.95, 0.88, 0.7],
+            ..LabelStyle::default()
+        },
+    ));
+    let (back_label, back_action) = if title_screen {
+        ("Back to title", format!("view:show:{}", title_view))
+    } else {
+        ("Restart", "story:start".to_string())
+    };
+    out.extend(button(
+        &format!("{}_back", ending_view),
+        &font_menu,
+        back_label,
+        win_w / 2.0 - 160.0,
+        490.0,
+        320.0,
+        &back_action,
+    ));
 
     for (path, name) in &clips {
         out.push(serde_json::json!({
@@ -1305,12 +1323,15 @@ pub(crate) fn emit_story(
     // UI assets attach to a View by name prefix, so one generated view name
     // must never be a `_`-extension of another or the members of the longer
     // view would be ambiguous.
-    let mut sorted = view_names.clone();
-    sorted.sort();
-    for pair in sorted.windows(2) {
+    let mut view_names = vec![stage_view, ending_view];
+    if title_screen {
+        view_names.push(title_view);
+    }
+    view_names.sort();
+    for pair in view_names.windows(2) {
         if pair[1].starts_with(&format!("{}_", pair[0])) {
             return Err(format!(
-                "generated view '{}' is a name-prefix of '{}'; rename one of the headings",
+                "generated view '{}' is a name-prefix of '{}'",
                 pair[0], pair[1]
             ));
         }
@@ -1319,51 +1340,37 @@ pub(crate) fn emit_story(
     Ok(out)
 }
 
-// A page or choice-menu backdrop: a full-canvas Sprite showing the current
-// `![bg]` image (white tint, texture sampled by the text pass), or the flat
-// dark fill when the story has not set one.
-fn backdrop(
-    name: &str,
-    bg: Option<&str>,
-    prefix: &str,
-    images: &mut Vec<(String, String)>,
-    win_w: f32,
-    win_h: f32,
-) -> serde_json::Value {
-    match bg {
-        Some(path) => {
-            let texture = image_asset(prefix, images, path);
-            serde_json::json!({
-                "name": name,
-                "type": "Sprite",
-                "args": {
-                    "x": 0.0, "y": 0.0, "width": win_w, "height": win_h,
-                    "tint": [1.0, 1.0, 1.0, 1.0],
-                    "texture": texture,
-                }
-            })
-        }
-        None => sprite(name, 0.0, 0.0, win_w, win_h, [0.05, 0.06, 0.09, 1.0]),
-    }
-}
+// The fixed dialog box the stage's name plate and dialog text sit on.
+const DIALOG_BOX: (f32, f32, f32, f32) = (140.0, 505.0, 1000.0, 190.0);
 
-// Character portraits: bottom-anchored beside the dialog box, scaled to a
-// fixed display height with the width following the image's aspect ratio.
-const PORTRAIT_HEIGHT: f32 = 620.0;
+// The compiled stage entry for a page or choice menu: the backdrop and
+// portrait images with their on-canvas rectangles, ready for the story
+// system to apply without any probing of its own. Portraits show at the
+// image's own pixel size against the reference canvas (scaled down only if
+// taller than the canvas), anchored to the canvas bottom; with cover fit the
+// canvas bottom sits at or below the window bottom at any aspect ratio, so
+// the image's bottom edge is never visibly cut off mid-air.
 const PORTRAIT_LEFT_CENTER_X: f32 = 320.0;
+const PORTRAIT_CENTER_X: f32 = 640.0;
 const PORTRAIT_RIGHT_CENTER_X: f32 = 960.0;
 
-fn portraits(
-    view: &str,
+fn stage_entry(
     stage: &Stage,
     prefix: &str,
     images: &mut Vec<(String, String)>,
     image_dims: ImageDims,
-    win_h: f32,
-) -> Result<Vec<serde_json::Value>, String> {
-    let mut out = Vec::new();
+) -> Result<serde_json::Value, String> {
+    let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
+    let mut entry = serde_json::json!({});
+    if let Some(path) = &stage.bg {
+        entry["bg"] = serde_json::json!({
+            "texture": image_asset(prefix, images, path),
+            "x": 0.0, "y": 0.0, "width": win_w, "height": win_h,
+        });
+    }
     for (side, path, center_x) in [
         ("left", &stage.left, PORTRAIT_LEFT_CENTER_X),
+        ("center", &stage.center, PORTRAIT_CENTER_X),
         ("right", &stage.right, PORTRAIT_RIGHT_CENTER_X),
     ] {
         let Some(path) = path else { continue };
@@ -1371,23 +1378,33 @@ fn portraits(
         if iw == 0 || ih == 0 {
             return Err(format!("portrait '{}' has a zero dimension", path));
         }
-        let h = PORTRAIT_HEIGHT;
+        let h = (ih as f32).min(win_h);
         let w = h * iw as f32 / ih as f32;
-        let texture = image_asset(prefix, images, path);
-        out.push(serde_json::json!({
-            "name": format!("{}_{}", view, side),
-            "type": "Sprite",
-            "args": {
-                "x": center_x - w / 2.0,
-                "y": win_h - h,
-                "width": w,
-                "height": h,
-                "tint": [1.0, 1.0, 1.0, 1.0],
-                "texture": texture,
-            }
-        }));
+        entry[side] = serde_json::json!({
+            "texture": image_asset(prefix, images, path),
+            "x": center_x - w / 2.0,
+            "y": win_h - h,
+            "width": w,
+            "height": h,
+        });
     }
-    Ok(out)
+    Ok(entry)
+}
+
+// A stage-owned sprite the story system mutates: cover fit (full-bleed stage
+// imagery reaches the window edges without distorting) with an explicit
+// initial visibility.
+fn stage_sprite(name: &str, rect: [f32; 4], tint: [f32; 4], visible: bool) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "type": "Sprite",
+        "args": {
+            "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
+            "tint": tint,
+            "fit": "cover",
+            "visible": visible,
+        }
+    })
 }
 
 // Read an image file's pixel dimensions from its header, without decoding
@@ -1433,14 +1450,6 @@ fn clip_asset(prefix: &str, clips: &mut Vec<(String, String)>, path: &str) -> St
     let name = format!("{}_clip{}", prefix, clips.len());
     clips.push((path.to_string(), name.clone()));
     name
-}
-
-fn audio_cue(name: &str, view: &str, clip: &str, kind: &str) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "AudioCue",
-        "args": { "view": view, "clip": clip, "kind": kind }
-    })
 }
 
 fn font(name: &str, size_px: u32) -> serde_json::Value {
@@ -1651,59 +1660,73 @@ You walk together toward the morning.
     }
 
     #[test]
-    fn emits_wired_views() {
+    fn emits_the_compiled_graph_and_stage() {
         let story = parse_story(CROSSROADS).unwrap();
-        let entries = emit_story("story", &story, true, &stub_dims).unwrap();
+        let entries = emit_story("story", &story, true, 30.0, &stub_dims).unwrap();
 
-        // Title screen starts the flow at the first node's first page.
+        // The title screen is initial and starts the story system.
         let title = find(&entries, "story_title");
         assert_eq!(title["args"]["initial"], true);
-        let start = find(&entries, "story_title_start_btn");
-        assert_eq!(action(start), "view:show:story_n_inn_p0");
-
-        // Narration pages advance page -> page -> next node.
         assert_eq!(
-            action(find(&entries, "story_n_inn_p0_next")),
-            "view:show:story_n_inn_p1"
-        );
-        assert_eq!(
-            action(find(&entries, "story_n_inn_p1_next")),
-            "view:show:story_n_the_crossroads_p0"
+            action(find(&entries, "story_title_start_btn")),
+            "story:start"
         );
 
-        // The speaker page carries a name plate in the character's color.
-        let plate = find(&entries, "story_n_inn_p1_name");
-        assert_eq!(plate["args"]["content"], "Innkeeper");
+        // The compiled graph takes the import's own name. Speakers resolve
+        // to display name + color, jump and choice targets to node indices,
+        // and the reveal speed rides along.
+        let graph = &find(&entries, "story")["args"];
+        assert_eq!(graph["title"], "The Crossroads");
+        assert_eq!(graph["text_speed"], 30.0);
+        let nodes = graph["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 4);
+        let plate = &nodes[0]["pages"][1]["speaker"];
+        assert_eq!(plate["name"], "Innkeeper");
+        assert_eq!(nodes[1]["choices"][0]["label"], "Into the wood");
+        assert_eq!(nodes[1]["choices"][0]["target"], 2);
+        assert_eq!(nodes[1]["choices"][1]["target"], 1);
+        assert_eq!(nodes[2]["pages"][1]["text"], "The morning comes.");
+        assert_eq!(nodes[2]["pages"][1]["jump"], 3);
 
-        // The choice node's page advances into its choice menu; each option
-        // targets its node's first page.
+        // One stage view carries the whole story: backdrop, portrait slots,
+        // dialog furniture, the advance region, and one button per option of
+        // the widest choice menu (disabled until the story reaches one).
+        assert_eq!(find(&entries, "story_stage")["args"]["initial"], false);
+        assert_eq!(find(&entries, "story_stage_bg")["args"]["fit"], "cover");
         assert_eq!(
-            action(find(&entries, "story_n_the_crossroads_p0_next")),
-            "view:show:story_n_the_crossroads_choice"
+            find(&entries, "story_stage_center")["args"]["visible"],
+            false
         );
         assert_eq!(
-            action(find(&entries, "story_n_the_crossroads_choice_opt0_btn")),
-            "view:show:story_n_wood_p0"
+            action(find(&entries, "story_stage_advance")),
+            "story:advance"
         );
         assert_eq!(
-            action(find(&entries, "story_n_the_crossroads_choice_opt1_btn")),
-            "view:show:story_n_the_crossroads_p0"
+            find(&entries, "story_advance_key")["args"]["action"],
+            "story:advance"
+        );
+        let opt0 = find(&entries, "story_stage_opt0_btn");
+        assert_eq!(action(opt0), "story:choose:0");
+        assert_eq!(
+            find(&entries, "story_stage_opt0_lbl")["args"]["visible"],
+            false
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| asset_name(e) == "story_stage_opt1_btn")
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|e| asset_name(e) == "story_stage_opt2_btn")
         );
 
-        // The jump page keeps its label text and targets the linked node.
-        let jump_page = find(&entries, "story_n_wood_p1_text");
-        assert_eq!(jump_page["args"]["content"], "The morning comes.");
-        assert_eq!(
-            action(find(&entries, "story_n_wood_p1_next")),
-            "view:show:story_n_ending_p0"
-        );
+        // No per-page views or audio cues remain.
+        assert!(!entries.iter().any(|e| asset_name(e).contains("_n_")));
+        assert!(!entries.iter().any(|e| type_norm(e) == "audiocue"));
 
-        // The last node falls through to the generated ending, which returns
-        // to the title screen.
-        assert_eq!(
-            action(find(&entries, "story_n_ending_p0_next")),
-            "view:show:story_ending"
-        );
+        // The ending returns to the title screen.
         assert_eq!(
             action(find(&entries, "story_ending_back_btn")),
             "view:show:story_title"
@@ -1711,13 +1734,13 @@ You walk together toward the morning.
     }
 
     #[test]
-    fn no_title_screen_makes_first_page_initial() {
+    fn no_title_screen_makes_the_stage_initial() {
         let story = parse_story(CROSSROADS).unwrap();
-        let entries = emit_story("story", &story, false, &stub_dims).unwrap();
+        let entries = emit_story("story", &story, false, 45.0, &stub_dims).unwrap();
         assert!(!entries.iter().any(|e| asset_name(e) == "story_title"));
-        assert_eq!(find(&entries, "story_n_inn_p0")["args"]["initial"], true);
+        assert_eq!(find(&entries, "story_stage")["args"]["initial"], true);
         let back = find(&entries, "story_ending_back_btn");
-        assert_eq!(action(back), "view:show:story_n_inn_p0");
+        assert_eq!(action(back), "story:start");
         assert_eq!(
             find(&entries, "story_ending_back_lbl")["args"]["content"],
             "Restart"
@@ -1797,12 +1820,12 @@ The door creaks.
     }
 
     #[test]
-    fn media_directives_emit_cues_and_deduped_clips() {
+    fn media_directives_compile_to_deduped_clip_names() {
         let story = parse_story(SCORED).unwrap();
-        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
+        let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
 
         // Three distinct audio files -> three AudioClip entries; the theme is
-        // deduplicated to one clip despite two pages sharing its music cue.
+        // deduplicated to one clip despite two pages sharing its music.
         let clips: Vec<&serde_json::Value> = entries
             .iter()
             .filter(|e| type_norm(e) == "audioclip")
@@ -1810,21 +1833,17 @@ The door creaks.
         assert_eq!(clips.len(), 3);
         assert_eq!(clips[0]["args"]["source"], "assets/theme.ogg");
 
-        // Every page after the directive carries a music cue for its view.
-        let cue = find(&entries, "s_n_inn_p0_music");
-        assert_eq!(cue["args"]["view"], "s_n_inn_p0");
-        assert_eq!(cue["args"]["kind"], "music");
-        assert_eq!(cue["args"]["clip"], clips[0]["name"]);
-        assert!(entries.iter().any(|e| asset_name(e) == "s_n_inn_p1_music"));
+        // Pages carry the deduplicated clip names in the compiled graph.
+        let nodes = &find(&entries, "s")["args"]["nodes"];
+        assert_eq!(nodes[0]["pages"][0]["music"], clips[0]["name"]);
+        assert_eq!(nodes[0]["pages"][1]["music"], clips[0]["name"]);
 
         // The one-shot lands on its page only.
-        let sfx = find(&entries, "s_n_inn_p2_sfx0");
-        assert_eq!(sfx["args"]["kind"], "sound");
-        assert!(!entries.iter().any(|e| asset_name(e) == "s_n_inn_p1_sfx0"));
+        assert_eq!(nodes[0]["pages"][2]["sounds"][0], clips[1]["name"]);
+        assert_eq!(nodes[0]["pages"][1]["sounds"].as_array().unwrap().len(), 0);
 
         // The choice menu carries the tense track.
-        let choice_cue = find(&entries, "s_n_crossroads_choice_music");
-        assert_eq!(choice_cue["args"]["clip"], clips[2]["name"]);
+        assert_eq!(nodes[1]["choice_music"], clips[2]["name"]);
     }
 
     #[test]
@@ -1846,7 +1865,7 @@ The door creaks.
             Some("assets/street.png")
         );
 
-        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
+        let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
         // Two distinct images -> two Texture entries.
         let textures: Vec<&serde_json::Value> = entries
             .iter()
@@ -1855,19 +1874,21 @@ The door creaks.
         assert_eq!(textures.len(), 2);
         assert_eq!(textures[0]["args"]["source"], "assets/inn.png");
 
-        // Backdrop sprites sample the image with a white tint; both pages of
-        // the node share the deduplicated texture.
-        let bg = find(&entries, "s_n_inn_p0_bg");
-        assert_eq!(bg["args"]["texture"], textures[0]["name"]);
-        assert_eq!(bg["args"]["tint"], serde_json::json!([1.0, 1.0, 1.0, 1.0]));
+        // Both pages of the node share the deduplicated texture in the
+        // compiled graph; a full-canvas rectangle places the backdrop.
+        let nodes = &find(&entries, "s")["args"]["nodes"];
+        let bg = &nodes[0]["pages"][0]["stage"]["bg"];
+        assert_eq!(bg["texture"], textures[0]["name"]);
+        assert_eq!(bg["width"], 1280.0);
         assert_eq!(
-            find(&entries, "s_n_inn_p1_bg")["args"]["texture"],
+            nodes[0]["pages"][1]["stage"]["bg"]["texture"],
             textures[0]["name"]
         );
         assert_eq!(
-            find(&entries, "s_n_out_choice_bg")["args"]["texture"],
+            nodes[1]["choice_stage"]["bg"]["texture"],
             textures[1]["name"]
         );
+
         // The title screen keeps its flat fill (no texture key at all).
         assert!(
             find(&entries, "s_title_bg")["args"]
@@ -1897,37 +1918,56 @@ The door creaks.
 
     #[test]
     fn portraits_persist_and_bg_change_clears_them() {
-        let src = "---\ntitle: T\n---\n\n# a\n\n![bg](room.png)\n![left](ana.png)\n\nOne.\n\n![right](ben.png)\n\nTwo.\n\n![bg](street.png)\n\nThree.\n";
+        let src = "---\ntitle: T\n---\n\n# a\n\n![bg](room.png)\n![left](ana.png)\n\nOne.\n\n![right](ben.png)\n![center](cho.png)\n\nTwo.\n\n![bg](street.png)\n\nThree.\n";
         let story = parse_story(src).unwrap();
         let pages = &story.nodes[0].pages;
         // Page one: left portrait only.
         assert_eq!(pages[0].stage.left.as_deref(), Some("ana.png"));
+        assert_eq!(pages[0].stage.center, None);
         assert_eq!(pages[0].stage.right, None);
-        // Page two: the right portrait joins; the left persists.
+        // Page two: the right and center portraits join; the left persists.
         assert_eq!(pages[1].stage.left.as_deref(), Some("ana.png"));
+        assert_eq!(pages[1].stage.center.as_deref(), Some("cho.png"));
         assert_eq!(pages[1].stage.right.as_deref(), Some("ben.png"));
-        // Page three: the scene change cleared both portraits.
+        // Page three: the scene change cleared every portrait.
         assert_eq!(pages[2].stage.bg.as_deref(), Some("street.png"));
         assert_eq!(pages[2].stage.left, None);
+        assert_eq!(pages[2].stage.center, None);
         assert_eq!(pages[2].stage.right, None);
     }
 
     #[test]
-    fn portrait_sprites_are_scaled_by_aspect_and_bottom_anchored() {
+    fn portraits_compile_at_native_size_and_bottom_anchor() {
         let src = "---\ntitle: T\n---\n\n# a\n\n![left](ana.png)\n\nhi\n";
         let story = parse_story(src).unwrap();
-        // stub_dims reports 456x700, so at 620 display height the width is
-        // 620 * 456/700 and the sprite is bottom-anchored on the canvas.
-        let entries = emit_story("s", &story, true, &stub_dims).unwrap();
-        let p = find(&entries, "s_n_a_p0_left");
-        let w = 620.0_f32 * 456.0 / 700.0;
-        assert!((p["args"]["width"].as_f64().unwrap() as f32 - w).abs() < 1e-3);
-        assert_eq!(p["args"]["height"], 620.0);
-        assert_eq!(p["args"]["y"], 100.0);
-        let x = p["args"]["x"].as_f64().unwrap() as f32;
-        assert!((x - (320.0 - w / 2.0)).abs() < 1e-3);
+        // stub_dims reports 456x700: placed at native pixel size against the
+        // 720 canvas, bottom-anchored; the cover-fit stage sprites put the
+        // canvas bottom at the window bottom.
+        let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
+        let p = &find(&entries, "s")["args"]["nodes"][0]["pages"][0]["stage"]["left"];
+        assert_eq!(p["width"], 456.0);
+        assert_eq!(p["height"], 700.0);
+        assert_eq!(p["y"], 20.0);
+        let x = p["x"].as_f64().unwrap() as f32;
+        assert!((x - (320.0 - 456.0 / 2.0)).abs() < 1e-3);
         // The portrait image becomes a Texture entry like a backdrop.
-        assert_eq!(p["args"]["texture"], find(&entries, "s_img0")["name"]);
+        assert_eq!(p["texture"], find(&entries, "s_img0")["name"]);
+    }
+
+    #[test]
+    fn oversized_portrait_scales_down_to_the_canvas_height() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n![center](big.png)\n\nhi\n";
+        let story = parse_story(src).unwrap();
+        let dims = |_: &str| Ok((900u32, 1440u32));
+        let entries = emit_story("s", &story, true, 45.0, &dims).unwrap();
+        let p = &find(&entries, "s")["args"]["nodes"][0]["pages"][0]["stage"]["center"];
+        // Taller than the canvas: clamped to 720 with the width following.
+        assert_eq!(p["height"], 720.0);
+        assert_eq!(p["width"], 450.0);
+        assert_eq!(p["y"], 0.0);
+        // Centered on the canvas.
+        let x = p["x"].as_f64().unwrap() as f32;
+        assert!((x - (640.0 - 450.0 / 2.0)).abs() < 1e-3);
     }
 
     #[test]
@@ -2103,13 +2143,21 @@ The door creaks.
     }
 
     #[test]
-    fn ambiguous_view_prefix_is_an_error() {
-        // "wood p0" slugs to wood-p0, whose page-0 view name extends the
-        // page-0 view of "wood".
-        let src = "---\ntitle: T\n---\n\n# wood\n\nhi\n\n# wood p0\n\nbye\n";
+    fn heading_names_cannot_collide_with_generated_views() {
+        // Node names no longer mint views (the whole story plays inside one
+        // stage view), so headings named after the scaffolding are fine.
+        let src = "---\ntitle: T\n---\n\n# title\n\nhi\n\n# stage\n\nbye\n\n# ending\n\nfin\n";
         let story = parse_story(src).unwrap();
-        let err = emit_story("s", &story, true, &stub_dims).unwrap_err();
-        assert!(err.contains("name-prefix"), "{err}");
+        let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
+        let nodes = &find(&entries, "s")["args"]["nodes"];
+        assert_eq!(nodes.as_array().unwrap().len(), 3);
+        // Exactly the three scaffolding views exist.
+        let views: Vec<String> = entries
+            .iter()
+            .filter(|e| type_norm(e) == "view")
+            .map(asset_name)
+            .collect();
+        assert_eq!(views, ["s_title", "s_stage", "s_ending"]);
     }
 
     #[test]

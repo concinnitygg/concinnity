@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use crate::assets::{
-    AudioClip, AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, Transform, ViewShown,
+    AudioClip, AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Story, Transform,
+    ViewShown,
 };
 use crate::audio::{AudioEngine, EmitterId};
 use crate::ecs::asset_id::AssetId;
@@ -30,6 +31,9 @@ pub struct AudioSystem {
     audio_cmd_cursor: crate::ecs::EventCursor,
     // Cursor into the Events<ViewShown> queue (cue triggers).
     view_shown_cursor: crate::ecs::EventCursor,
+    // Cursor into the Events<PlayCue> queue (direct play requests, e.g. the
+    // story system's page audio).
+    play_cue_cursor: crate::ecs::EventCursor,
     // Cues that matched a shown view so far; observable engine-independent
     // progress for headless tests (playback needs a device and a payload).
     cues_matched: usize,
@@ -70,6 +74,7 @@ impl AudioSystem {
             cue_clip_bytes: HashMap::new(),
             audio_cmd_cursor: crate::ecs::EventCursor::default(),
             view_shown_cursor: crate::ecs::EventCursor::default(),
+            play_cue_cursor: crate::ecs::EventCursor::default(),
             cues_matched: 0,
         }
     }
@@ -147,6 +152,24 @@ impl System for AudioSystem {
             });
         }
 
+        // A story plays clips by direct PlayCue request rather than through
+        // view-keyed cues, so cache every clip payload up front.
+        if ctx.query::<Story>().next().is_some() {
+            let uncached: Vec<(AssetId, crate::ecs::PayloadLocator)> = clip_locators
+                .iter()
+                .filter(|(id, _)| !self.cue_clip_bytes.contains_key(id))
+                .map(|(id, locator)| (*id, locator.clone()))
+                .collect();
+            for (id, locator) in uncached {
+                match ctx.read_payload(&locator) {
+                    Ok(bytes) => {
+                        self.cue_clip_bytes.insert(id, bytes.to_vec());
+                    }
+                    Err(e) => tracing::warn!("AudioSystem: story clip payload read failed: {e}"),
+                }
+            }
+        }
+
         tracing::info!(
             "AudioSystem: {} emitter(s), {} cue view(s), engine {}",
             self.emitters.len(),
@@ -194,6 +217,30 @@ impl System for AudioSystem {
                         CueKind::Sound => {
                             self.engine.play_sound(bytes, cue.volume);
                         }
+                    }
+                }
+            }
+        }
+
+        // Play direct requests (the story system's page audio). The story
+        // system runs earlier in the schedule, so these are heard this tick.
+        if let Some(events) = ctx.events::<PlayCue>() {
+            let requests: Vec<PlayCue> = events
+                .read(&mut self.play_cue_cursor)
+                .into_iter()
+                .copied()
+                .collect();
+            for cue in requests {
+                self.cues_matched += 1;
+                let Some(bytes) = self.cue_clip_bytes.get(&cue.clip) else {
+                    continue;
+                };
+                match cue.kind {
+                    CueKind::Music => {
+                        self.engine.play_music(cue.clip.0 as u64, bytes, cue.volume);
+                    }
+                    CueKind::Sound => {
+                        self.engine.play_sound(bytes, cue.volume);
                     }
                 }
             }

@@ -35,6 +35,7 @@ pub mod gfx;
 pub(crate) mod hud;
 pub mod jobs;
 pub(crate) mod physics;
+pub(crate) mod story;
 pub(crate) mod ui;
 
 // Asset API

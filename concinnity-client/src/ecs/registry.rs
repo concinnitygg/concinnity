@@ -17,6 +17,7 @@ crate::define_system_assets! {
     Camera3DSystem  => crate::gfx::camera_controller::Camera3DSystem,
     AnimationSystem => crate::gfx::animation::AnimationSystem,
     AudioSystem     => crate::audio::system::AudioSystem,
+    StorySystem     => crate::story::StorySystem,
     UiInputSystem   => crate::ui::UiInputSystem,
     FpsCounter      => crate::hud::fps_counter::FpsCounterSystem,
     StatHud         => crate::hud::stat_hud::StatHudSystem,

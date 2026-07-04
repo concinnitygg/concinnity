@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::Sprite;
+use crate::assets::{Sprite, SpriteFit};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
@@ -49,6 +49,7 @@ pub(crate) fn build_sprite_calls(
         None => return Vec::new(),
     };
     let overlay = OverlayTransform::from_viewport(viewport);
+    let cover = OverlayTransform::cover_from_viewport(viewport);
     let [vw, vh] = viewport;
     let mut calls = Vec::new();
     for s in sprites {
@@ -60,10 +61,17 @@ pub(crate) fn build_sprite_calls(
             continue;
         }
         let (x0, y0, x1, y1) = if s.view.is_some() {
-            // A view-owned sprite spanning the whole reference canvas is a
-            // full-screen backdrop (e.g. a menu dim): always fill the live
-            // window instead of uniform-scaling, which would letterbox it.
-            if covers_canvas(s) && vw > 0.0 && vh > 0.0 {
+            if s.fit == SpriteFit::Cover {
+                // Full-bleed stage imagery: uniform fill, centered crop. The
+                // canvas edges map at or beyond the window edges, so edge-
+                // anchored content (a bottom-anchored portrait) stays flush.
+                let (ax, ay) = cover.forward(s.x, s.y);
+                let (bx, by) = cover.forward(s.x + s.width, s.y + s.height);
+                (ax, ay, bx, by)
+            } else if covers_canvas(s) && vw > 0.0 && vh > 0.0 {
+                // A view-owned sprite spanning the whole reference canvas is a
+                // full-screen backdrop (e.g. a menu dim): always fill the live
+                // window instead of uniform-scaling, which would letterbox it.
                 (0.0, 0.0, vw, vh)
             } else {
                 let (ax, ay) = overlay.forward(s.x, s.y);
@@ -134,6 +142,7 @@ mod tests {
             follow_cursor: false,
             visible: true,
             view: None,
+            fit: SpriteFit::Fit,
         }
     }
 
@@ -232,6 +241,45 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices[0].pos, [0.0, 0.0]);
         assert_eq!(calls[0].vertices[2].pos, [2560.0, 1440.0]);
+    }
+
+    #[test]
+    fn cover_sprite_fills_the_window_and_crops_the_overflow() {
+        // On a 4:3 window the 16:9 canvas covers by the height ratio
+        // (768/720): vertical edges land exactly on the window edges,
+        // horizontal overflow is cropped equally on both sides.
+        let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [1.0, 1.0, 1.0, 1.0]);
+        s.view = Some(AssetId(7));
+        s.fit = SpriteFit::Cover;
+        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [1024.0, 768.0], &no_clips());
+        let scale = 768.0 / 720.0;
+        let overflow = (1280.0 * scale - 1024.0) / 2.0;
+        let vs = &calls[0].vertices;
+        assert!(
+            (vs[0].pos[0] - -overflow).abs() < 1e-3,
+            "x0={}",
+            vs[0].pos[0]
+        );
+        assert!((vs[0].pos[1]).abs() < 1e-3, "y0={}", vs[0].pos[1]);
+        assert!(
+            (vs[2].pos[0] - (1024.0 + overflow)).abs() < 1e-3,
+            "x1={}",
+            vs[2].pos[0]
+        );
+        assert!((vs[2].pos[1] - 768.0).abs() < 1e-3, "y1={}", vs[2].pos[1]);
+    }
+
+    #[test]
+    fn cover_sprite_anchored_to_the_canvas_bottom_stays_flush() {
+        // A bottom-anchored partial-canvas sprite (a character portrait): its
+        // bottom edge maps exactly to the window bottom on a window taller
+        // than the reference aspect.
+        let mut s = sprite(400.0, 100.0, 480.0, 620.0, [1.0, 1.0, 1.0, 1.0]);
+        s.view = Some(AssetId(7));
+        s.fit = SpriteFit::Cover;
+        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [1024.0, 768.0], &no_clips());
+        let bottom = calls[0].vertices[2].pos[1];
+        assert!((bottom - 768.0).abs() < 1e-3, "bottom={bottom}");
     }
 
     #[test]

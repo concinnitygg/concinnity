@@ -5,7 +5,7 @@
 
 use crate::assets::{
     FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
-    Sprite, TextLabel, View, ViewCommand, ViewShown,
+    Sprite, StoryCommand, TextLabel, View, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -1337,6 +1337,23 @@ fn fire_action(
         }
         return None;
     }
+    // story:start | story:advance | story:choose:<i> -- the story system
+    // reads the StoryCommand and moves through its compiled graph.
+    if let Some(rest) = action.strip_prefix("story:") {
+        let cmd = match rest {
+            "start" => Some(StoryCommand::Start),
+            "advance" => Some(StoryCommand::Advance),
+            _ => rest
+                .strip_prefix("choose:")
+                .and_then(|i| i.parse::<usize>().ok())
+                .map(StoryCommand::Choose),
+        };
+        match cmd {
+            Some(cmd) => ctx.events_mut::<StoryCommand>().send(cmd),
+            None => tracing::warn!("UiInputSystem: malformed story action '{}'", action),
+        }
+        return None;
+    }
     // setting:<key>:next|prev -- cycle a graphics setting. GraphicsSystem
     // reads the SettingCommand to apply, persist, and refresh the value label.
     if let Some(rest) = action.strip_prefix("setting:") {
@@ -1987,6 +2004,7 @@ mod tests {
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
             view: Some(view_id),
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2869,6 +2887,7 @@ mod tests {
                 follow_cursor: false,
                 visible: false,
                 view: Some(view),
+                fit: crate::assets::SpriteFit::Fit,
             });
         }
         world.add_component(KeyBinding {

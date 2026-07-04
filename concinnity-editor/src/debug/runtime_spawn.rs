@@ -320,6 +320,13 @@ pub(crate) enum RuntimeCommand {
         lifetime: Option<f32>,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
+    // Drive the story system: the same `StoryCommand` event a stage click or
+    // key press fires, so a headless harness can start, advance, and choose
+    // through a story and screenshot each page. ECS-side like `Despawn`.
+    Story {
+        command: crate::assets::StoryCommand,
+        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
 }
 
 static QUEUE: Mutex<Vec<RuntimeCommand>> = Mutex::new(Vec::new());
@@ -470,6 +477,10 @@ pub(crate) fn dispatch_runtime_spawn(
         RuntimeCommand::Spawn { reply, .. } => {
             // ECS-side like CameraSet; routed to `dispatch_spawn`.
             let _ = reply.send(Err("spawn: misrouted to backend dispatch".to_string()));
+        }
+        RuntimeCommand::Story { reply, .. } => {
+            // ECS-side like CameraSet; routed to `dispatch_story`.
+            let _ = reply.send(Err("story: misrouted to backend dispatch".to_string()));
         }
     }
 }
@@ -646,6 +657,21 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
             },
             lifetime_secs: lifetime,
         });
+    let _ = reply.send(Ok(()));
+}
+
+// Apply a drained `Story` command by sending a `StoryCommand` event into the
+// ECS, exactly as `UiInputSystem` does for a `story:*` action. The story
+// system reads it on its next step and moves through its graph. Routed here
+// (like `Despawn`) because it mutates the ECS, not the backend. The reply
+// fires once the event is queued; a world without a story simply ignores it.
+pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+    let RuntimeCommand::Story { command, reply } = cmd else {
+        return;
+    };
+    world
+        .events_mut::<crate::assets::StoryCommand>()
+        .send(command);
     let _ = reply.send(Ok(()));
 }
 

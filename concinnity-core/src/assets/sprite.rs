@@ -8,9 +8,9 @@ use crate::ecs::{AssetOrigin, CompanionSpec, Component};
 /// Sprites are pixel-anchored quads with an RGBA tint. They draw alongside
 /// [TextLabel](#textlabel)s, ordered behind labels so text sits on top.
 ///
-/// Currently only the tint is drawn (solid-coloured rectangles). The `texture`
-/// field is reserved for forward compatibility: a sprite with `texture` set
-/// renders exactly as if it were unset.
+/// A sprite with a `texture` draws that image, multiplied by the tint (use a
+/// white tint to show the image unchanged; the tint's alpha fades it).
+/// Without one, the tint is drawn as a solid-coloured rectangle.
 ///
 /// ```jsonl
 /// {
@@ -54,6 +54,29 @@ pub struct Sprite {
     /// means the sprite is always visible (e.g. a scene background).
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub view: Option<AssetId>,
+    /// How a view-owned sprite maps from the reference canvas to the window
+    /// when their aspect ratios differ.
+    pub fit: SpriteFit,
+}
+
+/// How a view-owned [Sprite](#sprite) maps from the 1280x720 reference canvas
+/// to the live window when their aspect ratios differ.
+///
+/// View-owned UI is authored against a fixed reference canvas and uniformly
+/// scaled to the window at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SpriteFit {
+    /// The canvas fits inside the window, centered, leaving margins on the
+    /// shorter axis. UI elements keep their proportions and stay fully
+    /// visible.
+    #[default]
+    Fit,
+    /// The canvas fills the window, centered, cropping the overflowing axis
+    /// equally on both sides. Full-bleed stage imagery (scene backdrops,
+    /// character portraits) reaches the window edges without distorting, and
+    /// content anchored to a canvas edge stays flush with the window edge.
+    Cover,
 }
 
 impl Default for Sprite {
@@ -69,6 +92,7 @@ impl Default for Sprite {
             follow_cursor: false,
             visible: true,
             view: None,
+            fit: SpriteFit::Fit,
         }
     }
 }
@@ -123,6 +147,15 @@ mod tests {
         assert!(s.visible);
         assert_eq!(s.width, 100.0);
         assert!(!s.follow_cursor);
+        assert_eq!(s.fit, SpriteFit::Fit);
+    }
+
+    #[test]
+    fn fit_deserializes_lowercase_and_round_trips() {
+        let s: Sprite = serde_json::from_str(r#"{"fit":"cover"}"#).unwrap();
+        assert_eq!(s.fit, SpriteFit::Cover);
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["fit"], "cover");
     }
 
     #[test]

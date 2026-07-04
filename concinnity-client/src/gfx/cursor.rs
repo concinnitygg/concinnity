@@ -150,6 +150,7 @@ mod tests {
             follow_cursor: true,
             visible: true,
             view: None,
+            fit: crate::assets::SpriteFit::Fit,
         }
     }
 
