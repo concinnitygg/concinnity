@@ -135,6 +135,9 @@ impl KeyState {
             left_button_down,
             hud_toggle: self.hud_toggle_pending,
             escape: self.escape_pending,
+            // Held Control modifier: wire from VK_CONTROL when this backend is
+            // built on Windows (a story's Ctrl fast-forward reads it).
+            ctrl: false,
             captured_key: self.captured_key,
         };
         self.interact_pending = false;

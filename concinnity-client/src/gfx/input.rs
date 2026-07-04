@@ -18,6 +18,11 @@ pub struct RenderInput {
     pub interact: bool,
     // True for exactly one frame per jump-key press.
     pub jump: bool,
+    // True while the Control key is held. A UI modifier (a story fast-forwards
+    // its dialogue while it is down); not gated by menu state, like `escape` and
+    // `captured_key`. Wired on Metal; DirectX / Vulkan set it from their key
+    // callbacks.
+    pub ctrl: bool,
     // Accumulated mouse delta since the last take_input() call.
     pub mouse_dx: f32,
     pub mouse_dy: f32,

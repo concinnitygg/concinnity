@@ -61,7 +61,7 @@ impl StorySystem {
 
         // A skip run reveals instantly; otherwise the reveal restarts the
         // auto/skip pacing clock.
-        if self.skip {
+        if self.skipping() {
             self.typewriter.shown = self.typewriter.full.len();
             let text = self.typewriter.text();
             let text_id = self.ids.as_ref().expect("resolved at init").text;
@@ -77,7 +77,7 @@ impl StorySystem {
         let rows = [
             (ids.log_label, "Log", false),
             (ids.auto_label, "Auto", self.auto),
-            (ids.skip_label, "Skip", self.skip),
+            (ids.skip_label, "Skip", self.skip || self.hold_skip),
             (ids.save_label, "Save", false),
         ];
         for (id, text, active) in rows {

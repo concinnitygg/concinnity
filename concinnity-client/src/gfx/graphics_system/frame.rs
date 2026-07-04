@@ -2013,6 +2013,9 @@ impl GraphicsSystem {
                     viewport: [vp_w, vp_h],
                     hud_toggle: raw.hud_toggle,
                     escape: raw.escape,
+                    // Not gated by `gameplay`: a story's Ctrl fast-forward works
+                    // while its stage (a view) is up, like the rebind capture below.
+                    ctrl: raw.ctrl,
                     // Not gated by `gameplay`: the rebind capture works while the
                     // settings menu is open (the camera is what freezes behind it).
                     captured_key: raw.captured_key,

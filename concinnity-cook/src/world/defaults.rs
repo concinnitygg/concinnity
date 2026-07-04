@@ -119,17 +119,28 @@ fn inject_story_pause_menu(
         return Ok(());
     }
 
-    // Quit returns to the story's title screen when it has one; a story built
-    // without a title screen has nowhere to return to, so it quits to desktop.
+    // Main Menu returns to the story's own title screen; it is offered only
+    // when the story has one (a story built without a title screen has nowhere
+    // to return to, so its pause menu skips the item). Quit always exits to
+    // desktop.
     let title_view = format!("{}_title", prefix);
-    let quit_action = if assets
+    let has_title = assets
         .iter()
-        .any(|v| type_norm(v) == "view" && asset_name(v) == title_view)
-    {
-        format!("view:show:{}", title_view)
-    } else {
-        "quit".to_string()
-    };
+        .any(|v| type_norm(v) == "view" && asset_name(v) == title_view);
+
+    let mut items = vec![
+        serde_json::json!({ "label": "Resume", "action": "story:pause" }),
+        serde_json::json!({ "label": "Save", "action": "story:save" }),
+        serde_json::json!({ "label": "Load", "action": "story:load" }),
+        serde_json::json!({ "label": "Settings", "action": "story:settings" }),
+    ];
+    if has_title {
+        items.push(serde_json::json!({
+            "label": "Main Menu",
+            "action": format!("view:show:{}", title_view),
+        }));
+    }
+    items.push(serde_json::json!({ "label": "Quit", "action": "quit" }));
 
     // The story system drives the pause and settings navigation (Resume /
     // Settings / the settings Back), so closing returns to the stage instead of
@@ -143,13 +154,7 @@ fn inject_story_pause_menu(
         "dim": [0.0, 0.0, 0.0, 0.6],
         "settings_profile": "minimal",
         "settings_back_action": "story:settings_back",
-        "items": [
-            { "label": "Resume", "action": "story:pause" },
-            { "label": "Save", "action": "story:save" },
-            { "label": "Load", "action": "story:load" },
-            { "label": "Settings", "action": "story:settings" },
-            { "label": "Quit to Title", "action": quit_action },
-        ],
+        "items": items,
     });
     inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
 
@@ -690,9 +695,8 @@ mod tests {
             "pause dim should be translucent"
         );
 
-        let actions: Vec<&str> = menu["args"]["items"]
-            .as_array()
-            .unwrap()
+        let items = menu["args"]["items"].as_array().unwrap();
+        let actions: Vec<&str> = items
             .iter()
             .map(|i| i["action"].as_str().unwrap())
             .collect();
@@ -701,10 +705,19 @@ mod tests {
             "story:save",
             "story:load",
             "story:settings",
+            // Main Menu (returns to the story's own title screen) and Quit are
+            // now separate items.
             "view:show:tale_title",
+            "quit",
         ] {
             assert!(actions.contains(&action), "missing pause action {action}");
         }
+        // Main Menu sits above Quit, and Quit is last.
+        let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+        assert_eq!(labels.last(), Some(&"Quit"));
+        let main_menu = labels.iter().position(|l| *l == "Main Menu").unwrap();
+        let quit = labels.iter().position(|l| *l == "Quit").unwrap();
+        assert!(main_menu < quit, "Main Menu should sit above Quit");
 
         // Escape is a story-driven binding, not the MainMenu's own toggle.
         let key = assets
@@ -738,8 +751,15 @@ mod tests {
             .iter()
             .find(|v| type_norm(v) == "mainmenu")
             .expect("pause menu injected");
-        let quit = menu["args"]["items"].as_array().unwrap().last().unwrap();
+        let items = menu["args"]["items"].as_array().unwrap();
+        let quit = items.last().unwrap();
         assert_eq!(quit["action"], "quit");
+        // With no title screen there is no Main Menu item to return to.
+        let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+        assert!(
+            !labels.contains(&"Main Menu"),
+            "no title screen -> no Main Menu item"
+        );
     }
 
     #[test]

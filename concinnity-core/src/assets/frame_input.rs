@@ -23,6 +23,11 @@ pub struct FrameInput {
     pub interact: bool,
     /// True for exactly one frame when the jump key (Space) is pressed.
     pub jump: bool,
+    /// True while the Control key is held. A modifier used by UI (e.g. a story
+    /// fast-forwards its dialogue while it is down). Like [escape](#structfield.escape)
+    /// and [captured_key](#structfield.captured_key) it is not frozen while a
+    /// menu is open.
+    pub ctrl: bool,
     /// Accumulated horizontal mouse movement since the last frame (pixels).
     pub mouse_dx: f32,
     /// Accumulated vertical mouse movement since the last frame (pixels).

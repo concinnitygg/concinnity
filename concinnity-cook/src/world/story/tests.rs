@@ -134,8 +134,18 @@ fn emits_the_compiled_graph_and_stage() {
         action(find(&entries, "story_stage_advance")),
         "story:advance"
     );
+    // Space and Enter both advance the dialogue.
+    assert_eq!(find(&entries, "story_advance_key")["args"]["key"], "Space");
     assert_eq!(
         find(&entries, "story_advance_key")["args"]["action"],
+        "story:advance"
+    );
+    assert_eq!(
+        find(&entries, "story_advance_key_enter")["args"]["key"],
+        "Enter"
+    );
+    assert_eq!(
+        find(&entries, "story_advance_key_enter")["args"]["action"],
         "story:advance"
     );
     let opt0 = find(&entries, "story_stage_opt0_btn");
@@ -198,7 +208,13 @@ fn emits_the_compiled_graph_and_stage() {
         0.0
     );
     assert_eq!(action(find(&entries, "story_title_load_btn")), "story:load");
-    assert_eq!(scaffold["slot_labels"].as_array().unwrap().len(), 3);
+    // Five slot rows are emitted (the story scrolls this window over more
+    // logical slots); each row's action carries its row index.
+    assert_eq!(scaffold["slot_labels"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        action(find(&entries, "story_stage_slot4_btn")),
+        "story:slot:4"
+    );
     assert_eq!(scaffold["advance_marker"], "story_stage_marker");
     assert_eq!(scaffold["title"], "story_title");
     assert!(

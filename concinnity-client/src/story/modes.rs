@@ -33,21 +33,52 @@ impl StorySystem {
         self.render_quick_row(ctx);
     }
 
+    // Momentary fast-forward while the skip modifier (Control) is held in page
+    // mode: behaves like the Skip toggle, but only for as long as the key is
+    // down. A choice menu or overlay leaves page mode, so it stops there ("until
+    // a choice") and resumes if the key is still held once page mode returns.
+    pub(super) fn update_hold_skip(&mut self, frame: &FrameInput, ctx: &mut PipelineContext) {
+        let want = frame.ctrl && self.page_mode();
+        if want == self.hold_skip {
+            return;
+        }
+        self.hold_skip = want;
+        self.mode_timer = 0.0;
+        // Only touch page furniture while page mode owns the screen: a
+        // transition caused by leaving page mode (into a choice / overlay) must
+        // not repaint the quick row over it.
+        if self.page_mode() {
+            if want && !self.typewriter.done() {
+                self.typewriter.shown = self.typewriter.full.len();
+                let text = self.typewriter.text();
+                let text_id = self.ids.as_ref().expect("resolved at init").text;
+                set_label(ctx, text_id, |l| l.content = text);
+            }
+            self.render_quick_row(ctx);
+        }
+    }
+
+    // Whether a skip run is active (the toggle or the held modifier).
+    pub(super) fn skipping(&self) -> bool {
+        self.skip || self.hold_skip
+    }
+
     // Per-frame reader-assist work: the waiting marker pulse and the auto /
     // skip page pacing.
     pub(super) fn tick_modes(&mut self, ctx: &mut PipelineContext, dt: f32) {
         if !self.page_mode() {
             return;
         }
+        let skipping = self.skipping();
         let waiting = self.typewriter.done();
         let marker = self.ids.as_ref().and_then(|i| i.marker);
-        let alpha = if waiting && !self.skip {
+        let alpha = if waiting && !skipping {
             0.35 + 0.3 * (self.elapsed * 5.0).sin()
         } else {
             0.0
         };
         set_sprite(ctx, marker, |s| s.tint[3] = alpha);
-        if self.skip {
+        if skipping {
             if !self.typewriter.done() {
                 self.typewriter.shown = self.typewriter.full.len();
                 let text = self.typewriter.text();

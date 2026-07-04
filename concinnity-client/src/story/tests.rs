@@ -116,6 +116,44 @@ fn story_world(story: Story) -> World {
     world
 }
 
+// A story world whose slot overlay has `rows` visible slot rows (the shared
+// scaffold has one), so the scrolling window over the logical slots can be
+// exercised.
+fn multi_slot_world(story: Story, rows: usize) -> World {
+    let mut world = World::new_empty();
+    let mut story = story;
+    story.asset_id = intern("s");
+    let mut sc = scaffold();
+    sc.slot_boxes = (0..rows)
+        .map(|i| intern(&format!("s_stage_slot{i}_box")))
+        .collect();
+    sc.slot_labels = (0..rows)
+        .map(|i| intern(&format!("s_stage_slot{i}_lbl")))
+        .collect();
+    story.scaffold = sc;
+    world.add_component(story);
+    for view in ["s_stage", "s_ending"] {
+        world.add_component(View {
+            asset_id: intern(view),
+            initial: view == "s_stage",
+            fade_in_secs: 0.0,
+        });
+    }
+    add_stage_furniture(&mut world);
+    // Extra rows beyond slot0, which `add_stage_furniture` already provides.
+    for i in 1..rows {
+        world.add_component(Sprite {
+            view: Some(intern("s_stage")),
+            ..sprite_named(&format!("s_stage_slot{i}_box"))
+        });
+        world.add_component(TextLabel {
+            view: Some(intern("s_stage")),
+            ..label_named(&format!("s_stage_slot{i}_lbl"))
+        });
+    }
+    world
+}
+
 // A world whose initial view is the generated title menu. The four menu
 // button labels start at distinct emitted positions; the story lays them out
 // (contiguous, centered, only the applicable buttons) from the save state on
@@ -239,6 +277,15 @@ fn label_y(world: &World, name: &str) -> f32 {
         .query::<TextLabel>()
         .find(|l| l.asset_id == id)
         .map(|l| l.y)
+        .unwrap_or_default()
+}
+
+fn label_color(world: &World, name: &str) -> [f32; 3] {
+    let id = intern(name);
+    world
+        .query::<TextLabel>()
+        .find(|l| l.asset_id == id)
+        .map(|l| l.color)
         .unwrap_or_default()
 }
 
@@ -1039,6 +1086,84 @@ fn save_overlay_writes_and_load_resumes() {
         .send(StoryCommand::OpenLoad);
     world.step();
     assert!(label_content(&world, "s_stage_slot0_lbl").contains("page 2"));
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Slot(0));
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// Holding the skip modifier (Control) fast-forwards: the current page snaps to
+// full and the Skip control reads engaged; releasing the key clears it. A slow
+// reveal makes the instant snap observable.
+#[test]
+fn holding_ctrl_fast_forwards_and_lights_skip() {
+    let mut story = two_page_story();
+    story.text_speed = 0.0001;
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "");
+
+    // Hold Control: the page reveals at once and Skip lights up.
+    world.add_component(FrameInput {
+        ctrl: true,
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+    assert_eq!(label_color(&world, "s_stage_qskip_lbl"), QUICK_ACTIVE);
+
+    // Release: Skip returns to idle.
+    world.add_component(FrameInput::default());
+    world.step();
+    assert_eq!(label_color(&world, "s_stage_qskip_lbl"), QUICK_IDLE);
+}
+
+// The slot overlay shows a fixed window of rows and scrolls it over the full
+// slot set: the wheel shifts which logical slots the rows show, the title
+// reports the visible range, and a picked row maps through the scroll offset.
+#[test]
+fn slot_overlay_scrolls_the_window_over_all_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "scroll_test".to_string();
+    let mut world = multi_slot_world(story, 3);
+    world.start().unwrap();
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.save_dir = dir.path().to_path_buf();
+        }
+    }
+    // A save in a far slot (index 6) so a scrolled row can show and load it.
+    let save = StorySave {
+        slug: "a".to_string(),
+        page: 1,
+        vars: BTreeMap::new(),
+    };
+    write_save(&slot_file(dir.path(), "scroll_test", 6), &save).unwrap();
+    world.step();
+
+    // Open the load overlay: the window starts at slot 1, showing three rows.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::OpenLoad);
+    world.step();
+    assert!(label_content(&world, "s_stage_slot0_lbl").contains("Slot 1"));
+    assert!(label_content(&world, "s_stage_slot_title").contains("1-3 / 10"));
+
+    // Wheel down six rows: the window shifts and row 0 shows the far slot.
+    world.add_component(FrameInput {
+        scroll_delta: SLOT_SCROLL_UNIT * 6.0,
+        ..Default::default()
+    });
+    world.step();
+    assert!(label_content(&world, "s_stage_slot0_lbl").contains("Slot 7"));
+    assert!(label_content(&world, "s_stage_slot0_lbl").contains("page 2"));
+    assert!(label_content(&world, "s_stage_slot_title").contains("7-9 / 10"));
+
+    // Picking row 0 now loads the far slot (index 6): play resumes at page 2.
+    world.add_component(FrameInput::default());
     world
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Slot(0));

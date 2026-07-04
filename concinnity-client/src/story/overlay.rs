@@ -171,32 +171,94 @@ impl StorySystem {
         } else {
             Overlay::SaveMenu
         };
+        // Fresh wheel travel each open; keep the window in range if slots changed.
+        self.slot_scroll_accum = 0.0;
+        self.slot_scroll = self.slot_scroll.min(self.max_slot_scroll());
         if self.started {
             self.hide_page_furniture(ctx);
         }
-        let (dim, title, boxes, labels) = {
+        let dim = self.ids.as_ref().expect("resolved at init").overlay_dim;
+        set_sprite(ctx, dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
+        self.render_slot_rows(ctx);
+    }
+
+    // The most the window can scroll: the logical slot count past the last
+    // fully-shown row.
+    pub(super) fn max_slot_scroll(&self) -> usize {
+        let visible = self.ids.as_ref().map_or(0, |i| i.slot_boxes.len());
+        SLOT_COUNT.saturating_sub(visible)
+    }
+
+    // Fill the slot overlay's title and its window of rows from `slot_scroll`.
+    // The title shows the visible range so the list reads as scrollable; rows
+    // past the last logical slot are hidden.
+    pub(super) fn render_slot_rows(&mut self, ctx: &mut PipelineContext) {
+        let load = self.overlay == Overlay::LoadMenu;
+        let (title, boxes, labels) = {
             let ids = self.ids.as_ref().expect("resolved at init");
             (
-                ids.overlay_dim,
                 ids.slot_title,
                 ids.slot_boxes.clone(),
                 ids.slot_labels.clone(),
             )
         };
-        set_sprite(ctx, dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
-        set_label(ctx, title, |l| {
-            l.content = (if load { "Load" } else { "Save" }).to_string();
-        });
-        for (i, box_id) in boxes.iter().enumerate() {
-            let summary = self.slot_summary(i);
-            set_sprite(ctx, Some(*box_id), |s| {
-                s.visible = true;
-                s.tint = CHOICE_BOX_TINT;
-            });
-            set_label(ctx, labels.get(i).copied(), |l| {
-                l.content = summary;
-                l.visible = true;
-            });
+        let visible = boxes.len();
+        let verb = if load { "Load" } else { "Save" };
+        let lo = (self.slot_scroll + 1).min(SLOT_COUNT);
+        let hi = (self.slot_scroll + visible).min(SLOT_COUNT);
+        let heading = format!("{}   {}-{} / {}", verb, lo, hi, SLOT_COUNT);
+        set_label(ctx, title, |l| l.content = heading);
+        for (row, box_id) in boxes.iter().enumerate() {
+            let slot = self.slot_scroll + row;
+            if slot < SLOT_COUNT {
+                let summary = self.slot_summary(slot);
+                set_sprite(ctx, Some(*box_id), |s| {
+                    s.visible = true;
+                    s.tint = CHOICE_BOX_TINT;
+                });
+                set_label(ctx, labels.get(row).copied(), |l| {
+                    l.content = summary;
+                    l.visible = true;
+                });
+            } else {
+                set_sprite(ctx, Some(*box_id), |s| s.tint[3] = 0.0);
+                set_label(ctx, labels.get(row).copied(), |l| l.content.clear());
+            }
+        }
+    }
+
+    // Scroll the slot window with the wheel and the arrow keys while the slot
+    // overlay is up; a no-op otherwise. Whole-row steps, clamped to range.
+    pub(super) fn handle_slot_scroll(&mut self, frame: &FrameInput, ctx: &mut PipelineContext) {
+        if !matches!(self.overlay, Overlay::SaveMenu | Overlay::LoadMenu) {
+            return;
+        }
+        let mut scroll = self.slot_scroll as i32;
+        self.slot_scroll_accum += frame.scroll_delta;
+        while self.slot_scroll_accum >= SLOT_SCROLL_UNIT {
+            self.slot_scroll_accum -= SLOT_SCROLL_UNIT;
+            scroll += 1;
+        }
+        while self.slot_scroll_accum <= -SLOT_SCROLL_UNIT {
+            self.slot_scroll_accum += SLOT_SCROLL_UNIT;
+            scroll -= 1;
+        }
+        match frame.captured_key {
+            Some(Key::Down) => scroll += 1,
+            Some(Key::Up) => scroll -= 1,
+            _ => {}
+        }
+        let max = self.max_slot_scroll() as i32;
+        let clamped = scroll.clamp(0, max);
+        if clamped != scroll {
+            // At an edge: don't bank overshoot travel, so scrolling back is
+            // immediate rather than having to unwind the excess first.
+            self.slot_scroll_accum = 0.0;
+        }
+        let clamped = clamped as usize;
+        if clamped != self.slot_scroll {
+            self.slot_scroll = clamped;
+            self.render_slot_rows(ctx);
         }
     }
 
@@ -207,7 +269,13 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn pick_slot(&mut self, slot: usize, ctx: &mut PipelineContext) {
+    // A slot overlay row was clicked: the action carries the visible row index,
+    // remapped to the logical slot through the current scroll offset.
+    pub(super) fn pick_slot(&mut self, row: usize, ctx: &mut PipelineContext) {
+        let slot = self.slot_scroll + row;
+        if slot >= SLOT_COUNT {
+            return;
+        }
         match self.overlay {
             Overlay::SaveMenu => {
                 let save = self.current_save();

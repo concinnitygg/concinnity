@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CmpOp, CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryOp,
-    StoryReload, StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
+    CmpOp, CueKind, FrameInput, Key, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage,
+    StoryOp, StoryReload, StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -59,6 +59,13 @@ const SKIP_PAGE_SECS: f32 = 0.15;
 // history lines its label shows at once.
 const BACKLOG_ENTRIES: usize = 100;
 const BACKLOG_LINES: usize = 20;
+// Manual save slots the slot overlay scrolls through. More slots than the
+// overlay shows at once (the build emits a fixed window of rows); the story
+// scrolls the window over this many logical slots.
+const SLOT_COUNT: usize = 10;
+// Accumulated `scroll_delta` that advances the slot window by one row. Mirrors
+// the settings list's feel (one wheel notch is one row).
+const SLOT_SCROLL_UNIT: f32 = 20.0;
 
 // The generated stage assets this system mutates, taken from the story's
 // build-resolved scaffold references. An unset optional slot (e.g. a story
@@ -242,10 +249,19 @@ pub struct StorySystem {
     // pause; skip reveals instantly and turns pages rapidly until a menu.
     auto: bool,
     skip: bool,
+    // Momentary fast-forward while the skip modifier (Control) is held: acts
+    // like `skip` but only for as long as the key is down, and only in page
+    // mode (a choice or overlay stops it, like the toggle).
+    hold_skip: bool,
     // Seconds since the current page finished revealing (auto) or turned
     // (skip).
     mode_timer: f32,
     overlay: Overlay,
+    // Index of the first slot shown in the slot overlay's top row: the window
+    // into the `SLOT_COUNT` logical slots. Scrolled by the wheel / arrow keys.
+    slot_scroll: usize,
+    // Fractional wheel travel toward the next row (reset when the overlay opens).
+    slot_scroll_accum: f32,
     // Recent dialogue for the backlog overlay, one pre-wrapped entry per
     // page shown.
     history: Vec<String>,
@@ -288,8 +304,11 @@ impl StorySystem {
             elapsed: 0.0,
             auto: false,
             skip: false,
+            hold_skip: false,
             mode_timer: 0.0,
             overlay: Overlay::None,
+            slot_scroll: 0,
+            slot_scroll_accum: 0.0,
             history: Vec::new(),
             active_view: None,
             settings_return: None,
@@ -456,6 +475,18 @@ impl System for StorySystem {
             }
             mode_flipped |= self.in_choice != was_in_choice;
         }
+
+        // The per-frame input snapshot (queried, not drained, like every other
+        // FrameInput reader). GraphicsSystem deposits it before this system runs,
+        // so it is the current frame's input. Drives the held-Control fast-forward
+        // and the slot-overlay scroll.
+        let frame = ctx
+            .query::<FrameInput>()
+            .last()
+            .cloned()
+            .unwrap_or_default();
+        self.update_hold_skip(&frame, ctx);
+        self.handle_slot_scroll(&frame, ctx);
 
         self.tick_typewriter(ctx, dt);
         self.tick_modes(ctx, dt);

@@ -455,6 +455,24 @@ impl System for UiInputSystem {
             }
         }
 
+        // Any other KeyBinding fires when its key is pressed this frame. Escape
+        // is handled above (it is not a `Key` variant, so it never arrives as a
+        // `captured_key`); every other binding matches the one-frame pressed key
+        // by its canonical name -- e.g. a story's Space / Enter advance bindings.
+        // Rebind capture and an open dropdown already returned above, so this
+        // cannot steal a key those flows want.
+        if let Some(key) = input.captured_key {
+            let name = key.name();
+            for kb in &self.bindings {
+                if kb.key == name && !kb.action.is_empty() {
+                    if let Some(result) = fire_action(&kb.action, None, ctx) {
+                        return result;
+                    }
+                    break;
+                }
+            }
+        }
+
         let mx = input.mouse_x;
         let my = input.mouse_y;
         let clicked = input.left_click;
@@ -2984,6 +3002,61 @@ mod tests {
 
         let cmd = produced_view_command(&world);
         assert!(matches!(cmd, Some(ViewCommand::Toggle(AssetId(50)))));
+    }
+
+    // Every StoryCommand the system sent this step, in send order.
+    fn produced_story_commands(world: &World) -> Vec<StoryCommand> {
+        let mut cursor = crate::ecs::EventCursor::default();
+        world
+            .events::<StoryCommand>()
+            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    // A non-Escape KeyBinding fires when its key is pressed (surfaced as the
+    // one-frame captured_key), so a story's Space / Enter advance bindings work.
+    #[test]
+    fn pressed_key_binding_fires_action() {
+        for key in [Key::Space, Key::Enter] {
+            let mut world = World::new_empty();
+            world.add_component(KeyBinding {
+                key: key.name().to_string(),
+                action: "story:advance".to_string(),
+            });
+            world.start().unwrap();
+
+            world.add_component(FrameInput {
+                captured_key: Some(key),
+                ..Default::default()
+            });
+            world.step();
+
+            assert_eq!(
+                produced_story_commands(&world),
+                vec![StoryCommand::Advance],
+                "{key:?} should advance",
+            );
+        }
+    }
+
+    // A pressed key with no matching binding fires nothing (the arrow keys a
+    // scrollable list reads must not be swallowed by a phantom action).
+    #[test]
+    fn pressed_key_without_a_binding_fires_nothing() {
+        let mut world = World::new_empty();
+        world.add_component(KeyBinding {
+            key: "Space".to_string(),
+            action: "story:advance".to_string(),
+        });
+        world.start().unwrap();
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Down),
+            ..Default::default()
+        });
+        world.step();
+
+        assert!(produced_story_commands(&world).is_empty());
     }
 
     // Escape toggles the menu; Settings is reached by a Show (a sub-view). After

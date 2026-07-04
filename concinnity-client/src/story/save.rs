@@ -7,6 +7,7 @@ impl StorySystem {
         self.history.clear();
         self.auto = false;
         self.skip = false;
+        self.hold_skip = false;
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
         let view = self.ids.as_ref().expect("resolved at init").view;
@@ -88,10 +89,10 @@ impl StorySystem {
         let _ = std::fs::remove_file(save_file(&self.save_dir, &self.story.save_key));
     }
 
-    // Whether any manual slot save exists (the title's Load lights up).
+    // Whether any manual slot save exists (the title's Load lights up). Scans
+    // every logical slot, not just the overlay's visible window.
     pub(super) fn any_slot_save(&self) -> bool {
         !self.story.save_key.is_empty()
-            && (0..self.ids.as_ref().map_or(0, |i| i.slot_boxes.len()))
-                .any(|i| slot_file(&self.save_dir, &self.story.save_key, i).exists())
+            && (0..SLOT_COUNT).any(|i| slot_file(&self.save_dir, &self.story.save_key, i).exists())
     }
 }

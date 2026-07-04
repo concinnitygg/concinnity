@@ -22,9 +22,11 @@ const TITLE_BACKDROP_DIM: [f32; 4] = [0.35, 0.35, 0.35, 1.0];
 // against the box's dark backdrop.
 const DIALOG_BOX: (f32, f32, f32, f32) = (140.0, 500.0, 1000.0, 210.0);
 pub(super) const DIALOG_BOX_RADIUS: f32 = 14.0;
-// Manual save slots offered by the slot overlay (the auto-save resumed by
-// Continue is separate).
-const SAVE_SLOTS: usize = 3;
+// Slot rows the save / load overlay shows at once. The story scrolls this
+// fixed window over its larger set of logical slots (the auto-save resumed by
+// Continue is separate), so each row's click action carries its row index, not
+// a fixed slot number.
+const VISIBLE_SLOTS: usize = 5;
 // Choice option rows: each option gets its own rounded box behind the label
 // so the menu stands apart from the dialog box's dark backdrop. The color
 // must match the story system's shown tint (it re-tints the boxes to show
@@ -239,10 +241,10 @@ pub(crate) fn emit_story(
     let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
     let load_label = title_screen.then(|| format!("{}_load_lbl", title_view));
     let settings_label = title_screen.then(|| format!("{}_settings_lbl", title_view));
-    let slot_boxes: Vec<String> = (0..SAVE_SLOTS)
+    let slot_boxes: Vec<String> = (0..VISIBLE_SLOTS)
         .map(|i| format!("{}_slot{}_box", stage_view, i))
         .collect();
-    let slot_labels: Vec<String> = (0..SAVE_SLOTS)
+    let slot_labels: Vec<String> = (0..VISIBLE_SLOTS)
         .map(|i| format!("{}_slot{}_lbl", stage_view, i))
         .collect();
     out.push(serde_json::json!({
@@ -345,11 +347,15 @@ pub(crate) fn emit_story(
         None,
         "story:advance",
     ));
-    out.push(serde_json::json!({
-        "name": format!("{}_advance_key", prefix),
-        "type": "KeyBinding",
-        "args": { "key": "Space", "action": "story:advance" }
-    }));
+    // Space and Enter both advance the dialogue (in addition to a click). Each
+    // is its own KeyBinding; the UI fires whichever key was pressed.
+    for (suffix, key) in [("advance_key", "Space"), ("advance_key_enter", "Enter")] {
+        out.push(serde_json::json!({
+            "name": format!("{}_{}", prefix, suffix),
+            "type": "KeyBinding",
+            "args": { "key": key, "action": "story:advance" }
+        }));
+    }
 
     // The advance marker: a small rounded square at the dialog box's lower
     // right that the story system pulses while a fully revealed page waits
@@ -497,7 +503,7 @@ pub(crate) fn emit_story(
             ..LabelStyle::default()
         },
     ));
-    for i in 0..SAVE_SLOTS {
+    for i in 0..VISIBLE_SLOTS {
         let y = 230.0 + i as f32 * 80.0;
         let lbl = format!("{}_slot{}_lbl", stage_view, i);
         out.push(rounded_sprite(

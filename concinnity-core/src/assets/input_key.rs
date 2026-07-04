@@ -68,6 +68,72 @@ pub enum Key {
 }
 
 impl Key {
+    /// The canonical variant name, matching the serialized form and how a
+    /// [KeyBinding](#keybinding) stores its `key` (e.g. `"W"`, `"Space"`,
+    /// `"Enter"`, `"Control"`). Unlike [display_name](#method.display_name)
+    /// this is the exact enum-variant spelling, so it round-trips with serde.
+    pub fn name(self) -> &'static str {
+        match self {
+            Key::A => "A",
+            Key::B => "B",
+            Key::C => "C",
+            Key::D => "D",
+            Key::E => "E",
+            Key::F => "F",
+            Key::G => "G",
+            Key::H => "H",
+            Key::I => "I",
+            Key::J => "J",
+            Key::K => "K",
+            Key::L => "L",
+            Key::M => "M",
+            Key::N => "N",
+            Key::O => "O",
+            Key::P => "P",
+            Key::Q => "Q",
+            Key::R => "R",
+            Key::S => "S",
+            Key::T => "T",
+            Key::U => "U",
+            Key::V => "V",
+            Key::W => "W",
+            Key::X => "X",
+            Key::Y => "Y",
+            Key::Z => "Z",
+            Key::Num0 => "Num0",
+            Key::Num1 => "Num1",
+            Key::Num2 => "Num2",
+            Key::Num3 => "Num3",
+            Key::Num4 => "Num4",
+            Key::Num5 => "Num5",
+            Key::Num6 => "Num6",
+            Key::Num7 => "Num7",
+            Key::Num8 => "Num8",
+            Key::Num9 => "Num9",
+            Key::Space => "Space",
+            Key::Tab => "Tab",
+            Key::Enter => "Enter",
+            Key::Shift => "Shift",
+            Key::Control => "Control",
+            Key::Alt => "Alt",
+            Key::Up => "Up",
+            Key::Down => "Down",
+            Key::Left => "Left",
+            Key::Right => "Right",
+            Key::Minus => "Minus",
+            Key::Equals => "Equals",
+            Key::LeftBracket => "LeftBracket",
+            Key::RightBracket => "RightBracket",
+            Key::Backslash => "Backslash",
+            Key::Semicolon => "Semicolon",
+            Key::Quote => "Quote",
+            Key::Comma => "Comma",
+            Key::Period => "Period",
+            Key::Slash => "Slash",
+            Key::Backtick => "Backtick",
+        }
+    }
+
     /// A short label for the settings menu (e.g. `"W"`, `"Space"`, `"Shift"`).
     pub fn display_name(self) -> &'static str {
         match self {
@@ -152,5 +218,29 @@ mod tests {
         assert_eq!(Key::Space.display_name(), "Space");
         assert_eq!(Key::Shift.display_name(), "Shift");
         assert_eq!(Key::Num1.display_name(), "1");
+    }
+
+    #[test]
+    fn name_matches_serialization() {
+        // `name` must equal the serialized variant name so it can be compared
+        // against a KeyBinding's stored `key` string (and parsed back).
+        for key in [
+            Key::A,
+            Key::Space,
+            Key::Enter,
+            Key::Control,
+            Key::Shift,
+            Key::Num0,
+            Key::Num9,
+            Key::Up,
+            Key::Slash,
+            Key::Backtick,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&key).unwrap(),
+                format!("\"{}\"", key.name()),
+                "name() must match serde for {key:?}",
+            );
+        }
     }
 }
