@@ -90,8 +90,11 @@
 - [SpriteFit](SpriteFit.md) - How a view-owned [Sprite](Sprite.md) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
+- [StoryCondition](StoryCondition.md) - A flag condition on a [StoryChoice](StoryChoice.md).
+- [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.
 - [StoryImage](StoryImage.md) - One placed stage image: which [Texture](Texture.md) to sample and where it sits on the reference canvas.
 - [StoryNode](StoryNode.md) - One jump target in a [Story](Story.md): a run of pages optionally ending in a choice menu.
+- [StoryOp](StoryOp.md) - One flag operation in a [Story](Story.md)'s script: raise or clear a named boolean flag. Flags start cleared and live for one playthrough.
 - [StoryPage](StoryPage.md) - One click-through page of a [StoryNode](StoryNode.md).
 - [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [View](View.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
 - [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).

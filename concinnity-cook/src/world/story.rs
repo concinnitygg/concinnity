@@ -52,6 +52,8 @@ pub(crate) struct Node {
     pub(crate) choice_music: Option<String>,
     pub(crate) choice_sounds: Vec<String>,
     pub(crate) choice_stage: Stage,
+    pub(crate) choice_ops: Vec<FlagOp>,
+    pub(crate) choice_gates: Vec<Gate>,
 }
 
 // The visual dressing current at a page: the backdrop image and the
@@ -80,12 +82,39 @@ pub(crate) struct Page {
     pub(crate) music: Option<String>,
     pub(crate) sounds: Vec<String>,
     pub(crate) stage: Stage,
+    pub(crate) ops: Vec<FlagOp>,
+    pub(crate) gates: Vec<Gate>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Choice {
     pub(crate) label: String,
     pub(crate) target: String,
+    pub(crate) condition: Option<Condition>,
+}
+
+// A `set` / `clear` line from a ```story script block, run when the page
+// (or choice menu) it precedes shows.
+#[derive(Debug, Clone)]
+pub(crate) struct FlagOp {
+    pub(crate) flag: String,
+    pub(crate) clear: bool,
+}
+
+// An `if <flag> -> #anchor` line from a ```story script block: a conditional
+// jump evaluated before the page (or choice menu) it precedes shows.
+#[derive(Debug, Clone)]
+pub(crate) struct Gate {
+    pub(crate) flag: String,
+    pub(crate) negate: bool,
+    pub(crate) target: String,
+}
+
+// An `if [not] <flag>` link title gating a choice option.
+#[derive(Debug, Clone)]
+pub(crate) struct Condition {
+    pub(crate) flag: String,
+    pub(crate) negate: bool,
 }
 
 // A media directive paragraph: a lone link whose label names the channel and
@@ -195,6 +224,93 @@ pub(crate) fn slug(text: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+// One parsed line of a ```story script block.
+enum ScriptLine {
+    Op(FlagOp),
+    Gate(Gate),
+}
+
+// A flag name: lowercase alphanumerics, `_`, `-` (the same alphabet as
+// heading slugs, so scripts read consistently with anchors).
+fn parse_flag(word: &str) -> Result<String, String> {
+    if word.is_empty()
+        || !word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "'{}' is not a flag name (lowercase letters, digits, `_`, `-`)",
+            word
+        ));
+    }
+    Ok(word.to_string())
+}
+
+// One script line: `set <flag>`, `clear <flag>`, or a conditional jump
+// `if [not] <flag> -> #anchor`.
+fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
+    if let Some(rest) = line.strip_prefix("set ") {
+        return Ok(ScriptLine::Op(FlagOp {
+            flag: parse_flag(rest.trim())?,
+            clear: false,
+        }));
+    }
+    if let Some(rest) = line.strip_prefix("clear ") {
+        return Ok(ScriptLine::Op(FlagOp {
+            flag: parse_flag(rest.trim())?,
+            clear: true,
+        }));
+    }
+    if let Some(rest) = line.strip_prefix("if ") {
+        let (condition, target) = rest.split_once("->").ok_or_else(|| {
+            format!(
+                "script line '{}' is missing the `-> #anchor` jump target",
+                line
+            )
+        })?;
+        let target = target.trim();
+        let Some(anchor) = target.strip_prefix('#') else {
+            return Err(format!(
+                "script jump target '{}' must be a `#heading` anchor",
+                target
+            ));
+        };
+        let condition = condition.trim();
+        let (negate, flag) = match condition.strip_prefix("not ") {
+            Some(rest) => (true, rest.trim()),
+            None => (false, condition),
+        };
+        return Ok(ScriptLine::Gate(Gate {
+            flag: parse_flag(flag)?,
+            negate,
+            target: anchor.to_string(),
+        }));
+    }
+    Err(format!(
+        "script line '{}' is not `set <flag>`, `clear <flag>`, or \
+         `if [not] <flag> -> #anchor`",
+        line
+    ))
+}
+
+// A choice condition from a link title: `if <flag>` or `if not <flag>`.
+fn parse_condition(title: &str) -> Result<Condition, String> {
+    let Some(rest) = title.strip_prefix("if ") else {
+        return Err(format!(
+            "choice condition '{}' must be `if <flag>` or `if not <flag>`",
+            title
+        ));
+    };
+    let (negate, flag) = match rest.trim().strip_prefix("not ") {
+        Some(rest) => (true, rest.trim()),
+        None => (false, rest.trim()),
+    };
+    Ok(Condition {
+        flag: parse_flag(flag)?,
+        negate,
+    })
+}
+
 // In-flight paragraph state: inline events accumulate here until the
 // paragraph closes and is classified as narration, dialogue, or a jump.
 #[derive(Default)]
@@ -222,11 +338,14 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     let mut heading_text: Option<String> = None;
     let mut meta_text: Option<String> = None;
     let mut strong_text: Option<String> = None;
-    let mut link: Option<(String, String)> = None; // (target, label so far)
+    let mut link: Option<(String, String, String)> = None; // (target, title, label so far)
     let mut image: Option<(String, String)> = None; // (target, alt so far)
     let mut in_list = false;
-    let mut item_links: Vec<(String, String)> = Vec::new();
+    let mut item_links: Vec<(String, String, Option<Condition>)> = Vec::new();
     let mut item_has_text = false;
+    // A ```story script fence being accumulated; parsed into ops and gates
+    // when it closes.
+    let mut script_text: Option<String> = None;
     // Media state in document order: the music current from the most recent
     // `[music]` directive, and one-shot `[sound]`s waiting for the next page
     // or choice list. A directive with nothing after it to attach to is dead
@@ -234,6 +353,10 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
     let mut current_music: Option<String> = None;
     let mut current_stage = Stage::default();
     let mut pending_sounds: Vec<String> = Vec::new();
+    // Script state waiting for the next page or choice menu, like the
+    // one-shot sounds above.
+    let mut pending_ops: Vec<FlagOp> = Vec::new();
+    let mut pending_gates: Vec<Gate> = Vec::new();
     let mut unconsumed_directive: Option<usize> = None;
 
     let options = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
@@ -303,12 +426,14 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                             page.music = current_music.clone();
                             page.stage = current_stage.clone();
                             page.sounds = std::mem::take(&mut pending_sounds);
+                            page.ops = std::mem::take(&mut pending_ops);
+                            page.gates = std::mem::take(&mut pending_gates);
                             unconsumed_directive = None;
                             cur_node
                                 .as_mut()
                                 .expect("paragraph start checked the node")
                                 .pages
-                                .push(page);
+                                .push(*page);
                         }
                         ParaOut::Directives(directives) => {
                             for directive in directives {
@@ -363,6 +488,8 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                 node.choice_music = current_music.clone();
                 node.choice_stage = current_stage.clone();
                 node.choice_sounds = std::mem::take(&mut pending_sounds);
+                node.choice_ops = std::mem::take(&mut pending_ops);
+                node.choice_gates = std::mem::take(&mut pending_gates);
                 unconsumed_directive = None;
             }
             Event::Start(Tag::Item) => {
@@ -376,15 +503,21 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                         "each choice must be exactly one link, e.g. `- [Go](#node)`".to_string(),
                     );
                 }
-                let (target, label) = item_links.pop().expect("length checked");
+                let (target, label, condition) = item_links.pop().expect("length checked");
                 cur_node
                     .as_mut()
                     .expect("list start checked the node")
                     .choices
-                    .push(Choice { label, target });
+                    .push(Choice {
+                        label,
+                        target,
+                        condition,
+                    });
             }
 
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::Start(Tag::Link {
+                dest_url, title, ..
+            }) => {
                 if image.is_some() {
                     return err(
                         &range,
@@ -394,10 +527,10 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                 // Targets are classified when the enclosing construct closes:
                 // `#heading` jumps/choices, audio-file media directives, or
                 // image directives.
-                link = Some((dest_url.to_string(), String::new()));
+                link = Some((dest_url.to_string(), title.to_string(), String::new()));
             }
             Event::End(TagEnd::Link) => {
-                let (target, label) = link.take().unwrap_or_default();
+                let (target, title, label) = link.take().unwrap_or_default();
                 if label.trim().is_empty() {
                     return err(&range, format!("link to '{}' has no label text", target));
                 }
@@ -408,8 +541,24 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                             format!("choice '{}' must link to a `#heading`", label.trim()),
                         );
                     };
-                    item_links.push((anchor.to_string(), label.trim().to_string()));
+                    // The optional link title gates the option:
+                    // `- [Ask](#ask "if asked")`.
+                    let condition = if title.trim().is_empty() {
+                        None
+                    } else {
+                        match parse_condition(title.trim()) {
+                            Ok(c) => Some(c),
+                            Err(e) => return err(&range, e),
+                        }
+                    };
+                    item_links.push((anchor.to_string(), label.trim().to_string(), condition));
                 } else if let Some(acc) = para.as_mut() {
+                    if !title.trim().is_empty() {
+                        return err(
+                            &range,
+                            "link titles (conditions) are only supported on choices".to_string(),
+                        );
+                    }
                     acc.links.push((label.trim().to_string(), target));
                 } else {
                     return err(
@@ -463,13 +612,15 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
             }
 
             Event::Text(t) => {
-                if let Some(meta) = meta_text.as_mut() {
+                if let Some(script) = script_text.as_mut() {
+                    script.push_str(&t);
+                } else if let Some(meta) = meta_text.as_mut() {
                     meta.push_str(&t);
                 } else if let Some(s) = strong_text.as_mut() {
                     s.push_str(&t);
                 } else if let Some((_, alt)) = image.as_mut() {
                     alt.push_str(&t);
-                } else if let Some((_, label)) = link.as_mut() {
+                } else if let Some((_, _, label)) = link.as_mut() {
                     label.push_str(&t);
                 } else if let Some(h) = heading_text.as_mut() {
                     h.push_str(&t);
@@ -511,8 +662,47 @@ pub(crate) fn parse_story(src: &str) -> Result<Story, String> {
                     .images
                     .push((alt.trim().to_string(), target));
             }
-            Event::Start(Tag::CodeBlock(_)) => {
-                return err(&range, "code blocks are not supported yet".to_string());
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let lang = match &kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    pulldown_cmark::CodeBlockKind::Indented => {
+                        return err(&range, "indented code blocks are not supported".to_string());
+                    }
+                };
+                if lang != "story" {
+                    return err(
+                        &range,
+                        format!(
+                            "code fence '{}' is not supported; script blocks use ```story",
+                            lang
+                        ),
+                    );
+                }
+                let Some(node) = cur_node.as_ref() else {
+                    return err(&range, "content before the first `#` heading".to_string());
+                };
+                if !node.choices.is_empty() {
+                    return err(
+                        &range,
+                        format!("node '{}': choices must be its last content", node.heading),
+                    );
+                }
+                script_text = Some(String::new());
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                let text = script_text.take().unwrap_or_default();
+                for raw in text.lines() {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    match parse_script_line(trimmed) {
+                        Ok(ScriptLine::Op(op)) => pending_ops.push(op),
+                        Ok(ScriptLine::Gate(gate)) => pending_gates.push(gate),
+                        Err(e) => return err(&range, e),
+                    }
+                }
+                unconsumed_directive = Some(line_of(&range));
             }
             Event::Code(_) => {
                 return err(&range, "inline code is not supported".to_string());
@@ -583,7 +773,8 @@ type ImageDims<'a> = &'a dyn Fn(&str) -> Result<(u32, u32), String>;
 // that style the pages after it. Directives stack: a paragraph made only of
 // `![bg]` / `[music]` / `[sound]` lines applies them all.
 enum ParaOut {
-    Page(Page),
+    // Boxed: a Page is an order of magnitude larger than the other variant.
+    Page(Box<Page>),
     Directives(Vec<Directive>),
 }
 
@@ -613,11 +804,11 @@ fn classify_paragraph(
         && acc.links[0].1.starts_with('#')
     {
         let (label, target) = acc.links.into_iter().next().expect("length checked");
-        return Ok(ParaOut::Page(Page {
+        return Ok(ParaOut::Page(Box::new(Page {
             text: label,
             jump: Some(target[1..].to_string()),
             ..Page::default()
-        }));
+        })));
     }
 
     // A directives paragraph: images and file links only, no prose. They
@@ -691,11 +882,11 @@ fn classify_paragraph(
             if text.is_empty() {
                 return Err(format!("line {}: empty paragraph", line));
             }
-            Ok(ParaOut::Page(Page {
+            Ok(ParaOut::Page(Box::new(Page {
                 speaker: acc.speaker,
                 text,
                 ..Page::default()
-            }))
+            })))
         }
         _ => Err(format!(
             "line {}: a link must stand alone in its paragraph (a jump or media \
@@ -728,6 +919,13 @@ fn validate_story(story: &Story) -> Result<(), String> {
             .iter()
             .filter_map(|p| p.jump.as_deref())
             .chain(node.choices.iter().map(|c| c.target.as_str()))
+            .chain(
+                node.pages
+                    .iter()
+                    .flat_map(|p| p.gates.iter())
+                    .chain(node.choice_gates.iter())
+                    .map(|g| g.target.as_str()),
+            )
     }
     for node in &story.nodes {
         for target in targets(node) {
@@ -1065,11 +1263,20 @@ pub(crate) fn emit_story(
             "story:start",
         ));
         out.extend(button(
+            &format!("{}_continue", title_view),
+            &font_menu,
+            "Continue",
+            win_w / 2.0 - 120.0,
+            490.0,
+            240.0,
+            "story:continue",
+        ));
+        out.extend(button(
             &format!("{}_quit", title_view),
             &font_menu,
             "Quit",
             win_w / 2.0 - 120.0,
-            490.0,
+            550.0,
             240.0,
             "quit",
         ));
@@ -1116,13 +1323,24 @@ pub(crate) fn emit_story(
                 "music": music,
                 "sounds": sounds,
                 "stage": stage_entry(&page.stage, prefix, &mut images, image_dims)?,
+                "ops": ops_entries(&page.ops),
+                "gates": gate_entries(&page.gates, &node_index),
             }));
         }
-        let choices: Vec<serde_json::Value> = node
-            .choices
-            .iter()
-            .map(|c| serde_json::json!({ "label": c.label, "target": node_index(&c.target) }))
-            .collect();
+        let choices: Vec<serde_json::Value> =
+            node.choices
+                .iter()
+                .map(|c| {
+                    let condition = c.condition.as_ref().map(
+                        |cond| serde_json::json!({ "flag": cond.flag, "negate": cond.negate }),
+                    );
+                    serde_json::json!({
+                        "label": c.label,
+                        "target": node_index(&c.target),
+                        "condition": condition,
+                    })
+                })
+                .collect();
         let choice_music = node
             .choice_music
             .as_ref()
@@ -1139,6 +1357,8 @@ pub(crate) fn emit_story(
             "choice_stage": stage_entry(&node.choice_stage, prefix, &mut images, image_dims)?,
             "choice_music": choice_music,
             "choice_sounds": choice_sounds,
+            "choice_ops": ops_entries(&node.choice_ops),
+            "choice_gates": gate_entries(&node.choice_gates, &node_index),
         }));
     }
     // The compiled graph takes the import's own name: the one declaration the
@@ -1156,6 +1376,7 @@ pub(crate) fn emit_story(
         .map(|i| format!("{}_opt{}_lbl", stage_view, i))
         .collect();
     let panel = (max_choices > 0).then(|| format!("{}_panel", stage_view));
+    let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
     out.push(serde_json::json!({
         "name": prefix,
         "type": "Story",
@@ -1163,6 +1384,7 @@ pub(crate) fn emit_story(
             "title": story.title,
             "nodes": nodes_json,
             "text_speed": text_speed,
+            "save_key": prefix,
             "scaffold": {
                 "view": &stage_view,
                 "ending": &ending_view,
@@ -1175,6 +1397,7 @@ pub(crate) fn emit_story(
                 "text_label": format!("{}_text", stage_view),
                 "panel": panel,
                 "options": option_labels,
+                "continue_label": continue_label,
             },
         }
     }));
@@ -1193,7 +1416,7 @@ pub(crate) fn emit_story(
         out.push(stage_sprite(
             &format!("{}_{}", stage_view, side),
             [0.0, 0.0, 1.0, 1.0],
-            [1.0, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 0.0],
             false,
         ));
     }
@@ -1409,6 +1632,28 @@ fn stage_entry(
         });
     }
     Ok(entry)
+}
+
+// The compiled flag operations for a page or choice menu.
+fn ops_entries(ops: &[FlagOp]) -> Vec<serde_json::Value> {
+    ops.iter()
+        .map(|op| serde_json::json!({ "flag": op.flag, "clear": op.clear }))
+        .collect()
+}
+
+// The compiled conditional jumps for a page or choice menu; targets become
+// node indices like every other jump.
+fn gate_entries(gates: &[Gate], node_index: &dyn Fn(&str) -> u32) -> Vec<serde_json::Value> {
+    gates
+        .iter()
+        .map(|g| {
+            serde_json::json!({
+                "flag": g.flag,
+                "negate": g.negate,
+                "target": node_index(&g.target),
+            })
+        })
+        .collect()
 }
 
 // A stage-owned sprite the story system mutates: cover fit (full-bleed stage
@@ -2146,7 +2391,8 @@ The door creaks.
     fn unsupported_constructs_are_errors() {
         let base = "---\ntitle: T\n---\n\n# a\n\n";
         for (body, needle) in [
-            ("```\ncode\n```\n", "code blocks"),
+            ("```\ncode\n```\n", "script blocks use"),
+            ("```rust\nlet x = 1;\n```\n", "script blocks use"),
             ("> quoted\n", "block quotes"),
             ("## sub\n", "headings"),
             ("*soft*\n", "emphasis"),
@@ -2170,6 +2416,89 @@ The door creaks.
         let src = "---\ntitle: T\n---\n\n# a\n\n- [go](#a)\n\nafterthought\n";
         let err = parse_story(src).unwrap_err();
         assert!(err.contains("last content"), "{err}");
+    }
+
+    #[test]
+    fn script_blocks_parse_ops_gates_and_choice_conditions() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n```story\nset asked\nclear shy\nif asked -> #b\nif not shy -> #b\n```\n\nOne.\n\n- [Go](#b \"if asked\")\n- [Stay](#a \"if not shy\")\n- [Leave](#b)\n\n# b\n\nDone.\n";
+        let story = parse_story(src).unwrap();
+        let page = &story.nodes[0].pages[0];
+        // Ops and gates attach to the page after the block, in order.
+        assert_eq!(page.ops.len(), 2);
+        assert_eq!(page.ops[0].flag, "asked");
+        assert!(!page.ops[0].clear);
+        assert!(page.ops[1].clear);
+        assert_eq!(page.gates.len(), 2);
+        assert_eq!(page.gates[0].target, "b");
+        assert!(!page.gates[0].negate);
+        assert!(page.gates[1].negate);
+        // Link titles gate their choices; an untitled choice is unconditional.
+        let choices = &story.nodes[0].choices;
+        let c = choices[0].condition.as_ref().unwrap();
+        assert_eq!(c.flag, "asked");
+        assert!(!c.negate);
+        assert!(choices[1].condition.as_ref().unwrap().negate);
+        assert!(choices[2].condition.is_none());
+    }
+
+    #[test]
+    fn script_before_choices_attaches_to_the_menu() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nHi.\n\n```story\nset ready\nif done -> #b\n```\n\n- [Go](#b)\n\n# b\n\nDone.\n";
+        let story = parse_story(src).unwrap();
+        let node = &story.nodes[0];
+        assert!(node.pages[0].ops.is_empty());
+        assert_eq!(node.choice_ops.len(), 1);
+        assert_eq!(node.choice_ops[0].flag, "ready");
+        assert_eq!(node.choice_gates.len(), 1);
+        assert_eq!(node.choice_gates[0].target, "b");
+    }
+
+    #[test]
+    fn script_errors_are_strict() {
+        // A malformed line, a bad flag name, a dangling gate target, a
+        // trailing block with nothing to attach to, and a titled
+        // non-choice link are all build errors.
+        let bad_line = "---\ntitle: T\n---\n\n# a\n\n```story\nraise x\n```\n\nhi\n";
+        assert!(parse_story(bad_line).unwrap_err().contains("is not `set"));
+        let bad_flag = "---\ntitle: T\n---\n\n# a\n\n```story\nset Bad Flag\n```\n\nhi\n";
+        assert!(
+            parse_story(bad_flag)
+                .unwrap_err()
+                .contains("not a flag name")
+        );
+        let dangling = "---\ntitle: T\n---\n\n# a\n\n```story\nif x -> #nowhere\n```\n\nhi\n";
+        assert!(
+            parse_story(dangling)
+                .unwrap_err()
+                .contains("matches no heading")
+        );
+        let trailing = "---\ntitle: T\n---\n\n# a\n\nhi\n\n```story\nset x\n```\n";
+        assert!(
+            parse_story(trailing)
+                .unwrap_err()
+                .contains("needs a following")
+        );
+        let titled_jump = "---\ntitle: T\n---\n\n# a\n\n[Go](#a \"if x\")\n\nhi\n";
+        assert!(
+            parse_story(titled_jump)
+                .unwrap_err()
+                .contains("only supported on choices")
+        );
+    }
+
+    #[test]
+    fn script_state_compiles_into_the_graph() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n```story\nset asked\nif asked -> #b\n```\n\nOne.\n\n- [Go](#b \"if asked\")\n\n# b\n\nDone.\n";
+        let story = parse_story(src).unwrap();
+        let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
+        let nodes = &find(&entries, "s")["args"]["nodes"];
+        let page = &nodes[0]["pages"][0];
+        assert_eq!(page["ops"][0]["flag"], "asked");
+        assert_eq!(page["ops"][0]["clear"], false);
+        // Gate targets compile to node indices like every other jump.
+        assert_eq!(page["gates"][0]["target"], 1);
+        assert_eq!(page["gates"][0]["negate"], false);
+        assert_eq!(nodes[0]["choices"][0]["condition"]["flag"], "asked");
     }
 
     #[test]

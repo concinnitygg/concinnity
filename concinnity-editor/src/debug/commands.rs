@@ -472,6 +472,7 @@ pub(super) fn handle_story(text: &str) -> String {
     };
     let command = match req.action.as_str() {
         "start" => crate::assets::StoryCommand::Start,
+        "continue" => crate::assets::StoryCommand::Continue,
         "advance" => crate::assets::StoryCommand::Advance,
         "choose" => crate::assets::StoryCommand::Choose(req.option),
         other => return error_reply(&format!("story: unknown action '{other}'")),

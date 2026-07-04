@@ -37,8 +37,19 @@ use crate::ecs::{AssetOrigin, Component};
 ///   paragraph
 /// - a node whose last page has no link falls through to the next heading
 ///   in document order; the final node ends the story
+/// - a ```` ```story ```` fenced block scripts state: `set <flag>` /
+///   `clear <flag>` run when the next page (or choice menu) shows, and
+///   `if <flag> -> #node` / `if not <flag> -> #node` jump there instead of
+///   showing it. Flags start cleared each playthrough
+/// - a choice link's quoted title gates the option:
+///   `- [Ask her](#ask "if asked")` only appears while `asked` is set
+///   (`"if not <flag>"` for the inverse)
 ///
-/// Any other Markdown construct (images, tables, code blocks, inline
+/// Play position and flags auto-save page by page (under the project's
+/// `.concinnity/data/`); the generated title screen's Continue resumes
+/// them, and finishing the story clears the save.
+///
+/// Any other Markdown construct (tables, other code fences, inline
 /// emphasis, ...) is an error at build time, as are links to headings that
 /// do not exist, undeclared speakers, and duplicate headings.
 ///

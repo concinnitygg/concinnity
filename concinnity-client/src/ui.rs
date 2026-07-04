@@ -1342,6 +1342,7 @@ fn fire_action(
     if let Some(rest) = action.strip_prefix("story:") {
         let cmd = match rest {
             "start" => Some(StoryCommand::Start),
+            "continue" => Some(StoryCommand::Continue),
             "advance" => Some(StoryCommand::Advance),
             _ => rest
                 .strip_prefix("choose:")

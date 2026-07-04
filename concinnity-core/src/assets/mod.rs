@@ -192,7 +192,8 @@ pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use sprite::{Sprite, SpriteFit};
 pub use story::{
-    Story, StoryChoice, StoryImage, StoryNode, StoryPage, StoryScaffold, StorySpeaker, StoryStage,
+    Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp, StoryPage,
+    StoryScaffold, StorySpeaker, StoryStage,
 };
 pub use story_command::StoryCommand;
 pub use story_import::StoryImport;

@@ -12,3 +12,5 @@ One click-through page of a [StoryNode](StoryNode.md).
 - `music`: A string. Music current at this page ([AudioClip](AudioClip.md) reference). Re-triggering the already-playing track is seamless. Optional.
 - `sounds`: An array of strings. One-shot effects played when the page shows.
 - `stage`: A [StoryStage](StoryStage.md) object. Stage dressing current at this page.
+- `ops`: An array of [StoryOp](StoryOp.md) objects. Flag operations run when the page shows.
+- `gates`: An array of [StoryGate](StoryGate.md) objects. Conditional jumps evaluated before the page shows: the first gate whose condition passes redirects play to its target node instead.

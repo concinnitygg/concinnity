@@ -8,6 +8,8 @@
 pub enum StoryCommand {
     // Reset to the first node and show the stage.
     Start,
+    // Resume from the saved position, or start fresh when no save exists.
+    Continue,
     // Advance the current page: complete a mid-reveal, else move on.
     #[default]
     Advance,

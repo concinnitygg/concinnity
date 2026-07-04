@@ -13,3 +13,5 @@ a choice menu.
 - `choice_stage`: A [StoryStage](StoryStage.md) object. Stage dressing current at the choice menu.
 - `choice_music`: A string. Music current at the choice menu ([AudioClip](AudioClip.md) reference). Optional.
 - `choice_sounds`: An array of strings. One-shots played when the choice menu shows.
+- `choice_ops`: An array of [StoryOp](StoryOp.md) objects. Flag operations run when the choice menu shows.
+- `choice_gates`: An array of [StoryGate](StoryGate.md) objects. Conditional jumps evaluated before the choice menu shows.

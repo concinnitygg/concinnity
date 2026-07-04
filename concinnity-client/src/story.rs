@@ -8,11 +8,13 @@
 // and portrait sprite textures, shows the choice menu when a node ends in
 // one, and asks the audio system to play page music and one-shots.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CueKind, PlayCue, Sprite, Story, StoryCommand, StoryImage, StoryStage, TextLabel, ViewCommand,
-    ViewShown,
+    CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryStage, TextLabel,
+    ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -42,6 +44,40 @@ struct StageIds {
     // out-of-menu choose (or an in-menu advance) a no-op, so the overlap
     // with the full-canvas advance region resolves without touching them.
     options: Vec<AssetId>,
+    // The title screen's Continue label, hidden while no save exists.
+    continue_label: Option<AssetId>,
+}
+
+// A story's persisted position and raised flags, auto-written page by page
+// and resumed by `story:continue`. Position is kept by node slug (stable
+// across story edits, unlike an index).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StorySave {
+    slug: String,
+    page: u32,
+    flags: Vec<String>,
+}
+
+fn save_file(dir: &Path, key: &str) -> PathBuf {
+    dir.join(format!("story_{}.bin", key))
+}
+
+fn read_save(dir: &Path, key: &str) -> Option<StorySave> {
+    let bytes = std::fs::read(save_file(dir, key)).ok()?;
+    match ciborium::from_reader(&bytes[..]) {
+        Ok(save) => Some(save),
+        Err(e) => {
+            tracing::warn!("StorySystem: save unreadable, starting fresh: {e}");
+            None
+        }
+    }
+}
+
+fn write_save(dir: &Path, key: &str, save: &StorySave) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut bytes = Vec::new();
+    ciborium::into_writer(save, &mut bytes).map_err(std::io::Error::other)?;
+    std::fs::write(save_file(dir, key), bytes)
 }
 
 // Dialogue reveal state for the current page.
@@ -69,6 +105,13 @@ pub struct StorySystem {
     page: usize,
     started: bool,
     in_choice: bool,
+    // Raised story flags; cleared on start, mutated by page and menu ops.
+    flags: HashSet<String>,
+    // Where the auto-save lives (the project data directory).
+    save_dir: PathBuf,
+    // The open menu's option indices into the node's choices (conditions
+    // filter gated options out); button i picks menu[i].
+    menu: Vec<usize>,
     typewriter: Typewriter,
     last_step: Option<Instant>,
     // The active view as announced by UiInputSystem; stage input (advance,
@@ -98,6 +141,9 @@ impl StorySystem {
             page: 0,
             started: false,
             in_choice: false,
+            flags: HashSet::new(),
+            save_dir: concinnity_core::paths::data_dir(),
+            menu: Vec::new(),
             typewriter: Typewriter::default(),
             last_step: None,
             active_view: None,
@@ -108,6 +154,7 @@ impl StorySystem {
 
     fn start(&mut self, ctx: &mut PipelineContext) {
         self.started = true;
+        self.flags.clear();
         self.exit_choice_ui(ctx);
         let view = self.ids.as_ref().expect("resolved at init").view;
         if self.active_view != Some(view) {
@@ -117,26 +164,138 @@ impl StorySystem {
         self.enter_node(0, ctx);
     }
 
+    // Resume from the saved position; a missing, stale, or unreadable save
+    // starts fresh.
+    fn continue_story(&mut self, ctx: &mut PipelineContext) {
+        let save = if self.story.save_key.is_empty() {
+            None
+        } else {
+            read_save(&self.save_dir, &self.story.save_key)
+        };
+        let Some(save) = save else {
+            self.start(ctx);
+            return;
+        };
+        let Some(node) = self.story.nodes.iter().position(|n| n.slug == save.slug) else {
+            self.start(ctx);
+            return;
+        };
+        if self.story.nodes[node].pages.is_empty() {
+            self.start(ctx);
+            return;
+        }
+        self.started = true;
+        self.flags = save.flags.into_iter().collect();
+        self.exit_choice_ui(ctx);
+        let view = self.ids.as_ref().expect("resolved at init").view;
+        if self.active_view != Some(view) {
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(view));
+        }
+        self.node = node;
+        self.page = (save.page as usize).min(self.story.nodes[node].pages.len() - 1);
+        self.apply_page(ctx);
+    }
+
+    // Auto-save the current position and flags; the title screen's Continue
+    // lights up once one exists.
+    fn persist_position(&mut self, ctx: &mut PipelineContext) {
+        if self.story.save_key.is_empty() {
+            return;
+        }
+        let mut flags: Vec<String> = self.flags.iter().cloned().collect();
+        flags.sort();
+        let save = StorySave {
+            slug: self.story.nodes[self.node].slug.clone(),
+            page: self.page as u32,
+            flags,
+        };
+        if let Err(e) = write_save(&self.save_dir, &self.story.save_key, &save) {
+            tracing::warn!("StorySystem: save failed: {e}");
+            return;
+        }
+        let continue_label = self.ids.as_ref().and_then(|i| i.continue_label);
+        set_label(ctx, continue_label, |l| l.content = "Continue".to_string());
+    }
+
+    // A finished story starts fresh next time: drop the save and dim
+    // Continue.
+    fn clear_save(&mut self, ctx: &mut PipelineContext) {
+        if self.story.save_key.is_empty() {
+            return;
+        }
+        let _ = std::fs::remove_file(save_file(&self.save_dir, &self.story.save_key));
+        let continue_label = self.ids.as_ref().and_then(|i| i.continue_label);
+        set_label(ctx, continue_label, |l| l.content.clear());
+    }
+
+    fn flag_passes(&self, flag: &str, negate: bool) -> bool {
+        self.flags.contains(flag) != negate
+    }
+
+    // The first gate whose condition passes, if any: its target node.
+    fn passing_gate(&self, gates: &[StoryGate]) -> Option<usize> {
+        gates
+            .iter()
+            .find(|g| self.flag_passes(&g.flag, g.negate))
+            .map(|g| g.target as usize)
+    }
+
+    // The node's choice indices whose conditions pass right now.
+    fn visible_choices(&self, node: usize) -> Vec<usize> {
+        self.story.nodes[node]
+            .choices
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                c.condition
+                    .as_ref()
+                    .is_none_or(|cond| self.flag_passes(&cond.flag, cond.negate))
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     // Move play to a node: its first page, or straight to its choice menu
     // when it has no pages. A node with neither falls through in document
-    // order; running past the last node ends the story.
+    // order; running past the last node ends the story. Gates on the arrived
+    // page (or menu) redirect first; the hop budget stops a gate cycle from
+    // spinning forever.
     fn enter_node(&mut self, index: usize, ctx: &mut PipelineContext) {
         let mut index = index;
+        let mut hops = 0;
         loop {
+            hops += 1;
+            if hops > 64 {
+                tracing::warn!("StorySystem: story gates form a loop; stopping");
+                return;
+            }
             let Some(node) = self.story.nodes.get(index) else {
                 self.show_ending(ctx);
                 return;
             };
             if !node.pages.is_empty() {
+                if let Some(target) = self.passing_gate(&node.pages[0].gates) {
+                    index = target;
+                    continue;
+                }
                 self.node = index;
                 self.page = 0;
                 self.apply_page(ctx);
                 return;
             }
             if !node.choices.is_empty() {
-                self.node = index;
-                self.enter_choice(ctx);
-                return;
+                if let Some(target) = self.passing_gate(&node.choice_gates) {
+                    index = target;
+                    continue;
+                }
+                if !self.visible_choices(index).is_empty() {
+                    self.node = index;
+                    self.enter_choice(ctx);
+                    return;
+                }
+                // Every option is gated off: fall through like a menu-less
+                // node.
             }
             index += 1;
         }
@@ -160,12 +319,22 @@ impl StorySystem {
         let jump = node.pages[self.page].jump;
         let more_pages = self.page + 1 < node.pages.len();
         let has_choices = !node.choices.is_empty();
+        // Gates on whatever comes next redirect before it shows.
+        let next_redirect = if jump.is_none() && more_pages {
+            self.passing_gate(&node.pages[self.page + 1].gates)
+        } else if jump.is_none() && has_choices {
+            self.passing_gate(&node.choice_gates)
+        } else {
+            None
+        };
         if let Some(jump) = jump {
             self.enter_node(jump as usize, ctx);
+        } else if let Some(target) = next_redirect {
+            self.enter_node(target, ctx);
         } else if more_pages {
             self.page += 1;
             self.apply_page(ctx);
-        } else if has_choices {
+        } else if has_choices && !self.visible_choices(self.node).is_empty() {
             self.enter_choice(ctx);
         } else {
             self.enter_node(self.node + 1, ctx);
@@ -179,7 +348,11 @@ impl StorySystem {
         if !self.started || !self.in_choice || self.active_view != Some(view) {
             return;
         }
-        let Some(choice) = self.story.nodes[self.node].choices.get(option) else {
+        let Some(choice) = self
+            .menu
+            .get(option)
+            .and_then(|&i| self.story.nodes[self.node].choices.get(i))
+        else {
             return;
         };
         let target = choice.target as usize;
@@ -195,6 +368,13 @@ impl StorySystem {
             (ids.name, ids.text)
         };
         let page = self.story.nodes[self.node].pages[self.page].clone();
+        for op in &page.ops {
+            if op.clear {
+                self.flags.remove(&op.flag);
+            } else {
+                self.flags.insert(op.flag.clone());
+            }
+        }
 
         let (speaker, color) = match &page.speaker {
             Some(s) => (s.name.clone(), s.color),
@@ -225,13 +405,24 @@ impl StorySystem {
         for sound in &page.sounds {
             play(ctx, Some(*sound), CueKind::Sound);
         }
+        self.persist_position(ctx);
     }
 
     // Show the current node's choice menu over its stage dressing; stage
-    // clicks are inert until an option is picked.
+    // clicks are inert until an option is picked. Gated options are left off
+    // the menu, and the button slots fill from the visible options in order.
     fn enter_choice(&mut self, ctx: &mut PipelineContext) {
         self.in_choice = true;
         let node = self.story.nodes[self.node].clone();
+        for op in &node.choice_ops {
+            if op.clear {
+                self.flags.remove(&op.flag);
+            } else {
+                self.flags.insert(op.flag.clone());
+            }
+        }
+        self.menu = self.visible_choices(self.node);
+        let menu = self.menu.clone();
         let ids = self.ids.as_ref().expect("resolved at init");
 
         apply_stage(ctx, ids, &node.choice_stage);
@@ -242,13 +433,16 @@ impl StorySystem {
 
         set_label(ctx, ids.name, |l| l.content.clear());
         set_label(ctx, ids.text, |l| l.content.clear());
-        set_sprite(ctx, ids.dialog_box, |s| s.visible = false);
+        // Hidden stage furniture renders nothing (zero alpha, empty text)
+        // rather than relying on `visible`: view re-activation (a pause
+        // overlay dismissing back to the stage) force-shows every member.
+        set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
         set_sprite(ctx, ids.panel, |s| {
             s.visible = true;
             s.tint = [0.0, 0.0, 0.0, 0.55];
         });
         for (i, label_id) in ids.options.iter().enumerate() {
-            match node.choices.get(i) {
+            match menu.get(i).map(|&c| &node.choices[c]) {
                 Some(choice) => {
                     let text = choice.label.clone();
                     let width = est_text_width(&text);
@@ -258,7 +452,7 @@ impl StorySystem {
                         l.x = CHOICE_BUTTON_X + ((CHOICE_BUTTON_W - width) / 2.0).max(0.0);
                     });
                 }
-                None => set_label(ctx, Some(*label_id), |l| l.visible = false),
+                None => set_label(ctx, Some(*label_id), |l| l.content.clear()),
             }
         }
     }
@@ -267,14 +461,15 @@ impl StorySystem {
     fn exit_choice_ui(&mut self, ctx: &mut PipelineContext) {
         self.in_choice = false;
         let ids = self.ids.as_ref().expect("resolved at init");
-        set_sprite(ctx, ids.dialog_box, |s| s.visible = true);
-        set_sprite(ctx, ids.panel, |s| s.visible = false);
+        set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.55]);
+        set_sprite(ctx, ids.panel, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
         for label_id in &ids.options {
-            set_label(ctx, Some(*label_id), |l| l.visible = false);
+            set_label(ctx, Some(*label_id), |l| l.content.clear());
         }
     }
 
     fn show_ending(&mut self, ctx: &mut PipelineContext) {
+        self.clear_save(ctx);
         let ids = self.ids.as_ref().expect("resolved at init");
         ctx.events_mut::<ViewCommand>()
             .send(ViewCommand::Show(ids.ending_view));
@@ -299,7 +494,7 @@ impl StorySystem {
 }
 
 impl System for StorySystem {
-    fn init(&mut self, _ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext) {
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.
@@ -318,6 +513,17 @@ impl System for StorySystem {
                     text: scaffold.text_label,
                     panel: scaffold.panel,
                     options: scaffold.options.clone(),
+                    continue_label: scaffold.continue_label,
+                });
+                // Continue lights up only when a resumable save exists. View
+                // activation force-shows every member label, so presence is
+                // carried by the content (an empty label renders nothing).
+                let has_save = !self.story.save_key.is_empty()
+                    && read_save(&self.save_dir, &self.story.save_key).is_some();
+                set_label(ctx, scaffold.continue_label, |l| {
+                    if !has_save {
+                        l.content.clear();
+                    }
                 });
             }
             _ => {
@@ -378,6 +584,7 @@ impl System for StorySystem {
             let was_in_choice = self.in_choice;
             match command {
                 StoryCommand::Start => self.start(ctx),
+                StoryCommand::Continue => self.continue_story(ctx),
                 StoryCommand::Advance if !mode_flipped => self.advance(ctx),
                 StoryCommand::Choose(i) if !mode_flipped => self.choose(i, ctx),
                 StoryCommand::Advance | StoryCommand::Choose(_) => {}
@@ -439,6 +646,7 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
                 (image.texture, image.x, image.y, image.width, image.height);
             set_sprite(ctx, slot, |s| {
                 s.visible = true;
+                s.tint = [1.0, 1.0, 1.0, 1.0];
                 s.texture = Some(texture);
                 s.x = x;
                 s.y = y;
@@ -446,7 +654,9 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
                 s.height = h;
             });
         }
-        None => set_sprite(ctx, slot, |s| s.visible = false),
+        // An empty slot goes fully transparent rather than invisible: view
+        // re-activation force-shows member sprites.
+        None => set_sprite(ctx, slot, |s| s.tint = [1.0, 1.0, 1.0, 0.0]),
     }
 }
 
@@ -508,6 +718,7 @@ mod tests {
             text_label: Some(intern("s_stage_text")),
             panel: Some(intern("s_stage_panel")),
             options: vec![intern("s_stage_opt0_lbl")],
+            continue_label: None,
         }
     }
 
@@ -634,6 +845,7 @@ mod tests {
                     choices: vec![StoryChoice {
                         label: "Go".to_string(),
                         target: 1,
+                        condition: None,
                     }],
                     ..Default::default()
                 },
@@ -684,13 +896,14 @@ mod tests {
             .send(StoryCommand::Choose(0));
         world.step();
         assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
-        assert!(
-            !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == panel)
-                .unwrap()
-                .visible
-        );
+        // Hidden furniture goes transparent (view re-activation force-shows
+        // members, so `visible` cannot carry menu state).
+        let alpha = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == panel)
+            .unwrap()
+            .tint[3];
+        assert_eq!(alpha, 0.0);
     }
 
     // Page stage dressing applies to the stage sprites: the backdrop samples
@@ -741,7 +954,7 @@ mod tests {
             .query::<Sprite>()
             .find(|s| s.asset_id == center)
             .unwrap();
-        assert!(!sprite.visible);
+        assert_eq!(sprite.tint[3], 0.0);
         let sprite = world.query::<Sprite>().find(|s| s.asset_id == bg).unwrap();
         assert_eq!(sprite.texture, None);
     }
@@ -799,6 +1012,198 @@ mod tests {
             .send(StoryCommand::Advance);
         world.step();
         assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+    }
+
+    // Page ops raise flags and a gate on the next page redirects play past
+    // it while the flag is set.
+    #[test]
+    fn ops_raise_flags_and_gates_redirect() {
+        use crate::assets::{StoryGate, StoryOp};
+        let story = Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![
+                        StoryPage {
+                            ops: vec![StoryOp {
+                                flag: "asked".to_string(),
+                                clear: false,
+                            }],
+                            ..page("Intro.")
+                        },
+                        StoryPage {
+                            gates: vec![StoryGate {
+                                flag: "asked".to_string(),
+                                negate: false,
+                                target: 1,
+                            }],
+                            ..page("Skipped.")
+                        },
+                    ],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "b".to_string(),
+                    pages: vec![page("Landed.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(story);
+        world.start().unwrap();
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Intro.");
+        // The intro's op set `asked`; the second page's gate fires instead
+        // of showing it.
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
+    }
+
+    // A gated option stays off the menu; the button slots fill from the
+    // visible options, and picking maps back to the right target.
+    #[test]
+    fn gated_choices_filter_and_remap() {
+        use crate::assets::StoryCondition;
+        let story = Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![page("Pick.")],
+                    choices: vec![
+                        StoryChoice {
+                            label: "Secret".to_string(),
+                            target: 1,
+                            condition: Some(StoryCondition {
+                                flag: "secret".to_string(),
+                                negate: false,
+                            }),
+                        },
+                        StoryChoice {
+                            label: "Plain".to_string(),
+                            target: 2,
+                            condition: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "hidden".to_string(),
+                    pages: vec![page("Never.")],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "plain".to_string(),
+                    pages: vec![page("Plainly.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(story);
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        // The gated option is hidden, so the first button is "Plain".
+        assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Plain");
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Choose(0));
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Plainly.");
+    }
+
+    // A menu whose gate passes redirects play instead of opening.
+    #[test]
+    fn menu_gates_redirect_past_the_menu() {
+        use crate::assets::{StoryGate, StoryOp};
+        let story = Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![StoryPage {
+                        ops: vec![StoryOp {
+                            flag: "skip".to_string(),
+                            clear: false,
+                        }],
+                        ..page("Once.")
+                    }],
+                    choices: vec![StoryChoice {
+                        label: "Never shown".to_string(),
+                        target: 0,
+                        condition: None,
+                    }],
+                    choice_gates: vec![StoryGate {
+                        flag: "skip".to_string(),
+                        negate: false,
+                        target: 1,
+                    }],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "b".to_string(),
+                    pages: vec![page("Landed.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(story);
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
+        // The menu never opened: its first button was never filled.
+        assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "");
+    }
+
+    // The save file round-trips position and flags; a missing file reads as
+    // None and an unreadable one starts fresh.
+    #[test]
+    fn story_save_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_save(dir.path(), "q").is_none());
+        let save = StorySave {
+            slug: "meadow".to_string(),
+            page: 2,
+            flags: vec!["asked".to_string(), "brave".to_string()],
+        };
+        write_save(dir.path(), "q", &save).unwrap();
+        let back = read_save(dir.path(), "q").expect("save exists");
+        assert_eq!(back.slug, "meadow");
+        assert_eq!(back.page, 2);
+        assert_eq!(back.flags, ["asked", "brave"]);
+        // Corruption falls back to a fresh start rather than a panic.
+        std::fs::write(save_file(dir.path(), "q"), b"not cbor").unwrap();
+        assert!(read_save(dir.path(), "q").is_none());
+    }
+
+    // Continue without any save behaves exactly like Start.
+    #[test]
+    fn continue_without_a_save_starts_fresh() {
+        let mut world = story_world(two_page_story());
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Continue);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "First page.");
     }
 
     // A jump page overrides the next-page order.

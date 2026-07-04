@@ -19,3 +19,4 @@ story system mutates page by page.
 - `text_label`: A string. Dialog text [TextLabel](TextLabel.md). Optional.
 - `panel`: A string. Choice menu panel [Sprite](Sprite.md). `None` when the story has no choice menus. Optional.
 - `options`: An array of strings. Choice button [TextLabel](TextLabel.md)s, one per option slot.
+- `continue_label`: A string. The title screen's Continue [TextLabel](TextLabel.md), hidden while no save exists. Optional.

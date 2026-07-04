@@ -38,6 +38,10 @@ pub struct Story {
     /// The generated stage assets the story system drives. All references
     /// are resolved to ids at build time, like every other cross-reference.
     pub scaffold: StoryScaffold,
+    /// Stable key naming this story's save file (position + flags,
+    /// auto-saved page by page under the project data directory). Empty
+    /// disables saving.
+    pub save_key: String,
 }
 
 /// The stage scaffolding a [Story](#story)'s build expansion generated: the
@@ -79,6 +83,10 @@ pub struct StoryScaffold {
     pub panel: Option<AssetId>,
     /// Choice button [TextLabel](#textlabel)s, one per option slot.
     pub options: Vec<AssetId>,
+    /// The title screen's Continue [TextLabel](#textlabel), hidden while no
+    /// save exists.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub continue_label: Option<AssetId>,
 }
 
 /// One jump target in a [Story](#story): a run of pages optionally ending in
@@ -99,6 +107,10 @@ pub struct StoryNode {
     pub choice_music: Option<AssetId>,
     /// One-shots played when the choice menu shows.
     pub choice_sounds: Vec<AssetId>,
+    /// Flag operations run when the choice menu shows.
+    pub choice_ops: Vec<StoryOp>,
+    /// Conditional jumps evaluated before the choice menu shows.
+    pub choice_gates: Vec<StoryGate>,
 }
 
 /// One click-through page of a [StoryNode](#storynode).
@@ -120,6 +132,11 @@ pub struct StoryPage {
     pub sounds: Vec<AssetId>,
     /// Stage dressing current at this page.
     pub stage: StoryStage,
+    /// Flag operations run when the page shows.
+    pub ops: Vec<StoryOp>,
+    /// Conditional jumps evaluated before the page shows: the first gate
+    /// whose condition passes redirects play to its target node instead.
+    pub gates: Vec<StoryGate>,
 }
 
 /// A resolved speaker attribution on a [StoryPage](#storypage).
@@ -172,6 +189,42 @@ pub struct StoryChoice {
     pub label: String,
     /// Node index chosen; play continues at that node's first page.
     pub target: u32,
+    /// Condition gating the option: shown only while it passes. `None` is
+    /// always shown.
+    pub condition: Option<StoryCondition>,
+}
+
+/// One flag operation in a [Story](#story)'s script: raise or clear a named
+/// boolean flag. Flags start cleared and live for one playthrough.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StoryOp {
+    /// The flag name.
+    pub flag: String,
+    /// `false` sets the flag; `true` clears it.
+    pub clear: bool,
+}
+
+/// One conditional jump in a [Story](#story)'s script.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StoryGate {
+    /// The flag the condition tests.
+    pub flag: String,
+    /// `false` passes while the flag is set; `true` while it is cleared.
+    pub negate: bool,
+    /// Node index play jumps to when the condition passes.
+    pub target: u32,
+}
+
+/// A flag condition on a [StoryChoice](#storychoice).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StoryCondition {
+    /// The flag the condition tests.
+    pub flag: String,
+    /// `false` passes while the flag is set; `true` while it is cleared.
+    pub negate: bool,
 }
 
 impl Default for Story {
@@ -182,6 +235,7 @@ impl Default for Story {
             nodes: Vec::new(),
             text_speed: 45.0,
             scaffold: StoryScaffold::default(),
+            save_key: String::new(),
         }
     }
 }
