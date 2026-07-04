@@ -56,21 +56,9 @@ fn scaffold() -> StoryScaffold {
     }
 }
 
-// A world with the stage scaffolding the build expansion would generate
-// for a story named "s", plus the compiled graph itself.
-fn story_world(story: Story) -> World {
-    let mut world = World::new_empty();
-    let mut story = story;
-    story.asset_id = intern("s");
-    story.scaffold = scaffold();
-    world.add_component(story);
-    for view in ["s_stage", "s_ending"] {
-        world.add_component(View {
-            asset_id: intern(view),
-            initial: view == "s_stage",
-            fade_in_secs: 0.0,
-        });
-    }
+// Add the stage sprites and labels the scaffold references, all on the
+// stage view, so `StageIds::from_scaffold` resolves for any story world.
+fn add_stage_furniture(world: &mut World) {
     for sprite in [
         "s_stage_bg",
         "s_stage_left",
@@ -104,6 +92,67 @@ fn story_world(story: Story) -> World {
             ..label_named(label)
         });
     }
+}
+
+// A world with the stage scaffolding the build expansion would generate
+// for a story named "s", plus the compiled graph itself.
+fn story_world(story: Story) -> World {
+    let mut world = World::new_empty();
+    let mut story = story;
+    story.asset_id = intern("s");
+    story.scaffold = scaffold();
+    world.add_component(story);
+    for view in ["s_stage", "s_ending"] {
+        world.add_component(View {
+            asset_id: intern(view),
+            initial: view == "s_stage",
+            fade_in_secs: 0.0,
+        });
+    }
+    add_stage_furniture(&mut world);
+    world
+}
+
+// A world whose initial view is the generated title menu. The four menu
+// button labels start at distinct emitted positions; the story lays them out
+// (contiguous, centered, only the applicable buttons) from the save state on
+// the first `ViewShown`. Mirrors the title-screen scaffold the build produces.
+fn title_menu_world(story: Story) -> World {
+    let mut world = World::new_empty();
+    let mut story = story;
+    story.asset_id = intern("s");
+    let mut sc = scaffold();
+    sc.title = Some(intern("s_title"));
+    sc.start_label = Some(intern("s_title_start_lbl"));
+    sc.continue_label = Some(intern("s_title_continue_lbl"));
+    sc.load_label = Some(intern("s_title_load_lbl"));
+    sc.quit_label = Some(intern("s_title_quit_lbl"));
+    story.scaffold = sc;
+    world.add_component(story);
+    // The title menu is the initial screen; the stage and ending are inactive.
+    for (view, initial) in [("s_title", true), ("s_stage", false), ("s_ending", false)] {
+        world.add_component(View {
+            asset_id: intern(view),
+            initial,
+            fade_in_secs: 0.0,
+        });
+    }
+    add_stage_furniture(&mut world);
+    // The four title buttons at distinct emitted y's (any values that differ
+    // from the runtime stack positions, so a relayout is observable).
+    for (name, y, text) in [
+        ("s_title_start_lbl", 100.0, "Start"),
+        ("s_title_continue_lbl", 200.0, "Continue"),
+        ("s_title_load_lbl", 300.0, "Load"),
+        ("s_title_quit_lbl", 400.0, "Quit"),
+    ] {
+        world.add_component(TextLabel {
+            view: Some(intern("s_title")),
+            content: text.to_string(),
+            y,
+            ..label_named(name)
+        });
+    }
     world
 }
 
@@ -113,6 +162,15 @@ fn label_content(world: &World, name: &str) -> String {
         .query::<TextLabel>()
         .find(|l| l.asset_id == id)
         .map(|l| l.content.clone())
+        .unwrap_or_default()
+}
+
+fn label_y(world: &World, name: &str) -> f32 {
+    let id = intern(name);
+    world
+        .query::<TextLabel>()
+        .find(|l| l.asset_id == id)
+        .map(|l| l.y)
         .unwrap_or_default()
 }
 
@@ -965,4 +1023,49 @@ fn choice_survives_a_spurious_slot_click() {
         .send(StoryCommand::Slot(1));
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
+}
+
+// Each menu button's follow-label hit region captures its fixed offset to its
+// label in `UiInputSystem::init`, which runs after `StorySystem::init`. So the
+// story must NOT lay the title menu out during its own init: moving the labels
+// then would slide them out from under that capture, pinning every hit region
+// at its emitted position instead of tracking the runtime layout (the cursor
+// would then hit each button in the wrong place). Guard both halves: init
+// leaves the emitted label positions untouched, and the first title
+// `ViewShown` (announced during that same init) lays out only the applicable
+// buttons.
+#[test]
+fn title_menu_lays_out_on_first_shown_not_at_init() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "titletest".to_string();
+    let mut world = title_menu_world(story);
+    world.start().unwrap();
+
+    // After init the emitted positions are untouched: had init laid the menu
+    // out, the follow-region offsets would already be baked in wrong.
+    assert_eq!(label_y(&world, "s_title_start_lbl"), 100.0);
+    assert_eq!(label_y(&world, "s_title_quit_lbl"), 400.0);
+
+    // Point saves at an empty directory so the layout is the two-button case.
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.save_dir = dir.path().to_path_buf();
+        }
+    }
+
+    // The first step consumes the initial title `ViewShown` and lays the menu
+    // out: with no save data, only Start and Quit, stacked contiguously and
+    // centered (no gap where Continue and Load would sit).
+    world.step();
+    let start = label_y(&world, "s_title_start_lbl");
+    let quit = label_y(&world, "s_title_quit_lbl");
+    assert_eq!(start, TITLE_MENU_CENTER_Y - TITLE_MENU_SPACING / 2.0);
+    assert_eq!(quit, TITLE_MENU_CENTER_Y + TITLE_MENU_SPACING / 2.0);
+    assert_eq!(quit - start, TITLE_MENU_SPACING);
+    assert_eq!(label_content(&world, "s_title_start_lbl"), "Start");
+    assert_eq!(label_content(&world, "s_title_quit_lbl"), "Quit");
+    // The absent buttons are emptied so their follow-regions go inert.
+    assert_eq!(label_content(&world, "s_title_continue_lbl"), "");
+    assert_eq!(label_content(&world, "s_title_load_lbl"), "");
 }

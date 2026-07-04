@@ -288,19 +288,23 @@ impl StorySystem {
 }
 
 impl System for StorySystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, _ctx: &mut PipelineContext) {
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.
         match StageIds::from_scaffold(&self.story.scaffold) {
             Some(ids) => {
                 self.ids = Some(ids);
-                // Lay the title menu out from the save state on disk: only the
-                // applicable buttons show, contiguous (view activation
-                // force-shows every member label, so presence is carried by the
-                // content -- an empty label renders nothing, and its
-                // follow-region goes inert).
-                self.layout_title_menu(ctx);
+                // The title menu is laid out on the first `ViewShown` (in
+                // `step`), not here. Each menu button's hit region captures its
+                // fixed vertical offset to its label in `UiInputSystem::init`,
+                // which runs after this one. Relaying the labels now would move
+                // them out from under that capture, so every region would bake
+                // in the wrong offset and stick at its emitted position instead
+                // of tracking the runtime layout. Leaving the emitted positions
+                // untouched lets the capture read the authored region-to-label
+                // gap; the first title `ViewShown` (announced by that same init)
+                // then drives the real layout before the first frame renders.
             }
             None => {
                 tracing::warn!(
