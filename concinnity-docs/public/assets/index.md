@@ -72,6 +72,7 @@
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
+- [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [IndirectLighting](IndirectLighting.md) - Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`. `Ibl` is the image-based-lighting-only ambient term the renderer has always used; `Ssgi` layers a screen-space global-illumination bounce on top.
@@ -90,11 +91,11 @@
 - [SpriteFit](SpriteFit.md) - How a view-owned [Sprite](Sprite.md) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
-- [StoryCondition](StoryCondition.md) - A flag condition on a [StoryChoice](StoryChoice.md).
+- [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
 - [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.
 - [StoryImage](StoryImage.md) - One placed stage image: which [Texture](Texture.md) to sample and where it sits on the reference canvas.
 - [StoryNode](StoryNode.md) - One jump target in a [Story](Story.md): a run of pages optionally ending in a choice menu.
-- [StoryOp](StoryOp.md) - One flag operation in a [Story](Story.md)'s script: raise or clear a named boolean flag. Flags start cleared and live for one playthrough.
+- [StoryOp](StoryOp.md) - One variable operation in a [Story](Story.md)'s script. All story state is named integer variables, starting at `0` each playthrough: a plain flag is a variable set to `1` and cleared to `0`.
 - [StoryPage](StoryPage.md) - One click-through page of a [StoryNode](StoryNode.md).
 - [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [View](View.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
 - [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).

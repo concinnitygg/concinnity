@@ -15,4 +15,16 @@ pub enum StoryCommand {
     Advance,
     // Pick the current choice menu's option by index.
     Choose(usize),
+    // Toggle auto-advance (pages turn on their own once revealed).
+    ToggleAuto,
+    // Toggle fast-forward (instant reveal, rapid page turns; stops at menus).
+    ToggleSkip,
+    // Toggle the dialogue-history overlay.
+    ToggleLog,
+    // Open the slot overlay in save mode.
+    OpenSave,
+    // Open the slot overlay in load mode.
+    OpenLoad,
+    // Pick a slot in the open slot overlay.
+    Slot(usize),
 }

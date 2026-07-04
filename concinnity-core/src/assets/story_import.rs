@@ -37,17 +37,27 @@ use crate::ecs::{AssetOrigin, Component};
 ///   paragraph
 /// - a node whose last page has no link falls through to the next heading
 ///   in document order; the final node ends the story
-/// - a ```` ```story ```` fenced block scripts state: `set <flag>` /
-///   `clear <flag>` run when the next page (or choice menu) shows, and
-///   `if <flag> -> #node` / `if not <flag> -> #node` jump there instead of
-///   showing it. Flags start cleared each playthrough
-/// - a choice link's quoted title gates the option:
-///   `- [Ask her](#ask "if asked")` only appears while `asked` is set
-///   (`"if not <flag>"` for the inverse)
+/// - a ```` ```story ```` fenced block scripts state. All story state is
+///   named integer variables starting at `0` each playthrough (a flag is a
+///   variable holding `1`): `set <var>` assigns 1, `clear <var>` assigns 0,
+///   `set <var> = <int>` assigns, and `add <var> <int>` adds (negatives
+///   subtract). Operations run when the next page (or choice menu) shows.
+///   `if <condition> -> #node` jumps there instead of showing it, where a
+///   condition is `<var>` (not zero), `not <var>` (zero), or a comparison
+///   `<var> <op> <int>` with `<op>` one of `==` `!=` `<` `<=` `>` `>=`
+/// - a choice link's quoted title gates the option with the same condition
+///   grammar: `- [Ask her](#ask "if asked")`, `- [Buy](#shop "if gold >= 3")`
 ///
-/// Play position and flags auto-save page by page (under the project's
+/// The stage's dialog box carries a quick row of reader controls: Log (a
+/// dialogue-history overlay), Auto (pages turn on their own once revealed),
+/// Skip (instant reveal and rapid turns, stopping at menus), and Save
+/// (numbered save slots). A pulsing marker shows when a fully revealed page
+/// waits for a click.
+///
+/// Play position and variables auto-save page by page (under the project's
 /// `.concinnity/data/`); the generated title screen's Continue resumes
-/// them, and finishing the story clears the save.
+/// them, and finishing the story clears the auto-save. Save writes one of
+/// three numbered slots, resumed from the title screen's Load.
 ///
 /// Under the editor's debug run, saving the `source` file hot-reloads the
 /// story: the graph re-compiles and swaps into the running game in place,

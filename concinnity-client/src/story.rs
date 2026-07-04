@@ -8,13 +8,13 @@
 // and portrait sprite textures, shows the choice menu when a node ends in
 // one, and asks the audio system to play page music and one-shots.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryReload,
-    StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
+    CmpOp, CueKind, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage, StoryOp,
+    StoryReload, StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -29,6 +29,21 @@ const CHOICE_BUTTON_W: f32 = 720.0;
 // slot re-tints its box to this; hiding is alpha zero, never `visible` (view
 // re-activation force-shows every member).
 const CHOICE_BOX_TINT: [f32; 4] = [0.16, 0.20, 0.35, 0.92];
+// Quick-row toggle colors: an engaged mode reads gold, the rest gray.
+const QUICK_ACTIVE: [f32; 3] = [1.0, 0.85, 0.3];
+const QUICK_IDLE: [f32; 3] = [0.75, 0.75, 0.75];
+// Shown alpha of the overlay dim behind the backlog and slot rows.
+const OVERLAY_DIM_ALPHA: f32 = 0.85;
+// Auto mode turns a fully revealed page after a base pause plus reading
+// time per character; skip mode turns instantly revealed pages at a fixed
+// rapid cadence.
+const AUTO_BASE_SECS: f32 = 0.8;
+const AUTO_PER_CHAR_SECS: f32 = 0.035;
+const SKIP_PAGE_SECS: f32 = 0.15;
+// Dialogue-history entries kept for the backlog overlay, and the most
+// history lines its label shows at once.
+const BACKLOG_ENTRIES: usize = 100;
+const BACKLOG_LINES: usize = 20;
 
 // The generated stage assets this system mutates, taken from the story's
 // build-resolved scaffold references. An unset optional slot (e.g. a story
@@ -52,6 +67,24 @@ struct StageIds {
     options: Vec<AssetId>,
     // The title screen's Continue label, hidden while no save exists.
     continue_label: Option<AssetId>,
+    // The title screen view (returned to when a load overlay opened from the
+    // title is dismissed) and its Load label, hidden while no slot exists.
+    title_view: Option<AssetId>,
+    load_label: Option<AssetId>,
+    // The pulsing waiting-for-input marker.
+    marker: Option<AssetId>,
+    // Quick-row control labels (Log / Auto / Skip / Save).
+    log_label: Option<AssetId>,
+    auto_label: Option<AssetId>,
+    skip_label: Option<AssetId>,
+    save_label: Option<AssetId>,
+    // Overlay furniture: the shared dim, the backlog history text, and the
+    // slot rows.
+    overlay_dim: Option<AssetId>,
+    backlog_label: Option<AssetId>,
+    slot_title: Option<AssetId>,
+    slot_boxes: Vec<AssetId>,
+    slot_labels: Vec<AssetId>,
 }
 
 impl StageIds {
@@ -71,26 +104,44 @@ impl StageIds {
             option_boxes: scaffold.option_boxes.clone(),
             options: scaffold.options.clone(),
             continue_label: scaffold.continue_label,
+            title_view: scaffold.title,
+            load_label: scaffold.load_label,
+            marker: scaffold.advance_marker,
+            log_label: scaffold.log_label,
+            auto_label: scaffold.auto_label,
+            skip_label: scaffold.skip_label,
+            save_label: scaffold.save_label,
+            overlay_dim: scaffold.overlay_dim,
+            backlog_label: scaffold.backlog_label,
+            slot_title: scaffold.slot_title,
+            slot_boxes: scaffold.slot_boxes.clone(),
+            slot_labels: scaffold.slot_labels.clone(),
         })
     }
 }
 
-// A story's persisted position and raised flags, auto-written page by page
-// and resumed by `story:continue`. Position is kept by node slug (stable
-// across story edits, unlike an index).
+// A story's persisted position and variables, auto-written page by page
+// (resumed by `story:continue`) and written to numbered slots by the slot
+// overlay. Position is kept by node slug (stable across story edits, unlike
+// an index).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StorySave {
     slug: String,
     page: u32,
-    flags: Vec<String>,
+    #[serde(default)]
+    vars: BTreeMap<String, i32>,
 }
 
 fn save_file(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("story_{}.bin", key))
 }
 
-fn read_save(dir: &Path, key: &str) -> Option<StorySave> {
-    let bytes = std::fs::read(save_file(dir, key)).ok()?;
+fn slot_file(dir: &Path, key: &str, slot: usize) -> PathBuf {
+    dir.join(format!("story_{}_slot{}.bin", key, slot))
+}
+
+fn read_save(path: &Path) -> Option<StorySave> {
+    let bytes = std::fs::read(path).ok()?;
     match ciborium::from_reader(&bytes[..]) {
         Ok(save) => Some(save),
         Err(e) => {
@@ -100,11 +151,13 @@ fn read_save(dir: &Path, key: &str) -> Option<StorySave> {
     }
 }
 
-fn write_save(dir: &Path, key: &str, save: &StorySave) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+fn write_save(path: &Path, save: &StorySave) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let mut bytes = Vec::new();
     ciborium::into_writer(save, &mut bytes).map_err(std::io::Error::other)?;
-    std::fs::write(save_file(dir, key), bytes)
+    std::fs::write(path, bytes)
 }
 
 // Dialogue reveal state for the current page.
@@ -124,6 +177,17 @@ impl Typewriter {
     }
 }
 
+// A modal overlay drawn over the stage: the dialogue backlog or the save /
+// load slot rows. Stage input is inert while one is up; any advance click
+// dismisses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlay {
+    None,
+    Backlog,
+    SaveMenu,
+    LoadMenu,
+}
+
 pub struct StorySystem {
     story: Story,
     ids: Option<StageIds>,
@@ -132,15 +196,29 @@ pub struct StorySystem {
     page: usize,
     started: bool,
     in_choice: bool,
-    // Raised story flags; cleared on start, mutated by page and menu ops.
-    flags: HashSet<String>,
-    // Where the auto-save lives (the project data directory).
+    // Story variables (a flag is a variable holding 1); reset on start,
+    // mutated by page and menu ops. An unset variable reads as 0.
+    vars: HashMap<String, i32>,
+    // Where the saves live (the project data directory).
     save_dir: PathBuf,
     // The open menu's option indices into the node's choices (conditions
     // filter gated options out); button i picks menu[i].
     menu: Vec<usize>,
     typewriter: Typewriter,
     last_step: Option<Instant>,
+    // Wall-clock seconds since construction, driving the marker pulse.
+    elapsed: f32,
+    // Reader-assist modes: auto turns fully revealed pages after a reading
+    // pause; skip reveals instantly and turns pages rapidly until a menu.
+    auto: bool,
+    skip: bool,
+    // Seconds since the current page finished revealing (auto) or turned
+    // (skip).
+    mode_timer: f32,
+    overlay: Overlay,
+    // Recent dialogue for the backlog overlay, one pre-wrapped entry per
+    // page shown.
+    history: Vec<String>,
     // The active view as announced by UiInputSystem; stage input (advance,
     // choose) is ignored while a menu or the title screen is up.
     active_view: Option<AssetId>,
@@ -169,11 +247,17 @@ impl StorySystem {
             page: 0,
             started: false,
             in_choice: false,
-            flags: HashSet::new(),
+            vars: HashMap::new(),
             save_dir: concinnity_core::paths::data_dir(),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             last_step: None,
+            elapsed: 0.0,
+            auto: false,
+            skip: false,
+            mode_timer: 0.0,
+            overlay: Overlay::None,
+            history: Vec::new(),
             active_view: None,
             command_cursor: crate::ecs::EventCursor::default(),
             view_shown_cursor: crate::ecs::EventCursor::default(),
@@ -183,7 +267,11 @@ impl StorySystem {
 
     fn start(&mut self, ctx: &mut PipelineContext) {
         self.started = true;
-        self.flags.clear();
+        self.vars.clear();
+        self.history.clear();
+        self.auto = false;
+        self.skip = false;
+        self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
         let view = self.ids.as_ref().expect("resolved at init").view;
         if self.active_view != Some(view) {
@@ -193,18 +281,23 @@ impl StorySystem {
         self.enter_node(0, ctx);
     }
 
-    // Resume from the saved position; a missing, stale, or unreadable save
-    // starts fresh.
+    // Resume from the auto-saved position; a missing, stale, or unreadable
+    // save starts fresh.
     fn continue_story(&mut self, ctx: &mut PipelineContext) {
         let save = if self.story.save_key.is_empty() {
             None
         } else {
-            read_save(&self.save_dir, &self.story.save_key)
+            read_save(&save_file(&self.save_dir, &self.story.save_key))
         };
-        let Some(save) = save else {
-            self.start(ctx);
-            return;
-        };
+        match save {
+            Some(save) => self.resume_from(save, ctx),
+            None => self.start(ctx),
+        }
+    }
+
+    // Put play at a saved position; an unknown slug or an empty node starts
+    // fresh instead.
+    fn resume_from(&mut self, save: StorySave, ctx: &mut PipelineContext) {
         let Some(node) = self.story.nodes.iter().position(|n| n.slug == save.slug) else {
             self.start(ctx);
             return;
@@ -214,7 +307,9 @@ impl StorySystem {
             return;
         }
         self.started = true;
-        self.flags = save.flags.into_iter().collect();
+        self.vars = save.vars.into_iter().collect();
+        self.history.clear();
+        self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
         let view = self.ids.as_ref().expect("resolved at init").view;
         if self.active_view != Some(view) {
@@ -226,20 +321,23 @@ impl StorySystem {
         self.apply_page(ctx);
     }
 
-    // Auto-save the current position and flags; the title screen's Continue
-    // lights up once one exists.
+    // The current position and variables as a save record.
+    fn current_save(&self) -> StorySave {
+        StorySave {
+            slug: self.story.nodes[self.node].slug.clone(),
+            page: self.page as u32,
+            vars: self.vars.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        }
+    }
+
+    // Auto-save the current position and variables; the title screen's
+    // Continue lights up once one exists.
     fn persist_position(&mut self, ctx: &mut PipelineContext) {
         if self.story.save_key.is_empty() {
             return;
         }
-        let mut flags: Vec<String> = self.flags.iter().cloned().collect();
-        flags.sort();
-        let save = StorySave {
-            slug: self.story.nodes[self.node].slug.clone(),
-            page: self.page as u32,
-            flags,
-        };
-        if let Err(e) = write_save(&self.save_dir, &self.story.save_key, &save) {
+        let save = self.current_save();
+        if let Err(e) = write_save(&save_file(&self.save_dir, &self.story.save_key), &save) {
             tracing::warn!("StorySystem: save failed: {e}");
             return;
         }
@@ -247,8 +345,8 @@ impl StorySystem {
         set_label(ctx, continue_label, |l| l.content = "Continue".to_string());
     }
 
-    // A finished story starts fresh next time: drop the save and dim
-    // Continue.
+    // A finished story starts fresh next time: drop the auto-save and dim
+    // Continue. Slot saves stay.
     fn clear_save(&mut self, ctx: &mut PipelineContext) {
         if self.story.save_key.is_empty() {
             return;
@@ -258,15 +356,34 @@ impl StorySystem {
         set_label(ctx, continue_label, |l| l.content.clear());
     }
 
-    fn flag_passes(&self, flag: &str, negate: bool) -> bool {
-        self.flags.contains(flag) != negate
+    // Whether any manual slot save exists (the title's Load lights up).
+    fn any_slot_save(&self) -> bool {
+        !self.story.save_key.is_empty()
+            && (0..self.ids.as_ref().map_or(0, |i| i.slot_boxes.len()))
+                .any(|i| slot_file(&self.save_dir, &self.story.save_key, i).exists())
+    }
+
+    // Apply a run of variable operations.
+    fn apply_ops(&mut self, ops: &[StoryOp]) {
+        for op in ops {
+            let slot = self.vars.entry(op.name.clone()).or_insert(0);
+            if op.add {
+                *slot = slot.saturating_add(op.value);
+            } else {
+                *slot = op.value;
+            }
+        }
+    }
+
+    fn cond_passes(&self, name: &str, op: CmpOp, value: i32) -> bool {
+        op.eval(self.vars.get(name).copied().unwrap_or(0), value)
     }
 
     // The first gate whose condition passes, if any: its target node.
     fn passing_gate(&self, gates: &[StoryGate]) -> Option<usize> {
         gates
             .iter()
-            .find(|g| self.flag_passes(&g.flag, g.negate))
+            .find(|g| self.cond_passes(&g.name, g.op, g.value))
             .map(|g| g.target as usize)
     }
 
@@ -279,7 +396,7 @@ impl StorySystem {
             .filter(|(_, c)| {
                 c.condition
                     .as_ref()
-                    .is_none_or(|cond| self.flag_passes(&cond.flag, cond.negate))
+                    .is_none_or(|cond| self.cond_passes(&cond.name, cond.op, cond.value))
             })
             .map(|(i, _)| i)
             .collect()
@@ -389,18 +506,20 @@ impl StorySystem {
         self.enter_node(target, ctx);
     }
 
-    // Arrive on the current page: run its flag ops, fill the stage, fire its
-    // one-shots, and auto-save.
+    // Arrive on the current page: run its variable ops, fill the stage, fire
+    // its one-shots, log it in the backlog, and auto-save.
     fn apply_page(&mut self, ctx: &mut PipelineContext) {
         let page = self.story.nodes[self.node].pages[self.page].clone();
-        for op in &page.ops {
-            if op.clear {
-                self.flags.remove(&op.flag);
-            } else {
-                self.flags.insert(op.flag.clone());
-            }
-        }
+        self.apply_ops(&page.ops);
         self.render_page(ctx);
+        let entry = match &page.speaker {
+            Some(s) => format!("{}: {}", s.name, page.text),
+            None => page.text.clone(),
+        };
+        self.history.push(entry);
+        if self.history.len() > BACKLOG_ENTRIES {
+            self.history.remove(0);
+        }
         for sound in &page.sounds {
             play(ctx, Some(*sound), CueKind::Sound);
         }
@@ -444,19 +563,55 @@ impl StorySystem {
             &page.stage,
         );
         play(ctx, page.music, CueKind::Music);
+
+        // A skip run reveals instantly; otherwise the reveal restarts the
+        // auto/skip pacing clock.
+        if self.skip {
+            self.typewriter.shown = self.typewriter.full.len();
+            let text = self.typewriter.text();
+            let text_id = self.ids.as_ref().expect("resolved at init").text;
+            set_label(ctx, text_id, |l| l.content = text);
+        }
+        self.mode_timer = 0.0;
+        self.render_quick_row(ctx);
     }
 
-    // Arrive on the current node's choice menu: run its flag ops, show the
-    // menu, and fire its one-shots.
+    // Fill (or clear) the quick-row control labels; engaged modes read gold.
+    fn render_quick_row(&mut self, ctx: &mut PipelineContext) {
+        let Some(ids) = self.ids.as_ref() else { return };
+        let rows = [
+            (ids.log_label, "Log", false),
+            (ids.auto_label, "Auto", self.auto),
+            (ids.skip_label, "Skip", self.skip),
+            (ids.save_label, "Save", false),
+        ];
+        for (id, text, active) in rows {
+            set_label(ctx, id, |l| {
+                l.content = text.to_string();
+                l.color = if active { QUICK_ACTIVE } else { QUICK_IDLE };
+            });
+        }
+    }
+
+    fn clear_quick_row(&mut self, ctx: &mut PipelineContext) {
+        let Some(ids) = self.ids.as_ref() else { return };
+        for id in [
+            ids.log_label,
+            ids.auto_label,
+            ids.skip_label,
+            ids.save_label,
+        ] {
+            set_label(ctx, id, |l| l.content.clear());
+        }
+        set_sprite(ctx, ids.marker, |s| s.tint[3] = 0.0);
+    }
+
+    // Arrive on the current node's choice menu: run its variable ops, show
+    // the menu, and fire its one-shots. A skip run stops at a menu.
     fn enter_choice(&mut self, ctx: &mut PipelineContext) {
         let node = self.story.nodes[self.node].clone();
-        for op in &node.choice_ops {
-            if op.clear {
-                self.flags.remove(&op.flag);
-            } else {
-                self.flags.insert(op.flag.clone());
-            }
-        }
+        self.apply_ops(&node.choice_ops);
+        self.skip = false;
         self.render_choice(ctx);
         for sound in &node.choice_sounds {
             play(ctx, Some(*sound), CueKind::Sound);
@@ -483,6 +638,8 @@ impl StorySystem {
         // rather than relying on `visible`: view re-activation (a pause
         // overlay dismissing back to the stage) force-shows every member.
         set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
+        self.clear_quick_row(ctx);
+        let ids = self.ids.as_ref().expect("resolved at init");
         let boxes = ids.option_boxes.clone();
         for (i, label_id) in ids.options.iter().enumerate() {
             let occupied = menu.get(i).is_some();
@@ -537,6 +694,10 @@ impl StorySystem {
         if new.scaffold.view != self.story.scaffold.view {
             return;
         }
+        // The re-rendered page would draw over an open overlay's dim.
+        if self.overlay != Overlay::None {
+            self.close_overlay(ctx);
+        }
         let slug = self.story.nodes.get(self.node).map(|n| n.slug.clone());
         let was_in_choice = self.in_choice;
         self.story = new;
@@ -581,9 +742,259 @@ impl StorySystem {
 
     fn show_ending(&mut self, ctx: &mut PipelineContext) {
         self.clear_save(ctx);
+        self.auto = false;
+        self.skip = false;
         let ids = self.ids.as_ref().expect("resolved at init");
         ctx.events_mut::<ViewCommand>()
             .send(ViewCommand::Show(ids.ending_view));
+    }
+
+    // Ordinary page mode: mid-story, no menu, no overlay, stage in front.
+    fn page_mode(&self) -> bool {
+        self.started
+            && !self.in_choice
+            && self.overlay == Overlay::None
+            && self.active_view == self.ids.as_ref().map(|i| i.view)
+    }
+
+    fn toggle_auto(&mut self, ctx: &mut PipelineContext) {
+        if !self.page_mode() {
+            return;
+        }
+        self.auto = !self.auto;
+        self.mode_timer = 0.0;
+        self.render_quick_row(ctx);
+    }
+
+    fn toggle_skip(&mut self, ctx: &mut PipelineContext) {
+        if !self.page_mode() {
+            return;
+        }
+        self.skip = !self.skip;
+        self.mode_timer = 0.0;
+        if self.skip && !self.typewriter.done() {
+            self.typewriter.shown = self.typewriter.full.len();
+            let text = self.typewriter.text();
+            let text_id = self.ids.as_ref().expect("resolved at init").text;
+            set_label(ctx, text_id, |l| l.content = text);
+        }
+        self.render_quick_row(ctx);
+    }
+
+    fn toggle_log(&mut self, ctx: &mut PipelineContext) {
+        match self.overlay {
+            Overlay::Backlog => self.close_overlay(ctx),
+            Overlay::None if self.page_mode() => self.open_backlog(ctx),
+            _ => {}
+        }
+    }
+
+    // Clear the page furniture that draws over the overlay dim (labels
+    // always render above sprites, so anything left filled would float on
+    // top of it).
+    fn hide_page_furniture(&mut self, ctx: &mut PipelineContext) {
+        let (name, text) = {
+            let ids = self.ids.as_ref().expect("resolved at init");
+            (ids.name, ids.text)
+        };
+        set_label(ctx, name, |l| l.content.clear());
+        set_label(ctx, text, |l| l.content.clear());
+        self.clear_quick_row(ctx);
+    }
+
+    fn open_backlog(&mut self, ctx: &mut PipelineContext) {
+        self.overlay = Overlay::Backlog;
+        self.hide_page_furniture(ctx);
+        // The most recent entries that fit the label, oldest first.
+        let mut chosen: Vec<&str> = Vec::new();
+        let mut lines = 0;
+        for entry in self.history.iter().rev() {
+            let n = entry.lines().count().max(1);
+            if !chosen.is_empty() && lines + n > BACKLOG_LINES {
+                break;
+            }
+            chosen.push(entry.as_str());
+            lines += n;
+            if lines >= BACKLOG_LINES {
+                break;
+            }
+        }
+        chosen.reverse();
+        let text = chosen.join("\n");
+        let ids = self.ids.as_ref().expect("resolved at init");
+        set_sprite(ctx, ids.overlay_dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
+        set_label(ctx, ids.backlog_label, |l| l.content = text);
+    }
+
+    fn open_save(&mut self, ctx: &mut PipelineContext) {
+        if self.page_mode() && !self.story.save_key.is_empty() {
+            self.open_slots(ctx, false);
+        }
+    }
+
+    // The title screen's Load: bring the (dimmed) stage up over whatever the
+    // title left behind and offer the slots. Also reachable nowhere else;
+    // mid-story loading goes through the same slots after a Save.
+    fn open_load(&mut self, ctx: &mut PipelineContext) {
+        if self.overlay != Overlay::None || self.story.save_key.is_empty() {
+            return;
+        }
+        if self.started && !self.page_mode() {
+            return;
+        }
+        if !self.started {
+            // The overlay is set before the view change lands, so the
+            // stage's ViewShown does not auto-start the story.
+            let view = self.ids.as_ref().expect("resolved at init").view;
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(view));
+        }
+        self.open_slots(ctx, true);
+    }
+
+    fn open_slots(&mut self, ctx: &mut PipelineContext, load: bool) {
+        self.overlay = if load {
+            Overlay::LoadMenu
+        } else {
+            Overlay::SaveMenu
+        };
+        if self.started {
+            self.hide_page_furniture(ctx);
+        }
+        let (dim, title, boxes, labels) = {
+            let ids = self.ids.as_ref().expect("resolved at init");
+            (
+                ids.overlay_dim,
+                ids.slot_title,
+                ids.slot_boxes.clone(),
+                ids.slot_labels.clone(),
+            )
+        };
+        set_sprite(ctx, dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
+        set_label(ctx, title, |l| {
+            l.content = (if load { "Load" } else { "Save" }).to_string();
+        });
+        for (i, box_id) in boxes.iter().enumerate() {
+            let summary = self.slot_summary(i);
+            set_sprite(ctx, Some(*box_id), |s| {
+                s.visible = true;
+                s.tint = CHOICE_BOX_TINT;
+            });
+            set_label(ctx, labels.get(i).copied(), |l| {
+                l.content = summary;
+                l.visible = true;
+            });
+        }
+    }
+
+    fn slot_summary(&self, slot: usize) -> String {
+        match read_save(&slot_file(&self.save_dir, &self.story.save_key, slot)) {
+            Some(save) => format!("Slot {}   {}, page {}", slot + 1, save.slug, save.page + 1),
+            None => format!("Slot {}   (empty)", slot + 1),
+        }
+    }
+
+    fn pick_slot(&mut self, slot: usize, ctx: &mut PipelineContext) {
+        match self.overlay {
+            Overlay::SaveMenu => {
+                let save = self.current_save();
+                let path = slot_file(&self.save_dir, &self.story.save_key, slot);
+                if let Err(e) = write_save(&path, &save) {
+                    tracing::warn!("StorySystem: slot save failed: {e}");
+                }
+                let load_label = self.ids.as_ref().and_then(|i| i.load_label);
+                set_label(ctx, load_label, |l| l.content = "Load".to_string());
+                self.close_overlay(ctx);
+            }
+            Overlay::LoadMenu => {
+                // Picking an empty slot leaves the overlay up.
+                let path = slot_file(&self.save_dir, &self.story.save_key, slot);
+                let Some(save) = read_save(&path) else { return };
+                self.hide_overlay_furniture(ctx);
+                self.overlay = Overlay::None;
+                self.resume_from(save, ctx);
+            }
+            _ => {}
+        }
+    }
+
+    fn hide_overlay_furniture(&mut self, ctx: &mut PipelineContext) {
+        let (dim, backlog, title, boxes, labels) = {
+            let ids = self.ids.as_ref().expect("resolved at init");
+            (
+                ids.overlay_dim,
+                ids.backlog_label,
+                ids.slot_title,
+                ids.slot_boxes.clone(),
+                ids.slot_labels.clone(),
+            )
+        };
+        set_sprite(ctx, dim, |s| s.tint[3] = 0.0);
+        set_label(ctx, backlog, |l| l.content.clear());
+        set_label(ctx, title, |l| l.content.clear());
+        for box_id in boxes {
+            set_sprite(ctx, Some(box_id), |s| s.tint[3] = 0.0);
+        }
+        for label_id in labels {
+            set_label(ctx, Some(label_id), |l| l.content.clear());
+        }
+    }
+
+    // Dismiss the open overlay: back to the page it covered, or back to the
+    // title screen when the load overlay was opened from there.
+    fn close_overlay(&mut self, ctx: &mut PipelineContext) {
+        self.hide_overlay_furniture(ctx);
+        self.overlay = Overlay::None;
+        if !self.started {
+            let title = self.ids.as_ref().and_then(|i| i.title_view);
+            if let Some(title) = title {
+                ctx.events_mut::<ViewCommand>()
+                    .send(ViewCommand::Show(title));
+            }
+            return;
+        }
+        // Overlays open from page mode only; restore the covered page in
+        // full (it was already read, so no re-typing).
+        self.render_page(ctx);
+        self.typewriter.shown = self.typewriter.full.len();
+        let text = self.typewriter.text();
+        let text_id = self.ids.as_ref().expect("resolved at init").text;
+        set_label(ctx, text_id, |l| l.content = text);
+    }
+
+    // Per-frame reader-assist work: the waiting marker pulse and the auto /
+    // skip page pacing.
+    fn tick_modes(&mut self, ctx: &mut PipelineContext, dt: f32) {
+        if !self.page_mode() {
+            return;
+        }
+        let waiting = self.typewriter.done();
+        let marker = self.ids.as_ref().and_then(|i| i.marker);
+        let alpha = if waiting && !self.skip {
+            0.35 + 0.3 * (self.elapsed * 5.0).sin()
+        } else {
+            0.0
+        };
+        set_sprite(ctx, marker, |s| s.tint[3] = alpha);
+        if self.skip {
+            if !self.typewriter.done() {
+                self.typewriter.shown = self.typewriter.full.len();
+                let text = self.typewriter.text();
+                let text_id = self.ids.as_ref().expect("resolved at init").text;
+                set_label(ctx, text_id, |l| l.content = text);
+            }
+            self.mode_timer += dt;
+            if self.mode_timer >= SKIP_PAGE_SECS {
+                self.mode_timer = 0.0;
+                self.advance(ctx);
+            }
+        } else if self.auto && waiting {
+            self.mode_timer += dt;
+            let delay = AUTO_BASE_SECS + AUTO_PER_CHAR_SECS * self.typewriter.full.len() as f32;
+            if self.mode_timer >= delay {
+                self.advance(ctx);
+            }
+        }
     }
 
     // Reveal more of the current page at the story's characters-per-second.
@@ -612,14 +1023,21 @@ impl System for StorySystem {
         match StageIds::from_scaffold(&self.story.scaffold) {
             Some(ids) => {
                 let continue_label = ids.continue_label;
+                let load_label = ids.load_label;
                 self.ids = Some(ids);
-                // Continue lights up only when a resumable save exists. View
-                // activation force-shows every member label, so presence is
-                // carried by the content (an empty label renders nothing).
+                // Continue / Load light up only when a resumable save exists.
+                // View activation force-shows every member label, so presence
+                // is carried by the content (an empty label renders nothing).
                 let has_save = !self.story.save_key.is_empty()
-                    && read_save(&self.save_dir, &self.story.save_key).is_some();
+                    && read_save(&save_file(&self.save_dir, &self.story.save_key)).is_some();
                 set_label(ctx, continue_label, |l| {
                     if !has_save {
+                        l.content.clear();
+                    }
+                });
+                let has_slots = self.any_slot_save();
+                set_label(ctx, load_label, |l| {
+                    if !has_slots {
                         l.content.clear();
                     }
                 });
@@ -646,6 +1064,7 @@ impl System for StorySystem {
             .map(|t| (now - t).as_secs_f32())
             .unwrap_or(0.0);
         self.last_step = Some(now);
+        self.elapsed += dt;
 
         // Freshly re-compiled graphs from the editor's source hot-reload
         // swap in before any input is handled.
@@ -673,7 +1092,11 @@ impl System for StorySystem {
         };
         for view in shown {
             self.active_view = Some(view);
-            if !self.started && Some(view) == self.ids.as_ref().map(|i| i.view) {
+            // The load overlay shows the stage without starting play.
+            if !self.started
+                && self.overlay == Overlay::None
+                && Some(view) == self.ids.as_ref().map(|i| i.view)
+            {
                 self.start(ctx);
             }
         }
@@ -686,25 +1109,56 @@ impl System for StorySystem {
                 .collect(),
             None => Vec::new(),
         };
-        // One click over a choice button fires both the full-canvas advance
-        // region and the button. The mode guards absorb the wrong-mode one,
-        // but a command that flips the mode must not let the click's other
-        // half act in the new mode the same tick (advancing into a menu must
-        // not also pick an option).
+        // One click over a button fires both the full-canvas advance region
+        // and the button (every hovered region fires). The mode guards
+        // absorb the wrong-mode half, but two same-tick rules remain: a
+        // command that flips the page/menu mode must not let the click's
+        // other half act in the new mode, and a click on a quick-row /
+        // slot button must not also advance (or choose).
+        let button_tick = commands.iter().any(|c| {
+            matches!(
+                c,
+                StoryCommand::ToggleAuto
+                    | StoryCommand::ToggleSkip
+                    | StoryCommand::ToggleLog
+                    | StoryCommand::OpenSave
+                    | StoryCommand::OpenLoad
+                    | StoryCommand::Slot(_)
+            )
+        });
         let mut mode_flipped = false;
         for command in commands {
             let was_in_choice = self.in_choice;
             match command {
                 StoryCommand::Start => self.start(ctx),
                 StoryCommand::Continue => self.continue_story(ctx),
-                StoryCommand::Advance if !mode_flipped => self.advance(ctx),
-                StoryCommand::Choose(i) if !mode_flipped => self.choose(i, ctx),
+                StoryCommand::ToggleAuto => self.toggle_auto(ctx),
+                StoryCommand::ToggleSkip => self.toggle_skip(ctx),
+                StoryCommand::ToggleLog => self.toggle_log(ctx),
+                StoryCommand::OpenSave => self.open_save(ctx),
+                StoryCommand::OpenLoad => self.open_load(ctx),
+                StoryCommand::Slot(i) => self.pick_slot(i, ctx),
+                StoryCommand::Advance if !mode_flipped && !button_tick => {
+                    if self.overlay != Overlay::None {
+                        // Any plain click dismisses an overlay.
+                        self.close_overlay(ctx);
+                    } else {
+                        // Manual input ends a skip run.
+                        if self.skip {
+                            self.skip = false;
+                            self.render_quick_row(ctx);
+                        }
+                        self.advance(ctx);
+                    }
+                }
+                StoryCommand::Choose(i) if !mode_flipped && !button_tick => self.choose(i, ctx),
                 StoryCommand::Advance | StoryCommand::Choose(_) => {}
             }
             mode_flipped |= self.in_choice != was_in_choice;
         }
 
         self.tick_typewriter(ctx, dt);
+        self.tick_modes(ctx, dt);
         StepResult::Continue
     }
 }
@@ -831,6 +1285,18 @@ mod tests {
             option_boxes: vec![intern("s_stage_opt0_box")],
             options: vec![intern("s_stage_opt0_lbl")],
             continue_label: None,
+            title: None,
+            load_label: None,
+            advance_marker: Some(intern("s_stage_marker")),
+            log_label: Some(intern("s_stage_qlog_lbl")),
+            auto_label: Some(intern("s_stage_qauto_lbl")),
+            skip_label: Some(intern("s_stage_qskip_lbl")),
+            save_label: Some(intern("s_stage_qsave_lbl")),
+            overlay_dim: Some(intern("s_stage_dim")),
+            backlog_label: Some(intern("s_stage_history")),
+            slot_title: Some(intern("s_stage_slot_title")),
+            slot_boxes: vec![intern("s_stage_slot0_box")],
+            slot_labels: vec![intern("s_stage_slot0_lbl")],
         }
     }
 
@@ -856,13 +1322,27 @@ mod tests {
             "s_stage_right",
             "s_stage_box",
             "s_stage_opt0_box",
+            "s_stage_marker",
+            "s_stage_dim",
+            "s_stage_slot0_box",
         ] {
             world.add_component(Sprite {
                 view: Some(intern("s_stage")),
                 ..sprite_named(sprite)
             });
         }
-        for label in ["s_stage_name", "s_stage_text", "s_stage_opt0_lbl"] {
+        for label in [
+            "s_stage_name",
+            "s_stage_text",
+            "s_stage_opt0_lbl",
+            "s_stage_qlog_lbl",
+            "s_stage_qauto_lbl",
+            "s_stage_qskip_lbl",
+            "s_stage_qsave_lbl",
+            "s_stage_history",
+            "s_stage_slot_title",
+            "s_stage_slot0_lbl",
+        ] {
             world.add_component(TextLabel {
                 view: Some(intern("s_stage")),
                 ..label_named(label)
@@ -1139,15 +1619,17 @@ mod tests {
                     pages: vec![
                         StoryPage {
                             ops: vec![StoryOp {
-                                flag: "asked".to_string(),
-                                clear: false,
+                                name: "asked".to_string(),
+                                value: 1,
+                                add: false,
                             }],
                             ..page("Intro.")
                         },
                         StoryPage {
                             gates: vec![StoryGate {
-                                flag: "asked".to_string(),
-                                negate: false,
+                                name: "asked".to_string(),
+                                op: CmpOp::Ne,
+                                value: 0,
                                 target: 1,
                             }],
                             ..page("Skipped.")
@@ -1193,8 +1675,9 @@ mod tests {
                             label: "Secret".to_string(),
                             target: 1,
                             condition: Some(StoryCondition {
-                                flag: "secret".to_string(),
-                                negate: false,
+                                name: "secret".to_string(),
+                                op: CmpOp::Ne,
+                                value: 0,
                             }),
                         },
                         StoryChoice {
@@ -1246,8 +1729,9 @@ mod tests {
                     slug: "a".to_string(),
                     pages: vec![StoryPage {
                         ops: vec![StoryOp {
-                            flag: "skip".to_string(),
-                            clear: false,
+                            name: "skip".to_string(),
+                            value: 1,
+                            add: false,
                         }],
                         ..page("Once.")
                     }],
@@ -1257,8 +1741,9 @@ mod tests {
                         condition: None,
                     }],
                     choice_gates: vec![StoryGate {
-                        flag: "skip".to_string(),
-                        negate: false,
+                        name: "skip".to_string(),
+                        op: CmpOp::Ne,
+                        value: 0,
                         target: 1,
                     }],
                     ..Default::default()
@@ -1283,25 +1768,32 @@ mod tests {
         assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "");
     }
 
-    // The save file round-trips position and flags; a missing file reads as
-    // None and an unreadable one starts fresh.
+    // The save file round-trips position and variables; a missing file
+    // reads as None and an unreadable one starts fresh.
     #[test]
     fn story_save_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_save(dir.path(), "q").is_none());
+        let auto = save_file(dir.path(), "q");
+        assert!(read_save(&auto).is_none());
         let save = StorySave {
             slug: "meadow".to_string(),
             page: 2,
-            flags: vec!["asked".to_string(), "brave".to_string()],
+            vars: [("asked".to_string(), 1), ("gold".to_string(), 7)]
+                .into_iter()
+                .collect(),
         };
-        write_save(dir.path(), "q", &save).unwrap();
-        let back = read_save(dir.path(), "q").expect("save exists");
+        write_save(&auto, &save).unwrap();
+        let back = read_save(&auto).expect("save exists");
         assert_eq!(back.slug, "meadow");
         assert_eq!(back.page, 2);
-        assert_eq!(back.flags, ["asked", "brave"]);
+        assert_eq!(back.vars.get("gold"), Some(&7));
         // Corruption falls back to a fresh start rather than a panic.
-        std::fs::write(save_file(dir.path(), "q"), b"not cbor").unwrap();
-        assert!(read_save(dir.path(), "q").is_none());
+        std::fs::write(&auto, b"not cbor").unwrap();
+        assert!(read_save(&auto).is_none());
+        // Slot files sit beside the auto-save, one per slot.
+        let slot = slot_file(dir.path(), "q", 1);
+        write_save(&slot, &save).unwrap();
+        assert_eq!(read_save(&slot).unwrap().slug, "meadow");
     }
 
     // Continue without any save behaves exactly like Start.
@@ -1465,5 +1957,210 @@ mod tests {
             .send(StoryCommand::Choose(0));
         world.step();
         assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
+    }
+
+    // Numeric ops accumulate across pages and a comparison gate fires once
+    // the threshold is met.
+    #[test]
+    fn numeric_ops_accumulate_and_comparisons_gate() {
+        use crate::assets::{StoryGate, StoryOp};
+        let add_trip = StoryOp {
+            name: "trips".to_string(),
+            value: 1,
+            add: true,
+        };
+        let story = Story {
+            title: "T".to_string(),
+            text_speed: 0.0,
+            nodes: vec![
+                StoryNode {
+                    slug: "a".to_string(),
+                    pages: vec![
+                        StoryPage {
+                            ops: vec![add_trip.clone()],
+                            ..page("One.")
+                        },
+                        StoryPage {
+                            ops: vec![add_trip.clone()],
+                            ..page("Two.")
+                        },
+                        StoryPage {
+                            gates: vec![StoryGate {
+                                name: "trips".to_string(),
+                                op: CmpOp::Ge,
+                                value: 2,
+                                target: 1,
+                            }],
+                            ..page("Never shown.")
+                        },
+                    ],
+                    ..Default::default()
+                },
+                StoryNode {
+                    slug: "counted".to_string(),
+                    pages: vec![page("Counted.")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = story_world(story);
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Two.");
+        // trips == 2 now: the third page's gate redirects.
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Counted.");
+    }
+
+    // The quick row fills in page mode; toggling a mode re-tints its label
+    // and the same click's advance half is suppressed.
+    #[test]
+    fn quick_row_toggles_and_suppresses_the_same_click_advance() {
+        let mut world = story_world(two_page_story());
+        world.start().unwrap();
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_qauto_lbl"), "Auto");
+        assert_eq!(label_content(&world, "s_stage_qsave_lbl"), "Save");
+
+        // The button click fires both its action and the full-canvas
+        // advance; the page must not turn.
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::ToggleAuto);
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+        let auto_id = intern("s_stage_qauto_lbl");
+        let color = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == auto_id)
+            .unwrap()
+            .color;
+        assert_eq!(color, QUICK_ACTIVE);
+    }
+
+    // The backlog overlay lists shown pages; a plain click dismisses it and
+    // restores the covered page.
+    #[test]
+    fn backlog_lists_history_and_a_click_dismisses() {
+        let mut world = story_world(two_page_story());
+        world.start().unwrap();
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::ToggleLog);
+        world.step();
+        let history = label_content(&world, "s_stage_history");
+        assert!(history.contains("Ayame: First page."));
+        assert!(history.contains("Second page."));
+        // The covered page furniture is cleared under the dim.
+        assert_eq!(label_content(&world, "s_stage_text"), "");
+        assert_eq!(label_content(&world, "s_stage_qauto_lbl"), "");
+
+        // While the overlay is up, an advance dismisses it (and only that).
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_history"), "");
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+    }
+
+    // Slot bookkeeping: summaries name the saved position, and any existing
+    // slot lights the title's Load.
+    #[test]
+    fn slot_summaries_and_slot_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut story = two_page_story();
+        story.save_key = "q".to_string();
+        story.scaffold = scaffold();
+        let mut sys = StorySystem::new(story);
+        sys.save_dir = dir.path().to_path_buf();
+        sys.ids = StageIds::from_scaffold(&scaffold());
+        assert!(!sys.any_slot_save());
+        assert!(sys.slot_summary(0).contains("empty"));
+
+        let save = StorySave {
+            slug: "a".to_string(),
+            page: 1,
+            vars: BTreeMap::new(),
+        };
+        write_save(&slot_file(dir.path(), "q", 0), &save).unwrap();
+        assert!(sys.any_slot_save());
+        let summary = sys.slot_summary(0);
+        assert!(summary.contains("a"), "{summary}");
+        assert!(summary.contains("page 2"), "{summary}");
+    }
+
+    // The save overlay writes the picked slot and dismisses; play resumes
+    // from a loaded slot.
+    #[test]
+    fn save_overlay_writes_and_load_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut story = two_page_story();
+        story.save_key = "slot_test".to_string();
+        let mut world = story_world(story);
+        world.start().unwrap();
+        // Point the world-constructed system's saves at the temp directory
+        // (the process-global state root must stay untouched: tests share
+        // it).
+        for system in world.systems_mut() {
+            if let crate::ecs::SystemAsset::StorySystem(s) = system {
+                s.save_dir = dir.path().to_path_buf();
+            }
+        }
+        world.step();
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Advance);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+
+        // Open the save overlay and pick slot 1.
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::OpenSave);
+        world.step();
+        assert!(label_content(&world, "s_stage_slot_title").contains("Save"));
+        assert!(label_content(&world, "s_stage_slot0_lbl").contains("empty"));
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Slot(0));
+        world.step();
+        // Overlay dismissed, page restored, slot written.
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+        let saved = read_save(&slot_file(dir.path(), "slot_test", 0)).expect("slot written");
+        assert_eq!(saved.page, 1);
+
+        // Restart, then load the slot back: play resumes at page 2.
+        world.events_mut::<StoryCommand>().send(StoryCommand::Start);
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::OpenLoad);
+        world.step();
+        assert!(label_content(&world, "s_stage_slot0_lbl").contains("page 2"));
+        world
+            .events_mut::<StoryCommand>()
+            .send(StoryCommand::Slot(0));
+        world.step();
+        assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
     }
 }

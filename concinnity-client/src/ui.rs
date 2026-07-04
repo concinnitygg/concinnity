@@ -1337,17 +1337,24 @@ fn fire_action(
         }
         return None;
     }
-    // story:start | story:advance | story:choose:<i> -- the story system
-    // reads the StoryCommand and moves through its compiled graph.
+    // story:start | story:advance | story:choose:<i> | the quick-row and
+    // slot-overlay controls -- the story system reads the StoryCommand and
+    // moves through its compiled graph.
     if let Some(rest) = action.strip_prefix("story:") {
         let cmd = match rest {
             "start" => Some(StoryCommand::Start),
             "continue" => Some(StoryCommand::Continue),
             "advance" => Some(StoryCommand::Advance),
-            _ => rest
-                .strip_prefix("choose:")
-                .and_then(|i| i.parse::<usize>().ok())
-                .map(StoryCommand::Choose),
+            "auto" => Some(StoryCommand::ToggleAuto),
+            "skip" => Some(StoryCommand::ToggleSkip),
+            "log" => Some(StoryCommand::ToggleLog),
+            "save" => Some(StoryCommand::OpenSave),
+            "load" => Some(StoryCommand::OpenLoad),
+            _ => match rest.split_once(':') {
+                Some(("choose", i)) => i.parse::<usize>().ok().map(StoryCommand::Choose),
+                Some(("slot", i)) => i.parse::<usize>().ok().map(StoryCommand::Slot),
+                _ => None,
+            },
         };
         match cmd {
             Some(cmd) => ctx.events_mut::<StoryCommand>().send(cmd),

@@ -85,6 +85,44 @@ pub struct StoryScaffold {
     /// save exists.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub continue_label: Option<AssetId>,
+    /// The title screen [View](#view), returned to when the load overlay is
+    /// dismissed before play started.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub title: Option<AssetId>,
+    /// The title screen's Load [TextLabel](#textlabel), hidden while no
+    /// slot save exists.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub load_label: Option<AssetId>,
+    /// The small pulsing [Sprite](#sprite) shown when a fully revealed page
+    /// waits for input.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub advance_marker: Option<AssetId>,
+    /// Quick-row Log [TextLabel](#textlabel) (dialogue history toggle).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub log_label: Option<AssetId>,
+    /// Quick-row Auto [TextLabel](#textlabel) (auto-advance toggle).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub auto_label: Option<AssetId>,
+    /// Quick-row Skip [TextLabel](#textlabel) (fast-forward toggle).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub skip_label: Option<AssetId>,
+    /// Quick-row Save [TextLabel](#textlabel) (opens the slot overlay).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub save_label: Option<AssetId>,
+    /// Full-canvas dim [Sprite](#sprite) behind the backlog and slot
+    /// overlays.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub overlay_dim: Option<AssetId>,
+    /// The backlog overlay's history [TextLabel](#textlabel).
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub backlog_label: Option<AssetId>,
+    /// The slot overlay's heading [TextLabel](#textlabel) ("Save" / "Load").
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub slot_title: Option<AssetId>,
+    /// Slot row box [Sprite](#sprite)s.
+    pub slot_boxes: Vec<AssetId>,
+    /// Slot row [TextLabel](#textlabel)s.
+    pub slot_labels: Vec<AssetId>,
 }
 
 /// One jump target in a [Story](#story): a run of pages optionally ending in
@@ -192,37 +230,78 @@ pub struct StoryChoice {
     pub condition: Option<StoryCondition>,
 }
 
-/// One flag operation in a [Story](#story)'s script: raise or clear a named
-/// boolean flag. Flags start cleared and live for one playthrough.
+/// One variable operation in a [Story](#story)'s script. All story state is
+/// named integer variables, starting at `0` each playthrough: a plain flag
+/// is a variable set to `1` and cleared to `0`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StoryOp {
-    /// The flag name.
-    pub flag: String,
-    /// `false` sets the flag; `true` clears it.
-    pub clear: bool,
+    /// The variable name.
+    pub name: String,
+    /// The value assigned (or added).
+    pub value: i32,
+    /// `false` assigns `value`; `true` adds it to the current value.
+    pub add: bool,
 }
 
 /// One conditional jump in a [Story](#story)'s script.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StoryGate {
-    /// The flag the condition tests.
-    pub flag: String,
-    /// `false` passes while the flag is set; `true` while it is cleared.
-    pub negate: bool,
+    /// The variable the condition tests.
+    pub name: String,
+    /// How the variable compares against `value`.
+    pub op: CmpOp,
+    /// The literal compared against.
+    pub value: i32,
     /// Node index play jumps to when the condition passes.
     pub target: u32,
 }
 
-/// A flag condition on a [StoryChoice](#storychoice).
+/// A condition on a [StoryChoice](#storychoice).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StoryCondition {
-    /// The flag the condition tests.
-    pub flag: String,
-    /// `false` passes while the flag is set; `true` while it is cleared.
-    pub negate: bool,
+    /// The variable the condition tests.
+    pub name: String,
+    /// How the variable compares against `value`.
+    pub op: CmpOp,
+    /// The literal compared against.
+    pub value: i32,
+}
+
+/// A comparison operator in a [Story](#story) condition. An unset variable
+/// reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CmpOp {
+    /// Equal.
+    Eq,
+    /// Not equal.
+    #[default]
+    Ne,
+    /// Less than.
+    Lt,
+    /// Less than or equal.
+    Le,
+    /// Greater than.
+    Gt,
+    /// Greater than or equal.
+    Ge,
+}
+
+impl CmpOp {
+    /// Evaluate `lhs <op> rhs`.
+    pub fn eval(self, lhs: i32, rhs: i32) -> bool {
+        match self {
+            CmpOp::Eq => lhs == rhs,
+            CmpOp::Ne => lhs != rhs,
+            CmpOp::Lt => lhs < rhs,
+            CmpOp::Le => lhs <= rhs,
+            CmpOp::Gt => lhs > rhs,
+            CmpOp::Ge => lhs >= rhs,
+        }
+    }
 }
 
 impl Default for Story {

@@ -450,8 +450,9 @@ pub(super) fn handle_despawn(text: &str) -> String {
     }
 }
 
-// Drive the story system: `action` is `start`, `advance`, or `choose` (the
-// latter with an `option` index).
+// Drive the story system: `action` is `start`, `advance`, `choose` / `slot`
+// (with an `option` index), or one of the quick-row controls (`auto`,
+// `skip`, `log`, `save`, `load`).
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct StoryCmdRequest {
@@ -475,6 +476,12 @@ pub(super) fn handle_story(text: &str) -> String {
         "continue" => crate::assets::StoryCommand::Continue,
         "advance" => crate::assets::StoryCommand::Advance,
         "choose" => crate::assets::StoryCommand::Choose(req.option),
+        "auto" => crate::assets::StoryCommand::ToggleAuto,
+        "skip" => crate::assets::StoryCommand::ToggleSkip,
+        "log" => crate::assets::StoryCommand::ToggleLog,
+        "save" => crate::assets::StoryCommand::OpenSave,
+        "load" => crate::assets::StoryCommand::OpenLoad,
+        "slot" => crate::assets::StoryCommand::Slot(req.option),
         other => return error_reply(&format!("story: unknown action '{other}'")),
     };
     let (tx, rx) = std::sync::mpsc::sync_channel(1);

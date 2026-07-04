@@ -93,28 +93,33 @@ pub(crate) struct Choice {
     pub(crate) condition: Option<Condition>,
 }
 
-// A `set` / `clear` line from a ```story script block, run when the page
-// (or choice menu) it precedes shows.
+// A `set` / `clear` / `add` line from a ```story script block, run when the
+// page (or choice menu) it precedes shows. All story state is named integer
+// variables (a flag is a variable set to 1 / cleared to 0): `set x` assigns
+// 1, `clear x` assigns 0, `set x = n` assigns n, `add x n` adds n.
 #[derive(Debug, Clone)]
 pub(crate) struct FlagOp {
-    pub(crate) flag: String,
-    pub(crate) clear: bool,
+    pub(crate) name: String,
+    pub(crate) value: i32,
+    pub(crate) add: bool,
 }
 
-// An `if <flag> -> #anchor` line from a ```story script block: a conditional
+// An `if ... -> #anchor` line from a ```story script block: a conditional
 // jump evaluated before the page (or choice menu) it precedes shows.
 #[derive(Debug, Clone)]
 pub(crate) struct Gate {
-    pub(crate) flag: String,
-    pub(crate) negate: bool,
+    pub(crate) condition: Condition,
     pub(crate) target: String,
 }
 
-// An `if [not] <flag>` link title gating a choice option.
+// A condition: `<var>` (not zero), `not <var>` (zero), or a comparison
+// `<var> <op> <int>` with op one of == != < <= > >=. Used by gates and by
+// choice-gating link titles.
 #[derive(Debug, Clone)]
 pub(crate) struct Condition {
-    pub(crate) flag: String,
-    pub(crate) negate: bool,
+    pub(crate) name: String,
+    pub(crate) op: &'static str,
+    pub(crate) value: i32,
 }
 
 // A media directive paragraph: a lone link whose label names the channel and
@@ -230,7 +235,7 @@ enum ScriptLine {
     Gate(Gate),
 }
 
-// A flag name: lowercase alphanumerics, `_`, `-` (the same alphabet as
+// A variable name: lowercase alphanumerics, `_`, `-` (the same alphabet as
 // heading slugs, so scripts read consistently with anchors).
 fn parse_flag(word: &str) -> Result<String, String> {
     if word.is_empty()
@@ -239,26 +244,53 @@ fn parse_flag(word: &str) -> Result<String, String> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
     {
         return Err(format!(
-            "'{}' is not a flag name (lowercase letters, digits, `_`, `-`)",
+            "'{}' is not a variable name (lowercase letters, digits, `_`, `-`)",
             word
         ));
     }
     Ok(word.to_string())
 }
 
-// One script line: `set <flag>`, `clear <flag>`, or a conditional jump
-// `if [not] <flag> -> #anchor`.
+// An integer literal in a script line (negatives allowed).
+fn parse_int(word: &str) -> Result<i32, String> {
+    word.parse::<i32>()
+        .map_err(|_| format!("'{}' is not an integer", word))
+}
+
+// One script line: `set <var>`, `clear <var>`, `set <var> = <int>`,
+// `add <var> <int>`, or a conditional jump `if <condition> -> #anchor`.
 fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
     if let Some(rest) = line.strip_prefix("set ") {
-        return Ok(ScriptLine::Op(FlagOp {
-            flag: parse_flag(rest.trim())?,
-            clear: false,
+        let rest = rest.trim();
+        return Ok(ScriptLine::Op(match rest.split_once('=') {
+            Some((name, value)) => FlagOp {
+                name: parse_flag(name.trim())?,
+                value: parse_int(value.trim())?,
+                add: false,
+            },
+            None => FlagOp {
+                name: parse_flag(rest)?,
+                value: 1,
+                add: false,
+            },
         }));
     }
     if let Some(rest) = line.strip_prefix("clear ") {
         return Ok(ScriptLine::Op(FlagOp {
-            flag: parse_flag(rest.trim())?,
-            clear: true,
+            name: parse_flag(rest.trim())?,
+            value: 0,
+            add: false,
+        }));
+    }
+    if let Some(rest) = line.strip_prefix("add ") {
+        let rest = rest.trim();
+        let (name, amount) = rest
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| format!("script line 'add {}' is missing the amount to add", rest))?;
+        return Ok(ScriptLine::Op(FlagOp {
+            name: parse_flag(name.trim())?,
+            value: parse_int(amount.trim())?,
+            add: true,
         }));
     }
     if let Some(rest) = line.strip_prefix("if ") {
@@ -275,40 +307,63 @@ fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
                 target
             ));
         };
-        let condition = condition.trim();
-        let (negate, flag) = match condition.strip_prefix("not ") {
-            Some(rest) => (true, rest.trim()),
-            None => (false, condition),
-        };
         return Ok(ScriptLine::Gate(Gate {
-            flag: parse_flag(flag)?,
-            negate,
+            condition: parse_bare_condition(condition.trim())?,
             target: anchor.to_string(),
         }));
     }
     Err(format!(
-        "script line '{}' is not `set <flag>`, `clear <flag>`, or \
-         `if [not] <flag> -> #anchor`",
+        "script line '{}' is not `set <var> [= <int>]`, `clear <var>`, \
+         `add <var> <int>`, or `if <condition> -> #anchor`",
         line
     ))
 }
 
-// A choice condition from a link title: `if <flag>` or `if not <flag>`.
+// The condition body after `if `: `<var>`, `not <var>`, or
+// `<var> <op> <int>` with op one of == != < <= > >=. Compiled to a
+// comparison against an integer (an unset variable reads as 0, so a bare
+// flag test is `!= 0` and its negation `== 0`).
+fn parse_bare_condition(condition: &str) -> Result<Condition, String> {
+    if let Some(rest) = condition.strip_prefix("not ") {
+        return Ok(Condition {
+            name: parse_flag(rest.trim())?,
+            op: "eq",
+            value: 0,
+        });
+    }
+    for (symbol, op) in [
+        ("==", "eq"),
+        ("!=", "ne"),
+        ("<=", "le"),
+        (">=", "ge"),
+        ("<", "lt"),
+        (">", "gt"),
+    ] {
+        if let Some((name, value)) = condition.split_once(symbol) {
+            return Ok(Condition {
+                name: parse_flag(name.trim())?,
+                op,
+                value: parse_int(value.trim())?,
+            });
+        }
+    }
+    Ok(Condition {
+        name: parse_flag(condition)?,
+        op: "ne",
+        value: 0,
+    })
+}
+
+// A choice condition from a link title: `if <condition>`.
 fn parse_condition(title: &str) -> Result<Condition, String> {
     let Some(rest) = title.strip_prefix("if ") else {
         return Err(format!(
-            "choice condition '{}' must be `if <flag>` or `if not <flag>`",
+            "choice condition '{}' must be `if <var>`, `if not <var>`, or \
+             `if <var> <op> <int>`",
             title
         ));
     };
-    let (negate, flag) = match rest.trim().strip_prefix("not ") {
-        Some(rest) => (true, rest.trim()),
-        None => (false, rest.trim()),
-    };
-    Ok(Condition {
-        flag: parse_flag(flag)?,
-        negate,
-    })
+    parse_bare_condition(rest.trim())
 }
 
 // In-flight paragraph state: inline events accumulate here until the
@@ -1272,11 +1327,20 @@ pub(crate) fn emit_story(
             "story:continue",
         ));
         out.extend(button(
+            &format!("{}_load", title_view),
+            &font_menu,
+            "Load",
+            win_w / 2.0 - 120.0,
+            550.0,
+            240.0,
+            "story:load",
+        ));
+        out.extend(button(
             &format!("{}_quit", title_view),
             &font_menu,
             "Quit",
             win_w / 2.0 - 120.0,
-            550.0,
+            610.0,
             240.0,
             "quit",
         ));
@@ -1327,20 +1391,24 @@ pub(crate) fn emit_story(
                 "gates": gate_entries(&page.gates, &node_index),
             }));
         }
-        let choices: Vec<serde_json::Value> =
-            node.choices
-                .iter()
-                .map(|c| {
-                    let condition = c.condition.as_ref().map(
-                        |cond| serde_json::json!({ "flag": cond.flag, "negate": cond.negate }),
-                    );
+        let choices: Vec<serde_json::Value> = node
+            .choices
+            .iter()
+            .map(|c| {
+                let condition = c.condition.as_ref().map(|cond| {
                     serde_json::json!({
-                        "label": c.label,
-                        "target": node_index(&c.target),
-                        "condition": condition,
+                        "name": cond.name,
+                        "op": cond.op,
+                        "value": cond.value,
                     })
+                });
+                serde_json::json!({
+                    "label": c.label,
+                    "target": node_index(&c.target),
+                    "condition": condition,
                 })
-                .collect();
+            })
+            .collect();
         let choice_music = node
             .choice_music
             .as_ref()
@@ -1379,6 +1447,13 @@ pub(crate) fn emit_story(
         .map(|i| format!("{}_opt{}_box", stage_view, i))
         .collect();
     let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
+    let load_label = title_screen.then(|| format!("{}_load_lbl", title_view));
+    let slot_boxes: Vec<String> = (0..SAVE_SLOTS)
+        .map(|i| format!("{}_slot{}_box", stage_view, i))
+        .collect();
+    let slot_labels: Vec<String> = (0..SAVE_SLOTS)
+        .map(|i| format!("{}_slot{}_lbl", stage_view, i))
+        .collect();
     out.push(serde_json::json!({
         "name": prefix,
         "type": "Story",
@@ -1400,6 +1475,18 @@ pub(crate) fn emit_story(
                 "option_boxes": option_boxes,
                 "options": option_labels,
                 "continue_label": continue_label,
+                "title": title_screen.then(|| title_view.clone()),
+                "load_label": load_label,
+                "advance_marker": format!("{}_marker", stage_view),
+                "log_label": format!("{}_qlog_lbl", stage_view),
+                "auto_label": format!("{}_qauto_lbl", stage_view),
+                "skip_label": format!("{}_qskip_lbl", stage_view),
+                "save_label": format!("{}_qsave_lbl", stage_view),
+                "overlay_dim": format!("{}_dim", stage_view),
+                "backlog_label": format!("{}_history", stage_view),
+                "slot_title": format!("{}_slot_title", stage_view),
+                "slot_boxes": slot_boxes,
+                "slot_labels": slot_labels,
             },
         }
     }));
@@ -1467,6 +1554,62 @@ pub(crate) fn emit_story(
         "args": { "key": "Space", "action": "story:advance" }
     }));
 
+    // The advance marker: a small rounded square at the dialog box's lower
+    // right that the story system pulses while a fully revealed page waits
+    // for a click.
+    out.push(rounded_sprite(
+        &format!("{}_marker", stage_view),
+        (
+            DIALOG_BOX.0 + DIALOG_BOX.2 - 50.0,
+            DIALOG_BOX.1 + DIALOG_BOX.3 - 70.0,
+            14.0,
+            14.0,
+        ),
+        [1.0, 0.95, 0.85, 0.0],
+        4.0,
+    ));
+
+    // The quick row: small always-clickable controls along the dialog box's
+    // bottom edge (Log / Auto / Skip / Save). Labels are filled by the story
+    // system in page mode and cleared elsewhere; the hit regions stay active
+    // the whole time and out-of-mode commands are ignored, like the choice
+    // buttons.
+    let quick = [
+        ("qlog", "Log", "story:log"),
+        ("qauto", "Auto", "story:auto"),
+        ("qskip", "Skip", "story:skip"),
+        ("qsave", "Save", "story:save"),
+    ];
+    let quick_y = DIALOG_BOX.1 + DIALOG_BOX.3 - 38.0;
+    let quick_w = 80.0;
+    let quick_x0 = DIALOG_BOX.0 + DIALOG_BOX.2 - 30.0 - quick.len() as f32 * 90.0;
+    for (i, (key, text, action)) in quick.iter().enumerate() {
+        let x = quick_x0 + i as f32 * 90.0;
+        let lbl = format!("{}_{}_lbl", stage_view, key);
+        out.push(serde_json::json!({
+            "name": lbl,
+            "type": "TextLabel",
+            "args": {
+                "font": font_dialog,
+                "content": "",
+                "x": x + centered_x(text, DIALOG_FONT_PX, quick_w),
+                "y": quick_y + 2.0,
+                "color": [0.75, 0.75, 0.75],
+                "scale": 1.0,
+                "visible": false,
+            }
+        }));
+        out.push(hit_region(
+            &format!("{}_{}_btn", stage_view, key),
+            x,
+            quick_y,
+            quick_w,
+            30.0,
+            Some(&lbl),
+            action,
+        ));
+    }
+
     // Choice furniture, sized for the widest menu in the story: one rounded
     // box + label per option, hidden until the story system reaches a
     // choice (each box is re-tinted visible with its slot). The buttons stay
@@ -1517,6 +1660,78 @@ pub(crate) fn emit_story(
                 }
             }));
         }
+    }
+
+    // Overlay furniture, declared after the rest of the stage so the dim
+    // draws over it: the shared full-canvas dim, the backlog history text,
+    // and the save/load slot rows. All hidden by rendering nothing (zero
+    // alpha, empty content); the story system fills them per overlay.
+    out.push(sprite(
+        &format!("{}_dim", stage_view),
+        0.0,
+        0.0,
+        win_w,
+        win_h,
+        [0.02, 0.02, 0.04, 0.0],
+    ));
+    out.push(label(
+        &format!("{}_history", stage_view),
+        &font_dialog,
+        "",
+        LabelStyle {
+            x: 100.0,
+            y: 70.0,
+            color: [0.92, 0.92, 0.92],
+            ..LabelStyle::default()
+        },
+    ));
+    out.push(label(
+        &format!("{}_slot_title", stage_view),
+        &font_menu,
+        "",
+        LabelStyle {
+            x: 280.0,
+            y: 160.0,
+            color: [1.0, 0.92, 0.78],
+            ..LabelStyle::default()
+        },
+    ));
+    for i in 0..SAVE_SLOTS {
+        let y = 230.0 + i as f32 * 80.0;
+        let lbl = format!("{}_slot{}_lbl", stage_view, i);
+        out.push(rounded_sprite(
+            &format!("{}_slot{}_box", stage_view, i),
+            (280.0, y, win_w - 560.0, 56.0),
+            [
+                CHOICE_BOX_COLOR[0],
+                CHOICE_BOX_COLOR[1],
+                CHOICE_BOX_COLOR[2],
+                0.0,
+            ],
+            CHOICE_BOX_RADIUS,
+        ));
+        out.push(serde_json::json!({
+            "name": lbl,
+            "type": "TextLabel",
+            "args": {
+                "font": font_menu,
+                "content": "",
+                "x": 310.0,
+                "y": y + 14.0,
+                "color": [0.92, 0.92, 0.92],
+                "scale": 1.0,
+                "visible": false,
+            }
+        }));
+        out.push(hit_region(
+            &format!("{}_slot{}_btn", stage_view, i),
+            280.0,
+            y,
+            win_w - 560.0,
+            56.0,
+            Some(&lbl),
+            &format!("story:slot:{}", i),
+        ));
     }
 
     // The ending screen, shown by the story system when the last node runs
@@ -1596,6 +1811,9 @@ pub(crate) fn emit_story(
 // against the box's dark backdrop.
 const DIALOG_BOX: (f32, f32, f32, f32) = (140.0, 500.0, 1000.0, 210.0);
 const DIALOG_BOX_RADIUS: f32 = 14.0;
+// Manual save slots offered by the slot overlay (the auto-save resumed by
+// Continue is separate).
+const SAVE_SLOTS: usize = 3;
 // Choice option rows: each option gets its own rounded box behind the label
 // so the menu stands apart from the dialog box's dark backdrop. The color
 // must match the story system's shown tint (it re-tints the boxes to show
@@ -1651,10 +1869,10 @@ fn stage_entry(
     Ok(entry)
 }
 
-// The compiled flag operations for a page or choice menu.
+// The compiled variable operations for a page or choice menu.
 fn ops_entries(ops: &[FlagOp]) -> Vec<serde_json::Value> {
     ops.iter()
-        .map(|op| serde_json::json!({ "flag": op.flag, "clear": op.clear }))
+        .map(|op| serde_json::json!({ "name": op.name, "value": op.value, "add": op.add }))
         .collect()
 }
 
@@ -1665,8 +1883,9 @@ fn gate_entries(gates: &[Gate], node_index: &dyn Fn(&str) -> u32) -> Vec<serde_j
         .iter()
         .map(|g| {
             serde_json::json!({
-                "flag": g.flag,
-                "negate": g.negate,
+                "name": g.condition.name,
+                "op": g.condition.op,
+                "value": g.condition.value,
                 "target": node_index(&g.target),
             })
         })
@@ -2036,6 +2255,37 @@ You walk together toward the morning.
         let text = &find(&entries, "story_stage_text")["args"];
         assert!(text["y"].as_f64().unwrap() > name["y"].as_f64().unwrap());
         assert!(!entries.iter().any(|e| asset_name(e).contains("_panel")));
+
+        // Quick row, advance marker, overlay furniture, and slot rows all
+        // exist and start hidden; the title screen offers Load.
+        assert_eq!(
+            action(find(&entries, "story_stage_qauto_btn")),
+            "story:auto"
+        );
+        assert_eq!(action(find(&entries, "story_stage_qlog_btn")), "story:log");
+        assert_eq!(
+            action(find(&entries, "story_stage_qskip_btn")),
+            "story:skip"
+        );
+        assert_eq!(
+            action(find(&entries, "story_stage_qsave_btn")),
+            "story:save"
+        );
+        assert_eq!(find(&entries, "story_stage_marker")["args"]["tint"][3], 0.0);
+        assert_eq!(find(&entries, "story_stage_dim")["args"]["tint"][3], 0.0);
+        assert_eq!(find(&entries, "story_stage_history")["args"]["content"], "");
+        assert_eq!(
+            action(find(&entries, "story_stage_slot2_btn")),
+            "story:slot:2"
+        );
+        assert_eq!(
+            find(&entries, "story_stage_slot0_box")["args"]["tint"][3],
+            0.0
+        );
+        assert_eq!(action(find(&entries, "story_title_load_btn")), "story:load");
+        assert_eq!(scaffold["slot_labels"].as_array().unwrap().len(), 3);
+        assert_eq!(scaffold["advance_marker"], "story_stage_marker");
+        assert_eq!(scaffold["title"], "story_title");
         assert!(
             entries
                 .iter()
@@ -2473,22 +2723,63 @@ The door creaks.
         let src = "---\ntitle: T\n---\n\n# a\n\n```story\nset asked\nclear shy\nif asked -> #b\nif not shy -> #b\n```\n\nOne.\n\n- [Go](#b \"if asked\")\n- [Stay](#a \"if not shy\")\n- [Leave](#b)\n\n# b\n\nDone.\n";
         let story = parse_story(src).unwrap();
         let page = &story.nodes[0].pages[0];
-        // Ops and gates attach to the page after the block, in order.
+        // Ops and gates attach to the page after the block, in order. Flag
+        // syntax compiles to the numeric model: set = 1, clear = 0, a bare
+        // test = "not zero", a `not` test = "zero".
         assert_eq!(page.ops.len(), 2);
-        assert_eq!(page.ops[0].flag, "asked");
-        assert!(!page.ops[0].clear);
-        assert!(page.ops[1].clear);
+        assert_eq!(page.ops[0].name, "asked");
+        assert_eq!((page.ops[0].value, page.ops[0].add), (1, false));
+        assert_eq!((page.ops[1].value, page.ops[1].add), (0, false));
         assert_eq!(page.gates.len(), 2);
         assert_eq!(page.gates[0].target, "b");
-        assert!(!page.gates[0].negate);
-        assert!(page.gates[1].negate);
+        assert_eq!(
+            (page.gates[0].condition.op, page.gates[0].condition.value),
+            ("ne", 0)
+        );
+        assert_eq!(
+            (page.gates[1].condition.op, page.gates[1].condition.value),
+            ("eq", 0)
+        );
         // Link titles gate their choices; an untitled choice is unconditional.
         let choices = &story.nodes[0].choices;
         let c = choices[0].condition.as_ref().unwrap();
-        assert_eq!(c.flag, "asked");
-        assert!(!c.negate);
-        assert!(choices[1].condition.as_ref().unwrap().negate);
+        assert_eq!(c.name, "asked");
+        assert_eq!((c.op, c.value), ("ne", 0));
+        assert_eq!(choices[1].condition.as_ref().unwrap().op, "eq");
         assert!(choices[2].condition.is_none());
+    }
+
+    #[test]
+    fn script_numeric_ops_and_comparisons_parse() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n```story\nset gold = 5\nadd gold -2\nif gold >= 3 -> #b\nif gold == 0 -> #b\nif gold != 1 -> #b\nif gold < 2 -> #b\nif gold <= 2 -> #b\nif gold > 2 -> #b\n```\n\nOne.\n\n- [Buy](#b \"if gold >= 3\")\n- [Beg](#b)\n\n# b\n\nDone.\n";
+        let story = parse_story(src).unwrap();
+        let page = &story.nodes[0].pages[0];
+        assert_eq!(
+            (
+                page.ops[0].name.as_str(),
+                page.ops[0].value,
+                page.ops[0].add
+            ),
+            ("gold", 5, false)
+        );
+        assert_eq!((page.ops[1].value, page.ops[1].add), (-2, true));
+        let ops: Vec<&str> = page.gates.iter().map(|g| g.condition.op).collect();
+        assert_eq!(ops, vec!["ge", "eq", "ne", "lt", "le", "gt"]);
+        assert_eq!(page.gates[0].condition.value, 3);
+        let c = story.nodes[0].choices[0].condition.as_ref().unwrap();
+        assert_eq!((c.name.as_str(), c.op, c.value), ("gold", "ge", 3));
+    }
+
+    #[test]
+    fn script_numeric_errors_are_strict() {
+        let bad_amount = "---\ntitle: T\n---\n\n# a\n\n```story\nadd gold two\n```\n\nhi\n";
+        assert!(parse_story(bad_amount).unwrap_err().contains("integer"));
+        let missing_amount = "---\ntitle: T\n---\n\n# a\n\n```story\nadd gold\n```\n\nhi\n";
+        assert!(parse_story(missing_amount).unwrap_err().contains("amount"));
+        let bad_value = "---\ntitle: T\n---\n\n# a\n\n```story\nset gold = lots\n```\n\nhi\n";
+        assert!(parse_story(bad_value).unwrap_err().contains("integer"));
+        let bad_cmp = "---\ntitle: T\n---\n\n# a\n\n```story\nif gold >= many -> #a\n```\n\nhi\n";
+        assert!(parse_story(bad_cmp).unwrap_err().contains("integer"));
     }
 
     #[test]
@@ -2498,7 +2789,7 @@ The door creaks.
         let node = &story.nodes[0];
         assert!(node.pages[0].ops.is_empty());
         assert_eq!(node.choice_ops.len(), 1);
-        assert_eq!(node.choice_ops[0].flag, "ready");
+        assert_eq!(node.choice_ops[0].name, "ready");
         assert_eq!(node.choice_gates.len(), 1);
         assert_eq!(node.choice_gates[0].target, "b");
     }
@@ -2514,7 +2805,7 @@ The door creaks.
         assert!(
             parse_story(bad_flag)
                 .unwrap_err()
-                .contains("not a flag name")
+                .contains("not a variable name")
         );
         let dangling = "---\ntitle: T\n---\n\n# a\n\n```story\nif x -> #nowhere\n```\n\nhi\n";
         assert!(
@@ -2543,12 +2834,15 @@ The door creaks.
         let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
         let nodes = &find(&entries, "s")["args"]["nodes"];
         let page = &nodes[0]["pages"][0];
-        assert_eq!(page["ops"][0]["flag"], "asked");
-        assert_eq!(page["ops"][0]["clear"], false);
+        assert_eq!(page["ops"][0]["name"], "asked");
+        assert_eq!(page["ops"][0]["value"], 1);
+        assert_eq!(page["ops"][0]["add"], false);
         // Gate targets compile to node indices like every other jump.
         assert_eq!(page["gates"][0]["target"], 1);
-        assert_eq!(page["gates"][0]["negate"], false);
-        assert_eq!(nodes[0]["choices"][0]["condition"]["flag"], "asked");
+        assert_eq!(page["gates"][0]["op"], "ne");
+        assert_eq!(page["gates"][0]["value"], 0);
+        assert_eq!(nodes[0]["choices"][0]["condition"]["name"], "asked");
+        assert_eq!(nodes[0]["choices"][0]["condition"]["op"], "ne");
     }
 
     #[test]

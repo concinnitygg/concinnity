@@ -6,6 +6,7 @@ One conditional jump in a [Story](Story.md)'s script.
 
 ## Parameters
 
-- `flag`: A string. The flag the condition tests.
-- `negate`: A boolean. `false` passes while the flag is set; `true` while it is cleared.
+- `name`: A string. The variable the condition tests.
+- `op`: A string (see [CmpOp](CmpOp.md)). How the variable compares against `value`.
+- `value`: An integer. The literal compared against.
 - `target`: An integer. Node index play jumps to when the condition passes.
