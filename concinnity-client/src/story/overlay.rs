@@ -47,29 +47,122 @@ impl StorySystem {
     }
 
     pub(super) fn open_save(&mut self, ctx: &mut PipelineContext) {
-        if self.page_mode() && !self.story.save_key.is_empty() {
+        if self.story.save_key.is_empty() {
+            return;
+        }
+        if self.page_mode() {
+            self.open_slots(ctx, false);
+        } else if self.menu_over_story() {
+            // Saving from a menu shown over the story (the injected pause menu):
+            // the stage is hidden behind the menu view, so raise it first, then
+            // open the slot overlay (stage-view furniture) on top of it.
+            self.raise_stage(ctx);
             self.open_slots(ctx, false);
         }
     }
 
-    // The title screen's Load: bring the (dimmed) stage up over whatever the
-    // title left behind and offer the slots. Also reachable nowhere else;
-    // mid-story loading goes through the same slots after a Save.
+    // Load offers the slot overlay from the title screen (before play), from
+    // ordinary page mode, and from a menu shown over the story (the pause
+    // menu). In the title and pause cases the stage is not the active view, so
+    // it is raised first; the overlay is set (in `open_slots`) before that view
+    // change lands, so the stage's `ViewShown` does not auto-start the story.
     pub(super) fn open_load(&mut self, ctx: &mut PipelineContext) {
         if self.overlay != Overlay::None || self.story.save_key.is_empty() {
             return;
         }
-        if self.started && !self.page_mode() {
-            return;
-        }
-        if !self.started {
-            // The overlay is set before the view change lands, so the
-            // stage's ViewShown does not auto-start the story.
-            let view = self.ids.as_ref().expect("resolved at init").view;
-            ctx.events_mut::<ViewCommand>()
-                .send(ViewCommand::Show(view));
+        if self.started {
+            if self.page_mode() {
+                // Already on the stage; the slots open in place.
+            } else if self.menu_over_story() {
+                self.raise_stage(ctx);
+            } else {
+                // A choice menu or the ending is up: loading is not offered.
+                return;
+            }
+        } else {
+            self.raise_stage(ctx);
         }
         self.open_slots(ctx, true);
+    }
+
+    // A view other than the story's own (the injected pause menu, say) is up
+    // over a started, non-choice story with no overlay: the stage is hidden
+    // behind it. Distinct from `page_mode`, which requires the stage itself to
+    // be active.
+    fn menu_over_story(&self) -> bool {
+        let Some(ids) = self.ids.as_ref() else {
+            return false;
+        };
+        self.started
+            && !self.in_choice
+            && self.overlay == Overlay::None
+            && self.active_view.is_some()
+            && self.active_view != Some(ids.view)
+            && self.active_view != Some(ids.ending_view)
+            && self.active_view != ids.title_view
+    }
+
+    // Bring the stage view forward (front and visible). The command lands next
+    // frame; any furniture set this frame keeps its content when the view
+    // re-activates.
+    fn raise_stage(&mut self, ctx: &mut PipelineContext) {
+        let view = self.ids.as_ref().expect("resolved at init").view;
+        ctx.events_mut::<ViewCommand>()
+            .send(ViewCommand::Show(view));
+    }
+
+    // Toggle the pause menu (the Escape binding and the Resume button). Views
+    // are single-slot, so showing the pause hides the stage; closing must show
+    // the stage explicitly rather than dismiss to no view (which renders
+    // nothing). An open backlog / slot overlay is dismissed first, so Escape
+    // steps back out one level at a time.
+    pub(super) fn toggle_pause(&mut self, ctx: &mut PipelineContext) {
+        if self.overlay != Overlay::None {
+            self.close_overlay(ctx);
+            return;
+        }
+        let (stage, pause) = {
+            let Some(ids) = self.ids.as_ref() else {
+                return;
+            };
+            (ids.view, ids.pause_view)
+        };
+        let Some(pause) = pause else { return };
+        if self.active_view == Some(pause) {
+            // Close: return to the stage the menu was opened over.
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(stage));
+        } else if self.active_view == Some(stage) {
+            // Open the pause menu over the stage.
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(pause));
+        }
+        // On the title / settings / ending screens Escape does nothing: those
+        // navigate through their own buttons.
+    }
+
+    // Open the settings screen (the pause menu's or the title's Settings item),
+    // remembering the menu that opened it so Back returns there.
+    pub(super) fn open_settings(&mut self, ctx: &mut PipelineContext) {
+        let settings = self.ids.as_ref().and_then(|i| i.settings_view);
+        if let Some(settings) = settings {
+            self.settings_return = self.active_view;
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(settings));
+        }
+    }
+
+    // Close the settings screen, returning to the menu that opened it (falling
+    // back to the title, then the stage).
+    pub(super) fn close_settings(&mut self, ctx: &mut PipelineContext) {
+        let target = self
+            .settings_return
+            .or_else(|| self.ids.as_ref().and_then(|i| i.title_view))
+            .or_else(|| self.ids.as_ref().map(|i| i.view));
+        if let Some(target) = target {
+            ctx.events_mut::<ViewCommand>()
+                .send(ViewCommand::Show(target));
+        }
     }
 
     pub(super) fn open_slots(&mut self, ctx: &mut PipelineContext, load: bool) {

@@ -482,6 +482,9 @@ pub(super) fn handle_story(text: &str) -> String {
         "save" => crate::assets::StoryCommand::OpenSave,
         "load" => crate::assets::StoryCommand::OpenLoad,
         "slot" => crate::assets::StoryCommand::Slot(req.option),
+        "pause" => crate::assets::StoryCommand::TogglePause,
+        "settings" => crate::assets::StoryCommand::OpenSettings,
+        "settings_back" => crate::assets::StoryCommand::CloseSettings,
         other => return error_reply(&format!("story: unknown action '{other}'")),
     };
     let (tx, rx) = std::sync::mpsc::sync_channel(1);

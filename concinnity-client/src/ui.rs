@@ -1417,6 +1417,9 @@ fn fire_action(
             "log" => Some(StoryCommand::ToggleLog),
             "save" => Some(StoryCommand::OpenSave),
             "load" => Some(StoryCommand::OpenLoad),
+            "pause" => Some(StoryCommand::TogglePause),
+            "settings" => Some(StoryCommand::OpenSettings),
+            "settings_back" => Some(StoryCommand::CloseSettings),
             _ => match rest.split_once(':') {
                 Some(("choose", i)) => i.parse::<usize>().ok().map(StoryCommand::Choose),
                 Some(("slot", i)) => i.parse::<usize>().ok().map(StoryCommand::Slot),

@@ -119,14 +119,16 @@ pub(crate) fn emit_story(
                 ..LabelStyle::default()
             },
         ));
-        // The four menu buttons at default contiguous positions; the story
-        // re-lays them out at runtime (Continue and Load only when a save
-        // exists), so their hit regions follow their labels.
+        // The menu buttons at default contiguous positions; the story re-lays
+        // them out at runtime (Continue and Load only when a save exists,
+        // Settings only when a settings screen exists), so their hit regions
+        // follow their labels.
         for (key, text, y, action) in [
-            ("start", "Start", 430.0, "story:start"),
-            ("continue", "Continue", 490.0, "story:continue"),
-            ("load", "Load", 550.0, "story:load"),
-            ("quit", "Quit", 610.0, "quit"),
+            ("start", "Start", 400.0, "story:start"),
+            ("continue", "Continue", 452.0, "story:continue"),
+            ("load", "Load", 504.0, "story:load"),
+            ("settings", "Settings", 556.0, "story:settings"),
+            ("quit", "Quit", 608.0, "quit"),
         ] {
             out.extend(title_button(
                 &format!("{}_{}", title_view, key),
@@ -236,6 +238,7 @@ pub(crate) fn emit_story(
     let quit_label = title_screen.then(|| format!("{}_quit_lbl", title_view));
     let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
     let load_label = title_screen.then(|| format!("{}_load_lbl", title_view));
+    let settings_label = title_screen.then(|| format!("{}_settings_lbl", title_view));
     let slot_boxes: Vec<String> = (0..SAVE_SLOTS)
         .map(|i| format!("{}_slot{}_box", stage_view, i))
         .collect();
@@ -267,6 +270,7 @@ pub(crate) fn emit_story(
                 "continue_label": continue_label,
                 "title": title_screen.then(|| title_view.clone()),
                 "load_label": load_label,
+                "settings_label": settings_label,
                 "advance_marker": format!("{}_marker", stage_view),
                 "log_label": format!("{}_qlog_lbl", stage_view),
                 "auto_label": format!("{}_qauto_lbl", stage_view),

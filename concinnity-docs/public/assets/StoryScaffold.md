@@ -24,6 +24,9 @@ story system mutates page by page.
 - `continue_label`: A string. The title screen's Continue [TextLabel](TextLabel.md), hidden while no save exists. Optional.
 - `title`: A string. The title screen [View](View.md), returned to when the load overlay is dismissed before play started. Optional.
 - `load_label`: A string. The title screen's Load [TextLabel](TextLabel.md), hidden while no slot save exists. Optional.
+- `pause`: A string. The pause-menu [View](View.md) (the injected Escape overlay), shown over the stage and returned from to the stage. Unset when the world declares no pause menu.
+- `settings`: A string. The settings-screen entry [View](View.md) opened by the pause menu's and the title screen's Settings items. Unset when there is no pause menu.
+- `settings_label`: A string. The title screen's Settings [TextLabel](TextLabel.md), laid out with the other title buttons and hidden when there is no settings screen. Optional.
 - `advance_marker`: A string. The small pulsing [Sprite](Sprite.md) shown when a fully revealed page waits for input. Optional.
 - `log_label`: A string. Quick-row Log [TextLabel](TextLabel.md) (dialogue history toggle). Optional.
 - `auto_label`: A string. Quick-row Auto [TextLabel](TextLabel.md) (auto-advance toggle). Optional.

@@ -273,6 +273,14 @@ fn dialog_is_bottom_anchored_and_title_buttons_follow() {
     let scaffold = &find(&entries, "story")["args"]["scaffold"];
     assert_eq!(scaffold["start_label"], "story_title_start_lbl");
     assert_eq!(scaffold["quit_label"], "story_title_quit_lbl");
+
+    // The title carries a Settings button (opening the settings screen through
+    // the story) and its label is registered in the scaffold for the runtime
+    // title-menu layout.
+    let settings = find(&entries, "story_title_settings_btn");
+    assert_eq!(settings["args"]["action"], "story:settings");
+    assert_eq!(settings["args"]["label"], "story_title_settings_lbl");
+    assert_eq!(scaffold["settings_label"], "story_title_settings_lbl");
 }
 
 // A `background` frontmatter draws the title menu over a full-bleed image

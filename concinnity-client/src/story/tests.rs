@@ -43,6 +43,9 @@ fn scaffold() -> StoryScaffold {
         continue_label: None,
         title: None,
         load_label: None,
+        pause: None,
+        settings: None,
+        settings_label: None,
         advance_marker: Some(intern("s_stage_marker")),
         log_label: Some(intern("s_stage_qlog_lbl")),
         auto_label: Some(intern("s_stage_qauto_lbl")),
@@ -154,6 +157,71 @@ fn title_menu_world(story: Story) -> World {
         });
     }
     world
+}
+
+// A story world with the pause menu + settings + title screens the engine
+// defaults inject, each with a member sprite the view system can show/hide so
+// the active screen is observable. Mirrors the scaffold the build produces once
+// the pause menu is injected and its views are threaded into the story.
+fn story_world_with_pause(story: Story) -> World {
+    let mut world = World::new_empty();
+    let mut story = story;
+    story.asset_id = intern("s");
+    let mut sc = scaffold();
+    sc.pause = Some(intern("s_pause"));
+    sc.settings = Some(intern("s_settings"));
+    sc.title = Some(intern("s_title"));
+    sc.start_label = Some(intern("s_title_start_lbl"));
+    sc.quit_label = Some(intern("s_title_quit_lbl"));
+    sc.settings_label = Some(intern("s_title_settings_lbl"));
+    story.scaffold = sc;
+    world.add_component(story);
+    for (view, initial) in [
+        ("s_stage", true),
+        ("s_ending", false),
+        ("s_pause", false),
+        ("s_settings", false),
+        ("s_title", false),
+    ] {
+        world.add_component(View {
+            asset_id: intern(view),
+            initial,
+            fade_in_secs: 0.0,
+        });
+    }
+    // One member sprite per menu screen, so its visibility tracks whether the
+    // screen is the active view.
+    for (name, view) in [
+        ("s_pause_dim", "s_pause"),
+        ("s_settings_dim", "s_settings"),
+        ("s_title_bg", "s_title"),
+    ] {
+        world.add_component(Sprite {
+            view: Some(intern(view)),
+            ..sprite_named(name)
+        });
+    }
+    for lbl in [
+        "s_title_start_lbl",
+        "s_title_quit_lbl",
+        "s_title_settings_lbl",
+    ] {
+        world.add_component(TextLabel {
+            view: Some(intern("s_title")),
+            ..label_named(lbl)
+        });
+    }
+    add_stage_furniture(&mut world);
+    world
+}
+
+fn sprite_visible(world: &World, name: &str) -> bool {
+    let id = intern(name);
+    world
+        .query::<Sprite>()
+        .find(|s| s.asset_id == id)
+        .map(|s| s.visible)
+        .unwrap_or(false)
 }
 
 fn label_content(world: &World, name: &str) -> String {
@@ -976,6 +1044,178 @@ fn save_overlay_writes_and_load_resumes() {
         .send(StoryCommand::Slot(0));
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// Saving from a menu shown over the story (the injected pause menu) raises the
+// hidden stage and opens the slot overlay on it, even though a different view
+// -- not the stage -- is active. Without the raise the slot furniture (all
+// stage-view members) would stay hidden behind the menu.
+#[test]
+fn pause_menu_save_raises_stage_and_opens_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "pause_save".to_string();
+    let mut world = story_world(story);
+    world.start().unwrap();
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.save_dir = dir.path().to_path_buf();
+        }
+    }
+    world.step();
+    // A pause menu becomes the active view over the started story.
+    world.events_mut::<ViewShown>().send(ViewShown {
+        view: intern("s_pause"),
+    });
+    world.step();
+
+    // Save from the pause menu opens the slot overlay on the raised stage.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::OpenSave);
+    world.step();
+    assert!(label_content(&world, "s_stage_slot_title").contains("Save"));
+
+    // Picking a slot writes the current position.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Slot(0));
+    world.step();
+    let saved = read_save(&slot_file(dir.path(), "pause_save", 0)).expect("slot written");
+    assert_eq!(saved.page, 0);
+}
+
+// Escape opens the pause over the stage; Escape (or Resume) again returns to
+// the stage rather than dismissing to no view (which would render nothing).
+#[test]
+fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
+    let mut world = story_world_with_pause(two_page_story());
+    world.start().unwrap();
+    world.step();
+    assert!(sprite_visible(&world, "s_stage_bg"), "stage starts visible");
+
+    // Escape from the stage opens the pause menu over it.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::TogglePause);
+    world.step();
+    world.step();
+    assert!(
+        sprite_visible(&world, "s_pause_dim"),
+        "pause menu shown on Escape"
+    );
+    assert!(
+        !sprite_visible(&world, "s_stage_bg"),
+        "stage hidden behind the pause"
+    );
+
+    // Escape again returns to the stage (the reported blank-screen bug).
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::TogglePause);
+    world.step();
+    world.step();
+    assert!(
+        sprite_visible(&world, "s_stage_bg"),
+        "resume returns to the stage, not a blank view"
+    );
+    assert!(!sprite_visible(&world, "s_pause_dim"));
+}
+
+// The settings screen returns, on Back, to whichever menu opened it: the pause
+// menu when opened mid-game, the title when opened from the title.
+#[test]
+fn settings_back_returns_to_the_opener() {
+    let mut world = story_world_with_pause(two_page_story());
+    world.start().unwrap();
+    world.step();
+
+    // Pause -> Settings -> Back returns to the pause menu.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::TogglePause);
+    world.step();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::OpenSettings);
+    world.step();
+    world.step();
+    assert!(sprite_visible(&world, "s_settings_dim"), "settings shown");
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::CloseSettings);
+    world.step();
+    world.step();
+    assert!(
+        sprite_visible(&world, "s_pause_dim"),
+        "Back from settings returns to the pause menu"
+    );
+
+    // Title -> Settings -> Back returns to the title.
+    world
+        .events_mut::<ViewCommand>()
+        .send(ViewCommand::Show(intern("s_title")));
+    world.step();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::OpenSettings);
+    world.step();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::CloseSettings);
+    world.step();
+    world.step();
+    assert!(
+        sprite_visible(&world, "s_title_bg"),
+        "Back from settings opened at the title returns to the title"
+    );
+}
+
+// Returning to the title (Quit-to-Title, or the ending's Back) ends the
+// playthrough, so the title's Load opens the slot overlay. Regression: with
+// `started` left set, Load fell through open_load's not-page-mode guard and was
+// a dead button on every title visit after the first play.
+#[test]
+fn title_load_works_after_returning_to_the_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "replay".to_string();
+    let mut world = story_world_with_pause(story);
+    world.start().unwrap();
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.save_dir = dir.path().to_path_buf();
+        }
+    }
+    world.step(); // stage active, started == true
+    let save = StorySave {
+        slug: "a".to_string(),
+        page: 1,
+        vars: BTreeMap::new(),
+    };
+    write_save(&slot_file(dir.path(), "replay", 0), &save).unwrap();
+
+    // Quit to the title (a plain view:show the pause menu's Quit fires).
+    world
+        .events_mut::<ViewCommand>()
+        .send(ViewCommand::Show(intern("s_title")));
+    world.step();
+    world.step();
+    assert!(sprite_visible(&world, "s_title_bg"), "title shown");
+
+    // Load from the title now opens the slot overlay (dead before the fix).
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::OpenLoad);
+    world.step();
+    world.step();
+    assert!(
+        label_content(&world, "s_stage_slot_title").contains("Load"),
+        "load overlay opens from the title after a playthrough"
+    );
 }
 
 // A choice button's hit region overlaps a slot row's (always-active) hit

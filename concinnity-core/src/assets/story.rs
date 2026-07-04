@@ -102,6 +102,19 @@ pub struct StoryScaffold {
     /// slot save exists.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub load_label: Option<AssetId>,
+    /// The pause-menu [View](#view) (the injected Escape overlay), shown over
+    /// the stage and returned from to the stage. Unset when the world declares
+    /// no pause menu.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub pause: Option<AssetId>,
+    /// The settings-screen entry [View](#view) opened by the pause menu's and
+    /// the title screen's Settings items. Unset when there is no pause menu.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub settings: Option<AssetId>,
+    /// The title screen's Settings [TextLabel](#textlabel), laid out with the
+    /// other title buttons and hidden when there is no settings screen.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub settings_label: Option<AssetId>,
     /// The small pulsing [Sprite](#sprite) shown when a fully revealed page
     /// waits for input.
     #[serde(deserialize_with = "de_opt_asset_ref")]

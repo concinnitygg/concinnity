@@ -8,13 +8,16 @@ impl StorySystem {
     // (and goes inert while the label is empty), so a hidden button neither
     // shows nor catches clicks. Runs at init and whenever the title is shown.
     pub(super) fn layout_title_menu(&mut self, ctx: &mut PipelineContext) {
-        let (title_view, start, cont, load, quit) = match self.ids.as_ref() {
+        let (title_view, start, cont, load, settings, quit, has_settings) = match self.ids.as_ref()
+        {
             Some(ids) => (
                 ids.title_view,
                 ids.start_label,
                 ids.continue_label,
                 ids.load_label,
+                ids.settings_label,
                 ids.quit_label,
+                ids.settings_view.is_some(),
             ),
             None => return,
         };
@@ -31,6 +34,11 @@ impl StorySystem {
         }
         if has_slots {
             buttons.push((load, "Load"));
+        }
+        // Settings appears only when a settings screen exists (no pause menu ->
+        // no settings screen), between Load and Quit.
+        if has_settings {
+            buttons.push((settings, "Settings"));
         }
         buttons.push((quit, "Quit"));
 
@@ -51,6 +59,9 @@ impl StorySystem {
         }
         if !has_slots {
             set_label(ctx, load, |l| l.content.clear());
+        }
+        if !has_settings {
+            set_label(ctx, settings, |l| l.content.clear());
         }
     }
 }

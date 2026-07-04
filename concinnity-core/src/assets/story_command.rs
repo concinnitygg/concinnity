@@ -27,4 +27,12 @@ pub enum StoryCommand {
     OpenLoad,
     // Pick a slot in the open slot overlay.
     Slot(usize),
+    // Toggle the pause menu over the stage: show it from the stage (or close an
+    // open overlay first), and return to the stage when it is up.
+    TogglePause,
+    // Open the settings screen, remembering the menu that opened it so it can be
+    // returned to.
+    OpenSettings,
+    // Close the settings screen, returning to whichever menu opened it.
+    CloseSettings,
 }

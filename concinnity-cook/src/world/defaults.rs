@@ -78,7 +78,126 @@ pub(crate) fn inject_engine_defaults(
             ],
         )?;
     }
+    // A story world with no menu of its own gets an Escape-toggled pause menu.
+    // Injected after the HUD defaults so it does not turn on the StatHud: the
+    // trimmed pause menu carries no performance-stats toggles to drive it.
+    if toggles.story_pause_menu {
+        inject_story_pause_menu(assets, report)?;
+    }
     Ok(())
+}
+
+// Give a story world an Escape pause menu (Resume / Save / Load / Settings /
+// Quit) when it plays a Story but declares no MainMenu. The menu targets the
+// story's own title screen for its Quit item and uses the trimmed settings
+// profile: a 2D story renders no scene, so only window / output and volume are
+// worth configuring. Runs after story expansion, so the compiled Story asset
+// (named for the sanitized import) and its `<name>_title` view are present.
+fn inject_story_pause_menu(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), String> {
+    // An authored MainMenu takes over the pause role; only inject when the
+    // world declares none of its own.
+    if assets.iter().any(|v| type_norm(v) == "mainmenu") {
+        return Ok(());
+    }
+    let Some(prefix) = assets
+        .iter()
+        .find(|v| type_norm(v) == "story")
+        .map(asset_name)
+        .filter(|n| !n.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let name = format!("{}_pause", prefix);
+    // No MainMenu exists (checked above), so this can only flag a same-name
+    // collision with an unrelated asset, which is a hard error rather than a
+    // silent skip.
+    if name_claimed(assets, &name, "MainMenu")? {
+        return Ok(());
+    }
+
+    // Quit returns to the story's title screen when it has one; a story built
+    // without a title screen has nowhere to return to, so it quits to desktop.
+    let title_view = format!("{}_title", prefix);
+    let quit_action = if assets
+        .iter()
+        .any(|v| type_norm(v) == "view" && asset_name(v) == title_view)
+    {
+        format!("view:show:{}", title_view)
+    } else {
+        "quit".to_string()
+    };
+
+    // The story system drives the pause and settings navigation (Resume /
+    // Settings / the settings Back), so closing returns to the stage instead of
+    // dismissing to an empty view. A translucent backdrop rather than the
+    // opaque MainMenu default, so the menu reads as an overlay. `toggle_key` is
+    // empty: Escape is a separate story-driven binding (below), not the
+    // MainMenu's own view toggle. `settings_back_action` both routes Back
+    // through the story and forces the settings screen to be generated.
+    let args = serde_json::json!({
+        "toggle_key": "",
+        "dim": [0.0, 0.0, 0.0, 0.6],
+        "settings_profile": "minimal",
+        "settings_back_action": "story:settings_back",
+        "items": [
+            { "label": "Resume", "action": "story:pause" },
+            { "label": "Save", "action": "story:save" },
+            { "label": "Load", "action": "story:load" },
+            { "label": "Settings", "action": "story:settings" },
+            { "label": "Quit to Title", "action": quit_action },
+        ],
+    });
+    inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
+
+    // Escape toggles the pause through the story system.
+    inject(
+        assets,
+        report,
+        "story_pause_menu",
+        &format!("{}_key", name),
+        "KeyBinding",
+        serde_json::json!({ "key": "Escape", "action": "story:pause" }),
+    );
+
+    // Point the story at its pause menu and settings entry views so the story
+    // system can show them. Those views are generated later by the menu
+    // expansion; the names are stable and intern to the same ids.
+    patch_story_scaffold(assets, prefix.as_str(), &name);
+    Ok(())
+}
+
+// Add the injected pause menu's view (`<menu>`) and settings entry view
+// (`<menu>_settings_video`) to the Story asset's scaffold, so the story system
+// resolves them like every other stage reference.
+fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu_name: &str) {
+    let pause_view = menu_name.to_string();
+    let settings_view = format!("{}_settings_video", menu_name);
+    for v in assets.iter_mut() {
+        if type_norm(v) != "story" || asset_name(v) != story_name {
+            continue;
+        }
+        // Best-effort: a build-generated Story always carries an object args +
+        // scaffold, but a hand-authored one might be malformed. Skip the patch
+        // rather than panic; the malformed Story surfaces its own error at
+        // validation / compile.
+        let Some(args) = v.get_mut("args").and_then(|a| a.as_object_mut()) else {
+            return;
+        };
+        let Some(scaffold) = args
+            .entry("scaffold")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+        else {
+            return;
+        };
+        scaffold.insert("pause".to_string(), serde_json::json!(pause_view));
+        scaffold.insert("settings".to_string(), serde_json::json!(settings_view));
+        return;
+    }
 }
 
 // Remove EngineDefaults entries from the world (they are build directives, not
@@ -542,6 +661,137 @@ mod tests {
         let mut report = ExpandReport::default();
         inject_engine_defaults(&mut assets, &mut report).unwrap();
         assert!(names_of_type(&assets, "proceduralmesh").is_empty());
+    }
+
+    #[test]
+    fn story_world_injects_a_pause_menu() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":{}}),
+            serde_json::json!({"name":"tale_title","type":"View","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        let menu = assets
+            .iter()
+            .find(|v| type_norm(v) == "mainmenu")
+            .expect("pause menu injected");
+        assert_eq!(asset_name(menu), "tale_pause");
+        assert_eq!(menu["args"]["settings_profile"], "minimal");
+        // The story system drives the pause: no MainMenu view toggle, and Back
+        // routes through the story so it returns to whichever menu opened it.
+        assert_eq!(menu["args"]["toggle_key"], "");
+        assert_eq!(menu["args"]["settings_back_action"], "story:settings_back");
+        // Translucent backdrop, not the opaque MainMenu default.
+        let alpha = menu["args"]["dim"][3].as_f64().unwrap();
+        assert!(
+            alpha > 0.0 && alpha < 1.0,
+            "pause dim should be translucent"
+        );
+
+        let actions: Vec<&str> = menu["args"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["action"].as_str().unwrap())
+            .collect();
+        for action in [
+            "story:pause",
+            "story:save",
+            "story:load",
+            "story:settings",
+            "view:show:tale_title",
+        ] {
+            assert!(actions.contains(&action), "missing pause action {action}");
+        }
+
+        // Escape is a story-driven binding, not the MainMenu's own toggle.
+        let key = assets
+            .iter()
+            .find(|v| type_norm(v) == "keybinding" && asset_name(v) == "tale_pause_key")
+            .expect("Escape binding injected");
+        assert_eq!(key["args"]["key"], "Escape");
+        assert_eq!(key["args"]["action"], "story:pause");
+
+        // The Story scaffold points at the pause + settings views.
+        let story = assets.iter().find(|v| type_norm(v) == "story").unwrap();
+        assert_eq!(story["args"]["scaffold"]["pause"], "tale_pause");
+        assert_eq!(
+            story["args"]["scaffold"]["settings"],
+            "tale_pause_settings_video"
+        );
+
+        // The trimmed menu drives no StatHud, so none is injected for a story.
+        assert!(names_of_type(&assets, "stathud").is_empty());
+    }
+
+    #[test]
+    fn story_without_a_title_screen_quits_to_desktop() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        let menu = assets
+            .iter()
+            .find(|v| type_norm(v) == "mainmenu")
+            .expect("pause menu injected");
+        let quit = menu["args"]["items"].as_array().unwrap().last().unwrap();
+        assert_eq!(quit["action"], "quit");
+    }
+
+    #[test]
+    fn authored_menu_suppresses_the_story_pause_menu() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":{}}),
+            serde_json::json!({"name":"tale_title","type":"View","args":{}}),
+            serde_json::json!({"name":"my_menu","type":"MainMenu","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert_eq!(names_of_type(&assets, "mainmenu"), vec!["my_menu"]);
+    }
+
+    #[test]
+    fn engine_defaults_opts_out_of_the_story_pause_menu() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":{}}),
+            serde_json::json!({"name":"tale_title","type":"View","args":{}}),
+            serde_json::json!({"name":"d","type":"EngineDefaults","args":{
+                "story_pause_menu": false
+            }}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "mainmenu").is_empty());
+    }
+
+    #[test]
+    fn malformed_story_args_do_not_panic_the_pause_injection() {
+        // A hand-authored Story with a non-object args is malformed, but the
+        // pause injection must skip the scaffold patch gracefully rather than
+        // panic; the malformed Story surfaces its own error later.
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":[]}),
+            serde_json::json!({"name":"tale_title","type":"View","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        // The menu still injects; only the scaffold patch was skipped.
+        assert!(assets.iter().any(|v| type_norm(v) == "mainmenu"));
+    }
+
+    #[test]
+    fn non_story_world_gets_no_pause_menu() {
+        let mut assets = world(&[gfx()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "mainmenu").is_empty());
     }
 
     #[test]

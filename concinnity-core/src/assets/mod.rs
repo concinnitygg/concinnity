@@ -136,7 +136,7 @@ pub use key_binding::KeyBinding;
 pub use layout_container::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
 pub use lifetime::Lifetime;
 pub use light_rig::LightRig;
-pub use main_menu::{MainMenu, MainMenuItem};
+pub use main_menu::{MainMenu, MainMenuItem, SettingsProfile};
 pub use material::Material;
 pub use material_palette::MaterialPalette;
 pub use mesh::{Mesh, VertexData};

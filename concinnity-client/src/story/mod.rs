@@ -90,6 +90,12 @@ struct StageIds {
     // title is dismissed) and its Load label, hidden while no slot exists.
     title_view: Option<AssetId>,
     load_label: Option<AssetId>,
+    // The pause menu view (the injected Escape overlay), the settings-screen
+    // entry view it and the title open, and the title's Settings label. All
+    // unset when the world declares no pause menu.
+    pause_view: Option<AssetId>,
+    settings_view: Option<AssetId>,
+    settings_label: Option<AssetId>,
     // The pulsing waiting-for-input marker.
     marker: Option<AssetId>,
     // Quick-row control labels (Log / Auto / Skip / Save).
@@ -127,6 +133,9 @@ impl StageIds {
             continue_label: scaffold.continue_label,
             title_view: scaffold.title,
             load_label: scaffold.load_label,
+            pause_view: scaffold.pause,
+            settings_view: scaffold.settings,
+            settings_label: scaffold.settings_label,
             marker: scaffold.advance_marker,
             log_label: scaffold.log_label,
             auto_label: scaffold.auto_label,
@@ -243,6 +252,9 @@ pub struct StorySystem {
     // The active view as announced by UiInputSystem; stage input (advance,
     // choose) is ignored while a menu or the title screen is up.
     active_view: Option<AssetId>,
+    // The view the settings screen returns to on Back (the pause menu or the
+    // title, whichever opened it).
+    settings_return: Option<AssetId>,
     command_cursor: crate::ecs::EventCursor,
     view_shown_cursor: crate::ecs::EventCursor,
     reload_cursor: crate::ecs::EventCursor,
@@ -280,6 +292,7 @@ impl StorySystem {
             overlay: Overlay::None,
             history: Vec::new(),
             active_view: None,
+            settings_return: None,
             command_cursor: crate::ecs::EventCursor::default(),
             view_shown_cursor: crate::ecs::EventCursor::default(),
             reload_cursor: crate::ecs::EventCursor::default(),
@@ -367,6 +380,11 @@ impl System for StorySystem {
             // state may have changed while a story played (a fresh auto-save,
             // a new slot, or a finished story clearing its auto-save).
             if Some(view) == self.ids.as_ref().and_then(|i| i.title_view) {
+                // Returning to the title (Quit-to-Title, or the ending's Back)
+                // ends the playthrough, so Start / Continue / Load behave as a
+                // fresh entry -- in particular Load routes through the
+                // not-started path that raises the stage.
+                self.started = false;
                 self.layout_title_menu(ctx);
             }
         }
@@ -417,6 +435,9 @@ impl System for StorySystem {
                 StoryCommand::OpenSave => self.open_save(ctx),
                 StoryCommand::OpenLoad => self.open_load(ctx),
                 StoryCommand::Slot(i) => self.pick_slot(i, ctx),
+                StoryCommand::TogglePause => self.toggle_pause(ctx),
+                StoryCommand::OpenSettings => self.open_settings(ctx),
+                StoryCommand::CloseSettings => self.close_settings(ctx),
                 StoryCommand::Advance if !mode_flipped && !button_tick => {
                     if self.overlay != Overlay::None {
                         // Any plain click dismisses an overlay.
