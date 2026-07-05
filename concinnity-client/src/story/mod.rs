@@ -169,12 +169,16 @@ struct StorySave {
     vars: BTreeMap<String, i32>,
 }
 
-fn save_file(dir: &Path, key: &str) -> PathBuf {
-    dir.join(format!("story_{}.bin", key))
+// The auto-save file (resumed by `story:continue`). One per game: v1 allows a
+// single story per world, so saves are a flat list with no per-story key.
+fn save_file(dir: &Path) -> PathBuf {
+    dir.join("auto")
 }
 
-fn slot_file(dir: &Path, key: &str, slot: usize) -> PathBuf {
-    dir.join(format!("story_{}_slot{}.bin", key, slot))
+// A numbered manual save slot. Slots are 1-based on disk (`save1`..) to match
+// the slot-menu labels; `slot` is the 0-based internal index.
+fn slot_file(dir: &Path, slot: usize) -> PathBuf {
+    dir.join(format!("save{}", slot + 1))
 }
 
 fn read_save(path: &Path) -> Option<StorySave> {
@@ -297,7 +301,7 @@ impl StorySystem {
             started: false,
             in_choice: false,
             vars: HashMap::new(),
-            save_dir: concinnity_core::paths::data_dir(),
+            save_dir: concinnity_core::paths::saves_dir(),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             last_step: None,

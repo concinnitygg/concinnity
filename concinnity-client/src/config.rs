@@ -7,8 +7,9 @@
 //   machine and stays out of the project tree.
 //
 // - `Settings` (runtime choices made in the in-engine settings menu: graphics,
-//   audio, controls) lives in the project at `.concinnity/config/settings.bin`,
-//   the mutable sibling of the build-regenerated `.concinnity/data`. It is
+//   audio, controls) lives in the project at `.concinnity/settings` (the
+//   `settings` file under the state directory), the mutable sibling of the
+//   build-regenerated `.concinnity/data`. It is
 //   stored as CBOR: binary like the data blobs, but self-describing, so adding
 //   or removing a setting never invalidates an existing file (a missing field
 //   falls back to its default, an unknown field is ignored). bincode, which the
@@ -21,13 +22,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_SERVER: &str = "http://127.0.0.1:8080";
-const SETTINGS_FILE: &str = "settings.bin";
-// Environment override for the directory that holds `settings.bin`. When set,
-// `Settings::load`/`save` read and write there instead of the project-relative
-// `.concinnity/config`, so a sandbox (CI, a second instance, or a test that
-// drives the binary) keeps its settings off the developer's real file. Unset in
-// normal use.
-const CONFIG_DIR_ENV: &str = "CN_CONFIG_DIR";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -40,7 +34,7 @@ pub struct Config {
 }
 
 // The runtime settings store: choices made in the in-engine settings menu.
-// Persisted as CBOR at `.concinnity/config/settings.bin`. Each field is
+// Persisted as CBOR at `.concinnity/settings`. Each field is
 // `Option` (via the sub-structs): `None` means "use the world's default" so an
 // unchanged setting never overrides the authored value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -323,26 +317,26 @@ impl Config {
 }
 
 impl Settings {
-    // Load from `<config dir>/settings.bin` (CBOR). When the file is absent,
-    // fall back to migrating any graphics/audio/controls choices from the legacy
+    // Load from the `settings` file (CBOR). When the file is absent, fall back
+    // to migrating any graphics/audio/controls choices from the legacy
     // `config.json` (where they used to live) so an existing user's choices are
     // not silently reset. The migrated values are persisted on the next `save()`
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
     pub fn load() -> Self {
-        Self::load_from(&config_dir())
+        Self::load_from(&concinnity_core::paths::settings_path())
     }
 
-    // Persist to `<config dir>/settings.bin` as CBOR. Creates the config
-    // directory as needed.
+    // Persist to the `settings` file as CBOR. Creates the state directory as
+    // needed.
     pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&config_dir())
+        self.save_to(&concinnity_core::paths::settings_path())
     }
 
-    // Read settings from `dir`. Split from `load` so the serialize-read path can
-    // be tested against a sandbox dir, never the developer's real file.
-    fn load_from(dir: &Path) -> Self {
-        match std::fs::read(dir.join(SETTINGS_FILE)) {
+    // Read settings from `path`. Split from `load` so the serialize-read path
+    // can be tested against a sandbox file, never the developer's real one.
+    fn load_from(path: &Path) -> Self {
+        match std::fs::read(path) {
             Ok(bytes) => ciborium::from_reader(&bytes[..]).unwrap_or_else(|e| {
                 // A truncated / incompatible file: use defaults rather than
                 // wiping silently mid-run (CBOR + serde defaults make this rare).
@@ -354,22 +348,16 @@ impl Settings {
         }
     }
 
-    // Write settings to `dir`. Split from `save` so the serialize-write path can
-    // be tested against a sandbox dir, never the developer's real file.
-    fn save_to(&self, dir: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
+    // Write settings to `path`. Split from `save` so the serialize-write path
+    // can be tested against a sandbox file, never the developer's real one.
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let mut bytes = Vec::new();
         ciborium::into_writer(self, &mut bytes).map_err(std::io::Error::other)?;
-        std::fs::write(dir.join(SETTINGS_FILE), bytes)
+        std::fs::write(path, bytes)
     }
-}
-
-// The directory holding `settings.bin`: the `CN_CONFIG_DIR` override when set,
-// otherwise the project-relative `.concinnity/config`.
-fn config_dir() -> PathBuf {
-    std::env::var_os(CONFIG_DIR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(concinnity_core::paths::config_dir)
 }
 
 // Read the legacy `config.json` and lift any graphics/audio/controls sections
@@ -584,8 +572,8 @@ mod tests {
     }
 
     // Regression guard: the on-disk `save`/`load` path must stay sandboxable so a
-    // test can never clobber the developer's real `.concinnity/config/settings.bin`.
-    // Drives the real serialize-write-read cycle, but against a temp dir. A
+    // test can never clobber the developer's real `.concinnity/settings` file.
+    // Drives the real serialize-write-read cycle, but against a temp file. A
     // non-default `render_scale` mirrors a real persisted choice and proves a
     // populated field survives the round trip (it is the field whose loss the
     // original 271 -> 260 byte clobber would have shown).
@@ -602,24 +590,23 @@ mod tests {
         };
 
         let dir = tempfile::tempdir().unwrap();
-        // The sandbox is somewhere else entirely, never the real settings dir.
-        assert_ne!(dir.path(), config_dir());
+        let path = dir.path().join("settings");
+        // The sandbox is somewhere else entirely, never the real settings file.
+        assert_ne!(path, concinnity_core::paths::settings_path());
 
-        s.save_to(dir.path()).unwrap();
+        s.save_to(&path).unwrap();
         // The write landed in the sandbox under the expected file name.
-        assert!(dir.path().join(SETTINGS_FILE).exists());
+        assert!(path.exists());
 
-        let loaded = Settings::load_from(dir.path());
+        let loaded = Settings::load_from(&path);
         assert_eq!(loaded, s);
     }
 
-    // With no override set, settings resolve to the project-relative config dir.
-    // The env is read-only here (mutating it is process-global and would race
-    // other tests), so the override branch is left to integration use.
+    // Settings resolve to the `settings` file directly under the state dir.
     #[test]
-    fn config_dir_defaults_to_project_dir() {
-        if std::env::var_os(CONFIG_DIR_ENV).is_none() {
-            assert_eq!(config_dir(), concinnity_core::paths::config_dir());
-        }
+    fn settings_path_is_under_state_dir() {
+        let p = concinnity_core::paths::settings_path();
+        assert_eq!(p.file_name().unwrap(), "settings");
+        assert_eq!(p, concinnity_core::paths::state_dir().join("settings"));
     }
 }

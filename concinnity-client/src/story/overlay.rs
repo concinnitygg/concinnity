@@ -263,7 +263,7 @@ impl StorySystem {
     }
 
     pub(super) fn slot_summary(&self, slot: usize) -> String {
-        match read_save(&slot_file(&self.save_dir, &self.story.save_key, slot)) {
+        match read_save(&slot_file(&self.save_dir, slot)) {
             Some(save) => format!("Slot {}   {}, page {}", slot + 1, save.slug, save.page + 1),
             None => format!("Slot {}   (empty)", slot + 1),
         }
@@ -279,7 +279,7 @@ impl StorySystem {
         match self.overlay {
             Overlay::SaveMenu => {
                 let save = self.current_save();
-                let path = slot_file(&self.save_dir, &self.story.save_key, slot);
+                let path = slot_file(&self.save_dir, slot);
                 if let Err(e) = write_save(&path, &save) {
                     tracing::warn!("StorySystem: slot save failed: {e}");
                 }
@@ -289,7 +289,7 @@ impl StorySystem {
             }
             Overlay::LoadMenu => {
                 // Picking an empty slot leaves the overlay up.
-                let path = slot_file(&self.save_dir, &self.story.save_key, slot);
+                let path = slot_file(&self.save_dir, slot);
                 let Some(save) = read_save(&path) else { return };
                 self.hide_overlay_furniture(ctx);
                 self.overlay = Overlay::None;

@@ -702,7 +702,7 @@ fn menu_gates_redirect_past_the_menu() {
 #[test]
 fn story_save_round_trips() {
     let dir = tempfile::tempdir().unwrap();
-    let auto = save_file(dir.path(), "q");
+    let auto = save_file(dir.path());
     assert!(read_save(&auto).is_none());
     let save = StorySave {
         slug: "meadow".to_string(),
@@ -720,7 +720,7 @@ fn story_save_round_trips() {
     std::fs::write(&auto, b"not cbor").unwrap();
     assert!(read_save(&auto).is_none());
     // Slot files sit beside the auto-save, one per slot.
-    let slot = slot_file(dir.path(), "q", 1);
+    let slot = slot_file(dir.path(), 1);
     write_save(&slot, &save).unwrap();
     assert_eq!(read_save(&slot).unwrap().slug, "meadow");
 }
@@ -1030,7 +1030,7 @@ fn slot_summaries_and_slot_presence() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), "q", 0), &save).unwrap();
+    write_save(&slot_file(dir.path(), 0), &save).unwrap();
     assert!(sys.any_slot_save());
     let summary = sys.slot_summary(0);
     assert!(summary.contains("a"), "{summary}");
@@ -1074,7 +1074,7 @@ fn save_overlay_writes_and_load_resumes() {
     world.step();
     // Overlay dismissed, page restored, slot written.
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
-    let saved = read_save(&slot_file(dir.path(), "slot_test", 0)).expect("slot written");
+    let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
     assert_eq!(saved.page, 1);
 
     // Restart, then load the slot back: play resumes at page 2.
@@ -1141,7 +1141,7 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), "scroll_test", 6), &save).unwrap();
+    write_save(&slot_file(dir.path(), 6), &save).unwrap();
     world.step();
 
     // Open the load overlay: the window starts at slot 1, showing three rows.
@@ -1206,7 +1206,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Slot(0));
     world.step();
-    let saved = read_save(&slot_file(dir.path(), "pause_save", 0)).expect("slot written");
+    let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
     assert_eq!(saved.page, 0);
 }
 
@@ -1321,7 +1321,7 @@ fn title_load_works_after_returning_to_the_title() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), "replay", 0), &save).unwrap();
+    write_save(&slot_file(dir.path(), 0), &save).unwrap();
 
     // Quit to the title (a plain view:show the pause menu's Quit fires).
     world
