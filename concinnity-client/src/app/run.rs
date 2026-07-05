@@ -16,6 +16,7 @@
 
 use crate::app::state::App;
 use crate::ecs::StepResult;
+use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
@@ -60,6 +61,28 @@ pub fn run() -> std::io::Result<()> {
         return Ok(());
     }
 
+    start_runtime(app)
+}
+
+// Production entry point for a shipped game: like `run`, but with the state root
+// pinned to `state_dir` (the flat tree beside the executable or inside an app
+// bundle, holding `data/`, `saves/`, and `settings`), and a missing blob is a
+// hard error rather than a silent no-op -- a packaged game without its data
+// cannot do anything useful. The concinnity-runtime binary calls this.
+pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
+    init_logging();
+    concinnity_core::paths::set_state_dir(state_dir);
+
+    let mut app = App::new();
+    app.load_blob().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "no compiled world data under {}: {e}",
+                concinnity_core::paths::data_dir().display()
+            ),
+        )
+    })?;
     start_runtime(app)
 }
 

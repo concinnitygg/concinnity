@@ -739,6 +739,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-runtime"
+version = "0.9.0"
+dependencies = [
+ "concinnity-client",
+ "concinnity-toolchain",
+]
+
+[[package]]
 name = "concinnity-toolchain"
 version = "0.9.0"
 
