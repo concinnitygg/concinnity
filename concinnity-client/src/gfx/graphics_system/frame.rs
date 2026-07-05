@@ -346,6 +346,8 @@ fn build_dropdown_overlay(
         follow_cursor: false,
         visible: true,
         view: view.view,
+        fit: crate::assets::SpriteFit::Fit,
+        corner_radius: 0.0,
     };
 
     // Border quad (a little larger, drawn first) then the panel fill on top.
@@ -402,6 +404,8 @@ fn build_dropdown_overlay(
             color: view.color,
             scale: view.scale,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -513,6 +517,7 @@ impl GraphicsSystem {
             let mut calls = gfx_sprite::build_sprite_calls(
                 &scene_sprites,
                 default_atlas_slot,
+                &self.sprite_texture_slots,
                 [win_w, win_h],
                 &self.clip_rects,
             );
@@ -539,6 +544,7 @@ impl GraphicsSystem {
                 calls.extend(gfx_sprite::build_sprite_calls(
                     &sprite_refs,
                     default_atlas_slot,
+                    &self.sprite_texture_slots,
                     [win_w, win_h],
                     &no_clips,
                 ));
@@ -2007,6 +2013,9 @@ impl GraphicsSystem {
                     viewport: [vp_w, vp_h],
                     hud_toggle: raw.hud_toggle,
                     escape: raw.escape,
+                    // Not gated by `gameplay`: a story's Ctrl fast-forward works
+                    // while its stage (a view) is up, like the rebind capture below.
+                    ctrl: raw.ctrl,
                     // Not gated by `gameplay`: the rebind capture works while the
                     // settings menu is open (the camera is what freezes behind it).
                     captured_key: raw.captured_key,

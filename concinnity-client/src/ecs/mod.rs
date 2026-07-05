@@ -403,6 +403,7 @@ impl World {
             World::build_camera,
             World::build_fps_counter,
             World::build_animation,
+            World::build_story,
             World::build_audio,
             World::build_ui_input,
         ];
@@ -493,13 +494,37 @@ impl World {
             .map(|_| crate::gfx::animation::AnimationSystem::new().into())
     }
 
-    // AudioSystem: present whenever the world declares any `AudioEmitter`.
-    // Building it opens an audio device, so a world with no emitters stays silent
-    // and device-free.
-    fn build_audio(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::AudioEmitter>()
+    // StorySystem: present whenever the world declares a `Story` (a compiled
+    // story graph). It runs before AudioSystem so its page-audio requests are
+    // heard the same tick, and before UiInputSystem like every other event
+    // producer (its view commands apply next frame).
+    fn build_story(&self) -> Option<SystemAsset> {
+        self.query::<crate::assets::Story>()
             .next()
-            .map(|_| crate::audio::system::AudioSystem::new().into())
+            .cloned()
+            .map(|story| crate::story::StorySystem::new(story).into())
+    }
+
+    // AudioSystem: present whenever the world declares any `AudioEmitter`
+    // (positional sound), `AudioCue` (view-triggered sound), or `Story`
+    // (page-triggered sound). Building it opens an audio device, so a world
+    // with none of them stays silent and device-free.
+    fn build_audio(&self) -> Option<SystemAsset> {
+        let needs = self.query::<crate::assets::AudioEmitter>().next().is_some()
+            || self.query::<crate::assets::AudioCue>().next().is_some()
+            || self
+                .query::<crate::assets::Story>()
+                .next()
+                .is_some_and(|s| {
+                    s.nodes.iter().any(|n| {
+                        n.choice_music.is_some()
+                            || !n.choice_sounds.is_empty()
+                            || n.pages
+                                .iter()
+                                .any(|p| p.music.is_some() || !p.sounds.is_empty())
+                    })
+                });
+        needs.then(|| crate::audio::system::AudioSystem::new().into())
     }
 
     // UiInputSystem: present whenever the world declares any `HitRegion`, `View`,

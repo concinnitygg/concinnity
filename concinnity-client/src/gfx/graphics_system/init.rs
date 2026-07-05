@@ -1556,6 +1556,69 @@ impl GraphicsSystem {
             }
         }
 
+        // Sprite textures ride the text-atlas pool: each distinct Texture a
+        // Sprite references is decoded and appended after the font atlases,
+        // drawn by the same pipeline (positive vertex mode = RGBA quad). A
+        // Story's stage images are gathered too: the story system swaps them
+        // onto the stage sprites at runtime, so they must be resident even
+        // though no sprite references them yet. A texture that cannot be
+        // resolved demotes its sprite to the solid tint fill, warned rather
+        // than fatal.
+        let sprite_texture_ids: Vec<AssetId> = {
+            let mut ids: Vec<AssetId> = ctx
+                .query::<crate::assets::Sprite>()
+                .filter_map(|s| s.texture)
+                .collect();
+            for story in ctx.query::<crate::assets::Story>() {
+                let stages = story.nodes.iter().flat_map(|n| {
+                    n.pages
+                        .iter()
+                        .map(|p| &p.stage)
+                        .chain(std::iter::once(&n.choice_stage))
+                });
+                for stage in stages {
+                    for image in [&stage.bg, &stage.left, &stage.center, &stage.right]
+                        .into_iter()
+                        .flatten()
+                    {
+                        ids.push(image.texture);
+                    }
+                }
+            }
+            ids.sort_unstable_by_key(|id| id.0);
+            ids.dedup();
+            ids
+        };
+        for tex_id in sprite_texture_ids {
+            let Some(locator) = texture_name_to_slot
+                .get(&tex_id)
+                .map(|&slot| texture_locators[slot].clone())
+            else {
+                tracing::warn!(
+                    "GraphicsSystem: Sprite references unknown texture {}; drawing its tint",
+                    tex_id
+                );
+                continue;
+            };
+            match ctx.read_payload(&locator) {
+                Ok(bytes) => match crate::build::texture::deserialise(bytes) {
+                    Ok((w, h, rgba)) => {
+                        self.sprite_texture_slots
+                            .insert(tex_id, text_atlas_data.len());
+                        text_atlas_data.push((w, h, rgba));
+                    }
+                    Err(e) => {
+                        tracing::warn!("GraphicsSystem: sprite texture {}: {}", tex_id, e)
+                    }
+                },
+                Err(e) => tracing::warn!(
+                    "GraphicsSystem: sprite texture {} payload read failed: {:?}",
+                    tex_id,
+                    e
+                ),
+            }
+        }
+
         // Indirect-ambient multiplier from PostProcessConfig, folded into the
         // shared LightUniforms so every backend's main pass scales its IBL /
         // flat-fallback ambient by it. 1.0 (the default) is a no-op.

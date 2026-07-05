@@ -123,18 +123,46 @@ mod tests {
         }
     }
 
-    // No `](#anchor)` cross-references survive into the embedded docs: every one
-    // is rewritten to a relative `Name.md` link at build time.
+    // No `](#anchor)` cross-references survive into the embedded docs' prose:
+    // every one is rewritten to a relative `Name.md` link at build time. Code
+    // spans and fenced blocks are exempt; they never render as links, and a
+    // doc may legitimately show anchor-link syntax verbatim (e.g. StoryImport
+    // documenting its Markdown dialect).
     #[test]
     fn no_in_page_anchor_links_remain() {
         for d in ASSET_DOCS {
             assert!(
-                !d.full_doc.contains("](#"),
-                "{} still has an in-page anchor link: {:?}",
+                !prose_only(d.full_doc).contains("](#"),
+                "{} still has an in-page anchor link outside code: {:?}",
                 d.type_name,
                 d.full_doc
             );
         }
+    }
+
+    // Strip fenced code blocks and inline code spans, leaving only the prose
+    // that renders as markdown.
+    fn prose_only(doc: &str) -> String {
+        let mut out = String::new();
+        let mut in_fence = false;
+        for line in doc.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                continue;
+            }
+            // Drop the content of `...` spans; an unpaired backtick keeps the
+            // rest of the line, which errs toward checking more, not less.
+            let mut parts = line.split('`');
+            out.push_str(parts.next().unwrap_or(""));
+            while let (Some(_code), Some(prose)) = (parts.next(), parts.next()) {
+                out.push_str(prose);
+            }
+            out.push('\n');
+        }
+        out
     }
 
     fn pages_dir() -> std::path::PathBuf {

@@ -360,6 +360,80 @@ pub(super) fn reload_procedural_meshes(
     result
 }
 
+// Re-expand the world's stories from disk and return every compiled `Story`
+// whose graph changed since the last pass. The expansion is the same one the
+// build runs (`expand_world_from_str` includes the StoryImport pass), so the
+// returned graphs match what a fresh `cn debug` would compile; `cn debug`
+// only, where the interner is warm and re-interning the generated names
+// yields the ids the running world already carries. `snapshots` is the
+// caller-owned name -> compiled-args map used to skip unchanged stories (a
+// save of one story's `.md` must not re-render the others); it starts empty,
+// so the first pass after a `.md` event hands over every story once.
+//
+// Limits, by design: the pass re-reads the graph only. Stage furniture is
+// fixed at init, so a story whose widest menu grew renders (and accepts
+// clicks for) only the buttons the world was built with, and a new image or
+// audio file needs a restart (the sprite atlas pool and clip cache are
+// init-time; a swapped-in id that was never pooled falls back with a warn).
+pub(super) fn reload_stories(
+    path: &str,
+    snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
+) -> Vec<crate::assets::Story> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(
+                "story hot-reload: failed to read '{}': {} (no update)",
+                path,
+                e
+            );
+            return Vec::new();
+        }
+    };
+    let entries = match concinnity_cook::world::expand_world_from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                "story hot-reload: failed to expand '{}': {} (kept the running story)",
+                path,
+                e,
+            );
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for entry in &entries {
+        if entry.get("type").and_then(|t| t.as_str()) != Some("Story") {
+            continue;
+        }
+        let Some(name) = entry.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let args = entry
+            .get("args")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if snapshots.get(name) == Some(&args) {
+            continue;
+        }
+        match serde_json::from_value::<crate::assets::Story>(args.clone()) {
+            Ok(story) => {
+                snapshots.insert(name.to_string(), args);
+                out.push(story);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "story hot-reload: failed to parse compiled story '{}': {} \
+                     (kept the running story)",
+                    name,
+                    e,
+                );
+            }
+        }
+    }
+    out
+}
+
 // Per-reload tally for the world-loaded shader-stage path. Counts are
 // surfaced separately from the asset-payload / world / procedural-mesh
 // tallies so a single info line per asset class keeps the log readable.

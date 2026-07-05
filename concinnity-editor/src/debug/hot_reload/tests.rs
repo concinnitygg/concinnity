@@ -284,6 +284,67 @@ fn jsonl_extension_is_an_asset_event() {
 }
 
 #[test]
+fn md_extension_is_an_asset_event() {
+    // StoryImport sources travel through the same watcher; the closure
+    // routes `.md` saves to the story re-expansion flag.
+    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(PathBuf::from("/tmp/story.md"));
+    assert!(is_asset_event(&evt));
+}
+
+#[test]
+fn reload_stories_re_expands_and_dedupes_by_snapshot() {
+    let dir = std::env::temp_dir().join(format!("story_reload_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = dir.join("tale.md");
+    std::fs::write(
+        &md,
+        "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello there.\n",
+    )
+    .unwrap();
+    let world = dir.join("world.jsonl");
+    std::fs::write(
+        &world,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "name": "tale", "type": "StoryImport",
+                "args": {"source": md.to_str().unwrap()}
+            })
+        ),
+    )
+    .unwrap();
+
+    let mut snapshots = std::collections::HashMap::new();
+    let stories = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    assert_eq!(stories.len(), 1);
+    assert_eq!(stories[0].title, "Tale");
+    assert_eq!(stories[0].nodes[0].pages[0].text, "Hello there.");
+    assert!(stories[0].scaffold.view.is_some());
+
+    // Unchanged source: the snapshot filters it out.
+    let unchanged = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    assert!(unchanged.is_empty());
+
+    // Edited dialogue comes back exactly once.
+    std::fs::write(
+        &md,
+        "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello again.\n",
+    )
+    .unwrap();
+    let edited = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    assert_eq!(edited.len(), 1);
+    assert_eq!(edited[0].nodes[0].pages[0].text, "Hello again.");
+
+    // A broken edit keeps the running story (and the snapshot state).
+    std::fs::write(&md, "---\ntitle: Broken\n").unwrap();
+    let broken = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    assert!(broken.is_empty());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn fresh_state_has_no_envmap_in_flight() {
     // The off-thread envmap convolution slot must start empty; a
     // non-`None` value at construction would skip the very first reload

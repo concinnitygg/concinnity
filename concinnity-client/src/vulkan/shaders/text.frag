@@ -2,6 +2,7 @@
 
 layout(location = 0) in vec2 frag_uv;
 layout(location = 1) in vec3 frag_color;
+layout(location = 2) in float frag_mode;
 layout(location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 0) uniform sampler2D atlas;
@@ -13,6 +14,15 @@ void main() {
     // text fragment shaders.
     if (frag_uv.x < 0.0) {
         out_color = vec4(frag_color, frag_uv.y);
+        return;
+    }
+    // A positive mode marks a textured quad (a Sprite with a texture): the
+    // bound atlas is the sprite's own RGBA image, tinted by the vertex colour
+    // with the mode value as the quad's alpha multiplier. Mirrors the
+    // DirectX / Metal text fragment shaders.
+    if (frag_mode > 0.0) {
+        vec4 tex = texture(atlas, frag_uv);
+        out_color = vec4(tex.rgb * frag_color, tex.a * frag_mode);
         return;
     }
     // Atlas stores a signed distance field: 0.5 = edge, >0.5 = inside,

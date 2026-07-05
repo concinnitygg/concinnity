@@ -5,13 +5,13 @@
 
 use crate::assets::{
     FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
-    Sprite, TextLabel, View, ViewCommand,
+    Sprite, SpriteFit, StoryCommand, TextLabel, View, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::settings;
 use concinnity_core::gfx::dropdown;
-use concinnity_core::gfx::overlay::OverlayTransform;
+use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use concinnity_core::gfx::scroll_layout::{self, RowSpec};
 use std::collections::HashMap;
 
@@ -54,6 +54,15 @@ struct RegionEntry {
     // Set by the scroll reflow when this region's row is hidden (its group is
     // collapsed); a hidden region never hovers or fires.
     hidden: bool,
+    // For a `follow_label` region: its label id and the captured `region.y -
+    // label.y` offset. Each frame the region's y is re-synced to the label
+    // (so a runtime-laid-out menu stays clickable) and the region is inert
+    // while the label is empty (a hidden entry catches no clicks).
+    follow: Option<(AssetId, f32)>,
+    // How the region maps from the reference canvas to the window (matches the
+    // sprite/label `fit`); a region spanning the whole canvas covers the full
+    // window regardless.
+    fit: SpriteFit,
 }
 
 // Per-view bookkeeping.
@@ -285,6 +294,18 @@ impl System for UiInputSystem {
             let slider_key = slider_key_from_action(&region.action);
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
+            // A follow-label region captures the y offset to its label now, so
+            // the runtime layout can move the label and the region tracks it.
+            let follow = if region.follow_label {
+                region.label.and_then(|lid| {
+                    ctx.query::<TextLabel>()
+                        .find(|l| l.asset_id == lid)
+                        .map(|l| (lid, region.y - l.y))
+                })
+            } else {
+                None
+            };
+            let fit = region.fit;
             self.regions.push(RegionEntry {
                 region,
                 original_color,
@@ -296,6 +317,8 @@ impl System for UiInputSystem {
                 region_base_y,
                 group_toggle,
                 hidden: false,
+                follow,
+                fit,
             });
         }
 
@@ -346,10 +369,13 @@ impl System for UiInputSystem {
             }
         }
 
-        // Activate the initial view (if any) by showing its elements.
+        // Activate the initial view (if any) by showing its elements. The
+        // activation is announced like any navigation so view-triggered
+        // consumers (AudioCue music) fire for the first screen too.
         if let Some(id) = initial {
             self.set_view_visibility(id, true, ctx);
             self.views.active = Some(id);
+            ctx.events_mut::<ViewShown>().send(ViewShown { view: id });
         }
 
         // Solve the initial scroll layout so frame 0 already shows the right
@@ -429,6 +455,24 @@ impl System for UiInputSystem {
             }
         }
 
+        // Any other KeyBinding fires when its key is pressed this frame. Escape
+        // is handled above (it is not a `Key` variant, so it never arrives as a
+        // `captured_key`); every other binding matches the one-frame pressed key
+        // by its canonical name -- e.g. a story's Space / Enter advance bindings.
+        // Rebind capture and an open dropdown already returned above, so this
+        // cannot steal a key those flows want.
+        if let Some(key) = input.captured_key {
+            let name = key.name();
+            for kb in &self.bindings {
+                if kb.key == name && !kb.action.is_empty() {
+                    if let Some(result) = fire_action(&kb.action, None, ctx) {
+                        return result;
+                    }
+                    break;
+                }
+            }
+        }
+
         let mx = input.mouse_x;
         let my = input.mouse_y;
         let clicked = input.left_click;
@@ -439,6 +483,11 @@ impl System for UiInputSystem {
         // before testing it against their (reference-space) rects. View-less
         // regions stay in window pixels (see crate::gfx::overlay).
         let overlay = OverlayTransform::from_viewport(input.viewport);
+        // Alternate mappings a region may opt into via `fit` (bottom-anchored
+        // dialog furniture); the fit transform above stays the default.
+        let overlay_bottom = OverlayTransform::bottom_anchored_from_viewport(input.viewport);
+        let overlay_cover = OverlayTransform::cover_from_viewport(input.viewport);
+        let [vw, vh] = input.viewport;
 
         // Scroll-wheel + scrollbar-thumb input for the active view's panel; both
         // adjust the panel's scroll offset (clamped later in the apply pass). A
@@ -542,11 +591,29 @@ impl System for UiInputSystem {
                     .is_some_and(|rest| {
                         disabled_rows.contains(rest.split(':').next().unwrap_or(""))
                     });
+            // A follow-label region tracks its label's y and goes inert while
+            // the label is empty (a hidden menu entry catches no clicks).
+            let follow_inert = if let Some((label_id, offset)) = entry.follow {
+                match ctx
+                    .query::<TextLabel>()
+                    .find(|l| l.asset_id == label_id)
+                    .map(|l| (l.y, l.content.is_empty()))
+                {
+                    Some((ly, empty)) => {
+                        entry.region.y = ly + offset;
+                        empty
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            };
             let inert = thumb_active
                 || entry.slider_key.is_some()
                 || entry.view != active_view
                 || (entry.scroll_row.is_some() && entry.hidden)
-                || disabled;
+                || disabled
+                || follow_inert;
             if inert {
                 if entry.was_hovered {
                     set_label_style(
@@ -560,16 +627,27 @@ impl System for UiInputSystem {
                 continue;
             }
 
-            // Overlay (view-owned) regions hit-test in reference space; HUD
-            // regions in window pixels.
-            let (qx, qy) = if entry.view.is_some() {
-                overlay.inverse(mx, my)
-            } else {
+            // Overlay (view-owned) regions hit-test in reference space (through
+            // the region's own `fit`); HUD regions in window pixels. A region
+            // spanning the whole reference canvas covers the full window (so a
+            // full-canvas advance region catches clicks in the letterbox too).
+            let full_window = entry.view.is_some() && region_covers_canvas(&entry.region);
+            let (qx, qy) = if entry.view.is_none() {
                 (mx, my)
+            } else {
+                match entry.fit {
+                    SpriteFit::Bottom => overlay_bottom.inverse(mx, my),
+                    SpriteFit::Cover => overlay_cover.inverse(mx, my),
+                    SpriteFit::Fit => overlay.inverse(mx, my),
+                }
             };
             let group_toggle = entry.group_toggle;
             let r = &entry.region;
-            let mut hovered = qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height;
+            let mut hovered = if full_window {
+                mx >= 0.0 && mx < vw && my >= 0.0 && my < vh
+            } else {
+                qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height
+            };
             // A scroll-content region only counts as hovered inside its band, so
             // a row scrolled past the edge does not catch clicks over the chrome.
             if let Some((pi, _)) = entry.scroll_row
@@ -881,6 +959,8 @@ impl UiInputSystem {
         }
         if let Some(next) = new_active {
             self.set_view_visibility(next, true, ctx);
+            // Announce the activation for view-triggered consumers (AudioCue).
+            ctx.events_mut::<ViewShown>().send(ViewShown { view: next });
         }
         self.views.active = new_active;
         self.views.prev = new_prev;
@@ -1255,6 +1335,16 @@ fn point_in_rect(x: f32, y: f32, rect: [f32; 4]) -> bool {
     x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3]
 }
 
+// Whether a region spans the whole reference canvas (a full-screen "click
+// anywhere" region). Such a region covers the entire live window, including any
+// letterbox margin, rather than only the fitted canvas rect.
+fn region_covers_canvas(r: &HitRegion) -> bool {
+    r.x <= 0.0
+        && r.y <= 0.0
+        && r.x + r.width >= UI_REFERENCE_SIZE[0]
+        && r.y + r.height >= UI_REFERENCE_SIZE[1]
+}
+
 // Write the given color + scale onto a region's referenced label, if any.
 // Drives hover-in (hover style), hover-out (captured style), and the restore
 // applied when a hovered region goes inert (its view hides, its row collapses,
@@ -1329,6 +1419,34 @@ fn fire_action(
                 .events_mut::<ViewCommand>()
                 .send(ViewCommand::Toggle(AssetId(id))),
             Err(_) => tracing::warn!("UiInputSystem: unresolved view action '{}'", action),
+        }
+        return None;
+    }
+    // story:start | story:advance | story:choose:<i> | the quick-row and
+    // slot-overlay controls -- the story system reads the StoryCommand and
+    // moves through its compiled graph.
+    if let Some(rest) = action.strip_prefix("story:") {
+        let cmd = match rest {
+            "start" => Some(StoryCommand::Start),
+            "continue" => Some(StoryCommand::Continue),
+            "advance" => Some(StoryCommand::Advance),
+            "auto" => Some(StoryCommand::ToggleAuto),
+            "skip" => Some(StoryCommand::ToggleSkip),
+            "log" => Some(StoryCommand::ToggleLog),
+            "save" => Some(StoryCommand::OpenSave),
+            "load" => Some(StoryCommand::OpenLoad),
+            "pause" => Some(StoryCommand::TogglePause),
+            "settings" => Some(StoryCommand::OpenSettings),
+            "settings_back" => Some(StoryCommand::CloseSettings),
+            _ => match rest.split_once(':') {
+                Some(("choose", i)) => i.parse::<usize>().ok().map(StoryCommand::Choose),
+                Some(("slot", i)) => i.parse::<usize>().ok().map(StoryCommand::Slot),
+                _ => None,
+            },
+        };
+        match cmd {
+            Some(cmd) => ctx.events_mut::<StoryCommand>().send(cmd),
+            None => tracing::warn!("UiInputSystem: malformed story action '{}'", action),
         }
         return None;
     }
@@ -1415,6 +1533,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1443,6 +1563,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1460,6 +1582,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1516,6 +1640,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1533,6 +1659,8 @@ mod tests {
             drag_handle: None,
             view: Some(menu),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1584,6 +1712,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1602,6 +1732,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, view)
@@ -1669,6 +1801,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1686,6 +1820,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.insert_resource(crate::ecs::DisplayModes(modes));
@@ -1875,6 +2011,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 0.66,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1893,6 +2031,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1924,6 +2064,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1952,6 +2094,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -1982,6 +2126,8 @@ mod tests {
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
             view: Some(view_id),
+            fit: crate::assets::SpriteFit::Fit,
+            corner_radius: 0.0,
         });
         world.start().unwrap();
 
@@ -2056,6 +2202,8 @@ mod tests {
             drag_handle: None,
             view: Some(view_id),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world
@@ -2110,6 +2258,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2145,6 +2295,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2168,6 +2320,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2189,6 +2343,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2215,6 +2371,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2261,6 +2419,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: true,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2291,6 +2451,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2323,6 +2485,8 @@ mod tests {
             drag_handle: Some(AssetId(8)),
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2393,6 +2557,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         // Body click region (a settings action; a content region, so it is
         // bucketed into its row and gated by the collapse).
@@ -2408,6 +2574,8 @@ mod tests {
             drag_handle: None,
             view: Some(view),
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
             view: Some(view),
@@ -2673,6 +2841,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
+            align: crate::assets::TextAlign::Left,
+            fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2690,6 +2860,8 @@ mod tests {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, value)
@@ -2765,6 +2937,46 @@ mod tests {
         assert!(produced_setting_commands(&world).is_empty());
     }
 
+    // Every ViewShown announcement so far, read with a fresh cursor.
+    fn shown_views(world: &World) -> Vec<AssetId> {
+        let mut cursor = crate::ecs::EventCursor::default();
+        world
+            .events::<ViewShown>()
+            .map(|e| e.read(&mut cursor).into_iter().map(|s| s.view).collect())
+            .unwrap_or_default()
+    }
+
+    // Both the initial view at start and a Show navigation announce the newly
+    // active view, so view-triggered consumers (AudioCue) hear every screen.
+    #[test]
+    fn view_activation_emits_view_shown() {
+        let mut world = World::new_empty();
+        let first = AssetId(80);
+        let second = AssetId(81);
+        for (id, initial) in [(first, true), (second, false)] {
+            world.add_component(View {
+                asset_id: id,
+                initial,
+                fade_in_secs: 0.0,
+            });
+        }
+        world.start().unwrap();
+        assert_eq!(shown_views(&world), vec![first]);
+
+        world
+            .events_mut::<ViewCommand>()
+            .send(ViewCommand::Show(second));
+        world.step();
+        assert_eq!(shown_views(&world), vec![first, second]);
+
+        // Showing the already-active view is a no-op: no repeat announcement.
+        world
+            .events_mut::<ViewCommand>()
+            .send(ViewCommand::Show(second));
+        world.step();
+        assert_eq!(shown_views(&world), vec![first, second]);
+    }
+
     #[test]
     fn escape_key_binding_fires_action() {
         let mut world = World::new_empty();
@@ -2790,6 +3002,61 @@ mod tests {
 
         let cmd = produced_view_command(&world);
         assert!(matches!(cmd, Some(ViewCommand::Toggle(AssetId(50)))));
+    }
+
+    // Every StoryCommand the system sent this step, in send order.
+    fn produced_story_commands(world: &World) -> Vec<StoryCommand> {
+        let mut cursor = crate::ecs::EventCursor::default();
+        world
+            .events::<StoryCommand>()
+            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    // A non-Escape KeyBinding fires when its key is pressed (surfaced as the
+    // one-frame captured_key), so a story's Space / Enter advance bindings work.
+    #[test]
+    fn pressed_key_binding_fires_action() {
+        for key in [Key::Space, Key::Enter] {
+            let mut world = World::new_empty();
+            world.add_component(KeyBinding {
+                key: key.name().to_string(),
+                action: "story:advance".to_string(),
+            });
+            world.start().unwrap();
+
+            world.add_component(FrameInput {
+                captured_key: Some(key),
+                ..Default::default()
+            });
+            world.step();
+
+            assert_eq!(
+                produced_story_commands(&world),
+                vec![StoryCommand::Advance],
+                "{key:?} should advance",
+            );
+        }
+    }
+
+    // A pressed key with no matching binding fires nothing (the arrow keys a
+    // scrollable list reads must not be swallowed by a phantom action).
+    #[test]
+    fn pressed_key_without_a_binding_fires_nothing() {
+        let mut world = World::new_empty();
+        world.add_component(KeyBinding {
+            key: "Space".to_string(),
+            action: "story:advance".to_string(),
+        });
+        world.start().unwrap();
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Down),
+            ..Default::default()
+        });
+        world.step();
+
+        assert!(produced_story_commands(&world).is_empty());
     }
 
     // Escape toggles the menu; Settings is reached by a Show (a sub-view). After
@@ -2824,6 +3091,8 @@ mod tests {
                 follow_cursor: false,
                 visible: false,
                 view: Some(view),
+                fit: crate::assets::SpriteFit::Fit,
+                corner_radius: 0.0,
             });
         }
         world.add_component(KeyBinding {

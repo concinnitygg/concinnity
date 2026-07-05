@@ -167,6 +167,9 @@ pub struct GraphicsSystem {
     prev_elapsed: f32,
     // Font atlas data, keyed by asset id, built during init().
     loaded_fonts: std::collections::HashMap<AssetId, text::LoadedFont>,
+    // Texture asset -> slot in the text-atlas pool, for Sprites with a
+    // texture. Sprite textures are appended after the font atlases at init.
+    sprite_texture_slots: std::collections::HashMap<AssetId, usize>,
     // DebugHud chip ids in stack order (cursor, camera, passes), captured at
     // init. The frame step anchors them to the top-right of the window and
     // stacks them downward; empty when the world has no DebugHud.
@@ -464,6 +467,7 @@ impl GraphicsSystem {
             spawn_cmd_cursor: crate::ecs::EventCursor::default(),
             prev_elapsed: 0.0,
             loaded_fonts: std::collections::HashMap::new(),
+            sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             texture_streamer: None,

@@ -301,7 +301,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bistro"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "concinnity-toolchain",
  "example-common",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-client"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "ash",
  "bitflags 2.11.1",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "concinnity-core",
  "fbxcel",
@@ -642,6 +642,7 @@ dependencies = [
  "kira",
  "png",
  "postcard",
+ "pulldown-cmark",
  "rayon",
  "serde",
  "serde_json",
@@ -656,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "concinnity-eas",
  "postcard",
@@ -672,18 +673,18 @@ dependencies = [
 
 [[package]]
 name = "concinnity-docs"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "syn",
 ]
 
 [[package]]
 name = "concinnity-eas"
-version = "0.7.3"
+version = "0.8.0"
 
 [[package]]
 name = "concinnity-editor"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "argon2",
  "ash",
@@ -739,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.7.3"
+version = "0.8.0"
 
 [[package]]
 name = "cookie"
@@ -1076,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "example-common"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "concinnity-client",
  "concinnity-cook",
@@ -3108,6 +3109,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags 2.11.1",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4294,6 +4306,12 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
+
+[[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-ident"

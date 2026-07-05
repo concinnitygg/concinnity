@@ -343,13 +343,14 @@ fn validated_entry(
     }))
 }
 
-// Build a SceneImport entry for a 3D scene file. SceneImport is a build-time
-// (BuildOnly) asset, so it can't go through `validated_entry` /
-// `create_asset_def` (which only build External components); materialize its
-// default args from the registration and set the source path.
-fn scene_import_entry(name: &str, source: &str) -> std::io::Result<serde_json::Value> {
-    let reg = ComponentType::parse("SceneImport")
-        .map_err(|_| std::io::Error::other("SceneImport asset type is unavailable"))?
+// Build an entry for a build-time (BuildOnly) import asset that expands from
+// a source file (SceneImport, StoryImport). Such an asset can't go through
+// `validated_entry` / `create_asset_def` (which only build External
+// components); materialize its default args from the registration and set the
+// source path.
+fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<serde_json::Value> {
+    let reg = ComponentType::parse(asset_type)
+        .map_err(|_| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
         .registration();
     let mut args = reg
         .default_args
@@ -362,7 +363,7 @@ fn scene_import_entry(name: &str, source: &str) -> std::io::Result<serde_json::V
     }
     Ok(serde_json::json!({
         "name": name,
-        "type": "SceneImport",
+        "type": asset_type,
         "args": args,
     }))
 }
@@ -447,6 +448,16 @@ fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
             serde_json::json!({ "lib_path": "", "model_path": path_str }),
         )?]),
 
+        // Audio files: an AudioClip whose payload is compiled (and decode-
+        // validated) at build. Played through an AudioEmitter (positional) or
+        // an AudioCue (view-triggered). Stem only, like fonts, so emitter and
+        // cue declarations read naturally.
+        "ogg" | "wav" | "mp3" | "flac" => Ok(vec![validated_entry(
+            &stem,
+            "AudioClip",
+            serde_json::json!({ "source": path_str }),
+        )?]),
+
         // File-backed assets: path is stored as-is; build compiles the blob
         "obj" | "mtl" | "png" | "jpg" | "jpeg" | "bmp" | "tga" | "gif" => {
             Ok(vec![validated_entry(
@@ -465,19 +476,23 @@ fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
         // (Companion injection's default-font pass auto-centers labels that omit
         // `centered`, but the validated_entry round-trip materializes the full
         // default struct so the auto-center path doesn't fire.)
-        "txt" | "md" => Ok(vec![validated_entry(
-            &stem,
-            "TextLabel",
-            serde_json::json!({
-                "content": read_text_content(path_str)?,
-                "centered": true,
-            }),
-        )?]),
+        "txt" => Ok(vec![text_label_entry(&stem, path_str)?]),
+
+        // Markdown: a file opening with a frontmatter fence is a story and
+        // becomes one StoryImport line the build expands into its UI assets;
+        // plain Markdown is treated as text, same as `.txt`.
+        "md" => {
+            if md_has_frontmatter(path_str)? {
+                Ok(vec![import_entry("StoryImport", &stem, path_str)?])
+            } else {
+                Ok(vec![text_label_entry(&stem, path_str)?])
+            }
+        }
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
         // world.jsonl stays compact (see concinnity_core::build::import).
-        "glb" | "fbx" => Ok(vec![scene_import_entry(&stem, path_str)?]),
+        "glb" | "fbx" => Ok(vec![import_entry("SceneImport", &stem, path_str)?]),
 
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -597,6 +612,30 @@ fn read_text_content(path_str: &str) -> std::io::Result<String> {
         }
     }
     Ok(content)
+}
+
+fn text_label_entry(name: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
+    validated_entry(
+        name,
+        "TextLabel",
+        serde_json::json!({
+            "content": read_text_content(path_str)?,
+            "centered": true,
+        }),
+    )
+}
+
+// A Markdown story opens with a `---` frontmatter fence on its first line.
+// Detection reads only that line, so the TextLabel size cap never applies to
+// a story file.
+fn md_has_frontmatter(path_str: &str) -> std::io::Result<bool> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path_str).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
+    })?;
+    let mut first = String::new();
+    std::io::BufReader::new(file).read_line(&mut first)?;
+    Ok(first.trim_start_matches('\u{feff}').trim_end() == "---")
 }
 
 fn entry_from_json_file(
@@ -1194,6 +1233,53 @@ mod tests {
         assert_eq!(lf_entry["args"]["content"], "line one\nline two");
         let crlf_entry = &entry_from_path(crlf.to_str().unwrap()).unwrap()[0];
         assert_eq!(crlf_entry["args"]["content"], "line one\r\nline two");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_file_becomes_audio_clip() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("door_creak.wav");
+        std::fs::write(&path, b"not-really-audio").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry["type"], "AudioClip");
+        assert_eq!(entry["name"], "door_creak");
+        assert_eq!(entry["args"]["source"], path.to_str().unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn markdown_with_frontmatter_becomes_story_import() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("crossroads.md");
+        std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry["type"], "StoryImport");
+        assert_eq!(entry["name"], "crossroads");
+        assert_eq!(entry["args"]["source"], path.to_str().unwrap());
+        // Registration defaults are materialized alongside the source.
+        assert_eq!(entry["args"]["title_screen"], serde_json::json!(true));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn markdown_without_frontmatter_stays_a_text_label() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "# Notes\n\nplain markdown\n").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["type"], "TextLabel");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

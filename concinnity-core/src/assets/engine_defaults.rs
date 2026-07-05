@@ -33,6 +33,12 @@ pub struct EngineDefaults {
     /// `EnvironmentMap` for image-based lighting only, with the background
     /// left to `clear_color` or your own geometry.
     pub sky: bool,
+    /// Inject an Escape-toggled pause [MainMenu](#mainmenu) when the world
+    /// plays a [Story](#story) but declares no `MainMenu`: Resume, Save, Load,
+    /// a trimmed Settings screen, and Quit to the story's title. Disable to
+    /// leave a story with no pause menu, or declare your own `MainMenu` to
+    /// replace it.
+    pub story_pause_menu: bool,
 }
 
 impl Default for EngineDefaults {
@@ -41,6 +47,7 @@ impl Default for EngineDefaults {
             hud: true,
             debug_hud: true,
             sky: true,
+            story_pause_menu: true,
         }
     }
 }
@@ -65,13 +72,17 @@ mod tests {
     #[test]
     fn bare_args_enable_every_default() {
         let d: EngineDefaults = serde_json::from_str("{}").unwrap();
-        assert!(d.hud && d.debug_hud && d.sky);
+        assert!(d.hud && d.debug_hud && d.sky && d.story_pause_menu);
     }
 
     #[test]
     fn individual_flags_opt_out() {
         let d: EngineDefaults = serde_json::from_str(r#"{"sky":false}"#).unwrap();
         assert!(!d.sky);
-        assert!(d.hud && d.debug_hud);
+        assert!(d.hud && d.debug_hud && d.story_pause_menu);
+
+        let d: EngineDefaults = serde_json::from_str(r#"{"story_pause_menu":false}"#).unwrap();
+        assert!(!d.story_pause_menu);
+        assert!(d.hud && d.debug_hud && d.sky);
     }
 }

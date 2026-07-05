@@ -61,6 +61,9 @@ pub(super) struct KeyState {
     // edge can fire `captured_key` and drive any action bound to Shift (Shift is
     // a pure modifier on macOS: it generates FlagsChanged, not KeyDown/KeyUp).
     pub(super) shift_down: bool,
+    // Whether Control is currently held, tracked from FlagsChanged like Shift.
+    // Surfaced as a held modifier (a story fast-forwards while it is down).
+    pub(super) control_down: bool,
     // Set by capture_cursor(); the next mouse-motion event after capture
     // has its delta discarded so queued pre-capture events (which were
     // produced before CGAssociateMouseAndMouseCursorPosition(0) took
@@ -479,6 +482,7 @@ impl MtlContext {
             left_button_down: self.keys.left_button_down,
             hud_toggle: self.keys.hud_toggle_pulse,
             escape: self.keys.escape_pulse,
+            ctrl: self.keys.control_down,
             captured_key: self.keys.captured_key,
         };
         self.keys.interact_pulse = false;
@@ -519,13 +523,18 @@ impl MtlContext {
                     // pure modifier on macOS (no KeyDown/KeyUp), so it is decoded
                     // here: drive any action bound to Shift (sprint by default)
                     // and fire the rebind-capture pulse on its rising edge.
-                    let shift = event.modifierFlags().contains(NSEventModifierFlags::Shift);
+                    let flags = event.modifierFlags();
+                    let shift = flags.contains(NSEventModifierFlags::Shift);
                     let edge_down = shift && !self.keys.shift_down;
                     self.keys.shift_down = shift;
                     if edge_down {
                         self.keys.captured_key = Some(Key::Shift);
                     }
                     self.apply_binding(Key::Shift, shift, edge_down);
+                    // Control is a held modifier too (a story's Ctrl fast-forward
+                    // reads it each frame); track it like Shift but drive no
+                    // gameplay binding.
+                    self.keys.control_down = flags.contains(NSEventModifierFlags::Control);
                 }
                 NSEventType::MouseMoved | NSEventType::LeftMouseDragged => {
                     if self.cursor_captured {

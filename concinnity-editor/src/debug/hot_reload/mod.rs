@@ -25,5 +25,5 @@ mod watcher;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use pending::{set_pending_shader_stages, set_pending_world};
+pub(crate) use pending::{set_pending_shader_stages, set_pending_stories, set_pending_world};
 pub(crate) use state::{AssetHotReloadState, run_frame};

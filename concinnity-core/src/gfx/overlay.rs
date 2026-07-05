@@ -55,6 +55,39 @@ impl OverlayTransform {
         }
     }
 
+    // Build the "cover" transform for a live logical viewport: the larger axis
+    // ratio, so the reference canvas always fills the window (the overflowing
+    // axis is cropped equally on both sides). Used by full-bleed stage imagery
+    // (scene backdrops, character portraits) that must reach the window edges
+    // without distorting; the canvas bottom maps at or below the window
+    // bottom, so bottom-anchored content stays flush at any aspect ratio.
+    pub fn cover_from_viewport(viewport: [f32; 2]) -> Self {
+        let mut t = Self::from_viewport(viewport);
+        let [rw, rh] = UI_REFERENCE_SIZE;
+        let [vw, vh] = viewport;
+        if vw > 0.0 && vh > 0.0 {
+            t.scale = (vw / rw).max(vh / rh);
+        }
+        t
+    }
+
+    // Build the "bottom-anchored" transform for a live logical viewport: the
+    // `fit` scale (no cropping, elements keep their proportions), but shifted
+    // vertically so the reference bottom edge (y = reference height) maps to the
+    // window bottom. Bottom-anchored overlay furniture (a dialog box and its
+    // controls) hugs the window bottom at any aspect ratio, where a plain `fit`
+    // would float it above the letterbox margin.
+    pub fn bottom_anchored_from_viewport(viewport: [f32; 2]) -> Self {
+        let mut t = Self::from_viewport(viewport);
+        let [_, rh] = UI_REFERENCE_SIZE;
+        let [_, vh] = viewport;
+        if vh > 0.0 {
+            // forward(_, rh).1 == vh  <=>  screen_cy = vh - (rh - ref_cy) * scale
+            t.screen_cy = vh - (rh - t.ref_cy) * t.scale;
+        }
+        t
+    }
+
     // The uniform scale factor applied to sizes (glyph scale, sprite extent).
     pub fn scale(&self) -> f32 {
         self.scale
@@ -124,6 +157,49 @@ mod tests {
         // lands at half a reference width in from the window's left.
         let (x0, _) = t.forward(0.0, 0.0);
         assert!((x0 - rw / 2.0).abs() < 1e-4, "x0={x0}");
+    }
+
+    #[test]
+    fn cover_uses_the_larger_axis_ratio() {
+        let [rw, rh] = UI_REFERENCE_SIZE;
+        // A 4:3 window is taller than the 16:9 reference: fit is width-limited,
+        // cover is height-limited.
+        let t = OverlayTransform::cover_from_viewport([1024.0, 768.0]);
+        assert!((t.scale() - 768.0 / rh).abs() < 1e-4);
+        // The canvas fills the window vertically: the reference bottom maps
+        // exactly to the window bottom (no letterbox bar).
+        let (_, by) = t.forward(rw / 2.0, rh);
+        assert!((by - 768.0).abs() < 1e-3, "by={by}");
+        // The overflowing axis crops equally: the reference left edge maps
+        // off-window by half the overflow.
+        let scaled_w = rw * t.scale();
+        let (x0, _) = t.forward(0.0, 0.0);
+        assert!((x0 - (1024.0 - scaled_w) / 2.0).abs() < 1e-3, "x0={x0}");
+    }
+
+    #[test]
+    fn cover_of_a_degenerate_viewport_is_identity() {
+        let t = OverlayTransform::cover_from_viewport([0.0, 0.0]);
+        assert_eq!(t.scale(), 1.0);
+    }
+
+    #[test]
+    fn bottom_anchored_maps_the_reference_bottom_to_the_window_bottom() {
+        let [rw, rh] = UI_REFERENCE_SIZE;
+        // A window taller than the 16:9 reference: plain fit would leave a
+        // margin below the canvas; bottom-anchored pins the canvas bottom to
+        // the window bottom while keeping the fit scale.
+        let vh = 1450.0;
+        let t = OverlayTransform::bottom_anchored_from_viewport([rw * 1.5, vh]);
+        assert!((t.scale() - 1.5).abs() < 1e-4, "keeps the fit scale");
+        let (_, by) = t.forward(rw / 2.0, rh);
+        assert!(
+            (by - vh).abs() < 1e-3,
+            "reference bottom at window bottom: {by}"
+        );
+        // Horizontal centering is unchanged from `fit`.
+        let (cx, _) = t.forward(rw / 2.0, rh / 2.0);
+        assert!((cx - rw * 1.5 / 2.0).abs() < 1e-3, "cx={cx}");
     }
 
     #[test]

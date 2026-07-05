@@ -12,7 +12,9 @@ use crate::gfx::graphics_system::HotReloadApplyParts;
 use crate::gfx::graphics_system::hot_reload_sources::*;
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
-use super::passes::{reload_procedural_meshes, reload_shader_stages, reload_volumetric_fog};
+use super::passes::{
+    reload_procedural_meshes, reload_shader_stages, reload_stories, reload_volumetric_fog,
+};
 use super::watcher::spawn_watcher;
 
 // A worker result still in flight: the receiving end of the channel a
@@ -150,6 +152,12 @@ pub struct AssetHotReloadState {
     // worker the render loop keeps drawing while the decode runs and only
     // stalls for the (fast) GPU upload pass.
     pub asset_batch_inflight: Inflight<DecodedAssetBatch>,
+    // The compiled args of every `Story` the last story-reload pass handed
+    // over, keyed by asset name. Lets the pass skip stories whose graphs
+    // did not change, so a save of one story's `.md` never re-renders the
+    // others. Starts empty: the first pass after a `.md` event sends every
+    // story once.
+    pub story_snapshots: std::collections::HashMap<String, serde_json::Value>,
     // SkinnedMesh skeleton-shape changes queued by [`poll_pending_assets`]
     // for the next step to apply to ECS-owned `SkeletonPose` components.
     // The reload helper has no ECS access, so it stashes the (skinned_index,
@@ -275,6 +283,7 @@ impl AssetHotReloadState {
             pending,
             env_map_inflight: Mutex::new(None),
             asset_batch_inflight: Mutex::new(None),
+            story_snapshots: std::collections::HashMap::new(),
             pending_skeleton_updates: Vec::new(),
             watcher,
         }
@@ -310,6 +319,9 @@ impl AssetHotReloadState {
 // system borrow is released.
 pub(crate) struct FrameHotReloadEffects {
     pub skeleton_updates: Vec<PendingSkeletonUpdate>,
+    // Freshly re-compiled story graphs from a `.md` save, to be sent as
+    // `StoryReload` events so the running story system swaps them in.
+    pub story_updates: Vec<crate::assets::Story>,
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
@@ -326,6 +338,7 @@ pub(crate) fn run_frame(
 ) -> FrameHotReloadEffects {
     let mut effects = FrameHotReloadEffects {
         skeleton_updates: Vec::new(),
+        story_updates: Vec::new(),
     };
 
     // Asset-payload poll. Pick up any completed off-thread work first so a
@@ -355,6 +368,22 @@ pub(crate) fn run_frame(
                 ss_result.failed,
                 ss_result.pipelines_rebuilt,
             );
+        }
+    }
+
+    // Markdown story reload poll: re-expand the world's StoryImports and
+    // queue every changed graph for the story system. Cheap when the flag is
+    // unset.
+    if super::pending::take_pending_stories() {
+        let path = state.world_jsonl_path.clone();
+        if let Some(path) = path {
+            effects.story_updates = reload_stories(&path, &mut state.story_snapshots);
+            if !effects.story_updates.is_empty() {
+                tracing::info!(
+                    "story hot-reload: {} story graph(s) re-compiled",
+                    effects.story_updates.len(),
+                );
+            }
         }
     }
 

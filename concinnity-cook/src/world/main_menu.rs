@@ -10,13 +10,13 @@
 use std::collections::{HashMap, HashSet};
 
 use super::expand::{asset_name, type_norm};
-use crate::assets::{Font, MainMenu};
+use crate::assets::{Font, MainMenu, SettingsProfile};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
-// a label's width so item text can be roughly centered at build time without
-// font metrics. The built-in font is proportional, so this is an approximation
-// (good enough for short menu labels); a custom font may center less precisely.
+// a label's width when laying out the settings tab bar (the menu items and
+// headings center with real font metrics via `align`; this only spaces the
+// tab row). The built-in font is proportional, so this is an approximation.
 const AVG_ADVANCE_RATIO: f32 = 0.5;
 
 // Settings tabs, left to right: (view-name suffix, tab label). Each tab is its
@@ -27,6 +27,16 @@ const SETTINGS_TABS: [(&str, &str); 3] = [
     ("audio", "Audio"),
     ("controls", "Controls"),
 ];
+
+// The tabs a settings profile shows, left to right. Full spans all three;
+// Minimal drops Controls (a world with no scene to move a camera through has
+// no gameplay keys to rebind), leaving Video + Audio.
+fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str, &'static str)] {
+    match profile {
+        SettingsProfile::Full => &SETTINGS_TABS,
+        SettingsProfile::Minimal => &SETTINGS_TABS[..2],
+    }
+}
 // Setting rows per tab, top to bottom: (setting key, display label). The runtime
 // (`concinnity_client::gfx::settings`) knows each key's options and how to apply
 // it; this only chooses which rows appear.
@@ -40,6 +50,16 @@ const VIDEO_ROWS: [(&str, &str); 7] = [
     ("perf_stats", "Display Performance Stats"),
     ("show_fps", "Show Framerate"),
     ("show_vram", "Show VRAM Usage"),
+];
+// Video rows under the Minimal profile: window and output basics only, for a
+// world that renders no 3D scene (nothing to configure quality for). No
+// graphics-quality preset, no performance-stats toggles, no Quality / Advanced
+// groups.
+const VIDEO_MINIMAL_ROWS: [(&str, &str); 4] = [
+    ("window_mode", "Window Mode"),
+    ("resolution", "Resolution"),
+    ("vsync", "Vsync"),
+    ("fps_cap", "Frame Rate"),
 ];
 // Rows tucked under the Video "Advanced" collapsible group (collapsed by
 // default), so the top of the Video tab stays uncrowded. More live
@@ -319,8 +339,11 @@ fn expand_one(
         }));
     }
 
-    if wants_settings {
-        for (suffix, _) in SETTINGS_TABS {
+    // Generate the settings screen when an item opens it (the `"settings"`
+    // convenience) or when a Back-action override is set (a caller that opens
+    // settings by its own action, e.g. a story pause menu).
+    if wants_settings || !menu.settings_back_action.is_empty() {
+        for (suffix, _) in settings_tabs(menu.settings_profile) {
             out.extend(emit_settings_tab(
                 menu_name, suffix, menu, &font_name, win_w, win_h, font_px,
             ));
@@ -401,17 +424,17 @@ fn emit_settings_tab(
     // already here); every other tab is a button that switches to its view.
     // There is no "Settings" heading -- the tabs already name the screen, and
     // dropping it gives the body band an extra row of space.
+    let tabs = settings_tabs(style.settings_profile);
     let tab_scale = style.text_scale * 1.1;
     let tab_text_y = text_y(0, tab_scale);
     let tab_gap = font_px * AVG_ADVANCE_RATIO * tab_scale * 1.2;
-    let tab_widths: Vec<f32> = SETTINGS_TABS
+    let tab_widths: Vec<f32> = tabs
         .iter()
         .map(|&(_, label)| text_width(label, font_px, tab_scale))
         .collect();
-    let tabs_total: f32 =
-        tab_widths.iter().sum::<f32>() + tab_gap * (SETTINGS_TABS.len() as f32 - 1.0);
+    let tabs_total: f32 = tab_widths.iter().sum::<f32>() + tab_gap * (tabs.len() as f32 - 1.0);
     let mut tab_x = center_x - tabs_total / 2.0;
-    for (&(suffix, label), w) in SETTINGS_TABS.iter().zip(&tab_widths) {
+    for (&(suffix, label), w) in tabs.iter().zip(&tab_widths) {
         let is_active = suffix == active;
         let color = if is_active {
             style.hover_color
@@ -469,7 +492,7 @@ fn emit_settings_tab(
     let band_h = VISIBLE_SETTINGS_ROWS as f32 * pitch;
     let text_y_at = |y: f32, scale: f32| y + (style.button_height - font_px * scale) / 2.0;
 
-    let (body, groups) = settings_body_rows(active);
+    let (body, groups) = settings_body_rows(active, style.settings_profile);
 
     // Emit each body row at its band-relative position, collecting a ScrollRow
     // (the row's reflowed/clipped element ids, its height, and its group).
@@ -662,14 +685,21 @@ fn emit_settings_tab(
         }
     }));
 
-    // Back button: fixed chrome below the band, returns to the menu view.
+    // Back button: fixed chrome below the band. Returns to the menu view by
+    // default, or fires the menu's Back-action override (so a caller that owns
+    // the settings navigation, e.g. a story, can route it).
     let back_y = band_top + band_h + BACK_GAP;
     let back_label = format!("{}_label_back", view);
-    out.push(label_value(
+    let back_action = if style.settings_back_action.is_empty() {
+        format!("view:show:{}", menu_name)
+    } else {
+        style.settings_back_action.clone()
+    };
+    out.push(centered_label(
         &back_label,
         "Back",
         font,
-        centered_x(center_x, "Back", font_px, style.text_scale),
+        center_x,
         text_y_at(back_y, style.text_scale),
         style.text_color,
         style.text_scale,
@@ -685,7 +715,7 @@ fn emit_settings_tab(
             "label": back_label,
             "hover_color": style.hover_color,
             "hover_scale": style.text_scale * style.hover_scale,
-            "action": format!("view:show:{}", menu_name),
+            "action": back_action,
         }
     }));
 
@@ -729,7 +759,16 @@ struct GroupSpec {
 }
 
 // The body rows + collapsible groups for one settings tab, top to bottom.
-fn settings_body_rows(active: &str) -> (Vec<BodyRow>, Vec<GroupSpec>) {
+fn settings_body_rows(active: &str, profile: SettingsProfile) -> (Vec<BodyRow>, Vec<GroupSpec>) {
+    // The Minimal profile shows a trimmed Video tab (window / output basics
+    // only) and shares the Full Audio tab; it never emits a Controls tab.
+    if profile == SettingsProfile::Minimal && active != "audio" {
+        let rows = VIDEO_MINIMAL_ROWS
+            .iter()
+            .map(|&(s, l)| BodyRow::Option(s, l, -1))
+            .collect();
+        return (rows, Vec::new());
+    }
     match active {
         "audio" => (
             AUDIO_ROWS
@@ -937,11 +976,11 @@ fn emit_menu_view(
     let mut row = 0usize;
     if has_title {
         let title_scale = style.text_scale * 1.4;
-        out.push(label_value(
+        out.push(centered_label(
             &format!("{}_title", view),
             title,
             font,
-            centered_x(center_x, title, font_px, title_scale),
+            center_x,
             start_y + (style.button_height - font_px * title_scale) / 2.0,
             style.text_color,
             title_scale,
@@ -953,11 +992,11 @@ fn emit_menu_view(
         let row_y = start_y + row as f32 * pitch;
         let label_name = format!("{}_label_{}", view, i);
 
-        out.push(label_value(
+        out.push(centered_label(
             &label_name,
             label,
             font,
-            centered_x(center_x, label, font_px, style.text_scale),
+            center_x,
             row_y + (style.button_height - line_h) / 2.0,
             style.text_color,
             style.text_scale,
@@ -1023,16 +1062,29 @@ fn label_value(
     })
 }
 
+// A label horizontally centered on `x` with the real font metrics (`align`
+// center), used for the vertically-stacked menu items, heading, and Back
+// button so differing label widths share one exact center rather than the old
+// glyph-width estimate.
+fn centered_label(
+    name: &str,
+    content: &str,
+    font: &str,
+    x: f32,
+    y: f32,
+    color: [f32; 3],
+    scale: f32,
+) -> serde_json::Value {
+    let mut value = label_value(name, content, font, x, y, color, scale);
+    value["args"]["align"] = serde_json::json!("center");
+    value
+}
+
 // Estimated rendered width of `text`, from the average glyph advance. The
 // built-in font is proportional, so this is an approximation good enough for
 // centering and tab layout.
 fn text_width(text: &str, font_px: f32, scale: f32) -> f32 {
     text.chars().count() as f32 * font_px * AVG_ADVANCE_RATIO * scale
-}
-
-// Left edge that horizontally centers `text` on `center_x`.
-fn centered_x(center_x: f32, text: &str, font_px: f32, scale: f32) -> f32 {
-    center_x - text_width(text, font_px, scale) / 2.0
 }
 
 // Map of declared Font name to its pixel size, for the centering estimate.
@@ -1060,27 +1112,52 @@ fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
 mod tests {
     use super::*;
 
-    // Dump a probe world that opens one settings tab directly, for the real-GPU
+    // Dump a probe world that opens one menu screen directly, for the real-GPU
     // screenshot smoke (the headless probe cannot click through the menu). Picks
-    // the tab from `CN_PROBE_TAB` (video | audio | controls, default controls),
-    // expands a MainMenu, then flips that tab's View to `initial` so it shows at
-    // launch. `#[ignore]`d: run explicitly, e.g.
-    //   CN_PROBE_TAB=controls cargo test -p concinnity-cook \
+    // the screen from `CN_PROBE_TAB` (`menu` for the button list, else a settings
+    // tab: video | audio | controls, default controls) and the settings breadth
+    // from `CN_PROBE_PROFILE` (full | minimal, default full). It expands a
+    // MainMenu, then flips the chosen View to `initial` so it shows at launch.
+    // `#[ignore]`d: run explicitly, e.g.
+    //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
     //       dump_settings_tab_probe_world -- --ignored
     // then `concinnity debug -f world.jsonl` + `debug_probe.py screenshot`.
     #[test]
     #[ignore]
     fn dump_settings_tab_probe_world() {
         let tab = std::env::var("CN_PROBE_TAB").unwrap_or_else(|_| "controls".to_string());
+        let profile = std::env::var("CN_PROBE_PROFILE").unwrap_or_else(|_| "full".to_string());
         let out = std::env::var("CN_PROBE_OUT").unwrap_or_else(|_| "world.jsonl".to_string());
+        // The Minimal profile is the pause-menu shape, so give it the pause item
+        // list; Full keeps the bare default items.
+        let menu_args = if profile == "minimal" {
+            serde_json::json!({
+                "title": "Paused",
+                "settings_profile": "minimal",
+                "items": [
+                    {"label": "Resume", "action": "return"},
+                    {"label": "Save", "action": "story:save"},
+                    {"label": "Load", "action": "story:load"},
+                    {"label": "Settings", "action": "settings"},
+                    {"label": "Quit to Title", "action": "quit"},
+                ],
+            })
+        } else {
+            serde_json::json!({"title": "Probe", "settings_profile": profile})
+        };
         let mut assets = vec![
             serde_json::json!({"name":"win","type":"Window","args":{"width":1280,"height":720}}),
             serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
-            serde_json::json!({"name":"main_menu","type":"MainMenu","args":{"title":"Probe"}}),
+            serde_json::json!({"name":"main_menu","type":"MainMenu","args": menu_args}),
         ];
         expand_main_menus(&mut assets).unwrap();
-        // Show the chosen tab's View at launch (the menu + other tabs off).
-        let target = format!("main_menu_settings_{tab}");
+        // Show the chosen screen at launch (the menu view for `menu`, else the
+        // named settings tab); every other View is off.
+        let target = if tab == "menu" {
+            "main_menu".to_string()
+        } else {
+            format!("main_menu_settings_{tab}")
+        };
         for v in &mut assets {
             if type_norm(v) == "view" {
                 v["args"]["initial"] = serde_json::json!(asset_name(v) == target);
@@ -1892,6 +1969,138 @@ mod tests {
         assert!(
             (left_pad - right_pad).abs() < 1e-3,
             "left pad {left_pad} != right pad {right_pad}"
+        );
+    }
+
+    // The Minimal profile emits only a Video and an Audio tab; there is no
+    // Controls tab view and no tab button pointing at one.
+    #[test]
+    fn minimal_profile_emits_only_video_and_audio_tabs() {
+        let mut assets = vec![serde_json::json!({
+            "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+
+        assert_eq!(by_name(&assets, "m_settings_video")["type"], "View");
+        assert_eq!(by_name(&assets, "m_settings_audio")["type"], "View");
+        assert!(
+            !assets
+                .iter()
+                .any(|v| asset_name(v) == "m_settings_controls"),
+            "Minimal must not emit a Controls tab view"
+        );
+        // The Video tab bar switches to Audio but offers no Controls button.
+        assert_eq!(
+            by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["action"],
+            "view:show:m_settings_audio"
+        );
+        assert!(
+            !assets
+                .iter()
+                .any(|v| asset_name(v) == "m_settings_video_tabbtn_controls"),
+            "Minimal Video tab bar must not offer Controls"
+        );
+    }
+
+    // The Minimal Video tab is trimmed to the window / output basics: window
+    // mode, resolution, vsync, frame rate. No graphics-quality preset, no
+    // performance-stats toggles, and no Quality / Advanced groups.
+    #[test]
+    fn minimal_video_tab_is_trimmed_to_output_basics() {
+        let mut assets = vec![serde_json::json!({
+            "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+
+        for setting in ["window_mode", "resolution", "vsync", "fps_cap"] {
+            let opt = by_name(&assets, &format!("m_settings_video_opt_{setting}"));
+            assert_eq!(opt["type"], "OptionSelect");
+            assert_eq!(opt["args"]["setting"], setting);
+        }
+        for dropped in [
+            "m_settings_video_opt_graphics_quality",
+            "m_settings_video_opt_perf_stats",
+            "m_settings_video_opt_show_fps",
+            "m_settings_video_opt_show_vram",
+            "m_settings_video_opt_ssgi",
+            "m_settings_video_grphdr_0",
+            "m_settings_video_grphdr_1",
+        ] {
+            assert!(
+                !assets.iter().any(|v| asset_name(v) == dropped),
+                "Minimal Video must not emit {dropped}"
+            );
+        }
+        // The scroll panel declares no collapsible groups.
+        let panel = by_name(&assets, "m_settings_video_scroll");
+        assert!(panel["args"]["groups"].as_array().unwrap().is_empty());
+    }
+
+    // The Minimal Audio tab keeps the master-volume row (it shares the Full
+    // Audio body).
+    #[test]
+    fn minimal_audio_tab_keeps_master_volume() {
+        let mut assets = vec![serde_json::json!({
+            "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        let vol = by_name(&assets, "m_settings_audio_opt_master_volume");
+        assert_eq!(vol["type"], "OptionSelect");
+        assert_eq!(vol["args"]["setting"], "master_volume");
+    }
+
+    // A `settings_back_action` generates the settings screen even with no
+    // "settings" item and routes the Back button through it (rather than the
+    // default view:show:<menu>).
+    #[test]
+    fn settings_back_action_generates_screen_and_overrides_back() {
+        let mut assets = vec![serde_json::json!({
+            "name": "m",
+            "type": "MainMenu",
+            "args": {
+                "settings_profile": "minimal",
+                "settings_back_action": "story:settings_back",
+                "items": [{"label": "Settings", "action": "story:settings"}]
+            }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        // The screen is generated despite no item using the "settings"
+        // convenience.
+        assert_eq!(by_name(&assets, "m_settings_video")["type"], "View");
+        // Both tabs' Back buttons fire the override.
+        for suffix in ["video", "audio"] {
+            assert_eq!(
+                by_name(&assets, &format!("m_settings_{suffix}_btn_back"))["args"]["action"],
+                "story:settings_back"
+            );
+        }
+    }
+
+    // Menu item labels, the heading, and Back center with real font metrics
+    // (align center) rather than the glyph-width estimate.
+    #[test]
+    fn menu_labels_center_with_real_metrics() {
+        let mut assets =
+            vec![serde_json::json!({"name":"m","type":"MainMenu","args":{"title":"Paused"}})];
+        expand_main_menus(&mut assets).unwrap();
+        assert_eq!(by_name(&assets, "m_title")["args"]["align"], "center");
+        assert_eq!(by_name(&assets, "m_label_0")["args"]["align"], "center");
+        assert_eq!(
+            by_name(&assets, "m_settings_video_label_back")["args"]["align"],
+            "center"
+        );
+    }
+
+    // The default (Full) profile is unchanged: it still emits the Controls tab
+    // and the graphics-quality preset the trimmed profile drops.
+    #[test]
+    fn full_profile_still_emits_controls_and_quality() {
+        let mut assets = vec![serde_json::json!({"name": "m", "type": "MainMenu"})];
+        expand_main_menus(&mut assets).unwrap();
+        assert_eq!(by_name(&assets, "m_settings_controls")["type"], "View");
+        assert_eq!(
+            by_name(&assets, "m_settings_video_opt_graphics_quality")["type"],
+            "OptionSelect"
         );
     }
 }

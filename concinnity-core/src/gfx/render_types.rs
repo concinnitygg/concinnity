@@ -244,17 +244,20 @@ pub struct ShadowPassPush {
 }
 
 // Compact vertex type used exclusively by the text render pass.
-// 32 bytes: screen-pixel position, atlas UV, text colour, and padding.
+// 32 bytes: screen-pixel position, atlas UV, text colour, and sampling mode.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct TextVertex {
     // Screen-space position in pixels (x from left, y from top).
     pub pos: [f32; 2],
-    // Normalised UV into the glyph atlas texture.
+    // Normalised UV into the bound atlas texture. A negative u marks a
+    // solid-fill quad (no sampling; alpha carried in v).
     pub uv: [f32; 2],
-    // Linear-space RGB text colour.
+    // Linear-space RGB colour: text colour, fill colour, or texture tint.
     pub color: [f32; 3],
-    pub _pad: f32,
+    // 0 = SDF glyph sampling; > 0 = textured quad (RGBA sample multiplied by
+    // `color`), with the value itself as the quad's alpha multiplier.
+    pub mode: f32,
 }
 
 // Uniforms pushed to the text vertex shader once per text draw call.
@@ -1455,7 +1458,7 @@ mod tests {
         assert_eq!(offset_of!(TextVertex, pos), 0);
         assert_eq!(offset_of!(TextVertex, uv), 8);
         assert_eq!(offset_of!(TextVertex, color), 16);
-        assert_eq!(offset_of!(TextVertex, _pad), 28);
+        assert_eq!(offset_of!(TextVertex, mode), 28);
     }
 
     #[test]

@@ -103,6 +103,33 @@ pub struct MainMenu {
     pub cursor_color: [f32; 4],
     /// Arrow cursor height in pixels (its width follows the arrow's shape).
     pub cursor_size: f32,
+    /// Which settings screen the `"settings"` item generates. `full` is the
+    /// complete Video / Audio / Controls set a 3D world configures; `minimal`
+    /// is the trimmed Video (window mode, resolution, vsync, frame rate) and
+    /// Audio (volume) set that fits a world with nothing to render into (a
+    /// visual-novel story, say), dropping the Controls tab and every
+    /// scene-render group.
+    pub settings_profile: SettingsProfile,
+    /// Action fired by the settings screen's Back button, overriding the
+    /// default (which returns to this menu). Setting it also generates the
+    /// settings screen even when no item uses the `"settings"` convenience, so
+    /// a caller that opens settings by its own action (a story, say) still gets
+    /// the screen. Empty keeps the default Back-to-menu behavior.
+    pub settings_back_action: String,
+}
+
+/// Which settings screen a [MainMenu](#mainmenu)'s `"settings"` item builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingsProfile {
+    /// The complete Video / Audio / Controls settings, with the graphics
+    /// quality preset and the Quality / Advanced render-feature groups.
+    #[default]
+    Full,
+    /// A trimmed Video tab (window mode, resolution, vsync, frame rate) and an
+    /// Audio tab (volume) only: no Controls tab, no graphics quality preset,
+    /// and no scene-render groups. Suits a world that renders no 3D scene.
+    Minimal,
 }
 
 /// One entry in a [MainMenu](#mainmenu).
@@ -151,6 +178,8 @@ impl Default for MainMenu {
             cursor: true,
             cursor_color: [1.0, 1.0, 1.0, 1.0],
             cursor_size: 22.0,
+            settings_profile: SettingsProfile::Full,
+            settings_back_action: String::new(),
         }
     }
 }
@@ -198,5 +227,13 @@ mod tests {
         assert_eq!(m.items.len(), 1);
         assert_eq!(m.items[0].label, "Play");
         assert_eq!(m.items[0].action, "scene:level_1");
+    }
+
+    #[test]
+    fn settings_profile_defaults_to_full_and_parses_lowercase() {
+        let m: MainMenu = serde_json::from_str("{}").unwrap();
+        assert_eq!(m.settings_profile, SettingsProfile::Full);
+        let m: MainMenu = serde_json::from_str(r#"{"settings_profile":"minimal"}"#).unwrap();
+        assert_eq!(m.settings_profile, SettingsProfile::Minimal);
     }
 }

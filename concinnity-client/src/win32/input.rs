@@ -19,6 +19,12 @@ pub(crate) struct KeyState {
     pub left: bool,
     pub right: bool,
     pub sprint: bool,
+    // Held Control modifier (a story's Ctrl fast-forward reads it each frame).
+    // Windows delivers Ctrl as an ordinary WM_KEYDOWN/WM_KEYUP carrying
+    // VK_CONTROL, so it is tracked here like a held key rather than through a
+    // separate modifier path (unlike macOS FlagsChanged); it drives no gameplay
+    // binding. Not a one-shot, so `take` reads without resetting it.
+    pub ctrl: bool,
     // One-shot flags: set on down, cleared after take_input() reads them.
     pub interact_pending: bool,
     pub jump_pending: bool,
@@ -83,6 +89,9 @@ impl KeyState {
         if vk == VK_F1 {
             self.hud_toggle_pending = true;
         }
+        if vk == VK_CONTROL {
+            self.ctrl = true;
+        }
         if let Some(key) = key_from_vk(vk) {
             self.captured_key = Some(key);
             self.apply_binding(key, true, true);
@@ -99,6 +108,9 @@ impl KeyState {
 
     // Update held flags from a WM_KEYUP message.
     pub(crate) fn on_key_up(&mut self, vk: VIRTUAL_KEY) {
+        if vk == VK_CONTROL {
+            self.ctrl = false;
+        }
         if let Some(key) = key_from_vk(vk) {
             self.apply_binding(key, false, false);
         }
@@ -135,6 +147,10 @@ impl KeyState {
             left_button_down,
             hud_toggle: self.hud_toggle_pending,
             escape: self.escape_pending,
+            // Held Control modifier (VK_CONTROL), tracked across key-down/up; a
+            // story's Ctrl fast-forward reads it. Held state, not a one-shot, so
+            // it is not reset below.
+            ctrl: self.ctrl,
             captured_key: self.captured_key,
         };
         self.interact_pending = false;
@@ -213,4 +229,28 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<Key> {
         VK_OEM_3 => Key::Backtick,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(ks: &mut KeyState) -> InputState {
+        ks.take(0.0, 0.0, 0.0, 0.0, false, false, 0.0)
+    }
+
+    #[test]
+    fn control_key_tracks_held_ctrl_modifier() {
+        // Regression: `ctrl` used to be hardcoded `false` in `take`, so a story's
+        // Ctrl fast-forward never fired on Windows (worked on Metal only).
+        let mut ks = KeyState::default();
+        assert!(!snapshot(&mut ks).ctrl, "ctrl starts released");
+        ks.on_key_down(VK_CONTROL);
+        assert!(snapshot(&mut ks).ctrl, "ctrl held after VK_CONTROL down");
+        // Held modifier, not a one-shot: still set on a later frame with no new
+        // event (so a sustained hold keeps fast-forwarding).
+        assert!(snapshot(&mut ks).ctrl, "ctrl stays held across frames");
+        ks.on_key_up(VK_CONTROL);
+        assert!(!snapshot(&mut ks).ctrl, "ctrl released after VK_CONTROL up");
+    }
 }

@@ -1,5 +1,6 @@
 // src/assets/hit_region.rs
 
+use crate::assets::SpriteFit;
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
 use crate::ecs::{AssetOrigin, Component};
 
@@ -61,6 +62,20 @@ pub struct HitRegion {
     /// cannot provide is disabled and grayed out); you don't set this directly.
     #[serde(default)]
     pub disabled: bool,
+    /// When set, this region tracks its referenced [`label`](#hitregion): it
+    /// follows the label's vertical position (so a menu the engine lays out at
+    /// runtime keeps its buttons clickable) and is inert while the label's text
+    /// is empty (so a hidden menu entry does not catch clicks). Requires
+    /// `label`.
+    #[serde(default)]
+    pub follow_label: bool,
+    /// How a view-owned region maps from the reference canvas to the window
+    /// when their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
+    /// `Bottom` keeps a region aligned with bottom-anchored furniture it
+    /// covers. A region spanning the whole reference canvas always covers the
+    /// full window regardless of `fit`.
+    #[serde(default)]
+    pub fit: SpriteFit,
 }
 
 impl Default for HitRegion {
@@ -77,6 +92,8 @@ impl Default for HitRegion {
             drag_handle: None,
             view: None,
             disabled: false,
+            follow_label: false,
+            fit: SpriteFit::Fit,
         }
     }
 }
