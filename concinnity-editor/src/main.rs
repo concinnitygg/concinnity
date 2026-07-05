@@ -137,6 +137,10 @@ enum Commands {
     /// Validate a world without building
     #[command(name = "test")]
     Test(TestArgs),
+
+    /// Package a built world into a distributable app
+    #[command(name = "export")]
+    Export(ExportArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -274,6 +278,31 @@ pub struct BuildArgs {
     pub user: Option<String>,
 }
 
+#[derive(Debug, clap::Args)]
+pub struct ExportArgs {
+    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    #[arg(short = 'f', long)]
+    pub file: Option<String>,
+
+    // Override the application name (default: the Application asset's name, then
+    // a MainMenu title, then "Concinnity"). Names the bundle, executable, and
+    // archive.
+    #[arg(short = 'n', long)]
+    pub name: Option<String>,
+
+    // Target platform (host only for now; a foreign target is rejected).
+    #[arg(long)]
+    pub platform: Option<String>,
+
+    // Output directory for the exported game.
+    #[arg(long, default_value = "dist")]
+    pub out: String,
+
+    // Output format: zip (default) or dir.
+    #[arg(long, default_value = "zip")]
+    pub format: String,
+}
+
 // When a render command requests graphics validation on macOS, relaunch the
 // process with Metal's API-validation layer (`MTL_DEBUG_LAYER`) set in the
 // environment, then return into the replacement image. Metal reads that
@@ -368,5 +397,12 @@ fn main() -> std::io::Result<()> {
             let path = args.file.as_deref().unwrap_or("");
             cli::check(path)
         }
+        Commands::Export(args) => cli::export(
+            args.file.as_deref(),
+            args.name.as_deref(),
+            args.platform.as_deref(),
+            &args.out,
+            &args.format,
+        ),
     }
 }

@@ -8,6 +8,7 @@ mod add;
 mod build;
 mod check;
 mod explain;
+mod export;
 mod list;
 mod new;
 mod rm;
@@ -20,6 +21,9 @@ pub use check::check;
 
 // Print one asset's effective entry from the expanded world
 pub use explain::explain;
+
+// Package a built world into a distributable game
+pub use export::export;
 
 // List all declared assets
 pub use list::list;

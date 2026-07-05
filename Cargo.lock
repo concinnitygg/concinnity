@@ -736,6 +736,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windows 0.61.3",
+ "zip",
 ]
 
 [[package]]
