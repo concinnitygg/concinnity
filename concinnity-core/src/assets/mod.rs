@@ -8,6 +8,7 @@
 
 // Component data types.
 mod animation;
+mod application;
 pub mod audio_clip;
 mod audio_command;
 mod audio_cue;
@@ -106,6 +107,7 @@ mod fps_counter;
 mod stat_hud;
 
 pub use animation::Animation;
+pub use application::Application;
 pub use audio_clip::AudioClip;
 pub use audio_command::AudioCommand;
 pub use audio_cue::{AudioCue, CueKind};

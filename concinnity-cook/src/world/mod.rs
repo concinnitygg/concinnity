@@ -5,6 +5,7 @@
 // the glob re-export of the same name.
 pub use concinnity_core::world::*;
 
+pub(crate) mod application;
 pub(crate) mod camera_shot;
 pub(crate) mod companion;
 pub(crate) mod config;

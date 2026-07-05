@@ -3,6 +3,7 @@
 # Assets
 
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
+- [Application](Application.md) - Names and identifies the application for distribution.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [View](View.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
