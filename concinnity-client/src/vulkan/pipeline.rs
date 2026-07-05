@@ -549,7 +549,7 @@ fn skinned_shadow_vertex_input() -> (
     ([binding], attrs)
 }
 
-// TextVertex binding (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + pad.
+// TextVertex binding (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + mode(float).
 fn text_vertex_input() -> (
     [vk::VertexInputBindingDescription; 1],
     [vk::VertexInputAttributeDescription; 4],
