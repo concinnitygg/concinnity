@@ -12,10 +12,12 @@ use crate::directx::post::bloom::{
     bloom_top_extent, compile_bloom_shaders, create_bloom_mips, create_bloom_pso,
     create_bloom_root_signature, write_color_rtv,
 };
-use crate::directx::post::rt_reflections::RtReflectionsResources;
-use crate::directx::post::ssao::SsaoResources;
-use crate::directx::post::ssgi::SsgiResources;
-use crate::directx::post::ssr::SsrResources;
+use crate::directx::post::rt_reflections::{
+    RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
+};
+use crate::directx::post::ssao::{SsaoDescriptorHandles, SsaoDeviceCtx, SsaoResources};
+use crate::directx::post::ssgi::{SsgiDescriptors, SsgiDevice, SsgiResources};
+use crate::directx::post::ssr::{SsrInitInputs, SsrResources};
 use crate::directx::post::taa::TaaResources;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, write_hdr_srv, write_rgba8_srv,
@@ -84,38 +86,79 @@ pub(super) struct RtReflectionsSlots {
     pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
 }
 
-#[allow(clippy::too_many_arguments)]
+// Render dimensions for the effect targets. Drawable (width/height) sizes the
+// bloom mip chain; render-resolution sizes the TAA / SSAO / SSR targets upstream
+// of the upscaler. They are equal when temporal upscaling is off.
+#[derive(Clone, Copy)]
+pub(super) struct EffectDimensions {
+    pub width: u32,
+    pub height: u32,
+    pub render_width: u32,
+    pub render_height: u32,
+}
+
+// The world-resolved feature settings that gate each pass. Each Option is None
+// when the feature is off. `rt_supported` is the DXR-tier capability; RT builds
+// only when both it and `rt_reflection_settings` are set.
+pub(super) struct EffectSettings {
+    pub ssao_settings: Option<crate::gfx::ssao::SsaoSettings>,
+    pub ssr_settings: Option<crate::gfx::ssr::SsrSettings>,
+    pub ssgi_settings: Option<crate::gfx::ssgi::SsgiSettings>,
+    pub rt_reflection_settings: Option<crate::gfx::rt_reflections::RtReflectionSettings>,
+    pub rt_supported: bool,
+}
+
+// Non-settings build flags: TAA on/off and the shader hot-reload toggle.
+#[derive(Clone, Copy)]
+pub(super) struct EffectFlags {
+    pub taa_enabled: bool,
+    pub hot_reload: bool,
+}
+
+// Descriptor-heap slots for every effect pass: bloom, TAA, SSAO, SSR, SSGI, RT.
+pub(super) struct EffectDescriptorSlots<'a> {
+    pub bloom: BloomSlots<'a>,
+    pub taa: TaaSlots,
+    pub ssao: SsaoSlots,
+    pub ssr: SsrSlots,
+    pub ssgi: SsgiSlots,
+    pub rt: RtReflectionsSlots,
+}
+
 pub(super) fn build_effects(
     device: &ID3D12Device,
     command_queue: &ID3D12CommandQueue,
     info_queue: Option<&ID3D12InfoQueue>,
-    // Drawable resolution; sizes the bloom mip chain (which samples the
-    // upscaler's output-res result / composite-bound scene).
-    width: u32,
-    height: u32,
-    // Off-screen scene render resolution; sizes the TAA velocity + history,
-    // SSAO, and SSR targets, which all live upstream of the upscaler. Equals
-    // `width`/`height` when temporal upscaling is off.
-    render_width: u32,
-    render_height: u32,
-    taa_enabled: bool,
-    ssao_settings: Option<crate::gfx::ssao::SsaoSettings>,
-    ssr_settings: Option<crate::gfx::ssr::SsrSettings>,
-    ssgi_settings: Option<crate::gfx::ssgi::SsgiSettings>,
-    // RT-reflection tunables (`Some` only when the world authored
-    // `ray_traced_reflections`); `rt_supported` reports the DXR-tier capability
-    // queried at init. The resources build only when both hold and the DXC
-    // compile succeeds; any failure leaves `rt_reflections` `None` (SSR fallback).
-    rt_reflection_settings: Option<crate::gfx::rt_reflections::RtReflectionSettings>,
-    rt_supported: bool,
-    bloom: BloomSlots<'_>,
-    taa_slots: TaaSlots,
-    ssao_slots: SsaoSlots,
-    ssr_slots: SsrSlots,
-    ssgi_slots: SsgiSlots,
-    rt_slots: RtReflectionsSlots,
-    hot_reload: bool,
+    dims: EffectDimensions,
+    settings: EffectSettings,
+    flags: EffectFlags,
+    slots: EffectDescriptorSlots<'_>,
 ) -> Result<EffectsBundle, String> {
+    let EffectDimensions {
+        width,
+        height,
+        render_width,
+        render_height,
+    } = dims;
+    let EffectSettings {
+        ssao_settings,
+        ssr_settings,
+        ssgi_settings,
+        rt_reflection_settings,
+        rt_supported,
+    } = settings;
+    let EffectFlags {
+        taa_enabled,
+        hot_reload,
+    } = flags;
+    let EffectDescriptorSlots {
+        bloom,
+        taa: taa_slots,
+        ssao: ssao_slots,
+        ssr: ssr_slots,
+        ssgi: ssgi_slots,
+        rt: rt_slots,
+    } = slots;
     // Transient pool: the graph-owned transient render targets. `bloom_top`
     // (bloom mip 0) is always managed; `ao_output` is placed only when SSAO is
     // on (else `resource_for` returns None and the main pass binding 6 falls
@@ -216,16 +259,17 @@ pub(super) fn build_effects(
             .resource_for("ao_output")
             .ok_or("transient pool missing ao_output while SSAO is enabled")?;
         Some(SsaoResources::new(
-            device,
+            SsaoDeviceCtx { device, info_queue },
             render_width,
             render_height,
             settings,
-            ssao_slots.ao_raw_rtv,
-            ssao_slots.ao_raw_srv,
-            ssao_slots.ao_rtv,
-            ssao_slots.ao_srv,
+            SsaoDescriptorHandles {
+                ao_raw_rtv: ssao_slots.ao_raw_rtv,
+                ao_raw_srv: ssao_slots.ao_raw_srv,
+                ao_rtv: ssao_slots.ao_rtv,
+                ao_srv: ssao_slots.ao_srv,
+            },
             ao_resource,
-            info_queue,
             hot_reload,
         )?)
     } else {
@@ -242,9 +286,11 @@ pub(super) fn build_effects(
                 device,
                 render_width,
                 render_height,
-                ssr_settings,
-                ssr_slots.output_rtv,
-                ssr_slots.output_srv,
+                SsrInitInputs {
+                    resolve_settings: ssr_settings,
+                    output_rtv: ssr_slots.output_rtv,
+                    output_srv: ssr_slots.output_srv,
+                },
                 info_queue,
                 hot_reload,
             )?)
@@ -257,13 +303,14 @@ pub(super) fn build_effects(
     // into the scene.
     let ssgi = if let Some(settings) = ssgi_settings {
         Some(SsgiResources::new(
-            device,
+            SsgiDevice { device, info_queue },
             render_width,
             render_height,
             settings,
-            ssgi_slots.gi_rtv,
-            ssgi_slots.gi_srv,
-            info_queue,
+            SsgiDescriptors {
+                gi_rtv: ssgi_slots.gi_rtv,
+                gi_srv: ssgi_slots.gi_srv,
+            },
             hot_reload,
         )?)
     } else {
@@ -278,14 +325,20 @@ pub(super) fn build_effects(
     // built separately in mod.rs and gates `rt_reflections_active` alongside this.
     let rt_reflections = match (rt_reflection_settings, rt_supported) {
         (Some(settings), true) => match RtReflectionsResources::new(
-            device,
-            render_width,
-            render_height,
+            RtBuildContext {
+                device,
+                width: render_width,
+                height: render_height,
+            },
             settings,
-            rt_slots.output_rtv,
-            rt_slots.output_srv,
-            info_queue,
-            hot_reload,
+            RtOutputDescriptors {
+                output_rtv: rt_slots.output_rtv,
+                output_srv: rt_slots.output_srv,
+            },
+            RtBuildInit {
+                info_queue,
+                hot_reload,
+            },
         ) {
             Ok(r) => Some(r),
             Err(e) => {

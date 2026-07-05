@@ -52,6 +52,27 @@ fn halton(mut index: u32, base: u32) -> f32 {
     result
 }
 
+// Where `record_frame` records this frame's GPU work: the outer "end" command
+// buffer, the acquired swapchain image, and the frame-in-flight slot the
+// per-frame resources (query pool block, view UBO, cull buffers) index into.
+#[derive(Clone, Copy)]
+pub(super) struct RecordFrameTargets {
+    pub cmd: vk::CommandBuffer,
+    pub image_index: u32,
+    pub frame_idx: usize,
+}
+
+// Per-frame camera / view state plus the overlay text drawn with it. Drives the
+// projection, cascade selection, sub-pixel jitter, and view UBO for this frame.
+pub(super) struct RecordFrameView<'a> {
+    pub elapsed: f32,
+    pub fov_y_radians: f32,
+    pub near: f32,
+    pub far: f32,
+    pub cam_pos: [f32; 3],
+    pub text_calls: &'a [TextDrawCall],
+}
+
 impl VkContext {
     // Rebuild this frame's `GpuObjectData` storage buffer for the bindless
     // static pass: one 144-byte record per build-time `DrawObject`, indexed
@@ -277,20 +298,25 @@ impl VkContext {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_frame(
         &mut self,
-        cmd: vk::CommandBuffer,
-        image_index: u32,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        frame_idx: usize,
+        targets: RecordFrameTargets,
+        view: RecordFrameView<'_>,
         world_hidden: bool,
     ) -> Result<Vec<vk::CommandBuffer>, String> {
+        let RecordFrameTargets {
+            cmd,
+            image_index,
+            frame_idx,
+        } = targets;
+        let RecordFrameView {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            cam_pos,
+            text_calls,
+        } = view;
         let device = self.device.clone();
         let device = &device;
         // The scene rasterises at render resolution (== swapchain extent unless
@@ -367,17 +393,18 @@ impl VkContext {
             extent.width as f32 / extent.height as f32
         };
         if self.shadow.pipeline.is_some() {
-            let fresh = crate::gfx::csm::compute_shadow_uniforms(
-                self.view_matrix,
-                cam_pos,
-                fov_y_radians,
-                cascade_aspect,
-                near,
-                (self.shadow.distance as f32).min(far),
-                self.shadow.light_dir,
-                self.shadow.map_size,
-                self.shadow.cascades,
-            );
+            let fresh =
+                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
+                    view: self.view_matrix,
+                    cam_pos,
+                    fov_y_rad: fov_y_radians,
+                    aspect: cascade_aspect,
+                    near,
+                    shadow_distance: (self.shadow.distance as f32).min(far),
+                    light_dir_to_source: self.shadow.light_dir,
+                    shadow_map_size: self.shadow.map_size,
+                    active_cascades: self.shadow.cascades,
+                });
             // Advance the cascade schedule and refresh only this frame's
             // cascades' light VPs; skipped cascades keep the VP + depth their
             // slice was last rendered with, so the Main pass samples each cascade

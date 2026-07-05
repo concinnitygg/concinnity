@@ -212,7 +212,6 @@ unsafe impl Send for XessUpscaler {}
 impl XessUpscaler {
     // Try to construct an XeSS upscaler. Returns `Ok(None)` when XeSS is
     // unavailable (DLL miss / context init failure); the caller falls through.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn try_new(
         device: &ID3D12Device,
         output_width: u32,
@@ -357,19 +356,18 @@ impl super::UpscaleBackend for XessUpscaler {
         super::halton_jitter_offset(frame_index)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        color: &ID3D12Resource,
-        depth: &ID3D12Resource,
-        motion_vectors: &ID3D12Resource,
-        jitter_offset: [f32; 2],
-        _frame_time_delta_ms: f32,
-        _camera_near: f32,
-        _camera_far: f32,
-        _camera_fov_y_radians: f32,
+        inputs: super::UpscaleInputs<'_>,
+        camera: super::UpscaleCamera,
     ) -> Result<(), String> {
+        let super::UpscaleInputs {
+            color,
+            depth,
+            motion_vectors,
+        } = inputs;
+        let super::UpscaleCamera { jitter_offset, .. } = camera;
         let reset = self.reset_pending.replace(false);
         let zero = xess_2d_t { x: 0, y: 0 };
         let params = xess_d3d12_execute_params_t {

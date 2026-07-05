@@ -4,7 +4,6 @@
 // draw-args / joint buffer construction, the cull compute pass, and the
 // bindless texture argument buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -249,6 +248,38 @@ pub(super) fn metal_skinned_record(
     rec
 }
 
+// The per-frame cull IO buffers: the packed DrawObject records the kernel tests
+// and the indirect draw-args table it reads each survivor's index range from.
+struct CullSceneBuffers<'a> {
+    object_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+}
+
+// The camera the cull kernel tests records against: the frustum planes plus the
+// eye position for the distance-based LOD pick.
+struct CullView<'a> {
+    frustum: &'a crate::gfx::frustum::Frustum,
+    cam_pos: [f32; 3],
+}
+
+// The output the cull kernel encodes survivors into: the target ICB, its
+// argument buffer, and the per-object status scratch it writes each record's
+// cull outcome to.
+struct CullOutputTarget<'a> {
+    icb: &'a Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
+    arg_buf: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    status: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+}
+
+// Per-dispatch cull knobs: whether to consult the Hi-Z pyramid (off for the
+// mirror cull, whose pyramid is the wrong screen space), an optional pass-timing
+// id, and the encoder debug label.
+struct CullDispatchOptions<'a> {
+    use_hiz: bool,
+    timing: Option<super::pass_timing::PassId>,
+    label: &'a str,
+}
+
 impl MtlContext {
     // Build the current-pose joint-palette buffers for the skinned passes, one
     // per skinned object, from the per-object ring at `ring_slot`. Returns an
@@ -454,16 +485,21 @@ impl MtlContext {
         };
         self.encode_cull_into(
             cmd_buf,
-            object_buffer,
-            draw_args_buffer,
-            frustum,
-            cam_pos,
-            icb,
-            arg_buf,
-            status,
-            true,
-            Some(super::pass_timing::PassId::Cull),
-            "cull phase1",
+            CullSceneBuffers {
+                object_buffer,
+                draw_args_buffer,
+            },
+            CullView { frustum, cam_pos },
+            CullOutputTarget {
+                icb,
+                arg_buf,
+                status,
+            },
+            CullDispatchOptions {
+                use_hiz: true,
+                timing: Some(super::pass_timing::PassId::Cull),
+                label: "cull phase1",
+            },
         )?;
         Ok(())
     }
@@ -492,16 +528,21 @@ impl MtlContext {
         };
         self.encode_cull_into(
             cmd_buf,
-            object_buffer,
-            draw_args_buffer,
-            frustum,
-            cam_pos,
-            &mirror.icb,
-            &mirror.arg_buffer,
-            status,
-            false,
-            None,
-            "mirror cull",
+            CullSceneBuffers {
+                object_buffer,
+                draw_args_buffer,
+            },
+            CullView { frustum, cam_pos },
+            CullOutputTarget {
+                icb: &mirror.icb,
+                arg_buf: &mirror.arg_buffer,
+                status,
+            },
+            CullDispatchOptions {
+                use_hiz: false,
+                timing: None,
+                label: "mirror cull",
+            },
         )
     }
 
@@ -512,21 +553,29 @@ impl MtlContext {
     // whether to consult the Hi-Z pyramid (`use_hiz`), an optional pass-timing id,
     // and an encoder label. A no-op when the cull pipeline is absent (non-bindless)
     // or there is no geometry.
-    #[allow(clippy::too_many_arguments)]
     fn encode_cull_into(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &crate::gfx::frustum::Frustum,
-        cam_pos: [f32; 3],
-        icb: &Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
-        arg_buf: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-        status: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-        use_hiz: bool,
-        timing: Option<super::pass_timing::PassId>,
-        label: &str,
+        scene: CullSceneBuffers,
+        view: CullView,
+        target: CullOutputTarget,
+        options: CullDispatchOptions,
     ) -> Result<(), String> {
+        let CullSceneBuffers {
+            object_buffer,
+            draw_args_buffer,
+        } = scene;
+        let CullView { frustum, cam_pos } = view;
+        let CullOutputTarget {
+            icb,
+            arg_buf,
+            status,
+        } = target;
+        let CullDispatchOptions {
+            use_hiz,
+            timing,
+            label,
+        } = options;
         use objc2_metal::{
             MTLComputeCommandEncoder as _, MTLComputePipelineState as _, MTLResourceUsage, MTLSize,
         };

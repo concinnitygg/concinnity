@@ -3,10 +3,10 @@
 // VoxelWorld chunk streaming for MtlContext: sub-allocator setup and the
 // add / remove / move-chunk-mesh operations driven after init.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2_metal::{MTLBuffer, MTLDevice as _, MTLResourceOptions};
 
+use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::DrawObject;
 
@@ -65,17 +65,16 @@ impl MtlContext {
     // The chunk is non-cullable and joins the `always_draw` set: the streaming
     // window already bounds the resident chunk count, so the renderer draws
     // every resident chunk. `frame` reclaims retired deferred frees first.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_chunk_mesh(
-        &mut self,
-        vertices: &[Vertex],
-        indices: &[u16],
-        model: [[f32; 4]; 4],
-        texture_slot: usize,
-        normal_map_slot: usize,
-        material: crate::gfx::render_types::MaterialUniforms,
-        frame: u64,
-    ) -> Result<usize, String> {
+    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+        let ChunkMesh {
+            verts: vertices,
+            idxs: indices,
+            model,
+            texture_slot,
+            normal_map_slot,
+            material,
+            frame,
+        } = mesh;
         if vertices.is_empty() || indices.is_empty() {
             return Err("add_chunk_mesh: empty chunk geometry".to_string());
         }

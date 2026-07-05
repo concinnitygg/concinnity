@@ -25,8 +25,6 @@
 // that boilerplate; each pass passes a per-draw closure for the only thing that
 // varies (the model / material / texture / joint bindings).
 
-#![allow(clippy::incompatible_msrv)]
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLIndexType, MTLPrimitiveType, MTLRenderCommandEncoder as _};

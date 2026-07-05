@@ -379,14 +379,13 @@ macro_rules! __define_asset_kind {
                 $( if val == $disc { return Some(Self::$variant); } )+
                 None
             }
-            // Unit error: a name either matches a known type or it does not;
-            // callers supply their own context message.
-            #[allow(clippy::result_unit_err)]
-            pub fn parse(s: &str) -> Result<Self, ()> {
+            // A name either matches a known type or it does not; callers that
+            // want a message supply their own via `ok_or`/`ok_or_else`.
+            pub fn parse(s: &str) -> Option<Self> {
                 $(
-                    if s == <$ty as $trait_name>::NAME { return Ok(Self::$variant); }
+                    if s == <$ty as $trait_name>::NAME { return Some(Self::$variant); }
                 )+
-                Err(())
+                None
             }
             pub fn registration(self) -> Registration {
                 match self { $( Self::$variant => <$ty as $trait_name>::registration() ),+ }

@@ -22,13 +22,14 @@ use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
 
 use crate::gfx::render_types::RtParams;
+use crate::gfx::rt_reflections::RtParamsInputs;
 
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{compile_glsl, compile_glsl_rt, inject_define, shader_source, spv_module};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::texture::{
-    GpuImage, create_buffer, create_image, create_image_view, one_shot_submit,
-    transition_image_layout_range,
+    GpuAllocContext, GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_buffer,
+    create_image, create_image_view, one_shot_submit, transition_image_layout_range,
 };
 
 const GLASS_VERT: &str = include_str!("shaders/glass.vert");
@@ -46,6 +47,19 @@ pub(in crate::vulkan) struct GlassRtInputs {
     pub geom_buffer: vk::Buffer,
     pub geom_size: vk::DeviceSize,
     pub deformed_verts: vk::Buffer,
+    pub skinned_indices: vk::Buffer,
+}
+
+// The live acceleration-structure handles re-pointed into one frame's glass RT
+// descriptor set every frame by `wire_dynamic` / `wire_rt_dynamic`. Same handles
+// the RT-reflection pass rewires; the deformed buffer is always valid while
+// `skinned_indices` is null until the first skinned rebuild.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassRtDynamic {
+    pub tlas: vk::AccelerationStructureKHR,
+    pub geom_buffer: vk::Buffer,
+    pub geom_size: vk::DeviceSize,
+    pub deformed: vk::Buffer,
     pub skinned_indices: vk::Buffer,
 }
 
@@ -282,17 +296,14 @@ impl GlassRt {
     // dummy when there is no skinned geometry); `skinned_indices` is null until the
     // first skinned rebuild, in which case the 1-element dummy SSBO binds so the
     // descriptor stays valid. Mirrors `post::rt_reflections::wire_dynamic`.
-    #[allow(clippy::too_many_arguments)]
-    fn wire_dynamic(
-        &self,
-        device: &Device,
-        frame_idx: usize,
-        tlas: vk::AccelerationStructureKHR,
-        geom_buffer: vk::Buffer,
-        geom_size: vk::DeviceSize,
-        deformed: vk::Buffer,
-        skinned_indices: vk::Buffer,
-    ) {
+    fn wire_dynamic(&self, device: &Device, frame_idx: usize, dynamic: GlassRtDynamic) {
+        let GlassRtDynamic {
+            tlas,
+            geom_buffer,
+            geom_size,
+            deformed,
+            skinned_indices,
+        } = dynamic;
         let set = self.sets[frame_idx];
         let accels = [tlas];
         let mut accel_write = vk::WriteDescriptorSetAccelerationStructureKHR::default()
@@ -365,6 +376,39 @@ impl GlassRt {
     }
 }
 
+// The render-pass + pipeline build config for the glass RT pipelines: the target
+// render pass, the per-frame ring depth, the MSAA depth-sampler flavour, and the
+// hot-reload shader source toggle.
+#[derive(Clone, Copy)]
+struct GlassRtPipelineConfig {
+    render_pass: vk::RenderPass,
+    frames: usize,
+    msaa: bool,
+    hot_reload: bool,
+}
+
+// The descriptor set layouts the glass RT pipeline layouts reference: the shared
+// glass view / params / global sets (0/1/2) plus the bindless texture pool set
+// (with its pool size) that gates the textured hit-shading variant.
+#[derive(Clone, Copy)]
+struct GlassRtSetLayouts {
+    view: vk::DescriptorSetLayout,
+    params: vk::DescriptorSetLayout,
+    global: vk::DescriptorSetLayout,
+    bindless: Option<vk::DescriptorSetLayout>,
+    bindless_pool_size: usize,
+}
+
+// The shared static geometry the trace reads plus the initial acceleration-
+// structure handles. `rt_inputs` wires the initial accel handles when RT is live
+// at launch; otherwise the first `rt_dynamic_update` fills them.
+#[derive(Clone, Copy)]
+struct GlassRtGeometry {
+    vertex_buffer: vk::Buffer,
+    index_buffer: vk::Buffer,
+    rt_inputs: Option<GlassRtInputs>,
+}
+
 // Build the glass RT pipelines + descriptor ring. Called from `GlassResources::new`
 // when the device is RT-capable. Returns `Err` on a shader-compile failure (the
 // caller then leaves `rt` `None` and the probe / planar glass path runs). The two
@@ -373,24 +417,32 @@ impl GlassRt {
 // a dedicated set 3 (bindless pool on set 4 for the textured variant). `rt_inputs`
 // wires the initial accel handles when RT is live at launch; otherwise the first
 // `rt_dynamic_update` fills them before the RT path is taken.
-#[allow(clippy::too_many_arguments)]
 fn build_glass_rt(
     instance: &ash::Instance,
     device: &Device,
     physical_device: vk::PhysicalDevice,
-    render_pass: vk::RenderPass,
-    frames: usize,
-    msaa: bool,
-    view_set_layout: vk::DescriptorSetLayout,
-    params_set_layout: vk::DescriptorSetLayout,
-    global_set_layout: vk::DescriptorSetLayout,
-    bindless_set_layout: Option<vk::DescriptorSetLayout>,
-    bindless_pool_size: usize,
-    vertex_buffer: vk::Buffer,
-    index_buffer: vk::Buffer,
-    rt_inputs: Option<GlassRtInputs>,
-    hot_reload: bool,
+    config: GlassRtPipelineConfig,
+    layouts: GlassRtSetLayouts,
+    geometry: GlassRtGeometry,
 ) -> Result<GlassRt, String> {
+    let GlassRtPipelineConfig {
+        render_pass,
+        frames,
+        msaa,
+        hot_reload,
+    } = config;
+    let GlassRtSetLayouts {
+        view: view_set_layout,
+        params: params_set_layout,
+        global: global_set_layout,
+        bindless: bindless_set_layout,
+        bindless_pool_size,
+    } = layouts;
+    let GlassRtGeometry {
+        vertex_buffer,
+        index_buffer,
+        rt_inputs,
+    } = geometry;
     let shaders = compile_glass_rt_shaders(hot_reload, msaa, bindless_pool_size)?;
     let set_layout = create_rt_set_layout(device)?;
 
@@ -534,11 +586,13 @@ fn build_glass_rt(
             rt.wire_dynamic(
                 device,
                 i,
-                inputs.tlas,
-                inputs.geom_buffer,
-                inputs.geom_size,
-                inputs.deformed_verts,
-                inputs.skinned_indices,
+                GlassRtDynamic {
+                    tlas: inputs.tlas,
+                    geom_buffer: inputs.geom_buffer,
+                    geom_size: inputs.geom_size,
+                    deformed: inputs.deformed_verts,
+                    skinned_indices: inputs.skinned_indices,
+                },
             );
         }
     }
@@ -959,29 +1013,37 @@ fn create_snapshot(
     height: u32,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width.max(1),
-        height.max(1),
-        HDR_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width: width.max(1),
+            height: height.max(1),
+            format: HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
             device,
             cmd,
             image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            1,
-            0,
-            1,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 1,
+                base_mip: 0,
+                mip_count: 1,
+            },
         );
     })?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
@@ -1063,6 +1125,86 @@ fn build_panel_buffers(
     Ok((vb, vb_mem, ib, ib_mem, idxs.len() as u32))
 }
 
+// The Vulkan device handles the glass build + rebuild need: the instance,
+// logical + physical device, and the transient command pool + queue used for the
+// one-shot snapshot layout transition.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassDeviceCtx<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// The non-resource build config for `GlassResources::new`: the render dims + ring
+// depth + MSAA sample count, the per-frame global descriptor set layout bound as
+// glass set 2, and the hot-reload shader source toggle.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassBuildConfig {
+    pub frames: usize,
+    pub msaa_samples: vk::SampleCountFlags,
+    pub width: u32,
+    pub height: u32,
+    // The per-frame global descriptor set layout (ViewUniforms, IBL cubes, probe
+    // set + cube array). Bound as glass set 2 so the fragment shader reflects the
+    // probe set / sky prefilter cube; the pipeline layout must reference it even
+    // though glass only samples bindings 5 / 7 / 8.
+    pub global_set_layout: vk::DescriptorSetLayout,
+    pub hot_reload: bool,
+}
+
+// The post-SSR scene target per frame slot plus the per-frame main-depth views.
+// `scene_views` / `scene_images` are the post-SSR scene target per frame slot
+// (SSR output repeated, or `hdr_resolve_images[i]`); `depth_views` are the main-
+// depth views the manual occlusion test samples. `sampler` is the linear sampler
+// bound alongside the snapshot + depth.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassSceneTargets<'a> {
+    pub scene_views: &'a [vk::ImageView],
+    pub scene_images: &'a [vk::Image],
+    pub depth_views: &'a [vk::ImageView],
+    pub sampler: vk::Sampler,
+}
+
+// Per-pane planar reflection slot (`None` falls back to the probe cube) and the
+// per-distinct-plane mirror target views the assigned panes sample. A slotless
+// pane (or an empty `target_views`) binds the snapshot as a valid stand-in and
+// never samples it (the shader gates on the flag).
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassPlanarTargets<'a> {
+    pub slots: &'a [Option<usize>],
+    pub target_views: &'a [vk::ImageView],
+}
+
+// Per-pixel RT reflection inputs, built whenever the device is RT-capable (so a
+// live quality toggle can bring RT up), independent of whether RT is on at launch.
+// `vertex_buffer` / `index_buffer` are the shared static geometry the trace reads;
+// `rt_inputs` is the initial acceleration-structure handles (`None` when RT is off
+// at launch, then filled per frame by `rt_dynamic_update`); `bindless_set_layout` +
+// pool size enable the textured hit-shading variant.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassRtSetup {
+    pub rt_capable: bool,
+    pub vertex_buffer: vk::Buffer,
+    pub index_buffer: vk::Buffer,
+    pub rt_inputs: Option<GlassRtInputs>,
+    pub bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    pub bindless_pool_size: usize,
+}
+
+// The resized post-SSR scene target + per-frame depth views a `rebuild` re-points
+// into. `planar_target_views` are the resized per-distinct-plane mirror target
+// views (the planar set is rebuilt just before glass), re-pointed into each pane's
+// binding 1. The sampler is borrowed from `VkContext` and survives on the resource.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GlassRebuildTargets<'a> {
+    pub scene_views: &'a [vk::ImageView],
+    pub scene_images: &'a [vk::Image],
+    pub depth_views: &'a [vk::ImageView],
+    pub planar_target_views: &'a [vk::ImageView],
+}
+
 impl GlassResources {
     // Build the glass pipeline + per-panel quad buffers + per-panel uniform
     // UBOs + the per-frame view ring + the scene snapshot + the per-frame
@@ -1071,48 +1213,47 @@ impl GlassResources {
     // target per frame slot (SSR output repeated, or `hdr_resolve_images[i]`);
     // `depth_views` are the per-frame main-depth views the manual occlusion
     // test samples.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        frames: usize,
-        msaa_samples: vk::SampleCountFlags,
-        width: u32,
-        height: u32,
-        scene_views: &[vk::ImageView],
-        scene_images: &[vk::Image],
-        depth_views: &[vk::ImageView],
-        sampler: vk::Sampler,
-        // The per-frame global descriptor set layout (ViewUniforms, IBL cubes,
-        // probe set + cube array). Bound as glass set 2 so the fragment shader
-        // reflects the probe set / sky prefilter cube; the pipeline layout must
-        // reference it even though glass only samples bindings 5 / 7 / 8.
-        global_set_layout: vk::DescriptorSetLayout,
-        // Per-pane planar reflection slot (`None` falls back to the probe cube) and
-        // the per-distinct-plane mirror target views the assigned panes sample. A
-        // slotless pane (or an empty `planar_target_views`) binds the snapshot as a
-        // valid stand-in and never samples it (the shader gates on the flag).
-        planar_slots: &[Option<usize>],
-        planar_target_views: &[vk::ImageView],
-        // Per-pixel RT reflection inputs, built whenever the device is RT-capable
-        // (so a live quality toggle can bring RT up), independent of whether RT is
-        // on at launch. `vertex_buffer` / `index_buffer` are the shared static
-        // geometry the trace reads; `rt_inputs` is the initial acceleration-
-        // structure handles (`None` when RT is off at launch, then filled per frame
-        // by `rt_dynamic_update`); `bindless_set_layout` + pool size enable the
-        // textured hit-shading variant.
-        rt_capable: bool,
-        vertex_buffer: vk::Buffer,
-        index_buffer: vk::Buffer,
-        rt_inputs: Option<GlassRtInputs>,
-        bindless_set_layout: Option<vk::DescriptorSetLayout>,
-        bindless_pool_size: usize,
+        ctx: GlassDeviceCtx,
+        config: GlassBuildConfig,
+        scene: GlassSceneTargets,
+        planar: GlassPlanarTargets,
+        rt_setup: GlassRtSetup,
         panels: &[GlassPanel],
-        hot_reload: bool,
     ) -> Result<Self, String> {
+        let GlassDeviceCtx {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let GlassBuildConfig {
+            frames,
+            msaa_samples,
+            width,
+            height,
+            global_set_layout,
+            hot_reload,
+        } = config;
+        let GlassSceneTargets {
+            scene_views,
+            scene_images,
+            depth_views,
+            sampler,
+        } = scene;
+        let GlassPlanarTargets {
+            slots: planar_slots,
+            target_views: planar_target_views,
+        } = planar;
+        let GlassRtSetup {
+            rt_capable,
+            vertex_buffer,
+            index_buffer,
+            rt_inputs,
+            bindless_set_layout,
+            bindless_pool_size,
+        } = rt_setup;
         let msaa = msaa_samples != vk::SampleCountFlags::TYPE_1;
         let render_pass = create_glass_render_pass(device, HDR_FORMAT)?;
         let view_set_layout = create_view_set_layout(device)?;
@@ -1135,18 +1276,24 @@ impl GlassResources {
                 instance,
                 device,
                 physical_device,
-                render_pass,
-                frames,
-                msaa,
-                view_set_layout,
-                params_set_layout,
-                global_set_layout,
-                bindless_set_layout,
-                bindless_pool_size,
-                vertex_buffer,
-                index_buffer,
-                rt_inputs,
-                hot_reload,
+                GlassRtPipelineConfig {
+                    render_pass,
+                    frames,
+                    msaa,
+                    hot_reload,
+                },
+                GlassRtSetLayouts {
+                    view: view_set_layout,
+                    params: params_set_layout,
+                    global: global_set_layout,
+                    bindless: bindless_set_layout,
+                    bindless_pool_size,
+                },
+                GlassRtGeometry {
+                    vertex_buffer,
+                    index_buffer,
+                    rt_inputs,
+                },
             ) {
                 Ok(rt) => Some(rt),
                 Err(e) => {
@@ -1294,27 +1441,14 @@ impl GlassResources {
     // handles. A no-op when the RT pipelines are absent. Called from
     // `VkContext::rt_dynamic_update` alongside the RT-reflection pass's re-point, so
     // the glass trace samples the same per-frame acceleration structure.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn wire_rt_dynamic(
         &self,
         device: &Device,
         frame_idx: usize,
-        tlas: vk::AccelerationStructureKHR,
-        geom_buffer: vk::Buffer,
-        geom_size: vk::DeviceSize,
-        deformed: vk::Buffer,
-        skinned_indices: vk::Buffer,
+        dynamic: GlassRtDynamic,
     ) {
         if let Some(rt) = self.rt.as_ref() {
-            rt.wire_dynamic(
-                device,
-                frame_idx,
-                tlas,
-                geom_buffer,
-                geom_size,
-                deformed,
-                skinned_indices,
-            );
+            rt.wire_dynamic(device, frame_idx, dynamic);
         }
     }
 
@@ -1330,23 +1464,26 @@ impl GlassResources {
     // survive. Called from the swapchain-resize handler after the SSR / HDR
     // resolve targets have been rebuilt (so `scene_views` / `scene_images` carry
     // the new handles).
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: GlassDeviceCtx,
         width: u32,
         height: u32,
-        scene_views: &[vk::ImageView],
-        scene_images: &[vk::Image],
-        depth_views: &[vk::ImageView],
-        // The resized per-distinct-plane mirror target views (the planar set is
-        // rebuilt just before glass), re-pointed into each pane's binding 1.
-        planar_target_views: &[vk::ImageView],
+        targets: GlassRebuildTargets,
     ) -> Result<(), String> {
+        let GlassDeviceCtx {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let GlassRebuildTargets {
+            scene_views,
+            scene_images,
+            depth_views,
+            planar_target_views,
+        } = targets;
         let old = std::mem::replace(
             &mut self.snapshot,
             create_snapshot(
@@ -1569,15 +1706,15 @@ impl VkContext {
                 [v[0][2], v[1][2], v[2][2], 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ];
-            let params = rtres.settings.params(
+            let params = rtres.settings.params(RtParamsInputs {
                 fov_y_radians,
                 aspect,
                 inv_view_rot,
-                cam,
-                self.fog_sun_dir,
-                self.fog_sun_color,
-                self.prefilter_mip_count as f32,
-            );
+                cam_pos: cam,
+                sun_dir: self.fog_sun_dir,
+                sun_color: self.fog_sun_color,
+                prefilter_mip_count: self.prefilter_mip_count as f32,
+            });
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const RtParams as *const u8,

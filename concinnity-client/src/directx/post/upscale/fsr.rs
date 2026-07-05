@@ -673,19 +673,24 @@ impl super::UpscaleBackend for FsrUpscaler {
     // claimed states. Returns the upscaler's output texture so the
     // caller can transition it for the next consumer (bloom / composite
     // read).
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        color: &ID3D12Resource,
-        depth: &ID3D12Resource,
-        motion_vectors: &ID3D12Resource,
-        jitter_offset: [f32; 2],
-        frame_time_delta_ms: f32,
-        camera_near: f32,
-        camera_far: f32,
-        camera_fov_y_radians: f32,
+        inputs: super::UpscaleInputs<'_>,
+        camera: super::UpscaleCamera,
     ) -> Result<(), String> {
+        let super::UpscaleInputs {
+            color,
+            depth,
+            motion_vectors,
+        } = inputs;
+        let super::UpscaleCamera {
+            jitter_offset,
+            frame_time_delta_ms,
+            camera_near,
+            camera_far,
+            camera_fov_y_radians,
+        } = camera;
         let render_size = FfxApiDimensions2D {
             width: self.render_width,
             height: self.render_height,
@@ -928,14 +933,18 @@ impl crate::directx::context::DxContext {
 
         upscaler.dispatch(
             cmd,
-            &scene_res,
-            &gb.depth,
-            &gb.velocity,
-            jitter,
-            dt_ms,
-            near,
-            far,
-            fov_y,
+            super::UpscaleInputs {
+                color: &scene_res,
+                depth: &gb.depth,
+                motion_vectors: &gb.velocity,
+            },
+            super::UpscaleCamera {
+                jitter_offset: jitter,
+                frame_time_delta_ms: dt_ms,
+                camera_near: near,
+                camera_far: far,
+                camera_fov_y_radians: fov_y,
+            },
         )?;
 
         // Restore the inputs to the states downstream consumers (and

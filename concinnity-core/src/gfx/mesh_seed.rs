@@ -75,22 +75,34 @@ pub fn plan_seed_bytes(mesh_byte_sizes: &[(u64, u64)], cap: usize) -> Option<(u6
     Some((seed_vtx, seed_idx))
 }
 
+// A geometry region to relocate: its vertex byte offset and count in the
+// source buffer, its LOD0 (index offset, count), and each alternate LOD's
+// (index offset, count) in input order.
+struct Region<'a> {
+    v_off_bytes: usize,
+    v_count: usize,
+    lod0: (usize, usize),
+    alts: &'a [(usize, usize)],
+}
+
 // Copy one geometry region -- its vertices plus its LOD0 and alternate index
 // ranges -- into the growing destination buffers, rebasing the region's
 // absolute indices onto the moved vertex base. Returns the region's new
 // vertex byte offset, its new LOD0 index element offset, and the new element
 // offset of each alternate (in input order).
-#[allow(clippy::too_many_arguments)] // distinct source/destination buffers and offsets; grouping would obscure intent
 fn relocate_region(
     src_v: &[Vertex],
     src_i: &[u32],
     dst_v: &mut Vec<Vertex>,
     dst_i: &mut Vec<u32>,
-    v_off_bytes: usize,
-    v_count: usize,
-    lod0: (usize, usize),
-    alts: &[(usize, usize)],
+    region: Region,
 ) -> (usize, usize, Vec<usize>) {
+    let Region {
+        v_off_bytes,
+        v_count,
+        lod0,
+        alts,
+    } = region;
     let old_vbase = v_off_bytes / VERTEX_STRIDE;
     let new_vbase = dst_v.len();
     dst_v.extend_from_slice(&src_v[old_vbase..old_vbase + v_count]);
@@ -166,10 +178,12 @@ pub fn compact_for_streaming(
             indices,
             &mut new_v,
             &mut new_i,
-            obj.vertex_offset,
-            obj.vertex_count,
-            (obj.index_offset, obj.index_count),
-            &alts,
+            Region {
+                v_off_bytes: obj.vertex_offset,
+                v_count: obj.vertex_count,
+                lod0: (obj.index_offset, obj.index_count),
+                alts: &alts,
+            },
         );
         obj.vertex_offset = new_v_off;
         obj.index_offset = new_i_off;
@@ -191,10 +205,12 @@ pub fn compact_for_streaming(
             indices,
             &mut new_v,
             &mut new_i,
-            c.vertex_offset,
-            c.vertex_count,
-            (c.index_offset, c.index_count),
-            &alts,
+            Region {
+                v_off_bytes: c.vertex_offset,
+                v_count: c.vertex_count,
+                lod0: (c.index_offset, c.index_count),
+                alts: &alts,
+            },
         );
         c.vertex_offset = new_v_off;
         c.index_offset = new_i_off;

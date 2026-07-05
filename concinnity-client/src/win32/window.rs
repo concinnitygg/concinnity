@@ -644,7 +644,15 @@ pub(crate) fn take_input_snapshot(state: &mut WindowState) -> crate::gfx::input:
     state.mouse_dy = 0.0;
     state.left_click_pending = false;
     state.scroll_delta = 0.0;
-    state.key.take(dx, dy, mx, my, lc, lbd, scroll)
+    state.key.take(MouseSnapshot {
+        dx,
+        dy,
+        x: mx,
+        y: my,
+        left_click: lc,
+        left_button_down: lbd,
+        scroll_delta: scroll,
+    })
 }
 
 pub(crate) fn pump_messages() {

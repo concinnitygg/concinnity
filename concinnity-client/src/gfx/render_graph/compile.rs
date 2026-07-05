@@ -856,13 +856,13 @@ mod tests {
         let kept = g.pass_barriers_for(main, &["keep"]);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].0, "keep");
-        assert_eq!(kept[0].1.from_state(), ResourceState::Undefined);
+        assert_eq!(kept[0].1.source_state(), ResourceState::Undefined);
         assert_eq!(kept[0].1.to_state(), ResourceState::Write);
         // Composite reads both: "keep" transitions Write -> Read.
         let composite = &g.passes[1];
         let kept = g.pass_barriers_for(composite, &["keep"]);
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].1.from_state(), ResourceState::Write);
+        assert_eq!(kept[0].1.source_state(), ResourceState::Write);
         assert_eq!(kept[0].1.to_state(), ResourceState::Read);
         // An empty allowlist keeps nothing; an unknown label keeps nothing.
         assert!(g.pass_barriers_for(main, &[]).is_empty());
@@ -970,7 +970,7 @@ mod tests {
         // the whole run's stage union.
         let ae = find(&g, PassId::AutoExposure);
         assert_eq!(ae.barriers_before.len(), 1);
-        assert_eq!(ae.barriers_before[0].from_state(), ResourceState::Write);
+        assert_eq!(ae.barriers_before[0].source_state(), ResourceState::Write);
         assert_eq!(ae.barriers_before[0].to_state(), ResourceState::Read);
         let rs = ae.barriers_before[0].read_stages();
         assert!(rs.contains(ReadStages::COMPUTE));
@@ -1048,7 +1048,7 @@ mod tests {
         let g = b.compile().expect("compiles");
         let blur = find(&g, PassId::SsaoBlur);
         assert_eq!(blur.barriers_before.len(), 1);
-        assert_eq!(blur.barriers_before[0].from_state(), ResourceState::Read);
+        assert_eq!(blur.barriers_before[0].source_state(), ResourceState::Read);
         assert_eq!(blur.barriers_before[0].to_state(), ResourceState::Write);
         let rs = blur.barriers_before[0].read_stages();
         assert!(rs.contains(ReadStages::COMPUTE));

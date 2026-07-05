@@ -498,17 +498,15 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         .or_else(|| doc.document.scenes().next());
     let mut scene_aabb: Option<([f32; 3], [f32; 3])> = None;
     if let Some(scene) = scene {
-        let mut prop_counter: usize = 0;
+        let mut walk = SceneWalk {
+            prefix,
+            model_names: &model_names,
+            prop_counter: 0,
+            entries: &mut entries,
+            aabb: &mut scene_aabb,
+        };
         for root in scene.nodes() {
-            walk_node(
-                &root,
-                IDENTITY,
-                prefix,
-                &model_names,
-                &mut prop_counter,
-                &mut entries,
-                &mut scene_aabb,
-            );
+            walk.walk_node(&root, IDENTITY);
         }
     }
 
@@ -550,70 +548,67 @@ fn intern_texture(
     name
 }
 
-// Recursively visit `node` with `parent_world` already composed in. For
-// mesh-bearing nodes emit a Prop entry; recurse with the updated world
-// matrix either way so children pick up the inherited transform. Also
-// accumulates `aabb` from each primitive's POSITION min/max so callers can
-// frame a camera to the scene without a second pass.
-#[allow(clippy::too_many_arguments)]
-fn walk_node(
-    node: &gltf::Node<'_>,
-    parent_world: Mat4,
-    prefix: &str,
-    model_names: &[String],
-    prop_counter: &mut usize,
-    entries: &mut Vec<serde_json::Value>,
-    aabb: &mut Option<([f32; 3], [f32; 3])>,
-) {
-    let local = node.transform().matrix();
-    let world = mat4_mul(parent_world, local);
+// Read-only context plus the mutable accumulators for the scene-graph walk.
+// `prop_counter` names emitted Props sequentially; `entries` collects the Prop
+// JSON; `aabb` grows to the world-space bounds of every primitive visited.
+struct SceneWalk<'a> {
+    prefix: &'a str,
+    model_names: &'a [String],
+    prop_counter: usize,
+    entries: &'a mut Vec<serde_json::Value>,
+    aabb: &'a mut Option<([f32; 3], [f32; 3])>,
+}
 
-    if let Some(mesh) = node.mesh() {
-        let mesh_idx = mesh.index();
-        if let Some(model_name) = model_names.get(mesh_idx) {
-            let (t, q, s) = decompose(world);
-            let rotation_deg = euler_yxz_from_quat(q);
-            let idx = *prop_counter;
-            *prop_counter += 1;
-            let prop_name = node
-                .name()
-                .map(|n| format!("{prefix}_{}", sanitize_name(n)))
-                .unwrap_or_else(|| format!("{prefix}_node_{idx}"));
-            entries.push(serde_json::json!({
-                "name": prop_name,
-                "type": "Prop",
-                "args": {
-                    "model": model_name,
-                    "position": [t[0], t[1], t[2]],
-                    "rotation_deg": [rotation_deg[0], rotation_deg[1], rotation_deg[2]],
-                    "scale": [s[0], s[1], s[2]],
-                }
-            }));
+impl SceneWalk<'_> {
+    // Recursively visit `node` with `parent_world` already composed in. For
+    // mesh-bearing nodes emit a Prop entry; recurse with the updated world
+    // matrix either way so children pick up the inherited transform. Also
+    // accumulates `aabb` from each primitive's POSITION min/max so callers can
+    // frame a camera to the scene without a second pass.
+    fn walk_node(&mut self, node: &gltf::Node<'_>, parent_world: Mat4) {
+        let local = node.transform().matrix();
+        let world = mat4_mul(parent_world, local);
 
-            // Expand each primitive's local POSITION AABB into world space by
-            // transforming all eight corners: works for any rotation /
-            // non-uniform scale combination.
-            for prim in mesh.primitives() {
-                let local_bbox = prim.bounding_box();
-                let corners = aabb_corners(local_bbox.min, local_bbox.max);
-                for c in corners {
-                    let w = transform_point(world, c);
-                    expand_aabb(aabb, w);
+        if let Some(mesh) = node.mesh() {
+            let mesh_idx = mesh.index();
+            if let Some(model_name) = self.model_names.get(mesh_idx) {
+                let (t, q, s) = decompose(world);
+                let rotation_deg = euler_yxz_from_quat(q);
+                let idx = self.prop_counter;
+                self.prop_counter += 1;
+                let prefix = self.prefix;
+                let prop_name = node
+                    .name()
+                    .map(|n| format!("{prefix}_{}", sanitize_name(n)))
+                    .unwrap_or_else(|| format!("{prefix}_node_{idx}"));
+                self.entries.push(serde_json::json!({
+                    "name": prop_name,
+                    "type": "Prop",
+                    "args": {
+                        "model": model_name,
+                        "position": [t[0], t[1], t[2]],
+                        "rotation_deg": [rotation_deg[0], rotation_deg[1], rotation_deg[2]],
+                        "scale": [s[0], s[1], s[2]],
+                    }
+                }));
+
+                // Expand each primitive's local POSITION AABB into world space
+                // by transforming all eight corners: works for any rotation /
+                // non-uniform scale combination.
+                for prim in mesh.primitives() {
+                    let local_bbox = prim.bounding_box();
+                    let corners = aabb_corners(local_bbox.min, local_bbox.max);
+                    for c in corners {
+                        let w = transform_point(world, c);
+                        expand_aabb(self.aabb, w);
+                    }
                 }
             }
         }
-    }
 
-    for child in node.children() {
-        walk_node(
-            &child,
-            world,
-            prefix,
-            model_names,
-            prop_counter,
-            entries,
-            aabb,
-        );
+        for child in node.children() {
+            self.walk_node(&child, world);
+        }
     }
 }
 

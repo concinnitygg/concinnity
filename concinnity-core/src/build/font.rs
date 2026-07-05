@@ -23,8 +23,7 @@ pub struct GlyphMetrics {
 }
 
 // Decoded font payload: atlas width, atlas height, supersample factor, RGBA
-// atlas pixels, and per-glyph metrics. Aliased so the decode signature stays
-// readable and under clippy's type-complexity bar.
+// atlas pixels, and per-glyph metrics.
 pub type DecodedFont = (u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
 
 // Deserialise a font payload back into atlas dimensions, the atlas supersample

@@ -5,7 +5,6 @@
 // size wins, falling back to the requested width/height before the drawable
 // exists).
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
@@ -45,18 +44,42 @@ pub(crate) struct WindowSetup {
     pub hdr_mode: HdrOutputMode,
 }
 
-#[allow(clippy::too_many_arguments)]
+// The window's own configuration: its title, requested size, whether the world
+// is geometry-less (clamps the initial HDR targets to 1x1), and whether frame
+// capture is enabled (drives `framebufferOnly` on the MTKView).
+pub(crate) struct WindowConfig<'a> {
+    pub title: &'a str,
+    pub width: u32,
+    pub height: u32,
+    pub geometry_less: bool,
+    pub capture_enabled: bool,
+}
+
+// The world's HDR-output request, resolved against the active display's EDR
+// headroom to pick the swapchain colour-output mode.
+#[derive(Clone, Copy)]
+pub(crate) struct HdrRequest {
+    pub display_requested: bool,
+    pub pq_requested: bool,
+}
+
 pub(crate) fn setup_window_and_view(
     mtm: objc2::MainThreadMarker,
     device: &ProtocolObject<dyn MTLDevice>,
-    title: &str,
-    width: u32,
-    height: u32,
-    geometry_less: bool,
-    hdr_display_requested: bool,
-    hdr_pq_requested: bool,
-    capture_enabled: bool,
+    config: WindowConfig,
+    hdr: HdrRequest,
 ) -> Result<WindowSetup, String> {
+    let WindowConfig {
+        title,
+        width,
+        height,
+        geometry_less,
+        capture_enabled,
+    } = config;
+    let HdrRequest {
+        display_requested: hdr_display_requested,
+        pq_requested: hdr_pq_requested,
+    } = hdr;
     // Resolve the swapchain colour-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded

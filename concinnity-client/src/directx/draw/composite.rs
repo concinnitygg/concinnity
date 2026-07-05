@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 use crate::gfx::render_types::{PostProcessParams, TextDrawCall, TextVertex};
 
 use crate::directx::context::DxContext;
+use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
 use crate::directx::texture::transition_barrier;
 
 // Root constants for the text pass (16 bytes = 4 DWORDs): window dimensions.
@@ -237,18 +238,20 @@ impl DxContext {
     // `gfx::fullscreen` driver. Transitions the back buffer to `RENDER_TARGET`
     // for the draws and back to `PRESENT` on exit; the HDR target is expected to
     // already be in `PIXEL_SHADER_RESOURCE` (the main pass leaves it that way).
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_composite_and_text(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        back_buffer: &ID3D12Resource,
-        back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+        render_target: CompositeRenderTarget<'_>,
         text_calls: &[TextDrawCall],
         scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
-        width: u32,
-        height: u32,
+        resolution: CompositeResolution,
     ) -> Result<(), String> {
+        let CompositeRenderTarget {
+            back_buffer,
+            back_buffer_rtv,
+        } = render_target;
+        let CompositeResolution { width, height } = resolution;
         // Reset this slot's text-upload cursor and ensure its buffer holds the
         // whole frame's text up front, so each `text_draw` only appends (and
         // never reallocates out from under an already-bound sub-view). The frame

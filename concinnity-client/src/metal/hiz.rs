@@ -29,7 +29,6 @@
 // texels, and Metal auto-barriers successive dispatches in the serial compute
 // encoder, so the downsample chain stays correct.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -86,18 +85,17 @@ pub(super) struct HiZResources {
     pub(super) mip_count: u32,
 }
 
+// The init and downsample compute pipelines produced from `hiz_build.metal`.
+type HizPipelines = (
+    Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+);
+
 // Compile both Hi-Z compute kernels from `hiz_build.metal`.
-#[allow(clippy::type_complexity)]
 pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<
-    (
-        Retained<ProtocolObject<dyn MTLComputePipelineState>>,
-        Retained<ProtocolObject<dyn MTLComputePipelineState>>,
-    ),
-    String,
-> {
+) -> Result<HizPipelines, String> {
     let msl = shader_source(hot_reload, "hiz_build.metal");
     let options = objc2_metal::MTLCompileOptions::new();
     let library = device
@@ -118,22 +116,21 @@ pub(super) fn build_hiz_pipelines(
     Ok((init_pipeline, downsample_pipeline))
 }
 
+// The mip-chain texture paired with its one single-level view per mip.
+type HizTextureAndViews = (
+    Retained<ProtocolObject<dyn MTLTexture>>,
+    Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+);
+
 // Create the `R32Float` mip-chain texture plus one single-level view per mip.
 // Same pixel format for parent + views, so no `PixelFormatView` usage is
 // needed. Private storage keeps it GPU-only (kernel-written, cull-read).
-#[allow(clippy::type_complexity)]
 fn create_hiz_texture_and_views(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
     mip_count: u32,
-) -> Result<
-    (
-        Retained<ProtocolObject<dyn MTLTexture>>,
-        Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    ),
-    String,
-> {
+) -> Result<HizTextureAndViews, String> {
     let desc = MTLTextureDescriptor::new();
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);

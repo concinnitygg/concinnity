@@ -15,7 +15,6 @@
 // Pipelines, target, and both encoders live together so the effect is a single
 // unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -28,7 +27,7 @@ use crate::gfx::ssgi::SsgiSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::pipeline::shader_source;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 
 // All screen-space-GI feature state grouped into one unit: the resolved
@@ -155,11 +154,13 @@ impl MtlContext {
         // Gather: hemisphere ray-march over the G-buffer -> gi target.
         self.fullscreen_pass(
             cmd_buf,
-            targets.gi.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::First(crate::metal::pass_timing::PassId::Ssgi),
-            gather_ps,
-            "SSGI gather",
+            FullscreenPass {
+                target: targets.gi.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::First(crate::metal::pass_timing::PassId::Ssgi),
+                pipeline: gather_ps,
+                label: "SSGI gather",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer.as_ref()), 1);
@@ -177,11 +178,13 @@ impl MtlContext {
         // indirect term on top.
         self.fullscreen_pass(
             cmd_buf,
-            self.hdr_targets.hdr_resolve.as_ref(),
-            MTLLoadAction::Load,
-            PassTimer::Last(crate::metal::pass_timing::PassId::Ssgi),
-            composite_ps,
-            "SSGI composite",
+            FullscreenPass {
+                target: self.hdr_targets.hdr_resolve.as_ref(),
+                load: MTLLoadAction::Load,
+                timer: PassTimer::Last(crate::metal::pass_timing::PassId::Ssgi),
+                pipeline: composite_ps,
+                label: "SSGI composite",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.gi.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer.as_ref()), 1);

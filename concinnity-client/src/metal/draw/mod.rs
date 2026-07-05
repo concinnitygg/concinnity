@@ -13,17 +13,19 @@
 // `decal.rs`, `fog.rs`, `post.rs`, etc., and are invoked through the
 // `self.encode_*` methods defined there.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 mod composite;
-mod main;
+// pub(in crate::metal) so the render-graph executor, planar mirror, and probe
+// bake can name the shared main-pass param structs defined here.
+pub(in crate::metal) mod main;
 mod shadow;
 
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
 
+use crate::gfx::backend::FrameParams;
 use crate::gfx::render_graph::FrameGraphInputs;
-use crate::gfx::render_types::TextDrawCall;
+use crate::gfx::rt_reflections::RtParamsInputs;
 
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
@@ -69,41 +71,20 @@ impl MtlContext {
     // until unified memory is exhausted and the GPU faults / the host panics.
     // Draining per frame frees each frame's command buffers once the GPU
     // retires them, bounding VRAM to the work actually in flight.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_frame(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String> {
-        objc2::rc::autoreleasepool(|_| {
-            self.draw_frame_inner(
-                elapsed,
-                fov_y_radians,
-                near,
-                far,
-                cam_pos,
-                text_calls,
-                world_hidden,
-            )
-        })
+    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+        objc2::rc::autoreleasepool(|_| self.draw_frame_inner(params))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_frame_inner(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String> {
+    fn draw_frame_inner(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+        let FrameParams {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            cam_pos,
+            text_calls,
+            world_hidden,
+        } = params;
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("draw_frame must be called from the main thread")?;
 
@@ -261,17 +242,18 @@ impl MtlContext {
             }
         };
         if self.shadow_pipeline_state.is_some() {
-            let fresh = crate::gfx::csm::compute_shadow_uniforms(
-                self.view_matrix,
-                cam_pos,
-                fov_y_radians,
-                cascade_aspect,
-                near,
-                (self.shadow_distance as f32).min(far),
-                self.shadow_light_dir,
-                self.shadow_map_size,
-                self.shadow_cascades,
-            );
+            let fresh =
+                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
+                    view: self.view_matrix,
+                    cam_pos,
+                    fov_y_rad: fov_y_radians,
+                    aspect: cascade_aspect,
+                    near,
+                    shadow_distance: (self.shadow_distance as f32).min(far),
+                    light_dir_to_source: self.shadow_light_dir,
+                    shadow_map_size: self.shadow_map_size,
+                    active_cascades: self.shadow_cascades,
+                });
             // Pick this frame's cascades and refresh only their VPs; cascades
             // skipped this frame keep the VP their slice was rendered with so
             // the Main pass samples each slice consistently. Splits depend only
@@ -509,15 +491,15 @@ impl MtlContext {
                         sun.color[1] * sun.intensity,
                         sun.color[2] * sun.intensity,
                     ];
-                    settings.params(
+                    settings.params(RtParamsInputs {
                         fov_y_radians,
                         aspect,
                         inv_view_rot,
                         cam_pos,
-                        sun.direction,
+                        sun_dir: sun.direction,
                         sun_color,
                         prefilter_mip_count,
-                    )
+                    })
                 });
         let fog_params = self.fog.settings.map(|fog| {
             // Sun = the first directional light; falls back to the
@@ -1096,16 +1078,24 @@ impl MtlContext {
             .as_mut()
             .expect("rt_accel is Some (checked by caller)")
             .refresh_static_topology(
-                &device,
-                &queue,
-                &vbuf,
-                &ibuf,
+                super::raytrace::RtGpu {
+                    device: &device,
+                    command_queue: &queue,
+                },
+                super::raytrace::RtStaticGeometry {
+                    vertex_buffer: &vbuf,
+                    index_buffer: &ibuf,
+                },
                 &draw_objects,
-                albedo_count,
-                normal_count,
-                exclude_seethrough,
-                build_tlas,
-                frame_id,
+                super::raytrace::RtTextureCounts {
+                    albedo_count,
+                    normal_count,
+                },
+                super::raytrace::RtTopologyRefreshOptions {
+                    exclude_seethrough,
+                    build_tlas,
+                    frame_id,
+                },
             );
         self.draw_objects = draw_objects;
         res
@@ -1144,14 +1134,22 @@ impl MtlContext {
             _ => None,
         };
         let built = super::raytrace::build_rt_accel(
-            &self.device,
-            &self.command_queue,
-            &self.vertex_buffer,
-            &self.index_buffer,
-            &self.draw_objects,
-            &self.instanced_clusters,
-            albedo_count,
-            normal_count,
+            super::raytrace::RtGpu {
+                device: &self.device,
+                command_queue: &self.command_queue,
+            },
+            super::raytrace::RtStaticGeometry {
+                vertex_buffer: &self.vertex_buffer,
+                index_buffer: &self.index_buffer,
+            },
+            super::raytrace::RtSceneGeometry {
+                draw_objects: &self.draw_objects,
+                clusters: &self.instanced_clusters,
+            },
+            super::raytrace::RtTextureCounts {
+                albedo_count,
+                normal_count,
+            },
             skinned,
             self.seethrough_meshes_enabled(),
         )?;
@@ -1198,12 +1196,16 @@ impl MtlContext {
             .as_mut()
             .expect("rt_accel is Some (checked by caller)")
             .rebuild_skinned(
-                &device,
-                &queue,
+                super::raytrace::RtGpu {
+                    device: &device,
+                    command_queue: &queue,
+                },
                 &draw_objects,
                 skinned,
-                albedo_count,
-                normal_count,
+                super::raytrace::RtTextureCounts {
+                    albedo_count,
+                    normal_count,
+                },
                 frame_id,
             );
         self.draw_objects = draw_objects;

@@ -13,7 +13,6 @@
 // matching note on why the earlier `MTLParallelRenderCommandEncoder` landing
 // was reverted.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -40,7 +39,6 @@ impl MtlContext {
 
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::metal) fn encode_shadow_pass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

@@ -5,13 +5,11 @@
 // Method resolution picks the inherent over the trait method when both
 // have the same name, so `self.draw_frame(...)` calls the inherent here.
 
-use crate::gfx::backend::{QualitySettings, RenderBackend};
+use crate::gfx::backend::{ChunkMesh, FrameParams, QualitySettings, RenderBackend};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::profile::RenderStats;
-use crate::gfx::render_types::{
-    MaterialUniforms, PostProcessParams, SkinnedDrawObject, TextDrawCall,
-};
+use crate::gfx::render_types::{MaterialUniforms, PostProcessParams, SkinnedDrawObject};
 
 use super::context::{MtlContext, debug_assert_main_thread};
 
@@ -96,7 +94,7 @@ impl RenderBackend for MtlContext {
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> Result<(), String>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn add_chunk_mesh(&mut self, verts: &[Vertex], idxs: &[u16], model: [[f32; 4]; 4], texture_slot: usize, normal_map_slot: usize, material: MaterialUniforms, frame: u64) -> Result<usize, String>;
+        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities;
@@ -123,29 +121,12 @@ impl RenderBackend for MtlContext {
 
     // Methods that are NOT a 1:1 forward; written out by hand.
 
-    fn draw_frame(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String> {
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
         // Not in the guarded `forward!` block: draw_frame needs the
         // MainThreadMarker as a *value* (it threads it into NSEvent pumping and
         // window ops), so it proves the invariant itself and returns Err off
         // the main thread rather than asserting: no point double-checking.
-        self.draw_frame(
-            elapsed,
-            fov_y_radians,
-            near,
-            far,
-            cam_pos,
-            text_calls,
-            world_hidden,
-        )
+        self.draw_frame(params)
     }
 
     fn window_closed(&mut self) -> bool {

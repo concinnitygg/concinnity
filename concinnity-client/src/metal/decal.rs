@@ -11,7 +11,6 @@
 // point at each pixel and tests it against the decal's local bounding box,
 // stamping the texture onto whatever surface fills the box.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

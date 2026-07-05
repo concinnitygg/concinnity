@@ -217,60 +217,38 @@ impl std::fmt::Debug for AssetHotReloadState {
 }
 
 impl AssetHotReloadState {
-    // Build from the init-captured [`HotReloadSources`] bundle. The `cn debug`
+    // Build the state from the init-captured [`HotReloadSources`] bundle and
+    // (best-effort) spawn the `notify` watcher over every unique parent
+    // directory of the captured source paths. Watcher creation is best-effort:
+    // a missing path or notify error logs and continues; the debug-WS
+    // `reload-assets` command still works on the same flag. The `cn debug`
     // drive calls this on its first tick after taking the sources off the
     // `GraphicsSystem`.
-    pub(crate) fn from_sources(s: HotReloadSources) -> Self {
-        Self::new(
-            s.map,
-            s.color_lut,
-            s.environment_map,
-            s.meshes,
-            s.skinned_meshes,
-            s.procedural_meshes,
-            s.shader_stages,
-            s.world_jsonl_path,
-        )
-    }
-
-    // Build the state and (best-effort) spawn the `notify` watcher over every
-    // unique parent directory of the captured source paths. Watcher creation
-    // is best-effort: a missing path or notify error logs and continues;
-    // the debug-WS `reload-assets` command still works on the same flag.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        map: TextureSourceMap,
-        color_lut: Option<ColorLutSource>,
-        environment_map: Option<EnvironmentMapSource>,
-        meshes: MeshSourceMap,
-        skinned_meshes: SkinnedMeshSourceMap,
-        procedural_meshes: ProceduralMeshSourceMap,
-        shader_stages: ShaderStageSourceMap,
-        world_jsonl_path: Option<String>,
-    ) -> Self {
+    pub(crate) fn from_sources(sources: HotReloadSources) -> Self {
         let pending = Arc::new(AtomicBool::new(false));
-        let nothing_to_watch = map.is_empty()
-            && color_lut.is_none()
-            && environment_map.is_none()
-            && meshes.is_empty()
-            && skinned_meshes.is_empty()
-            && procedural_meshes.is_empty()
-            && shader_stages.is_empty()
-            && world_jsonl_path.is_none();
+        let nothing_to_watch = sources.map.is_empty()
+            && sources.color_lut.is_none()
+            && sources.environment_map.is_none()
+            && sources.meshes.is_empty()
+            && sources.skinned_meshes.is_empty()
+            && sources.procedural_meshes.is_empty()
+            && sources.shader_stages.is_empty()
+            && sources.world_jsonl_path.is_none();
         let watcher = if nothing_to_watch {
             None
         } else {
-            spawn_watcher(
-                &map,
-                color_lut.as_ref(),
-                environment_map.as_ref(),
-                &meshes,
-                &skinned_meshes,
-                &shader_stages,
-                world_jsonl_path.as_deref(),
-                Arc::clone(&pending),
-            )
+            spawn_watcher(&sources, Arc::clone(&pending))
         };
+        let HotReloadSources {
+            map,
+            color_lut,
+            environment_map,
+            meshes,
+            skinned_meshes,
+            procedural_meshes,
+            shader_stages,
+            world_jsonl_path,
+        } = sources;
         Self {
             map,
             color_lut,

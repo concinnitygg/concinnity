@@ -234,10 +234,8 @@ impl BarrierOp {
     pub fn resource_index(self) -> usize {
         self.resource.index()
     }
-    // Accessor for the transition's source state, paired with `to_state`; not a
-    // constructor despite the `from_` prefix.
-    #[allow(clippy::wrong_self_convention)]
-    pub fn from_state(self) -> ResourceState {
+    // Accessor for the transition's source state, paired with `to_state`.
+    pub fn source_state(self) -> ResourceState {
         self.from
     }
     pub fn to_state(self) -> ResourceState {

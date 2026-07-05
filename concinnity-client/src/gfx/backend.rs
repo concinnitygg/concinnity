@@ -34,6 +34,34 @@ use crate::gfx::ssgi::SsgiSettings;
 use crate::gfx::ssr::SsrSettings;
 use crate::gfx::volumetric_fog::FogSettings;
 
+// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
+// an opaque menu backdrop covers the scene: the backend skips every world pass
+// and presents only the overlay (`text_calls`) over a cleared target.
+#[derive(Clone, Copy)]
+pub struct FrameParams<'a> {
+    pub elapsed: f32,
+    pub fov_y_radians: f32,
+    pub near: f32,
+    pub far: f32,
+    pub cam_pos: [f32; 3],
+    pub text_calls: &'a [TextDrawCall],
+    pub world_hidden: bool,
+}
+
+// One streamed chunk's geometry plus placement, supplied to
+// [`RenderBackend::add_chunk_mesh`]. `frame` reclaims retired deferred frees
+// before the chunk is placed in the streaming headroom.
+#[derive(Clone, Copy)]
+pub struct ChunkMesh<'a> {
+    pub verts: &'a [Vertex],
+    pub idxs: &'a [u16],
+    pub model: [[f32; 4]; 4],
+    pub texture_slot: usize,
+    pub normal_map_slot: usize,
+    pub material: MaterialUniforms,
+    pub frame: u64,
+}
+
 // One draw slot's fresh geometry, supplied to
 // [`RenderBackend::rebuild_static_geometry`] when an asset hot-reload
 // changed its vertex / index count and the slot can no longer hold the new
@@ -276,20 +304,8 @@ pub trait RenderBackend: SceneControl + Send {
     fn take_input(&mut self) -> RenderInput;
     fn wait_idle(&self);
 
-    // Per-frame drive. `world_hidden` is set when an opaque menu backdrop
-    // covers the scene: the backend skips every world pass and presents only
-    // the overlay (`text_calls`) over a cleared target.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_frame(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String>;
+    // Per-frame drive. See [`FrameParams`] for the inputs.
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String>;
     fn update_view(&mut self, matrix: [[f32; 4]; 4]);
     fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
 
@@ -400,17 +416,7 @@ pub trait RenderBackend: SceneControl + Send {
         texture_slot: usize,
         normal_map_slot: usize,
     ) -> Result<(), String>;
-    #[allow(clippy::too_many_arguments)]
-    fn add_chunk_mesh(
-        &mut self,
-        verts: &[Vertex],
-        idxs: &[u16],
-        model: [[f32; 4]; 4],
-        texture_slot: usize,
-        normal_map_slot: usize,
-        material: MaterialUniforms,
-        frame: u64,
-    ) -> Result<usize, String>;
+    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
     fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
     fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
 

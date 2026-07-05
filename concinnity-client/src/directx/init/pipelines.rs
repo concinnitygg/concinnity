@@ -1019,50 +1019,71 @@ pub(super) struct MainPipelines {
 // The bindless + cull infrastructure is only built when
 // `vert_bytes`+`frag_bytes` are empty (built-in shader path) AND
 // `n_objects > 0`. Otherwise the corresponding fields are `None` / empty.
-#[allow(clippy::too_many_arguments)]
+// Compiled + optional override shader bytes for the main pass pipelines.
+#[derive(Clone, Copy)]
+pub(super) struct MainPipelineShaders<'a> {
+    // Built-in compiled main pass shaders.
+    pub shaders: &'a CompiledShaders,
+    // Precompiled DXBC override for a custom vertex shader (empty = use built-in).
+    pub vert_bytes: &'a [u8],
+    // Precompiled DXBC override for a custom fragment shader (empty = use built-in).
+    pub frag_bytes: &'a [u8],
+}
+
+// Record counts + MSAA that size the GPU-driven bindless pass's cull / object /
+// draw-args / indirect buffers.
+#[derive(Clone, Copy)]
+pub(super) struct MainPipelineConfig {
+    // Static build-time object count.
+    pub n_objects: usize,
+    // Total instanced-cluster instances folded in after the static objects.
+    pub n_instances: usize,
+    // Skinned draw objects folded in after the instances.
+    pub n_skinned: usize,
+    // Worst-case resident chunk count for a streaming VoxelWorld (0 otherwise),
+    // reserved between the instances and the skinned tail.
+    pub n_chunk_max: usize,
+    // MSAA sample count for the HDR render target.
+    pub msaa_samples: u32,
+}
+
+// Which optional GPU-driven pipeline variants to build.
+#[derive(Clone, Copy)]
+pub(super) struct MainPipelineFeatures {
+    // Build the phase-2 cull PSO + second indirect buffers for two-pass Hi-Z occlusion.
+    pub occlusion_two_pass: bool,
+    // Build the GPU-driven shadow pass (depth-only pipeline + per-cascade indirect buffers).
+    pub shadow_enabled: bool,
+    // Build the GPU-driven G-buffer pre-pass (pipeline + previous-frame model buffers).
+    pub gbuffer_enabled: bool,
+    pub hot_reload: bool,
+}
+
 pub(super) fn build_main_pipelines(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
-    shaders: &CompiledShaders,
-    vert_bytes: &[u8],
-    frag_bytes: &[u8],
-    msaa_samples: u32,
-    n_objects: usize,
-    // Total instanced-cluster instances folded into the GPU-driven bindless pass.
-    // The cull / object / draw-args / indirect buffers are sized for
-    // `n_objects + n_instances` so each instance gets a record at `n_objects + k`;
-    // the cull dispatch + `ExecuteIndirect` then count the merged total.
-    n_instances: usize,
-    // Skinned draw objects folded in after the instances (records at
-    // `n_objects + n_instances + k`, drawn by the main pass's 2nd `ExecuteIndirect`
-    // against the per-frame deformed-vertex buffer). Sizes the shared buffers'
-    // reserved skinned tail; the records are written per frame in
-    // `build_object_buffer` / `build_draw_args_buffer` once skinned geometry is
-    // resident.
-    n_skinned: usize,
-    // Worst-case resident chunk count for a streaming VoxelWorld (0 otherwise).
-    // Reserves a chunk record region BETWEEN the instances and the skinned tail
-    // (`[n_objects + n_instances, +n_chunk_max)`). Chunk geometry already lives in
-    // the shared VB/IB, so resident chunks fold into this region each frame and are
-    // drawn by the static+instance prefix `ExecuteIndirect`; the skinned tail base
-    // shifts past the reserve. Sizes the cull buffers' merged total.
-    n_chunk_max: usize,
-    // `PostProcessConfig.occlusion_two_pass`. When set (and the bindless cull
-    // path is active), build the phase-2 cull PSO + the second indirect buffers
-    // that drive two-pass Hi-Z occlusion.
-    occlusion_two_pass: bool,
-    // When the world has shadows enabled (shadow map size > 0) AND the bindless
-    // cull path is active, build the GPU-driven shadow pass's depth-only
-    // pipeline + per-cascade indirect buffers. A shadow-disabled world skips
-    // them (they would never be issued).
-    shadow_enabled: bool,
-    // When the G-buffer pre-pass is enabled (any screen-space consumer drives it)
-    // AND the bindless cull path is active, build the GPU-driven G-buffer pre-pass
-    // pipeline + the per-frame previous-frame model buffers it reads for velocity.
-    // A world with no G-buffer skips them (the pre-pass never runs).
-    gbuffer_enabled: bool,
-    hot_reload: bool,
+    pipeline_shaders: MainPipelineShaders<'_>,
+    config: MainPipelineConfig,
+    features: MainPipelineFeatures,
 ) -> Result<MainPipelines, String> {
+    let MainPipelineShaders {
+        shaders,
+        vert_bytes,
+        frag_bytes,
+    } = pipeline_shaders;
+    let MainPipelineConfig {
+        n_objects,
+        n_instances,
+        n_skinned,
+        n_chunk_max,
+        msaa_samples,
+    } = config;
+    let MainPipelineFeatures {
+        occlusion_two_pass,
+        shadow_enabled,
+        gbuffer_enabled,
+        hot_reload,
+    } = features;
     // Merged record count: static build-time objects, the instanced-cluster
     // instances, the streamed-chunk reserve, then the skinned objects. The
     // per-frame static fills write only the first `n_objects`; the instance records

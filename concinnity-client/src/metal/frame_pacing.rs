@@ -11,8 +11,6 @@
 // `depth` frames are ever in flight. This is the foundation that lets the
 // per-frame buffers move from fresh-allocation to ring-buffered reuse.
 
-#![allow(clippy::incompatible_msrv)]
-
 use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 
 // Counting semaphore bounding how many frames the CPU may queue ahead of the

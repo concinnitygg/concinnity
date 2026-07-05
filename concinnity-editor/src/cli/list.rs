@@ -72,7 +72,7 @@ pub fn list(json_path: Option<&str>, expanded: bool) -> std::io::Result<()> {
                 .unwrap_or("?")
                 .to_string();
 
-            let (origin, payload) = if let Ok(ct) = ComponentType::parse(&type_str) {
+            let (origin, payload) = if let Some(ct) = ComponentType::parse(&type_str) {
                 let r = ct.registration();
                 (format!("{:?}", r.origin), format!("{:?}", r.payload))
             } else {

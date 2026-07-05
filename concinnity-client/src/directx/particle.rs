@@ -594,7 +594,6 @@ impl DxContext {
     // frame `dt` driving spawn rates + integration. Takes `&self` because
     // `record_frame` is `&self`; per-frame mutable state (last-elapsed,
     // frame index, per-emitter spawn accumulators) lives in `Cell`s.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_particles(
         &self,
         cmd: &ID3D12GraphicsCommandList,

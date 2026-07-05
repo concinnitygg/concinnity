@@ -817,6 +817,52 @@ pub(super) fn build_rt_skin_pipeline(
     build_skin_pipeline(device, hot_reload)
 }
 
+// Geometry + counts the RT acceleration-structure build reads.
+#[derive(Clone, Copy)]
+pub(super) struct RtInitGeometry<'a> {
+    // Device where the build allocates and records.
+    pub device: &'a ID3D12Device,
+    // Command queue where the build submits and fences.
+    pub queue: &'a ID3D12CommandQueue,
+    // Shared static vertex buffer (positions at VERTEX_STRIDE).
+    pub vertex_buffer: &'a ID3D12Resource,
+    // Shared static u32 index buffer.
+    pub index_buffer: &'a ID3D12Resource,
+    // Every participating draw object (filtered by residency + index count inside).
+    pub draw_objects: &'a [DrawObject],
+    // Every participating instanced cluster.
+    pub clusters: &'a [InstancedCluster],
+    // Shared vertex buffer's vertex count (bounds each geometry's VertexCount).
+    pub total_vertices: usize,
+    // Flat bindless albedo-pool length (resolves per-object pool indices).
+    pub albedo_count: u32,
+    // Flat bindless normal-map-pool length (clamps normal indices).
+    pub normal_count: u32,
+}
+
+// Per-frame dynamic-update policy + skinned inputs for `dynamic_update`.
+pub(super) struct RtDynamicInputs<'a> {
+    // Rebuild gate: off / auto (dirty check) / rebuild (every frame) / tlas.
+    pub mode: RtDynamicMode,
+    // Per-frame joint palettes + visible skinned objects (None skips the skinned path).
+    pub skinned: Option<SkinnedRtInputs<'a>>,
+    // Index into the per-frame ring (frame_idx % FRAMES).
+    pub frame_idx: usize,
+    // Set when the participating draw set changed since the last update.
+    pub topology_dirty: bool,
+}
+
+// Per-frame skinned rebuild inputs: current model matrices, the shared skinned
+// data, and the visible skinned objects.
+pub(super) struct RtSkinnedRebuildInputs<'a> {
+    // Current participating objects' model matrices, parallel to object_indices.
+    pub current: &'a [[[f32; 4]; 4]],
+    // Shared vertex + index buffers + joint palettes for the frame's skinned objects.
+    pub skinned: &'a SkinnedRtInputs<'a>,
+    // Visible (draw index, object) pairs in `objects` order.
+    pub objects: &'a [(usize, &'a SkinnedDrawObject)],
+}
+
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
 // list (committed and fence-waited so the structures are ready before the first
 // frame traces them). Returns `Ok(None)` when there is no resident triangle
@@ -826,18 +872,18 @@ pub(super) fn build_rt_skin_pipeline(
 // each geometry's `VertexCount`); `albedo_count` / `normal_count` are the flat
 // bindless pool sizes used to resolve each geometry's `albedo = texture_slot` /
 // `normal = albedo_count + normal_slot` pool indices for the RT hit shader.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_rt_accel(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
-    vertex_buffer: &ID3D12Resource,
-    index_buffer: &ID3D12Resource,
-    draw_objects: &[DrawObject],
-    clusters: &[InstancedCluster],
-    total_vertices: usize,
-    albedo_count: u32,
-    normal_count: u32,
-) -> Result<Option<RtAccelData>, String> {
+pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelData>, String> {
+    let RtInitGeometry {
+        device,
+        queue,
+        vertex_buffer,
+        index_buffer,
+        draw_objects,
+        clusters,
+        total_vertices,
+        albedo_count,
+        normal_count,
+    } = geometry;
     let device5: ID3D12Device5 = device
         .cast()
         .map_err(|e| format!("ID3D12Device5 cast (DXR unsupported?): {e}"))?;
@@ -1089,17 +1135,19 @@ impl RtAccelData {
     // BLAS head is refreshed (`refresh_topology`) before the transform path, so
     // the new/removed geometry enters/leaves the BVH instead of being ignored
     // (the `Auto` dirty check only watches the transforms of the prior set).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn dynamic_update(
         &mut self,
         device: &ID3D12Device,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
-        mode: RtDynamicMode,
-        skinned: Option<SkinnedRtInputs>,
-        frame_idx: usize,
-        topology_dirty: bool,
+        inputs: RtDynamicInputs,
     ) {
+        let RtDynamicInputs {
+            mode,
+            skinned,
+            frame_idx,
+            topology_dirty,
+        } = inputs;
         // Advance the deferred-free clock and drop any topology-refresh orphans /
         // scratch whose frames-in-flight window has elapsed (the frame-begin fence
         // wait has by now retired every trace that could have referenced them).
@@ -1150,9 +1198,11 @@ impl RtAccelData {
                 device,
                 cmd,
                 draw_objects,
-                &current,
-                &s,
-                &skinned_objects,
+                RtSkinnedRebuildInputs {
+                    current: &current,
+                    skinned: &s,
+                    objects: &skinned_objects,
+                },
                 frame_idx,
             ) {
                 tracing::warn!("RT skinned rebuild failed (keeping live BVH): {e}");
@@ -1550,17 +1600,19 @@ impl RtAccelData {
     // to a shader-readable state, then the BLAS/TLAS build (reads it). The start
     // cmd list is submitted before every per-pass trace, so build -> trace is
     // ordered by submission too.
-    #[allow(clippy::too_many_arguments)]
     fn rebuild_skinned(
         &mut self,
         device: &ID3D12Device,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
-        current: &[[[f32; 4]; 4]],
-        skinned: &SkinnedRtInputs,
-        skinned_objects: &[(usize, &SkinnedDrawObject)],
+        inputs: RtSkinnedRebuildInputs,
         frame_idx: usize,
     ) -> Result<(), String> {
+        let RtSkinnedRebuildInputs {
+            current,
+            skinned,
+            objects: skinned_objects,
+        } = inputs;
         let device5: ID3D12Device5 = device
             .cast()
             .map_err(|e| format!("ID3D12Device5 cast (skinned rebuild): {e}"))?;
@@ -1941,10 +1993,12 @@ impl super::context::DxContext {
             &self.device,
             cmd,
             &self.draw_objects,
-            self.rt_dynamic_mode,
-            skinned,
-            frame_idx,
-            topology_dirty,
+            RtDynamicInputs {
+                mode: self.rt_dynamic_mode,
+                skinned,
+                frame_idx,
+                topology_dirty,
+            },
         );
     }
 
@@ -1955,17 +2009,17 @@ impl super::context::DxContext {
     // and the next topology change retries.
     fn seed_rt_accel(&mut self) {
         let hot_reload = self.hot_reload.enabled;
-        let mut accel = match build_rt_accel(
-            &self.device,
-            &self.command_queue,
-            &self.geometry.vertex_buffer,
-            &self.geometry.index_buffer,
-            &self.draw_objects,
-            &self.instanced.clusters,
-            self.rt_static_vertex_count,
-            self.descriptors.textures.len() as u32,
-            self.descriptors.normal_map_textures.len() as u32,
-        ) {
+        let mut accel = match build_rt_accel(RtInitGeometry {
+            device: &self.device,
+            queue: &self.command_queue,
+            vertex_buffer: &self.geometry.vertex_buffer,
+            index_buffer: &self.geometry.index_buffer,
+            draw_objects: &self.draw_objects,
+            clusters: &self.instanced.clusters,
+            total_vertices: self.rt_static_vertex_count,
+            albedo_count: self.descriptors.textures.len() as u32,
+            normal_count: self.descriptors.normal_map_textures.len() as u32,
+        }) {
             Ok(Some(accel)) => accel,
             Ok(None) => return,
             Err(e) => {

@@ -47,33 +47,46 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
     }
 }
 
+// Camera, light, and shadow-configuration inputs to
+// [`compute_shadow_uniforms`].
+#[derive(Clone, Copy)]
+pub struct ShadowUniformInputs {
+    // Camera view matrix (column-major, RH, same convention as look_at).
+    pub view: [[f32; 4]; 4],
+    // World-space camera position.
+    pub cam_pos: [f32; 3],
+    // Vertical FOV in radians.
+    pub fov_y_rad: f32,
+    // Viewport aspect ratio (width / height).
+    pub aspect: f32,
+    // Camera near plane.
+    pub near: f32,
+    // Far end of the last cascade. Cascades cover [near, shadow_distance].
+    pub shadow_distance: f32,
+    // Unit vector pointing TOWARD the light. Same convention as
+    // `DirectionalLight.direction`; renormalised internally.
+    pub light_dir_to_source: [f32; 3],
+    // Per-cascade texture resolution; used for texel snapping.
+    pub shadow_map_size: u32,
+    // How many of the `NUM_SHADOW_CASCADES` slots are live (1..=4); only the
+    // first `active` are split + projected, the rest hold a negative split
+    // sentinel and an identity VP so the shader never selects them.
+    pub active_cascades: u32,
+}
+
 // Compute cascade VPs + split depths from camera + light parameters.
-//
-// Arguments:
-// - `view`: camera view matrix (column-major, RH, same convention as look_at).
-// - `cam_pos`: world-space camera position.
-// - `fov_y_rad`: vertical FOV in radians.
-// - `aspect`: viewport aspect ratio (width / height).
-// - `near`: camera near plane.
-// - `shadow_distance`: far end of the last cascade. Cascades cover [near, shadow_distance].
-// - `light_dir_to_source`: unit vector pointing TOWARD the light. Same convention
-//   as `DirectionalLight.direction`; renormalised internally.
-// - `shadow_map_size`: per-cascade texture resolution; used for texel snapping.
-// - `active_cascades`: how many of the `NUM_SHADOW_CASCADES` slots are live (1..=4);
-//   only the first `active` are split + projected, the rest hold a negative split
-//   sentinel and an identity VP so the shader never selects them.
-#[allow(clippy::too_many_arguments)]
-pub fn compute_shadow_uniforms(
-    view: [[f32; 4]; 4],
-    cam_pos: [f32; 3],
-    fov_y_rad: f32,
-    aspect: f32,
-    near: f32,
-    shadow_distance: f32,
-    light_dir_to_source: [f32; 3],
-    shadow_map_size: u32,
-    active_cascades: u32,
-) -> ShadowUniforms {
+pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
+    let ShadowUniformInputs {
+        view,
+        cam_pos,
+        fov_y_rad,
+        aspect,
+        near,
+        shadow_distance,
+        light_dir_to_source,
+        shadow_map_size,
+        active_cascades,
+    } = inputs;
     let shadow_far = shadow_distance.max(near + 1.0);
     let active = active_cascades.clamp(1, NUM_SHADOW_CASCADES as u32) as usize;
 
@@ -298,17 +311,17 @@ mod tests {
 
     #[test]
     fn splits_are_strictly_increasing_within_range() {
-        let u = compute_shadow_uniforms(
-            ident_view(),
-            [0.0, 0.0, 0.0],
-            std::f32::consts::FRAC_PI_2,
-            1.0,
-            0.1,
-            80.0,
-            [0.0, 1.0, 0.0],
-            2048,
-            4,
-        );
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            aspect: 1.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: [0.0, 1.0, 0.0],
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
         for i in 1..NUM_SHADOW_CASCADES {
             assert!(
                 u.cascade_splits[i] > u.cascade_splits[i - 1],
@@ -325,17 +338,17 @@ mod tests {
         // With active_cascades = 2 the first two slots cover [near, shadow_far]
         // (last split == shadow distance) and the unused tail holds the negative
         // sentinel + identity VPs, so the shader never selects an unrendered slot.
-        let u = compute_shadow_uniforms(
-            ident_view(),
-            [0.0, 0.0, 0.0],
-            std::f32::consts::FRAC_PI_2,
-            1.0,
-            0.1,
-            80.0,
-            [0.0, 1.0, 0.0],
-            2048,
-            2,
-        );
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            aspect: 1.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: [0.0, 1.0, 0.0],
+            shadow_map_size: 2048,
+            active_cascades: 2,
+        });
         assert_eq!(u.active_cascades, 2);
         assert!(u.cascade_splits[0] > 0.1);
         assert!(u.cascade_splits[1] > u.cascade_splits[0]);
@@ -346,17 +359,17 @@ mod tests {
         assert_eq!(u.light_vps[2], IDENTITY4);
         assert_eq!(u.light_vps[3], IDENTITY4);
         // Out-of-range counts clamp into 1..=4.
-        let one = compute_shadow_uniforms(
-            ident_view(),
-            [0.0, 0.0, 0.0],
-            std::f32::consts::FRAC_PI_2,
-            1.0,
-            0.1,
-            80.0,
-            [0.0, 1.0, 0.0],
-            2048,
-            0,
-        );
+        let one = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            aspect: 1.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: [0.0, 1.0, 0.0],
+            shadow_map_size: 2048,
+            active_cascades: 0,
+        });
         assert_eq!(one.active_cascades, 1);
         assert!((one.cascade_splits[0] - 80.0).abs() < 1e-3);
     }
@@ -365,17 +378,17 @@ mod tests {
     fn near_clamped_to_avoid_degenerate_log() {
         // shadow_distance smaller than near is clamped to near + 1.0 so the
         // logarithmic split term stays finite.
-        let u = compute_shadow_uniforms(
-            ident_view(),
-            [0.0, 0.0, 0.0],
-            std::f32::consts::FRAC_PI_2,
-            1.0,
-            5.0,
-            1.0,
-            [0.0, 1.0, 0.0],
-            2048,
-            4,
-        );
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            aspect: 1.0,
+            near: 5.0,
+            shadow_distance: 1.0,
+            light_dir_to_source: [0.0, 1.0, 0.0],
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
         for s in &u.cascade_splits {
             assert!(s.is_finite() && *s > 0.0);
         }
@@ -383,17 +396,17 @@ mod tests {
 
     #[test]
     fn cascade_vps_finite_for_typical_inputs() {
-        let u = compute_shadow_uniforms(
-            ident_view(),
-            [10.0, 5.0, -3.0],
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.1,
-            80.0,
-            [-0.4, 0.7, 0.3],
-            2048,
-            4,
-        );
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [10.0, 5.0, -3.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: [-0.4, 0.7, 0.3],
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
         for vp in &u.light_vps {
             for col in vp {
                 for v in col {
@@ -407,17 +420,17 @@ mod tests {
     fn point_inside_first_cascade_projects_into_unit_box() {
         // A point a few metres in front of the camera should project into the
         // first cascade's light NDC, inside the [-1, 1] xy box (depth [0, 1]).
-        let u = compute_shadow_uniforms(
-            ident_view(),
-            [0.0, 0.0, 0.0],
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.1,
-            80.0,
-            [0.0, 1.0, 0.0],
-            2048,
-            4,
-        );
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: [0.0, 1.0, 0.0],
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
         // World point 2m in front of camera (looking down -Z).
         let p = [0.0_f32, 0.0, -2.0, 1.0];
         let vp = u.light_vps[0];
@@ -440,17 +453,17 @@ mod tests {
     // texel coordinates for a camera at `cam` (looking down -Z).
     fn cascade0_texel(cam: [f32; 3], world_p: [f32; 3], light: [f32; 3], size: u32) -> (f32, f32) {
         let view = look_at(cam, [cam[0], cam[1], cam[2] - 1.0], [0.0, 1.0, 0.0]);
-        let u = compute_shadow_uniforms(
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
             view,
-            cam,
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.1,
-            80.0,
-            light,
-            size,
-            4,
-        );
+            cam_pos: cam,
+            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: light,
+            shadow_map_size: size,
+            active_cascades: 4,
+        });
         let vp = u.light_vps[0];
         let p = [world_p[0], world_p[1], world_p[2], 1.0];
         let mut clip = [0.0_f32; 4];
@@ -499,17 +512,17 @@ mod tests {
     // Project a world point through cascade 0's VP and return its light NDC.
     fn cascade0_ndc(cam: [f32; 3], world_p: [f32; 3], light: [f32; 3]) -> [f32; 3] {
         let view = look_at(cam, [cam[0], cam[1], cam[2] - 1.0], [0.0, 1.0, 0.0]);
-        let u = compute_shadow_uniforms(
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
             view,
-            cam,
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.1,
-            80.0,
-            light,
-            2048,
-            4,
-        );
+            cam_pos: cam,
+            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: light,
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
         let vp = u.light_vps[0];
         let p = [world_p[0], world_p[1], world_p[2], 1.0];
         let mut clip = [0.0_f32; 4];

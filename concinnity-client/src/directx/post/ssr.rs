@@ -351,7 +351,17 @@ pub(in crate::directx) struct SsrResources {
     pub(in crate::directx) resolve: Option<SsrResolve>,
 }
 
-#[allow(clippy::too_many_arguments)]
+// Output target descriptors + resolve settings for the SSR resolve builder.
+pub(in crate::directx) struct SsrInitInputs {
+    // Resolved authored tunables; `Some` only when the SSR resolve is on. With
+    // `None` (a SSGI-only build) the resolve output + pipeline are skipped.
+    pub resolve_settings: Option<crate::gfx::ssr::SsrSettings>,
+    // SSR resolve output: CPU RTV plus the (CPU, GPU) SRV pair TAA / bloom /
+    // composite consume as the scene colour.
+    pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+
 impl SsrResources {
     // Build the SSR resolve resources. Called from `DxContext::new` when the
     // world's `PostProcessConfig` enables SSR or SSGI. `resolve_settings` is
@@ -362,12 +372,15 @@ impl SsrResources {
         device: &ID3D12Device,
         width: u32,
         height: u32,
-        resolve_settings: Option<crate::gfx::ssr::SsrSettings>,
-        output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+        inputs: SsrInitInputs,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let SsrInitInputs {
+            resolve_settings,
+            output_rtv,
+            output_srv,
+        } = inputs;
         let resolve = if let Some(settings) = resolve_settings {
             let output = create_rt_target(device, width, height, SSR_OUTPUT_FORMAT)?;
             write_format_rtv(device, &output, output_rtv, SSR_OUTPUT_FORMAT);
@@ -486,7 +499,6 @@ pub(in crate::directx) fn rebuild_ssr_pipelines(
 
 // Encoders
 
-#[allow(clippy::too_many_arguments)]
 impl DxContext {
     // GPU descriptor handle of the SRV the TAA / bloom / composite passes
     // sample as the "scene": the FSR3 upscale output when temporal

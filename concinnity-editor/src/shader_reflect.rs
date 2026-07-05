@@ -15,7 +15,6 @@
 // issue and fails open: only a layout mismatch we actually observed fails the
 // build.
 
-#![allow(clippy::incompatible_msrv)]
 // Driven only by the binary's build chain (cn build / cn debug); the FFI lib
 // never registers the validator, so these items read as dead under the lib.
 #![allow(dead_code)]

@@ -85,17 +85,25 @@ impl VkContext {
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
             let gb = super::post::gbuffer::GbufferResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
-                self.render_extent.width,
-                self.render_extent.height,
-                self.frames_in_flight,
-                self.instanced.set_layout,
-                // Skinned variant is built lazily by `upload_skinned`, as at init.
-                None,
+                super::post::gbuffer::GbufferDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
+                super::post::gbuffer::GbufferQueueCtx {
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                super::post::gbuffer::GbufferExtent {
+                    width: self.render_extent.width,
+                    height: self.render_extent.height,
+                    frames: self.frames_in_flight,
+                },
+                super::post::gbuffer::GbufferSsboLayouts {
+                    instance: self.instanced.set_layout,
+                    // Skinned variant is built lazily by `upload_skinned`, as at init.
+                    skinned: None,
+                },
                 self.draw_objects.len(),
                 self.hot_reload,
             )?;
@@ -105,15 +113,19 @@ impl VkContext {
         // TAA.
         if desired_taa && self.taa.is_none() {
             let taa = super::post::taa::TaaResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                &super::post::taa::TaaDeviceContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    pd: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 self.frames_in_flight,
                 self.render_extent,
-                &self.hdr_resolve_images,
-                self.composite_sampler,
+                &super::post::taa::TaaSceneInputs {
+                    hdr_resolve_images: &self.hdr_resolve_images,
+                    sampler: self.composite_sampler,
+                },
                 self.hot_reload,
             )?;
             self.taa = Some(taa);
@@ -131,19 +143,25 @@ impl VkContext {
                 .ssr
                 .unwrap_or_else(|| crate::gfx::ssr::SsrSettings::resolve(0.0, 0.0));
             let ssr = super::post::ssr::SsrResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
-                self.render_extent.width,
-                self.render_extent.height,
+                &super::post::ssr::SsrGpuContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                super::post::ssr::SsrExtent {
+                    width: self.render_extent.width,
+                    height: self.render_extent.height,
+                },
                 self.frames_in_flight,
-                settings,
-                &hdr_views,
-                self.env_map.prefilter.view,
-                self.cube_sampler,
-                self.descriptors.global_set_layout,
+                super::post::ssr::SsrInitInputs {
+                    settings,
+                    hdr_resolve_views: &hdr_views,
+                    prefilter_view: self.env_map.prefilter.view,
+                    cube_sampler: self.cube_sampler,
+                    global_set_layout: self.descriptors.global_set_layout,
+                },
                 self.hot_reload,
             )?;
             self.ssr = Some(ssr);
@@ -161,15 +179,19 @@ impl VkContext {
                 .expect("SSGI requires the unified G-buffer pre-pass")
                 .normal_depth_views();
             let ssgi = super::post::ssgi::SsgiResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                super::post::ssgi::SsgiDevice {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
                 self.render_extent.width,
                 self.render_extent.height,
                 self.frames_in_flight,
                 settings,
-                &hdr_views,
-                nd_views[0],
+                super::post::ssgi::SsgiInputViews {
+                    hdr_resolve_views: &hdr_views,
+                    gbuffer_view: nd_views[0],
+                },
                 self.hot_reload,
             )?;
             self.ssgi = Some(ssgi);
@@ -230,9 +252,11 @@ impl VkContext {
                 .transient_pool
                 .views_for_frames("ao_output", self.frames_in_flight);
             let ssao = super::post::ssao::SsaoResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                &super::post::ssao::SsaoDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
                 self.render_extent.width,
                 self.render_extent.height,
                 self.frames_in_flight,
@@ -285,18 +309,22 @@ impl VkContext {
             let nd_views = gb.normal_depth_views();
             let rough_views = gb.roughness_views();
             let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                &super::post::reflection_composite::GpuAllocContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 self.render_extent.width,
                 self.render_extent.height,
                 self.frames_in_flight,
                 q.reflection_blur_scale,
-                &hdr_views,
-                &nd_views,
-                &rough_views,
+                &super::post::reflection_composite::CompositeInputViews {
+                    hdr_resolve_views: &hdr_views,
+                    normal_depth_views: &nd_views,
+                    roughness_views: &rough_views,
+                },
                 self.hot_reload,
             )?;
             self.reflection_composite = Some(rc);
@@ -333,18 +361,22 @@ impl VkContext {
         settings: crate::gfx::rt_reflections::RtReflectionSettings,
     ) -> Result<(), String> {
         let accel = match crate::vulkan::raytrace::build_rt_accel(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+            crate::vulkan::raytrace::RtDeviceCtx {
+                instance: &self.instance,
+                device: &self.device,
+                pd: self.physical_device,
+            },
             self.commands.command_pool,
             self.graphics_queue,
-            self.geometry.vertex_buffer,
-            self.geometry.index_buffer,
-            &self.draw_objects,
-            &self.instanced.clusters,
-            self.textures.len(),
-            self.normal_map_textures.len(),
-            self.rt_static_vertex_count,
+            crate::vulkan::raytrace::RtSceneGeometry {
+                vertex_buffer: self.geometry.vertex_buffer,
+                index_buffer: self.geometry.index_buffer,
+                draw_objects: &self.draw_objects,
+                clusters: &self.instanced.clusters,
+                albedo_count: self.textures.len(),
+                normal_count: self.normal_map_textures.len(),
+                total_vertices: self.rt_static_vertex_count,
+            },
             self.frames_in_flight,
             self.hot_reload,
         ) {
@@ -379,29 +411,37 @@ impl VkContext {
             0
         };
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.render_extent.width,
-            self.render_extent.height,
-            self.frames_in_flight,
+            super::post::rt_reflections::RtBuild {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                width: self.render_extent.width,
+                height: self.render_extent.height,
+                frames: self.frames_in_flight,
+            },
             settings,
-            self.geometry.vertex_buffer,
-            self.geometry.index_buffer,
-            accel.tlas(),
-            geom_buffer,
-            geom_size,
-            accel.deformed_verts(),
-            accel.skinned_indices(),
-            &hdr_views,
-            &nd_views,
-            &rough_views,
-            self.env_map.prefilter.view,
-            self.cube_sampler,
-            self.cull.bindless_set_layout,
-            self.descriptors.global_set_layout,
-            bindless_pool_size,
-            self.hot_reload,
+            super::post::rt_reflections::RtStaticInputs {
+                vertex_buffer: self.geometry.vertex_buffer,
+                index_buffer: self.geometry.index_buffer,
+                hdr_resolve_views: &hdr_views,
+                gbuffer_views: &nd_views,
+                roughness_views: &rough_views,
+                prefilter_view: self.env_map.prefilter.view,
+                cube_sampler: self.cube_sampler,
+            },
+            super::post::rt_reflections::RtAccelHandles {
+                tlas: accel.tlas(),
+                geom_buffer,
+                geom_size,
+                deformed_verts: accel.deformed_verts(),
+                skinned_indices: accel.skinned_indices(),
+            },
+            super::post::rt_reflections::RtLayoutConfig {
+                bindless_set_layout: self.cull.bindless_set_layout,
+                global_set_layout: self.descriptors.global_set_layout,
+                pool_size: bindless_pool_size,
+                hot_reload: self.hot_reload,
+            },
         ) {
             Ok(rt) => rt,
             Err(e) => {

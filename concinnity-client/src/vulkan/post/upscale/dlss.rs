@@ -27,7 +27,7 @@ use std::ptr;
 
 use ash::{Device, vk};
 
-use super::{UpscaleImage, VkUpscaleBackend};
+use super::{UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
 use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
 
@@ -141,36 +141,54 @@ fn make_resource(
     }
 }
 
+// The image dimensions, format, and clear value for `create_cleared_input`.
+#[derive(Clone, Copy)]
+struct ClearedInputSpec {
+    width: u32,
+    height: u32,
+    format: vk::Format,
+    clear: vk::ClearColorValue,
+}
+
 // Create a small device-local input image, clear it to `clear`, and leave it in
 // GENERAL (the layout NGX reads all resources in). Used for the supplied
 // exposure texture, written once here and never touched again, so the one-time
 // clear barrier covers all later NGX reads. SAMPLED | STORAGE usage matches
 // however NGX binds it (descriptor type unknown to us).
-#[allow(clippy::too_many_arguments)]
 fn create_cleared_input(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-    format: vk::Format,
-    clear: vk::ClearColorValue,
+    gpu: super::UpscalerGpu<'_>,
+    spec: ClearedInputSpec,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+    let super::UpscalerGpu {
         instance,
         device,
         physical_device,
-        width.max(1),
-        height.max(1),
+        command_pool,
+        queue,
+    } = gpu;
+    let ClearedInputSpec {
+        width,
+        height,
         format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::STORAGE
-            | vk::ImageUsageFlags::TRANSFER_DST,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        clear,
+    } = spec;
+    let (image, memory) = create_image(
+        &crate::vulkan::texture::GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &crate::vulkan::texture::ImageSpec {
+            width: width.max(1),
+            height: height.max(1),
+            format,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::TRANSFER_DST,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
     let range = vk::ImageSubresourceRange {
@@ -186,12 +204,16 @@ fn create_cleared_input(
             cmd,
             image,
             vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
-            vk::AccessFlags::empty(),
-            vk::PipelineStageFlags::TRANSFER,
-            vk::AccessFlags::TRANSFER_WRITE,
+            super::LayoutTransition {
+                from: vk::ImageLayout::UNDEFINED,
+                to: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            },
+            super::BarrierSync {
+                src_stage: vk::PipelineStageFlags::TOP_OF_PIPE,
+                src_access: vk::AccessFlags::empty(),
+                dst_stage: vk::PipelineStageFlags::TRANSFER,
+                dst_access: vk::AccessFlags::TRANSFER_WRITE,
+            },
         );
         unsafe {
             device.cmd_clear_color_image(
@@ -207,12 +229,16 @@ fn create_cleared_input(
             cmd,
             image,
             vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::GENERAL,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::AccessFlags::TRANSFER_WRITE,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::AccessFlags::SHADER_READ,
+            super::LayoutTransition {
+                from: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                to: vk::ImageLayout::GENERAL,
+            },
+            super::BarrierSync {
+                src_stage: vk::PipelineStageFlags::TRANSFER,
+                src_access: vk::AccessFlags::TRANSFER_WRITE,
+                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
         );
     })?;
     Ok(GpuImage {
@@ -354,17 +380,19 @@ impl DlssUpscaler {
     // `build_upscaler` falls through. NGX `CreateFeature` records onto a command
     // buffer, so this submits a one-shot init buffer to `queue`. Assumes the NGX
     // instance / device extensions were enabled at creation (via `UpscaleSdk`).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn try_new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        gpu: super::UpscalerGpu<'_>,
         output_width: u32,
         output_height: u32,
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
+        let super::UpscalerGpu {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = gpu;
         let (render_width, render_height, scale) =
             super::resolve_render_dims(output_width, output_height, upscale_scale);
 
@@ -487,16 +515,20 @@ impl DlssUpscaler {
         // so the first evaluate finds it ready; on failure tear down everything
         // built so far.
         let exposure = match create_cleared_input(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            1,
-            1,
-            vk::Format::R32_SFLOAT,
-            vk::ClearColorValue {
-                float32: [1.0, 0.0, 0.0, 0.0],
+            super::UpscalerGpu {
+                instance,
+                device,
+                physical_device,
+                command_pool,
+                queue,
+            },
+            ClearedInputSpec {
+                width: 1,
+                height: 1,
+                format: vk::Format::R32_SFLOAT,
+                clear: vk::ClearColorValue {
+                    float32: [1.0, 0.0, 0.0, 0.0],
+                },
             },
         ) {
             Ok(img) => img,
@@ -566,19 +598,18 @@ impl VkUpscaleBackend for DlssUpscaler {
         super::halton_jitter_offset(frame_index)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: vk::CommandBuffer,
-        color: &UpscaleImage,
-        depth: &UpscaleImage,
-        motion: &UpscaleImage,
-        jitter_offset: [f32; 2],
-        _elapsed: f32,
-        _camera_near: f32,
-        _camera_far: f32,
-        _camera_fov_y_radians: f32,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> Result<(), String> {
+        let UpscaleInputs {
+            color,
+            depth,
+            motion,
+        } = inputs;
+        let jitter_offset = camera.jitter_offset;
         let reset = self.reset_pending.replace(false);
         // These must outlive the EvaluateFeature call (NGX reads them during the
         // record); they are bound by pointer through SetVoidPointer.

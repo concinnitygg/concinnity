@@ -14,8 +14,6 @@
 // Each slot grows power-of-two on demand (like `ensure_icb_capacity`) and is
 // never shrunk, so steady state does zero allocation.
 
-#![allow(clippy::incompatible_msrv)]
-
 use std::collections::VecDeque;
 
 use objc2::rc::Retained;
@@ -151,10 +149,13 @@ impl TransientRing {
 // the per-pass encoders bind so they need no change. Current and previous
 // poses use separate `JointRing`s because the velocity pass reads both in the
 // same frame and they must not alias the same slot.
+// One skinned object's palette buffer for a given ring slot, absent until the
+// slot is first written.
+type PaletteSlot = Option<Retained<ProtocolObject<dyn MTLBuffer>>>;
+
 pub(super) struct JointRing {
     // slots[ring_slot][object] -> palette buffer
-    #[allow(clippy::type_complexity)]
-    slots: Vec<Vec<Option<Retained<ProtocolObject<dyn MTLBuffer>>>>>,
+    slots: Vec<Vec<PaletteSlot>>,
 }
 
 impl JointRing {

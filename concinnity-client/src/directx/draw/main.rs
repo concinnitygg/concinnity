@@ -11,6 +11,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
+use crate::directx::graph_exec::{FrameGpuBuffers, MainPassCamera};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 // Root constants for the main pass (112 bytes = 28 DWORDs).
@@ -187,21 +188,26 @@ impl DxContext {
     // Finishes by resolving (MSAA) or transitioning (no MSAA) the HDR target
     // to `PIXEL_SHADER_RESOURCE` so the velocity / TAA / bloom / composite
     // passes can sample it.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_main_pass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        width: u32,
-        height: u32,
-        view_gva: u64,
-        light_gva: u64,
-        shadow_ubo_gva: u64,
-        frustum: &crate::gfx::frustum::Frustum,
-        cam_pos: [f32; 3],
+        camera: MainPassCamera<'_>,
+        gpu: FrameGpuBuffers,
         visible: &[u32],
         world_hidden: bool,
     ) {
+        let MainPassCamera {
+            width,
+            height,
+            frustum,
+            cam_pos,
+        } = camera;
+        let FrameGpuBuffers {
+            view_gva,
+            light_gva,
+            shadow_ubo_gva,
+        } = gpu;
         let depth_dsv = self.depth_dsv;
 
         unsafe {
@@ -694,17 +700,19 @@ impl DxContext {
     // (the graph gates the Main2 node on it), so all phase-2 resources are
     // present; the resolve still runs even if there is nothing to redraw.
     // Mirrors `metal/draw/main.rs::encode_main_pass_phase2`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_main_pass_phase2(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         width: u32,
         height: u32,
-        view_gva: u64,
-        light_gva: u64,
-        shadow_ubo_gva: u64,
+        gpu: FrameGpuBuffers,
     ) {
+        let FrameGpuBuffers {
+            view_gva,
+            light_gva,
+            shadow_ubo_gva,
+        } = gpu;
         let depth_dsv = self.depth_dsv;
 
         // Load (do not clear) the phase-1 colour + depth: Main2 composites the

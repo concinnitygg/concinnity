@@ -460,9 +460,11 @@ impl DxContext {
                 width,
                 height,
                 upscale_scale,
-                slot_cpu(upscale_uav_slot),
-                slot_cpu(upscale_srv_slot),
-                slot_gpu(upscale_srv_slot),
+                crate::directx::post::upscale::UpscalerDescriptors {
+                    uav_cpu: slot_cpu(upscale_uav_slot),
+                    srv_cpu: slot_cpu(upscale_srv_slot),
+                    srv_gpu: slot_gpu(upscale_srv_slot),
+                },
                 upscale_backend,
             )?
             .0
@@ -560,16 +562,22 @@ impl DxContext {
             let view = crate::build::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
             upload_environment_map(
-                &device,
-                &command_queue,
-                view.irradiance_face,
-                view.irradiance_bytes,
-                view.prefilter_face,
-                &view.prefilter_mip_bytes,
-                slot_cpu(1),
-                slot_gpu(1),
-                slot_cpu(2),
-                slot_gpu(2),
+                crate::directx::texture::GpuUploadContext {
+                    device: &device,
+                    queue: &command_queue,
+                },
+                crate::directx::texture::EnvironmentMapPayload {
+                    irradiance_face: view.irradiance_face,
+                    irradiance_bytes: view.irradiance_bytes,
+                    prefilter_face: view.prefilter_face,
+                    mip_bytes: &view.prefilter_mip_bytes,
+                },
+                crate::directx::texture::EnvironmentMapDescriptors {
+                    irr_srv_cpu: slot_cpu(1),
+                    irr_srv_gpu: slot_gpu(1),
+                    pre_srv_cpu: slot_cpu(2),
+                    pre_srv_gpu: slot_gpu(2),
+                },
             )?
         } else {
             let irradiance = create_fallback_cubemap(
@@ -1022,18 +1030,24 @@ impl DxContext {
         let main_pipelines = pipelines::build_main_pipelines(
             &device,
             info_queue.as_ref(),
-            &shaders,
-            vert_bytes,
-            frag_bytes,
-            msaa_samples,
-            n_objects,
-            n_instances,
-            n_skinned,
-            n_chunk_max,
-            occlusion_two_pass,
-            effective_shadow_size > 0,
-            gbuffer_enabled,
-            hot_reload,
+            pipelines::MainPipelineShaders {
+                shaders: &shaders,
+                vert_bytes,
+                frag_bytes,
+            },
+            pipelines::MainPipelineConfig {
+                n_objects,
+                n_instances,
+                n_skinned,
+                n_chunk_max,
+                msaa_samples,
+            },
+            pipelines::MainPipelineFeatures {
+                occlusion_two_pass,
+                shadow_enabled: effective_shadow_size > 0,
+                gbuffer_enabled,
+                hot_reload,
+            },
         )?;
         let pipelines::MainPipelines {
             main_root_sig,
@@ -1368,27 +1382,35 @@ impl DxContext {
             &device,
             &command_queue,
             info_queue.as_ref(),
-            width,
-            height,
-            render_w,
-            render_h,
-            taa_enabled,
-            ssao_settings,
-            ssr_settings,
-            ssgi_settings,
-            rt_reflection_settings,
-            raytracing_supported,
-            effects::BloomSlots {
-                rtv_for: &bloom_rtv_for,
-                srv_cpu_for: &bloom_srv_cpu_for,
-                srv_gpu_for: &bloom_srv_gpu_for,
+            effects::EffectDimensions {
+                width,
+                height,
+                render_width: render_w,
+                render_height: render_h,
             },
-            taa_slots,
-            ssao_slots,
-            ssr_slots,
-            ssgi_slots,
-            rt_slots,
-            hot_reload,
+            effects::EffectSettings {
+                ssao_settings,
+                ssr_settings,
+                ssgi_settings,
+                rt_reflection_settings,
+                rt_supported: raytracing_supported,
+            },
+            effects::EffectFlags {
+                taa_enabled,
+                hot_reload,
+            },
+            effects::EffectDescriptorSlots {
+                bloom: effects::BloomSlots {
+                    rtv_for: &bloom_rtv_for,
+                    srv_cpu_for: &bloom_srv_cpu_for,
+                    srv_gpu_for: &bloom_srv_gpu_for,
+                },
+                taa: taa_slots,
+                ssao: ssao_slots,
+                ssr: ssr_slots,
+                ssgi: ssgi_slots,
+                rt: rt_slots,
+            },
         )?;
         let effects::EffectsBundle {
             transient_pool,
@@ -1417,14 +1439,18 @@ impl DxContext {
         // `upload_skinned` once the joint-bound vertex layout exists.
         let gbuffer = if gbuffer_enabled {
             Some(crate::directx::post::gbuffer::GbufferResources::new(
-                &device,
-                render_w,
-                render_h,
-                need_instanced,
-                false,
+                crate::directx::post::gbuffer::GbufferDeviceCtx {
+                    device: &device,
+                    info_queue: info_queue.as_ref(),
+                },
+                crate::directx::post::gbuffer::GbufferExtent {
+                    width: render_w,
+                    height: render_h,
+                    need_instanced,
+                    need_skinned: false,
+                    hot_reload,
+                },
                 gbuffer_slots,
-                info_queue.as_ref(),
-                hot_reload,
             )?)
         } else {
             None
@@ -1472,15 +1498,21 @@ impl DxContext {
         let fog_resources = if fog_settings.is_some() {
             Some(crate::directx::fog::FogResources::new(
                 &device,
-                msaa_samples,
-                decal_depth_srv_gpu,
-                shadow_srv_gpu,
-                slot_cpu(fog_froxel_uav_slot),
-                slot_gpu(fog_froxel_uav_slot),
-                slot_cpu(fog_froxel_srv_slot),
-                slot_gpu(fog_froxel_srv_slot),
+                crate::directx::fog::FogVolumeDescriptors {
+                    uav_cpu: slot_cpu(fog_froxel_uav_slot),
+                    uav_gpu: slot_gpu(fog_froxel_uav_slot),
+                    srv_cpu: slot_cpu(fog_froxel_srv_slot),
+                    srv_gpu: slot_gpu(fog_froxel_srv_slot),
+                },
+                crate::directx::fog::FogShaderResourceHandles {
+                    depth_srv_gpu: decal_depth_srv_gpu,
+                    shadow_srv_gpu,
+                },
+                crate::directx::fog::FogDeviceParams {
+                    msaa_samples,
+                    hot_reload,
+                },
                 info_queue.as_ref(),
-                hot_reload,
             )?)
         } else {
             None
@@ -1693,28 +1725,36 @@ impl DxContext {
         // bindings the main pass uses, so raymarched surfaces sample the
         // same CSM cascades + IBL cubes as rasterised geometry.
         let raymarch = crate::directx::raymarch::RaymarchResources::try_new(
-            &device,
-            info_queue.as_ref(),
-            &command_queue,
+            crate::directx::raymarch::RaymarchDeviceContext {
+                device: &device,
+                info_queue: info_queue.as_ref(),
+                command_queue: &command_queue,
+            },
+            crate::directx::raymarch::RaymarchTargetConfig {
+                width: render_w,
+                height: render_h,
+                msaa_samples,
+            },
+            crate::directx::raymarch::RaymarchSharedBindings {
+                shadow_resource: shadow_resource_opt.as_ref().map(|r| &r.resource),
+                shadow_layers: NUM_SHADOW_CASCADES as u32,
+                irradiance_resource: &env_map.irradiance.resource,
+                prefilter_resource: &env_map.prefilter.resource,
+            },
+            crate::directx::raymarch::RaymarchDescriptorHandles {
+                srv_base_cpu: slot_cpu(raymarch_srv_base_slot),
+                srv_base_gpu: slot_gpu(raymarch_srv_base_slot),
+                srv_descriptor_size,
+                sampler_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE {
+                    ptr: samp_cpu_base.ptr + raymarch_sampler_base_slot * sampler_descriptor_size,
+                },
+                sampler_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE {
+                    ptr: samp_gpu_base.ptr
+                        + (raymarch_sampler_base_slot * sampler_descriptor_size) as u64,
+                },
+                sampler_descriptor_size,
+            },
             &sdf_volumes,
-            render_w,
-            render_h,
-            msaa_samples,
-            shadow_resource_opt.as_ref().map(|r| &r.resource),
-            NUM_SHADOW_CASCADES as u32,
-            &env_map.irradiance.resource,
-            &env_map.prefilter.resource,
-            slot_cpu(raymarch_srv_base_slot),
-            slot_gpu(raymarch_srv_base_slot),
-            srv_descriptor_size,
-            D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: samp_cpu_base.ptr + raymarch_sampler_base_slot * sampler_descriptor_size,
-            },
-            D3D12_GPU_DESCRIPTOR_HANDLE {
-                ptr: samp_gpu_base.ptr
-                    + (raymarch_sampler_base_slot * sampler_descriptor_size) as u64,
-            },
-            sampler_descriptor_size,
             hot_reload,
         )?;
 
@@ -1736,17 +1776,21 @@ impl DxContext {
                 mip_uav_gpus.push(slot_gpu(hiz_uav_base_slot + i));
             }
             Some(crate::directx::hiz::HiZResources::new(
-                &device,
-                info_queue.as_ref(),
-                render_w,
-                render_h,
-                slot_cpu(hiz_srv_slot),
-                slot_gpu(hiz_srv_slot),
-                slot_cpu(decal_depth_srv_slot),
-                decal_depth_srv_gpu,
-                mip_uav_cpus,
-                mip_uav_gpus,
-                hot_reload,
+                crate::directx::hiz::HiZDeviceCtx {
+                    device: &device,
+                    info_queue: info_queue.as_ref(),
+                    hot_reload,
+                },
+                crate::directx::hiz::HiZTarget {
+                    width: render_w,
+                    height: render_h,
+                    srv_cpu: slot_cpu(hiz_srv_slot),
+                    srv_gpu: slot_gpu(hiz_srv_slot),
+                    depth_srv_cpu: slot_cpu(decal_depth_srv_slot),
+                    depth_srv_gpu: decal_depth_srv_gpu,
+                    mip_uav_cpus,
+                    mip_uav_gpus,
+                },
             )?)
         } else {
             None
@@ -1770,14 +1814,18 @@ impl DxContext {
                 .collect();
             Some(crate::directx::planar::PlanarReflectionSet::new(
                 &device,
-                msaa_samples,
-                render_w,
-                render_h,
+                crate::directx::planar::PlanarConfig {
+                    sample_count: msaa_samples,
+                    width: render_w,
+                    height: render_h,
+                    n_cull: planar_n_cull,
+                },
                 &planar_assignment.representatives,
-                &resolve_srv_cpu,
-                &resolve_srv_gpu,
-                clear_color,
-                planar_n_cull,
+                crate::directx::planar::PlanarTargets {
+                    resolve_srv_cpu: &resolve_srv_cpu,
+                    resolve_srv_gpu: &resolve_srv_gpu,
+                    clear_color,
+                },
             )?)
         };
 
@@ -1790,18 +1838,24 @@ impl DxContext {
             None
         } else {
             Some(crate::directx::glass::GlassResources::new(
-                &device,
-                &command_queue,
-                msaa_samples,
+                crate::directx::glass::GlassDeviceCtx {
+                    device: &device,
+                    command_queue: &command_queue,
+                },
+                crate::directx::glass::GlassBuildConfig {
+                    msaa_samples,
+                    width: render_w,
+                    height: render_h,
+                    hot_reload,
+                },
+                crate::directx::glass::GlassSceneTargets {
+                    scene_copy_srv_cpu: slot_cpu(transparent_scene_copy_srv_slot),
+                    scene_copy_srv_gpu: slot_gpu(transparent_scene_copy_srv_slot),
+                    depth_srv_gpu: decal_depth_srv_gpu,
+                },
                 &glass_panels,
                 &planar_assignment.slots,
-                slot_cpu(transparent_scene_copy_srv_slot),
-                slot_gpu(transparent_scene_copy_srv_slot),
-                decal_depth_srv_gpu,
-                render_w,
-                render_h,
                 info_queue.as_ref(),
-                hot_reload,
             )?)
         };
 
@@ -1816,17 +1870,17 @@ impl DxContext {
         // attached. A skin-pipeline build failure (DXC absent) is non-fatal: the
         // RT pass still runs for static geometry, just without skinned hits.
         let rt_accel = if rt_reflections.is_some() {
-            match super::raytrace::build_rt_accel(
-                &device,
-                &command_queue,
-                &vertex_buffer,
-                &index_buffer,
-                &draw_objects,
-                &instanced_clusters,
-                vertices.len(),
-                flat_albedo_count as u32,
-                flat_normal_count as u32,
-            ) {
+            match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
+                device: &device,
+                queue: &command_queue,
+                vertex_buffer: &vertex_buffer,
+                index_buffer: &index_buffer,
+                draw_objects: &draw_objects,
+                clusters: &instanced_clusters,
+                total_vertices: vertices.len(),
+                albedo_count: flat_albedo_count as u32,
+                normal_count: flat_normal_count as u32,
+            }) {
                 Ok(Some(mut accel)) => {
                     match super::raytrace::build_rt_skin_pipeline(&device, hot_reload) {
                         Ok(skin) => accel.set_skin_pipeline(skin),

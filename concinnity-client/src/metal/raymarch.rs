@@ -24,7 +24,6 @@
 //     `main_depth` (texture(0)).
 
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -571,16 +570,14 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
 // vertex shader scales by `vol.extent` and translates by `vol.centre`.
 // Indices wind 36 CCW triangles (the encoder culls front faces so the
 // rasteriser only fires for back faces).
-#[allow(clippy::type_complexity)]
+type RaymarchCubeBuffers = (
+    Retained<ProtocolObject<dyn MTLBuffer>>,
+    Retained<ProtocolObject<dyn MTLBuffer>>,
+);
+
 pub(in crate::metal) fn build_raymarch_cube_buffers(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<
-    (
-        Retained<ProtocolObject<dyn MTLBuffer>>,
-        Retained<ProtocolObject<dyn MTLBuffer>>,
-    ),
-    String,
-> {
+) -> Result<RaymarchCubeBuffers, String> {
     // `extent` in SdfVolume is the AABB half-widths: the box spans
     // `centre ± extent`. The vertex shader computes `pos * extent +
     // centre`, so the proxy corners must be at `±1.0` for the scaled

@@ -40,7 +40,8 @@ use ash::{Device, vk};
 use super::pipeline::{compile_glsl, inject_define, shader_source, spv_module};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
-    create_buffer, find_memory_type, one_shot_submit, transition_image_layout_range,
+    LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
+    transition_image_layout_range,
 };
 
 const HIZ_INIT_GLSL: &str = include_str!("shaders/hiz_init.comp");
@@ -289,6 +290,27 @@ fn create_compute_pipeline(
     Ok(pipeline)
 }
 
+// Vulkan device + one-shot submission context threaded into the Hi-Z resource
+// (re)creation calls. Bundles the handles needed to allocate GPU memory and run
+// the layout-transition submit.
+#[derive(Clone, Copy)]
+pub(super) struct HiZDeviceCtx<'a> {
+    pub(super) instance: &'a ash::Instance,
+    pub(super) device: &'a Device,
+    pub(super) physical_device: vk::PhysicalDevice,
+    pub(super) command_pool: vk::CommandPool,
+    pub(super) queue: vk::Queue,
+}
+
+// The render (depth) target the Hi-Z pyramid mirrors: its dimensions plus the
+// per-frame main-depth views the init kernel reduces into mip 0.
+#[derive(Clone, Copy)]
+pub(super) struct HiZTarget<'a> {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) depth_views: &'a [vk::ImageView],
+}
+
 impl HiZResources {
     // The pyramid's all-mips sampled view + its sampler, the two resources a
     // cull set-1 ("read set") binds at binding 0. Exposed so the reflection-probe
@@ -301,25 +323,27 @@ impl HiZResources {
     }
 
     // Build every Hi-Z resource sized to the render (depth) resolution. Called
-    // from the init path when the GPU-cull pipeline is active. `depth_views`
+    // from the init path when the GPU-cull pipeline is active. `target.depth_views`
     // are the per-frame main-depth views the init kernel reduces.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
+        ctx: HiZDeviceCtx,
+        target: HiZTarget,
         sample_count: u32,
         frames: usize,
-        depth_views: &[vk::ImageView],
         // When set, allocate the phase-2 cull-read sets + UBOs for two-pass
         // occlusion (`Cull2`). Gated on the world's `occlusion_two_pass`.
         two_pass: bool,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        // `command_pool`, `queue`, and `depth_views` are only needed by the
+        // `create_image_and_sets` call below, which takes `ctx` / `target` whole.
+        let HiZDeviceCtx {
+            instance,
+            device,
+            physical_device,
+            ..
+        } = ctx;
+        let HiZTarget { width, height, .. } = target;
         // Set layouts.
         // Init: binding 0 depth sampler, binding 1 dst-mip storage image.
         let init_set_layout = create_set_layout(
@@ -427,16 +451,7 @@ impl HiZResources {
             mip_count: 0,
             sample_count,
         };
-        res.create_image_and_sets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-            depth_views,
-        )?;
+        res.create_image_and_sets(ctx, target)?;
         Ok(res)
     }
 
@@ -444,18 +459,23 @@ impl HiZResources {
     // to it. Resets the descriptor pool, so all Hi-Z sets are freshly
     // allocated; the cull-read UBO buffers themselves survive (only their
     // descriptors are rewritten). The caller must have idled the GPU.
-    #[allow(clippy::too_many_arguments)]
     fn create_image_and_sets(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        depth_views: &[vk::ImageView],
+        ctx: HiZDeviceCtx,
+        target: HiZTarget,
     ) -> Result<(), String> {
+        let HiZDeviceCtx {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let HiZTarget {
+            width,
+            height,
+            depth_views,
+        } = target;
         let mip_count = hiz_mip_count(width, height).min(MAX_HIZ_MIPS as u32).max(1);
         let (image, memory) =
             create_hiz_image(instance, device, physical_device, width, height, mip_count)?;
@@ -467,13 +487,17 @@ impl HiZResources {
                 device,
                 cmd,
                 image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-                0,
-                1,
-                0,
-                mip_count,
+                LayoutTransition {
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                },
+                SubresourceRange {
+                    base_layer: 0,
+                    layer_count: 1,
+                    base_mip: 0,
+                    mip_count,
+                },
             );
         })?;
 
@@ -559,29 +583,9 @@ impl HiZResources {
     // pipelines, layouts, sampler, and cull-read UBO buffers survive. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
     // now-stale pyramid, and must have idled the GPU first.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn resize_to(
-        &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        depth_views: &[vk::ImageView],
-    ) -> Result<(), String> {
-        self.destroy_image_and_views(device);
-        self.create_image_and_sets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-            depth_views,
-        )
+    pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> Result<(), String> {
+        self.destroy_image_and_views(ctx.device);
+        self.create_image_and_sets(ctx, target)
     }
 
     // Swap freshly-rebuilt pipelines into the live resource. Used by the shader

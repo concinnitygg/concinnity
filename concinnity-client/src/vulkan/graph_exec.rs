@@ -42,6 +42,7 @@ use crate::gfx::render_types::TextDrawCall;
 use super::barrier_translate::vk_transition;
 use super::context::VkContext;
 use super::parallel_encoder::ParallelCtxRef;
+use super::post::gbuffer::GbufferPrepassView;
 
 // One resolved barrier target: the image a graph resource backs, its class, and
 // its array-layer count (1 for a plain target, the cascade count for the CSM
@@ -84,7 +85,7 @@ fn emit_graph_barriers(
         let Some((old_layout, new_layout, src_access, dst_access, src_stage, dst_stage)) =
             vk_transition(
                 target.class,
-                op.from_state(),
+                op.source_state(),
                 op.to_state(),
                 op.read_stages(),
             )
@@ -761,11 +762,13 @@ impl VkContext {
                     gb,
                     cmd,
                     params.frame_idx,
-                    params.vp_mat,
-                    params.cur_vp,
+                    GbufferPrepassView {
+                        jittered_vp: params.vp_mat,
+                        cur_vp: params.cur_vp,
+                        cam_pos: params.cam_pos,
+                        frustum: params.frustum,
+                    },
                     params.visible,
-                    params.frustum,
-                    params.cam_pos,
                     velocity_active,
                 );
             }

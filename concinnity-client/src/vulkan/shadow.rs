@@ -38,6 +38,13 @@ struct ShadowPush {
     _pad: [u32; 3],
 }
 
+// Depth-only shadow pipeline + its layout, bound once per legacy cascade body.
+#[derive(Clone, Copy)]
+struct ShadowLegacyPipeline {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+}
+
 impl VkContext {
     // Encode the cascaded-shadow-map render passes for frame slot
     // `frame_idx`: one render pass per cascade slice, drawing every
@@ -141,8 +148,10 @@ impl VkContext {
                     frame_idx,
                     cascade_idx,
                     cam_pos,
-                    shadow_pipeline,
-                    shadow_pl,
+                    ShadowLegacyPipeline {
+                        pipeline: shadow_pipeline,
+                        layout: shadow_pl,
+                    },
                 );
             }
 
@@ -338,7 +347,6 @@ impl VkContext {
     // `cmd_draw_indexed` for static + instanced (iterated per instance) + skinned
     // casters. Used for non-bindless worlds (custom shader) or worlds with no
     // build-time geometry.
-    #[allow(clippy::too_many_arguments)]
     fn encode_shadow_cascade_legacy(
         &self,
         device: &Device,
@@ -346,9 +354,12 @@ impl VkContext {
         frame_idx: usize,
         cascade_idx: usize,
         cam_pos: [f32; 3],
-        shadow_pipeline: vk::Pipeline,
-        shadow_pl: vk::PipelineLayout,
+        shadow: ShadowLegacyPipeline,
     ) {
+        let ShadowLegacyPipeline {
+            pipeline: shadow_pipeline,
+            layout: shadow_pl,
+        } = shadow;
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
 

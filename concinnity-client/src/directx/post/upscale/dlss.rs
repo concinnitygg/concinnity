@@ -159,22 +159,49 @@ pub(in crate::directx) struct DlssUpscaler {
 // `Send` bound is satisfied unsafely, same as the rest of `DxContext`.
 unsafe impl Send for DlssUpscaler {}
 
+// GPU device + queue plus output resolution and upscale ratio for NGX feature
+// creation.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct DlssCreateParams<'a> {
+    // The GPU device (held for Shutdown1 on drop).
+    pub device: &'a ID3D12Device,
+    // Command queue for NGX CreateFeature's one-shot init submission.
+    pub command_queue: &'a ID3D12CommandQueue,
+    pub output_width: u32,
+    pub output_height: u32,
+    // Per-axis render-to-output scale ratio, clamped to [1/3, 1.0].
+    pub upscale_scale: f32,
+}
+
+// GPU descriptor heap handles for the upscaler output texture.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct DlssOutputDescriptors {
+    pub output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
 impl DlssUpscaler {
     // Try to construct a DLSS upscaler. Returns `Ok(None)` when DLSS is
     // unavailable (NGX init failure, GPU lacks DLSS, feature-create failure);
     // the caller falls through. NGX `CreateFeature` records onto a command
     // list, so this submits a one-shot init list to `command_queue`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn try_new(
-        device: &ID3D12Device,
-        command_queue: &ID3D12CommandQueue,
-        output_width: u32,
-        output_height: u32,
-        upscale_scale: f32,
-        output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        params: DlssCreateParams<'_>,
+        descriptors: DlssOutputDescriptors,
     ) -> Result<Option<Self>, String> {
+        let DlssCreateParams {
+            device,
+            command_queue,
+            output_width,
+            output_height,
+            upscale_scale,
+        } = params;
+        let DlssOutputDescriptors {
+            output_uav_cpu,
+            output_srv_cpu,
+            output_srv_gpu,
+        } = descriptors;
         let scale = if upscale_scale > 0.0 {
             upscale_scale.clamp(1.0 / 3.0, 1.0)
         } else {
@@ -343,19 +370,18 @@ impl super::UpscaleBackend for DlssUpscaler {
         super::halton_jitter_offset(frame_index)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        color: &ID3D12Resource,
-        depth: &ID3D12Resource,
-        motion_vectors: &ID3D12Resource,
-        jitter_offset: [f32; 2],
-        _frame_time_delta_ms: f32,
-        _camera_near: f32,
-        _camera_far: f32,
-        _camera_fov_y_radians: f32,
+        inputs: super::UpscaleInputs<'_>,
+        camera: super::UpscaleCamera,
     ) -> Result<(), String> {
+        let super::UpscaleInputs {
+            color,
+            depth,
+            motion_vectors,
+        } = inputs;
+        let super::UpscaleCamera { jitter_offset, .. } = camera;
         let reset = self.reset_pending.replace(false);
         unsafe {
             NVSDK_NGX_Parameter_SetD3d12Resource(

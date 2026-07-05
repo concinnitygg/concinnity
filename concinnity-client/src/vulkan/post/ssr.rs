@@ -181,37 +181,57 @@ fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .map_err(|e| format!("SSR resolve render pass: {e}"))
 }
 
+// Shared device/queue handles every SSR target build needs. Borrowed by
+// `create_output_target`, `build_targets`, `new`, and `rebuild`.
+pub(in crate::vulkan) struct SsrGpuContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// Resolution of the resolution-dependent SSR targets.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct SsrExtent {
+    pub width: u32,
+    pub height: u32,
+}
+
 // Output target: pre-transitioned to `SHADER_READ_ONLY_OPTIMAL` so the
 // composite / bloom / TAA descriptor sets bound to it at init see a
 // validly-laid-out image even before the first SSR resolve runs (e.g. the
 // first frame's composite reads ssr.output before SSR has fired this slot).
-#[allow(clippy::too_many_arguments)]
-fn create_output_target(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+fn create_output_target(gpu: &SsrGpuContext, extent: SsrExtent) -> Result<GpuImage, String> {
+    let &SsrGpuContext {
         instance,
         device,
         physical_device,
-        width,
-        height,
-        SSR_OUTPUT_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        // TRANSFER_SRC so the transparent pass can snapshot this scene image for
-        // its refraction tap (the glass pass copies the post-SSR scene into its
-        // own snapshot, mirroring how `hdr_resolve` is the copy source when SSR
-        // is off). Inert for the SSR resolve itself.
-        vk::ImageUsageFlags::COLOR_ATTACHMENT
-            | vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        command_pool,
+        queue,
+    } = gpu;
+    let SsrExtent { width, height } = extent;
+    let (image, memory) = create_image(
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format: SSR_OUTPUT_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            // TRANSFER_SRC so the transparent pass can snapshot this scene image for
+            // its refraction tap (the glass pass copies the post-SSR scene into its
+            // own snapshot, mirroring how `hdr_resolve` is the copy source when SSR
+            // is off). Inert for the SSR resolve itself.
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -314,31 +334,55 @@ fn create_resolve_pipeline(
     Ok(pipeline)
 }
 
+// Content + wiring inputs `SsrResources::new` builds the resolve from, apart
+// from the device/queue infra (`SsrGpuContext`), the extent, frame count, and
+// the hot-reload flag.
+pub(in crate::vulkan) struct SsrInitInputs<'a> {
+    // Resolved authored tunables.
+    pub settings: crate::gfx::ssr::SsrSettings,
+    // Per-frame HDR resolve scene views feeding the resolve sets.
+    pub hdr_resolve_views: &'a [vk::ImageView],
+    // Prefilter cubemap + its sampler for the IBL fallback all resolve sets bind.
+    pub prefilter_view: vk::ImageView,
+    pub cube_sampler: vk::Sampler,
+    // The forward global set's layout, bound as set 1 so the resolve can sample
+    // the reflection-probe set + cube array (binding 7/8) on a missed ray.
+    pub global_set_layout: vk::DescriptorSetLayout,
+}
+
+// The per-frame view + sampler wiring the resolve descriptor sets bind on a
+// rebuild. `gbuffer_views` / `roughness_views` carry the unified pre-pass's
+// per-frame views (empty falls back to the scene view); `prefilter_view` +
+// `cube_sampler` feed the IBL fallback.
+pub(in crate::vulkan) struct SsrResolveInputs<'a> {
+    pub hdr_resolve_views: &'a [vk::ImageView],
+    pub gbuffer_views: &'a [vk::ImageView],
+    pub roughness_views: &'a [vk::ImageView],
+    pub prefilter_view: vk::ImageView,
+    pub cube_sampler: vk::Sampler,
+}
+
 impl SsrResources {
     // Build every SSR resource. `hdr_resolve_views` feeds the per-frame
     // resolve descriptor sets; `prefilter_view` + `cube_sampler` feed the IBL
     // fallback all resolve sets bind. The G-buffer / roughness the resolve
     // samples come from the unified pre-pass; the caller re-points those
     // bindings at its per-frame views after construction.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
+        gpu: &SsrGpuContext,
+        extent: SsrExtent,
         frames: usize,
-        settings: crate::gfx::ssr::SsrSettings,
-        hdr_resolve_views: &[vk::ImageView],
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-        // The forward global set's layout, bound as set 1 so the resolve can sample
-        // the reflection-probe set + cube array (binding 7/8) on a missed ray.
-        global_set_layout: vk::DescriptorSetLayout,
+        inputs: SsrInitInputs,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = gpu.device;
+        let SsrInitInputs {
+            settings,
+            hdr_resolve_views,
+            prefilter_view,
+            cube_sampler,
+            global_set_layout,
+        } = inputs;
         let resolve_render_pass = create_resolve_render_pass(device)?;
 
         // Resolve set 0: scene + gbuffer + roughness + prefilter cube samplers.
@@ -434,15 +478,7 @@ impl SsrResources {
             },
             resolve_framebuffer: vk::Framebuffer::null(),
         };
-        me.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
+        me.build_targets(gpu, extent)?;
         // Bind scene + prefilter cube; the G-buffer / roughness slots are
         // re-pointed at the unified pre-pass per-frame views by the caller
         // (the live path) before the first frame. Until then they fall back to
@@ -460,21 +496,17 @@ impl SsrResources {
 
     // Allocate or re-allocate the resolution-dependent output target +
     // framebuffer at the given extent.
-    #[allow(clippy::too_many_arguments)]
-    fn build_targets(
-        &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-    ) -> Result<(), String> {
-        let w = width.max(1);
-        let h = height.max(1);
-        self.output =
-            create_output_target(instance, device, physical_device, command_pool, queue, w, h)?;
+    fn build_targets(&mut self, gpu: &SsrGpuContext, extent: SsrExtent) -> Result<(), String> {
+        let device = gpu.device;
+        let w = extent.width.max(1);
+        let h = extent.height.max(1);
+        self.output = create_output_target(
+            gpu,
+            SsrExtent {
+                width: w,
+                height: h,
+            },
+        )?;
 
         self.resolve_framebuffer = unsafe {
             device.create_framebuffer(
@@ -581,32 +613,22 @@ impl SsrResources {
     // Rebuild the resolution-dependent targets at a new swapchain extent and
     // re-wire the resolve descriptor sets. The caller has already idled the
     // device.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
+        gpu: &SsrGpuContext,
+        extent: SsrExtent,
+        inputs: SsrResolveInputs,
     ) -> Result<(), String> {
+        let device = gpu.device;
+        let SsrResolveInputs {
+            hdr_resolve_views,
+            gbuffer_views,
+            roughness_views,
+            prefilter_view,
+            cube_sampler,
+        } = inputs;
         self.destroy_targets(device);
-        self.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
+        self.build_targets(gpu, extent)?;
         self.wire_resolve_sets(
             device,
             hdr_resolve_views,

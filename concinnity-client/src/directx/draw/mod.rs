@@ -68,6 +68,41 @@ fn halton(mut index: u32, base: u32) -> f32 {
     result
 }
 
+// The command list + back-buffer target this frame records into.
+#[derive(Clone, Copy)]
+pub(super) struct RecordFrameTargets<'a> {
+    // Outer "end" command list carrying Composite + restore barriers.
+    pub cmd: &'a ID3D12GraphicsCommandList,
+    // Swapchain back-buffer resource.
+    pub back_buffer: &'a ID3D12Resource,
+    // CPU descriptor handle for the back-buffer RTV.
+    pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    // Frame-in-flight slot for per-frame resource indexing.
+    pub frame_idx: usize,
+}
+
+// Per-frame camera / view state plus the overlay text drawn with it.
+#[derive(Clone, Copy)]
+pub(super) struct RecordFrameView<'a> {
+    pub elapsed: f32,
+    pub fov_y_radians: f32,
+    pub near: f32,
+    pub far: f32,
+    pub cam_pos: [f32; 3],
+    pub text_calls: &'a [TextDrawCall],
+}
+
+// Scene render resolution (every scene pass) plus output resolution (composite).
+#[derive(Clone, Copy)]
+pub(super) struct RecordFrameResolution {
+    // Off-screen scene render resolution; drives every scene pass + sub-pixel jitter.
+    pub width: u32,
+    pub height: u32,
+    // Drawable (swapchain) resolution; only the Composite pass uses it.
+    pub output_width: u32,
+    pub output_height: u32,
+}
+
 impl DxContext {
     // Drive a single frame through the render graph. `end_cmd` is the
     // outer "end" cmd list (composite + final timestamp + resolve +
@@ -78,28 +113,33 @@ impl DxContext {
     // them between the "start" outer cmd list (timestamp pre-init,
     // closed by the caller before record_frame) and the "end" outer
     // cmd list.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_frame(
         &self,
-        end_cmd: &ID3D12GraphicsCommandList,
-        back_buffer: &ID3D12Resource,
-        back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        frame_idx: usize,
-        // Off-screen scene render resolution (drives every scene pass + the
-        // sub-pixel jitter). Equals the output dims when upscaling is off.
-        width: u32,
-        height: u32,
-        // Drawable (swapchain) resolution; only the Composite pass uses it.
-        output_width: u32,
-        output_height: u32,
+        targets: RecordFrameTargets<'_>,
+        view: RecordFrameView<'_>,
+        resolution: RecordFrameResolution,
         world_hidden: bool,
     ) -> Result<Vec<ID3D12GraphicsCommandList>, String> {
+        let RecordFrameTargets {
+            cmd: end_cmd,
+            back_buffer,
+            back_buffer_rtv,
+            frame_idx,
+        } = targets;
+        let RecordFrameView {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            cam_pos,
+            text_calls,
+        } = view;
+        let RecordFrameResolution {
+            width,
+            height,
+            output_width,
+            output_height,
+        } = resolution;
         // Render-target aspect, shared by the main projection below and the
         // cull frustum.
         let aspect = if height == 0 {

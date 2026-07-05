@@ -106,7 +106,6 @@ impl KeyState {
     // Drain into an InputState snapshot, resetting one-shot flags. The mouse
     // fields (deltas, position, click, held-button, scroll) are owned by
     // `WindowState` and passed in; the keyboard one-shots tracked here are reset.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn take(
         &mut self,
         mouse_dx: f32,

@@ -86,23 +86,39 @@ fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .map_err(|e| format!("TAA render pass: {e}"))
 }
 
+// The Vulkan device handles needed to create and transition TAA GPU resources
+// (images, framebuffers, descriptor sets). Bundled because they always travel
+// together through `new` / `build_targets` / `rebuild` / the history-image
+// builder.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct TaaDeviceContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub pd: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// The scene inputs wired into the TAA resolve sets: the per-frame HDR resolve
+// images (initial scene binding) and the sampler used for all three bindings.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct TaaSceneInputs<'a> {
+    pub hdr_resolve_images: &'a [GpuImage],
+    pub sampler: vk::Sampler,
+}
+
 impl TaaResources {
-    // Build every TAA resource. `hdr_resolve_images` feed the per-frame TAA
-    // resolve sets as the initial scene input; the velocity binding is
+    // Build every TAA resource. `inputs.hdr_resolve_images` feed the per-frame
+    // TAA resolve sets as the initial scene input; the velocity binding is
     // re-pointed at the unified pre-pass per-frame views by the caller.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &TaaDeviceContext,
         frames: usize,
         extent: vk::Extent2D,
-        hdr_resolve_images: &[GpuImage],
-        sampler: vk::Sampler,
+        inputs: &TaaSceneInputs,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = ctx.device;
         let taa_render_pass = create_taa_render_pass(device)?;
 
         // set 0 for the TAA resolve: scene / velocity / history samplers.
@@ -178,24 +194,20 @@ impl TaaResources {
             taa_sets: Vec::new(),
             taa_frame: 0,
         };
-        taa.build_targets(instance, device, pd, command_pool, queue, extent, frames)?;
-        taa.wire_sets(device, hdr_resolve_images, sampler);
+        taa.build_targets(ctx, extent, frames)?;
+        taa.wire_sets(device, inputs.hdr_resolve_images, inputs.sampler);
         Ok(taa)
     }
 
     // (Re)build the resolution-dependent targets + framebuffers. Allocates the
     // descriptor sets from the (reset) pool; the caller then calls `wire_sets`.
-    #[allow(clippy::too_many_arguments)]
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &TaaDeviceContext,
         extent: vk::Extent2D,
         frames: usize,
     ) -> Result<(), String> {
+        let device = ctx.device;
         // The history ring is at least two images deep even with a single
         // frame in flight, so the TAA pass never samples the slot it is
         // writing (a same-image read+write is a validation error). With
@@ -204,11 +216,7 @@ impl TaaResources {
         let n_out = frames.max(2);
         for _ in 0..n_out {
             self.taa_out_images.push(create_taa_history_image(
-                instance,
-                device,
-                pd,
-                command_pool,
-                queue,
+                ctx,
                 extent.width,
                 extent.height,
                 HDR_FORMAT,
@@ -357,22 +365,17 @@ impl TaaResources {
     // Rebuild the resolution-dependent targets at a new swapchain extent and
     // re-wire all descriptor sets. The caller (`rebuild_swapchain`) has
     // already idled the device.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &TaaDeviceContext,
         extent: vk::Extent2D,
         frames: usize,
-        hdr_resolve_images: &[GpuImage],
-        sampler: vk::Sampler,
+        inputs: &TaaSceneInputs,
     ) -> Result<(), String> {
+        let device = ctx.device;
         self.destroy_targets(device);
-        self.build_targets(instance, device, pd, command_pool, queue, extent, frames)?;
-        self.wire_sets(device, hdr_resolve_images, sampler);
+        self.build_targets(ctx, extent, frames)?;
+        self.wire_sets(device, inputs.hdr_resolve_images, inputs.sampler);
         // Stale history cannot be reprojected onto the new resolution.
         self.taa_frame = 0;
         Ok(())
@@ -641,28 +644,34 @@ fn create_taa_pipeline(
 // image usable as both a render target and a sampled texture. Pre-transitioned
 // to `SHADER_READ_ONLY_OPTIMAL` so the first frame's TAA resolve can bind a
 // neighbouring slot as history before that slot has ever been rendered to.
-#[allow(clippy::too_many_arguments)]
 fn create_taa_history_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &TaaDeviceContext,
     width: u32,
     height: u32,
     format: vk::Format,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+    let &TaaDeviceContext {
         instance,
         device,
-        physical_device,
-        width,
-        height,
-        format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        pd: physical_device,
+        command_pool,
+        queue,
+    } = ctx;
+    let (image, memory) = create_image(
+        &super::super::texture::GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &super::super::texture::ImageSpec {
+            width,
+            height,
+            format,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(

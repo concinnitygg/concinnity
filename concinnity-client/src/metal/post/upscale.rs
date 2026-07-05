@@ -12,7 +12,6 @@
 // vectors. The existing projection jitter still runs: the scaler consumes
 // its sub-pixel offset.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

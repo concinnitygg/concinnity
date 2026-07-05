@@ -18,18 +18,17 @@
 
 use std::marker::PhantomData;
 
-// Marker for a backend context that may be shared, read-only, across the
-// parallel-encode worker fan-out. Implementing this is an unsafe claim that
-// concurrent `&Self` access during command recording is sound: the graphics API
-// allows shared read of device-derived resources, and every interior-mutable
-// field reachable during encode is either atomic or hoisted out of the fan-out
-// before it begins. Each backend's impl carries that audit (see the module docs
-// in each `*/parallel_encoder.rs`).
-//
-// The safety contract lives in the `//` comments above rather than a `///`
-// `# Safety` section because this crate does not use rustdoc outside the asset
-// API; the lint that wants the rustdoc form is suppressed accordingly.
-#[allow(clippy::missing_safety_doc)]
+/// Marker for a backend context that may be shared, read-only, across the
+/// parallel-encode worker fan-out.
+///
+/// # Safety
+///
+/// Implementing this is a claim that concurrent `&Self` access during command
+/// recording is sound: the graphics API allows shared read of device-derived
+/// resources, and every interior-mutable field reachable during encode is
+/// either atomic or hoisted out of the fan-out before it begins. Each backend's
+/// impl carries that audit (see the module docs in each
+/// `*/parallel_encoder.rs`).
 pub(crate) unsafe trait ParallelEncodeCtx {}
 
 // A handle to a `&'a T` borrow that is Send + Sync when `T: ParallelEncodeCtx`.

@@ -975,32 +975,67 @@ fn scratch_alignment(instance: &ash::Instance, pd: vk::PhysicalDevice) -> u64 {
     (as_props.min_acceleration_structure_scratch_offset_alignment as u64).max(1)
 }
 
+// The Vulkan device handles every acceleration-structure build reads from. `pd`
+// is Copy; `instance` / `device` are borrowed. Shared by the one-shot
+// `build_rt_accel` and the per-frame rebuild methods so they thread one context
+// rather than three loose handles.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RtDeviceCtx<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) pd: vk::PhysicalDevice,
+}
+
+// The scene geometry + bindless-pool sizing `build_rt_accel` bakes into the
+// initial BVH: the shared static vertex / index buffers, the participating draw
+// objects + instanced clusters, and the pool counts the geometry-table indices
+// offset against. Borrowed for the duration of the build.
+pub(in crate::vulkan) struct RtSceneGeometry<'a> {
+    // The shared static vertex buffer the BLAS reads positions from.
+    pub(in crate::vulkan) vertex_buffer: vk::Buffer,
+    // The shared static u32 index buffer the BLAS reads triangles from.
+    pub(in crate::vulkan) index_buffer: vk::Buffer,
+    // Every draw object; the resident, real-triangle ones participate.
+    pub(in crate::vulkan) draw_objects: &'a [DrawObject],
+    // Every instanced cluster; the non-empty, real-triangle ones participate.
+    pub(in crate::vulkan) clusters: &'a [InstancedCluster],
+    // The bindless albedo-pool length (cluster + object normal indices offset
+    // past it).
+    pub(in crate::vulkan) albedo_count: usize,
+    // The bindless normal-map-pool length (used to clamp normal indices).
+    pub(in crate::vulkan) normal_count: usize,
+    // The shared vertex buffer's vertex count (used to bound each geometry's
+    // `max_vertex`).
+    pub(in crate::vulkan) total_vertices: usize,
+}
+
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
 // buffer (submitted and fence-waited so the structures are ready before the
 // first frame traces them). Returns `Ok(None)` when there is no resident
 // triangle geometry to trace: the caller then leaves RT disabled and falls back
 // to SSR.
-//
-// `albedo_count` is the bindless albedo-pool length (cluster + object normal
-// indices offset past it); `total_vertices` is the shared vertex buffer's vertex
-// count (used to bound each geometry's `max_vertex`).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_rt_accel(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+    ctx: RtDeviceCtx,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
-    vertex_buffer: vk::Buffer,
-    index_buffer: vk::Buffer,
-    draw_objects: &[DrawObject],
-    clusters: &[InstancedCluster],
-    albedo_count: usize,
-    normal_count: usize,
-    total_vertices: usize,
+    geometry: RtSceneGeometry,
     frames_in_flight: usize,
     hot_reload: bool,
 ) -> Result<Option<RtAccelData>, String> {
+    let RtDeviceCtx {
+        instance,
+        device,
+        pd,
+    } = ctx;
+    let RtSceneGeometry {
+        vertex_buffer,
+        index_buffer,
+        draw_objects,
+        clusters,
+        albedo_count,
+        normal_count,
+        total_vertices,
+    } = geometry;
     let as_loader = ash::khr::acceleration_structure::Device::new(instance, device);
     let last_tex = albedo_count.saturating_sub(1);
     let last_nm = normal_count.saturating_sub(1);
@@ -1305,6 +1340,23 @@ pub(super) fn build_rt_accel(
     }))
 }
 
+// The rebuild policy for one dynamic update: the mode gate plus whether the
+// participating draw set changed since the last update.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RtRebuildPolicy {
+    pub mode: RtDynamicMode,
+    pub topology_dirty: bool,
+}
+
+// This frame's skinned pose inputs for `rebuild_skinned`: the posed world
+// matrices, the shared skinned RT inputs, and the visible (draw-index, object)
+// pairs to re-skin.
+struct SkinnedPoseInputs<'a> {
+    current: &'a [[[f32; 4]; 4]],
+    skinned: &'a SkinnedRtInputs<'a>,
+    objects: &'a [(usize, &'a SkinnedDrawObject)],
+}
+
 impl RtAccelData {
     // Per-frame dynamic update, recorded onto `cmd` (the frame's "start" command
     // buffer, submitted before every per-pass trace on the single graphics
@@ -1318,19 +1370,24 @@ impl RtAccelData {
     // BLAS head is refreshed (`refresh_topology`) before the transform path, so
     // the new/removed geometry enters/leaves the BVH instead of being ignored (the
     // `Auto` dirty check only watches transforms of the prior set).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn dynamic_update(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
+        ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
-        mode: RtDynamicMode,
+        policy: RtRebuildPolicy,
         frame_idx: usize,
         skinned: Option<SkinnedRtInputs>,
-        topology_dirty: bool,
     ) {
+        let RtRebuildPolicy {
+            mode,
+            topology_dirty,
+        } = policy;
+        let RtDeviceCtx {
+            instance,
+            device,
+            pd,
+        } = ctx;
         self.frame_counter += 1;
         let now = self.frame_counter;
         // Free any retired resources whose frames-in-flight window has elapsed.
@@ -1391,14 +1448,14 @@ impl RtAccelData {
                 return;
             };
             if let Err(e) = self.rebuild_skinned(
-                instance,
-                device,
-                pd,
+                ctx,
                 cmd,
                 draw_objects,
-                &current,
-                &s,
-                &skinned_objects,
+                SkinnedPoseInputs {
+                    current: &current,
+                    skinned: &s,
+                    objects: &skinned_objects,
+                },
                 frame_idx,
             ) {
                 tracing::warn!("RT skinned rebuild failed (keeping live BVH): {e}");
@@ -1433,7 +1490,7 @@ impl RtAccelData {
             return;
         }
 
-        if let Err(e) = self.rebuild_tlas(instance, device, pd, cmd, draw_objects, &current, now) {
+        if let Err(e) = self.rebuild_tlas(ctx, cmd, draw_objects, &current, now) {
             tracing::warn!("RT dynamic TLAS rebuild failed (keeping live BVH): {e}");
         }
     }
@@ -1823,17 +1880,19 @@ impl RtAccelData {
     // Rebuild the TLAS + geometry table from `current` transforms, recycling the
     // next `static_ring` slot's buffers in place, and record the build onto `cmd`.
     // The BLAS are kept (rigid transforms leave object-space geometry unchanged).
-    #[allow(clippy::too_many_arguments)]
     fn rebuild_tlas(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
+        ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         current: &[[[f32; 4]; 4]],
         now: u64,
     ) -> Result<(), String> {
+        let RtDeviceCtx {
+            instance,
+            device,
+            pd,
+        } = ctx;
         // Freshly-transformed draw-object instances, then the cluster instances
         // re-appended verbatim. The geometry table mirrors this order.
         let mut instances: Vec<vk::AccelerationStructureInstanceKHR> =
@@ -1987,19 +2046,24 @@ impl RtAccelData {
     // (COMPUTE write -> AS-build + FRAGMENT read), then the BLAS/TLAS build (reads
     // it). The start buffer is submitted before every per-pass trace, so build ->
     // trace is ordered by submission too.
-    #[allow(clippy::too_many_arguments)]
     fn rebuild_skinned(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
+        ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
-        current: &[[[f32; 4]; 4]],
-        skinned: &SkinnedRtInputs,
-        skinned_objects: &[(usize, &SkinnedDrawObject)],
+        pose: SkinnedPoseInputs,
         frame_idx: usize,
     ) -> Result<(), String> {
+        let SkinnedPoseInputs {
+            current,
+            skinned,
+            objects: skinned_objects,
+        } = pose;
+        let RtDeviceCtx {
+            instance,
+            device,
+            pd,
+        } = ctx;
         let skin = self
             .skin
             .as_ref()

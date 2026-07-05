@@ -212,16 +212,20 @@ fn create_gi_target(
     height: u32,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width,
-        height,
-        HDR_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format: HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
     Ok(GpuImage {
@@ -356,23 +360,48 @@ pub(in crate::vulkan) fn rebuild_ssgi_pipelines(
     Ok(RebuiltSsgiPipelines { gather, composite })
 }
 
+// The Vulkan device handles the SSGI resources are built and rebuilt against.
+// These three always travel together, so they ride as one bundle through `new`
+// and `rebuild`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct SsgiDevice<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+}
+
+// The image views `SsgiResources::new` wires its descriptor sets + framebuffers
+// against. `hdr_resolve_views` feeds the per-frame gather scene input + the
+// composite framebuffers; `gbuffer_view` is the SSR pre-pass G-buffer (view
+// normal + linear depth) every set samples.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct SsgiInputViews<'a> {
+    pub hdr_resolve_views: &'a [vk::ImageView],
+    pub gbuffer_view: vk::ImageView,
+}
+
 impl SsgiResources {
-    // Build every SSGI resource. `hdr_resolve_views` feeds the per-frame gather
-    // scene input + the composite framebuffers; `gbuffer_view` is the SSR
-    // pre-pass G-buffer (view normal + linear depth) every set samples.
-    #[allow(clippy::too_many_arguments)]
+    // Build every SSGI resource. `views.hdr_resolve_views` feeds the per-frame
+    // gather scene input + the composite framebuffers; `views.gbuffer_view` is
+    // the SSR pre-pass G-buffer (view normal + linear depth) every set samples.
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        dev: SsgiDevice<'_>,
         width: u32,
         height: u32,
         frames: usize,
         settings: SsgiSettings,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_view: vk::ImageView,
+        views: SsgiInputViews<'_>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let SsgiDevice {
+            instance,
+            device,
+            physical_device,
+        } = dev;
+        let SsgiInputViews {
+            hdr_resolve_views,
+            gbuffer_view,
+        } = views;
         let gather_render_pass = create_gather_render_pass(device)?;
         let composite_render_pass = create_composite_render_pass(device)?;
 
@@ -649,18 +678,20 @@ impl SsgiResources {
 
     // Rebuild the resolution-dependent targets at a new swapchain extent and
     // re-wire the descriptor sets. The caller has already idled the device and
-    // rebuilt the SSR pre-pass, so `gbuffer_view` is current.
-    #[allow(clippy::too_many_arguments)]
+    // rebuilt the SSR pre-pass, so `gbuffer_views` is current.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        dev: SsgiDevice<'_>,
         width: u32,
         height: u32,
         hdr_resolve_views: &[vk::ImageView],
         gbuffer_views: &[vk::ImageView],
     ) -> Result<(), String> {
+        let SsgiDevice {
+            instance,
+            device,
+            physical_device,
+        } = dev;
         self.destroy_targets(device);
         self.build_targets(
             instance,

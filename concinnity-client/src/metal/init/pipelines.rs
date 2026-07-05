@@ -7,7 +7,6 @@
 //   * The optional instanced pipeline.
 //   * The shared depth-stencil state used by main + shadow passes.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

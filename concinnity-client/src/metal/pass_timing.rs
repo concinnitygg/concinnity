@@ -29,8 +29,6 @@
 // by 1000 for microseconds. A proper `sampleTimestamps:gpuTimestamp:`
 // calibration would be needed for a future Intel Mac path.
 
-#![allow(clippy::incompatible_msrv)]
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSRange, NSString};

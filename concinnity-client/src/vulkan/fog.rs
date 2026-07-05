@@ -29,7 +29,8 @@ use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use super::context::VkContext;
 use super::pipeline::{compile_glsl, inject_define, spv_module};
 use super::texture::{
-    create_buffer, find_memory_type, one_shot_submit, transition_image_layout_range,
+    LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
+    transition_image_layout_range,
 };
 
 // GLSL sources, shared with the host so the hot-reload pass can pick them up
@@ -102,32 +103,71 @@ pub(in crate::vulkan) struct FogResources {
     pub(in crate::vulkan) volume_sampler: vk::Sampler,
 }
 
+// The Vulkan device handles `FogResources::new` needs to create its GPU
+// resources and run the one-shot volume-layout transition. `command_pool` /
+// `queue` are used once to move the volume into `SHADER_READ_ONLY_OPTIMAL`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FogDeviceContext<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
+    pub(in crate::vulkan) command_pool: vk::CommandPool,
+    pub(in crate::vulkan) queue: vk::Queue,
+}
+
+// The per-frame render targets + config the fog pipeline binds against: the
+// resolved HDR colour views (framebuffer attachments), the scene depth views,
+// the shared depth sampler, and the frame count / MSAA / format / extent.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FogFrameTargets<'a> {
+    pub(in crate::vulkan) frames: usize,
+    pub(in crate::vulkan) msaa: bool,
+    pub(in crate::vulkan) hdr_format: vk::Format,
+    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) sampler: vk::Sampler,
+    pub(in crate::vulkan) extent: vk::Extent2D,
+}
+
+// The shared CSM resources the froxel kernel taps per slab.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FogShadowResources {
+    pub(in crate::vulkan) ubo: vk::Buffer,
+    pub(in crate::vulkan) map_view: vk::ImageView,
+    pub(in crate::vulkan) sampler: vk::Sampler,
+}
+
 impl FogResources {
     // Build the fog render pipeline + the froxel compute pipeline + their
     // dependent resources. Called from `VkContext::new` only when the world
     // declared a `VolumetricFog` and `FogSettings::resolve` returned a value.
-    // `shadow_ubo` / `shadow_map_view` / `shadow_sampler` are the shared CSM
-    // resources the froxel kernel taps per slab; `command_pool` / `queue`
-    // are used once to move the volume into `SHADER_READ_ONLY_OPTIMAL`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        frames: usize,
-        msaa: bool,
-        hdr_format: vk::Format,
-        hdr_resolve_views: &[vk::ImageView],
-        depth_views: &[vk::ImageView],
-        sampler: vk::Sampler,
-        shadow_ubo: vk::Buffer,
-        shadow_map_view: vk::ImageView,
-        shadow_sampler: vk::Sampler,
-        extent: vk::Extent2D,
+        ctx: FogDeviceContext,
+        targets: FogFrameTargets,
+        shadow: FogShadowResources,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let FogDeviceContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let FogFrameTargets {
+            frames,
+            msaa,
+            hdr_format,
+            hdr_resolve_views,
+            depth_views,
+            sampler,
+            extent,
+        } = targets;
+        let FogShadowResources {
+            ubo: shadow_ubo,
+            map_view: shadow_map_view,
+            sampler: shadow_sampler,
+        } = shadow;
         let render_pass = create_fog_render_pass(device, hdr_format)?;
         let view_set_layout = create_fog_set_layout(device)?;
         let pipeline_layout = create_fog_pipeline_layout(device, view_set_layout)?;
@@ -151,13 +191,17 @@ impl FogResources {
                 device,
                 cmd,
                 volume_image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-                0,
-                1,
-                0,
-                1,
+                LayoutTransition {
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                },
+                SubresourceRange {
+                    base_layer: 0,
+                    layer_count: 1,
+                    base_mip: 0,
+                    mip_count: 1,
+                },
             );
         })?;
         let volume_storage_view = create_volume_view(device, volume_image)?;
@@ -192,24 +236,28 @@ impl FogResources {
             write_view_set(
                 device,
                 set,
-                params_ubos[i],
-                depth_views[i.min(last_depth)],
-                sampler,
-                froxel_ubos[i],
-                volume_sampled_view,
-                volume_sampler,
+                FogViewBindings {
+                    params_ubo: params_ubos[i],
+                    depth_view: depth_views[i.min(last_depth)],
+                    depth_sampler: sampler,
+                    froxel_ubo: froxel_ubos[i],
+                    volume_view: volume_sampled_view,
+                    volume_sampler,
+                },
             );
         }
         for (i, &set) in froxel_sets.iter().enumerate() {
             write_froxel_set(
                 device,
                 set,
-                params_ubos[i],
-                froxel_ubos[i],
-                shadow_ubo,
-                shadow_map_view,
-                shadow_sampler,
-                volume_storage_view,
+                FogFroxelBindings {
+                    params_ubo: params_ubos[i],
+                    froxel_ubo: froxel_ubos[i],
+                    shadow_ubo,
+                    shadow_map_view,
+                    shadow_sampler,
+                    volume_storage_view,
+                },
             );
         }
 
@@ -556,17 +604,27 @@ fn alloc_descriptor_sets(
         .map_err(|e| format!("fog descriptor sets: {e}"))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_view_set(
-    device: &Device,
-    set: vk::DescriptorSet,
+// The four bindings of a per-frame fog-render view set: the FogParams +
+// FogFroxelParams UBOs, the scene depth sampler, and the froxel volume sampler.
+#[derive(Clone, Copy)]
+struct FogViewBindings {
     params_ubo: vk::Buffer,
     depth_view: vk::ImageView,
     depth_sampler: vk::Sampler,
     froxel_ubo: vk::Buffer,
     volume_view: vk::ImageView,
     volume_sampler: vk::Sampler,
-) {
+}
+
+fn write_view_set(device: &Device, set: vk::DescriptorSet, bindings: FogViewBindings) {
+    let FogViewBindings {
+        params_ubo,
+        depth_view,
+        depth_sampler,
+        froxel_ubo,
+        volume_view,
+        volume_sampler,
+    } = bindings;
     let params_info = vk::DescriptorBufferInfo::default()
         .buffer(params_ubo)
         .offset(0)
@@ -608,17 +666,28 @@ fn write_view_set(
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_froxel_set(
-    device: &Device,
-    set: vk::DescriptorSet,
+// The five bindings of a per-frame froxel compute set: the FogParams,
+// FogFroxelParams, and ShadowUniforms UBOs, the CSM shadow map, and the froxel
+// volume storage image.
+#[derive(Clone, Copy)]
+struct FogFroxelBindings {
     params_ubo: vk::Buffer,
     froxel_ubo: vk::Buffer,
     shadow_ubo: vk::Buffer,
     shadow_map_view: vk::ImageView,
     shadow_sampler: vk::Sampler,
     volume_storage_view: vk::ImageView,
-) {
+}
+
+fn write_froxel_set(device: &Device, set: vk::DescriptorSet, bindings: FogFroxelBindings) {
+    let FogFroxelBindings {
+        params_ubo,
+        froxel_ubo,
+        shadow_ubo,
+        shadow_map_view,
+        shadow_sampler,
+        volume_storage_view,
+    } = bindings;
     let params_info = vk::DescriptorBufferInfo::default()
         .buffer(params_ubo)
         .offset(0)

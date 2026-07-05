@@ -155,10 +155,12 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
             // One click region over the whole control column opens the list.
             region(
                 &format!("{}_open", name),
-                ctrl_x,
-                s.y,
-                right - ctrl_x,
-                s.height,
+                Rect {
+                    x: ctrl_x,
+                    y: s.y,
+                    width: right - ctrl_x,
+                    height: s.height,
+                },
                 &value_name,
                 s,
                 &format!("setting:{}:open", s.setting),
@@ -221,10 +223,12 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
         // Prev click region (the `<` button).
         region(
             &format!("{}_prev", name),
-            ctrl_x,
-            s.y,
-            sw,
-            s.height,
+            Rect {
+                x: ctrl_x,
+                y: s.y,
+                width: sw,
+                height: s.height,
+            },
             &value_name,
             s,
             &format!("setting:{}:prev", s.setting),
@@ -232,10 +236,12 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
         // Next click region (value + `>`).
         region(
             &format!("{}_next", name),
-            next_x,
-            s.y,
-            right - next_x,
-            s.height,
+            Rect {
+                x: next_x,
+                y: s.y,
+                width: right - next_x,
+                height: s.height,
+            },
             &value_name,
             s,
             &format!("setting:{}:next", s.setting),
@@ -243,14 +249,19 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
     ]
 }
 
-// Build a HitRegion value scoped to a settings row.
-#[allow(clippy::too_many_arguments)]
-fn region(
-    name: &str,
+// A settings-row rectangle in overlay coordinates.
+#[derive(Clone, Copy)]
+struct Rect {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+}
+
+// Build a HitRegion value scoped to a settings row.
+fn region(
+    name: &str,
+    rect: Rect,
     value_label: &str,
     s: &OptionSelect,
     action: &str,
@@ -259,10 +270,10 @@ fn region(
         "name": name,
         "type": "HitRegion",
         "args": {
-            "x": x,
-            "y": y,
-            "width": width,
-            "height": height,
+            "x": rect.x,
+            "y": rect.y,
+            "width": rect.width,
+            "height": rect.height,
             "label": value_label,
             "hover_color": s.hover_color,
             "hover_scale": s.hover_scale,

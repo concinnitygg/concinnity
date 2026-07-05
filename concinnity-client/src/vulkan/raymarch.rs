@@ -36,8 +36,8 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{compile_glsl, shader_source, spv_module};
 use super::render_pass::create_main_render_pass_two_pass;
 use super::texture::{
-    GpuImage, create_buffer, create_image, create_image_view, one_shot_submit,
-    transition_image_layout_range,
+    GpuAllocContext, GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_buffer,
+    create_image, create_image_view, one_shot_submit, transition_image_layout_range,
 };
 
 // Engine-shipped GLSL: the proxy vertex shader (standalone) and the helpers +
@@ -585,16 +585,20 @@ fn alloc_sets(
         .map_err(|e| format!("raymarch descriptor sets: {e}"))
 }
 
-// Write every binding of one per-frame view set. The shadow / IBL / light /
-// shadow-UBO bindings are shared engine resources; the snapshot is the
-// per-frame-independent scene tap (its contents are refreshed by the encoder).
-#[allow(clippy::too_many_arguments)]
-fn write_view_set(
-    device: &Device,
-    set: vk::DescriptorSet,
+// The three UBOs bound into one per-frame view set: the per-frame RaymarchView,
+// the shared lights, and the shared shadow VPs.
+#[derive(Clone, Copy)]
+struct RaymarchViewSetBuffers {
     view_ubo: vk::Buffer,
     light_ubo: vk::Buffer,
     shadow_ubo: vk::Buffer,
+}
+
+// The image/sampler pairs bound into one per-frame view set: the CSM shadow
+// map, the IBL irradiance + prefilter cubes (sharing the cube sampler), and the
+// per-frame-independent scene snapshot tap.
+#[derive(Clone, Copy)]
+struct RaymarchViewSetTextures {
     shadow_map_view: vk::ImageView,
     shadow_sampler: vk::Sampler,
     irradiance_view: vk::ImageView,
@@ -602,7 +606,31 @@ fn write_view_set(
     cube_sampler: vk::Sampler,
     snapshot_view: vk::ImageView,
     scene_sampler: vk::Sampler,
+}
+
+// Write every binding of one per-frame view set. The shadow / IBL / light /
+// shadow-UBO bindings are shared engine resources; the snapshot is the
+// per-frame-independent scene tap (its contents are refreshed by the encoder).
+fn write_view_set(
+    device: &Device,
+    set: vk::DescriptorSet,
+    buffers: RaymarchViewSetBuffers,
+    textures: RaymarchViewSetTextures,
 ) {
+    let RaymarchViewSetBuffers {
+        view_ubo,
+        light_ubo,
+        shadow_ubo,
+    } = buffers;
+    let RaymarchViewSetTextures {
+        shadow_map_view,
+        shadow_sampler,
+        irradiance_view,
+        prefilter_view,
+        cube_sampler,
+        snapshot_view,
+        scene_sampler,
+    } = textures;
     let view_info = vk::DescriptorBufferInfo::default()
         .buffer(view_ubo)
         .offset(0)
@@ -967,29 +995,37 @@ fn create_snapshot(
     height: u32,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width.max(1),
-        height.max(1),
-        HDR_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width: width.max(1),
+            height: height.max(1),
+            format: HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
             device,
             cmd,
             image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            1,
-            0,
-            1,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 1,
+                base_mip: 0,
+                mip_count: 1,
+            },
         );
     })?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
@@ -1001,6 +1037,44 @@ fn create_snapshot(
     })
 }
 
+// Vulkan device/instance handles used to create + rebuild raymarch GPU
+// resources. Shared by `try_new` and `rebuild`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RaymarchDeviceContext<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
+    pub(in crate::vulkan) command_pool: vk::CommandPool,
+    pub(in crate::vulkan) queue: vk::Queue,
+}
+
+// Render-target configuration for the raymarch pass: the per-frame ring depth,
+// the MSAA sample count, and the render dims the snapshot is sized to.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RaymarchTargetConfig {
+    pub(in crate::vulkan) frames: usize,
+    pub(in crate::vulkan) msaa_samples: vk::SampleCountFlags,
+    pub(in crate::vulkan) width: u32,
+    pub(in crate::vulkan) height: u32,
+}
+
+// Shared engine resources bound into the view sets (and the shadow view sets):
+// the CSM shadow map, the IBL cubes + samplers, the scene-snapshot sampler, the
+// light + shadow UBOs, and the depth-only shadow render pass the shadow-caster
+// pipelines target.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RaymarchSharedBindings {
+    pub(in crate::vulkan) shadow_map_view: vk::ImageView,
+    pub(in crate::vulkan) shadow_sampler: vk::Sampler,
+    pub(in crate::vulkan) irradiance_view: vk::ImageView,
+    pub(in crate::vulkan) prefilter_view: vk::ImageView,
+    pub(in crate::vulkan) cube_sampler: vk::Sampler,
+    pub(in crate::vulkan) linear_sampler: vk::Sampler,
+    pub(in crate::vulkan) light_ubo: vk::Buffer,
+    pub(in crate::vulkan) shadow_ubo: vk::Buffer,
+    pub(in crate::vulkan) shadow_render_pass: vk::RenderPass,
+}
+
 impl RaymarchResources {
     // Build every raymarch resource + the per-volume records. `sdf_volumes` is
     // the drained-and-payload-paired list from `graphics_system::init`; each
@@ -1008,29 +1082,37 @@ impl RaymarchResources {
     // anything else (Metal-first `.metal` / DirectX `.hlsl`) is skipped with a
     // logged warning. Returns `Ok(None)` when no volume survived the filter so
     // the engine omits the pass.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn try_new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        frames: usize,
-        msaa_samples: vk::SampleCountFlags,
-        width: u32,
-        height: u32,
-        shadow_map_view: vk::ImageView,
-        shadow_sampler: vk::Sampler,
-        irradiance_view: vk::ImageView,
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-        linear_sampler: vk::Sampler,
-        light_ubo: vk::Buffer,
-        shadow_ubo: vk::Buffer,
-        shadow_render_pass: vk::RenderPass,
+        ctx: RaymarchDeviceContext,
+        target: RaymarchTargetConfig,
+        bindings: RaymarchSharedBindings,
         sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
         hot_reload: bool,
     ) -> Result<Option<Self>, String> {
+        let RaymarchDeviceContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let RaymarchTargetConfig {
+            frames,
+            msaa_samples,
+            width,
+            height,
+        } = target;
+        let RaymarchSharedBindings {
+            shadow_map_view,
+            shadow_sampler,
+            irradiance_view,
+            prefilter_view,
+            cube_sampler,
+            linear_sampler,
+            light_ubo,
+            shadow_ubo,
+            shadow_render_pass,
+        } = bindings;
         // Filter `.glsl` volumes; Metal/DirectX-first SDFs get dropped with a
         // warning so the rest of the world keeps rendering.
         let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes
@@ -1123,16 +1205,20 @@ impl RaymarchResources {
             write_view_set(
                 device,
                 set,
-                view_ubos[i],
-                light_ubo,
-                shadow_ubo,
-                shadow_map_view,
-                shadow_sampler,
-                irradiance_view,
-                prefilter_view,
-                cube_sampler,
-                snapshot.view,
-                linear_sampler,
+                RaymarchViewSetBuffers {
+                    view_ubo: view_ubos[i],
+                    light_ubo,
+                    shadow_ubo,
+                },
+                RaymarchViewSetTextures {
+                    shadow_map_view,
+                    shadow_sampler,
+                    irradiance_view,
+                    prefilter_view,
+                    cube_sampler,
+                    snapshot_view: snapshot.view,
+                    scene_sampler: linear_sampler,
+                },
             );
         }
 
@@ -1320,17 +1406,19 @@ impl RaymarchResources {
     // Recreate the scene snapshot at new render dims + re-point the `scene_color`
     // binding of every view set. Called from the swapchain-resize handler; the
     // pipelines, layouts, UBOs, cube buffers, and render passes all survive.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: RaymarchDeviceContext,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
+        let RaymarchDeviceContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
         let old = std::mem::replace(
             &mut self.snapshot,
             create_snapshot(

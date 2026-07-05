@@ -325,9 +325,11 @@ fn expand_one(
         &items,
         menu,
         &font_name,
-        win_w,
-        win_h,
-        font_px,
+        MenuMetrics {
+            win_w,
+            win_h,
+            font_px,
+        },
         menu.initial,
     ));
 
@@ -519,16 +521,32 @@ fn emit_settings_tab(
         let (mut elements, group): (Vec<String>, i32) = match *row {
             BodyRow::Option(setting, label, group) => {
                 let name = format!("{}_opt_{}", view, setting);
-                out.push(option_select_row(
-                    &name, setting, label, font, content_x, base_y, content_w, row_scale, style,
-                ));
+                out.push(option_select_row(&SettingsRow {
+                    name: &name,
+                    setting,
+                    label,
+                    font,
+                    x: content_x,
+                    y: base_y,
+                    width: content_w,
+                    scale: row_scale,
+                    style,
+                }));
                 (super::option_select::element_names(&name, setting), group)
             }
             BodyRow::Slider(setting, label, group) => {
                 let name = format!("{}_sld_{}", view, setting);
-                out.push(slider_row(
-                    &name, setting, label, font, content_x, base_y, content_w, row_scale, style,
-                ));
+                out.push(slider_row(&SettingsRow {
+                    name: &name,
+                    setting,
+                    label,
+                    font,
+                    x: content_x,
+                    y: base_y,
+                    width: content_w,
+                    scale: row_scale,
+                    style,
+                }));
                 (super::slider::element_names(&name), group)
             }
             BodyRow::Key(action_label, key, idx, group) => {
@@ -843,19 +861,35 @@ fn settings_body_rows(active: &str, profile: SettingsProfile) -> (Vec<BodyRow>, 
     }
 }
 
-// Build an OptionSelect cycle-row asset for the settings body.
-#[allow(clippy::too_many_arguments)]
-fn option_select_row(
-    name: &str,
-    setting: &str,
-    label: &str,
-    font: &str,
+// A settings-body row: its element name, the setting it drives, display label,
+// font, position/size in overlay space, text scale, and the menu style it
+// inherits colors and row height from. Shared by the OptionSelect and Slider
+// row builders, which take the same inputs.
+struct SettingsRow<'a> {
+    name: &'a str,
+    setting: &'a str,
+    label: &'a str,
+    font: &'a str,
     x: f32,
     y: f32,
     width: f32,
     scale: f32,
-    style: &MainMenu,
-) -> serde_json::Value {
+    style: &'a MainMenu,
+}
+
+// Build an OptionSelect cycle-row asset for the settings body.
+fn option_select_row(row: &SettingsRow) -> serde_json::Value {
+    let &SettingsRow {
+        name,
+        setting,
+        label,
+        font,
+        x,
+        y,
+        width,
+        scale,
+        style,
+    } = row;
     serde_json::json!({
         "name": name,
         "type": "OptionSelect",
@@ -881,18 +915,18 @@ fn option_select_row(
 }
 
 // Build a Slider row asset for the settings body.
-#[allow(clippy::too_many_arguments)]
-fn slider_row(
-    name: &str,
-    setting: &str,
-    label: &str,
-    font: &str,
-    x: f32,
-    y: f32,
-    width: f32,
-    scale: f32,
-    style: &MainMenu,
-) -> serde_json::Value {
+fn slider_row(row: &SettingsRow) -> serde_json::Value {
+    let &SettingsRow {
+        name,
+        setting,
+        label,
+        font,
+        x,
+        y,
+        width,
+        scale,
+        style,
+    } = row;
     serde_json::json!({
         "name": name,
         "type": "Slider",
@@ -930,20 +964,30 @@ fn row_background(
     })
 }
 
+// Window dimensions and font pixel size used to lay out a menu view.
+#[derive(Clone, Copy)]
+struct MenuMetrics {
+    win_w: f32,
+    win_h: f32,
+    font_px: f32,
+}
+
 // Emit the assets for one menu layer: a View, an optional dim backdrop, an
 // optional heading, a TextLabel + HitRegion per item, and an optional cursor.
-#[allow(clippy::too_many_arguments)]
 fn emit_menu_view(
     view: &str,
     title: &str,
     items: &[(String, String)],
     style: &MainMenu,
     font: &str,
-    win_w: f32,
-    win_h: f32,
-    font_px: f32,
+    metrics: MenuMetrics,
     initial: bool,
 ) -> Vec<serde_json::Value> {
+    let MenuMetrics {
+        win_w,
+        win_h,
+        font_px,
+    } = metrics;
     let mut out = Vec::new();
 
     out.push(serde_json::json!({

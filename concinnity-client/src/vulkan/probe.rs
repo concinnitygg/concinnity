@@ -31,7 +31,8 @@ use super::hiz::CullHizParams;
 use super::probe_uniforms::{MAX_PROBES, ProbeSet, ProbeUniforms};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
-    GpuImage, create_buffer, create_image, create_image_view, upload_probe_prefilter_cube,
+    GpuAllocContext, GpuImage, ImageSpec, create_buffer, create_image, create_image_view,
+    upload_probe_prefilter_cube,
 };
 use crate::gfx::frustum::Frustum;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, ProbePlacement};
@@ -935,24 +936,29 @@ impl BakeResources {
         let device = &ctx.device;
         let instance = &ctx.instance;
         let pd = ctx.physical_device;
+        let alloc = GpuAllocContext {
+            instance,
+            device,
+            physical_device: pd,
+        };
         let msaa = ctx.msaa_samples != vk::SampleCountFlags::TYPE_1;
         let size = PROBE_FACE_SIZE;
 
         // Colour + depth (+ single-sample resolve when MSAA), then a framebuffer
         // compatible with `main_render_pass`.
         let (color_img, color_mem) = create_image(
-            instance,
-            device,
-            pd,
-            size,
-            size,
-            HDR_FORMAT,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ctx.msaa_samples,
+            &alloc,
+            &ImageSpec {
+                width: size,
+                height: size,
+                format: HDR_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::SAMPLED,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: ctx.msaa_samples,
+            },
         )?;
         let color_view =
             create_image_view(device, color_img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
@@ -963,16 +969,16 @@ impl BakeResources {
             aux_views: Vec::new(),
         };
         let (depth_img, depth_mem) = create_image(
-            instance,
-            device,
-            pd,
-            size,
-            size,
-            PROBE_DEPTH_FORMAT,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ctx.msaa_samples,
+            &alloc,
+            &ImageSpec {
+                width: size,
+                height: size,
+                format: PROBE_DEPTH_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: ctx.msaa_samples,
+            },
         )?;
         let depth_view = create_image_view(
             device,
@@ -988,18 +994,18 @@ impl BakeResources {
         };
         let resolve = if msaa {
             let (img, mem) = create_image(
-                instance,
-                device,
-                pd,
-                size,
-                size,
-                HDR_FORMAT,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::SAMPLED,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                vk::SampleCountFlags::TYPE_1,
+                &alloc,
+                &ImageSpec {
+                    width: size,
+                    height: size,
+                    format: HDR_FORMAT,
+                    tiling: vk::ImageTiling::OPTIMAL,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::SAMPLED,
+                    mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    samples: vk::SampleCountFlags::TYPE_1,
+                },
             )?;
             let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
             Some(GpuImage {

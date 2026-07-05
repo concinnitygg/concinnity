@@ -126,7 +126,7 @@ fn emit_graph_barriers(
         if let Some((before, after)) = d3d12_transition(
             target.class,
             target.resting,
-            op.from_state(),
+            op.source_state(),
             op.to_state(),
             op.read_stages(),
         ) {
@@ -135,6 +135,42 @@ fn emit_graph_barriers(
             }
         }
     }
+}
+
+// The back-buffer render target the composite pass writes: the resource (for its
+// RENDER_TARGET <-> PRESENT transitions) plus its RTV handle.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct CompositeRenderTarget<'a> {
+    pub back_buffer: &'a ID3D12Resource,
+    pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+}
+
+// Output (drawable) resolution the composite pass writes at. Under temporal
+// upscaling this differs from the scene render dimensions.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct CompositeResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+// Camera + viewport state for the bindless main pass.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct MainPassCamera<'a> {
+    // Render-target dimensions in pixels.
+    pub width: u32,
+    pub height: u32,
+    // Camera frustum for per-cluster culling and LOD selection.
+    pub frustum: &'a crate::gfx::frustum::Frustum,
+    // Camera world position.
+    pub cam_pos: [f32; 3],
+}
+
+// GPU virtual addresses of this frame's view / light / shadow constant buffers.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FrameGpuBuffers {
+    pub view_gva: u64,
+    pub light_gva: u64,
+    pub shadow_ubo_gva: u64,
 }
 
 // Per-frame params the executor threads into each pass's `encode_*`
@@ -392,8 +428,10 @@ impl DxContext {
             self.encode_composite_and_text(
                 params.cmd,
                 params.frame_idx,
-                params.back_buffer,
-                params.back_buffer_rtv,
+                CompositeRenderTarget {
+                    back_buffer: params.back_buffer,
+                    back_buffer_rtv: params.back_buffer_rtv,
+                },
                 params.text_calls,
                 params.scene_srv,
                 // Composite runs at drawable resolution; it samples the
@@ -401,8 +439,10 @@ impl DxContext {
                 // fullscreen triangle and writes the output-sized back
                 // buffer. Under upscaling this differs from the scene
                 // render dims in `params.width`/`height`.
-                params.output_width,
-                params.output_height,
+                CompositeResolution {
+                    width: params.output_width,
+                    height: params.output_height,
+                },
             )?;
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
@@ -629,13 +669,17 @@ impl DxContext {
                 self.encode_main_pass(
                     cmd,
                     params.frame_idx,
-                    params.width,
-                    params.height,
-                    params.view_gva,
-                    params.light_gva,
-                    params.shadow_ubo_gva,
-                    params.frustum,
-                    params.cam_pos,
+                    MainPassCamera {
+                        width: params.width,
+                        height: params.height,
+                        frustum: params.frustum,
+                        cam_pos: params.cam_pos,
+                    },
+                    FrameGpuBuffers {
+                        view_gva: params.view_gva,
+                        light_gva: params.light_gva,
+                        shadow_ubo_gva: params.shadow_ubo_gva,
+                    },
                     params.visible,
                     params.world_hidden,
                 );
@@ -771,9 +815,11 @@ impl DxContext {
                     params.frame_idx,
                     params.width,
                     params.height,
-                    params.view_gva,
-                    params.light_gva,
-                    params.shadow_ubo_gva,
+                    FrameGpuBuffers {
+                        view_gva: params.view_gva,
+                        light_gva: params.light_gva,
+                        shadow_ubo_gva: params.shadow_ubo_gva,
+                    },
                 );
             }
             PassId::Ssgi => {
@@ -808,11 +854,13 @@ impl DxContext {
                 self.encode_gbuffer_prepass(
                     cmd,
                     params.frame_idx,
-                    params.vp_mat,
-                    params.cur_vp,
+                    crate::directx::post::gbuffer::GbufferPrepassView {
+                        jittered_vp: params.vp_mat,
+                        cur_vp: params.cur_vp,
+                        frustum: params.frustum,
+                        cam_pos: params.cam_pos,
+                    },
                     params.visible,
-                    params.frustum,
-                    params.cam_pos,
                     self.taa.is_some(),
                 );
             }

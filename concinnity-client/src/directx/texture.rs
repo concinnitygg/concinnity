@@ -356,7 +356,6 @@ pub(super) fn write_rgba8_srv(
 // at the given heap slot. Used for resources that bind to a single slot
 // (text atlases, etc.). Per-object scene textures use `upload_texture_resource`
 // + `write_rgba8_srv` directly so one resource can feed multiple per-object slots.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn upload_texture(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
@@ -1152,19 +1151,53 @@ pub(super) fn upload_cubemap(
 // `irradiance_face` / `prefilter_face` are the mip-0 face sizes. `mip_bytes`
 // is one slice per mip in order 0..mip_count; `mip_count` must equal
 // `mip_bytes.len()`.
-#[allow(clippy::too_many_arguments)]
+// The DirectX device + command queue for a one-shot GPU upload.
+#[derive(Clone, Copy)]
+pub(super) struct GpuUploadContext<'a> {
+    pub device: &'a ID3D12Device,
+    pub queue: &'a ID3D12CommandQueue,
+}
+
+// The two IBL cubes for an EnvironmentMap upload: the irradiance cube and the
+// multi-mip prefiltered radiance cube (both RGBA32F).
+pub(super) struct EnvironmentMapPayload<'a> {
+    // Mip-0 face size of the irradiance cube.
+    pub irradiance_face: u32,
+    // RGBA32F irradiance cube bytes (6 faces).
+    pub irradiance_bytes: &'a [u8],
+    // Mip-0 face size of the prefilter cube.
+    pub prefilter_face: u32,
+    // One slice per prefilter mip, in order 0..mip_count.
+    pub mip_bytes: &'a [&'a [u8]],
+}
+
+// Descriptor heap slots for the irradiance + prefilter cube SRVs.
+#[derive(Clone, Copy)]
+pub(super) struct EnvironmentMapDescriptors {
+    pub irr_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub irr_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub pre_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub pre_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
 pub(super) fn upload_environment_map(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
-    irradiance_face: u32,
-    irradiance_bytes: &[u8],
-    prefilter_face: u32,
-    mip_bytes: &[&[u8]],
-    irr_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    irr_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pre_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pre_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    ctx: GpuUploadContext,
+    payload: EnvironmentMapPayload,
+    descriptors: EnvironmentMapDescriptors,
 ) -> Result<EnvironmentMapTextures, String> {
+    let GpuUploadContext { device, queue } = ctx;
+    let EnvironmentMapPayload {
+        irradiance_face,
+        irradiance_bytes,
+        prefilter_face,
+        mip_bytes,
+    } = payload;
+    let EnvironmentMapDescriptors {
+        irr_srv_cpu,
+        irr_srv_gpu,
+        pre_srv_cpu,
+        pre_srv_gpu,
+    } = descriptors;
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }

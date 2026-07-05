@@ -178,24 +178,38 @@ pub(in crate::vulkan) fn bloom_mip_count(width: u32, height: u32) -> u32 {
     levels.clamp(4, 6) as u32
 }
 
+// The shared Vulkan device + one-shot upload context threaded through the
+// bloom target allocators. Bundles the instance/device borrows with the
+// physical device, command pool, and queue used to create images and submit
+// the one-shot layout transitions.
+pub(in crate::vulkan) struct BloomDeviceContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
 // Create the bloom mip chain for an HDR target of `width`x`height`. `mips[i]`
 // has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel;
 // `mips[0]` is half-res. Each mip is a single-sample colour image usable as
 // both a render target and a sampled texture, and is pre-transitioned to
 // `SHADER_READ_ONLY_OPTIMAL` so the composite pass can bind it even when
 // bloom is disabled and the bloom passes never run.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn create_bloom_mips(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &BloomDeviceContext,
     width: u32,
     height: u32,
     format: vk::Format,
     mip0_override: Option<(vk::Image, vk::ImageView)>,
 ) -> Result<(Vec<GpuImage>, Vec<vk::Extent2D>), String> {
+    let &BloomDeviceContext {
+        instance,
+        device,
+        physical_device,
+        command_pool,
+        queue,
+    } = ctx;
     let full_w = width.max(1);
     let full_h = height.max(1);
     let count = bloom_mip_count(full_w, full_h);
@@ -221,16 +235,20 @@ pub(in crate::vulkan) fn create_bloom_mips(
             }
         } else {
             let (image, memory) = create_image(
-                instance,
-                device,
-                physical_device,
-                mw,
-                mh,
-                format,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                vk::SampleCountFlags::TYPE_1,
+                &GpuAllocContext {
+                    instance,
+                    device,
+                    physical_device,
+                },
+                &ImageSpec {
+                    width: mw,
+                    height: mh,
+                    format,
+                    tiling: vk::ImageTiling::OPTIMAL,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                    mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    samples: vk::SampleCountFlags::TYPE_1,
+                },
             )?;
             one_shot_submit(device, command_pool, queue, |cmd| {
                 transition_image_layout(
@@ -263,13 +281,8 @@ pub(in crate::vulkan) fn create_bloom_mips(
 // plus the shared mip extents (the same across all slots).
 // `bloom_top` is the per-frame pooled mip 0 (one `(image, view)` per frame in
 // flight) when bloom is enabled, else empty (mip 0 is committed like the rest).
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn create_bloom_chain(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &BloomDeviceContext,
     extent: vk::Extent2D,
     frames: usize,
     bloom_top: &[(vk::Image, vk::ImageView)],
@@ -278,11 +291,7 @@ pub(in crate::vulkan) fn create_bloom_chain(
     let mut extents = Vec::new();
     for f in 0..frames {
         let (m, e) = create_bloom_mips(
-            instance,
-            device,
-            pd,
-            command_pool,
-            queue,
+            ctx,
             extent.width,
             extent.height,
             HDR_FORMAT,
@@ -296,17 +305,19 @@ pub(in crate::vulkan) fn create_bloom_chain(
     Ok((mips, extents))
 }
 
+// The bloom write and blend framebuffer sets, each indexed [frame][mip].
+type BloomFramebuffers = (Vec<Vec<vk::Framebuffer>>, Vec<Vec<vk::Framebuffer>>);
+
 // Build the bloom write + blend framebuffers for every frame slot. The write
 // set has one framebuffer per mip; the blend set omits the smallest mip,
 // which is never upsampled into.
-#[allow(clippy::type_complexity)]
 pub(in crate::vulkan) fn create_bloom_framebuffers(
     device: &Device,
     write_pass: vk::RenderPass,
     blend_pass: vk::RenderPass,
     bloom_mips: &[Vec<GpuImage>],
     extents: &[vk::Extent2D],
-) -> Result<(Vec<Vec<vk::Framebuffer>>, Vec<Vec<vk::Framebuffer>>), String> {
+) -> Result<BloomFramebuffers, String> {
     let make_fb = |rp: vk::RenderPass, view: vk::ImageView, ext: vk::Extent2D| {
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(rp)

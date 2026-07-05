@@ -4,7 +4,6 @@
 // per-frame pose updates, hot-reload of skinned geometry, and skeleton
 // joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

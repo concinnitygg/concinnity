@@ -163,7 +163,6 @@ pub(in crate::directx) struct TaaResources {
     pub(in crate::directx) frame: Cell<u32>,
 }
 
-#[allow(clippy::too_many_arguments)]
 impl TaaResources {
     // Build the TAA history + resolve resources. The two `history_*` handles are
     // the descriptor-heap slots reserved for TAA after the bloom mips + LUT.

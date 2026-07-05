@@ -50,7 +50,6 @@
 //   * Captured before that frame's shadow map is populated, so the probe bakes
 //     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -486,19 +485,27 @@ impl MtlContext {
         };
         self.encode_main_into_face(
             &render_cb,
-            &gpu.msaa_color,
-            &gpu.msaa_depth,
-            &gpu.resolves[face],
-            view,
-            vp,
-            eye,
-            elapsed,
-            &[],
-            &prepared,
-            &gpu.joint_bufs,
-            Some(&gpu.object_buffer),
-            Some(&gpu.tex_args),
-            gpu.deformed.as_ref(),
+            crate::metal::draw::main::FaceTargets {
+                color_msaa: &gpu.msaa_color,
+                depth_msaa: &gpu.msaa_depth,
+                resolve: &gpu.resolves[face],
+            },
+            crate::metal::draw::main::MainPassCamera {
+                elapsed,
+                vp,
+                view,
+                cam_pos: eye,
+            },
+            crate::metal::draw::main::DrawInputs {
+                visible: &[],
+                prepared_instances: &prepared,
+                skinned_joint_bufs: &gpu.joint_bufs,
+            },
+            crate::metal::draw::main::GpuFrameBuffers {
+                object_buffer: Some(&gpu.object_buffer),
+                bindless_tex_args: Some(&gpu.tex_args),
+                deformed_skinned: gpu.deformed.as_ref(),
+            },
             // Probe cube bake reuses the main cull ICB (no per-face mirror cull).
             None,
         )?;

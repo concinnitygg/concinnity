@@ -28,7 +28,6 @@
 // data-parallel draw-record prep) can plug in without re-deriving the
 // dispatch shape.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -41,6 +40,47 @@ use crate::gfx::render_types::ShadowUniforms;
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::{ModelUniforms, ViewUniforms};
+
+// Camera state a main-pass encode builds its ViewUniforms from. `view` is
+// `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
+// the caller's face view matrix for a reflection-probe face capture, so it
+// travels with the rest of the camera state rather than being read off `self`.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct MainPassCamera {
+    pub elapsed: f32,
+    pub vp: [[f32; 4]; 4],
+    pub view: [[f32; 4]; 4],
+    pub cam_pos: [f32; 3],
+}
+
+// The GPU-driven per-frame buffers the bindless static path consumes. All three
+// are `Some` together exactly when the bindless cull path is active this frame;
+// the legacy per-draw path leaves them `None` and walks the CPU `visible` list.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct GpuFrameBuffers<'a> {
+    pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+}
+
+// The scene draw inputs the main pass walks: the CPU visible set (legacy path),
+// the prepared instanced clusters, and the per-skinned-mesh joint palettes.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct DrawInputs<'a> {
+    pub visible: &'a [u32],
+    pub prepared_instances: &'a super::super::instanced::PreparedInstances,
+    pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+}
+
+// The reflection-probe face attachments `encode_main_into_face` renders into
+// instead of the HDR targets: a square MSAA colour + depth, resolving colour
+// into `resolve`.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct FaceTargets<'a> {
+    pub color_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
+    pub depth_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
+    pub resolve: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
+}
 
 impl MtlContext {
     // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
@@ -58,21 +98,28 @@ impl MtlContext {
 
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::metal) fn encode_main_pass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        elapsed: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        visible: &[u32],
-        prepared_instances: &super::super::instanced::PreparedInstances,
-        skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-        object_buffer: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        camera: MainPassCamera,
+        draw_inputs: DrawInputs,
+        gpu: GpuFrameBuffers,
         world_hidden: bool,
     ) -> Result<u32, String> {
+        let MainPassCamera {
+            elapsed,
+            vp,
+            view: _,
+            cam_pos,
+        } = camera;
+        let DrawInputs {
+            visible,
+            prepared_instances,
+            skinned_joint_bufs,
+        } = draw_inputs;
+        // Only `object_buffer` gates the descriptor's store action below; the
+        // rest of `gpu` travels intact into `encode_main_static_into`.
+        let object_buffer = gpu.object_buffer;
         // Build the HDR render pass descriptor. Colour writes into the MSAA
         // attachment and resolves into the single-sample target at end-of-pass;
         // depth lives entirely on the MSAA attachment and is discarded unless
@@ -165,9 +212,7 @@ impl MtlContext {
             &view_uniforms,
             cam_pos,
             visible,
-            object_buffer,
-            bindless_tex_args,
-            deformed_skinned,
+            gpu,
             // Main pass: the main cull ICB (no override).
             None,
         );
@@ -187,23 +232,13 @@ impl MtlContext {
     // the capture never disturbs the frame's camera state. Depth is cleared and
     // discarded -- the probe consumes only the resolved colour. Driven by
     // `capture_reflection_probe` (metal/probe.rs), once at first frame.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::metal) fn encode_main_into_face(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        face_color_msaa: &ProtocolObject<dyn objc2_metal::MTLTexture>,
-        face_depth_msaa: &ProtocolObject<dyn objc2_metal::MTLTexture>,
-        face_resolve: &ProtocolObject<dyn objc2_metal::MTLTexture>,
-        view: [[f32; 4]; 4],
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        elapsed: f32,
-        visible: &[u32],
-        prepared_instances: &super::super::instanced::PreparedInstances,
-        skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-        object_buffer: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        face_targets: FaceTargets,
+        camera: MainPassCamera,
+        draw_inputs: DrawInputs,
+        gpu: GpuFrameBuffers,
         // Bindless ICB to execute instead of the main cull's. The planar mirror
         // render passes its slot's mirror ICB (culled against the reflected
         // frustum); the probe capture passes `None` (reuses the main cull ICB).
@@ -211,6 +246,22 @@ impl MtlContext {
         // `visible` regardless.
         icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     ) -> Result<u32, String> {
+        let FaceTargets {
+            color_msaa: face_color_msaa,
+            depth_msaa: face_depth_msaa,
+            resolve: face_resolve,
+        } = face_targets;
+        let MainPassCamera {
+            elapsed,
+            vp,
+            view,
+            cam_pos,
+        } = camera;
+        let DrawInputs {
+            visible,
+            prepared_instances,
+            skinned_joint_bufs,
+        } = draw_inputs;
         let desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.clear_color;
         unsafe {
@@ -258,9 +309,7 @@ impl MtlContext {
             &view_uniforms,
             cam_pos,
             visible,
-            object_buffer,
-            bindless_tex_args,
-            deformed_skinned,
+            gpu,
             icb_override,
         );
         let count_instanced =
@@ -285,17 +334,23 @@ impl MtlContext {
     // the post-decoration stack reads the combined result. A no-op (returns 0)
     // when there is nothing to redraw: two-pass off, no bindless geometry, or
     // the phase-2 ICB was not built.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::metal) fn encode_main_pass_phase2(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        elapsed: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        object_buffer: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        camera: MainPassCamera,
+        gpu: GpuFrameBuffers,
     ) -> Result<u32, String> {
+        let MainPassCamera {
+            elapsed,
+            vp,
+            view: _,
+            cam_pos,
+        } = camera;
+        let GpuFrameBuffers {
+            object_buffer,
+            bindless_tex_args,
+            deformed_skinned,
+        } = gpu;
         let (Some(obj_buf), Some(tex_args), Some(icb)) =
             (object_buffer, bindless_tex_args, &self.cull.icb_2)
         else {
@@ -526,22 +581,24 @@ impl MtlContext {
     // Encode the static-geometry sub-path: either the bindless GPU-driven
     // ICB execution or the legacy per-draw loop, depending on which path
     // the world's pipeline opted into.
-    #[allow(clippy::too_many_arguments)]
     fn encode_main_static_into(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
         cam_pos: [f32; 3],
         visible: &[u32],
-        object_buffer: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        gpu: GpuFrameBuffers,
         // ICB to execute instead of the main cull's `self.cull.icb`: the planar
         // mirror render passes its slot's mirror ICB (culled against the
         // reflected frustum) here; the main + probe paths pass `None` to use the
         // main ICB.
         icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     ) -> u32 {
+        let GpuFrameBuffers {
+            object_buffer,
+            bindless_tex_args,
+            deformed_skinned,
+        } = gpu;
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main static"));
         if !self.bind_main_pass_shared(enc, view_uniforms) {
             enc.popDebugGroup();

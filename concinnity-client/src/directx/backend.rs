@@ -10,11 +10,11 @@
 // rests on. Forwarders that rename, drop args, or have a custom body stay
 // hand-written below the macro. Mirrors src/metal/backend.rs.
 
-use crate::gfx::backend::RenderBackend;
+use crate::gfx::backend::{ChunkMesh, FrameParams, RenderBackend};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::profile::RenderStats;
-use crate::gfx::render_types::{MaterialUniforms, SkinnedDrawObject, TextDrawCall};
+use crate::gfx::render_types::SkinnedDrawObject;
 
 use super::context::{DxContext, debug_assert_main_thread};
 
@@ -74,7 +74,7 @@ impl RenderBackend for DxContext {
         fn update_quality_params(&mut self, settings: crate::gfx::backend::QualitySettings);
         fn take_input(&mut self) -> RenderInput;
         fn wait_idle(&self);
-        fn draw_frame(&mut self, elapsed: f32, fov_y_radians: f32, near: f32, far: f32, cam_pos: [f32; 3], text_calls: &[TextDrawCall], world_hidden: bool) -> Result<(), String>;
+        fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
         fn retire_draw_object(&mut self, draw_idx: usize);
@@ -91,7 +91,7 @@ impl RenderBackend for DxContext {
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> Result<(), String>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize, texture_slot: usize, normal_map_slot: usize) -> Result<(), String>;
-        fn add_chunk_mesh(&mut self, verts: &[Vertex], idxs: &[u16], model: [[f32; 4]; 4], texture_slot: usize, normal_map_slot: usize, material: MaterialUniforms, frame: u64) -> Result<usize, String>;
+        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn add_decal(&mut self, record: crate::gfx::decal::DecalRecord) -> Result<usize, String>;

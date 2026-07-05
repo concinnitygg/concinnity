@@ -8,7 +8,6 @@
 // pipeline-descriptor boilerplate into one place so each effect file keeps only
 // what is unique to it.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -122,24 +121,38 @@ pub(crate) enum PassTimer {
     Last(PassId),
 }
 
+// The per-pass setup a fullscreen-triangle encode needs: the colour target it
+// writes, that attachment's load action, where the pass sits in the GPU-timing
+// span, the pipeline it runs, and the encoder debug label.
+pub(in crate::metal) struct FullscreenPass<'a> {
+    pub target: &'a ProtocolObject<dyn MTLTexture>,
+    pub load: MTLLoadAction,
+    pub timer: PassTimer,
+    pub pipeline: &'a ProtocolObject<dyn MTLRenderPipelineState>,
+    pub label: &'a str,
+}
+
 impl MtlContext {
     // Run one fullscreen-triangle pass: open a single-attachment render encoder
-    // on `target` (with the given `load` action and an always-`Store`), attach
-    // GPU timing per `timer`, set `pipeline`, let `bind` set the pass's
-    // fragment inputs, draw the `[[vertex_id]]` triangle, and end encoding.
-    // Centralises the encoder open / draw / close skeleton every screen-space
-    // effect repeats so each `encode_*` supplies only its unique bindings.
-    #[allow(clippy::too_many_arguments)]
+    // on `pass.target` (with the given `pass.load` action and an always-`Store`),
+    // attach GPU timing per `pass.timer`, set `pass.pipeline`, let `bind` set the
+    // pass's fragment inputs, draw the `[[vertex_id]]` triangle, and end
+    // encoding. Centralises the encoder open / draw / close skeleton every
+    // screen-space effect repeats so each `encode_*` supplies only its unique
+    // bindings.
     pub(in crate::metal) fn fullscreen_pass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        target: &ProtocolObject<dyn MTLTexture>,
-        load: MTLLoadAction,
-        timer: PassTimer,
-        pipeline: &ProtocolObject<dyn MTLRenderPipelineState>,
-        label: &str,
+        pass: FullscreenPass,
         bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
     ) -> Result<(), String> {
+        let FullscreenPass {
+            target,
+            load,
+            timer,
+            pipeline,
+            label,
+        } = pass;
         let desc = MTLRenderPassDescriptor::new();
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);

@@ -499,19 +499,19 @@ fn create_gbuffer_bindless_root_signature(
 // per-frame `prev_model` buffers it reads are allocated alongside the other cull
 // buffers. Reuses `create_gbuffer_pso` (3 MRT, private D32, single-sample, LESS
 // depth) with the two-stream bindless input layout.
-#[allow(clippy::type_complexity)]
+// The bindless g-buffer root signature, pipeline state, and command signature
+// the cull state stores.
+type GbufferBindlessPipeline = (
+    ID3D12RootSignature,
+    ID3D12PipelineState,
+    ID3D12CommandSignature,
+);
+
 pub(in crate::directx) fn build_gbuffer_bindless(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
-) -> Result<
-    (
-        ID3D12RootSignature,
-        ID3D12PipelineState,
-        ID3D12CommandSignature,
-    ),
-    String,
-> {
+) -> Result<GbufferBindlessPipeline, String> {
     let vs = compile_hlsl(
         &shader_source(
             hot_reload,
@@ -597,18 +597,40 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) prev_models: RefCell<Vec<[[f32; 4]; 4]>>,
 }
 
+// The device + optional debug info queue the G-buffer builder submits against.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GbufferDeviceCtx<'a> {
+    pub device: &'a ID3D12Device,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+}
+
+// Render-target extent plus which pipeline variants the G-buffer pre-pass builds.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GbufferExtent {
+    pub width: u32,
+    pub height: u32,
+    // Build the instanced root sig / PSO for GPU-instanced static geometry.
+    pub need_instanced: bool,
+    // Build the skinned variant (skinned geometry present; built lazily in
+    // `upload_skinned` at init, so `false` there).
+    pub need_skinned: bool,
+    pub hot_reload: bool,
+}
+
 impl GbufferResources {
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
-        width: u32,
-        height: u32,
-        need_instanced: bool,
-        need_skinned: bool,
+        ctx: GbufferDeviceCtx,
+        extent: GbufferExtent,
         slots: GbufferSlots,
-        info_queue: Option<&ID3D12InfoQueue>,
-        hot_reload: bool,
     ) -> Result<Self, String> {
+        let GbufferDeviceCtx { device, info_queue } = ctx;
+        let GbufferExtent {
+            width,
+            height,
+            need_instanced,
+            need_skinned,
+            hot_reload,
+        } = extent;
         let normal_depth = create_rt_target(device, width, height, GBUFFER_NORMAL_DEPTH_FORMAT)?;
         write_format_rtv(
             device,
@@ -918,24 +940,50 @@ pub(in crate::directx) fn rebuild_gbuffer_pipelines(
     })
 }
 
+// Camera + view-projection inputs for the G-buffer pre-pass. The two VPs drive
+// rasterisation (jittered) and motion vectors (un-jittered current vs previous).
+pub(in crate::directx) struct GbufferPrepassView<'a> {
+    // Jittered view-projection (rasterisation target).
+    pub jittered_vp: [[f32; 4]; 4],
+    // Un-jittered current view-projection (motion vectors).
+    pub cur_vp: [[f32; 4]; 4],
+    // Camera frustum for per-cluster culling + LOD.
+    pub frustum: &'a crate::gfx::frustum::Frustum,
+    // Camera world position.
+    pub cam_pos: [f32; 3],
+}
+
+// View inputs for the legacy CPU-driven G-buffer path: the view CBV address plus
+// the camera used to cull + LOD each object.
+struct GbufferLegacyView<'a> {
+    // GPU virtual address of the view uniforms CBV (root param 0).
+    view_gva: u64,
+    // Camera frustum for per-object culling + LOD.
+    frustum: &'a crate::gfx::frustum::Frustum,
+    // Camera world position.
+    cam_pos: [f32; 3],
+}
+
 impl DxContext {
     // Encode the unified G-buffer pre-pass: one jittered traversal of the
     // visible set (static + instanced + skinned) into the normal+depth /
     // roughness / velocity MRT. `velocity_active` is true when a consumer (TAA
     // or FSR) reads motion; when false, cur == prev so the motion channel is a
     // harmless zero.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_gbuffer_prepass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        jittered_vp: [[f32; 4]; 4],
-        cur_vp: [[f32; 4]; 4],
+        view: GbufferPrepassView<'_>,
         visible: &[u32],
-        frustum: &crate::gfx::frustum::Frustum,
-        cam_pos: [f32; 3],
         velocity_active: bool,
     ) {
+        let GbufferPrepassView {
+            jittered_vp,
+            cur_vp,
+            frustum,
+            cam_pos,
+        } = view;
         let gb = match &self.gbuffer {
             Some(g) => g,
             None => return,
@@ -1035,10 +1083,12 @@ impl DxContext {
             self.encode_gbuffer_prepass_legacy(
                 cmd,
                 frame_idx,
-                view_gva,
+                GbufferLegacyView {
+                    view_gva,
+                    frustum,
+                    cam_pos,
+                },
                 visible,
-                frustum,
-                cam_pos,
                 velocity_active,
             );
         }
@@ -1067,17 +1117,19 @@ impl DxContext {
     // shader) or worlds with no build-time geometry. The caller has already
     // transitioned the targets to RENDER_TARGET, cleared them, and set the
     // viewport / scissor / topology.
-    #[allow(clippy::too_many_arguments)]
     fn encode_gbuffer_prepass_legacy(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        view_gva: u64,
+        view: GbufferLegacyView<'_>,
         visible: &[u32],
-        frustum: &crate::gfx::frustum::Frustum,
-        cam_pos: [f32; 3],
         velocity_active: bool,
     ) {
+        let GbufferLegacyView {
+            view_gva,
+            frustum,
+            cam_pos,
+        } = view;
         let gb = match &self.gbuffer {
             Some(g) => g,
             None => return,
@@ -1244,7 +1296,6 @@ impl DxContext {
     // model rides a parallel buffer. Streamed chunks / runtime clones (records past
     // `n_objects`) keep a legacy per-object loop. The CPU never walks the static /
     // skinned draw lists.
-    #[allow(clippy::too_many_arguments)]
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         cmd: &ID3D12GraphicsCommandList,

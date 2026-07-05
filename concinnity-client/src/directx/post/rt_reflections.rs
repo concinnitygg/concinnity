@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::RtReflectionSettings;
+use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::dxc::compile_hlsl_dxc;
@@ -288,21 +288,50 @@ pub(in crate::directx) struct RtReflectionsResources {
     textured_pso: ID3D12PipelineState,
 }
 
-#[allow(clippy::too_many_arguments)]
+// Device + output target extent for building the RT-reflection resources.
+pub(in crate::directx) struct RtBuildContext<'a> {
+    pub device: &'a ID3D12Device,
+    pub width: u32,
+    pub height: u32,
+}
+
+// The RT-reflection output target's descriptor handles: a CPU RTV plus the
+// (CPU, GPU) SRV pair downstream passes sample.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RtOutputDescriptors {
+    pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+
+// Optional debug info queue plus the shader hot-reload toggle for the build.
+pub(in crate::directx) struct RtBuildInit<'a> {
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+    pub hot_reload: bool,
+}
+
 impl RtReflectionsResources {
     // Build the RT-reflection resources. Returns `Err` when the DXC compile
     // fails (DXC absent / shader error) so the caller can fall back to SSR; the
     // accel-structure build + DXR capability are gated separately by the caller.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
-        width: u32,
-        height: u32,
+        ctx: RtBuildContext,
         settings: RtReflectionSettings,
-        output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-        info_queue: Option<&ID3D12InfoQueue>,
-        hot_reload: bool,
+        descriptors: RtOutputDescriptors,
+        init: RtBuildInit,
     ) -> Result<Self, String> {
+        let RtBuildContext {
+            device,
+            width,
+            height,
+        } = ctx;
+        let RtOutputDescriptors {
+            output_rtv,
+            output_srv,
+        } = descriptors;
+        let RtBuildInit {
+            info_queue,
+            hot_reload,
+        } = init;
         let output = create_rt_target(device, width, height, HDR_FORMAT)?;
         write_format_rtv(device, &output, output_rtv, HDR_FORMAT);
         write_format_srv(device, &output, output_srv.0, HDR_FORMAT);
@@ -445,15 +474,15 @@ impl DxContext {
             [v[0][2], v[1][2], v[2][2], 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let params = rt.settings.params(
+        let params = rt.settings.params(RtParamsInputs {
             fov_y_radians,
             aspect,
             inv_view_rot,
             cam_pos,
-            self.fog.sun_dir,
-            self.fog.sun_color,
-            self.env_map.prefilter_mip_count as f32,
-        );
+            sun_dir: self.fog.sun_dir,
+            sun_color: self.fog.sun_color,
+            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+        });
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const RtParams as *const u8,

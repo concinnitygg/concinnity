@@ -36,6 +36,13 @@ struct ShadowPush {
     _pad: [u32; 3],
 }
 
+// The depth-only shadow pipeline: its PSO + root signature, always used together.
+#[derive(Clone, Copy)]
+struct ShadowPipeline<'a> {
+    pso: &'a ID3D12PipelineState,
+    root_sig: &'a ID3D12RootSignature,
+}
+
 impl DxContext {
     pub(in crate::directx) fn encode_shadow_pass(
         &self,
@@ -104,8 +111,10 @@ impl DxContext {
                 shadow_ubo_gva,
                 cam_pos,
                 render_mask,
-                shadow_pso,
-                shadow_root_sig,
+                ShadowPipeline {
+                    pso: shadow_pso,
+                    root_sig: shadow_root_sig,
+                },
             );
         } else {
             self.encode_shadow_pass_legacy(
@@ -114,8 +123,10 @@ impl DxContext {
                 shadow_ubo_gva,
                 cam_pos,
                 render_mask,
-                shadow_pso,
-                shadow_root_sig,
+                ShadowPipeline {
+                    pso: shadow_pso,
+                    root_sig: shadow_root_sig,
+                },
             );
         }
 
@@ -144,7 +155,6 @@ impl DxContext {
     // second for the skinned tail -- the same two-region split the bindless main
     // pass uses, but depth-only and through `light_vps[cascade_idx]`. The CPU
     // never walks the static / instanced / skinned draw lists.
-    #[allow(clippy::too_many_arguments)]
     fn encode_shadow_pass_gpu_driven(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -152,9 +162,12 @@ impl DxContext {
         shadow_ubo_gva: u64,
         cam_pos: [f32; 3],
         render_mask: u32,
-        legacy_shadow_pso: &ID3D12PipelineState,
-        legacy_shadow_root_sig: &ID3D12RootSignature,
+        legacy_pipeline: ShadowPipeline<'_>,
     ) {
+        let ShadowPipeline {
+            pso: legacy_shadow_pso,
+            root_sig: legacy_shadow_root_sig,
+        } = legacy_pipeline;
         let (Some(sb_pso), Some(sb_root), Some(sb_sig), Some(indirect)) = (
             self.cull.shadow_bindless_pso.as_ref(),
             self.cull.shadow_bindless_root_sig.as_ref(),
@@ -272,7 +285,6 @@ impl DxContext {
     // draw), so they are skipped here. Mirrors the legacy static loop, appending
     // into each re-rendered cascade's depth (no re-clear). A no-op for worlds with
     // no clones (the common case, incl. pure-voxel worlds).
-    #[allow(clippy::too_many_arguments)]
     fn encode_shadow_legacy_extra(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -338,7 +350,6 @@ impl DxContext {
     // Legacy CPU-driven shadow raster: per-cascade per-object `DrawIndexed` for
     // static + instanced (iterated per instance) + skinned casters. Used for
     // non-bindless worlds (custom shader) or worlds with no build-time geometry.
-    #[allow(clippy::too_many_arguments)]
     fn encode_shadow_pass_legacy(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -346,9 +357,12 @@ impl DxContext {
         shadow_ubo_gva: u64,
         cam_pos: [f32; 3],
         render_mask: u32,
-        shadow_pso: &ID3D12PipelineState,
-        shadow_root_sig: &ID3D12RootSignature,
+        pipeline: ShadowPipeline<'_>,
     ) {
+        let ShadowPipeline {
+            pso: shadow_pso,
+            root_sig: shadow_root_sig,
+        } = pipeline;
         unsafe {
             cmd.SetPipelineState(shadow_pso);
             cmd.SetGraphicsRootSignature(shadow_root_sig);

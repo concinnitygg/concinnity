@@ -8,7 +8,6 @@
 // SSAO skips its own pre-pass entirely; with SSR off SSAO runs its own
 // pre-pass over the visible static, instanced, and skinned geometry.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -21,7 +20,7 @@ use crate::gfx::ssao::SsaoSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::pipeline::shader_source;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
@@ -143,11 +142,13 @@ impl MtlContext {
         // Kernel: GTAO horizon search over the G-buffer -> raw occlusion.
         self.fullscreen_pass(
             cmd_buf,
-            targets.ao_raw.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::Whole(crate::metal::pass_timing::PassId::SsaoKernel),
-            kernel_ps,
-            "SSAO kernel",
+            FullscreenPass {
+                target: targets.ao_raw.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::SsaoKernel),
+                pipeline: kernel_ps,
+                label: "SSAO kernel",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 0);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
@@ -162,11 +163,13 @@ impl MtlContext {
         // Blur: depth-aware smoothing of the raw occlusion -> final AO.
         self.fullscreen_pass(
             cmd_buf,
-            ao_output,
-            MTLLoadAction::DontCare,
-            PassTimer::Whole(crate::metal::pass_timing::PassId::SsaoBlur),
-            blur_ps,
-            "SSAO blur",
+            FullscreenPass {
+                target: ao_output,
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::SsaoBlur),
+                pipeline: blur_ps,
+                label: "SSAO blur",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.ao_raw.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);

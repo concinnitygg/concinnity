@@ -4,7 +4,6 @@
 // the streaming subsystem (per-slot upload + eviction placeholders) and by
 // asset hot-reload (`cn debug` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use crate::metal::context::MtlContext;
 use crate::metal::texture::upload_texture;

@@ -332,7 +332,6 @@ impl DecalResources {
     // rings. Called from `DxContext::new` when the world declares any
     // `Decal` OR unconditionally so runtime `add_decal` works from a world
     // that started empty; the cost is one PSO + a few small buffers.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn new(
         device: &ID3D12Device,
         command_queue: &ID3D12CommandQueue,
@@ -480,7 +479,6 @@ pub(in crate::directx) fn write_main_depth_srv(
 
 // Encoder
 
-#[allow(clippy::too_many_arguments)]
 impl DxContext {
     // Encode the projected-decal pass. Called between the main HDR resolve
     // and the SSR resolve so a decal is reflected by SSR and tracked by

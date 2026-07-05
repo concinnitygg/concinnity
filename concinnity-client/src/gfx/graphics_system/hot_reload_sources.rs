@@ -387,6 +387,7 @@ impl TextureSourceMap {
 // init to the `cn debug` binary's hot-reload drive, which builds the
 // filesystem watcher + `AssetHotReloadState` from it. Empty / `None` under
 // `cn run`, which never captures sources.
+#[derive(Default)]
 pub struct HotReloadSources {
     pub map: TextureSourceMap,
     pub color_lut: Option<ColorLutSource>,

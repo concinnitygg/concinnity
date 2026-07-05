@@ -27,7 +27,6 @@
 // unit-tested `gfx::planar_reflection` + `gfx::frustum`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -236,19 +235,27 @@ impl MtlContext {
 
             self.encode_main_into_face(
                 cmd_buf,
-                &targets.msaa_color,
-                &targets.msaa_depth,
-                &targets.resolve,
-                m.view,
-                m.view_proj,
-                m.eye,
-                params.elapsed,
-                visible,
-                params.prepared_instances,
-                params.skinned_joint_bufs,
-                params.object_buffer,
-                params.bindless_tex_args,
-                params.deformed_skinned,
+                crate::metal::draw::main::FaceTargets {
+                    color_msaa: &targets.msaa_color,
+                    depth_msaa: &targets.msaa_depth,
+                    resolve: &targets.resolve,
+                },
+                crate::metal::draw::main::MainPassCamera {
+                    elapsed: params.elapsed,
+                    vp: m.view_proj,
+                    view: m.view,
+                    cam_pos: m.eye,
+                },
+                crate::metal::draw::main::DrawInputs {
+                    visible,
+                    prepared_instances: params.prepared_instances,
+                    skinned_joint_bufs: params.skinned_joint_bufs,
+                },
+                crate::metal::draw::main::GpuFrameBuffers {
+                    object_buffer: params.object_buffer,
+                    bindless_tex_args: params.bindless_tex_args,
+                    deformed_skinned: params.deformed_skinned,
+                },
                 icb_override,
             )?;
         }

@@ -293,27 +293,47 @@ pub(in crate::directx) struct SsaoResources {
     pub(in crate::directx) blur_pso: ID3D12PipelineState,
 }
 
-#[allow(clippy::too_many_arguments)]
+// GPU device handles the SSAO builder needs: the device and the optional debug
+// info queue. They always travel together through `new`.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct SsaoDeviceCtx<'a> {
+    pub device: &'a ID3D12Device,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+}
+
+// Descriptor handles for the SSAO raw + blurred occlusion targets. Each target
+// has a CPU RTV plus a (CPU, GPU) SRV pair reserved in the parent heaps.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct SsaoDescriptorHandles {
+    pub ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+
 impl SsaoResources {
     // Build all SSAO resources. Called from `DxContext::new` only when the
     // world's `PostProcessConfig` enables SSAO. `ao_raw_*` / `ao_*` reserve
     // heap slots in the SRV + RTV heaps the caller laid out at init; the view
     // normal + depth the kernel samples come from the unified G-buffer pre-pass.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        ctx: SsaoDeviceCtx,
         width: u32,
         height: u32,
         settings: crate::gfx::ssao::SsaoSettings,
-        ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-        ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+        handles: SsaoDescriptorHandles,
         // The pooled `ao_output` resource (placed in `DxContext::transient_pool`);
         // SSAO writes its RTV + SRV but does not own it.
         ao_resource: &ID3D12Resource,
-        info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let SsaoDeviceCtx { device, info_queue } = ctx;
+        let SsaoDescriptorHandles {
+            ao_raw_rtv,
+            ao_raw_srv,
+            ao_rtv,
+            ao_srv,
+        } = handles;
         // Raw occlusion is SSAO-internal (committed); the blurred `ao` is the
         // pooled `ao_output`, so SSAO only writes its RTV + SRV.
         let ao_raw = create_rt_target(device, width, height, SSAO_OCCLUSION_FORMAT)?;

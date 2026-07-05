@@ -4,7 +4,6 @@
 // mip-chain target allocation, and per-frame encoder live together so the
 // effect is a single unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -16,7 +15,7 @@ use objc2_metal::{
 use crate::metal::context::MtlContext;
 use crate::metal::pipeline::shader_source;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 
 // Pipelines
@@ -167,11 +166,13 @@ impl MtlContext {
         };
         self.fullscreen_pass(
             cmd_buf,
-            mips[0].as_ref(),
-            MTLLoadAction::DontCare,
-            prefilter_timer,
-            &bloom_pipelines.prefilter,
-            "bloom prefilter",
+            FullscreenPass {
+                target: mips[0].as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: prefilter_timer,
+                pipeline: &bloom_pipelines.prefilter,
+                label: "bloom prefilter",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(scene_color), 0);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
@@ -187,11 +188,13 @@ impl MtlContext {
         for i in 1..n {
             self.fullscreen_pass(
                 cmd_buf,
-                mips[i].as_ref(),
-                MTLLoadAction::DontCare,
-                PassTimer::None,
-                &bloom_pipelines.downsample,
-                "bloom downsample",
+                FullscreenPass {
+                    target: mips[i].as_ref(),
+                    load: MTLLoadAction::DontCare,
+                    timer: PassTimer::None,
+                    pipeline: &bloom_pipelines.downsample,
+                    label: "bloom downsample",
+                },
                 |enc| unsafe {
                     enc.setFragmentTexture_atIndex(Some(mips[i - 1].as_ref()), 0);
                     enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
@@ -211,11 +214,13 @@ impl MtlContext {
             };
             self.fullscreen_pass(
                 cmd_buf,
-                mips[i].as_ref(),
-                MTLLoadAction::Load,
-                timer,
-                &bloom_pipelines.upsample,
-                "bloom upsample",
+                FullscreenPass {
+                    target: mips[i].as_ref(),
+                    load: MTLLoadAction::Load,
+                    timer,
+                    pipeline: &bloom_pipelines.upsample,
+                    label: "bloom upsample",
+                },
                 |enc| unsafe {
                     enc.setFragmentTexture_atIndex(Some(mips[i + 1].as_ref()), 0);
                     enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);

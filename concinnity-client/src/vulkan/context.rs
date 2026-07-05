@@ -6,6 +6,7 @@ use std::cell::RefCell;
 
 use ash::{Device, vk};
 
+use crate::gfx::backend::FrameParams;
 use crate::gfx::render_types::*;
 
 use super::draw::*;
@@ -1350,17 +1351,16 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 //  Public API
 
 impl VkContext {
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_frame(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String> {
+    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+        let FrameParams {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            cam_pos,
+            text_calls,
+            world_hidden,
+        } = params;
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in
         // pipeline from disk-resident source before this frame's passes
@@ -1574,15 +1574,19 @@ impl VkContext {
         }
 
         let mut submit_bufs = self.record_frame(
-            cmd,
-            image_index,
-            elapsed,
-            fov_y_radians,
-            near,
-            far,
-            cam_pos,
-            text_calls,
-            frame,
+            RecordFrameTargets {
+                cmd,
+                image_index,
+                frame_idx: frame,
+            },
+            RecordFrameView {
+                elapsed,
+                fov_y_radians,
+                near,
+                far,
+                cam_pos,
+                text_calls,
+            },
             world_hidden,
         )?;
 

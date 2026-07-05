@@ -952,6 +952,44 @@ fn write_raymarch_samplers(
     unsafe { device.CreateSampler(&scene, slot_cpu(2)) };
 }
 
+// DirectX device / queue / info handles the raymarch build submits against.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RaymarchDeviceContext<'a> {
+    pub device: &'a ID3D12Device,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+    pub command_queue: &'a ID3D12CommandQueue,
+}
+
+// Render-target configuration for the raymarch pass.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RaymarchTargetConfig {
+    pub width: u32,
+    pub height: u32,
+    pub msaa_samples: u32,
+}
+
+// Shared engine resources bound into the raymarch pass: the cascaded shadow map
+// and the IBL cubes.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RaymarchSharedBindings<'a> {
+    // Cascaded shadow map (None when shadow mapping is off).
+    pub shadow_resource: Option<&'a ID3D12Resource>,
+    pub shadow_layers: u32,
+    pub irradiance_resource: &'a ID3D12Resource,
+    pub prefilter_resource: &'a ID3D12Resource,
+}
+
+// Descriptor table bases + strides for the raymarch SRV + sampler heaps.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RaymarchDescriptorHandles {
+    pub srv_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub srv_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_descriptor_size: usize,
+    pub sampler_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub sampler_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub sampler_descriptor_size: usize,
+}
+
 impl RaymarchResources {
     // Build every raymarch resource and the per-volume records. `sdf_volumes`
     // is the drained-and-payload-paired list from `graphics_system::init`;
@@ -960,27 +998,38 @@ impl RaymarchResources {
     // authors) is skipped with a logged warning. Returns `Ok(None)`
     // when no volume survived the filter so the engine simply omits
     // the pass.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn try_new(
-        device: &ID3D12Device,
-        info_queue: Option<&ID3D12InfoQueue>,
-        command_queue: &ID3D12CommandQueue,
+        ctx: RaymarchDeviceContext,
+        target: RaymarchTargetConfig,
+        bindings: RaymarchSharedBindings,
+        handles: RaymarchDescriptorHandles,
         sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
-        width: u32,
-        height: u32,
-        msaa_samples: u32,
-        shadow_resource: Option<&ID3D12Resource>,
-        shadow_layers: u32,
-        irradiance_resource: &ID3D12Resource,
-        prefilter_resource: &ID3D12Resource,
-        srv_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        srv_descriptor_size: usize,
-        sampler_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        sampler_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        sampler_descriptor_size: usize,
         hot_reload: bool,
     ) -> Result<Option<Self>, String> {
+        let RaymarchDeviceContext {
+            device,
+            info_queue,
+            command_queue,
+        } = ctx;
+        let RaymarchTargetConfig {
+            width,
+            height,
+            msaa_samples,
+        } = target;
+        let RaymarchSharedBindings {
+            shadow_resource,
+            shadow_layers,
+            irradiance_resource,
+            prefilter_resource,
+        } = bindings;
+        let RaymarchDescriptorHandles {
+            srv_base_cpu,
+            srv_base_gpu,
+            srv_descriptor_size,
+            sampler_base_cpu,
+            sampler_base_gpu,
+            sampler_descriptor_size,
+        } = handles;
         // Filter `.hlsl` volumes; Metal-first SDFs get dropped with a
         // warning so the rest of the world keeps rendering.
         let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes

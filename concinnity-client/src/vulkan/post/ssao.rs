@@ -268,16 +268,20 @@ fn create_ao_target(
     height: u32,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width,
-        height,
-        SSAO_OCCLUSION_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &super::super::texture::GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &super::super::texture::ImageSpec {
+            width,
+            height,
+            format: SSAO_OCCLUSION_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(
         device,
@@ -370,12 +374,19 @@ fn create_fullscreen_pipeline(
     Ok(pipeline)
 }
 
-#[allow(clippy::too_many_arguments)]
+// The Vulkan device handles every SSAO target builder threads through: the
+// instance, logical device, and physical device used to allocate images. Bundled
+// because they always travel together through `new` / `build_targets` / `rebuild`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct SsaoDeviceCtx<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+}
+
 impl SsaoResources {
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        ctx: &SsaoDeviceCtx,
         width: u32,
         height: u32,
         frames: usize,
@@ -383,6 +394,7 @@ impl SsaoResources {
         ao_views: &[vk::ImageView],
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = ctx.device;
         let fullscreen_render_pass = create_fullscreen_render_pass(device)?;
         let blur_render_pass = create_blur_render_pass(device)?;
 
@@ -504,7 +516,7 @@ impl SsaoResources {
             kernel_framebuffer: vk::Framebuffer::null(),
             blur_framebuffers: Vec::new(),
         };
-        me.build_targets(instance, device, physical_device, width, height, ao_views)?;
+        me.build_targets(ctx, width, height, ao_views)?;
         // The kernel/blur normal+depth bindings are re-pointed at the unified
         // pre-pass per-frame views by the caller before the first frame; the
         // raw-AO view stands in until then so every binding is valid.
@@ -518,13 +530,16 @@ impl SsaoResources {
     // targets via `destroy_targets`.
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        ctx: &SsaoDeviceCtx,
         width: u32,
         height: u32,
         ao_views: &[vk::ImageView],
     ) -> Result<(), String> {
+        let &SsaoDeviceCtx {
+            instance,
+            device,
+            physical_device,
+        } = ctx;
         let w = width.max(1);
         let h = height.max(1);
         self.ao_raw = create_ao_target(instance, device, physical_device, w, h)?;
@@ -640,16 +655,15 @@ impl SsaoResources {
     // idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        ctx: &SsaoDeviceCtx,
         width: u32,
         height: u32,
         gbuffer_views: &[vk::ImageView],
         ao_views: &[vk::ImageView],
     ) -> Result<(), String> {
+        let device = ctx.device;
         self.destroy_targets(device);
-        self.build_targets(instance, device, physical_device, width, height, ao_views)?;
+        self.build_targets(ctx, width, height, ao_views)?;
         self.wire_kernel_and_blur_sets(device, gbuffer_views);
         Ok(())
     }

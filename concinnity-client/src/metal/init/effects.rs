@@ -5,8 +5,6 @@
 // and auto-exposure. Each block is gated on the relevant world setting so a
 // world that disables an effect pays zero construction cost.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
-#![allow(clippy::too_many_arguments)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -40,6 +38,59 @@ use crate::metal::post::{
 };
 use crate::metal::texture::create_fallback_texture;
 use crate::metal::transient_pool::{TransientTexturePool, transient_specs};
+
+// The toggle-controlled feature settings shared by [`build_effects`] and
+// [`build_quality_effects`] (the runtime quality rebuild forwards the same set).
+// Each is the world-resolved `Option` that gates whether that feature's
+// pipelines + targets are built at all. `reflection_blur_scale` and
+// `auto_exposure_bias_ev` ride along because they only make sense paired with
+// their feature (SSR/RT and auto-exposure respectively).
+pub(crate) struct EffectSettings<'a> {
+    pub ssao: &'a Option<SsaoSettings>,
+    pub ssr: &'a Option<SsrSettings>,
+    pub ssgi: &'a Option<SsgiSettings>,
+    pub rt_reflection: &'a Option<RtReflectionSettings>,
+    pub auto_exposure: &'a Option<AutoExposureSettings>,
+    // Per-axis divisor for the roughness-aware reflection blur target, resolved
+    // from the world's `reflection_blur_resolution`. Sizes the blur target at
+    // render / this; stored on `SsrState` so resize reuses it.
+    pub reflection_blur_scale: u32,
+    pub auto_exposure_bias_ev: f32,
+}
+
+// The non-settings build flags shared by [`build_effects`] and
+// [`build_quality_effects`].
+#[derive(Clone, Copy)]
+pub(crate) struct EffectFlags {
+    pub taa_enabled: bool,
+    // Whether the velocity pre-pass + targets should be built. True when TAA is
+    // on or temporal upscaling is on (the MetalFX scaler consumes motion vectors).
+    pub needs_velocity: bool,
+    pub has_instanced: bool,
+    pub hot_reload: bool,
+}
+
+// The resolution pair [`build_effects`] operates at. Render-resolution is where
+// the 3D scene + most post passes (HDR, TAA, velocity, SSAO, SSR) draw;
+// output-resolution is where bloom + composite operate so the upscaled / native
+// scene reads back cleanly into the drawable. They are equal when no upscaler is
+// active; render is smaller when MetalFX upscaling is on.
+#[derive(Clone, Copy)]
+pub(crate) struct EffectDimensions {
+    pub render_w: u32,
+    pub render_h: u32,
+    pub output_w: u32,
+    pub output_h: u32,
+}
+
+// The world-content effects [`build_effects`] builds outside the quality-toggle
+// subset: decals, volumetric fog, and particles. Each is skipped when the world
+// declares none, and a quality toggle never rebuilds them.
+pub(crate) struct WorldContentEffects<'a> {
+    pub fog_settings: &'a Option<FogSettings>,
+    pub decals: &'a [DecalRecord],
+    pub particles: &'a [ParticleEmitterRecord],
+}
 
 pub(crate) struct EffectsBundle {
     // Bloom targets are always created (the composite pass binds the top mip
@@ -143,27 +194,29 @@ pub(crate) struct QualityEffectsBundle {
 // skinned meshes (init via `upload_skinned`, the runtime rebuild re-attaches it).
 // The RT acceleration structure is also the caller's responsibility (it needs the
 // resident geometry buffers); this builds only the RT resolve pipelines.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_quality_effects(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     render_w: u32,
     render_h: u32,
-    taa_enabled: bool,
-    needs_velocity: bool,
-    has_instanced: bool,
-    ssao_settings: &Option<SsaoSettings>,
-    ssr_settings: &Option<SsrSettings>,
-    ssgi_settings: &Option<SsgiSettings>,
-    rt_reflection_settings: &Option<RtReflectionSettings>,
-    // Per-axis divisor for the roughness-aware reflection blur target, resolved
-    // from the world's `reflection_blur_resolution`. Sizes the blur target at
-    // render / this; stored on `SsrState` so resize reuses it.
-    reflection_blur_scale: u32,
-    auto_exposure_settings: &Option<AutoExposureSettings>,
-    auto_exposure_bias_ev: f32,
-    hot_reload: bool,
+    settings: EffectSettings,
+    flags: EffectFlags,
 ) -> Result<QualityEffectsBundle, String> {
+    let EffectSettings {
+        ssao: ssao_settings,
+        ssr: ssr_settings,
+        ssgi: ssgi_settings,
+        rt_reflection: rt_reflection_settings,
+        auto_exposure: auto_exposure_settings,
+        reflection_blur_scale,
+        auto_exposure_bias_ev,
+    } = settings;
+    let EffectFlags {
+        taa_enabled,
+        needs_velocity,
+        has_instanced,
+        hot_reload,
+    } = flags;
     // TAA pipeline + ping-pong history buffers. Built only when TAA is on;
     // upscaling-on worlds skip the TAA pass entirely (the MetalFX scaler does
     // temporal accumulation itself). The TAA targets are sized at
@@ -414,36 +467,25 @@ pub(crate) fn build_effects(
     // (the settings-gated features below are already trimmed by the
     // requirements derivation before they reach here).
     scene: bool,
-    // Render-resolution dimensions: where the 3D scene + most post passes
-    // (HDR, TAA, velocity, SSAO, SSR) draw. Equal to `output_w/h` when no
-    // upscaler is active; smaller when MetalFX upscaling is on.
-    render_w: u32,
-    render_h: u32,
-    // Output-resolution dimensions: where bloom + composite operate so the
-    // upscaled / native scene reads back cleanly into the drawable.
-    output_w: u32,
-    output_h: u32,
-    taa_enabled: bool,
-    // Whether the velocity pre-pass + targets should be built. True when
-    // TAA is on *or* when temporal upscaling is on (the MetalFX scaler
-    // consumes motion vectors).
-    needs_velocity: bool,
-    has_instanced: bool,
-    ssao_settings: &Option<SsaoSettings>,
-    ssr_settings: &Option<SsrSettings>,
-    ssgi_settings: &Option<SsgiSettings>,
-    rt_reflection_settings: &Option<RtReflectionSettings>,
-    // Per-axis divisor for the roughness-aware reflection blur target, resolved
-    // from the world's `reflection_blur_resolution` (forwarded to
-    // `build_quality_effects`).
-    reflection_blur_scale: u32,
-    decals: &[DecalRecord],
-    particles: &[ParticleEmitterRecord],
-    fog_settings: &Option<FogSettings>,
-    auto_exposure_settings: &Option<AutoExposureSettings>,
-    auto_exposure_bias_ev: f32,
-    hot_reload: bool,
+    dims: EffectDimensions,
+    settings: EffectSettings,
+    flags: EffectFlags,
+    world_content: WorldContentEffects,
 ) -> Result<EffectsBundle, String> {
+    let EffectDimensions {
+        render_w,
+        render_h,
+        output_w,
+        output_h,
+    } = dims;
+    let WorldContentEffects {
+        fog_settings,
+        decals,
+        particles,
+    } = world_content;
+    // `flags` is Copy and moves intact into `build_quality_effects` below; this
+    // local drives the bloom + world-content pipeline builds that stay here.
+    let hot_reload = flags.hot_reload;
     // Bloom chain + pipelines. Bloom samples whatever scene_color the post
     // stack hands it: that's at output (drawable) resolution when MetalFX
     // upscaling is on, native resolution otherwise. Sized off `output_w/h`
@@ -479,23 +521,7 @@ pub(crate) fn build_effects(
         auto_exposure_output,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(
-        device,
-        vert_desc,
-        render_w,
-        render_h,
-        taa_enabled,
-        needs_velocity,
-        has_instanced,
-        ssao_settings,
-        ssr_settings,
-        ssgi_settings,
-        rt_reflection_settings,
-        reflection_blur_scale,
-        auto_exposure_settings,
-        auto_exposure_bias_ev,
-        hot_reload,
-    )?;
+    } = build_quality_effects(device, vert_desc, render_w, render_h, settings, flags)?;
 
     // Projected-decal pass. Built only when the world declares at least one
     // decal; with none, all four resources stay `None` and the pass is

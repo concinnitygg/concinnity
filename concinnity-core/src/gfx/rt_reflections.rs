@@ -39,6 +39,26 @@ pub struct RtReflectionSettings {
     pub max_distance: f32,
 }
 
+// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
+// `fov_y_radians` / `aspect` give the view-ray scale used to rebuild a
+// view-space position from the SSR pre-pass G-buffer. `inv_view_rot` is the
+// view-to-world rotation (the transpose of the view matrix's orthonormal 3x3)
+// and `cam_pos` the world camera position; together they form the
+// camera-to-world transform that lifts the reconstructed hit point + normal
+// into the BVH's world space. `sun_dir` is the world-space unit direction
+// toward the sun and `sun_color` its radiance; `prefilter_mip_count` is the IBL
+// cubemap mip count (0 = no IBL) for the miss fallback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RtParamsInputs {
+    pub fov_y_radians: f32,
+    pub aspect: f32,
+    pub inv_view_rot: [[f32; 4]; 4],
+    pub cam_pos: [f32; 3],
+    pub sun_dir: [f32; 3],
+    pub sun_color: [f32; 3],
+    pub prefilter_mip_count: f32,
+}
+
 impl RtReflectionSettings {
     // Clamp the authored intensity / distance into a safe range.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
@@ -49,26 +69,17 @@ impl RtReflectionSettings {
     }
 
     // Build the per-frame GPU uniform from these settings, the active camera,
-    // and the sun. `fov_y_radians` / `aspect` give the view-ray scale used to
-    // rebuild a view-space position from the SSR pre-pass G-buffer.
-    // `inv_view_rot` is the view-to-world rotation (the transpose of the view
-    // matrix's orthonormal 3x3) and `cam_pos` the world camera position;
-    // together they form the camera-to-world transform that lifts the
-    // reconstructed hit point + normal into the BVH's world space.
-    // `sun_dir` is the world-space unit direction toward the sun and
-    // `sun_color` its radiance; `prefilter_mip_count` is the IBL cubemap mip
-    // count (0 = no IBL) for the miss fallback.
-    #[allow(clippy::too_many_arguments)]
-    pub fn params(
-        &self,
-        fov_y_radians: f32,
-        aspect: f32,
-        inv_view_rot: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        sun_dir: [f32; 3],
-        sun_color: [f32; 3],
-        prefilter_mip_count: f32,
-    ) -> RtParams {
+    // and the sun.
+    pub fn params(&self, inputs: RtParamsInputs) -> RtParams {
+        let RtParamsInputs {
+            fov_y_radians,
+            aspect,
+            inv_view_rot,
+            cam_pos,
+            sun_dir,
+            sun_color,
+            prefilter_mip_count,
+        } = inputs;
         // Camera-to-world: the rotation already lives in `inv_view_rot`'s 3x3
         // (its translation column is identity); set the translation column to
         // the world camera position to complete the rigid inverse of the view.
@@ -123,15 +134,15 @@ mod tests {
     #[test]
     fn params_carry_camera_and_sun_inputs() {
         let s = RtReflectionSettings::resolve(0.8, 40.0);
-        let p = s.params(
-            std::f32::consts::FRAC_PI_2,
-            1.6,
-            IDENTITY,
-            [3.0, 4.0, 5.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 0.9, 0.8],
-            6.0,
-        );
+        let p = s.params(RtParamsInputs {
+            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            aspect: 1.6,
+            inv_view_rot: IDENTITY,
+            cam_pos: [3.0, 4.0, 5.0],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0, 0.9, 0.8],
+            prefilter_mip_count: 6.0,
+        });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
@@ -148,15 +159,15 @@ mod tests {
         // inv_view's translation column must be the world camera position so the
         // reconstructed view-space hit point lifts to the right world point.
         let s = RtReflectionSettings::resolve(0.8, 40.0);
-        let p = s.params(
-            std::f32::consts::FRAC_PI_2,
-            1.6,
-            IDENTITY,
-            [3.0, 4.0, 5.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 1.0, 1.0],
-            6.0,
-        );
+        let p = s.params(RtParamsInputs {
+            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            aspect: 1.6,
+            inv_view_rot: IDENTITY,
+            cam_pos: [3.0, 4.0, 5.0],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0, 1.0, 1.0],
+            prefilter_mip_count: 6.0,
+        });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
         assert_eq!(p.inv_view[0], [1.0, 0.0, 0.0, 0.0]);
@@ -165,15 +176,15 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = RtReflectionSettings::resolve(0.7, 40.0);
-        let p = s.params(
-            std::f32::consts::FRAC_PI_2,
-            0.0,
-            IDENTITY,
-            [0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 1.0, 1.0],
-            0.0,
-        );
+        let p = s.params(RtParamsInputs {
+            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            aspect: 0.0,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0, 0.0, 0.0],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0, 1.0, 1.0],
+            prefilter_mip_count: 0.0,
+        });
         assert!(p.aspect >= MIN_ASPECT);
     }
 }

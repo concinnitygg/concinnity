@@ -5,7 +5,6 @@
 // Pipelines, targets, and both encoders live together so the effect is a
 // single unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -18,7 +17,7 @@ use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::pipeline::shader_source;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 
 // All screen-space-reflection feature state grouped into one unit: the
@@ -194,11 +193,13 @@ impl MtlContext {
         // target (reflected radiance + composite weight, not yet blended).
         self.fullscreen_pass(
             cmd_buf,
-            targets.reflection.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::Whole(crate::metal::pass_timing::PassId::SsrResolve),
-            resolve_ps,
-            "SSR resolve",
+            FullscreenPass {
+                target: targets.reflection.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::SsrResolve),
+                pipeline: resolve_ps,
+                label: "SSR resolve",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuf.normal_depth.as_ref()), 1);
@@ -260,11 +261,13 @@ impl MtlContext {
         // span start; the composite below times its end (both under one slot).
         self.fullscreen_pass(
             cmd_buf,
-            targets.blur.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::First(crate::metal::pass_timing::PassId::ReflectionComposite),
-            blur_ps,
-            "reflection blur",
+            FullscreenPass {
+                target: targets.blur.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::First(crate::metal::pass_timing::PassId::ReflectionComposite),
+                pipeline: blur_ps,
+                label: "reflection blur",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuf.roughness.as_ref()), 1);
@@ -275,11 +278,13 @@ impl MtlContext {
         // roughness, then composite over the scene into `output`.
         self.fullscreen_pass(
             cmd_buf,
-            targets.output.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::Last(crate::metal::pass_timing::PassId::ReflectionComposite),
-            composite_ps,
-            "reflection composite",
+            FullscreenPass {
+                target: targets.output.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::Last(crate::metal::pass_timing::PassId::ReflectionComposite),
+                pipeline: composite_ps,
+                label: "reflection composite",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 1);

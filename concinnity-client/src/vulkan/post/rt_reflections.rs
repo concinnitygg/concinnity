@@ -24,7 +24,7 @@
 use ash::{Device, vk};
 
 use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::RtReflectionSettings;
+use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
@@ -310,39 +310,102 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
     Ok(RebuiltRtPipelines { flat, textured })
 }
 
+// Allocation context for building RT resources: the device to allocate on, the
+// output-target extent, and the number of frames in flight (per-frame UBOs +
+// descriptor sets). Everything `create_buffer` / `create_image` / `build_targets`
+// need to size and place the pass's GPU memory.
+pub(in crate::vulkan) struct RtBuild<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub width: u32,
+    pub height: u32,
+    pub frames: usize,
+}
+
+// The resolution-independent static resolve inputs the pass samples every frame:
+// the scene vertex/index SSBOs, the per-frame HDR scene / G-buffer / roughness
+// views, and the shared IBL prefilter cube. Wired by `wire_static` (at init and
+// on resize) into every frame's set.
+pub(in crate::vulkan) struct RtStaticInputs<'a> {
+    pub vertex_buffer: vk::Buffer,
+    pub index_buffer: vk::Buffer,
+    pub hdr_resolve_views: &'a [vk::ImageView],
+    pub gbuffer_views: &'a [vk::ImageView],
+    pub roughness_views: &'a [vk::ImageView],
+    pub prefilter_view: vk::ImageView,
+    pub cube_sampler: vk::Sampler,
+}
+
+// The live acceleration-structure handles the trace binds per frame: the TLAS,
+// the geometry table (buffer + byte size), the deformed skinned vertex buffer,
+// and the skinned index buffer. All re-pointed each frame by `wire_dynamic`
+// because a dynamic rebuild fresh-allocates them.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RtAccelHandles {
+    pub tlas: vk::AccelerationStructureKHR,
+    pub geom_buffer: vk::Buffer,
+    pub geom_size: vk::DeviceSize,
+    pub deformed_verts: vk::Buffer,
+    pub skinned_indices: vk::Buffer,
+}
+
+// Pipeline-layout / bindless configuration for building the RT pipelines: the
+// optional bindless texture-pool layout + its length (enable the textured
+// variant), the forward global set's layout (bound as set 1 for the
+// reflection-probe miss fallback), and whether this is a hot-reload recompile.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct RtLayoutConfig {
+    pub bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    // The forward global set's layout, bound as set 1 so the pass can sample the
+    // reflection-probe set + cube array (binding 7/8) on a ray miss.
+    pub global_set_layout: vk::DescriptorSetLayout,
+    pub pool_size: usize,
+    pub hot_reload: bool,
+}
+
 impl RtReflectionsResources {
     // Build every RT-reflection resource. Returns `Err` when the GLSL fails to
-    // compile (the caller then falls back to SSR). `tlas` + `geom` are the
-    // initial acceleration-structure handles (re-pointed each frame thereafter);
-    // `bindless_set_layout` + `pool_size` enable the textured variant.
-    #[allow(clippy::too_many_arguments)]
+    // compile (the caller then falls back to SSR). `accel` holds the initial
+    // acceleration-structure handles (re-pointed each frame thereafter);
+    // `layout.bindless_set_layout` + `layout.pool_size` enable the textured variant.
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        width: u32,
-        height: u32,
-        frames: usize,
+        build: RtBuild,
         settings: RtReflectionSettings,
-        vertex_buffer: vk::Buffer,
-        index_buffer: vk::Buffer,
-        tlas: vk::AccelerationStructureKHR,
-        geom_buffer: vk::Buffer,
-        geom_size: vk::DeviceSize,
-        deformed_verts: vk::Buffer,
-        skinned_indices: vk::Buffer,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-        bindless_set_layout: Option<vk::DescriptorSetLayout>,
-        // The forward global set's layout, bound as set 1 so the pass can sample the
-        // reflection-probe set + cube array (binding 7/8) on a ray miss.
-        global_set_layout: vk::DescriptorSetLayout,
-        pool_size: usize,
-        hot_reload: bool,
+        static_inputs: RtStaticInputs,
+        accel: RtAccelHandles,
+        layout: RtLayoutConfig,
     ) -> Result<Self, String> {
+        let RtBuild {
+            instance,
+            device,
+            physical_device,
+            width,
+            height,
+            frames,
+        } = build;
+        let RtStaticInputs {
+            vertex_buffer,
+            index_buffer,
+            hdr_resolve_views,
+            gbuffer_views,
+            roughness_views,
+            prefilter_view,
+            cube_sampler,
+        } = static_inputs;
+        let RtAccelHandles {
+            tlas,
+            geom_buffer,
+            geom_size,
+            deformed_verts,
+            skinned_indices,
+        } = accel;
+        let RtLayoutConfig {
+            bindless_set_layout,
+            global_set_layout,
+            pool_size,
+            hot_reload,
+        } = layout;
         let render_pass = create_rt_render_pass(device)?;
 
         // set 0: RtParams UBO, TLAS, geom table, verts, indices, scene, gbuffer,
@@ -548,23 +611,27 @@ impl RtReflectionsResources {
         me.build_targets(instance, device, physical_device, width, height)?;
         me.wire_static(
             device,
-            vertex_buffer,
-            index_buffer,
-            hdr_resolve_views,
-            gbuffer_views,
-            roughness_views,
-            prefilter_view,
-            cube_sampler,
+            RtStaticInputs {
+                vertex_buffer,
+                index_buffer,
+                hdr_resolve_views,
+                gbuffer_views,
+                roughness_views,
+                prefilter_view,
+                cube_sampler,
+            },
         );
         for i in 0..frames {
             me.wire_dynamic(
                 device,
                 i,
-                tlas,
-                geom_buffer,
-                geom_size,
-                deformed_verts,
-                skinned_indices,
+                RtAccelHandles {
+                    tlas,
+                    geom_buffer,
+                    geom_size,
+                    deformed_verts,
+                    skinned_indices,
+                },
             );
         }
         Ok(me)
@@ -582,21 +649,25 @@ impl RtReflectionsResources {
         let w = width.max(1);
         let h = height.max(1);
         let (image, memory) = create_image(
-            instance,
-            device,
-            physical_device,
-            w,
-            h,
-            HDR_FORMAT,
-            vk::ImageTiling::OPTIMAL,
-            // TRANSFER_SRC so the transparent (glass) pass can snapshot the
-            // post-RT scene for its refraction tap, the same usage the SSR output
-            // carries when SSR owns the scene image.
-            vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::SampleCountFlags::TYPE_1,
+            &GpuAllocContext {
+                instance,
+                device,
+                physical_device,
+            },
+            &ImageSpec {
+                width: w,
+                height: h,
+                format: HDR_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                // TRANSFER_SRC so the transparent (glass) pass can snapshot the
+                // post-RT scene for its refraction tap, the same usage the SSR output
+                // carries when SSR owns the scene image.
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: vk::SampleCountFlags::TYPE_1,
+            },
         )?;
         let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         self.output = GpuImage {
@@ -629,18 +700,16 @@ impl RtReflectionsResources {
     // A single-entry slice is shared across frames (the legacy SSR pre-pass
     // G-buffer). RT reuses the same byte-identical G-buffer the separate SSR
     // pre-pass produced, so the trace maths is unchanged.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::vulkan) fn wire_static(
-        &self,
-        device: &Device,
-        vertex_buffer: vk::Buffer,
-        index_buffer: vk::Buffer,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-    ) {
+    pub(in crate::vulkan) fn wire_static(&self, device: &Device, inputs: RtStaticInputs) {
+        let RtStaticInputs {
+            vertex_buffer,
+            index_buffer,
+            hdr_resolve_views,
+            gbuffer_views,
+            roughness_views,
+            prefilter_view,
+            cube_sampler,
+        } = inputs;
         let verts_info = vk::DescriptorBufferInfo::default()
             .buffer(vertex_buffer)
             .offset(0)
@@ -722,17 +791,19 @@ impl RtReflectionsResources {
     // `skinned_indices` is `vk::Buffer::null()` until the first skinned rebuild,
     // in which case the 1-element dummy SSBO is bound so the descriptor stays
     // valid.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn wire_dynamic(
         &self,
         device: &Device,
         frame_idx: usize,
-        tlas: vk::AccelerationStructureKHR,
-        geom_buffer: vk::Buffer,
-        geom_size: vk::DeviceSize,
-        deformed: vk::Buffer,
-        skinned_indices: vk::Buffer,
+        accel: RtAccelHandles,
     ) {
+        let RtAccelHandles {
+            tlas,
+            geom_buffer,
+            geom_size,
+            deformed_verts: deformed,
+            skinned_indices,
+        } = accel;
         let set = self.resolve_sets[frame_idx];
         let accels = [tlas];
         let mut accel_write = vk::WriteDescriptorSetAccelerationStructureKHR::default()
@@ -827,7 +898,6 @@ impl RtReflectionsResources {
     // the static descriptors (the gbuffer / roughness / scene views all moved).
     // The TLAS + geom table are resolution-independent; the caller re-points them
     // per frame as usual.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         instance: &ash::Instance,
@@ -835,26 +905,11 @@ impl RtReflectionsResources {
         physical_device: vk::PhysicalDevice,
         width: u32,
         height: u32,
-        vertex_buffer: vk::Buffer,
-        index_buffer: vk::Buffer,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
+        inputs: RtStaticInputs,
     ) -> Result<(), String> {
         self.destroy_targets(device);
         self.build_targets(instance, device, physical_device, width, height)?;
-        self.wire_static(
-            device,
-            vertex_buffer,
-            index_buffer,
-            hdr_resolve_views,
-            gbuffer_views,
-            roughness_views,
-            prefilter_view,
-            cube_sampler,
-        );
+        self.wire_static(device, inputs);
         Ok(())
     }
 
@@ -984,15 +1039,19 @@ impl VkContext {
                 }
             });
             accel.dynamic_update(
-                &instance,
-                &device,
-                pd,
+                super::super::raytrace::RtDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    pd,
+                },
                 cmd,
                 &self.draw_objects,
-                mode,
+                super::super::raytrace::RtRebuildPolicy {
+                    mode,
+                    topology_dirty,
+                },
                 frame_idx,
                 skinned,
-                topology_dirty,
             );
             self.rt_accel = Some(accel);
         }
@@ -1005,11 +1064,13 @@ impl VkContext {
         rt.wire_dynamic(
             &device,
             frame_idx,
-            tlas,
-            geom_buffer,
-            geom_size,
-            deformed,
-            skinned_indices,
+            RtAccelHandles {
+                tlas,
+                geom_buffer,
+                geom_size,
+                deformed_verts: deformed,
+                skinned_indices,
+            },
         );
         // Re-point the glass pass's RT descriptor ring at the same live handles, so
         // a glass trace this frame samples the current TLAS / geometry table. A
@@ -1018,11 +1079,13 @@ impl VkContext {
             glass.wire_rt_dynamic(
                 &device,
                 frame_idx,
-                tlas,
-                geom_buffer,
-                geom_size,
-                deformed,
-                skinned_indices,
+                super::super::glass::GlassRtDynamic {
+                    tlas,
+                    geom_buffer,
+                    geom_size,
+                    deformed,
+                    skinned_indices,
+                },
             );
         }
     }
@@ -1057,15 +1120,15 @@ impl VkContext {
             [v[0][2], v[1][2], v[2][2], 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let params = rt.settings.params(
+        let params = rt.settings.params(RtParamsInputs {
             fov_y_radians,
             aspect,
             inv_view_rot,
             cam_pos,
-            self.fog_sun_dir,
-            self.fog_sun_color,
-            self.prefilter_mip_count as f32,
-        );
+            sun_dir: self.fog_sun_dir,
+            sun_color: self.fog_sun_color,
+            prefilter_mip_count: self.prefilter_mip_count as f32,
+        });
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const RtParams as *const u8,

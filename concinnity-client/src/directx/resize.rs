@@ -100,9 +100,11 @@ impl DxContext {
                 new_w,
                 new_h,
                 scale,
-                uav,
-                srv_cpu,
-                srv_gpu,
+                crate::directx::post::upscale::UpscalerDescriptors {
+                    uav_cpu: uav,
+                    srv_cpu,
+                    srv_gpu,
+                },
                 backend,
             )?
             .0;

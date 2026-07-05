@@ -25,7 +25,7 @@ use std::ptr;
 
 use ash::{Device, vk};
 
-use super::{UpscaleImage, VkUpscaleBackend, copy_ext_names};
+use super::{UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names};
 use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::texture::GpuImage;
 
@@ -365,17 +365,19 @@ impl XessUpscaler {
     // through. Assumes the XeSS instance / device extensions + features were
     // enabled at creation time (via `UpscaleSdk`); if they were not, the
     // context create / init below fails and we fall back.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn try_new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        gpu: super::UpscalerGpu<'_>,
         output_width: u32,
         output_height: u32,
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
+        let super::UpscalerGpu {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = gpu;
         let xess = match XessApi::load() {
             Some(api) => api,
             None => {
@@ -516,19 +518,20 @@ impl VkUpscaleBackend for XessUpscaler {
         super::halton_jitter_offset(frame_index)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: vk::CommandBuffer,
-        color: &UpscaleImage,
-        depth: &UpscaleImage,
-        motion: &UpscaleImage,
-        jitter_offset: [f32; 2],
-        _elapsed: f32,
-        _camera_near: f32,
-        _camera_far: f32,
-        _camera_fov_y_radians: f32,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> Result<(), String> {
+        let UpscaleInputs {
+            color,
+            depth,
+            motion,
+        } = inputs;
+        // XeSS ignores the camera's temporal / projection fields (auto-exposure
+        // + its own frame heuristics); only the shared jitter feeds the dispatch.
+        let jitter_offset = camera.jitter_offset;
         let reset = self.reset_pending.replace(false);
         let zero = xess_2d_t { x: 0, y: 0 };
         let output_view = xess_vk_image_view_info {

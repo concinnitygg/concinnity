@@ -27,6 +27,7 @@ use crate::directx::texture::{
 use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::RtParams;
+use crate::gfx::rt_reflections::RtParamsInputs;
 
 pub const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
 // Shared reflection-probe sampling, concatenated ahead of the glass shader (no
@@ -621,22 +622,22 @@ fn create_glass_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
 // probe/planar glass path. Built whenever the GPU supports DXR (regardless of
 // whether RT is on at launch) so a live `quality-set ray_traced_reflections`
 // selects it with no pipeline rebuild.
-#[allow(clippy::type_complexity)]
+// Root signature, the flat and textured RT pipeline states, and the per-frame
+// upload resources with their mapped pointers.
+type GlassRtPipeline = (
+    ID3D12RootSignature,
+    ID3D12PipelineState,
+    ID3D12PipelineState,
+    Vec<ID3D12Resource>,
+    Vec<*mut u8>,
+);
+
 fn build_glass_rt(
     device: &ID3D12Device,
     msaa_samples: u32,
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
-) -> Result<
-    (
-        ID3D12RootSignature,
-        ID3D12PipelineState,
-        ID3D12PipelineState,
-        Vec<ID3D12Resource>,
-        Vec<*mut u8>,
-    ),
-    String,
-> {
+) -> Result<GlassRtPipeline, String> {
     let shaders = compile_glass_rt_shaders(msaa_samples, hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_glass_rt_root_signature(device))?;
     let flat_pso = dump_on_err(
@@ -697,27 +698,61 @@ fn write_scene_copy_srv(
     unsafe { device.CreateShaderResourceView(scene_copy, Some(&desc), srv_cpu) };
 }
 
+// The device + queue handles glass build submits against.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GlassDeviceCtx<'a> {
+    pub device: &'a ID3D12Device,
+    pub command_queue: &'a ID3D12CommandQueue,
+}
+
+// Render-target build config: MSAA sample count, render dimensions, and the
+// shader hot-reload toggle.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GlassBuildConfig {
+    pub msaa_samples: u32,
+    pub width: u32,
+    pub height: u32,
+    pub hot_reload: bool,
+}
+
+// GPU descriptor handles for the scene snapshot (CPU + GPU SRV) and the
+// main-depth SRV the glass pixel shader samples.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GlassSceneTargets {
+    pub scene_copy_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub scene_copy_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
 impl GlassResources {
     // Build the glass pipeline + per-panel quad buffers + per-panel uniform
     // CBVs + the per-frame view ring + the scene snapshot. Called from
     // `DxContext::new` when the world declares any `GlassPanel`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
-        command_queue: &ID3D12CommandQueue,
-        msaa_samples: u32,
+        device_ctx: GlassDeviceCtx,
+        config: GlassBuildConfig,
+        scene: GlassSceneTargets,
         panels: &[GlassPanel],
         // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep
         // the probe/sky reflection. From `assign_planar_slots`.
         planar_slots: &[Option<usize>],
-        scene_copy_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        scene_copy_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        width: u32,
-        height: u32,
         info_queue: Option<&ID3D12InfoQueue>,
-        hot_reload: bool,
     ) -> Result<Self, String> {
+        let GlassDeviceCtx {
+            device,
+            command_queue,
+        } = device_ctx;
+        let GlassBuildConfig {
+            msaa_samples,
+            width,
+            height,
+            hot_reload,
+        } = config;
+        let GlassSceneTargets {
+            scene_copy_srv_cpu,
+            scene_copy_srv_gpu,
+            depth_srv_gpu,
+        } = scene;
         let (vs, ps) = compile_glass_shaders(msaa_samples, hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_glass_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_glass_pso(device, &root_sig, &vs, &ps))?;
@@ -967,15 +1002,15 @@ impl DxContext {
                 [v[0][2], v[1][2], v[2][2], 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ];
-            let params = rt.settings.params(
+            let params = rt.settings.params(RtParamsInputs {
                 fov_y_radians,
                 aspect,
                 inv_view_rot,
-                cam,
-                self.fog.sun_dir,
-                self.fog.sun_color,
-                self.env_map.prefilter_mip_count as f32,
-            );
+                cam_pos: cam,
+                sun_dir: self.fog.sun_dir,
+                sun_color: self.fog.sun_color,
+                prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            });
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const RtParams as *const u8,

@@ -97,16 +97,10 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
         prefilter_clamp: 12.0,
     };
     // Parent dir (temp dir) exists, so the watcher should subscribe.
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        Some(env_map.clone()),
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        environment_map: Some(env_map.clone()),
+        ..Default::default()
+    });
     assert!(state.environment_map.is_some());
     let captured = state.environment_map.as_ref().unwrap();
     assert_eq!(captured.prefilter_face_size, env_map.prefilter_face_size);
@@ -118,16 +112,7 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
 fn fully_empty_state_skips_watcher_creation() {
     // No textures, no LUT, no EnvironmentMap, no meshes, no skinned, no
     // world path → nothing to watch.
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
     assert!(state.environment_map.is_none());
     assert!(state.color_lut.is_none());
     assert!(state.map.is_empty());
@@ -191,16 +176,10 @@ fn state_with_only_meshes_still_spawns_a_watcher() {
         lod_distances: Vec::new(),
         draw_indices: vec![0],
     });
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
         meshes,
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+        ..Default::default()
+    });
     assert_eq!(state.meshes.len(), 1);
     assert_eq!(state.meshes.entries[0].draw_indices, vec![0]);
 }
@@ -240,16 +219,10 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
         index_count: 24,
         joint_count: 2,
     });
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        skinned,
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        skinned_meshes: skinned,
+        ..Default::default()
+    });
     assert_eq!(state.skinned_meshes.len(), 1);
     assert_eq!(state.skinned_meshes.entries[0].joint_count, 2);
 }
@@ -263,16 +236,10 @@ fn state_with_only_world_jsonl_still_spawns_a_watcher() {
         std::env::temp_dir().display(),
         std::process::id()
     );
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        Some(world_path.clone()),
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        world_jsonl_path: Some(world_path.clone()),
+        ..Default::default()
+    });
     assert_eq!(state.world_jsonl_path.as_deref(), Some(world_path.as_str()));
 }
 
@@ -349,16 +316,7 @@ fn fresh_state_has_no_envmap_in_flight() {
     // The off-thread envmap convolution slot must start empty; a
     // non-`None` value at construction would skip the very first reload
     // request a `reload_assets` pass made.
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
     let slot = state.env_map_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -368,16 +326,7 @@ fn fresh_state_has_no_asset_batch_in_flight() {
     // Same invariant as the envmap slot: a non-`None` value at
     // construction would make the very first `reload_assets` think a
     // worker was already running and skip the spawn.
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
     let slot = state.asset_batch_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -452,16 +401,7 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     // The render thread polls + drains in one step; a second drain on
     // the same frame must return nothing so a successful apply does not
     // double-write the SkeletonPose components.
-    let mut state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        ShaderStageSourceMap::new(),
-        None,
-    );
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: 0,
         new_skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
@@ -555,16 +495,11 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
         args: serde_json::json!({"generator": "box"}),
         draw_indices: vec![0],
     });
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        proc,
-        ShaderStageSourceMap::new(),
-        Some(world_path),
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        procedural_meshes: proc,
+        world_jsonl_path: Some(world_path),
+        ..Default::default()
+    });
     assert_eq!(state.procedural_meshes.len(), 1);
     assert_eq!(state.procedural_meshes.entries[0].name, "box_mesh");
 }
@@ -663,16 +598,10 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
             std::process::id()
         ),
     });
-    let state = AssetHotReloadState::new(
-        TextureSourceMap::new(),
-        None,
-        None,
-        MeshSourceMap::new(),
-        SkinnedMeshSourceMap::new(),
-        ProceduralMeshSourceMap::new(),
-        stages,
-        None,
-    );
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        shader_stages: stages,
+        ..Default::default()
+    });
     assert_eq!(state.shader_stages.len(), 1);
     assert_eq!(state.shader_stages.entries[0].kind, ShaderKind::Vertex);
 }
@@ -706,16 +635,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             crate::gfx::input::RenderInput::default()
         }
         fn wait_idle(&self) {}
-        fn draw_frame(
-            &mut self,
-            _: f32,
-            _: f32,
-            _: f32,
-            _: f32,
-            _: [f32; 3],
-            _: &[crate::gfx::render_types::TextDrawCall],
-            _: bool,
-        ) -> Result<(), String> {
+        fn draw_frame(&mut self, _: crate::gfx::backend::FrameParams<'_>) -> Result<(), String> {
             Ok(())
         }
         fn update_view(&mut self, _: [[f32; 4]; 4]) {}
@@ -780,13 +700,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         }
         fn add_chunk_mesh(
             &mut self,
-            _: &[crate::gfx::mesh_payload::Vertex],
-            _: &[u16],
-            _: [[f32; 4]; 4],
-            _: usize,
-            _: usize,
-            _: crate::gfx::render_types::MaterialUniforms,
-            _: u64,
+            _: crate::gfx::backend::ChunkMesh<'_>,
         ) -> Result<usize, String> {
             Ok(0)
         }

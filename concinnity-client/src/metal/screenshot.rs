@@ -20,7 +20,6 @@
 // copy reads it. The decode follows the swapchain format (4-byte SDR `BGRA8` or
 // 8-byte HDR `RGBA16Float`), not a fixed texel size.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLCommandBuffer as _, MTLCommandEncoder as _,

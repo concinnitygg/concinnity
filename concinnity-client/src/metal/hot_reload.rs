@@ -11,7 +11,6 @@
 // `MtlContext::new` is called with `hot_reload = true`. Production `cn run`
 // never instantiates it.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use objc2::rc::Retained;

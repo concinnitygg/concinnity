@@ -355,15 +355,16 @@ pub(super) fn resolve_instanced_shader(
     Ok(Some(spv))
 }
 
-// SPIR-V for the skinned-mesh shader stages: the main skinned VS, the
-// depth-only skinned shadow VS, and the fragment shader (shared with the
-// static path; `frag_bytes`, when valid SPIR-V, is used directly, otherwise
-// the built-in `FRAG_GLSL` is compiled).
-#[allow(clippy::type_complexity)]
+// SPIR-V for the skinned-mesh shader stages, in order: the main skinned VS, the
+// depth-only skinned shadow VS, and the fragment shader.
+type SkinnedShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
+
+// (Fragment is shared with the static path; `frag_bytes`, when valid SPIR-V, is
+// used directly, otherwise the built-in `FRAG_GLSL` is compiled.)
 pub(super) fn compile_skinned_shaders(
     hot_reload: bool,
     frag_bytes: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
+) -> Result<SkinnedShaderSpirv, String> {
     let main_vs_src = shader_source(hot_reload, "skinned.vert", SKINNED_VERT_GLSL);
     let main_vs = compile_glsl(
         &main_vs_src,
@@ -583,16 +584,28 @@ fn text_vertex_input() -> (
     ([binding], attrs)
 }
 
-#[allow(clippy::too_many_arguments)]
+// Render pass, pipeline layout, and the vertex + fragment SPIR-V a mesh
+// pipeline (main / instanced / skinned) is built against. Borrows the shader
+// byte slices for the duration of the build.
+pub(super) struct MeshPipelineTargets<'a> {
+    pub render_pass: vk::RenderPass,
+    pub layout: vk::PipelineLayout,
+    pub vert_spv: &'a [u8],
+    pub frag_spv: &'a [u8],
+}
+
 pub(super) fn create_main_pipeline(
     device: &Device,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
+    targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     _surface_format: vk::Format,
 ) -> Result<vk::Pipeline, String> {
+    let MeshPipelineTargets {
+        render_pass,
+        layout,
+        vert_spv,
+        frag_spv,
+    } = targets;
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -690,25 +703,13 @@ pub(super) fn create_main_pipeline(
 // Same as `create_main_pipeline` but takes an instanced vertex shader. The
 // caller is responsible for using a pipeline layout that includes the
 // per-instance storage buffer descriptor set (set=2).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn create_instanced_pipeline(
     device: &Device,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
+    targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
 ) -> Result<vk::Pipeline, String> {
-    create_main_pipeline(
-        device,
-        render_pass,
-        layout,
-        vert_spv,
-        frag_spv,
-        msaa,
-        surface_format,
-    )
+    create_main_pipeline(device, targets, msaa, surface_format)
 }
 
 pub(super) fn create_shadow_pipeline(
@@ -805,15 +806,17 @@ pub(super) fn create_shadow_pipeline(
 // Main-pass pipeline for skinned geometry: the skinned vertex shader (80-byte
 // layout) paired with the standard fragment shader. The caller passes a
 // pipeline layout that includes the joint storage-buffer descriptor set.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn create_skinned_pipeline(
     device: &Device,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
+    targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
 ) -> Result<vk::Pipeline, String> {
+    let MeshPipelineTargets {
+        render_pass,
+        layout,
+        vert_spv,
+        frag_spv,
+    } = targets;
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();

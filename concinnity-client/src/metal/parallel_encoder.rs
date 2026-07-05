@@ -19,8 +19,6 @@
 // `particle_last_elapsed`, `particle_frame_index`, the per-emitter
 // `spawn_state`) all happen on the main thread before the fan-out.
 
-#![allow(clippy::incompatible_msrv)]
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLCommandBuffer;

@@ -275,25 +275,50 @@ pub(in crate::directx) fn write_hiz_mip_uav(
     unsafe { device.CreateUnorderedAccessView(tex, None, Some(&desc), uav_cpu) };
 }
 
+// Device handles the Hi-Z builder submits against, plus the shader hot-reload
+// toggle. They always travel together through `new`.
+#[derive(Clone, Copy)]
+pub(super) struct HiZDeviceCtx<'a> {
+    pub device: &'a ID3D12Device,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+    pub hot_reload: bool,
+}
+
+// The Hi-Z render target: its dimensions plus every descriptor handle the
+// downsample + cull kernels bind. The all-mips SRV and main-depth SRV each
+// have a (CPU, GPU) pair; the per-mip UAVs have one pair per mip.
+pub(super) struct HiZTarget {
+    pub width: u32,
+    pub height: u32,
+    pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub depth_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    pub mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+}
+
 impl HiZResources {
     // Build the Hi-Z resource + every PSO. Called from the init path when
     // the bindless static pass + cull pipeline are active. Each of the
     // supplied descriptor handles points at a pre-reserved slot in the
     // SRV heap; the resource owns the descriptors but not the heap.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        device: &ID3D12Device,
-        info_queue: Option<&ID3D12InfoQueue>,
-        width: u32,
-        height: u32,
-        srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        depth_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-        mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
-        hot_reload: bool,
-    ) -> Result<Self, String> {
+    pub(super) fn new(ctx: HiZDeviceCtx, target: HiZTarget) -> Result<Self, String> {
+        let HiZDeviceCtx {
+            device,
+            info_queue,
+            hot_reload,
+        } = ctx;
+        let HiZTarget {
+            width,
+            height,
+            srv_cpu,
+            srv_gpu,
+            depth_srv_cpu,
+            depth_srv_gpu,
+            mip_uav_cpus,
+            mip_uav_gpus,
+        } = target;
         let mip_count = hiz_mip_count(width, height).min(mip_uav_cpus.len() as u32);
         if mip_count == 0 {
             return Err("hiz: zero mip count".into());

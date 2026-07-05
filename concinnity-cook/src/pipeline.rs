@@ -240,9 +240,9 @@ fn probe_gltf_cache(
     let empty: [WorldJsonlAsset; 0] = [];
     for asset in assets {
         let ct = if asset.asset_type == Mesh::NAME {
-            ComponentType::parse(Mesh::NAME).ok()
+            ComponentType::parse(Mesh::NAME)
         } else if asset.asset_type == SkinnedMesh::NAME {
-            ComponentType::parse(SkinnedMesh::NAME).ok()
+            ComponentType::parse(SkinnedMesh::NAME)
         } else {
             None
         };

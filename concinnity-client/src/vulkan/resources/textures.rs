@@ -9,7 +9,7 @@
 use ash::vk;
 
 use super::super::context::*;
-use super::super::texture::upload_texture;
+use super::super::texture::{GpuUploadContext, upload_texture};
 
 impl VkContext {
     pub(in crate::vulkan) fn write_object_image(
@@ -196,11 +196,13 @@ impl VkContext {
         }
         self.wait_idle();
         let img = upload_texture(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &GpuUploadContext {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             width,
             height,
             pixels,
@@ -243,11 +245,13 @@ impl VkContext {
         }
         self.wait_idle();
         let img = upload_texture(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &GpuUploadContext {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             width,
             height,
             pixels,
@@ -332,11 +336,13 @@ impl VkContext {
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &GpuUploadContext {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             view.irradiance_face,
             view.irradiance_bytes,
             view.prefilter_face,

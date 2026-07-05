@@ -36,7 +36,6 @@
 // frames-in-flight fence retires the frames whose still-in-flight trace could
 // read them.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use std::ptr::NonNull;
 
@@ -350,6 +349,47 @@ pub(crate) struct SkinnedRtInputs<'a> {
     pub joint_matrices: &'a [Vec<[[f32; 4]; 4]>],
     // The compiled `rt_skin` compute pipeline.
     pub skin_pipeline: &'a ProtocolObject<dyn MTLComputePipelineState>,
+}
+
+// The device + queue every acceleration-structure build encodes on.
+#[derive(Clone, Copy)]
+pub(crate) struct RtGpu<'a> {
+    pub device: &'a ProtocolObject<dyn objc2_metal::MTLDevice>,
+    pub command_queue: &'a ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
+}
+
+// The shared static geometry buffers a BLAS build addresses: the u32-indexed
+// vertex + index buffers that hold every non-skinned draw object and cluster.
+#[derive(Clone, Copy)]
+pub(crate) struct RtStaticGeometry<'a> {
+    pub vertex_buffer: &'a ProtocolObject<dyn MTLBuffer>,
+    pub index_buffer: &'a ProtocolObject<dyn MTLBuffer>,
+}
+
+// The scene geometry a full BVH build spans: the draw objects and the instanced
+// clusters (both filtered to resident, real-triangle participants inside).
+#[derive(Clone, Copy)]
+pub(crate) struct RtSceneGeometry<'a> {
+    pub draw_objects: &'a [DrawObject],
+    pub clusters: &'a [InstancedCluster],
+}
+
+// The bindless texture-pool sizes a geometry table is clamped against, so a
+// per-object albedo / normal index never points past the resident pool.
+#[derive(Clone, Copy)]
+pub(crate) struct RtTextureCounts {
+    pub albedo_count: usize,
+    pub normal_count: usize,
+}
+
+// The trailing knobs of an incremental topology refresh: whether see-through
+// glass is excluded from the BLAS, whether to also rebuild the TLAS inline (the
+// no-skinned path), and the frame id the retired resources are parked under.
+#[derive(Clone, Copy)]
+pub(crate) struct RtTopologyRefreshOptions {
+    pub exclude_seethrough: bool,
+    pub build_tlas: bool,
+    pub frame_id: u64,
 }
 
 // Whether the GPU supports hardware ray tracing. Apple-silicon GPUs report
@@ -851,16 +891,11 @@ impl crate::metal::context::MtlContext {
 // one (u16-indexed) BLAS per skinned object is built over that buffer. Because
 // the pose changes every frame the whole structure is rebuilt per frame (the
 // caller forces this); fresh allocations keep it hazard-free.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_rt_accel(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
-    vertex_buffer: &ProtocolObject<dyn MTLBuffer>,
-    index_buffer: &ProtocolObject<dyn MTLBuffer>,
-    draw_objects: &[DrawObject],
-    clusters: &[InstancedCluster],
-    albedo_count: usize,
-    normal_count: usize,
+    gpu: RtGpu,
+    static_geometry: RtStaticGeometry,
+    scene: RtSceneGeometry,
+    texture_counts: RtTextureCounts,
     skinned: Option<SkinnedRtInputs>,
     // Layer 2 see-through: when set, see-through glass meshes are left out of the
     // BLAS (they trace their own per-pixel reflection in the transparent pass, and
@@ -870,6 +905,22 @@ pub(crate) fn build_rt_accel(
     // `Material::see_through`), not a global flag.
     exclude_seethrough: bool,
 ) -> Result<Option<RtAccelData>, String> {
+    let RtGpu {
+        device,
+        command_queue,
+    } = gpu;
+    let RtStaticGeometry {
+        vertex_buffer,
+        index_buffer,
+    } = static_geometry;
+    let RtSceneGeometry {
+        draw_objects,
+        clusters,
+    } = scene;
+    let RtTextureCounts {
+        albedo_count,
+        normal_count,
+    } = texture_counts;
     // Only resident draw objects with real triangles take part. When the Layer 2
     // see-through path is enabled, see-through glass meshes are excluded (they
     // route through the transparent pass with their own per-pixel trace, so glass
@@ -1254,20 +1305,31 @@ impl RtAccelData {
     // freed in place: `useResource` declares residency not lifetime, and the build
     // keeps reading the scratch / instance buffer after this returns, so they must
     // outlive the frames whose still-in-flight trace could reach them.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn refresh_static_topology(
         &mut self,
-        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-        command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
-        vertex_buffer: &ProtocolObject<dyn MTLBuffer>,
-        index_buffer: &ProtocolObject<dyn MTLBuffer>,
+        gpu: RtGpu,
+        static_geometry: RtStaticGeometry,
         draw_objects: &[DrawObject],
-        albedo_count: usize,
-        normal_count: usize,
-        exclude_seethrough: bool,
-        build_tlas: bool,
-        frame_id: u64,
+        texture_counts: RtTextureCounts,
+        options: RtTopologyRefreshOptions,
     ) -> Result<(), String> {
+        let RtGpu {
+            device,
+            command_queue,
+        } = gpu;
+        let RtStaticGeometry {
+            vertex_buffer,
+            index_buffer,
+        } = static_geometry;
+        let RtTextureCounts {
+            albedo_count,
+            normal_count,
+        } = texture_counts;
+        let RtTopologyRefreshOptions {
+            exclude_seethrough,
+            build_tlas,
+            frame_id,
+        } = options;
         // The current participating draw set, by the same predicate as the full
         // build. (Clusters + skinned never change here, so they are not re-filtered.)
         let new_indices: Vec<usize> = draw_objects
@@ -1483,17 +1545,22 @@ impl RtAccelData {
     // `Ok(())` without touching the structures when the draw list changed shape
     // (a full rebuild handles that), and falls back to `rebuild_tlas` when no
     // skinned object is visible this frame.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn rebuild_skinned(
         &mut self,
-        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-        command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
+        gpu: RtGpu,
         draw_objects: &[DrawObject],
         skinned: SkinnedRtInputs,
-        albedo_count: usize,
-        normal_count: usize,
+        texture_counts: RtTextureCounts,
         frame_id: u64,
     ) -> Result<(), String> {
+        let RtGpu {
+            device,
+            command_queue,
+        } = gpu;
+        let RtTextureCounts {
+            albedo_count,
+            normal_count,
+        } = texture_counts;
         let Some(objects) = self.current_objects(draw_objects) else {
             return Ok(());
         };

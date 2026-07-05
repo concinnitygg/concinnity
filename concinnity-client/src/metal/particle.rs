@@ -18,7 +18,6 @@
 // pass and before SSR, so particles appear in screen-space reflections and
 // are temporally stabilised by TAA.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

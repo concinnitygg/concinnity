@@ -6,9 +6,21 @@ use ash::{Device, vk};
 
 use super::context::*;
 use super::device::*;
+use super::glass::{GlassDeviceCtx, GlassRebuildTargets};
+use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::{
-    alloc_bloom_input_sets, create_bloom_chain, create_bloom_framebuffers, rebind_bloom_input0,
+    BloomDeviceContext, alloc_bloom_input_sets, create_bloom_chain, create_bloom_framebuffers,
+    rebind_bloom_input0,
 };
+use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
+use super::post::reflection_composite::CompositeInputViews;
+use super::post::rt_reflections::RtStaticInputs;
+use super::post::ssao::SsaoDeviceCtx;
+use super::post::ssgi::SsgiDevice;
+use super::post::ssr::{SsrExtent, SsrGpuContext, SsrResolveInputs};
+use super::post::taa::{TaaDeviceContext, TaaSceneInputs};
+use super::post::upscale::UpscalerGpu;
+use super::raymarch::RaymarchDeviceContext;
 use super::texture::*;
 
 //  Swapchain rebuild
@@ -76,29 +88,36 @@ impl VkContext {
         self.destroy_swapchain_resources();
 
         let (width, height) = self.window.framebuffer_size();
+        // re-query present family
+        let present_family = {
+            let (_, pf) = query_queue_families(
+                &self.instance,
+                self.physical_device,
+                &self.surface_loader,
+                self.surface,
+            )?;
+            pf
+        };
         let (sc, imgs, fmt, ext) = create_swapchain_inner(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            &self.surface_loader,
-            self.surface,
-            &self.swapchain_loader,
-            width as u32,
-            height as u32,
-            self.graphics_family,
-            // re-query present family
-            {
-                let (_, pf) = query_queue_families(
-                    &self.instance,
-                    self.physical_device,
-                    &self.surface_loader,
-                    self.surface,
-                )?;
-                pf
+            &SwapchainSurface {
+                instance: &self.instance,
+                device: &self.device,
+                pd: self.physical_device,
+                surface_loader: &self.surface_loader,
+                surface: self.surface,
+                swapchain_loader: &self.swapchain_loader,
             },
-            vk::SwapchainKHR::null(),
-            self.hdr_mode,
-            self.vsync,
+            SwapchainQueueFamilies {
+                graphics_family: self.graphics_family,
+                present_family,
+            },
+            SwapchainConfig {
+                width: width as u32,
+                height: height as u32,
+                old_swapchain: vk::SwapchainKHR::null(),
+                hdr_mode: self.hdr_mode,
+                vsync: self.vsync,
+            },
         )?;
         self.swapchain = sc;
         self.swapchain_images = imgs;
@@ -119,11 +138,13 @@ impl VkContext {
             // `build_upscaler` re-resolves `upscale_requested` deterministically
             // to the same first choice, so the rebuilt backend matches the device.
             let (built, resolved) = super::post::build_upscaler(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                UpscalerGpu {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 ext.width,
                 ext.height,
                 scale,
@@ -178,11 +199,13 @@ impl VkContext {
             create_swapchain_image_views(&self.device, &self.swapchain_images, fmt)?;
 
         let (color_images, depth_images, hdr_resolve_images) = create_attachments(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &AttachmentDeviceCtx {
+                instance: &self.instance,
+                device: &self.device,
+                pd: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             render_ext.width,
             render_ext.height,
             self.msaa_samples,
@@ -209,11 +232,13 @@ impl VkContext {
 
         // Rebuild the bloom chain at the new resolution.
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &BloomDeviceContext {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             ext,
             self.frames_in_flight,
             &bloom_top_pairs,
@@ -257,14 +282,20 @@ impl VkContext {
         // current. The render pass, pipelines, UBOs, and descriptor sets survive.
         if let Some(mut gb) = self.gbuffer.take() {
             gb.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
-                render_ext.width,
-                render_ext.height,
-                self.frames_in_flight,
+                GbufferDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
+                GbufferQueueCtx {
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                GbufferExtent {
+                    width: render_ext.width,
+                    height: render_ext.height,
+                    frames: self.frames_in_flight,
+                },
             )?;
             self.gbuffer = Some(gb);
         }
@@ -285,18 +316,24 @@ impl VkContext {
                 None => (Vec::new(), Vec::new()),
             };
             ssr.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
-                render_ext.width,
-                render_ext.height,
-                &hdr_views,
-                &nd_views,
-                &rough_views,
-                self.env_map.prefilter.view,
-                self.cube_sampler,
+                &SsrGpuContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                SsrExtent {
+                    width: render_ext.width,
+                    height: render_ext.height,
+                },
+                SsrResolveInputs {
+                    hdr_resolve_views: &hdr_views,
+                    gbuffer_views: &nd_views,
+                    roughness_views: &rough_views,
+                    prefilter_view: self.env_map.prefilter.view,
+                    cube_sampler: self.cube_sampler,
+                },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
             // in the composite rebuild below), not the raw resolve output.
@@ -318,9 +355,11 @@ impl VkContext {
                 .expect("SSGI keeps the unified G-buffer pre-pass alive")
                 .normal_depth_views();
             ssgi.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                SsgiDevice {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
                 render_ext.width,
                 render_ext.height,
                 &hdr_views,
@@ -352,13 +391,15 @@ impl VkContext {
                 self.physical_device,
                 render_ext.width,
                 render_ext.height,
-                self.geometry.vertex_buffer,
-                self.geometry.index_buffer,
-                &hdr_views,
-                &nd_views,
-                &rough_views,
-                self.env_map.prefilter.view,
-                self.cube_sampler,
+                RtStaticInputs {
+                    vertex_buffer: self.geometry.vertex_buffer,
+                    index_buffer: self.geometry.index_buffer,
+                    hdr_resolve_views: &hdr_views,
+                    gbuffer_views: &nd_views,
+                    roughness_views: &rough_views,
+                    prefilter_view: self.env_map.prefilter.view,
+                    cube_sampler: self.cube_sampler,
+                },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
             // in the composite rebuild below), not the raw RT output.
@@ -379,16 +420,20 @@ impl VkContext {
                 None => (Vec::new(), Vec::new()),
             };
             rc.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                &super::post::reflection_composite::GpuAllocContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 render_ext.width,
                 render_ext.height,
-                &hdr_views,
-                &nd_views,
-                &rough_views,
+                &CompositeInputViews {
+                    hdr_resolve_views: &hdr_views,
+                    normal_depth_views: &nd_views,
+                    roughness_views: &rough_views,
+                },
             )?;
             for frame_sets in &self.bloom_input_sets {
                 rebind_bloom_input0(
@@ -408,15 +453,19 @@ impl VkContext {
         // of these are still in flight.
         if let Some(mut taa) = self.taa.take() {
             taa.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                &TaaDeviceContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    pd: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 render_ext,
                 self.frames_in_flight,
-                &self.hdr_resolve_images,
-                self.composite_sampler,
+                &TaaSceneInputs {
+                    hdr_resolve_images: &self.hdr_resolve_images,
+                    sampler: self.composite_sampler,
+                },
             )?;
             // When a reflection path owns the scene image, TAA samples the reflection
             // composite output (HDR + reflections) instead of the raw HDR resolve. A
@@ -489,11 +538,13 @@ impl VkContext {
         // rebuilt main framebuffers, so only the snapshot moved.
         if let Some(mut rm) = self.raymarch.take() {
             rm.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                RaymarchDeviceContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 render_ext.width,
                 render_ext.height,
             )?;
@@ -539,17 +590,21 @@ impl VkContext {
             let depth_views: Vec<vk::ImageView> =
                 self.depth_images.iter().map(|img| img.view).collect();
             glass.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
+                GlassDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 render_ext.width,
                 render_ext.height,
-                &scene_views,
-                &scene_images,
-                &depth_views,
-                &planar_target_views,
+                GlassRebuildTargets {
+                    scene_views: &scene_views,
+                    scene_images: &scene_images,
+                    depth_views: &depth_views,
+                    planar_target_views: &planar_target_views,
+                },
             )?;
             self.glass = Some(glass);
         }
@@ -563,14 +618,18 @@ impl VkContext {
             let depth_views: Vec<vk::ImageView> =
                 self.depth_images.iter().map(|img| img.view).collect();
             hiz.resize_to(
-                &self.instance,
-                &self.device,
-                self.physical_device,
-                self.commands.command_pool,
-                self.graphics_queue,
-                render_ext.width,
-                render_ext.height,
-                &depth_views,
+                HiZDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                HiZTarget {
+                    width: render_ext.width,
+                    height: render_ext.height,
+                    depth_views: &depth_views,
+                },
             )?;
             self.cull.hiz = Some(hiz);
             self.cull.hiz_valid = false;
@@ -625,9 +684,11 @@ impl VkContext {
             };
             let ao_views = self.transient_pool.views_for_frames("ao_output", frames);
             ssao.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                &SsaoDeviceCtx {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
                 render_ext.width,
                 render_ext.height,
                 &nd_views,
@@ -696,19 +757,30 @@ impl VkContext {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn create_swapchain_inner(
-    _instance: &ash::Instance,
-    _device: &Device,
-    pd: vk::PhysicalDevice,
-    surface_loader: &ash::khr::surface::Instance,
-    surface: vk::SurfaceKHR,
-    swapchain_loader: &ash::khr::swapchain::Device,
-    width: u32,
-    height: u32,
-    graphics_family: u32,
-    present_family: u32,
-    old_swapchain: vk::SwapchainKHR,
+// Vulkan handles needed to query the surface and create a swapchain against it.
+pub(super) struct SwapchainSurface<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub pd: vk::PhysicalDevice,
+    pub surface_loader: &'a ash::khr::surface::Instance,
+    pub surface: vk::SurfaceKHR,
+    pub swapchain_loader: &'a ash::khr::swapchain::Device,
+}
+
+// Graphics + present queue family indices. Equal indices select EXCLUSIVE
+// sharing; distinct indices select CONCURRENT sharing across both families.
+#[derive(Clone, Copy)]
+pub(super) struct SwapchainQueueFamilies {
+    pub graphics_family: u32,
+    pub present_family: u32,
+}
+
+// Swapchain sizing + presentation configuration.
+#[derive(Clone, Copy)]
+pub(super) struct SwapchainConfig {
+    pub width: u32,
+    pub height: u32,
+    pub old_swapchain: vk::SwapchainKHR,
     // Resolved output mode, picking the swapchain (format, colour space):
     //   - `Sdr`                        -> `B8G8R8A8_UNORM` + sRGB-nonlinear.
     //   - `Hdr{ ExtendedLinear }`      -> `R16G16B16A16_SFLOAT` +
@@ -722,12 +794,37 @@ pub(super) fn create_swapchain_inner(
     // resolve in init.rs), so the chosen encoding and colour space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
-    hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    pub hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
     // tearing), then IMMEDIATE, falling back to FIFO when neither is offered.
-    vsync: bool,
+    pub vsync: bool,
+}
+
+pub(super) fn create_swapchain_inner(
+    surface: &SwapchainSurface,
+    families: SwapchainQueueFamilies,
+    config: SwapchainConfig,
 ) -> Result<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D), String> {
+    let &SwapchainSurface {
+        instance: _instance,
+        device: _device,
+        pd,
+        surface_loader,
+        surface,
+        swapchain_loader,
+    } = surface;
+    let SwapchainQueueFamilies {
+        graphics_family,
+        present_family,
+    } = families;
+    let SwapchainConfig {
+        width,
+        height,
+        old_swapchain,
+        hdr_mode,
+        vsync,
+    } = config;
     use crate::gfx::hdr_output::{HdrEncoding, HdrOutputMode};
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| format!("surface caps: {e}"))?;
@@ -869,48 +966,50 @@ pub(super) fn create_swapchain_image_views(
 // the resolve image directly otherwise) and ends with the resolve image in
 // `SHADER_READ_ONLY_OPTIMAL` so the composite pass can sample it.
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+// Vulkan handles needed to allocate + transition off-screen attachment images.
+pub(super) struct AttachmentDeviceCtx<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub pd: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// Per-frame color, depth, and HDR-resolve images (one entry per swapchain frame).
+type FrameAttachments = (Vec<GpuImage>, Vec<GpuImage>, Vec<GpuImage>);
+
 pub(super) fn create_attachments(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &AttachmentDeviceCtx,
     width: u32,
     height: u32,
     msaa: vk::SampleCountFlags,
     count: usize,
-) -> Result<(Vec<GpuImage>, Vec<GpuImage>, Vec<GpuImage>), String> {
+) -> Result<FrameAttachments, String> {
+    let &AttachmentDeviceCtx {
+        instance,
+        device,
+        pd,
+        command_pool,
+        queue,
+    } = ctx;
+    let upload_ctx = GpuUploadContext {
+        instance,
+        device,
+        physical_device: pd,
+        command_pool,
+        queue,
+    };
     let mut color_images = Vec::new();
     let mut depth_images = Vec::new();
     let mut resolve_images = Vec::new();
     for _ in 0..count {
-        let depth = create_depth_image(
-            instance,
-            device,
-            pd,
-            command_pool,
-            queue,
-            width,
-            height,
-            msaa,
-        )?;
+        let depth = create_depth_image(&upload_ctx, width, height, msaa)?;
         depth_images.push(depth);
         resolve_images.push(create_hdr_resolve_image(
             instance, device, pd, width, height, HDR_FORMAT,
         )?);
         if msaa != vk::SampleCountFlags::TYPE_1 {
-            let color = create_msaa_color_image(
-                instance,
-                device,
-                pd,
-                command_pool,
-                queue,
-                width,
-                height,
-                HDR_FORMAT,
-                msaa,
-            )?;
+            let color = create_msaa_color_image(&upload_ctx, width, height, HDR_FORMAT, msaa)?;
             color_images.push(color);
         }
     }

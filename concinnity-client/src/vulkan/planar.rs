@@ -28,7 +28,9 @@ use ash::{Device, vk};
 use super::context::{HDR_FORMAT, VkContext};
 use super::draw::ViewUniforms;
 use super::resources::alloc_descriptor_sets;
-use super::texture::{GpuImage, create_buffer, create_image, create_image_view};
+use super::texture::{
+    GpuAllocContext, GpuImage, ImageSpec, create_buffer, create_image, create_image_view,
+};
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets are sized to. Single-sourced from `gfx::planar_reflection`
@@ -137,34 +139,62 @@ pub(in crate::vulkan) struct PlanarCullSources<'a> {
 unsafe impl Send for PlanarReflectionSet {}
 unsafe impl Sync for PlanarReflectionSet {}
 
-// Create the shared colour (MSAA only) + shared depth + per-plane targets at the
-// given render dimensions.
-#[allow(clippy::too_many_arguments)]
-fn create_targets(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+// The GPU allocation context threaded through every planar create call: the
+// instance + logical device + physical device create_image / create_buffer need.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct PlanarDevice<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) pd: vk::PhysicalDevice,
+}
+
+// Render dimensions for the shared colour + depth + per-plane targets: the MSAA
+// sample count, pixel dimensions, and how many per-plane targets to create.
+#[derive(Clone, Copy)]
+struct PlanarTargetDims {
     sample_count: vk::SampleCountFlags,
     width: u32,
     height: u32,
     plane_count: usize,
+}
+
+// Create the shared colour (MSAA only) + shared depth + per-plane targets at the
+// given render dimensions.
+fn create_targets(
+    gpu: PlanarDevice<'_>,
+    dims: PlanarTargetDims,
 ) -> Result<(Option<GpuImage>, GpuImage, Vec<GpuImage>), String> {
+    let PlanarDevice {
+        instance,
+        device,
+        pd,
+    } = gpu;
+    let PlanarTargetDims {
+        sample_count,
+        width,
+        height,
+        plane_count,
+    } = dims;
     let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
     let w = width.max(1);
     let h = height.max(1);
 
     let color = if msaa {
         let (img, mem) = create_image(
-            instance,
-            device,
-            pd,
-            w,
-            h,
-            HDR_FORMAT,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            sample_count,
+            &GpuAllocContext {
+                instance,
+                device,
+                physical_device: pd,
+            },
+            &ImageSpec {
+                width: w,
+                height: h,
+                format: HDR_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: sample_count,
+            },
         )?;
         let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         Some(GpuImage {
@@ -178,16 +208,20 @@ fn create_targets(
     };
 
     let (depth_img, depth_mem) = create_image(
-        instance,
-        device,
-        pd,
-        w,
-        h,
-        PLANAR_DEPTH_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        sample_count,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device: pd,
+        },
+        &ImageSpec {
+            width: w,
+            height: h,
+            format: PLANAR_DEPTH_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: sample_count,
+        },
     )?;
     let depth_view = create_image_view(
         device,
@@ -205,16 +239,20 @@ fn create_targets(
     let mut targets = Vec::with_capacity(plane_count);
     for _ in 0..plane_count {
         let (img, mem) = create_image(
-            instance,
-            device,
-            pd,
-            w,
-            h,
-            HDR_FORMAT,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::SampleCountFlags::TYPE_1,
+            &GpuAllocContext {
+                instance,
+                device,
+                physical_device: pd,
+            },
+            &ImageSpec {
+                width: w,
+                height: h,
+                format: HDR_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: vk::SampleCountFlags::TYPE_1,
+            },
         )?;
         let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         targets.push(GpuImage {
@@ -227,20 +265,36 @@ fn create_targets(
     Ok((color, depth, targets))
 }
 
+// The attachments + geometry for the per-plane framebuffers: the compatible main
+// pass, the MSAA sample count, the shared colour (MSAA only) + shared depth reused
+// across planes, the per-plane targets (one framebuffer each), and the pixel
+// dimensions.
+struct PlanarFramebufferInputs<'a> {
+    main_render_pass: vk::RenderPass,
+    sample_count: vk::SampleCountFlags,
+    color: Option<&'a GpuImage>,
+    depth: &'a GpuImage,
+    targets: &'a [GpuImage],
+    width: u32,
+    height: u32,
+}
+
 // One framebuffer per plane, render-pass-compatible with the bindless main pass:
 // MSAA -> [shared colour, shared depth, plane target (resolve)], single-sample ->
 // [plane target (colour), shared depth].
-#[allow(clippy::too_many_arguments)]
 fn create_framebuffers(
     device: &Device,
-    main_render_pass: vk::RenderPass,
-    sample_count: vk::SampleCountFlags,
-    color: Option<&GpuImage>,
-    depth: &GpuImage,
-    targets: &[GpuImage],
-    width: u32,
-    height: u32,
+    inputs: PlanarFramebufferInputs<'_>,
 ) -> Result<Vec<vk::Framebuffer>, String> {
+    let PlanarFramebufferInputs {
+        main_render_pass,
+        sample_count,
+        color,
+        depth,
+        targets,
+        width,
+        height,
+    } = inputs;
     let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
     let mut out = Vec::with_capacity(targets.len());
     for target in targets {
@@ -262,6 +316,35 @@ fn create_framebuffers(
     Ok(out)
 }
 
+// The frame-independent render config for a planar set: how many frames the ring
+// buffers double-buffer over, the MSAA sample count, and the render dimensions.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct PlanarConfig {
+    pub(in crate::vulkan) frames: usize,
+    pub(in crate::vulkan) sample_count: vk::SampleCountFlags,
+    pub(in crate::vulkan) width: u32,
+    pub(in crate::vulkan) height: u32,
+}
+
+// The shared lighting + environment bindings every planar global set carries: the
+// light + shadow UBOs (buffer + size), the shadow map, the IBL irradiance +
+// prefilter cubes (+ their sampler), and the SSAO white fallback (+ its sampler).
+// All Copy vk handles, shared unchanged across every (plane, frame) global set.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct PlanarLightingBindings {
+    pub(in crate::vulkan) light_ubo: vk::Buffer,
+    pub(in crate::vulkan) light_size: u64,
+    pub(in crate::vulkan) shadow_ubo: vk::Buffer,
+    pub(in crate::vulkan) shadow_size: u64,
+    pub(in crate::vulkan) shadow_map_view: vk::ImageView,
+    pub(in crate::vulkan) shadow_sampler: vk::Sampler,
+    pub(in crate::vulkan) irradiance_view: vk::ImageView,
+    pub(in crate::vulkan) prefilter_view: vk::ImageView,
+    pub(in crate::vulkan) cube_sampler: vk::Sampler,
+    pub(in crate::vulkan) ssao_white_view: vk::ImageView,
+    pub(in crate::vulkan) linear_sampler: vk::Sampler,
+}
+
 impl PlanarReflectionSet {
     // Build the planar set: shared colour + depth + per-plane targets at render
     // dimensions, per-plane framebuffers, the per-(plane, frame) reflected-view
@@ -271,52 +354,63 @@ impl PlanarReflectionSet {
     // resources (indirect + status + cull set reading the frame's object/draw-args).
     // The bindless object SSBO + texture pool (the bindless set) is the FRAME's,
     // bound at encode time.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
-        frames: usize,
-        sample_count: vk::SampleCountFlags,
-        width: u32,
-        height: u32,
+        gpu: PlanarDevice<'_>,
+        config: PlanarConfig,
         planes: &[[f32; 4]],
         main_render_pass: vk::RenderPass,
         global_set_layout: vk::DescriptorSetLayout,
-        light_ubo: vk::Buffer,
-        light_size: u64,
-        shadow_ubo: vk::Buffer,
-        shadow_size: u64,
-        shadow_map_view: vk::ImageView,
-        shadow_sampler: vk::Sampler,
-        irradiance_view: vk::ImageView,
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-        ssao_white_view: vk::ImageView,
-        linear_sampler: vk::Sampler,
+        lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
     ) -> Result<Self, String> {
         use super::probe_uniforms::{MAX_PROBES, ProbeSet};
 
-        let plane_count = planes.len();
-        let (color, depth, targets) = create_targets(
+        let PlanarDevice {
             instance,
             device,
             pd,
+        } = gpu;
+        let PlanarConfig {
+            frames,
             sample_count,
             width,
             height,
-            plane_count,
+        } = config;
+        let PlanarLightingBindings {
+            light_ubo,
+            light_size,
+            shadow_ubo,
+            shadow_size,
+            shadow_map_view,
+            shadow_sampler,
+            irradiance_view,
+            prefilter_view,
+            cube_sampler,
+            ssao_white_view,
+            linear_sampler,
+        } = lighting;
+
+        let plane_count = planes.len();
+        let (color, depth, targets) = create_targets(
+            gpu,
+            PlanarTargetDims {
+                sample_count,
+                width,
+                height,
+                plane_count,
+            },
         )?;
         let framebuffers = create_framebuffers(
             device,
-            main_render_pass,
-            sample_count,
-            color.as_ref(),
-            &depth,
-            &targets,
-            width,
-            height,
+            PlanarFramebufferInputs {
+                main_render_pass,
+                sample_count,
+                color: color.as_ref(),
+                depth: &depth,
+                targets: &targets,
+                width,
+                height,
+            },
         )?;
 
         // EMPTY ProbeSet UBO (count 0): every mirror face reflects only the sky, so
@@ -604,23 +698,29 @@ impl PlanarReflectionSet {
         // Build the new targets + framebuffers first, then retire the old ones, so
         // a failure leaves the existing set intact.
         let (color, depth, targets) = create_targets(
-            instance,
-            device,
-            pd,
-            self.sample_count,
-            width,
-            height,
-            self.planes.len(),
+            PlanarDevice {
+                instance,
+                device,
+                pd,
+            },
+            PlanarTargetDims {
+                sample_count: self.sample_count,
+                width,
+                height,
+                plane_count: self.planes.len(),
+            },
         )?;
         let framebuffers = create_framebuffers(
             device,
-            self.main_render_pass,
-            self.sample_count,
-            color.as_ref(),
-            &depth,
-            &targets,
-            width,
-            height,
+            PlanarFramebufferInputs {
+                main_render_pass: self.main_render_pass,
+                sample_count: self.sample_count,
+                color: color.as_ref(),
+                depth: &depth,
+                targets: &targets,
+                width,
+                height,
+            },
         )?;
 
         unsafe {

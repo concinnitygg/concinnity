@@ -3,7 +3,6 @@
 // Hot-reload rebuild of the shared static-mesh vertex + index buffers when
 // re-imported `.glb` source no longer fits each draw's init-time slot.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2_metal::{MTLBuffer as _, MTLDevice as _, MTLResourceOptions};
 

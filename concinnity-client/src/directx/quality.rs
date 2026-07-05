@@ -116,15 +116,19 @@ impl DxContext {
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
             let gbuffer = super::post::gbuffer::GbufferResources::new(
-                &self.device,
-                render_w,
-                render_h,
-                self.n_clusters > 0,
-                // Skinned variant builds lazily in `upload_skinned`, as at init.
-                false,
+                super::post::gbuffer::GbufferDeviceCtx {
+                    device: &self.device,
+                    info_queue: self.info_queue.as_ref(),
+                },
+                super::post::gbuffer::GbufferExtent {
+                    width: render_w,
+                    height: render_h,
+                    need_instanced: self.n_clusters > 0,
+                    // Skinned variant builds lazily in `upload_skinned`, as at init.
+                    need_skinned: false,
+                    hot_reload,
+                },
                 slots.gbuffer,
-                self.info_queue.as_ref(),
-                hot_reload,
             )?;
             self.gbuffer = Some(gbuffer);
         }
@@ -153,9 +157,11 @@ impl DxContext {
                 &self.device,
                 render_w,
                 render_h,
-                q.ssr,
-                slots.ssr_output_rtv,
-                slots.ssr_output_srv,
+                super::post::ssr::SsrInitInputs {
+                    resolve_settings: q.ssr,
+                    output_rtv: slots.ssr_output_rtv,
+                    output_srv: slots.ssr_output_srv,
+                },
                 self.info_queue.as_ref(),
                 hot_reload,
             )?;
@@ -168,13 +174,17 @@ impl DxContext {
         if desired_ssgi && self.ssgi.is_none() {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
             let ssgi = super::post::ssgi::SsgiResources::new(
-                &self.device,
+                super::post::ssgi::SsgiDevice {
+                    device: &self.device,
+                    info_queue: self.info_queue.as_ref(),
+                },
                 render_w,
                 render_h,
                 settings,
-                slots.ssgi_gi_rtv,
-                slots.ssgi_gi_srv,
-                self.info_queue.as_ref(),
+                super::post::ssgi::SsgiDescriptors {
+                    gi_rtv: slots.ssgi_gi_rtv,
+                    gi_srv: slots.ssgi_gi_srv,
+                },
                 hot_reload,
             )?;
             self.ssgi = Some(ssgi);
@@ -257,16 +267,20 @@ impl DxContext {
                 .clone();
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ssao = super::post::ssao::SsaoResources::new(
-                &self.device,
+                super::post::ssao::SsaoDeviceCtx {
+                    device: &self.device,
+                    info_queue: self.info_queue.as_ref(),
+                },
                 render_w,
                 render_h,
                 settings,
-                slots.ssao_ao_raw_rtv,
-                slots.ssao_ao_raw_srv,
-                slots.ssao_ao_rtv,
-                slots.ssao_ao_srv,
+                super::post::ssao::SsaoDescriptorHandles {
+                    ao_raw_rtv: slots.ssao_ao_raw_rtv,
+                    ao_raw_srv: slots.ssao_ao_raw_srv,
+                    ao_rtv: slots.ssao_ao_rtv,
+                    ao_srv: slots.ssao_ao_srv,
+                },
                 &ao_resource,
-                self.info_queue.as_ref(),
                 hot_reload,
             )?;
             self.ssao.resources = Some(ssao);
@@ -292,17 +306,17 @@ impl DxContext {
         settings: crate::gfx::rt_reflections::RtReflectionSettings,
     ) -> Result<(), String> {
         let hot_reload = self.hot_reload.enabled;
-        let mut accel = match super::raytrace::build_rt_accel(
-            &self.device,
-            &self.command_queue,
-            &self.geometry.vertex_buffer,
-            &self.geometry.index_buffer,
-            &self.draw_objects,
-            &self.instanced.clusters,
-            self.rt_static_vertex_count,
-            self.descriptors.textures.len() as u32,
-            self.descriptors.normal_map_textures.len() as u32,
-        ) {
+        let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
+            device: &self.device,
+            queue: &self.command_queue,
+            vertex_buffer: &self.geometry.vertex_buffer,
+            index_buffer: &self.geometry.index_buffer,
+            draw_objects: &self.draw_objects,
+            clusters: &self.instanced.clusters,
+            total_vertices: self.rt_static_vertex_count,
+            albedo_count: self.descriptors.textures.len() as u32,
+            normal_count: self.descriptors.normal_map_textures.len() as u32,
+        }) {
             Ok(Some(accel)) => accel,
             Ok(None) => {
                 tracing::info!(
@@ -323,14 +337,20 @@ impl DxContext {
         }
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
-            &self.device,
-            self.render_width,
-            self.render_height,
+            super::post::rt_reflections::RtBuildContext {
+                device: &self.device,
+                width: self.render_width,
+                height: self.render_height,
+            },
             settings,
-            slots.rt_output_rtv,
-            slots.rt_output_srv,
-            self.info_queue.as_ref(),
-            hot_reload,
+            super::post::rt_reflections::RtOutputDescriptors {
+                output_rtv: slots.rt_output_rtv,
+                output_srv: slots.rt_output_srv,
+            },
+            super::post::rt_reflections::RtBuildInit {
+                info_queue: self.info_queue.as_ref(),
+                hot_reload,
+            },
         ) {
             Ok(rt) => rt,
             Err(e) => {

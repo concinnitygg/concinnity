@@ -15,8 +15,8 @@ use super::draw::*;
 use super::math::*;
 use super::pipeline::*;
 use super::post::bloom::{
-    MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders, create_bloom_chain,
-    create_bloom_framebuffers, create_bloom_pipeline, rebind_bloom_input0,
+    BloomDeviceContext, MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders,
+    create_bloom_chain, create_bloom_framebuffers, create_bloom_pipeline, rebind_bloom_input0,
 };
 use super::post::taa::*;
 use super::render_pass::*;
@@ -435,19 +435,25 @@ impl VkContext {
         let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
         let (swapchain, swapchain_images, swapchain_format, swapchain_extent) =
             create_swapchain_inner(
-                &instance,
-                &device,
-                physical_device,
-                &surface_loader,
-                surface,
-                &swapchain_loader,
-                width,
-                height,
-                graphics_family,
-                present_family,
-                vk::SwapchainKHR::null(),
-                hdr_mode,
-                vsync,
+                &SwapchainSurface {
+                    instance: &instance,
+                    device: &device,
+                    pd: physical_device,
+                    surface_loader: &surface_loader,
+                    surface,
+                    swapchain_loader: &swapchain_loader,
+                },
+                SwapchainQueueFamilies {
+                    graphics_family,
+                    present_family,
+                },
+                SwapchainConfig {
+                    width,
+                    height,
+                    old_swapchain: vk::SwapchainKHR::null(),
+                    hdr_mode,
+                    vsync,
+                },
             )?;
         let swapchain_image_views =
             create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
@@ -474,11 +480,13 @@ impl VkContext {
         // extensions were enabled above via `upscale_sdk`).
         let upscale = if temporal_upscaling {
             let (built, resolved) = super::post::build_upscaler(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
+                super::post::upscale::UpscalerGpu {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
                 swapchain_extent.width,
                 swapchain_extent.height,
                 upscale_scale,
@@ -558,11 +566,13 @@ impl VkContext {
                 .enumerate()
                 .map(|(i, (w, h, px))| {
                     upload_texture(
-                        &instance,
-                        &device,
-                        physical_device,
-                        command_pool,
-                        graphics_queue,
+                        &GpuUploadContext {
+                            instance: &instance,
+                            device: &device,
+                            physical_device,
+                            command_pool,
+                            queue: graphics_queue,
+                        },
                         *w,
                         *h,
                         px,
@@ -583,11 +593,13 @@ impl VkContext {
         for (i, (w, h, px)) in normal_maps.iter().enumerate() {
             gpu_normal_maps.push(
                 upload_texture(
-                    &instance,
-                    &device,
-                    physical_device,
-                    command_pool,
-                    graphics_queue,
+                    &GpuUploadContext {
+                        instance: &instance,
+                        device: &device,
+                        physical_device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
                     *w,
                     *h,
                     px,
@@ -601,11 +613,13 @@ impl VkContext {
             .enumerate()
             .map(|(i, (w, h, px))| {
                 upload_texture(
-                    &instance,
-                    &device,
-                    physical_device,
-                    command_pool,
-                    graphics_queue,
+                    &GpuUploadContext {
+                        instance: &instance,
+                        device: &device,
+                        physical_device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
                     *w,
                     *h,
                     px,
@@ -646,11 +660,13 @@ impl VkContext {
 
         //  Off-screen HDR attachments (one set per frame-in-flight slot)
         let (color_images, depth_images, hdr_resolve_images) = create_attachments(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
+            &AttachmentDeviceCtx {
+                instance: &instance,
+                device: &device,
+                pd: physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
             render_extent.width,
             render_extent.height,
             msaa_samples,
@@ -695,11 +711,13 @@ impl VkContext {
 
         //  Bloom chain (per frame-in-flight slot)
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
+            &BloomDeviceContext {
+                instance: &instance,
+                device: &device,
+                physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
             swapchain_extent,
             frames,
             &bloom_top_pairs,
@@ -856,11 +874,13 @@ impl VkContext {
             let view = crate::build::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
+                &GpuUploadContext {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
                 view.irradiance_face,
                 view.irradiance_bytes,
                 view.prefilter_face,
@@ -1085,10 +1105,12 @@ impl VkContext {
         let (vert_spv, frag_spv) = resolve_main_shaders(hot_reload, vert_bytes, frag_bytes)?;
         let main_pipeline = create_main_pipeline(
             &device,
-            main_render_pass,
-            main_pipeline_layout,
-            &vert_spv,
-            &frag_spv,
+            MeshPipelineTargets {
+                render_pass: main_render_pass,
+                layout: main_pipeline_layout,
+                vert_spv: &vert_spv,
+                frag_spv: &frag_spv,
+            },
             msaa_samples,
             swapchain_format,
         )?;
@@ -1127,10 +1149,12 @@ impl VkContext {
                     .ok_or("instanced shader payload missing")?;
             let pipeline = create_instanced_pipeline(
                 &device,
-                main_render_pass,
-                instanced_pl,
-                &inst_spv_opt,
-                &frag_spv,
+                MeshPipelineTargets {
+                    render_pass: main_render_pass,
+                    layout: instanced_pl,
+                    vert_spv: &inst_spv_opt,
+                    frag_spv: &frag_spv,
+                },
                 msaa_samples,
                 swapchain_format,
             )?;
@@ -1239,9 +1263,11 @@ impl VkContext {
         let ssao_opt = if let Some(settings) = ssao_settings {
             let ao_views = transient_pool.views_for_frames("ao_output", frames);
             Some(super::post::ssao::SsaoResources::new(
-                &instance,
-                &device,
-                physical_device,
+                &super::post::ssao::SsaoDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                },
                 render_extent.width,
                 render_extent.height,
                 frames,
@@ -1282,19 +1308,25 @@ impl VkContext {
             let hdr_views: Vec<vk::ImageView> =
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(super::post::ssr::SsrResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
-                render_extent.width,
-                render_extent.height,
+                &super::post::ssr::SsrGpuContext {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                super::post::ssr::SsrExtent {
+                    width: render_extent.width,
+                    height: render_extent.height,
+                },
                 frames,
-                settings,
-                &hdr_views,
-                env_map.prefilter.view,
-                cube_sampler,
-                global_set_layout,
+                super::post::ssr::SsrInitInputs {
+                    settings,
+                    hdr_resolve_views: &hdr_views,
+                    prefilter_view: env_map.prefilter.view,
+                    cube_sampler,
+                    global_set_layout,
+                },
                 hot_reload,
             )?)
         } else {
@@ -1311,19 +1343,27 @@ impl VkContext {
         //  exists (it doesn't at init). Mirrors the DirectX `self.gbuffer` build.
         let gbuffer_opt = if ssr_opt.is_some() || ssao_opt.is_some() || taa_enabled {
             Some(super::post::gbuffer::GbufferResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
-                render_extent.width,
-                render_extent.height,
-                frames,
-                instance_set_layout_opt,
-                // Skinned variant built lazily by `upload_skinned` via
-                // `ensure_skinned_gbuffer_pso` (the joint-set layout does not
-                // exist yet at init time), matching the gbuffer / TAA.
-                None,
+                super::post::gbuffer::GbufferDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                },
+                super::post::gbuffer::GbufferQueueCtx {
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                super::post::gbuffer::GbufferExtent {
+                    width: render_extent.width,
+                    height: render_extent.height,
+                    frames,
+                },
+                super::post::gbuffer::GbufferSsboLayouts {
+                    instance: instance_set_layout_opt,
+                    // Skinned variant built lazily by `upload_skinned` via
+                    // `ensure_skinned_gbuffer_pso` (the joint-set layout does not
+                    // exist yet at init time), matching the gbuffer / TAA.
+                    skinned: None,
+                },
                 draw_objects.len(),
                 hot_reload,
             )?)
@@ -1348,15 +1388,19 @@ impl VkContext {
             let hdr_views: Vec<vk::ImageView> =
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(super::post::ssgi::SsgiResources::new(
-                &instance,
-                &device,
-                physical_device,
+                super::post::ssgi::SsgiDevice {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                },
                 render_extent.width,
                 render_extent.height,
                 frames,
                 settings,
-                &hdr_views,
-                nd_views[0],
+                super::post::ssgi::SsgiInputViews {
+                    hdr_resolve_views: &hdr_views,
+                    gbuffer_view: nd_views[0],
+                },
                 hot_reload,
             )?)
         } else {
@@ -1688,10 +1732,12 @@ impl VkContext {
             let (bvs, bfs) = compile_bindless_shaders(hot_reload, bindless_pool_size)?;
             let pipeline = create_main_pipeline(
                 &device,
-                main_render_pass,
-                pipeline_layout,
-                &bvs,
-                &bfs,
+                MeshPipelineTargets {
+                    render_pass: main_render_pass,
+                    layout: pipeline_layout,
+                    vert_spv: &bvs,
+                    frag_spv: &bfs,
+                },
                 msaa_samples,
                 swapchain_format,
             )?;
@@ -1792,18 +1838,22 @@ impl VkContext {
         // `!rt_active` once the build outcome is known.
         let (rt_accel_opt, rt_opt) = if rt_wanted {
             match crate::vulkan::raytrace::build_rt_accel(
-                &instance,
-                &device,
-                physical_device,
+                crate::vulkan::raytrace::RtDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    pd: physical_device,
+                },
                 command_pool,
                 graphics_queue,
-                vertex_buffer,
-                index_buffer,
-                &draw_objects,
-                &instanced_clusters,
-                gpu_textures.len(),
-                gpu_normal_maps.len(),
-                vertices.len(),
+                crate::vulkan::raytrace::RtSceneGeometry {
+                    vertex_buffer,
+                    index_buffer,
+                    draw_objects: &draw_objects,
+                    clusters: &instanced_clusters,
+                    albedo_count: gpu_textures.len(),
+                    normal_count: gpu_normal_maps.len(),
+                    total_vertices: vertices.len(),
+                },
                 frames,
                 hot_reload,
             ) {
@@ -1821,29 +1871,37 @@ impl VkContext {
                     let rough_views = gb.roughness_views();
                     let (geom_buffer, geom_size) = accel.geom_table();
                     match super::post::rt_reflections::RtReflectionsResources::new(
-                        &instance,
-                        &device,
-                        physical_device,
-                        render_extent.width,
-                        render_extent.height,
-                        frames,
+                        super::post::rt_reflections::RtBuild {
+                            instance: &instance,
+                            device: &device,
+                            physical_device,
+                            width: render_extent.width,
+                            height: render_extent.height,
+                            frames,
+                        },
                         rt_settings.expect("rt_wanted implies rt_settings is Some"),
-                        vertex_buffer,
-                        index_buffer,
-                        accel.tlas(),
-                        geom_buffer,
-                        geom_size,
-                        accel.deformed_verts(),
-                        accel.skinned_indices(),
-                        &hdr_views,
-                        &nd_views,
-                        &rough_views,
-                        env_map.prefilter.view,
-                        cube_sampler,
-                        bindless_set_layout,
-                        global_set_layout,
-                        bindless_pool_size,
-                        hot_reload,
+                        super::post::rt_reflections::RtStaticInputs {
+                            vertex_buffer,
+                            index_buffer,
+                            hdr_resolve_views: &hdr_views,
+                            gbuffer_views: &nd_views,
+                            roughness_views: &rough_views,
+                            prefilter_view: env_map.prefilter.view,
+                            cube_sampler,
+                        },
+                        super::post::rt_reflections::RtAccelHandles {
+                            tlas: accel.tlas(),
+                            geom_buffer,
+                            geom_size,
+                            deformed_verts: accel.deformed_verts(),
+                            skinned_indices: accel.skinned_indices(),
+                        },
+                        super::post::rt_reflections::RtLayoutConfig {
+                            bindless_set_layout,
+                            global_set_layout,
+                            pool_size: bindless_pool_size,
+                            hot_reload,
+                        },
                     ) {
                         Ok(rt) => (Some(accel), Some(rt)),
                         Err(e) => {
@@ -1894,18 +1952,22 @@ impl VkContext {
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(
                 super::post::reflection_composite::ReflectionCompositeResources::new(
-                    &instance,
-                    &device,
-                    physical_device,
-                    command_pool,
-                    graphics_queue,
+                    &super::post::reflection_composite::GpuAllocContext {
+                        instance: &instance,
+                        device: &device,
+                        physical_device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
                     render_extent.width,
                     render_extent.height,
                     frames,
                     reflection_blur_scale,
-                    &hdr_views,
-                    &gb.normal_depth_views(),
-                    &gb.roughness_views(),
+                    &super::post::reflection_composite::CompositeInputViews {
+                        hdr_resolve_views: &hdr_views,
+                        normal_depth_views: &gb.normal_depth_views(),
+                        roughness_views: &gb.roughness_views(),
+                    },
                     hot_reload,
                 )?,
             )
@@ -1945,7 +2007,18 @@ impl VkContext {
         // condition as the bindless pass: the compute kernel writes one
         // indirect draw command per build-time object, which the bindless main
         // pass issues with a single multiDrawIndexedIndirect.
-        #[allow(clippy::type_complexity)]
+        type CullPipelineResources = (
+            Option<vk::Pipeline>,
+            Option<vk::PipelineLayout>,
+            Option<vk::DescriptorSetLayout>,
+            Vec<vk::DescriptorSet>,
+            Vec<vk::Buffer>,
+            Vec<vk::DeviceMemory>,
+            Vec<*mut u8>,
+            Vec<vk::Buffer>,
+            Vec<vk::DeviceMemory>,
+            Option<crate::vulkan::hiz::HiZResources>,
+        );
         let (
             cull_pipeline,
             cull_pipeline_layout,
@@ -1957,18 +2030,7 @@ impl VkContext {
             indirect_buffers,
             indirect_buffer_memories,
             hiz,
-        ): (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
-            Vec<vk::DescriptorSet>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Vec<*mut u8>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Option<crate::vulkan::hiz::HiZResources>,
-        ) = if bindless_active {
+        ): CullPipelineResources = if bindless_active {
             // Set 0: object SSBO + draw-args SSBO + indirect-command SSBO +
             // cull-status SSBO (binding 3: phase-1 writes the per-object cull
             // outcome for two-pass occlusion; the phase-2 kernel reads it).
@@ -1994,16 +2056,20 @@ impl VkContext {
             // pipeline (sampler2D Hi-Z + per-frame CullHizParams UBO).
             let depth_views: Vec<vk::ImageView> = depth_images.iter().map(|img| img.view).collect();
             let hiz = crate::vulkan::hiz::HiZResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
-                render_extent.width,
-                render_extent.height,
+                crate::vulkan::hiz::HiZDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                crate::vulkan::hiz::HiZTarget {
+                    width: render_extent.width,
+                    height: render_extent.height,
+                    depth_views: &depth_views,
+                },
                 msaa_samples.as_raw(),
                 frames,
-                &depth_views,
                 occlusion_two_pass,
                 hot_reload,
             )?;
@@ -2208,7 +2274,16 @@ impl VkContext {
         // re-rendered cascade then runs one cull dispatch + one
         // `cmd_draw_indexed_indirect` (static + instance prefix) + one for the
         // skinned tail, replacing the CPU per-object shadow loop.
-        #[allow(clippy::type_complexity)]
+        type ShadowCullResources = (
+            Option<vk::Pipeline>,
+            Option<vk::PipelineLayout>,
+            Option<vk::DescriptorSetLayout>,
+            Vec<Vec<vk::DescriptorSet>>,
+            Option<vk::Pipeline>,
+            Option<vk::PipelineLayout>,
+            Vec<Vec<vk::Buffer>>,
+            Vec<Vec<vk::DeviceMemory>>,
+        );
         let (
             shadow_cull_pipeline,
             shadow_cull_pipeline_layout,
@@ -2218,16 +2293,7 @@ impl VkContext {
             shadow_bindless_pipeline_layout,
             shadow_indirect_buffers,
             shadow_indirect_buffer_memories,
-        ): (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
-            Vec<Vec<vk::DescriptorSet>>,
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Vec<Vec<vk::Buffer>>,
-            Vec<Vec<vk::DeviceMemory>>,
-        ) = if bindless_active
+        ): ShadowCullResources = if bindless_active
             && shadow_pipeline_opt.is_some()
             && let Some(bl_set_layout) = bindless_set_layout
         {
@@ -2383,7 +2449,15 @@ impl VkContext {
         // per-frame indirect buffer (camera frustum, NO extra cull dispatch). The
         // prev_model buffers' instance region is init-written inside the helper;
         // the static + skinned regions are rewritten each frame.
-        #[allow(clippy::type_complexity)]
+        type GbufferBindlessResources = (
+            Option<vk::Pipeline>,
+            Option<vk::PipelineLayout>,
+            Option<vk::DescriptorSetLayout>,
+            Vec<vk::DescriptorSet>,
+            Vec<vk::Buffer>,
+            Vec<vk::DeviceMemory>,
+            Vec<*mut u8>,
+        );
         let (
             gbuffer_bindless_pipeline,
             gbuffer_bindless_pipeline_layout,
@@ -2392,15 +2466,7 @@ impl VkContext {
             prev_model_buffers,
             prev_model_memories,
             prev_model_ptrs,
-        ): (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
-            Vec<vk::DescriptorSet>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Vec<*mut u8>,
-        ) = if let (true, Some(gb), Some(bl_set_layout)) =
+        ): GbufferBindlessResources = if let (true, Some(gb), Some(bl_set_layout)) =
             (gbuffer_active, gbuffer_opt.as_ref(), bindless_set_layout)
         {
             // Per-instance models in cluster-then-instance order (matches the
@@ -2411,16 +2477,22 @@ impl VkContext {
                 .flat_map(|c| c.instances.iter().copied())
                 .collect();
             let gbb = super::post::gbuffer::build_gbuffer_bindless(
-                &instance,
-                &device,
-                physical_device,
-                descriptor_pool,
-                bl_set_layout,
+                super::post::gbuffer::GbufferDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                },
+                super::post::gbuffer::GbufferBindlessDescriptors {
+                    descriptor_pool,
+                    bindless_set_layout: bl_set_layout,
+                },
                 gb,
-                &inst_models,
-                draw_objects.len(),
-                n_cull,
-                frames,
+                super::post::gbuffer::GbufferBindlessScene {
+                    instance_models: &inst_models,
+                    n_objects: draw_objects.len(),
+                    n_cull,
+                    frames,
+                },
                 hot_reload,
             )?;
             (
@@ -2453,7 +2525,15 @@ impl VkContext {
         // cull-status), and the phase-1/phase-2 main render passes. The Hi-Z
         // phase-2 cull-read sets live inside `HiZResources` (built above when
         // `occlusion_two_pass`). Mirrors `directx/init/pipelines.rs`.
-        #[allow(clippy::type_complexity)]
+        type TwoPassCullResources = (
+            Option<vk::Pipeline>,
+            Vec<vk::DescriptorSet>,
+            Option<vk::DescriptorPool>,
+            Vec<vk::Buffer>,
+            Vec<vk::DeviceMemory>,
+            Option<vk::RenderPass>,
+            Option<vk::RenderPass>,
+        );
         let (
             cull_pipeline_phase2,
             cull_sets2,
@@ -2462,15 +2542,7 @@ impl VkContext {
             indirect_buffer2_memories,
             main_render_pass_phase1,
             main_render_pass_phase2,
-        ): (
-            Option<vk::Pipeline>,
-            Vec<vk::DescriptorSet>,
-            Option<vk::DescriptorPool>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Option<vk::RenderPass>,
-            Option<vk::RenderPass>,
-        ) = if let (Some(set_layout), Some(pipeline_layout)) =
+        ): TwoPassCullResources = if let (Some(set_layout), Some(pipeline_layout)) =
             (cull_set_layout, cull_pipeline_layout)
             && occlusion_two_pass
         {
@@ -2758,15 +2830,19 @@ impl VkContext {
         // per-frame TAA output image.
         let taa = if taa_enabled {
             let taa = TaaResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
+                &TaaDeviceContext {
+                    instance: &instance,
+                    device: &device,
+                    pd: physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
                 frames,
                 render_extent,
-                &hdr_resolve_images,
-                composite_sampler,
+                &TaaSceneInputs {
+                    hdr_resolve_images: &hdr_resolve_images,
+                    sampler: composite_sampler,
+                },
                 hot_reload,
             )?;
             // When a reflection path owns the scene image, TAA samples the
@@ -2868,18 +2944,22 @@ impl VkContext {
         let hdr_resolve_views: Vec<vk::ImageView> =
             hdr_resolve_images.iter().map(|img| img.view).collect();
         let decals_state = Some(crate::vulkan::decal::DecalResources::new(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
+            crate::vulkan::decal::DecalDeviceContext {
+                instance: &instance,
+                device: &device,
+                physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
+            crate::vulkan::decal::DecalPassTargets {
+                hdr_format: HDR_FORMAT,
+                hdr_resolve_views: &hdr_resolve_views,
+                depth_views: &depth_views,
+                sampler: linear_sampler,
+                extent: render_extent,
+            },
             frames,
             msaa_samples != vk::SampleCountFlags::TYPE_1,
-            HDR_FORMAT,
-            &hdr_resolve_views,
-            &depth_views,
-            linear_sampler,
-            render_extent,
             hot_reload,
         )?);
 
@@ -2888,21 +2968,27 @@ impl VkContext {
         // pass when `fog_settings` is `None`.
         let fog_resources = if fog_settings.is_some() {
             Some(crate::vulkan::fog::FogResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
-                frames,
-                msaa_samples != vk::SampleCountFlags::TYPE_1,
-                HDR_FORMAT,
-                &hdr_resolve_views,
-                &depth_views,
-                linear_sampler,
-                shadow_ubo,
-                shadow_map.view,
-                shadow_sampler,
-                render_extent,
+                crate::vulkan::fog::FogDeviceContext {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                crate::vulkan::fog::FogFrameTargets {
+                    frames,
+                    msaa: msaa_samples != vk::SampleCountFlags::TYPE_1,
+                    hdr_format: HDR_FORMAT,
+                    hdr_resolve_views: &hdr_resolve_views,
+                    depth_views: &depth_views,
+                    sampler: linear_sampler,
+                    extent: render_extent,
+                },
+                crate::vulkan::fog::FogShadowResources {
+                    ubo: shadow_ubo,
+                    map_view: shadow_map.view,
+                    sampler: shadow_sampler,
+                },
                 hot_reload,
             )?)
         } else {
@@ -2914,24 +3000,30 @@ impl VkContext {
         // `.glsl` `SdfVolume` survived the backend filter, so the Raymarch pass
         // is omitted from the frame graph.
         let raymarch = crate::vulkan::raymarch::RaymarchResources::try_new(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
-            frames,
-            msaa_samples,
-            render_extent.width,
-            render_extent.height,
-            shadow_map.view,
-            shadow_sampler,
-            env_map.irradiance.view,
-            env_map.prefilter.view,
-            cube_sampler,
-            linear_sampler,
-            light_ubo,
-            shadow_ubo,
-            shadow_render_pass,
+            crate::vulkan::raymarch::RaymarchDeviceContext {
+                instance: &instance,
+                device: &device,
+                physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
+            crate::vulkan::raymarch::RaymarchTargetConfig {
+                frames,
+                msaa_samples,
+                width: render_extent.width,
+                height: render_extent.height,
+            },
+            crate::vulkan::raymarch::RaymarchSharedBindings {
+                shadow_map_view: shadow_map.view,
+                shadow_sampler,
+                irradiance_view: env_map.irradiance.view,
+                prefilter_view: env_map.prefilter.view,
+                cube_sampler,
+                linear_sampler,
+                light_ubo,
+                shadow_ubo,
+                shadow_render_pass,
+            },
             &sdf_volumes,
             hot_reload,
         )?;
@@ -2969,27 +3061,33 @@ impl VkContext {
                 }),
             };
             Some(crate::vulkan::planar::PlanarReflectionSet::new(
-                &instance,
-                &device,
-                physical_device,
-                frames,
-                msaa_samples,
-                render_extent.width,
-                render_extent.height,
+                crate::vulkan::planar::PlanarDevice {
+                    instance: &instance,
+                    device: &device,
+                    pd: physical_device,
+                },
+                crate::vulkan::planar::PlanarConfig {
+                    frames,
+                    sample_count: msaa_samples,
+                    width: render_extent.width,
+                    height: render_extent.height,
+                },
                 &planar_assignment.representatives,
                 main_render_pass,
                 global_set_layout,
-                light_ubo,
-                light_ubo_size,
-                shadow_ubo,
-                shadow_ubo_size,
-                shadow_map.view,
-                shadow_sampler,
-                env_map.irradiance.view,
-                env_map.prefilter.view,
-                cube_sampler,
-                ssao_white.view,
-                linear_sampler,
+                crate::vulkan::planar::PlanarLightingBindings {
+                    light_ubo,
+                    light_size: light_ubo_size,
+                    shadow_ubo,
+                    shadow_size: shadow_ubo_size,
+                    shadow_map_view: shadow_map.view,
+                    shadow_sampler,
+                    irradiance_view: env_map.irradiance.view,
+                    prefilter_view: env_map.prefilter.view,
+                    cube_sampler,
+                    ssao_white_view: ssao_white.view,
+                    linear_sampler,
+                },
                 cull_sources,
             )?)
         } else {
@@ -3039,30 +3137,40 @@ impl VkContext {
                 }
             });
             Some(crate::vulkan::glass::GlassResources::new(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
-                frames,
-                msaa_samples,
-                render_extent.width,
-                render_extent.height,
-                &glass_scene_views,
-                &glass_scene_images,
-                &glass_depth_views,
-                linear_sampler,
-                global_set_layout,
-                &planar_assignment.slots,
-                &planar_target_views,
-                rt_capable,
-                vertex_buffer,
-                index_buffer,
-                glass_rt_inputs,
-                bindless_set_layout,
-                bindless_pool_size,
+                crate::vulkan::glass::GlassDeviceCtx {
+                    instance: &instance,
+                    device: &device,
+                    physical_device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                crate::vulkan::glass::GlassBuildConfig {
+                    frames,
+                    msaa_samples,
+                    width: render_extent.width,
+                    height: render_extent.height,
+                    global_set_layout,
+                    hot_reload,
+                },
+                crate::vulkan::glass::GlassSceneTargets {
+                    scene_views: &glass_scene_views,
+                    scene_images: &glass_scene_images,
+                    depth_views: &glass_depth_views,
+                    sampler: linear_sampler,
+                },
+                crate::vulkan::glass::GlassPlanarTargets {
+                    slots: &planar_assignment.slots,
+                    target_views: &planar_target_views,
+                },
+                crate::vulkan::glass::GlassRtSetup {
+                    rt_capable,
+                    vertex_buffer,
+                    index_buffer,
+                    rt_inputs: glass_rt_inputs,
+                    bindless_set_layout,
+                    bindless_pool_size,
+                },
                 &glass_panels,
-                hot_reload,
             )?)
         };
 

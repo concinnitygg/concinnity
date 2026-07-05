@@ -13,7 +13,6 @@
 // Mission Control) that never go through the settings menu.
 
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

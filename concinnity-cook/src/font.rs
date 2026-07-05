@@ -148,16 +148,21 @@ pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
 
     // Reusable per-glyph buffers, allocated once, cleared each iteration.
     let mut cell_hi = vec![0u8; cell_n * 4];
-    let mut inside_dist2 = vec![0.0f32; cell_n];
-    let mut outside_dist2 = vec![0.0f32; cell_n];
 
-    // EDT scratch, sized for the largest cell dimension; reused across calls.
+    // SDF scratch: per-pixel distance grids plus the EDT working buffers sized
+    // for the largest cell dimension; reused across every glyph.
     let max_cell_dim = cell_w_hi.max(cell_h_hi) as usize;
-    let mut edt_v = vec![0usize; max_cell_dim];
-    let mut edt_z = vec![0.0f32; max_cell_dim + 1];
-    let mut edt_row_tmp = vec![0.0f32; cell_w_hi as usize];
-    let mut edt_col_src = vec![0.0f32; cell_h_hi as usize];
-    let mut edt_col_dst = vec![0.0f32; cell_h_hi as usize];
+    let mut sdf_scratch = SdfScratch {
+        inside_dist2: vec![0.0f32; cell_n],
+        outside_dist2: vec![0.0f32; cell_n],
+        edt: EdtScratch {
+            v: vec![0usize; max_cell_dim],
+            z: vec![0.0f32; max_cell_dim + 1],
+            row_tmp: vec![0.0f32; cell_w_hi as usize],
+            col_src: vec![0.0f32; cell_h_hi as usize],
+            col_dst: vec![0.0f32; cell_h_hi as usize],
+        },
+    };
 
     let mut metrics_out: Vec<GlyphMetrics> = Vec::new();
 
@@ -188,13 +193,7 @@ pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
             cell_w_hi as usize,
             cell_h_hi as usize,
             sdf_spread,
-            &mut inside_dist2,
-            &mut outside_dist2,
-            &mut edt_v,
-            &mut edt_z,
-            &mut edt_row_tmp,
-            &mut edt_col_src,
-            &mut edt_col_dst,
+            &mut sdf_scratch,
         );
 
         // Box-filter the high-res cell into the final low-res atlas.
@@ -302,20 +301,36 @@ fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
     }
 }
 
+// Reusable working buffers for the separable Euclidean distance transform,
+// sized once for the largest cell so the per-glyph SDF pass allocates nothing.
+struct EdtScratch {
+    v: Vec<usize>,
+    z: Vec<f32>,
+    row_tmp: Vec<f32>,
+    col_src: Vec<f32>,
+    col_dst: Vec<f32>,
+}
+
+// Reusable working buffers for `cell_coverage_to_sdf`: the two per-pixel
+// distance grids plus the distance-transform scratch. Caller-owned and reused
+// across glyphs to avoid per-call allocation.
+struct SdfScratch {
+    inside_dist2: Vec<f32>,
+    outside_dist2: Vec<f32>,
+    edt: EdtScratch,
+}
+
 // 2-D squared Euclidean distance transform via two separable 1-D passes.
 // `out` must be pre-initialised by the caller: 0.0 for foreground, INF for background.
-// All scratch slices are caller-provided to avoid per-call allocation.
-#[allow(clippy::too_many_arguments)] // caller-provided scratch buffers, kept separate to avoid per-call allocation
-fn edt_2d(
-    w: usize,
-    h: usize,
-    out: &mut [f32],
-    v: &mut [usize],
-    z: &mut [f32],
-    row_tmp: &mut [f32],
-    col_src: &mut [f32],
-    col_dst: &mut [f32],
-) {
+// The scratch buffers are caller-provided to avoid per-call allocation.
+fn edt_2d(w: usize, h: usize, out: &mut [f32], edt: &mut EdtScratch) {
+    let EdtScratch {
+        v,
+        z,
+        row_tmp,
+        col_src,
+        col_dst,
+    } = edt;
     // Row pass
     for y in 0..h {
         edt_1d(
@@ -343,22 +358,20 @@ fn edt_2d(
 // All buffers are caller-provided so no heap allocation happens per call.
 // After conversion every channel holds the normalised distance in [0, 255]:
 //   128 ≈ glyph outline, >128 = inside, <128 = outside.
-#[allow(clippy::too_many_arguments)] // caller-provided scratch buffers, kept separate to avoid per-call allocation
 fn cell_coverage_to_sdf(
     cell: &mut [u8],
     w: usize,
     h: usize,
     spread: f32,
-    inside_dist2: &mut [f32],
-    outside_dist2: &mut [f32],
-    edt_v: &mut [usize],
-    edt_z: &mut [f32],
-    row_tmp: &mut [f32],
-    col_src: &mut [f32],
-    col_dst: &mut [f32],
+    scratch: &mut SdfScratch,
 ) {
     const INF: f32 = 1e9;
     let n = w * h;
+    let SdfScratch {
+        inside_dist2,
+        outside_dist2,
+        edt,
+    } = scratch;
 
     // Initialise EDT grids directly from coverage, skipping the bool_buf pass.
     for i in 0..n {
@@ -367,26 +380,8 @@ fn cell_coverage_to_sdf(
         outside_dist2[i] = if fg { INF } else { 0.0 };
     }
 
-    edt_2d(
-        w,
-        h,
-        &mut inside_dist2[..n],
-        edt_v,
-        edt_z,
-        row_tmp,
-        col_src,
-        col_dst,
-    );
-    edt_2d(
-        w,
-        h,
-        &mut outside_dist2[..n],
-        edt_v,
-        edt_z,
-        row_tmp,
-        col_src,
-        col_dst,
-    );
+    edt_2d(w, h, &mut inside_dist2[..n], edt);
+    edt_2d(w, h, &mut outside_dist2[..n], edt);
 
     let spread2 = spread * spread;
     for i in 0..n {

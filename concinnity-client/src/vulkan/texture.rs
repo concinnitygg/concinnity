@@ -99,20 +99,46 @@ pub(super) fn create_buffer(
     Ok((buffer, memory))
 }
 
+// The Vulkan handles needed to allocate a device resource: the instance and
+// physical device (for memory-type queries) plus the logical device.
+#[derive(Clone, Copy)]
+pub(super) struct GpuAllocContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+}
+
+// Immutable description of a 2-D image to allocate.
+#[derive(Clone, Copy)]
+pub(super) struct ImageSpec {
+    pub width: u32,
+    pub height: u32,
+    pub format: vk::Format,
+    pub tiling: vk::ImageTiling,
+    pub usage: vk::ImageUsageFlags,
+    pub mem_props: vk::MemoryPropertyFlags,
+    pub samples: vk::SampleCountFlags,
+}
+
 // Allocate a VkImage with its own DeviceMemory.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn create_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    width: u32,
-    height: u32,
-    format: vk::Format,
-    tiling: vk::ImageTiling,
-    usage: vk::ImageUsageFlags,
-    mem_props: vk::MemoryPropertyFlags,
-    samples: vk::SampleCountFlags,
+    ctx: &GpuAllocContext,
+    spec: &ImageSpec,
 ) -> Result<(vk::Image, vk::DeviceMemory), String> {
+    let &GpuAllocContext {
+        instance,
+        device,
+        physical_device,
+    } = ctx;
+    let &ImageSpec {
+        width,
+        height,
+        format,
+        tiling,
+        usage,
+        mem_props,
+        samples,
+    } = spec;
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -204,21 +230,43 @@ where
     Ok(())
 }
 
+// A layout transition described by its endpoints and the aspect it applies to.
+#[derive(Clone, Copy)]
+pub(super) struct LayoutTransition {
+    pub old_layout: vk::ImageLayout,
+    pub new_layout: vk::ImageLayout,
+    pub aspect: vk::ImageAspectFlags,
+}
+
+// The subset of an image's layers and mips a barrier or copy touches.
+#[derive(Clone, Copy)]
+pub(super) struct SubresourceRange {
+    pub base_layer: u32,
+    pub layer_count: u32,
+    pub base_mip: u32,
+    pub mip_count: u32,
+}
+
 // Transition `layer_count` layers of an image from one layout to another via
 // a pipeline barrier. Used by the array shadow map and cube uploads.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn transition_image_layout_range(
     device: &Device,
     cmd: vk::CommandBuffer,
     image: vk::Image,
-    old_layout: vk::ImageLayout,
-    new_layout: vk::ImageLayout,
-    aspect: vk::ImageAspectFlags,
-    base_layer: u32,
-    layer_count: u32,
-    base_mip: u32,
-    mip_count: u32,
+    transition: LayoutTransition,
+    range: SubresourceRange,
 ) {
+    let LayoutTransition {
+        old_layout,
+        new_layout,
+        aspect,
+    } = transition;
+    let SubresourceRange {
+        base_layer,
+        layer_count,
+        base_mip,
+        mip_count,
+    } = range;
     let (src_access, dst_access, src_stage, dst_stage) =
         layout_transition_access(old_layout, new_layout);
 
@@ -330,7 +378,20 @@ pub(super) fn transition_image_layout(
     aspect: vk::ImageAspectFlags,
 ) {
     transition_image_layout_range(
-        device, cmd, image, old_layout, new_layout, aspect, 0, 1, 0, 1,
+        device,
+        cmd,
+        image,
+        LayoutTransition {
+            old_layout,
+            new_layout,
+            aspect,
+        },
+        SubresourceRange {
+            base_layer: 0,
+            layer_count: 1,
+            base_mip: 0,
+            mip_count: 1,
+        },
     );
 }
 
@@ -349,31 +410,49 @@ pub(super) fn transition_image_layout_array(
         device,
         cmd,
         image,
-        old_layout,
-        new_layout,
-        aspect,
-        0,
-        layer_count,
-        0,
-        1,
+        LayoutTransition {
+            old_layout,
+            new_layout,
+            aspect,
+        },
+        SubresourceRange {
+            base_layer: 0,
+            layer_count,
+            base_mip: 0,
+            mip_count: 1,
+        },
     );
+}
+
+// The Vulkan handles needed to allocate a resource and run a one-shot upload:
+// a `GpuAllocContext`'s handles plus the transient command pool and the queue
+// the copy is submitted to.
+#[derive(Clone, Copy)]
+pub(super) struct GpuUploadContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
 }
 
 // Upload RGBA pixel data to a device-local RGBA8_UNORM image with a full mip
 // chain. The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and every
 // level is uploaded so the texture minifies through hardware trilinear / aniso
 // selection instead of aliasing from a single mip-0 sample at a distance.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn upload_texture(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     width: u32,
     height: u32,
     pixels: &[u8],
 ) -> Result<GpuImage, String> {
+    let &GpuUploadContext {
+        instance,
+        device,
+        physical_device,
+        command_pool,
+        queue,
+    } = ctx;
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -452,13 +531,17 @@ pub(super) fn upload_texture(
             device,
             cmd,
             image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            1,
-            0,
-            mip_count,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 1,
+                base_mip: 0,
+                mip_count,
+            },
         );
         let mut regions: Vec<vk::BufferImageCopy> = Vec::with_capacity(mip_count as usize);
         let mut off = 0u64;
@@ -497,13 +580,17 @@ pub(super) fn upload_texture(
             device,
             cmd,
             image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            1,
-            0,
-            mip_count,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 1,
+                base_mip: 0,
+                mip_count,
+            },
         );
     })?;
 
@@ -547,11 +634,13 @@ pub(super) fn create_fallback_white(
     queue: vk::Queue,
 ) -> Result<GpuImage, String> {
     upload_texture(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
+        &GpuUploadContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        },
         1,
         1,
         &[255u8, 255, 255, 255],
@@ -567,11 +656,13 @@ pub(super) fn create_fallback_flat_normal(
     queue: vk::Queue,
 ) -> Result<GpuImage, String> {
     upload_texture(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
+        &GpuUploadContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        },
         1,
         1,
         &[128u8, 128, 255, 255],
@@ -878,33 +969,39 @@ pub(super) fn create_shadow_map_array(
 }
 
 // Create a device-local depth image for the main render pass.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn create_depth_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     width: u32,
     height: u32,
     samples: vk::SampleCountFlags,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+    let &GpuUploadContext {
         instance,
         device,
         physical_device,
-        width,
-        height,
-        vk::Format::D32_SFLOAT,
-        vk::ImageTiling::OPTIMAL,
-        // SAMPLED so the projected-decal pass (and any future depth-
-        // sampling effect) can read it from a fragment shader. Without
-        // this, the validation layer rejects the SHADER_READ_ONLY layout
-        // transition and the SAMPLED-bit-required `vkUpdateDescriptorSets`
-        // write that bind the depth view to the decal's set 0 binding 2.
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        samples,
+        command_pool,
+        queue,
+    } = ctx;
+    let (image, memory) = create_image(
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format: vk::Format::D32_SFLOAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            // SAMPLED so the projected-decal pass (and any future depth-
+            // sampling effect) can read it from a fragment shader. Without
+            // this, the validation layer rejects the SHADER_READ_ONLY layout
+            // transition and the SAMPLED-bit-required `vkUpdateDescriptorSets`
+            // write that bind the depth view to the decal's set 0 binding 2.
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -931,29 +1028,36 @@ pub(super) fn create_depth_image(
 }
 
 // Create a multisampled color image for the MSAA resolve target.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn create_msaa_color_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     width: u32,
     height: u32,
     format: vk::Format,
     samples: vk::SampleCountFlags,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+    let &GpuUploadContext {
         instance,
         device,
         physical_device,
-        width,
-        height,
-        format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        samples,
+        command_pool,
+        queue,
+    } = ctx;
+    let (image, memory) = create_image(
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -988,20 +1092,25 @@ pub(super) fn create_hdr_resolve_image(
     format: vk::Format,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width,
-        height,
-        format,
-        vk::ImageTiling::OPTIMAL,
-        // TRANSFER_SRC so the raymarch pass can snapshot the resolved scene into
-        // its `scene_color` refraction tap before compositing the SDF volumes.
-        vk::ImageUsageFlags::COLOR_ATTACHMENT
-            | vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format,
+            tiling: vk::ImageTiling::OPTIMAL,
+            // TRANSFER_SRC so the raymarch pass can snapshot the resolved scene
+            // into its `scene_color` refraction tap before compositing the SDF
+            // volumes.
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
     Ok(GpuImage {
@@ -1192,13 +1301,17 @@ fn create_cube_image(
             device,
             cmd,
             image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            6,
-            0,
-            mip_count,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 6,
+                base_mip: 0,
+                mip_count,
+            },
         );
 
         // One BufferImageCopy per (mip, face).
@@ -1244,13 +1357,17 @@ fn create_cube_image(
             device,
             cmd,
             image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            6,
-            0,
-            mip_count,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 6,
+                base_mip: 0,
+                mip_count,
+            },
         );
     })?;
 
@@ -1340,18 +1457,20 @@ pub(super) fn create_fallback_cubemap(
 // Upload an `EnvironmentMap` payload into two cube textures: a single-mip
 // irradiance cube and a multi-mip prefiltered radiance cube. Mirrors the
 // Metal and DirectX upload paths.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn upload_environment_map(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     irradiance_face: u32,
     irradiance_bytes: &[u8],
     prefilter_face: u32,
     mip_bytes: &[&[u8]],
 ) -> Result<EnvironmentMapTextures, String> {
+    let &GpuUploadContext {
+        instance,
+        device,
+        physical_device,
+        command_pool,
+        queue,
+    } = ctx;
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }

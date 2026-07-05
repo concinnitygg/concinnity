@@ -189,34 +189,61 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .map_err(|e| format!("reflection composite render pass: {e}"))
 }
 
+// The Vulkan device / queue context needed to allocate and transition a GPU image.
+// Shared by every target-building entry point (create_target, build_targets, new,
+// rebuild).
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GpuAllocContext<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// Per-frame G-buffer / scene input view slices feeding the composite's static
+// bindings: the scene HDR resolve, the unified pre-pass normal+depth, and the
+// roughness views. Wired at init / resize; the reflection binding is re-pointed
+// per encode.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CompositeInputViews<'a> {
+    pub hdr_resolve_views: &'a [vk::ImageView],
+    pub normal_depth_views: &'a [vk::ImageView],
+    pub roughness_views: &'a [vk::ImageView],
+}
+
 // One full-screen colour target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
 // descriptor sets bound to it at init see a valid layout before the first encode.
-#[allow(clippy::too_many_arguments)]
-fn create_target(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
+fn create_target(ctx: &GpuAllocContext, width: u32, height: u32) -> Result<GpuImage, String> {
+    let &GpuAllocContext {
         instance,
         device,
         physical_device,
-        width,
-        height,
-        HDR_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        // TRANSFER_SRC so the transparent (glass) pass can snapshot the
-        // post-reflection scene for its refraction tap, the same usage the SSR
-        // output carried before the composite owned the scene image.
-        vk::ImageUsageFlags::COLOR_ATTACHMENT
-            | vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        command_pool,
+        queue,
+    } = ctx;
+    let (image, memory) = create_image(
+        // The local GpuAllocContext also carries command_pool + queue; create_image
+        // takes the texture-module context, so build that variant explicitly.
+        &super::super::texture::GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &super::super::texture::ImageSpec {
+            width,
+            height,
+            format: HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            // TRANSFER_SRC so the transparent (glass) pass can snapshot the
+            // post-reflection scene for its refraction tap, the same usage the SSR
+            // output carried before the composite owned the scene image.
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -314,26 +341,21 @@ fn create_composite_pipeline(
 }
 
 impl ReflectionCompositeResources {
-    // Build every composite resource. `hdr_resolve_views` (per-frame scene),
-    // `normal_depth_views` + `roughness_views` (the unified G-buffer pre-pass's
-    // per-frame views) feed the composite's static bindings; the reflection binding
-    // is re-pointed per encode. `blur_scale` is the per-axis blur divisor.
-    #[allow(clippy::too_many_arguments)]
+    // Build every composite resource. `views` bundles the per-frame scene
+    // (`hdr_resolve_views`) and the unified G-buffer pre-pass's per-frame
+    // `normal_depth_views` + `roughness_views`; these feed the composite's static
+    // bindings while the reflection binding is re-pointed per encode. `blur_scale`
+    // is the per-axis blur divisor.
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &GpuAllocContext,
         width: u32,
         height: u32,
         frames: usize,
         blur_scale: u32,
-        hdr_resolve_views: &[vk::ImageView],
-        normal_depth_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
+        views: &CompositeInputViews,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = ctx.device;
         let blur_scale = blur_scale.max(1);
         let render_pass = create_composite_render_pass(device)?;
 
@@ -429,51 +451,26 @@ impl ReflectionCompositeResources {
             sampler,
             blur_scale,
         };
-        me.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
-        me.wire_sets(
-            device,
-            hdr_resolve_views,
-            normal_depth_views,
-            roughness_views,
-        );
+        me.build_targets(ctx, width, height)?;
+        me.wire_sets(device, views);
         Ok(me)
     }
 
     // Allocate / re-allocate the resolution-dependent output + blur targets and
     // their framebuffers at the given extent.
-    #[allow(clippy::too_many_arguments)]
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &GpuAllocContext,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
+        let device = ctx.device;
         let w = width.max(1);
         let h = height.max(1);
         let bw = (w / self.blur_scale).max(1);
         let bh = (h / self.blur_scale).max(1);
-        self.output = create_target(instance, device, physical_device, command_pool, queue, w, h)?;
-        self.blur = create_target(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            bw,
-            bh,
-        )?;
+        self.output = create_target(ctx, w, h)?;
+        self.blur = create_target(ctx, bw, bh)?;
         self.blur_extent = vk::Extent2D {
             width: bw,
             height: bh,
@@ -503,13 +500,12 @@ impl ReflectionCompositeResources {
     // reflection target) is left at a valid placeholder and re-pointed per encode.
     // Single-entry G-buffer slices are shared across frames (the legacy pre-pass
     // produced one view); per-frame slices index by frame.
-    fn wire_sets(
-        &self,
-        device: &Device,
-        hdr_resolve_views: &[vk::ImageView],
-        normal_depth_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
-    ) {
+    fn wire_sets(&self, device: &Device, views: &CompositeInputViews) {
+        let &CompositeInputViews {
+            hdr_resolve_views,
+            normal_depth_views,
+            roughness_views,
+        } = views;
         let img = |view: vk::ImageView| {
             vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -568,36 +564,16 @@ impl ReflectionCompositeResources {
     // Rebuild the resolution-dependent targets at a new extent and re-wire the
     // per-frame static bindings (the scene / G-buffer / blur views all moved). The
     // caller has already idled the device.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: &GpuAllocContext,
         width: u32,
         height: u32,
-        hdr_resolve_views: &[vk::ImageView],
-        normal_depth_views: &[vk::ImageView],
-        roughness_views: &[vk::ImageView],
+        views: &CompositeInputViews,
     ) -> Result<(), String> {
-        self.destroy_targets(device);
-        self.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
-        self.wire_sets(
-            device,
-            hdr_resolve_views,
-            normal_depth_views,
-            roughness_views,
-        );
+        self.destroy_targets(ctx.device);
+        self.build_targets(ctx, width, height)?;
+        self.wire_sets(ctx.device, views);
         Ok(())
     }
 

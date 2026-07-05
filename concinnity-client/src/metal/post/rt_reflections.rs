@@ -12,7 +12,6 @@
 // with SSR resolve. Like SSGI it relies on the SSR pre-pass G-buffer, so the
 // pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

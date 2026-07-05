@@ -1028,12 +1028,12 @@ mod tests {
 
         let ssao = g.pass_barriers_for(pass(PassId::SsaoBlur), &["ao_output"]);
         assert_eq!(ssao.len(), 1, "SsaoBlur has exactly one ao_output barrier");
-        assert_eq!(ssao[0].1.from_state(), ResourceState::Undefined);
+        assert_eq!(ssao[0].1.source_state(), ResourceState::Undefined);
         assert_eq!(ssao[0].1.to_state(), ResourceState::Write);
 
         let main = g.pass_barriers_for(pass(PassId::Main), &["ao_output"]);
         assert_eq!(main.len(), 1, "Main has exactly one ao_output barrier");
-        assert_eq!(main[0].1.from_state(), ResourceState::Write);
+        assert_eq!(main[0].1.source_state(), ResourceState::Write);
         assert_eq!(main[0].1.to_state(), ResourceState::Read);
     }
 
@@ -1057,12 +1057,12 @@ mod tests {
 
         let shadow = g.pass_barriers_for(pass(PassId::Shadow), &["shadow_map"]);
         assert_eq!(shadow.len(), 1, "Shadow has exactly one shadow_map barrier");
-        assert_eq!(shadow[0].1.from_state(), ResourceState::Undefined);
+        assert_eq!(shadow[0].1.source_state(), ResourceState::Undefined);
         assert_eq!(shadow[0].1.to_state(), ResourceState::Write);
 
         let main = g.pass_barriers_for(pass(PassId::Main), &["shadow_map"]);
         assert_eq!(main.len(), 1, "Main has exactly one shadow_map barrier");
-        assert_eq!(main[0].1.from_state(), ResourceState::Write);
+        assert_eq!(main[0].1.source_state(), ResourceState::Write);
         assert_eq!(main[0].1.to_state(), ResourceState::Read);
 
         // Main carries both migrated resources' barriers in one pass.
@@ -1095,7 +1095,7 @@ mod tests {
             1,
             "FogFroxel has exactly one fog_froxel_volume barrier"
         );
-        assert_eq!(froxel[0].1.from_state(), ResourceState::Undefined);
+        assert_eq!(froxel[0].1.source_state(), ResourceState::Undefined);
         assert_eq!(froxel[0].1.to_state(), ResourceState::Write);
 
         let fog = g.pass_barriers_for(pass(PassId::Fog), &["fog_froxel_volume"]);
@@ -1104,7 +1104,7 @@ mod tests {
             1,
             "Fog has exactly one fog_froxel_volume barrier"
         );
-        assert_eq!(fog[0].1.from_state(), ResourceState::Write);
+        assert_eq!(fog[0].1.source_state(), ResourceState::Write);
         assert_eq!(fog[0].1.to_state(), ResourceState::Read);
     }
 

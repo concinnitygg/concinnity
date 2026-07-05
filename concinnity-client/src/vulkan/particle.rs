@@ -30,7 +30,7 @@ use crate::gfx::render_types::ParticleParams;
 
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{compile_glsl, shader_source, spv_module};
-use super::texture::create_buffer;
+use super::texture::{GpuAllocContext, GpuUploadContext, create_buffer};
 
 // GLSL sources, shared with the host so the hot-reload pass can pick them
 // up the same way the existing built-in shaders do.
@@ -71,13 +71,15 @@ struct ParticleView {
     _pad1: f32,
 }
 
+// SPIR-V for the particle shader stages, in order: compute, vertex, fragment.
+type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
+
 // Compile the particle compute + vertex + fragment shaders to SPIR-V. Used
 // by [`ParticleResources::new`] at init and by shader hot-reload to rebuild
 // the two pipelines against the existing layouts.
-#[allow(clippy::type_complexity)]
 pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
+) -> Result<ParticleShaderSpirv, String> {
     let cs_src = shader_source(hot_reload, "particle_simulate.comp", PARTICLE_SIMULATE_GLSL);
     let vs_src = shader_source(hot_reload, "particle.vert", PARTICLE_VERT_GLSL);
     let fs_src = shader_source(hot_reload, "particle.frag", PARTICLE_FRAG_GLSL);
@@ -192,16 +194,18 @@ impl ParticleResources {
     // framebuffers. Called from `VkContext::new` only when the world
     // declared at least one `ParticleEmitter`. The encoder is a no-op
     // when this is `None`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        gpu: GpuAllocContext,
         frames: usize,
         hdr_resolve_views: &[vk::ImageView],
         extent: vk::Extent2D,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        } = gpu;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
         let compute_set_layout = create_compute_set_layout(device)?;
         let (view_set_layout, emitter_set_layout) = create_render_set_layouts(device)?;
@@ -388,16 +392,19 @@ impl ParticleResources {
 // emitter's compute + render descriptor sets and writes the pool/counter
 // bindings. The albedo binding stays unwritten; `add_emitter` writes it
 // from the live texture pool.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn build_emitter_gpu_state(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    gpu: GpuUploadContext,
     resources: &ParticleResources,
     record: &ParticleEmitterRecord,
 ) -> Result<ParticleEmitterGpuState, String> {
+    // Destructure the handles the buffer allocations need directly; the
+    // one-shot zero-fills below take the whole `gpu` context (it is Copy).
+    let GpuUploadContext {
+        instance,
+        device,
+        physical_device,
+        ..
+    } = gpu;
     let slots = record.max_particles as u64;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
 
@@ -412,15 +419,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    zero_device_buffer(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        pool_buffer,
-        pool_bytes,
-    )?;
+    zero_device_buffer(gpu, pool_buffer, pool_bytes)?;
 
     // Counter buffer: DEVICE_LOCAL, 4 bytes, used as STORAGE by the
     // compute kernel and TRANSFER_DST for the per-frame
@@ -434,15 +433,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    zero_device_buffer(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        counter_buffer,
-        counter_bytes,
-    )?;
+    zero_device_buffer(gpu, counter_buffer, counter_bytes)?;
 
     // Allocate the (compute, render) descriptor set pair.
     let set_layouts = [resources.compute_set_layout, resources.emitter_set_layout];
@@ -839,16 +830,13 @@ fn create_render_pipeline(
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
 // 32-bit pattern; `bytes` is guaranteed to be a multiple of 4 for both
 // the pool (32 bytes per slot) and the counter (4 bytes).
-#[allow(clippy::too_many_arguments)]
-fn zero_device_buffer(
-    _instance: &ash::Instance,
-    device: &Device,
-    _physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    target: vk::Buffer,
-    bytes: u64,
-) -> Result<(), String> {
+fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> Result<(), String> {
+    let GpuUploadContext {
+        device,
+        command_pool,
+        queue,
+        ..
+    } = gpu;
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
         unsafe { device.cmd_fill_buffer(cmd, target, 0, bytes, 0) };
     })
@@ -1203,9 +1191,11 @@ impl VkContext {
             let hdr_resolve_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
             let resources = ParticleResources::new(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                GpuAllocContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                },
                 self.frames_in_flight,
                 &hdr_resolve_views,
                 self.render_extent,
@@ -1224,11 +1214,13 @@ impl VkContext {
         }
 
         let gpu_state = build_emitter_gpu_state(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            GpuUploadContext {
+                instance: &self.instance,
+                device: &self.device,
+                physical_device: self.physical_device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             self.particle_resources.as_ref().unwrap(),
             &record,
         )?;

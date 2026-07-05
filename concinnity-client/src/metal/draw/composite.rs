@@ -6,7 +6,6 @@
 // after in the same render pass so it sits on top of the tonemapped image in
 // display-referred LDR space.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

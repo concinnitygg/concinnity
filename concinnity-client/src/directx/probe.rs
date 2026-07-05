@@ -33,7 +33,6 @@
 //     probe (no per-bake deformed buffer yet). They still receive probe reflections.
 //   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //     a probe bakes on an early frame), exactly like Metal.
-#![allow(clippy::incompatible_msrv)]
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -120,6 +119,37 @@ pub(in crate::directx) struct ConvertingBake {
     index: usize,
     placement: reflection_probe::ProbePlacement,
     payload: Arc<OnceLock<Vec<u8>>>,
+}
+
+// Colour + depth attachments for a probe-face / planar mirror capture.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FaceTargets {
+    pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
+}
+
+// GPU virtual addresses of the per-capture view / light / shadow constant buffers.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FaceUniforms {
+    pub view_gva: u64,
+    pub light_gva: u64,
+    pub shadow_ubo_gva: u64,
+}
+
+// The indirect draw for one capture region: the command buffer, its byte offset,
+// and the per-object buffer address for bindless rendering.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct IndirectDraw<'a> {
+    pub indirect: &'a ID3D12Resource,
+    pub indirect_offset: u32,
+    pub object_gva: u64,
+}
+
+// Render-target dimensions for the capture.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FaceExtent {
+    pub width: u32,
+    pub height: u32,
 }
 
 impl DxContext {
@@ -560,16 +590,21 @@ impl DxContext {
         let object_gva = unsafe { self.cull.object_buffer_resources[slot].GetGPUVirtualAddress() };
         self.encode_main_into_face(
             &cmd,
-            rtv,
-            dsv,
-            view_gva,
-            light_gva,
-            shadow_gva,
-            indirect,
-            0,
-            object_gva,
-            PROBE_FACE_SIZE,
-            PROBE_FACE_SIZE,
+            FaceTargets { rtv, dsv },
+            FaceUniforms {
+                view_gva,
+                light_gva,
+                shadow_ubo_gva: shadow_gva,
+            },
+            IndirectDraw {
+                indirect,
+                indirect_offset: 0,
+                object_gva,
+            },
+            FaceExtent {
+                width: PROBE_FACE_SIZE,
+                height: PROBE_FACE_SIZE,
+            },
         );
 
         // Resolve (MSAA) + copy the face into its readback buffer.
@@ -793,21 +828,26 @@ impl DxContext {
     // (render-resolution target, the planar indirect buffer at the plane's region
     // byte offset, drawn against the frame's object buffer). `indirect_offset` is a
     // byte offset into `indirect` to the region's first command.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn encode_main_into_face(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        view_gva: u64,
-        light_gva: u64,
-        shadow_ubo_gva: u64,
-        indirect: &ID3D12Resource,
-        indirect_offset: u32,
-        object_gva: u64,
-        width: u32,
-        height: u32,
+        targets: FaceTargets,
+        uniforms: FaceUniforms,
+        draw: IndirectDraw<'_>,
+        extent: FaceExtent,
     ) {
+        let FaceTargets { rtv, dsv } = targets;
+        let FaceUniforms {
+            view_gva,
+            light_gva,
+            shadow_ubo_gva,
+        } = uniforms;
+        let IndirectDraw {
+            indirect,
+            indirect_offset,
+            object_gva,
+        } = draw;
+        let FaceExtent { width, height } = extent;
         let bindless_pso = self.cull.main_bindless_pso.as_ref().unwrap();
         let bindless_root = self.cull.main_bindless_root_sig.as_ref().unwrap();
         let cull_sig = self.cull.cull_command_signature.as_ref().unwrap();

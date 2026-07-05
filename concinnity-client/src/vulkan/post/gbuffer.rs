@@ -251,16 +251,20 @@ fn create_color_target(
     format: vk::Format,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width,
-        height,
-        format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &ImageSpec {
+            width,
+            height,
+            format,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
     Ok(GpuImage {
@@ -271,19 +275,39 @@ fn create_color_target(
     })
 }
 
+// Render pass + pipeline layout a pre-pass pipeline binds against.
+#[derive(Clone, Copy)]
+struct PrepassPipelineTargets {
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+}
+
+// The compiled SPIR-V + vertex input layout a pre-pass pipeline is built from.
+struct PrepassPipelineShaders<'a> {
+    vert_spv: &'a [u8],
+    frag_spv: &'a [u8],
+    bindings: &'a [vk::VertexInputBindingDescription],
+    attrs: &'a [vk::VertexInputAttributeDescription],
+}
+
 // Build a pre-pass pipeline. Three MRT colour targets (normal+depth, roughness,
 // velocity) over a private depth buffer; same no-cull / LESS depth as the main
 // pass.
-#[allow(clippy::too_many_arguments)]
 fn create_prepass_pipeline(
     device: &Device,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
-    bindings: &[vk::VertexInputBindingDescription],
-    attrs: &[vk::VertexInputAttributeDescription],
+    targets: PrepassPipelineTargets,
+    shaders: PrepassPipelineShaders,
 ) -> Result<vk::Pipeline, String> {
+    let PrepassPipelineTargets {
+        render_pass,
+        layout,
+    } = targets;
+    let PrepassPipelineShaders {
+        vert_spv,
+        frag_spv,
+        bindings,
+        attrs,
+    } = shaders;
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -496,27 +520,66 @@ pub(in crate::vulkan) struct GbufferBindless {
     pub(in crate::vulkan) prev_model_ptrs: Vec<*mut u8>,
 }
 
+// Vulkan device handles every G-buffer builder threads through: the instance,
+// logical device, and physical device used to allocate images / buffers.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferDeviceCtx<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+}
+
+// Descriptor wiring the GPU-driven pre-pass allocates against: the shared pool
+// its per-frame set 0 comes from and the bindless GpuObjectData set layout it
+// reuses as set 1.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferBindlessDescriptors {
+    pub descriptor_pool: vk::DescriptorPool,
+    pub bindless_set_layout: vk::DescriptorSetLayout,
+}
+
+// Scene sizing that dimensions the per-frame prev_model SSBOs. `instance_models`
+// are the per-instance current transforms written once into the immutable
+// instance region; `n_objects` is the static prefix length that region starts
+// after; `n_cull` is the total cull-record count (the SSBO stride); `frames` is
+// the number of frames in flight.
+pub(in crate::vulkan) struct GbufferBindlessScene<'a> {
+    pub instance_models: &'a [[[f32; 4]; 4]],
+    pub n_objects: usize,
+    pub n_cull: usize,
+    pub frames: usize,
+}
+
 // Build the GPU-driven G-buffer pre-pass pipeline + its per-frame previous-frame
 // model SSBOs + descriptor sets. The previous-frame model buffers' instance
 // region `[n_objects, n_objects + n_instances)` is written once here (immutable,
 // camera-only motion); the static + skinned regions are rewritten each frame by
 // `build_gbuffer_prev_models`. Set 0 = G-buffer view UBO + prev_model SSBO; set 1
 // = the shared bindless GpuObjectData set (object id via gl_InstanceIndex).
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn build_gbuffer_bindless(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    descriptor_pool: vk::DescriptorPool,
-    bindless_set_layout: vk::DescriptorSetLayout,
+    ctx: GbufferDeviceCtx,
+    descriptors: GbufferBindlessDescriptors,
     gb: &GbufferResources,
-    instance_models: &[[[f32; 4]; 4]],
-    n_objects: usize,
-    n_cull: usize,
-    frames: usize,
+    scene: GbufferBindlessScene,
     hot_reload: bool,
 ) -> Result<GbufferBindless, String> {
     use super::super::pipeline::shader_source;
+
+    let GbufferDeviceCtx {
+        instance,
+        device,
+        physical_device,
+    } = ctx;
+    let GbufferBindlessDescriptors {
+        descriptor_pool,
+        bindless_set_layout,
+    } = descriptors;
+    let GbufferBindlessScene {
+        instance_models,
+        n_objects,
+        n_cull,
+        frames,
+    } = scene;
 
     let vs = compile_glsl(
         &shader_source(
@@ -565,12 +628,16 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     let (bindings, attrs) = vertex_56_dual_input();
     let pipeline = create_prepass_pipeline(
         device,
-        gb.prepass_render_pass,
-        pipeline_layout,
-        &vs,
-        &fs,
-        &bindings,
-        &attrs,
+        PrepassPipelineTargets {
+            render_pass: gb.prepass_render_pass,
+            layout: pipeline_layout,
+        },
+        PrepassPipelineShaders {
+            vert_spv: &vs,
+            frag_spv: &fs,
+            bindings: &bindings,
+            attrs: &attrs,
+        },
     )?;
 
     // Per-frame prev_model SSBOs (host-visible, persistently mapped), sized for
@@ -718,12 +785,16 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
     let (vbindings, vattrs) = vertex_56_input();
     let prepass_static = create_prepass_pipeline(
         device,
-        gbuffer.prepass_render_pass,
-        gbuffer.prepass_layout_static,
-        &shaders.prepass_vs,
-        &shaders.prepass_fs,
-        &vbindings,
-        &vattrs,
+        PrepassPipelineTargets {
+            render_pass: gbuffer.prepass_render_pass,
+            layout: gbuffer.prepass_layout_static,
+        },
+        PrepassPipelineShaders {
+            vert_spv: &shaders.prepass_vs,
+            frag_spv: &shaders.prepass_fs,
+            bindings: &vbindings,
+            attrs: &vattrs,
+        },
     )?;
     let prepass_instanced = if let (Some(layout), Some(_)) = (
         gbuffer.prepass_layout_instanced,
@@ -733,12 +804,16 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
         // instance SSBO), so bind just those two attributes.
         Some(create_prepass_pipeline(
             device,
-            gbuffer.prepass_render_pass,
-            layout,
-            &shaders.prepass_instanced_vs,
-            &shaders.prepass_fs,
-            &vbindings,
-            &vattrs[..2],
+            PrepassPipelineTargets {
+                render_pass: gbuffer.prepass_render_pass,
+                layout,
+            },
+            PrepassPipelineShaders {
+                vert_spv: &shaders.prepass_instanced_vs,
+                frag_spv: &shaders.prepass_fs,
+                bindings: &vbindings,
+                attrs: &vattrs[..2],
+            },
         )?)
     } else {
         None
@@ -749,12 +824,16 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
         let (sbindings, sattrs) = skinned_vertex_input();
         Some(create_prepass_pipeline(
             device,
-            gbuffer.prepass_render_pass,
-            layout,
-            &shaders.prepass_skinned_vs,
-            &shaders.prepass_fs,
-            &sbindings,
-            &sattrs,
+            PrepassPipelineTargets {
+                render_pass: gbuffer.prepass_render_pass,
+                layout,
+            },
+            PrepassPipelineShaders {
+                vert_spv: &shaders.prepass_skinned_vs,
+                frag_spv: &shaders.prepass_fs,
+                bindings: &sbindings,
+                attrs: &sattrs,
+            },
         )?)
     } else {
         None
@@ -766,26 +845,57 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
     })
 }
 
+// Command pool + queue the target builders use to lay out the private depth
+// image (its layout transition is submitted on this queue).
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferQueueCtx {
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
+
+// Render-resolution extent + frame-in-flight count the per-frame MRT targets are
+// sized and multiplied by.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferExtent {
+    pub width: u32,
+    pub height: u32,
+    pub frames: usize,
+}
+
+// The existing main-pass storage-buffer set layouts the pre-pass reuses: the
+// per-instance model SSBO layout and the per-object joint-palette SSBO layout.
+// Either is `None` when the world has no instanced / skinned geometry.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferSsboLayouts {
+    pub instance: Option<vk::DescriptorSetLayout>,
+    pub skinned: Option<vk::DescriptorSetLayout>,
+}
+
 impl GbufferResources {
-    // Build every G-buffer pre-pass resource. `instance_ssbo_set_layout` /
-    // `skinned_ssbo_set_layout` are the existing per-instance / per-object joint
-    // storage-buffer layouts the main pass uses; the pre-pass reuses those
-    // buffers directly.
-    #[allow(clippy::too_many_arguments)]
+    // Build every G-buffer pre-pass resource. `ssbo_layouts` are the existing
+    // per-instance / per-object joint storage-buffer layouts the main pass uses;
+    // the pre-pass reuses those buffers directly.
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        frames: usize,
-        instance_ssbo_set_layout: Option<vk::DescriptorSetLayout>,
-        skinned_ssbo_set_layout: Option<vk::DescriptorSetLayout>,
+        ctx: GbufferDeviceCtx,
+        queue: GbufferQueueCtx,
+        extent: GbufferExtent,
+        ssbo_layouts: GbufferSsboLayouts,
         object_count: usize,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let GbufferDeviceCtx {
+            instance,
+            device,
+            physical_device,
+        } = ctx;
+        // Only the frame count is needed here (for the view-UBO ring); the
+        // sized targets are built by `build_targets`, which takes the full
+        // `extent` below and reads width/height itself.
+        let GbufferExtent { frames, .. } = extent;
+        let GbufferSsboLayouts {
+            instance: instance_ssbo_set_layout,
+            skinned: skinned_ssbo_set_layout,
+        } = ssbo_layouts;
         let prepass_render_pass = create_prepass_render_pass(device)?;
 
         // Pre-pass set 0: GbView UBO. Set 1 (instance/joint SSBO) is supplied by
@@ -858,24 +968,32 @@ impl GbufferResources {
         let (vbindings, vattrs) = vertex_56_input();
         let prepass_pso_static = create_prepass_pipeline(
             device,
-            prepass_render_pass,
-            prepass_layout_static,
-            &shaders.prepass_vs,
-            &shaders.prepass_fs,
-            &vbindings,
-            &vattrs,
+            PrepassPipelineTargets {
+                render_pass: prepass_render_pass,
+                layout: prepass_layout_static,
+            },
+            PrepassPipelineShaders {
+                vert_spv: &shaders.prepass_vs,
+                frag_spv: &shaders.prepass_fs,
+                bindings: &vbindings,
+                attrs: &vattrs,
+            },
         )?;
         let prepass_pso_instanced = if let Some(layout) = prepass_layout_instanced {
             // Instanced pre-pass reads only position + normal (model comes from
             // the instance SSBO), so bind just those two attributes.
             Some(create_prepass_pipeline(
                 device,
-                prepass_render_pass,
-                layout,
-                &shaders.prepass_instanced_vs,
-                &shaders.prepass_fs,
-                &vbindings,
-                &vattrs[..2],
+                PrepassPipelineTargets {
+                    render_pass: prepass_render_pass,
+                    layout,
+                },
+                PrepassPipelineShaders {
+                    vert_spv: &shaders.prepass_instanced_vs,
+                    frag_spv: &shaders.prepass_fs,
+                    bindings: &vbindings,
+                    attrs: &vattrs[..2],
+                },
             )?)
         } else {
             None
@@ -884,12 +1002,16 @@ impl GbufferResources {
             let (sbindings, sattrs) = skinned_vertex_input();
             Some(create_prepass_pipeline(
                 device,
-                prepass_render_pass,
-                layout,
-                &shaders.prepass_skinned_vs,
-                &shaders.prepass_fs,
-                &sbindings,
-                &sattrs,
+                PrepassPipelineTargets {
+                    render_pass: prepass_render_pass,
+                    layout,
+                },
+                PrepassPipelineShaders {
+                    vert_spv: &shaders.prepass_skinned_vs,
+                    frag_spv: &shaders.prepass_fs,
+                    bindings: &sbindings,
+                    attrs: &sattrs,
+                },
             )?)
         } else {
             None
@@ -969,33 +1091,32 @@ impl GbufferResources {
             prev_models: vec![IDENTITY4; object_count],
             hot_reload,
         };
-        me.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-            frames,
-        )?;
+        me.build_targets(ctx, queue, extent)?;
         Ok(me)
     }
 
     // Allocate the per-frame MRT targets + private depth + framebuffers at the
     // given extent. One slot per frame in flight.
-    #[allow(clippy::too_many_arguments)]
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        frames: usize,
+        ctx: GbufferDeviceCtx,
+        queue: GbufferQueueCtx,
+        extent: GbufferExtent,
     ) -> Result<(), String> {
+        let GbufferDeviceCtx {
+            instance,
+            device,
+            physical_device,
+        } = ctx;
+        let GbufferQueueCtx {
+            command_pool,
+            queue,
+        } = queue;
+        let GbufferExtent {
+            width,
+            height,
+            frames,
+        } = extent;
         let w = width.max(1);
         let h = height.max(1);
         for _ in 0..frames {
@@ -1024,11 +1145,13 @@ impl GbufferResources {
                 GBUFFER_VELOCITY_FORMAT,
             )?;
             let depth = create_depth_image(
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
+                &GpuUploadContext {
+                    instance,
+                    device,
+                    physical_device,
+                    command_pool,
+                    queue,
+                },
                 w,
                 h,
                 vk::SampleCountFlags::TYPE_1,
@@ -1126,29 +1249,14 @@ impl GbufferResources {
     // Rebuild the per-frame targets at a new swapchain extent. The caller has
     // already idled the device. The descriptor sets and UBOs are
     // resolution-independent and untouched.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        width: u32,
-        height: u32,
-        frames: usize,
+        ctx: GbufferDeviceCtx,
+        queue: GbufferQueueCtx,
+        extent: GbufferExtent,
     ) -> Result<(), String> {
-        self.destroy_targets(device);
-        self.build_targets(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-            frames,
-        )?;
+        self.destroy_targets(ctx.device);
+        self.build_targets(ctx, queue, extent)?;
         Ok(())
     }
 
@@ -1205,12 +1313,16 @@ impl GbufferResources {
         let (sbindings, sattrs) = skinned_vertex_input();
         let pso = create_prepass_pipeline(
             device,
-            self.prepass_render_pass,
-            layout,
-            &sk_vs,
-            &prepass_fs,
-            &sbindings,
-            &sattrs,
+            PrepassPipelineTargets {
+                render_pass: self.prepass_render_pass,
+                layout,
+            },
+            PrepassPipelineShaders {
+                vert_spv: &sk_vs,
+                frag_spv: &prepass_fs,
+                bindings: &sbindings,
+                attrs: &sattrs,
+            },
         )?;
         self.prepass_layout_skinned = Some(layout);
         self.prepass_pso_skinned = Some(pso);
@@ -1269,6 +1381,18 @@ impl GbufferResources {
     }
 }
 
+// Camera / view state the G-buffer pre-pass rasterises with. `jittered_vp` is
+// the jittered VP that rasterises (matching the main pass); `cur_vp` is the
+// un-jittered current VP the shader pairs with the previous VP for the motion
+// vector; `cam_pos` + `frustum` drive LOD selection and instanced-cluster
+// culling.
+pub(in crate::vulkan) struct GbufferPrepassView<'a> {
+    pub jittered_vp: [[f32; 4]; 4],
+    pub cur_vp: [[f32; 4]; 4],
+    pub cam_pos: [f32; 3],
+    pub frustum: &'a crate::gfx::frustum::Frustum,
+}
+
 impl VkContext {
     // Encode the unified G-buffer pre-pass: one jittered traversal of the
     // visible set (static + GPU-instanced + skinned) into the per-frame
@@ -1280,19 +1404,21 @@ impl VkContext {
     //
     // `gb` is borrowed from the owning `self.gbuffer` field by the caller,
     // matching how the SSR / TAA encoders take their resources.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn encode_gbuffer_prepass(
         &self,
         gb: &GbufferResources,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        jittered_vp: [[f32; 4]; 4],
-        cur_vp: [[f32; 4]; 4],
+        view: GbufferPrepassView,
         visible: &[u32],
-        frustum: &crate::gfx::frustum::Frustum,
-        cam_pos: [f32; 3],
         velocity_active: bool,
     ) {
+        let GbufferPrepassView {
+            jittered_vp,
+            cur_vp,
+            cam_pos,
+            frustum,
+        } = view;
         let device = &self.device;
         let extent = self.render_extent;
 

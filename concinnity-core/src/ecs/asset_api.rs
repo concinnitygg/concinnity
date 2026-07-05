@@ -36,7 +36,7 @@ pub struct AssetTypeEntry {
 // step calls this first, then runs its compilation pass over the resulting
 // defs. The HTTP API follows the same two-step pattern
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
-    if let Ok(ct) = ComponentType::parse(&req.asset_type) {
+    if let Some(ct) = ComponentType::parse(&req.asset_type) {
         let reg = ct.registration();
         if reg.origin != AssetOrigin::External {
             return Err(CnResult::InvalidArgument);

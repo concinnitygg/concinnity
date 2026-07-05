@@ -7,6 +7,7 @@ use crate::assets::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
+use crate::gfx::backend::{ChunkMesh, FrameParams};
 use crate::gfx::{
     draw_list::{self},
     scene_reel, settings, sprite as gfx_sprite, text,
@@ -1915,7 +1916,15 @@ impl GraphicsSystem {
                     let mut added: Vec<(crate::gfx::chunk_coord::ChunkCoord, usize)> = Vec::new();
                     cs.streamer.drain_completed(|coord, verts, idxs| {
                         let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
-                        match backend.add_chunk_mesh(verts, idxs, model, tex, nm, mat, frame) {
+                        match backend.add_chunk_mesh(ChunkMesh {
+                            verts,
+                            idxs,
+                            model,
+                            texture_slot: tex,
+                            normal_map_slot: nm,
+                            material: mat,
+                            frame,
+                        }) {
                             Ok(draw_idx) => added.push((coord, draw_idx)),
                             Err(e) => tracing::warn!(
                                 "GraphicsSystem: chunk add ({},{}): {}",
@@ -1953,15 +1962,15 @@ impl GraphicsSystem {
                 // last tick are in InputState before take_input() snapshots and
                 // clears it.
                 backend.update_view(final_view);
-                match backend.draw_frame(
+                match backend.draw_frame(FrameParams {
                     elapsed,
                     fov_y_radians,
                     near,
                     far,
-                    final_cam_pos,
-                    &text_calls,
+                    cam_pos: final_cam_pos,
+                    text_calls: &text_calls,
                     world_hidden,
-                ) {
+                }) {
                     Ok(()) => {}
                     Err(e) => {
                         tracing::error!("GraphicsSystem: draw_frame: {}", e);

@@ -26,8 +26,6 @@
 // instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 // (the bindless face render omits the skinned tail), exactly like the probe capture.
 
-#![allow(clippy::incompatible_msrv)]
-
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -119,6 +117,30 @@ pub(in crate::directx) struct PlanarReflectionSet {
 unsafe impl Send for PlanarReflectionSet {}
 unsafe impl Sync for PlanarReflectionSet {}
 
+// Render-target build config for the planar set: MSAA sample count, render
+// dimensions, and the mirror-cull record count.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct PlanarConfig {
+    // MSAA sample count matching the main pass.
+    pub sample_count: u32,
+    // Shared colour + depth target width in pixels.
+    pub width: u32,
+    // Shared colour + depth target height in pixels.
+    pub height: u32,
+    // Build-time draw-record count (`DxContext::cull_count`): sizes each plane's
+    // region of the per-frame mirror-cull indirect buffer.
+    pub n_cull: usize,
+}
+
+// Per-plane resolve descriptor handles (one entry per plane) plus the shared
+// colour clear value.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct PlanarTargets<'a> {
+    pub resolve_srv_cpu: &'a [D3D12_CPU_DESCRIPTOR_HANDLE],
+    pub resolve_srv_gpu: &'a [D3D12_GPU_DESCRIPTOR_HANDLE],
+    pub clear_color: [f32; 4],
+}
+
 impl PlanarReflectionSet {
     // Build the planar set: shared colour + depth at `width`x`height` (matching
     // the main pass's formats + sample count so the bindless face render binds the
@@ -126,20 +148,23 @@ impl PlanarReflectionSet {
     // reserved heap slot, and the per-(plane, frame) reflected-view CBV ring.
     // `resolve_srv_cpu` / `resolve_srv_gpu` are the reserved heap descriptors, one
     // per plane in `planes`.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn new(
         device: &ID3D12Device,
-        sample_count: u32,
-        width: u32,
-        height: u32,
+        config: PlanarConfig,
         planes: &[[f32; 4]],
-        resolve_srv_cpu: &[D3D12_CPU_DESCRIPTOR_HANDLE],
-        resolve_srv_gpu: &[D3D12_GPU_DESCRIPTOR_HANDLE],
-        clear_color: [f32; 4],
-        // Build-time draw-record count (`DxContext::cull_count`): sizes each plane's
-        // region of the per-frame mirror-cull indirect buffer.
-        n_cull: usize,
+        targets: PlanarTargets,
     ) -> Result<Self, String> {
+        let PlanarConfig {
+            sample_count,
+            width,
+            height,
+            n_cull,
+        } = config;
+        let PlanarTargets {
+            resolve_srv_cpu,
+            resolve_srv_gpu,
+            clear_color,
+        } = targets;
         let rtv_heap = create_rtv_heap(device)?;
         let dsv_heap = create_dsv_heap(device)?;
         let color_rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
@@ -442,16 +467,24 @@ impl DxContext {
             let ring = slot * FRAMES + params.frame_idx;
             self.encode_main_into_face(
                 cmd,
-                set.color_rtv,
-                set.depth_dsv,
-                set.view_gvas[ring],
-                params.light_gva,
-                params.shadow_ubo_gva,
-                indirect,
-                set.region_offset(slot),
-                frame_object_gva,
-                w,
-                h,
+                crate::directx::probe::FaceTargets {
+                    rtv: set.color_rtv,
+                    dsv: set.depth_dsv,
+                },
+                crate::directx::probe::FaceUniforms {
+                    view_gva: set.view_gvas[ring],
+                    light_gva: params.light_gva,
+                    shadow_ubo_gva: params.shadow_ubo_gva,
+                },
+                crate::directx::probe::IndirectDraw {
+                    indirect,
+                    indirect_offset: set.region_offset(slot),
+                    object_gva: frame_object_gva,
+                },
+                crate::directx::probe::FaceExtent {
+                    width: w,
+                    height: h,
+                },
             );
             set.resolve_into(cmd, slot);
         }

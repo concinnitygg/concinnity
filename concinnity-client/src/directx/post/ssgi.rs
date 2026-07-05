@@ -249,20 +249,35 @@ pub(in crate::directx) struct SsgiResources {
     composite_pso: ID3D12PipelineState,
 }
 
-#[allow(clippy::too_many_arguments)]
+// GPU device handles the SSGI builder needs: the device and the optional debug
+// info queue. They always travel together through `new`.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct SsgiDevice<'a> {
+    pub device: &'a ID3D12Device,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+}
+
+// Descriptor handles for the SSGI gather target: a CPU RTV plus the (CPU, GPU)
+// SRV pair the composite samples.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct SsgiDescriptors {
+    pub gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub gi_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+
 impl SsgiResources {
     // Build all SSGI resources. Called from `DxContext::new` only when the
     // world's `PostProcessConfig` selects `indirect_lighting: ssgi`.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        dev: SsgiDevice,
         width: u32,
         height: u32,
         settings: SsgiSettings,
-        gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-        gi_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-        info_queue: Option<&ID3D12InfoQueue>,
+        descriptors: SsgiDescriptors,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let SsgiDevice { device, info_queue } = dev;
+        let SsgiDescriptors { gi_rtv, gi_srv } = descriptors;
         // The gather runs at `gi_scale`-reduced resolution; the composite
         // bilateral-upsamples it back to full resolution (it reads the gi
         // texture's own dimensions for the tap stride). Mirrors metal/post/ssgi.

@@ -4,7 +4,6 @@
 // buffers via the sub-allocators, plus in-place per-slot updates for asset
 // hot-reload.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};

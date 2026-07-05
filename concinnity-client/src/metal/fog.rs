@@ -13,7 +13,6 @@
 // transmittance)` so the pipeline's `over` blend yields
 // `scene * T + scattered` automatically.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

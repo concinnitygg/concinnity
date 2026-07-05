@@ -23,7 +23,7 @@ use ash::vk;
 use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
 use super::pipeline::{
-    compile_bindless_shaders, compile_composite_shaders, compile_cull_shader,
+    MeshPipelineTargets, compile_bindless_shaders, compile_composite_shaders, compile_cull_shader,
     compile_cull_shader_phase2, compile_skinned_shaders, compile_text_shaders,
     create_composite_pipeline, create_cull_pipeline, create_instanced_pipeline,
     create_main_pipeline, create_skinned_pipeline, create_text_pipeline, resolve_instanced_shader,
@@ -272,10 +272,12 @@ impl VkContext {
                 let (bvs, bps) = compile_bindless_shaders(hr, self.textures.len())?;
                 create_main_pipeline(
                     device,
-                    self.main_render_pass,
-                    self.cull.bindless_pipeline_layout.unwrap(),
-                    &bvs,
-                    &bps,
+                    MeshPipelineTargets {
+                        render_pass: self.main_render_pass,
+                        layout: self.cull.bindless_pipeline_layout.unwrap(),
+                        vert_spv: &bvs,
+                        frag_spv: &bps,
+                    },
                     self.msaa_samples,
                     self.swapchain_format,
                 )
@@ -577,10 +579,12 @@ impl VkContext {
         let (vert_spv, frag_spv) = resolve_main_shaders(hr, vert, frag)?;
         let new_main = create_main_pipeline(
             device,
-            self.main_render_pass,
-            self.main_pipeline_layout,
-            &vert_spv,
-            &frag_spv,
+            MeshPipelineTargets {
+                render_pass: self.main_render_pass,
+                layout: self.main_pipeline_layout,
+                vert_spv: &vert_spv,
+                frag_spv: &frag_spv,
+            },
             self.msaa_samples,
             self.swapchain_format,
         )?;
@@ -601,10 +605,12 @@ impl VkContext {
             })?;
             Some(create_instanced_pipeline(
                 device,
-                self.main_render_pass,
-                layout,
-                &inst_spv,
-                &frag_spv,
+                MeshPipelineTargets {
+                    render_pass: self.main_render_pass,
+                    layout,
+                    vert_spv: &inst_spv,
+                    frag_spv: &frag_spv,
+                },
                 self.msaa_samples,
                 self.swapchain_format,
             )?)
@@ -620,10 +626,12 @@ impl VkContext {
             let (skinned_vs, _skinned_shadow_vs, frag_ps) = compile_skinned_shaders(hr, frag)?;
             Some(create_skinned_pipeline(
                 device,
-                self.main_render_pass,
-                layout,
-                &skinned_vs,
-                &frag_ps,
+                MeshPipelineTargets {
+                    render_pass: self.main_render_pass,
+                    layout,
+                    vert_spv: &skinned_vs,
+                    frag_spv: &frag_ps,
+                },
                 self.msaa_samples,
             )?)
         } else {

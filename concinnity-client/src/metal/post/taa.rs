@@ -6,7 +6,6 @@
 // per-frame encoders live together so the effect is a single unit Vulkan /
 // DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -18,7 +17,7 @@ use objc2_metal::{
 use crate::metal::context::MtlContext;
 use crate::metal::pipeline::shader_source;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 use crate::metal::uniforms::TaaUniforms;
 
@@ -129,11 +128,13 @@ impl MtlContext {
 
         self.fullscreen_pass(
             cmd_buf,
-            dst.as_ref(),
-            MTLLoadAction::DontCare,
-            PassTimer::Whole(crate::metal::pass_timing::PassId::TaaResolve),
-            pipeline,
-            "TAA resolve",
+            FullscreenPass {
+                target: dst.as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::TaaResolve),
+                pipeline,
+                label: "TAA resolve",
+            },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(scene_input), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuf.velocity.as_ref()), 1);

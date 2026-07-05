@@ -317,7 +317,7 @@ fn is_path_like(s: &str) -> bool {
     }
     // has a dot but the full string isn't a known type name
     if s.contains('.') {
-        return ComponentType::parse(s).is_err();
+        return ComponentType::parse(s).is_none();
     }
     false
 }
@@ -350,7 +350,7 @@ fn validated_entry(
 // source path.
 fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<serde_json::Value> {
     let reg = ComponentType::parse(asset_type)
-        .map_err(|_| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
+        .ok_or_else(|| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
         .registration();
     let mut args = reg
         .default_args
@@ -747,7 +747,7 @@ fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json::Value>> {
         return entry_from_path(target);
     }
 
-    if ComponentType::parse(target).is_ok() {
+    if ComponentType::parse(target).is_some() {
         return entry_from_type_name(target).map(|e| vec![e]);
     }
 

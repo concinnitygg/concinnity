@@ -7,7 +7,6 @@
 // matching `post/*.rs` / `decal.rs` / `fog.rs` / `auto_exposure.rs` /
 // `cull.rs` files so each effect is a single unit.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use dispatch2::DispatchData;
 use objc2::rc::Retained;

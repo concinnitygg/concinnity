@@ -488,6 +488,31 @@ pub(in crate::directx) struct FogResources {
     pub(in crate::directx) shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
 
+// CPU + GPU descriptor handles for the froxel volume: the compute kernel's UAV
+// (write) and the fog pass's SRV (read).
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FogVolumeDescriptors {
+    pub uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub uav_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
+// GPU descriptor handles for the scene depth + shadow map the fog shaders sample.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FogShaderResourceHandles {
+    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
+// Device-level fog build config: MSAA sample count (compiled into the depth SRV
+// declarations) and the shader hot-reload toggle.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FogDeviceParams {
+    pub msaa_samples: u32,
+    pub hot_reload: bool,
+}
+
 impl FogResources {
     // Build the fog pipeline + per-frame uniform rings + the froxel volume
     // + the compute kernel. Called from `DxContext::new` only when the
@@ -495,21 +520,29 @@ impl FogResources {
     // into the heap by the decal-init path (the projected-decal pass
     // writes the main-depth SRV unconditionally so runtime `add_decal`
     // works from a world that started empty); the fog pass reuses the
-    // same descriptor. `volume_uav_cpu` / `volume_srv_cpu` are dedicated
+    // same descriptor. `volume.uav_cpu` / `volume.srv_cpu` are dedicated
     // SRV-heap slots reserved by init for the froxel volume.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::directx) fn new(
         device: &ID3D12Device,
-        msaa_samples: u32,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        volume_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        volume_uav_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-        volume_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        volume_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        volume: FogVolumeDescriptors,
+        shader_resources: FogShaderResourceHandles,
+        params: FogDeviceParams,
         info_queue: Option<&ID3D12InfoQueue>,
-        hot_reload: bool,
     ) -> Result<Self, String> {
+        let FogVolumeDescriptors {
+            uav_cpu: volume_uav_cpu,
+            uav_gpu: volume_uav_gpu,
+            srv_cpu: volume_srv_cpu,
+            srv_gpu: volume_srv_gpu,
+        } = volume;
+        let FogShaderResourceHandles {
+            depth_srv_gpu,
+            shadow_srv_gpu,
+        } = shader_resources;
+        let FogDeviceParams {
+            msaa_samples,
+            hot_reload,
+        } = params;
         let (vs, ps) = compile_fog_shaders(msaa_samples, hot_reload)?;
         let cs = compile_fog_froxel_shader(hot_reload)?;
 

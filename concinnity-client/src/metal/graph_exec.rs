@@ -60,8 +60,6 @@
 // resources are ever introduced, the point-1 assumption breaks and explicit
 // `MTLFence`s become necessary.)
 
-#![allow(clippy::incompatible_msrv)]
-
 use std::sync::atomic::Ordering;
 
 use objc2::rc::Retained;
@@ -432,12 +430,17 @@ impl MtlContext {
             }
             PassId::Main2 => self.encode_main_pass_phase2(
                 cmd_buf,
-                params.elapsed,
-                params.vp,
-                params.cam_pos,
-                params.object_buffer,
-                params.bindless_tex_args,
-                params.deformed_skinned,
+                crate::metal::draw::main::MainPassCamera {
+                    elapsed: params.elapsed,
+                    vp: params.vp,
+                    view: self.view_matrix,
+                    cam_pos: params.cam_pos,
+                },
+                crate::metal::draw::main::GpuFrameBuffers {
+                    object_buffer: params.object_buffer,
+                    bindless_tex_args: params.bindless_tex_args,
+                    deformed_skinned: params.deformed_skinned,
+                },
             )?,
             PassId::Shadow => {
                 // Build the raymarch view only when a volume opts into
@@ -461,15 +464,22 @@ impl MtlContext {
             }
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
-                params.elapsed,
-                params.vp,
-                params.cam_pos,
-                params.visible,
-                params.prepared_instances,
-                params.skinned_joint_bufs,
-                params.object_buffer,
-                params.bindless_tex_args,
-                params.deformed_skinned,
+                crate::metal::draw::main::MainPassCamera {
+                    elapsed: params.elapsed,
+                    vp: params.vp,
+                    view: self.view_matrix,
+                    cam_pos: params.cam_pos,
+                },
+                crate::metal::draw::main::DrawInputs {
+                    visible: params.visible,
+                    prepared_instances: params.prepared_instances,
+                    skinned_joint_bufs: params.skinned_joint_bufs,
+                },
+                crate::metal::draw::main::GpuFrameBuffers {
+                    object_buffer: params.object_buffer,
+                    bindless_tex_args: params.bindless_tex_args,
+                    deformed_skinned: params.deformed_skinned,
+                },
                 params.world_hidden,
             )?,
             PassId::AutoExposure => self.encode_auto_exposure(cmd_buf)?,
@@ -510,16 +520,20 @@ impl MtlContext {
                 self.encode_gbuffer_prepass(
                     cmd_buf,
                     &gview,
-                    params.visible,
-                    params.cam_pos,
-                    params.prepared_instances,
-                    params.skinned_joint_bufs,
-                    params.prev_skinned_joint_bufs,
+                    crate::metal::post::gbuffer::GbufferSceneInputs {
+                        visible: params.visible,
+                        cam_pos: params.cam_pos,
+                        prepared_instances: params.prepared_instances,
+                        cur_joint_bufs: params.skinned_joint_bufs,
+                        prev_joint_bufs: params.prev_skinned_joint_bufs,
+                    },
+                    crate::metal::post::gbuffer::GbufferGpuBuffers {
+                        object_buffer: params.object_buffer,
+                        prev_model_buffer: params.prev_model_buffer,
+                        deformed_current: params.deformed_skinned,
+                        deformed_prev: params.deformed_prev,
+                    },
                     params.vel_uniforms.is_some(),
-                    params.object_buffer,
-                    params.prev_model_buffer,
-                    params.deformed_skinned,
-                    params.deformed_prev,
                 )?
             }
             PassId::TaaResolve => {

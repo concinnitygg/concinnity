@@ -7,6 +7,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
 
@@ -505,16 +506,22 @@ impl DxContext {
         let pre_srv_cpu = self.env_map.prefilter.srv_cpu;
         let pre_srv_gpu = self.env_map.prefilter.srv_gpu;
         let new_env = upload_environment_map(
-            &self.device,
-            &self.command_queue,
-            view.irradiance_face,
-            view.irradiance_bytes,
-            view.prefilter_face,
-            &view.prefilter_mip_bytes,
-            irr_srv_cpu,
-            irr_srv_gpu,
-            pre_srv_cpu,
-            pre_srv_gpu,
+            GpuUploadContext {
+                device: &self.device,
+                queue: &self.command_queue,
+            },
+            EnvironmentMapPayload {
+                irradiance_face: view.irradiance_face,
+                irradiance_bytes: view.irradiance_bytes,
+                prefilter_face: view.prefilter_face,
+                mip_bytes: &view.prefilter_mip_bytes,
+            },
+            EnvironmentMapDescriptors {
+                irr_srv_cpu,
+                irr_srv_gpu,
+                pre_srv_cpu,
+                pre_srv_gpu,
+            },
         )?;
         self.env_map = new_env;
         Ok(())
@@ -1141,17 +1148,16 @@ impl DxContext {
     // range still renders. `frame` reclaims retired deferred frees first.
     // `wait_idle` runs before the geometry copy so the whole-resource
     // COPY_DEST transition races no in-flight command list.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_chunk_mesh(
-        &mut self,
-        vertices: &[Vertex],
-        indices: &[u16],
-        model: [[f32; 4]; 4],
-        texture_slot: usize,
-        normal_map_slot: usize,
-        material: crate::gfx::render_types::MaterialUniforms,
-        frame: u64,
-    ) -> Result<usize, String> {
+    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+        let ChunkMesh {
+            verts: vertices,
+            idxs: indices,
+            model,
+            texture_slot,
+            normal_map_slot,
+            material,
+            frame,
+        } = mesh;
         if vertices.is_empty() || indices.is_empty() {
             return Err("add_chunk_mesh: empty chunk geometry".to_string());
         }

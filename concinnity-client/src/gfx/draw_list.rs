@@ -442,18 +442,33 @@ pub(crate) fn load_room_geometry(
 // draw-index table for runtime model-matrix updates and the GPU-instanced
 // cluster list (one entry per InstancedProp).
 // Returns None if any referenced asset is missing (error already logged).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_draw_list(
-    items: &[RenderableItem],
-    instanced_props: &[InstancedProp],
-    world_mats: &[[[f32; 4]; 4]],
-    model_map: &std::collections::HashMap<AssetId, Vec<SubMeshRef>>,
-    mesh_geometry: &std::collections::HashMap<AssetId, LoadedMesh>,
-    room_geometry: &[RoomGeometry],
-    texture_name_to_slot: &std::collections::HashMap<AssetId, usize>,
-    material_map: &std::collections::HashMap<AssetId, MaterialEntry>,
-    always_resident_meshes: &std::collections::HashSet<AssetId>,
-) -> Option<DrawListData> {
+// The read-only scene lookup tables consumed by [`build_draw_list`]: the
+// renderable items and instanced props plus every catalogue needed to resolve
+// their geometry, textures, and materials.
+pub(crate) struct DrawListInputs<'a> {
+    pub items: &'a [RenderableItem],
+    pub instanced_props: &'a [InstancedProp],
+    pub world_mats: &'a [[[f32; 4]; 4]],
+    pub model_map: &'a std::collections::HashMap<AssetId, Vec<SubMeshRef>>,
+    pub mesh_geometry: &'a std::collections::HashMap<AssetId, LoadedMesh>,
+    pub room_geometry: &'a [RoomGeometry],
+    pub texture_name_to_slot: &'a std::collections::HashMap<AssetId, usize>,
+    pub material_map: &'a std::collections::HashMap<AssetId, MaterialEntry>,
+    pub always_resident_meshes: &'a std::collections::HashSet<AssetId>,
+}
+
+pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
+    let DrawListInputs {
+        items,
+        instanced_props,
+        world_mats,
+        model_map,
+        mesh_geometry,
+        room_geometry,
+        texture_name_to_slot,
+        material_map,
+        always_resident_meshes,
+    } = inputs;
     let mut all_vertices: Vec<Vertex> = Vec::new();
     let mut all_indices: Vec<u32> = Vec::new();
     let mut draw_objects: Vec<DrawObject> = Vec::new();
@@ -1127,18 +1142,19 @@ mod tests {
             ],
         };
 
-        let (verts, idxs, draw_objects, clusters, _prop_idxs, mesh_id_to_draws) = build_draw_list(
-            &[],
-            &[inst],
-            &[],
-            &std::collections::HashMap::new(),
-            &mesh_geometry,
-            &[],
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            &std::collections::HashSet::new(),
-        )
-        .expect("build_draw_list");
+        let (verts, idxs, draw_objects, clusters, _prop_idxs, mesh_id_to_draws) =
+            build_draw_list(DrawListInputs {
+                items: &[],
+                instanced_props: &[inst],
+                world_mats: &[],
+                model_map: &std::collections::HashMap::new(),
+                mesh_geometry: &mesh_geometry,
+                room_geometry: &[],
+                texture_name_to_slot: &std::collections::HashMap::new(),
+                material_map: &std::collections::HashMap::new(),
+                always_resident_meshes: &std::collections::HashSet::new(),
+            })
+            .expect("build_draw_list");
 
         // Cluster mesh appended exactly once into the shared buffers.
         assert_eq!(verts.len(), 4);
@@ -1184,17 +1200,17 @@ mod tests {
         };
 
         let (_verts, _idxs, draw_objects, clusters, _prop_idxs, _mesh_id_to_draws) =
-            build_draw_list(
-                &[],
-                &[inst],
-                &[],
-                &std::collections::HashMap::new(),
-                &mesh_geometry,
-                &[],
-                &std::collections::HashMap::new(),
-                &std::collections::HashMap::new(),
-                &std::collections::HashSet::new(),
-            )
+            build_draw_list(DrawListInputs {
+                items: &[],
+                instanced_props: &[inst],
+                world_mats: &[],
+                model_map: &std::collections::HashMap::new(),
+                mesh_geometry: &mesh_geometry,
+                room_geometry: &[],
+                texture_name_to_slot: &std::collections::HashMap::new(),
+                material_map: &std::collections::HashMap::new(),
+                always_resident_meshes: &std::collections::HashSet::new(),
+            })
             .expect("build_draw_list");
 
         assert!(draw_objects.is_empty());
@@ -1227,17 +1243,17 @@ mod tests {
         let mut always_resident = std::collections::HashSet::new();
         always_resident.insert(AssetId(0));
 
-        let (_v, _i, draw_objects, _c, _p, _m) = build_draw_list(
-            &items,
-            &[],
-            &world_mats,
-            &std::collections::HashMap::new(),
-            &mesh_geometry,
-            &[],
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            &always_resident,
-        )
+        let (_v, _i, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+            items: &items,
+            instanced_props: &[],
+            world_mats: &world_mats,
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &always_resident,
+        })
         .expect("build_draw_list");
 
         assert_eq!(draw_objects.len(), 1);

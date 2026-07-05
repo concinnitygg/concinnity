@@ -13,7 +13,8 @@ use crate::gfx::render_types::*;
 use super::super::context::*;
 use super::super::math::*;
 use super::super::pipeline::{
-    compile_skinned_shaders, create_skinned_pipeline, create_skinned_shadow_pipeline,
+    MeshPipelineTargets, compile_skinned_shaders, create_skinned_pipeline,
+    create_skinned_shadow_pipeline,
 };
 use super::super::texture::create_buffer;
 use super::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -66,10 +67,12 @@ impl VkContext {
         .map_err(|e| format!("skinned pipeline layout: {e}"))?;
         let skinned_pipeline = create_skinned_pipeline(
             &self.device,
-            self.main_render_pass,
-            skinned_pipeline_layout,
-            &skinned_vs,
-            &frag_spv,
+            MeshPipelineTargets {
+                render_pass: self.main_render_pass,
+                layout: skinned_pipeline_layout,
+                vert_spv: &skinned_vs,
+                frag_spv: &frag_spv,
+            },
             self.msaa_samples,
         )?;
 

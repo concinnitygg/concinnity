@@ -1713,17 +1713,17 @@ impl GraphicsSystem {
             instanced_clusters,
             prop_draw_indices,
             mesh_id_to_draws,
-        ) = match draw_list::build_draw_list(
-            &items,
-            &instanced_props,
-            &world_mats,
-            &model_map,
-            &mesh_geometry,
-            &room_geometry,
-            &texture_name_to_slot,
-            &material_map,
-            &always_resident_meshes,
-        ) {
+        ) = match draw_list::build_draw_list(draw_list::DrawListInputs {
+            items: &items,
+            instanced_props: &instanced_props,
+            world_mats: &world_mats,
+            model_map: &model_map,
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &room_geometry,
+            texture_name_to_slot: &texture_name_to_slot,
+            material_map: &material_map,
+            always_resident_meshes: &always_resident_meshes,
+        }) {
             Some(d) => d,
             None => {
                 self.failed = true;

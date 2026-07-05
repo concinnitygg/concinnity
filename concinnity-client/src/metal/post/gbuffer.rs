@@ -8,7 +8,6 @@
 // the same geometry. Pipelines, targets, and the encoder live together so the
 // effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -250,6 +249,30 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
 
 // Encoder
 
+// The CPU draw-loop inputs the legacy (non-bindless) G-buffer pre-pass walks:
+// the visible set, the camera position for the LOD pick, the prepared instanced
+// clusters, and the skinned pose pair (current + previous-frame joint palettes;
+// the previous drives skinned motion vectors).
+pub(in crate::metal) struct GbufferSceneInputs<'a> {
+    pub visible: &'a [u32],
+    pub cam_pos: [f32; 3],
+    pub prepared_instances: &'a super::super::instanced::PreparedInstances,
+    pub cur_joint_bufs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
+    pub prev_joint_bufs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
+}
+
+// The GPU-driven per-frame buffers the bindless G-buffer pre-pass consumes: the
+// cull-produced object records, the parallel previous-frame model matrices, and
+// the current + previous-frame deformed skinned vertices. All `Some` together on
+// the bindless path; the legacy path leaves them `None` and takes the CPU loop.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct GbufferGpuBuffers<'a> {
+    pub object_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub prev_model_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub deformed_current: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub deformed_prev: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+}
+
 impl MtlContext {
     // Encode the unified G-buffer pre-pass: one jittered traversal of the
     // visible set (static, GPU-instanced, then skinned) writing view-space
@@ -263,22 +286,21 @@ impl MtlContext {
     // whether the static prev-model + skinned prev-pose come from last frame
     // (true) or collapse to the current frame (false): when false the motion
     // channel is a harmless zero that no consumer reads.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::metal) fn encode_gbuffer_prepass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &GBufferView,
-        visible: &[u32],
-        cam_pos: [f32; 3],
-        prepared_instances: &super::super::instanced::PreparedInstances,
-        cur_joint_bufs: &[Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
-        prev_joint_bufs: &[Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
+        scene: GbufferSceneInputs,
+        gpu: GbufferGpuBuffers,
         velocity_active: bool,
-        object_buffer: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-        prev_model_buffer: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-        deformed_current: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-        deformed_prev: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> Result<u32, String> {
+        let GbufferSceneInputs {
+            visible,
+            cam_pos,
+            prepared_instances,
+            cur_joint_bufs,
+            prev_joint_bufs,
+        } = scene;
         let (targets, static_ps) = match (&self.gbuffer.targets, &self.gbuffer.prepass_pipeline) {
             (Some(t), Some(p)) => (t, p),
             _ => return Ok(0),
@@ -340,18 +362,8 @@ impl MtlContext {
         // produced an object buffer) and the bindless G-buffer pipeline exists,
         // draw the SAME per-frame indirect command set the main pass executes,
         // with no CPU draw loop. Mirrors the main pass's two-range ICB split.
-        if self.gbuffer.bindless_pipeline.is_some()
-            && let Some(object_buffer) = object_buffer
-        {
-            let draws = self.encode_gbuffer_prepass_gpu_driven(
-                &enc,
-                view,
-                object_buffer,
-                prev_model_buffer,
-                deformed_current,
-                deformed_prev,
-                velocity_active,
-            );
+        if self.gbuffer.bindless_pipeline.is_some() && gpu.object_buffer.is_some() {
+            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active);
             return Ok(draws);
         }
 
@@ -473,22 +485,25 @@ impl MtlContext {
     // (prev_pos == cur_pos -> model-delta motion), the previous-frame deformed
     // buffer for the skinned tail (per-vertex skin motion). Returns the indirect
     // draw count (0-2).
-    #[allow(clippy::too_many_arguments)]
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view: &GBufferView,
-        object_buffer: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-        prev_model_buffer: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-        deformed_current: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-        deformed_prev: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+        gpu: GbufferGpuBuffers,
         velocity_active: bool,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
         use std::sync::atomic::Ordering;
-        let (Some(pipeline), Some(icb), Some(prev_models)) = (
+        let GbufferGpuBuffers {
+            object_buffer,
+            prev_model_buffer,
+            deformed_current,
+            deformed_prev,
+        } = gpu;
+        let (Some(pipeline), Some(icb), Some(object_buffer), Some(prev_models)) = (
             self.gbuffer.bindless_pipeline.as_ref(),
             self.cull.icb.as_ref(),
+            object_buffer,
             prev_model_buffer,
         ) else {
             return 0;

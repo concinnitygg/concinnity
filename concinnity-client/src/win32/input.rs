@@ -11,6 +11,20 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 // crate::gfx::input::RenderInput; this alias keeps the historical name.
 pub use crate::gfx::input::RenderInput as InputState;
 
+// One frame's accumulated mouse input, owned by `WindowState` and handed to
+// [`KeyState::take`] so the drained snapshot carries pointer motion, position,
+// button, and scroll state alongside the keyboard one-shots.
+#[derive(Clone, Copy)]
+pub(crate) struct MouseSnapshot {
+    pub dx: f32,
+    pub dy: f32,
+    pub x: f32,
+    pub y: f32,
+    pub left_click: bool,
+    pub left_button_down: bool,
+    pub scroll_delta: f32,
+}
+
 // Per-key pressed state tracked across Win32 WM_KEYDOWN / WM_KEYUP messages.
 #[derive(Default)]
 pub(crate) struct KeyState {
@@ -119,17 +133,16 @@ impl KeyState {
     // Drain into an InputState snapshot, resetting one-shot flags. The mouse
     // fields (deltas, position, click, held-button, scroll) are owned by
     // `WindowState` and passed in; the keyboard one-shots tracked here are reset.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn take(
-        &mut self,
-        mouse_dx: f32,
-        mouse_dy: f32,
-        mouse_x: f32,
-        mouse_y: f32,
-        left_click: bool,
-        left_button_down: bool,
-        scroll_delta: f32,
-    ) -> InputState {
+    pub(crate) fn take(&mut self, mouse: MouseSnapshot) -> InputState {
+        let MouseSnapshot {
+            dx: mouse_dx,
+            dy: mouse_dy,
+            x: mouse_x,
+            y: mouse_y,
+            left_click,
+            left_button_down,
+            scroll_delta,
+        } = mouse;
         let s = InputState {
             forward: self.forward,
             backward: self.backward,
@@ -236,7 +249,15 @@ mod tests {
     use super::*;
 
     fn snapshot(ks: &mut KeyState) -> InputState {
-        ks.take(0.0, 0.0, 0.0, 0.0, false, false, 0.0)
+        ks.take(MouseSnapshot {
+            dx: 0.0,
+            dy: 0.0,
+            x: 0.0,
+            y: 0.0,
+            left_click: false,
+            left_button_down: false,
+            scroll_delta: 0.0,
+        })
     }
 
     #[test]

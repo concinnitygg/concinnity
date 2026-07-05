@@ -41,7 +41,7 @@ fn companions_for_type(
     args: &serde_json::Value,
     world: &[serde_json::Value],
 ) -> Vec<crate::ecs::CompanionSpec> {
-    if let Ok(ct) = ComponentType::parse(asset_type) {
+    if let Some(ct) = ComponentType::parse(asset_type) {
         ct.companions(args, world)
     } else {
         Vec::new()

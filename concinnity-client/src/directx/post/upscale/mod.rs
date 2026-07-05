@@ -58,19 +58,45 @@ pub(in crate::directx) trait UpscaleBackend: Send {
     // Record the upscale onto `cmd`. Inputs are claimed in the states
     // `encode_upscale` transitioned them into (color / depth / motion in
     // NON_PIXEL_SHADER_RESOURCE, output in UNORDERED_ACCESS).
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        color: &ID3D12Resource,
-        depth: &ID3D12Resource,
-        motion_vectors: &ID3D12Resource,
-        jitter_offset: [f32; 2],
-        frame_time_delta_ms: f32,
-        camera_near: f32,
-        camera_far: f32,
-        camera_fov_y_radians: f32,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> Result<(), String>;
+}
+
+// Render-resolution inputs the upscale consumes for one frame (each transitioned
+// to NON_PIXEL_SHADER_RESOURCE by `encode_upscale`).
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct UpscaleInputs<'a> {
+    // Scene colour at render resolution.
+    pub color: &'a ID3D12Resource,
+    // Scene depth at render resolution.
+    pub depth: &'a ID3D12Resource,
+    // Screen-space motion vectors at render resolution.
+    pub motion_vectors: &'a ID3D12Resource,
+}
+
+// Per-frame temporal + camera parameters shared with the jittered projection so
+// the rasterised scene and the reconstruction agree.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct UpscaleCamera {
+    // Sub-pixel jitter for this frame (render-pixel units).
+    pub jitter_offset: [f32; 2],
+    // Frame time delta in milliseconds.
+    pub frame_time_delta_ms: f32,
+    pub camera_near: f32,
+    pub camera_far: f32,
+    pub camera_fov_y_radians: f32,
+}
+
+// GPU descriptor handles for the upscaler's output texture (UAV write + SRV read).
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct UpscalerDescriptors {
+    pub uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
 
 // Output texture helpers (shared by every backend): an output-resolution
@@ -213,18 +239,20 @@ fn backend_order(
 // candidate order on any `try_new` that returns `None` (DLL miss, unsupported
 // GPU, context-init failure). Returns the boxed backend (or `None` for native
 // rendering) and the tag that actually built, so a resize rebuilds the same one.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::directx) fn build_upscaler(
     device: &ID3D12Device,
     command_queue: &ID3D12CommandQueue,
     output_width: u32,
     output_height: u32,
     upscale_scale: f32,
-    output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    descriptors: UpscalerDescriptors,
     requested: UpscalerBackend,
 ) -> Result<(Option<Box<dyn UpscaleBackend>>, ResolvedBackend), String> {
+    let UpscalerDescriptors {
+        uav_cpu: output_uav_cpu,
+        srv_cpu: output_srv_cpu,
+        srv_gpu: output_srv_gpu,
+    } = descriptors;
     // `command_queue` is only consumed by the DLSS init path (NGX CreateFeature
     // records onto a command list); silence the unused-binding lint otherwise.
     #[cfg(not(ngx_sdk_bundled))]
@@ -260,14 +288,18 @@ pub(in crate::directx) fn build_upscaler(
                 #[cfg(ngx_sdk_bundled)]
                 {
                     dlss::DlssUpscaler::try_new(
-                        device,
-                        command_queue,
-                        output_width,
-                        output_height,
-                        upscale_scale,
-                        output_uav_cpu,
-                        output_srv_cpu,
-                        output_srv_gpu,
+                        dlss::DlssCreateParams {
+                            device,
+                            command_queue,
+                            output_width,
+                            output_height,
+                            upscale_scale,
+                        },
+                        dlss::DlssOutputDescriptors {
+                            output_uav_cpu,
+                            output_srv_cpu,
+                            output_srv_gpu,
+                        },
                     )?
                     .map(|u| Box::new(u) as Box<dyn UpscaleBackend>)
                 }

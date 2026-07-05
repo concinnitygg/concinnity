@@ -144,7 +144,7 @@ pub fn load_world(content: &str) -> Result<Vec<serde_json::Value>, Vec<String>> 
             continue;
         };
 
-        let origin = if let Ok(ct) = ComponentType::parse(type_str) {
+        let origin = if let Some(ct) = ComponentType::parse(type_str) {
             Some(ct.registration().origin)
         } else {
             errors.push(format!("{}: unknown type '{}'", label, type_str));

@@ -19,7 +19,6 @@
 //   * BVH partition + previous-model snapshot + hot-reload watcher
 //   * The final `Self { ... }` literal
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 pub(super) mod effects;
 pub(crate) mod pipelines;
@@ -450,13 +449,17 @@ impl MtlContext {
         } = window::setup_window_and_view(
             mtm,
             &device,
-            title,
-            width,
-            height,
-            geometry_less,
-            hdr_display_requested,
-            hdr_pq_requested,
-            hot_reload,
+            window::WindowConfig {
+                title,
+                width,
+                height,
+                geometry_less,
+                capture_enabled: hot_reload,
+            },
+            window::HdrRequest {
+                display_requested: hdr_display_requested,
+                pq_requested: hdr_pq_requested,
+            },
         )?;
         // Honor the requested vsync on the backing CAMetalLayer (default
         // CAMetalLayer presentation is display-synced).
@@ -632,24 +635,32 @@ impl MtlContext {
             &device,
             &vert_desc,
             requirements.scene,
-            render_w,
-            render_h,
-            initial_w,
-            initial_h,
-            effective_taa_enabled,
-            velocity_needed,
-            instanced_pipeline_state.is_some(),
-            &ssao_settings,
-            &ssr_settings,
-            &ssgi_settings,
-            &rt_reflection_settings,
-            reflection_blur_scale,
-            &decals,
-            &particles,
-            &fog_settings,
-            &auto_exposure_settings,
-            auto_exposure_bias_ev,
-            hot_reload,
+            effects::EffectDimensions {
+                render_w,
+                render_h,
+                output_w: initial_w,
+                output_h: initial_h,
+            },
+            effects::EffectSettings {
+                ssao: &ssao_settings,
+                ssr: &ssr_settings,
+                ssgi: &ssgi_settings,
+                rt_reflection: &rt_reflection_settings,
+                auto_exposure: &auto_exposure_settings,
+                reflection_blur_scale,
+                auto_exposure_bias_ev,
+            },
+            effects::EffectFlags {
+                taa_enabled: effective_taa_enabled,
+                needs_velocity: velocity_needed,
+                has_instanced: instanced_pipeline_state.is_some(),
+                hot_reload,
+            },
+            effects::WorldContentEffects {
+                fog_settings: &fog_settings,
+                decals: &decals,
+                particles: &particles,
+            },
         )?;
 
         // Transparent water surfaces. Built only when the world declared
@@ -897,14 +908,22 @@ impl MtlContext {
             && super::raytrace::raytracing_supported(&device)
         {
             match super::raytrace::build_rt_accel(
-                &device,
-                &command_queue,
-                &vertex_buffer,
-                &index_buffer,
-                &draw_objects,
-                &instanced_clusters,
-                gpu_textures.len(),
-                gpu_normal_maps.len(),
+                super::raytrace::RtGpu {
+                    device: &device,
+                    command_queue: &command_queue,
+                },
+                super::raytrace::RtStaticGeometry {
+                    vertex_buffer: &vertex_buffer,
+                    index_buffer: &index_buffer,
+                },
+                super::raytrace::RtSceneGeometry {
+                    draw_objects: &draw_objects,
+                    clusters: &instanced_clusters,
+                },
+                super::raytrace::RtTextureCounts {
+                    albedo_count: gpu_textures.len(),
+                    normal_count: gpu_normal_maps.len(),
+                },
                 // Skinned meshes upload after `new`, so the initial BVH is
                 // static + instanced; the first frame's update seeds the
                 // skinned geometry once `upload_skinned` has run.

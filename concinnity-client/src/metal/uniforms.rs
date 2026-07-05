@@ -2,7 +2,6 @@
 //
 // repr(C) uniform structs shared by the Metal frame encoder and its passes.
 // Each layout must match the corresponding struct in the MSL shader sources.
-#![allow(clippy::incompatible_msrv)]
 
 // Per-frame view-projection uniforms pushed at buffer(0) once per frame.
 // Shared across all draw calls in a frame. `view` is the standalone view

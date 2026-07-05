@@ -34,7 +34,7 @@ use std::ptr;
 use ash::vk::Handle;
 use ash::{Device, vk};
 
-use super::{UpscaleImage, VkUpscaleBackend};
+use super::{UpscaleCamera, UpscaleInputs, UpscalerGpu, VkUpscaleBackend};
 use crate::vulkan::texture::GpuImage;
 
 // FFX API bindings (subset)
@@ -371,17 +371,19 @@ impl FsrUpscaler {
     // Try to construct an FSR upscaler at the given output resolution + quality.
     // Returns `Ok(None)` when FFX is unavailable (library miss, any entry point
     // missing, context init failed); `build_upscaler` then falls through.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn try_new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        gpu: UpscalerGpu<'_>,
         output_width: u32,
         output_height: u32,
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
+        let UpscalerGpu {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = gpu;
         let ffx = match FfxApi::load() {
             Some(api) => api,
             None => {
@@ -593,19 +595,24 @@ impl VkUpscaleBackend for FsrUpscaler {
     // the layouts/states `encode_upscale` arranged; FFX records its own internal
     // barriers from the declared states. FSR consumes only the raw image handles
     // (FFX is told each input's format + render dims).
-    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         cmd: vk::CommandBuffer,
-        color: &UpscaleImage,
-        depth: &UpscaleImage,
-        motion: &UpscaleImage,
-        jitter_offset: [f32; 2],
-        elapsed: f32,
-        camera_near: f32,
-        camera_far: f32,
-        camera_fov_y_radians: f32,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> Result<(), String> {
+        let UpscaleInputs {
+            color,
+            depth,
+            motion,
+        } = inputs;
+        let UpscaleCamera {
+            jitter_offset,
+            elapsed,
+            near: camera_near,
+            far: camera_far,
+            fov_y_radians: camera_fov_y_radians,
+        } = camera;
         let mk = |image: vk::Image, format: u32, usage: u32, state: u32, w: u32, h: u32| {
             FfxApiResource {
                 resource: image.as_raw() as usize as *mut c_void,

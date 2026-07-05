@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
 use windows::core::Interface;
 
+use crate::gfx::backend::FrameParams;
 use crate::gfx::render_types::*;
 
 use super::auto_exposure::AutoExposureResources;
@@ -1112,17 +1113,16 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_frame(
-        &mut self,
-        elapsed: f32,
-        fov_y_radians: f32,
-        near: f32,
-        far: f32,
-        cam_pos: [f32; 3],
-        text_calls: &[TextDrawCall],
-        world_hidden: bool,
-    ) -> Result<(), String> {
+    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+        let FrameParams {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            cam_pos,
+            text_calls,
+            world_hidden,
+        } = params;
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in PSO
         // from disk-resident source before the frame's passes start using
@@ -1418,17 +1418,18 @@ impl DxContext {
         // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
         if !self.shadow.dsvs.is_empty() {
             let aspect = self.render_width.max(1) as f32 / self.render_height.max(1) as f32;
-            let fresh = crate::gfx::csm::compute_shadow_uniforms(
-                self.view_matrix,
-                cam_pos,
-                fov_y_radians,
-                aspect,
-                near,
-                (self.shadow.distance as f32).min(far),
-                self.shadow.light_dir,
-                self.shadow.map_size,
-                self.shadow.cascades,
-            );
+            let fresh =
+                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
+                    view: self.view_matrix,
+                    cam_pos,
+                    fov_y_rad: fov_y_radians,
+                    aspect,
+                    near,
+                    shadow_distance: (self.shadow.distance as f32).min(far),
+                    light_dir_to_source: self.shadow.light_dir,
+                    shadow_map_size: self.shadow.map_size,
+                    active_cascades: self.shadow.cascades,
+                });
             let update = self.shadow.update;
             let mask = self
                 .shadow
@@ -1450,20 +1451,26 @@ impl DxContext {
         //    `end_cmd`. Returns the per-pass cmd lists in topological
         //    pass order.
         let pass_cmd_lists = self.record_frame(
-            end_cmd,
-            &back_buffer,
-            back_buffer_rtv,
-            elapsed,
-            fov_y_radians,
-            near,
-            far,
-            cam_pos,
-            text_calls,
-            frame,
-            self.render_width.max(1),
-            self.render_height.max(1),
-            self.output_width.max(1),
-            self.output_height.max(1),
+            crate::directx::draw::RecordFrameTargets {
+                cmd: end_cmd,
+                back_buffer: &back_buffer,
+                back_buffer_rtv,
+                frame_idx: frame,
+            },
+            crate::directx::draw::RecordFrameView {
+                elapsed,
+                fov_y_radians,
+                near,
+                far,
+                cam_pos,
+                text_calls,
+            },
+            crate::directx::draw::RecordFrameResolution {
+                width: self.render_width.max(1),
+                height: self.render_height.max(1),
+                output_width: self.output_width.max(1),
+                output_height: self.output_height.max(1),
+            },
             world_hidden,
         )?;
 

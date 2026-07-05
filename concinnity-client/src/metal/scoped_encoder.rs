@@ -16,7 +16,6 @@
 // own inner `{ }` scope so one guard drops (ending its encoder) before the next
 // is created.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(clippy::incompatible_msrv)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

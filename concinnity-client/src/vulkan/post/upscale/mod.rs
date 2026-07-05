@@ -51,6 +51,29 @@ pub(in crate::vulkan) struct UpscaleImage {
     pub(in crate::vulkan) aspect: vk::ImageAspectFlags,
 }
 
+// The three render-resolution inputs a backend upscale consumes for one frame,
+// each transitioned into the layout `encode_upscale` arranged (color / motion in
+// SHADER_READ_ONLY, depth in SHADER_READ_ONLY after its attachment layout).
+pub(in crate::vulkan) struct UpscaleInputs<'a> {
+    pub(in crate::vulkan) color: &'a UpscaleImage,
+    pub(in crate::vulkan) depth: &'a UpscaleImage,
+    pub(in crate::vulkan) motion: &'a UpscaleImage,
+}
+
+// Per-frame temporal / camera parameters shared with the jittered camera
+// projection so the rasterised scene and the reconstruction agree.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct UpscaleCamera {
+    // Sub-pixel jitter for this frame (render-pixel units).
+    pub(in crate::vulkan) jitter_offset: [f32; 2],
+    // The frame's elapsed-seconds stamp; each backend keeps its own frame-delta
+    // clock + reset state.
+    pub(in crate::vulkan) elapsed: f32,
+    pub(in crate::vulkan) near: f32,
+    pub(in crate::vulkan) far: f32,
+    pub(in crate::vulkan) fov_y_radians: f32,
+}
+
 // One temporal-upscaling backend. `encode_upscale` (below) transitions the
 // scene / depth / motion inputs and the output image, then calls `dispatch`;
 // each backend records its vendor upscale onto the supplied command buffer.
@@ -80,21 +103,14 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     fn jitter(&self) -> [f32; 2];
     // Record the upscale onto `cmd`. Inputs are claimed in the layouts
     // `encode_upscale` transitioned them into (color / motion / depth in
-    // SHADER_READ_ONLY_OPTIMAL, output in GENERAL). `elapsed` is the frame's
-    // elapsed-seconds stamp; each backend keeps its own frame-delta clock +
-    // reset state.
-    #[allow(clippy::too_many_arguments)]
+    // SHADER_READ_ONLY_OPTIMAL, output in GENERAL). `camera.elapsed` is the
+    // frame's elapsed-seconds stamp; each backend keeps its own frame-delta
+    // clock + reset state.
     fn dispatch(
         &self,
         cmd: vk::CommandBuffer,
-        color: &UpscaleImage,
-        depth: &UpscaleImage,
-        motion: &UpscaleImage,
-        jitter_offset: [f32; 2],
-        elapsed: f32,
-        camera_near: f32,
-        camera_far: f32,
-        camera_fov_y_radians: f32,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> Result<(), String>;
     // Tear down owned GPU + SDK resources. Called from `VkContext::drop` after
     // `device_wait_idle`.
@@ -167,16 +183,20 @@ pub(super) fn create_output_image(
     height: u32,
 ) -> Result<GpuImage, String> {
     let (image, memory) = create_image(
-        instance,
-        device,
-        physical_device,
-        width.max(1),
-        height.max(1),
-        HDR_FORMAT,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        vk::SampleCountFlags::TYPE_1,
+        &crate::vulkan::texture::GpuAllocContext {
+            instance,
+            device,
+            physical_device,
+        },
+        &crate::vulkan::texture::ImageSpec {
+            width: width.max(1),
+            height: height.max(1),
+            format: HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
     )?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
     one_shot_submit(device, command_pool, queue, |cmd| {
@@ -215,22 +235,44 @@ pub(super) fn create_output_image(
     })
 }
 
+// The layout change one `image_barrier` records.
+#[derive(Clone, Copy)]
+pub(super) struct LayoutTransition {
+    pub(super) from: vk::ImageLayout,
+    pub(super) to: vk::ImageLayout,
+}
+
+// The source / destination stage + access scopes one `image_barrier`
+// synchronises.
+#[derive(Clone, Copy)]
+pub(super) struct BarrierSync {
+    pub(super) src_stage: vk::PipelineStageFlags,
+    pub(super) src_access: vk::AccessFlags,
+    pub(super) dst_stage: vk::PipelineStageFlags,
+    pub(super) dst_access: vk::AccessFlags,
+}
+
 // One image barrier with explicit stages/access (the upscalers read their
 // inputs in the COMPUTE stage; the generic `transition_image_layout` helper
 // targets FRAGMENT, which would not synchronise the compute reads).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn image_barrier(
     device: &Device,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     aspect: vk::ImageAspectFlags,
-    old_layout: vk::ImageLayout,
-    new_layout: vk::ImageLayout,
-    src_stage: vk::PipelineStageFlags,
-    src_access: vk::AccessFlags,
-    dst_stage: vk::PipelineStageFlags,
-    dst_access: vk::AccessFlags,
+    transition: LayoutTransition,
+    sync: BarrierSync,
 ) {
+    let LayoutTransition {
+        from: old_layout,
+        to: new_layout,
+    } = transition;
+    let BarrierSync {
+        src_stage,
+        src_access,
+        dst_stage,
+        dst_access,
+    } = sync;
     let barrier = vk::ImageMemoryBarrier::default()
         .old_layout(old_layout)
         .new_layout(new_layout)
@@ -313,6 +355,17 @@ fn fsr_available() -> bool {
     cfg!(ffx_sdk_bundled)
 }
 
+// The GPU handles a backend needs to create its output image + run one-shot
+// init transitions.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct UpscalerGpu<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
+    pub(in crate::vulkan) command_pool: vk::CommandPool,
+    pub(in crate::vulkan) queue: vk::Queue,
+}
+
 // Construct the upscaler for the requested backend, falling through the
 // candidate order on any `try_new` that returns `None` (DLL miss, unsupported
 // GPU, context-init failure). Returns the boxed backend (or `None` for native
@@ -320,13 +373,8 @@ fn fsr_available() -> bool {
 // for the *first* candidate were enabled at device creation (see `UpscaleSdk`);
 // a fallback past that candidate can only land on FSR / Native (which need no
 // extra extensions), so a DLSS / XeSS context-create failure degrades to FSR.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn build_upscaler(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    gpu: UpscalerGpu<'_>,
     output_width: u32,
     output_height: u32,
     upscale_scale: f32,
@@ -339,42 +387,19 @@ pub(in crate::vulkan) fn build_upscaler(
         fsr_available(),
     ) {
         let built: Option<Box<dyn VkUpscaleBackend>> = match cand {
-            ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
-                output_width,
-                output_height,
-                upscale_scale,
-            )?
-            .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>),
-            ResolvedBackend::Xess => xess::XessUpscaler::try_new(
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
-                output_width,
-                output_height,
-                upscale_scale,
-            )?
-            .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>),
+            ResolvedBackend::Fsr => {
+                fsr::FsrUpscaler::try_new(gpu, output_width, output_height, upscale_scale)?
+                    .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>)
+            }
+            ResolvedBackend::Xess => {
+                xess::XessUpscaler::try_new(gpu, output_width, output_height, upscale_scale)?
+                    .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>)
+            }
             ResolvedBackend::Dlss => {
                 #[cfg(ngx_sdk_bundled)]
                 {
-                    dlss::DlssUpscaler::try_new(
-                        instance,
-                        device,
-                        physical_device,
-                        command_pool,
-                        queue,
-                        output_width,
-                        output_height,
-                        upscale_scale,
-                    )?
-                    .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>)
+                    dlss::DlssUpscaler::try_new(gpu, output_width, output_height, upscale_scale)?
+                        .map(|u| Box::new(u) as Box<dyn VkUpscaleBackend>)
                 }
                 #[cfg(not(ngx_sdk_bundled))]
                 {
@@ -656,36 +681,48 @@ impl VkContext {
             cmd,
             scene.image,
             vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::AccessFlags::SHADER_READ,
+            LayoutTransition {
+                from: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                src_access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
         );
         image_barrier(
             &self.device,
             cmd,
             velocity.image,
             vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::AccessFlags::SHADER_READ,
+            LayoutTransition {
+                from: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                src_access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
         );
         image_barrier(
             &self.device,
             cmd,
             depth.image,
             vk::ImageAspectFlags::DEPTH,
-            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::AccessFlags::SHADER_READ,
+            LayoutTransition {
+                from: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                src_access: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
         );
         // The output rests in SHADER_READ_ONLY after the previous frame's
         // bloom + composite sampled it; flip it back to GENERAL for the write
@@ -696,12 +733,16 @@ impl VkContext {
                 cmd,
                 upscaler.output_image().image,
                 vk::ImageAspectFlags::COLOR,
-                upscaler.output_layout(),
-                vk::ImageLayout::GENERAL,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::AccessFlags::SHADER_WRITE,
+                LayoutTransition {
+                    from: upscaler.output_layout(),
+                    to: vk::ImageLayout::GENERAL,
+                },
+                BarrierSync {
+                    src_stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    src_access: vk::AccessFlags::SHADER_READ,
+                    dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                    dst_access: vk::AccessFlags::SHADER_WRITE,
+                },
             );
             upscaler.set_output_layout(vk::ImageLayout::GENERAL);
         }
@@ -735,14 +776,18 @@ impl VkContext {
         let far = params.far.max(near + 1.0);
         upscaler.dispatch(
             cmd,
-            &color,
-            &depth_in,
-            &motion,
-            upscaler.jitter(),
-            params.elapsed,
-            near,
-            far,
-            params.fov_y_radians,
+            UpscaleInputs {
+                color: &color,
+                depth: &depth_in,
+                motion: &motion,
+            },
+            UpscaleCamera {
+                jitter_offset: upscaler.jitter(),
+                elapsed: params.elapsed,
+                near,
+                far,
+                fov_y_radians: params.fov_y_radians,
+            },
         )?;
 
         // Flip the output GENERAL -> SHADER_READ_ONLY so bloom + composite can
@@ -753,12 +798,16 @@ impl VkContext {
             cmd,
             upscaler.output_image().image,
             vk::ImageAspectFlags::COLOR,
-            vk::ImageLayout::GENERAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::AccessFlags::SHADER_WRITE,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
-            vk::AccessFlags::SHADER_READ,
+            LayoutTransition {
+                from: vk::ImageLayout::GENERAL,
+                to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                src_access: vk::AccessFlags::SHADER_WRITE,
+                dst_stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
         );
         upscaler.set_output_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 

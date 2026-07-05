@@ -16,17 +16,22 @@ use crate::gfx::graphics_system::hot_reload_sources::*;
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_client::metal::hot_reload`: 150 ms debounce, only
 // modify/create/remove events fire the flag, only relevant extensions count.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_watcher(
-    map: &TextureSourceMap,
-    color_lut: Option<&ColorLutSource>,
-    environment_map: Option<&EnvironmentMapSource>,
-    meshes: &MeshSourceMap,
-    skinned_meshes: &SkinnedMeshSourceMap,
-    shader_stages: &ShaderStageSourceMap,
-    world_jsonl_path: Option<&str>,
+    sources: &HotReloadSources,
     flag: Arc<AtomicBool>,
 ) -> Option<notify::RecommendedWatcher> {
+    // Procedural meshes are generated, not sourced from a file, so they have no
+    // directory to watch.
+    let HotReloadSources {
+        map,
+        color_lut,
+        environment_map,
+        meshes,
+        skinned_meshes,
+        procedural_meshes: _,
+        shader_stages,
+        world_jsonl_path,
+    } = sources;
     let debounce = Duration::from_millis(150);
     let last_fire = Mutex::new(Instant::now() - debounce);
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {

@@ -12,15 +12,17 @@
 // bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
 // particle-sim reset and no multi-second geometry re-upload).
 
-#![allow(clippy::incompatible_msrv)]
-
 use crate::gfx::backend::QualitySettings;
 
 use super::context::MtlContext;
-use super::init::effects::{QualityEffectsBundle, build_quality_effects};
+use super::init::effects::{
+    EffectFlags, EffectSettings, QualityEffectsBundle, build_quality_effects,
+};
 use super::init::pipelines::make_vertex_descriptor;
 use super::post::build_gbuffer_prepass_pipeline;
-use super::raytrace::{build_rt_accel, raytracing_supported};
+use super::raytrace::{
+    RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
+};
 use super::resources::skinning::make_skinned_vertex_descriptor;
 
 impl MtlContext {
@@ -53,17 +55,21 @@ impl MtlContext {
             &make_vertex_descriptor(),
             render_w,
             render_h,
-            taa_effective,
-            needs_velocity,
-            has_instanced,
-            &q.ssao,
-            &q.ssr,
-            &q.ssgi,
-            &rt_settings,
-            q.reflection_blur_scale,
-            &q.auto_exposure,
-            q.auto_exposure_bias_ev,
-            self.hot_reload,
+            EffectSettings {
+                ssao: &q.ssao,
+                ssr: &q.ssr,
+                ssgi: &q.ssgi,
+                rt_reflection: &rt_settings,
+                auto_exposure: &q.auto_exposure,
+                reflection_blur_scale: q.reflection_blur_scale,
+                auto_exposure_bias_ev: q.auto_exposure_bias_ev,
+            },
+            EffectFlags {
+                taa_enabled: taa_effective,
+                needs_velocity,
+                has_instanced,
+                hot_reload: self.hot_reload,
+            },
         ) {
             Ok(b) => b,
             Err(e) => {
@@ -135,14 +141,22 @@ impl MtlContext {
         if self.rt.settings.is_some() {
             if self.rt.accel.is_none() {
                 match build_rt_accel(
-                    &self.device,
-                    &self.command_queue,
-                    &self.vertex_buffer,
-                    &self.index_buffer,
-                    &self.draw_objects,
-                    &self.instanced_clusters,
-                    self.textures.len(),
-                    self.normal_map_textures.len(),
+                    RtGpu {
+                        device: &self.device,
+                        command_queue: &self.command_queue,
+                    },
+                    RtStaticGeometry {
+                        vertex_buffer: &self.vertex_buffer,
+                        index_buffer: &self.index_buffer,
+                    },
+                    RtSceneGeometry {
+                        draw_objects: &self.draw_objects,
+                        clusters: &self.instanced_clusters,
+                    },
+                    RtTextureCounts {
+                        albedo_count: self.textures.len(),
+                        normal_count: self.normal_map_textures.len(),
+                    },
                     None,
                     self.seethrough_meshes_enabled(),
                 ) {

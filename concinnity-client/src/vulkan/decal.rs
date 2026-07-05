@@ -139,27 +139,56 @@ pub(in crate::vulkan) struct DecalResources {
     pub(in crate::vulkan) decal_texture_slots: Cell<[usize; MAX_DECALS]>,
 }
 
+// Vulkan handles needed to create the decal pass's GPU resources
+// (buffers, one-shot transfer submits). Borrowed for the duration of
+// `DecalResources::new`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct DecalDeviceContext<'a> {
+    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
+    pub(in crate::vulkan) command_pool: vk::CommandPool,
+    pub(in crate::vulkan) queue: vk::Queue,
+}
+
+// Render-target inputs the decal pass writes into / samples from: the
+// resolved HDR colour attachment (format + per-frame views), the main
+// depth views, the shared sampler, and the framebuffer extent.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct DecalPassTargets<'a> {
+    pub(in crate::vulkan) hdr_format: vk::Format,
+    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) sampler: vk::Sampler,
+    pub(in crate::vulkan) extent: vk::Extent2D,
+}
+
 impl DecalResources {
     // Build the decal pipeline + its dependent resources. Called
     // unconditionally from `VkContext::new` so runtime `add_decal`
     // works from a world that started empty; the cost is one pipeline
     // + small buffers.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
-        command_pool: vk::CommandPool,
-        queue: vk::Queue,
+        ctx: DecalDeviceContext,
+        targets: DecalPassTargets,
         frames: usize,
         msaa: bool,
-        hdr_format: vk::Format,
-        hdr_resolve_views: &[vk::ImageView],
-        depth_views: &[vk::ImageView],
-        sampler: vk::Sampler,
-        extent: vk::Extent2D,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let DecalDeviceContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
+        let DecalPassTargets {
+            hdr_format,
+            hdr_resolve_views,
+            depth_views,
+            sampler,
+            extent,
+        } = targets;
         let render_pass = create_decal_render_pass(device, hdr_format)?;
         let (view_set_layout, albedo_set_layout) = create_decal_set_layouts(device)?;
         let pipeline_layout =

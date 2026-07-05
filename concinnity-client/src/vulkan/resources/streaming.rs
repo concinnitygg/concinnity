@@ -7,6 +7,7 @@
 
 use ash::vk;
 
+use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::*;
 
@@ -146,17 +147,16 @@ impl VkContext {
 
     // Place one streamed chunk's geometry in the chunk headroom region and
     // add (or recycle) a `DrawObject` for it; returns the draw-list index.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_chunk_mesh(
-        &mut self,
-        vertices: &[Vertex],
-        indices: &[u16],
-        model: [[f32; 4]; 4],
-        texture_slot: usize,
-        normal_map_slot: usize,
-        material: MaterialUniforms,
-        frame: u64,
-    ) -> Result<usize, String> {
+    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+        let ChunkMesh {
+            verts: vertices,
+            idxs: indices,
+            model,
+            texture_slot,
+            normal_map_slot,
+            material,
+            frame,
+        } = mesh;
         if vertices.is_empty() || indices.is_empty() {
             return Err("add_chunk_mesh: empty chunk geometry".to_string());
         }
