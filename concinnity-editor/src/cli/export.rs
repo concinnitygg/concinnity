@@ -1,10 +1,11 @@
 // src/cli/export.rs
 //
-// `cn export`: package a built world into a distributable game. Builds the world
+// `cn export`: package a built world into a distributable app. Builds the world
 // (reusing the normal build cache), then assembles a self-contained bundle: the
 // runtime player executable beside the world's compiled `data/` blobs, in a
-// flat layout the shipped runtime resolves relative to its own executable. The
-// result is a folder and, by default, a `.zip`.
+// flat layout the shipped runtime resolves relative to its own executable. On
+// macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
+// elsewhere it is a folder. The result is archived to a `.zip` by default.
 //
 // The player is the prebuilt `concinnity-runtime` binary that ships beside the
 // `cn`/`concinnity` executable; export copies it rather than compiling, so a
@@ -21,12 +22,25 @@ use concinnity_cook::world::{WorldJsonlAsset, prepare_world};
 
 use super::list::resolve_world_path;
 
+// Resolved naming/metadata for the exported app.
+struct AppMeta {
+    // Display name (window title, macOS bundle display name); may contain spaces.
+    display_name: String,
+    // Reverse-DNS bundle identifier (macOS CFBundleIdentifier).
+    identifier: String,
+    // Version string (macOS CFBundle[Short]Version).
+    version: String,
+    // Source icon path (relative to the world), if the Application asset set one.
+    icon: Option<PathBuf>,
+}
+
 pub fn export(
     json_path: Option<&str>,
     name: Option<&str>,
     platform: Option<&str>,
     out: &str,
     format: &str,
+    dmg: bool,
 ) -> io::Result<()> {
     let make_zip = match format {
         "zip" => true,
@@ -38,6 +52,12 @@ pub fn export(
             ));
         }
     };
+    if dmg && !cfg!(target_os = "macos") {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "--dmg is only available when exporting on macOS",
+        ));
+    }
 
     // Fail fast, before building, on the two things export cannot recover from:
     // a target that is not this platform, and a missing runtime player.
@@ -49,60 +69,137 @@ pub fn export(
     let world_path = resolve_world_path(json_path)?;
     build_from_path(&world_path)?;
 
-    // Read the application name from the expanded world. The build above already
+    // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
     let loaded = prepare_world(&content)
         .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
-    let display_name = resolve_display_name(name, &loaded.assets);
-    let slug = slug(&display_name);
+    let meta = read_app_meta(name, &loaded.assets);
 
     let out_dir = Path::new(out);
-    let bundle_dir = out_dir.join(&slug);
-    if bundle_dir.exists() {
-        fs::remove_dir_all(&bundle_dir)?;
-    }
-    fs::create_dir_all(&bundle_dir)?;
+    fs::create_dir_all(out_dir)?;
+    let data_dir = concinnity_core::paths::data_dir();
 
-    // The renamed player, beside the world's data. The runtime resolves its
-    // state root (data/, saves/, settings) relative to this executable.
+    if cfg!(target_os = "macos") {
+        export_macos(&meta, &runtime, out_dir, &data_dir, make_zip, dmg)
+    } else {
+        export_portable(&meta, &runtime, out_dir, &data_dir, make_zip)
+    }
+}
+
+// A folder bundle (Windows / Linux): the renamed player beside `data/`, then a
+// zip of that folder.
+fn export_portable(
+    meta: &AppMeta,
+    runtime: &Path,
+    out_dir: &Path,
+    data_dir: &Path,
+    make_zip: bool,
+) -> io::Result<()> {
+    let slug = slug(&meta.display_name);
+    let bundle_dir = out_dir.join(&slug);
+    reset_dir(&bundle_dir)?;
+
     let exe_name = exe_file_name(&slug);
     let exe_dst = bundle_dir.join(&exe_name);
-    fs::copy(&runtime, &exe_dst)?;
+    fs::copy(runtime, &exe_dst)?;
+    make_executable(&exe_dst)?;
+    copy_runtime_sidecars(runtime, &bundle_dir)?;
+
+    let blobs = copy_blobs(data_dir, &bundle_dir.join("data"))?;
+    report_export(&meta.display_name, &bundle_dir, blobs)?;
+
+    if make_zip {
+        let zip_path = out_dir.join(format!("{slug}.zip"));
+        zip_tree(&bundle_dir, &slug, &exe_name, &zip_path)?;
+        println!("Wrote {}", zip_path.display());
+    }
+    Ok(())
+}
+
+// A macOS `.app` bundle: Contents/MacOS/<exe>, Contents/Info.plist, and
+// Contents/Resources/{<icon>.icns, data/}. The runtime resolves its state root
+// to Contents/Resources (see concinnity-runtime's state_dir_for_exe). Optionally
+// zipped and/or wrapped in a `.dmg`.
+fn export_macos(
+    meta: &AppMeta,
+    runtime: &Path,
+    out_dir: &Path,
+    data_dir: &Path,
+    make_zip: bool,
+    make_dmg: bool,
+) -> io::Result<()> {
+    let slug = slug(&meta.display_name);
+    let app_dir = out_dir.join(format!("{slug}.app"));
+    reset_dir(&app_dir)?;
+
+    let contents = app_dir.join("Contents");
+    let macos_dir = contents.join("MacOS");
+    let resources = contents.join("Resources");
+    fs::create_dir_all(&macos_dir)?;
+    fs::create_dir_all(&resources)?;
+
+    let exe_dst = macos_dir.join(&slug);
+    fs::copy(runtime, &exe_dst)?;
     make_executable(&exe_dst)?;
 
-    let blob_count = copy_blobs(
-        &concinnity_core::paths::data_dir(),
-        &bundle_dir.join("data"),
+    let blobs = copy_blobs(data_dir, &resources.join("data"))?;
+
+    // Build the .icns from the Application's icon, if it set one.
+    let icon_file = match &meta.icon {
+        Some(src) => Some(build_icns(src, &resources, &slug)?),
+        None => None,
+    };
+
+    fs::write(
+        contents.join("Info.plist"),
+        info_plist(meta, &slug, icon_file.as_deref()),
     )?;
-    if blob_count == 0 {
+
+    report_export(&meta.display_name, &app_dir, blobs)?;
+
+    if make_zip {
+        let zip_path = out_dir.join(format!("{slug}.zip"));
+        let exe_rel = format!("Contents/MacOS/{slug}");
+        zip_tree(&app_dir, &format!("{slug}.app"), &exe_rel, &zip_path)?;
+        println!("Wrote {}", zip_path.display());
+    }
+    if make_dmg {
+        let dmg_path = out_dir.join(format!("{slug}.dmg"));
+        build_dmg(&app_dir, &slug, &meta.display_name, &dmg_path)?;
+        println!("Wrote {}", dmg_path.display());
+    }
+    Ok(())
+}
+
+fn report_export(display_name: &str, bundle: &Path, blobs: usize) -> io::Result<()> {
+    if blobs == 0 {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "the build produced no data blobs to package",
         ));
     }
-
     println!(
         "Exported \"{}\" -> {} ({} blob{})",
         display_name,
-        bundle_dir.display(),
-        blob_count,
-        if blob_count == 1 { "" } else { "s" },
+        bundle.display(),
+        blobs,
+        if blobs == 1 { "" } else { "s" },
     );
-
-    if make_zip {
-        let zip_path = out_dir.join(format!("{slug}.zip"));
-        zip_bundle(&bundle_dir, &slug, &exe_name, &zip_path)?;
-        println!("Wrote {}", zip_path.display());
-    }
-
     Ok(())
 }
 
+// Remove `dir` if it exists, then create it fresh, so re-exports are clean.
+fn reset_dir(dir: &Path) -> io::Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
+    }
+    fs::create_dir_all(dir)
+}
+
 // Copy every compiled blob (the integer-named files) from the build's data
-// directory into the bundle's `data/`, skipping the shader-compile
-// intermediates the build leaves there (named after their asset). Returns the
-// number of blobs copied.
+// directory into `data_dst`, skipping the shader-compile intermediates the
+// build leaves there (named after their asset). Returns the number copied.
 fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> {
     fs::create_dir_all(data_dst)?;
     let mut count = 0;
@@ -169,7 +266,8 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
             io::ErrorKind::NotFound,
             format!(
                 "runtime player not found at {} -- the `concinnity-runtime` binary must sit \
-                 beside the `cn` executable",
+                 beside the `cn` executable (in a dev checkout, build it with \
+                 `cargo build -p concinnity-runtime`)",
                 path.display()
             ),
         ))
@@ -198,8 +296,25 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-// The application name, by precedence: an explicit `--name`, then the
-// Application asset's name, then a MainMenu title, then the engine default.
+// Read the app metadata from the expanded world, applying the `--name`
+// override and deriving anything the Application asset left unset.
+fn read_app_meta(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> AppMeta {
+    let display_name = resolve_display_name(cli_name, assets);
+    let identifier =
+        string_arg(assets, "application", "id").unwrap_or_else(|| derive_identifier(&display_name));
+    let version =
+        string_arg(assets, "application", "version").unwrap_or_else(|| "0.1.0".to_string());
+    let icon = string_arg(assets, "application", "icon").map(PathBuf::from);
+    AppMeta {
+        display_name,
+        identifier,
+        version,
+        icon,
+    }
+}
+
+// The app name, by precedence: an explicit `--name`, then the Application
+// asset's name, then a MainMenu title, then the engine default.
 fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> String {
     if let Some(n) = cli_name.map(str::trim).filter(|s| !s.is_empty()) {
         return n.to_string();
@@ -211,6 +326,31 @@ fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> S
         return n;
     }
     "Concinnity".to_string()
+}
+
+// A reverse-DNS bundle identifier derived from the name when the Application
+// asset declares none: `gg.concinnity.<name>`, the name reduced to bundle-id
+// characters (ascii alphanumerics, lowercased; other runs become a single `-`).
+fn derive_identifier(name: &str) -> String {
+    let mut comp = String::new();
+    let mut pending_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            if pending_dash && !comp.is_empty() {
+                comp.push('-');
+            }
+            pending_dash = false;
+            comp.push(c.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    let comp = comp.trim_matches('-');
+    if comp.is_empty() {
+        "gg.concinnity.app".to_string()
+    } else {
+        format!("gg.concinnity.{comp}")
+    }
 }
 
 // The first non-empty string value of `key` on the first asset whose normalized
@@ -232,7 +372,7 @@ fn normalize_type(t: &str) -> String {
 
 // A filesystem-safe slug for the bundle folder, executable, and archive name.
 // Keeps alphanumerics, `.`, `-`, `_`; collapses runs of other characters
-// (including spaces) to a single `-`. Falls back to "game" when empty.
+// (including spaces) to a single `-`. Falls back to "app" when empty.
 fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
@@ -249,35 +389,228 @@ fn slug(name: &str) -> String {
     }
     let trimmed = out.trim_matches('-');
     if trimmed.is_empty() {
-        "game".to_string()
+        "app".to_string()
     } else {
         trimmed.to_string()
     }
 }
 
-// Zip the bundle directory under a single top-level `<slug>/` folder, with the
-// player executable marked executable so it stays runnable after extraction on
-// Unix. Files are added in sorted order for a reproducible archive.
-fn zip_bundle(bundle_dir: &Path, top: &str, exe_name: &str, zip_path: &Path) -> io::Result<()> {
+// Synthesize the macOS Info.plist. The bundle display name comes from
+// CFBundleDisplayName, so the `.app` file name can stay a plain slug while
+// Finder still shows the real name.
+fn info_plist(meta: &AppMeta, exe_name: &str, icon_file: Option<&str>) -> String {
+    let icon_entry = match icon_file {
+        Some(icon) => format!(
+            "\t<key>CFBundleIconFile</key>\n\t<string>{}</string>\n",
+            xml_escape(icon)
+        ),
+        None => String::new(),
+    };
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \t<key>CFBundleName</key>\n\t<string>{name}</string>\n\
+         \t<key>CFBundleDisplayName</key>\n\t<string>{name}</string>\n\
+         \t<key>CFBundleExecutable</key>\n\t<string>{exe}</string>\n\
+         \t<key>CFBundleIdentifier</key>\n\t<string>{id}</string>\n\
+         \t<key>CFBundleVersion</key>\n\t<string>{ver}</string>\n\
+         \t<key>CFBundleShortVersionString</key>\n\t<string>{ver}</string>\n\
+         \t<key>CFBundlePackageType</key>\n\t<string>APPL</string>\n\
+         \t<key>CFBundleInfoDictionaryVersion</key>\n\t<string>6.0</string>\n\
+         {icon}\
+         \t<key>LSMinimumSystemVersion</key>\n\t<string>11.0</string>\n\
+         \t<key>NSHighResolutionCapable</key>\n\t<true/>\n\
+         \t<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>\n\
+         </dict>\n\
+         </plist>\n",
+        name = xml_escape(&meta.display_name),
+        exe = xml_escape(exe_name),
+        id = xml_escape(&meta.identifier),
+        ver = xml_escape(&meta.version),
+        icon = icon_entry,
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+// Build `<resources>/<slug>.icns` from a source PNG using the stock macOS tools
+// `sips` (resize) and `iconutil` (assemble). Returns the icns file name for the
+// Info.plist. Errors if the source is missing or a tool fails.
+fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
+    if !src.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Application icon not found: {}", src.display()),
+        ));
+    }
+    let iconset = std::env::temp_dir().join(format!("cn-export-{slug}.iconset"));
+    reset_dir(&iconset)?;
+
+    // The standard iconset ladder: each size at 1x and 2x.
+    for size in [16u32, 32, 128, 256, 512] {
+        for scale in [1u32, 2] {
+            let px = size * scale;
+            let suffix = if scale == 2 { "@2x" } else { "" };
+            let dst = iconset.join(format!("icon_{size}x{size}{suffix}.png"));
+            run_tool(
+                "sips",
+                &[
+                    "-z",
+                    &px.to_string(),
+                    &px.to_string(),
+                    &src.to_string_lossy(),
+                    "--out",
+                    &dst.to_string_lossy(),
+                ],
+            )?;
+        }
+    }
+
+    let icns_name = format!("{slug}.icns");
+    let icns_path = resources.join(&icns_name);
+    run_tool(
+        "iconutil",
+        &[
+            "-c",
+            "icns",
+            &iconset.to_string_lossy(),
+            "-o",
+            &icns_path.to_string_lossy(),
+        ],
+    )?;
+    let _ = fs::remove_dir_all(&iconset);
+    Ok(icns_name)
+}
+
+// Wrap a `.app` in a compressed `.dmg` via `hdiutil`. The `.app` is staged into
+// its own folder first so it lands at the disk image's root (hdiutil's
+// -srcfolder makes the folder the volume root).
+fn build_dmg(app_dir: &Path, slug: &str, volume_name: &str, dmg_path: &Path) -> io::Result<()> {
+    let staging = std::env::temp_dir().join(format!("cn-export-{slug}-dmg"));
+    reset_dir(&staging)?;
+    copy_tree(app_dir, &staging.join(format!("{slug}.app")))?;
+
+    if dmg_path.exists() {
+        fs::remove_file(dmg_path)?;
+    }
+    run_tool(
+        "hdiutil",
+        &[
+            "create",
+            "-volname",
+            volume_name,
+            "-srcfolder",
+            &staging.to_string_lossy(),
+            "-ov",
+            "-format",
+            "UDZO",
+            &dmg_path.to_string_lossy(),
+        ],
+    )?;
+    let _ = fs::remove_dir_all(&staging);
+    Ok(())
+}
+
+// Run an external tool, turning a non-zero exit into an io::Error carrying its
+// stderr.
+fn run_tool(program: &str, args: &[&str]) -> io::Result<()> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| io::Error::new(e.kind(), format!("failed to run `{program}`: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "`{program}` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+// Copy the runtime player's sibling native libraries into the bundle beside the
+// exe, so the bundle carries everything the player needs to launch. On Windows
+// the graphics-SDK runtime DLLs (FidelityFX / XeSS / DLSS / DXC) sit beside the
+// built runtime binary, and the Agility SDK D3D12 runtime lives in a `D3D12/`
+// subdir that the exe's `D3D12SDKPath` export points at (`.\D3D12\`); copy both.
+// A strict no-op on macOS and Linux, where the runtime links only system
+// frameworks / libraries (no sibling `.dll`, no `D3D12/`).
+fn copy_runtime_sidecars(runtime: &Path, dest_dir: &Path) -> io::Result<()> {
+    let Some(src_dir) = runtime.parent() else {
+        return Ok(());
+    };
+    // Sibling DLLs (the Windows graphics-SDK runtimes). Matched by extension so
+    // the set can change without export knowing backend specifics.
+    for entry in fs::read_dir(src_dir)? {
+        let path = entry?.path();
+        let is_dll = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("dll"));
+        if is_dll
+            && path.is_file()
+            && let Some(name) = path.file_name()
+        {
+            fs::copy(&path, dest_dir.join(name))?;
+        }
+    }
+    // The Agility SDK D3D12 runtime, resolved by the exe relative to itself.
+    let d3d12 = src_dir.join("D3D12");
+    if d3d12.is_dir() {
+        copy_tree(&d3d12, &dest_dir.join("D3D12"))?;
+    }
+    Ok(())
+}
+
+// Recursively copy the directory tree at `src` to `dst`.
+fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_tree(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+// Zip the tree at `src_dir` under a single top-level `<top>/` folder, marking
+// the player executable (`exe_rel`, relative to `src_dir`) executable so it
+// stays runnable after extraction on Unix. Files are added in sorted order for
+// a reproducible archive.
+fn zip_tree(src_dir: &Path, top: &str, exe_rel: &str, zip_path: &Path) -> io::Result<()> {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
     let mut files = Vec::new();
-    collect_files(bundle_dir, &mut files)?;
+    collect_files(src_dir, &mut files)?;
     files.sort();
 
     let file = fs::File::create(zip_path)?;
     let mut zw = zip::ZipWriter::new(file);
     for path in files {
         let rel = path
-            .strip_prefix(bundle_dir)
+            .strip_prefix(src_dir)
             .map_err(io::Error::other)?
             .to_string_lossy()
             .replace('\\', "/");
-        let is_exe = rel == exe_name;
+        let mode = if rel == exe_rel { 0o755 } else { 0o644 };
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(if is_exe { 0o755 } else { 0o644 });
+            .unix_permissions(mode);
         zw.start_file(format!("{top}/{rel}"), options)
             .map_err(io::Error::other)?;
         let bytes = fs::read(&path)?;
@@ -318,8 +651,8 @@ mod tests {
         assert_eq!(slug("  Spaced  Out  "), "Spaced-Out");
         assert_eq!(slug("weird:/name*?"), "weird-name");
         assert_eq!(slug("keep_dots.and-dashes"), "keep_dots.and-dashes");
-        assert_eq!(slug("***"), "game");
-        assert_eq!(slug(""), "game");
+        assert_eq!(slug("***"), "app");
+        assert_eq!(slug(""), "app");
     }
 
     #[test]
@@ -341,24 +674,19 @@ mod tests {
         );
         let menu = asset("m", "MainMenu", serde_json::json!({"title": "Menu Title"}));
 
-        // Explicit --name wins over everything.
         assert_eq!(
             resolve_display_name(Some("CLI Name"), &[app.clone(), menu.clone()]),
             "CLI Name"
         );
-        // Then the Application asset.
         assert_eq!(
             resolve_display_name(None, &[app.clone(), menu.clone()]),
             "App Name"
         );
-        // Then a MainMenu title.
         assert_eq!(
             resolve_display_name(None, std::slice::from_ref(&menu)),
             "Menu Title"
         );
-        // Then the engine default.
         assert_eq!(resolve_display_name(None, &[]), "Concinnity");
-        // An empty --name is ignored (falls through to the Application asset).
         assert_eq!(resolve_display_name(Some("  "), &[app]), "App Name");
     }
 
@@ -373,7 +701,6 @@ mod tests {
 
     #[test]
     fn host_platform_is_accepted_and_others_rejected() {
-        // None and the host are fine; a foreign platform errors.
         check_target_platform(None).unwrap();
         check_target_platform(Some(std::env::consts::OS)).unwrap();
         let foreign = if std::env::consts::OS == "windows" {
@@ -382,5 +709,91 @@ mod tests {
             "windows"
         };
         assert!(check_target_platform(Some(foreign)).is_err());
+    }
+
+    #[test]
+    fn app_meta_derives_id_and_version_defaults() {
+        // No Application: name falls to default, id derived, version defaulted.
+        let meta = read_app_meta(Some("My Cool App"), &[]);
+        assert_eq!(meta.display_name, "My Cool App");
+        assert_eq!(meta.identifier, "gg.concinnity.my-cool-app");
+        assert_eq!(meta.version, "0.1.0");
+        assert!(meta.icon.is_none());
+
+        // Application supplies id / version / icon verbatim.
+        let app = asset(
+            "app",
+            "Application",
+            serde_json::json!({
+                "name": "Named", "id": "gg.studio.thing", "version": "2.3.4", "icon": "art/i.png"
+            }),
+        );
+        let meta = read_app_meta(None, std::slice::from_ref(&app));
+        assert_eq!(meta.display_name, "Named");
+        assert_eq!(meta.identifier, "gg.studio.thing");
+        assert_eq!(meta.version, "2.3.4");
+        assert_eq!(meta.icon.as_deref(), Some(Path::new("art/i.png")));
+    }
+
+    #[test]
+    fn info_plist_has_required_keys_and_escapes() {
+        let meta = AppMeta {
+            display_name: "Tom & Jerry".to_string(),
+            identifier: "gg.studio.tj".to_string(),
+            version: "1.0".to_string(),
+            icon: None,
+        };
+        let plist = info_plist(&meta, "tj", Some("tj.icns"));
+        assert!(plist.contains("<key>CFBundleExecutable</key>\n\t<string>tj</string>"));
+        assert!(plist.contains("<key>CFBundleIdentifier</key>\n\t<string>gg.studio.tj</string>"));
+        assert!(plist.contains("<key>CFBundleShortVersionString</key>\n\t<string>1.0</string>"));
+        assert!(plist.contains("<key>CFBundleIconFile</key>\n\t<string>tj.icns</string>"));
+        // The `&` in the display name is XML-escaped.
+        assert!(plist.contains("Tom &amp; Jerry"));
+        assert!(!plist.contains("Tom & Jerry"));
+
+        // Without an icon there is no CFBundleIconFile key.
+        let plist = info_plist(&meta, "tj", None);
+        assert!(!plist.contains("CFBundleIconFile"));
+    }
+
+    #[test]
+    fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
+        // Simulate a Windows target/<profile>/ dir: the runtime exe, sibling
+        // DLLs, a non-lib file, and the Agility D3D12/ subdir.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("D3D12")).unwrap();
+        fs::write(src.join("concinnity-runtime.exe"), b"exe").unwrap();
+        fs::write(src.join("amd_fidelityfx_dx12.dll"), b"x").unwrap();
+        fs::write(src.join("libconcinnity_editor.dll"), b"x").unwrap();
+        fs::write(src.join("notes.txt"), b"x").unwrap();
+        fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
+
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), &dest).unwrap();
+
+        assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
+        assert!(dest.join("libconcinnity_editor.dll").exists());
+        assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
+        // Non-DLL siblings and the exe itself are not carried along.
+        assert!(!dest.join("notes.txt").exists());
+        assert!(!dest.join("concinnity-runtime.exe").exists());
+    }
+
+    #[test]
+    fn copy_runtime_sidecars_is_a_noop_without_dlls() {
+        // The macOS / Linux case: no sibling `.dll`, no `D3D12/`.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("concinnity-runtime"), b"exe").unwrap();
+        fs::write(src.join("libconcinnity_editor.dylib"), b"x").unwrap();
+
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-runtime"), &dest).unwrap();
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
 }

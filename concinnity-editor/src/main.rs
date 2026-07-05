@@ -294,13 +294,17 @@ pub struct ExportArgs {
     #[arg(long)]
     pub platform: Option<String>,
 
-    // Output directory for the exported game.
+    // Output directory for the exported app.
     #[arg(long, default_value = "dist")]
     pub out: String,
 
     // Output format: zip (default) or dir.
     #[arg(long, default_value = "zip")]
     pub format: String,
+
+    // macOS: also produce a .dmg wrapping the .app (macOS-only).
+    #[arg(long)]
+    pub dmg: bool,
 }
 
 // When a render command requests graphics validation on macOS, relaunch the
@@ -403,6 +407,7 @@ fn main() -> std::io::Result<()> {
             args.platform.as_deref(),
             &args.out,
             &args.format,
+            args.dmg,
         ),
     }
 }

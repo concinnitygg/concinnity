@@ -1,15 +1,15 @@
-// concinnity-runtime: the shipped game player.
+// concinnity-runtime: the shipped app player.
 //
 // A minimal standalone binary that plays a world's pre-compiled blobs. It links
 // only the runtime crate (concinnity-client) and the shared data types it
 // re-exports (concinnity-core), never the cook/build pipeline or the editor, so
-// a shipped game carries no compiler. `cn export` compiles this once per
-// platform and copies it (renamed) into each game bundle beside the world's
+// a shipped app carries no compiler. `cn export` ships this prebuilt beside the
+// `cn` toolchain and copies it (renamed) into each app bundle beside the world's
 // `data/` blobs.
 //
-// The state root (holding `data/`, plus the `saves/` and `settings` the game
+// The state root (holding `data/`, plus the `saves/` and `settings` the app
 // writes at runtime) is anchored to the executable, not the launch working
-// directory, so the game finds its data whether it is double-clicked, launched
+// directory, so the app finds its data whether it is double-clicked, launched
 // from a shell, or run from inside a macOS `.app` bundle.
 
 use std::ffi::OsStr;
@@ -59,8 +59,8 @@ mod tests {
     fn plain_layout_uses_the_executable_directory() {
         // A portable folder (Windows/Linux, or a bare macOS binary): the state
         // tree sits directly beside the executable.
-        let dir = Path::new("/games/MyGame");
-        assert_eq!(state_dir_for_exe(dir), Path::new("/games/MyGame"));
+        let dir = Path::new("/apps/MyApp");
+        assert_eq!(state_dir_for_exe(dir), Path::new("/apps/MyApp"));
     }
 
     #[test]

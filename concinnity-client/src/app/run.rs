@@ -64,10 +64,10 @@ pub fn run() -> std::io::Result<()> {
     start_runtime(app)
 }
 
-// Production entry point for a shipped game: like `run`, but with the state root
+// Production entry point for a shipped app: like `run`, but with the state root
 // pinned to `state_dir` (the flat tree beside the executable or inside an app
 // bundle, holding `data/`, `saves/`, and `settings`), and a missing blob is a
-// hard error rather than a silent no-op -- a packaged game without its data
+// hard error rather than a silent no-op -- a packaged app without its data
 // cannot do anything useful. The concinnity-runtime binary calls this.
 pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
     init_logging();
