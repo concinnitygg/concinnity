@@ -1,5 +1,13 @@
 # Concinnity
 
+[![Concinnity GitHub Actions][gh-image]][gh-checks]
+[![codecov.io][codecov-img]][codecov-link]
+
+[gh-image]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml/badge.svg?branch=main
+[gh-checks]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml?query=branch%3Amain
+[codecov-img]: https://img.shields.io/codecov/c/github/concinnitygg/concinnity?logo=codecov
+[codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
+
 Application software for [`concinnity.gg`](https://concinnity.gg).
 
 ## Overview
