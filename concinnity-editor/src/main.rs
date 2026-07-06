@@ -137,6 +137,10 @@ enum Commands {
     /// Validate a world without building
     #[command(name = "test")]
     Test(TestArgs),
+
+    /// Package a built world into a distributable app
+    #[command(name = "export")]
+    Export(ExportArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -149,37 +153,37 @@ struct Cli {
 
 #[derive(Debug, clap::Args)]
 pub struct DebugArgs {
-    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    // Connect to the server's WebSocket command channel.
+    /// Connect to the server's WebSocket command channel
     // Value is the ws:// or wss:// URL of the endpoint,
     // e.g. ws://127.0.0.1:8080/v1/ws
     #[arg(long)]
     pub websocket: Option<String>,
 
-    // Account ID to authenticate with when connecting over WebSocket.
+    /// Account ID to authenticate with when connecting over WebSocket
     // Must be non-empty, <= 128 chars, and not prefixed with "guest:".
     // Required when --websocket is set.
     #[arg(long)]
     pub ws_user: Option<String>,
 
-    // Base HTTP URL of the infra server used to fetch missing asset files.
+    /// Base HTTP URL of the infra server used to fetch missing asset files
     // Defaults to the value in the client config (~/.config/concinnity/config.json).
     #[arg(long)]
     pub server: Option<String>,
 
-    // Account ID for asset fetching authentication.
+    /// Account ID for asset fetching authentication
     // Defaults to the value in the client config.
     #[arg(long)]
     pub user: Option<String>,
 
-    // Port for the localhost runtime debug server (default 8777).
+    /// Port for the localhost runtime debug server (default 8777)
     #[arg(long)]
     pub debug_port: Option<u16>,
 
-    // Enable graphics API validation. Omitted defaults to on for debug builds
+    /// Enable graphics API validation. Omitted defaults to on for debug builds
     // and off for release. See `RunArgs::validation`.
     #[arg(long)]
     pub validation: Option<bool>,
@@ -187,28 +191,28 @@ pub struct DebugArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct RunArgs {
-    // Enable graphics API validation: the DirectX / Vulkan debug layers, or on
-    // macOS the Metal API-validation layer (the process re-execs once with
-    // `MTL_DEBUG_LAYER` set, since Metal cannot toggle it from inside a running
-    // process). Omitted defaults to on for debug builds and off for release;
-    // pass `--validation false` to force it off in a debug build. The heavier
-    // Metal shader validation is not enabled by this flag; set
-    // `MTL_SHADER_VALIDATION=1` in the environment for that.
+    /// Enable graphics API validation. Omitted defaults to on for debug builds
+    // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
+    // layer (the process re-execs once with `MTL_DEBUG_LAYER` set, since Metal
+    // cannot toggle it from inside a running process). Omitted defaults to on for
+    // debug builds and off for release; pass `--validation false` to force it off
+    // in a debug build. The heavier Metal shader validation is not enabled by
+    // this flag; set `MTL_SHADER_VALIDATION=1` in the environment for that.
     #[arg(long)]
     pub validation: Option<bool>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct AddArgs {
-    // File path (shaders/pbr.vert) or asset type name (Logger, LLM, ...)
+    /// Path to an asset file or type name
     pub target: String,
 
-    // Override the asset name written into world.jsonl.
+    /// Override the asset name written into the world
     // If omitted, the name is derived from the filename (including extension).
     #[arg(short, long)]
     pub name: Option<String>,
 
-    // Named scaffold preset used when bootstrapping a fresh GLB world.
+    /// Named scaffold preset used when bootstrapping a new world
     // Currently only "showcase" (adds bloom/IBL/fog on top of the base scaffold).
     // Ignored when scaffolding doesn't fire.
     #[arg(short = 't', long)]
@@ -217,25 +221,25 @@ pub struct AddArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct RmArgs {
-    // The `name` field of the asset to remove
+    /// The `name` field of the asset to remove
     pub name: String,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct TestArgs {
-    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct ListArgs {
-    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    // List the expanded world the build produces instead of the authored
-    // file: build-time macros are expanded and injected defaults included,
+    /// List the expanded world the build produces
+    // build-time macros are expanded and injected defaults included,
     // each row tagged with its provenance (authored / injected / expanded).
     #[arg(long)]
     pub expanded: bool,
@@ -243,35 +247,56 @@ pub struct ListArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct ExplainArgs {
-    // The `name` field of the asset to print
+    /// The `name` field of the asset to print
     pub name: String,
 
-    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct NewArgs {
-    // Directory to create the project in
+    /// Directory to create the project in
     pub path: String,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct BuildArgs {
-    // Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    #[arg(short = 'f', long)]
+    pub file: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ExportArgs {
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    // Base HTTP URL of the infra server used to fetch missing asset files.
-    // Defaults to the value in the client config (~/.config/concinnity/config.json).
-    #[arg(long)]
-    pub server: Option<String>,
+    /// Override the application name
+    #[arg(short = 'n', long)]
+    pub name: Option<String>,
 
-    // Account ID for asset fetching authentication.
-    // Defaults to the value in the client config.
+    /// Override the application version
     #[arg(long)]
-    pub user: Option<String>,
+    pub version: Option<String>,
+
+    /// Target platform
+    #[arg(long)]
+    pub platform: Option<String>,
+
+    /// Output directory for the exported app
+    #[arg(long, default_value = "dist")]
+    pub out: String,
+
+    /// Output format: zip (default) or dir
+    #[arg(long, default_value = "zip")]
+    pub format: String,
+
+    /// Also produce a .dmg wrapping the .app (macOS-only)
+    #[arg(long)]
+    pub dmg: bool,
 }
 
 // When a render command requests graphics validation on macOS, relaunch the
@@ -368,5 +393,14 @@ fn main() -> std::io::Result<()> {
             let path = args.file.as_deref().unwrap_or("");
             cli::check(path)
         }
+        Commands::Export(args) => cli::export(
+            args.file.as_deref(),
+            args.name.as_deref(),
+            args.version.as_deref(),
+            args.platform.as_deref(),
+            &args.out,
+            &args.format,
+            args.dmg,
+        ),
     }
 }

@@ -2,6 +2,7 @@
 // Entry point for all build-time JSON-level world expansion.
 // Operates purely on serde_json::Value; no type registry or blob compilation.
 
+use super::application::apply_application;
 use super::camera_shot::expand_camera_shots;
 use super::companion::inject_companions;
 use super::defaults::inject_engine_defaults;
@@ -94,6 +95,11 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // its Window / ShaderStage stack) implied by everything authored or
     // expanded above, so the defaults pass can key off "this world renders".
     inject_companions(assets, &mut report);
+    // The Application asset (at most one) names the world for distribution and,
+    // when a Window authored no title, fills it so a running game shows its own
+    // name. Runs after the first companion round so a rendering world's injected
+    // Window is present to receive the title.
+    apply_application(assets, &mut report)?;
     // Engine defaults: complete a rendering world with the standard assets it
     // does not declare (MainMenu, HUDs + chips + font, sky mesh). Runs before
     // menu expansion so an injected MainMenu expands like an authored one.

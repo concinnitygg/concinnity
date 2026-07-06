@@ -24,8 +24,8 @@ impl StorySystem {
         if title_view.is_none() {
             return;
         }
-        let has_save = !self.story.save_key.is_empty()
-            && read_save(&save_file(&self.save_dir, &self.story.save_key)).is_some();
+        let has_save =
+            !self.story.save_key.is_empty() && read_save(&save_file(&self.save_dir)).is_some();
         let has_slots = self.any_slot_save();
 
         let mut buttons: Vec<(Option<AssetId>, &str)> = vec![(start, "Start")];

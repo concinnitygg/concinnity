@@ -101,6 +101,7 @@ crate::define_components! {
         StoryImport       => assets::StoryImport,       82,
         AudioCue          => assets::AudioCue,          83,
         Story             => assets::Story,             84,
+        Application       => assets::Application,       85,
 }
 
 #[cfg(test)]

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="512" y1="100" x2="512" y2="677" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1c5e18"/>
+      <stop offset="1" stop-color="#020a04"/>
+    </linearGradient>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <svg x="202" y="202" width="620" height="620" viewBox="0 46 136 128" preserveAspectRatio="xMidYMid meet">
+      <polygon points="14,92 37,102 23,109 0,99" fill="#a6cbba"/>
+      <polygon points="47,77 70,87 56,94 33,84" fill="#a6cbba"/>
+      <polygon points="80,62 103,72 89,79 66,69" fill="#a6cbba"/>
+      <polygon points="113,47 136,57 122,64 99,54" fill="#a6cbba"/>
+      <polygon points="14,128 37,118 23,111 0,121" fill="#a6cbba"/>
+      <polygon points="47,143 70,133 56,126 33,136" fill="#a6cbba"/>
+      <polygon points="80,158 103,148 89,141 66,151" fill="#a6cbba"/>
+      <polygon points="113,173 136,163 122,156 99,166" fill="#a6cbba"/>
+      <polygon points="0,124.64 0,174.64 110,174.64" fill="#a6cbba"/>
+    </svg>
+  </g>
+</svg>

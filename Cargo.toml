@@ -6,6 +6,7 @@ members = [
     "concinnity-cook",
     "concinnity-toolchain",
     "concinnity-client",
+    "concinnity-runtime",
     "concinnity-editor",
     "concinnity-docs",
     "examples/common",
@@ -18,12 +19,13 @@ default-members = [
     "concinnity-cook",
     "concinnity-toolchain",
     "concinnity-client",
+    "concinnity-runtime",
     "concinnity-editor",
     "concinnity-docs",
 ]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
