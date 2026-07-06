@@ -37,6 +37,7 @@ struct AppMeta {
 pub fn export(
     json_path: Option<&str>,
     name: Option<&str>,
+    version: Option<&str>,
     platform: Option<&str>,
     out: &str,
     format: &str,
@@ -77,7 +78,7 @@ pub fn export(
     let content = fs::read_to_string(&world_path)?;
     let loaded = prepare_world(&content)
         .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
-    let meta = read_app_meta(name, &loaded.assets);
+    let meta = read_app_meta(name, version, &loaded.assets);
 
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir)?;
@@ -123,7 +124,8 @@ fn export_portable(
     report_export(&meta.display_name, &bundle_dir, blobs)?;
 
     if make_zip {
-        let zip_path = out_dir.join(format!("{slug}.zip"));
+        let stem = artifact_stem(meta, platform_tag(std::env::consts::OS));
+        let zip_path = out_dir.join(format!("{stem}.zip"));
         zip_tree(&bundle_dir, &slug, &exe_name, &zip_path)?;
         println!("Wrote {}", zip_path.display());
     }
@@ -172,14 +174,15 @@ fn export_macos(
 
     report_export(&meta.display_name, &app_dir, blobs)?;
 
+    let stem = artifact_stem(meta, platform_tag(std::env::consts::OS));
     if make_zip {
-        let zip_path = out_dir.join(format!("{slug}.zip"));
+        let zip_path = out_dir.join(format!("{stem}.zip"));
         let exe_rel = format!("Contents/MacOS/{slug}");
         zip_tree(&app_dir, &format!("{slug}.app"), &exe_rel, &zip_path)?;
         println!("Wrote {}", zip_path.display());
     }
     if make_dmg {
-        let dmg_path = out_dir.join(format!("{slug}.dmg"));
+        let dmg_path = out_dir.join(format!("{stem}.dmg"));
         build_dmg(&app_dir, &slug, &meta.display_name, &dmg_path)?;
         println!("Wrote {}", dmg_path.display());
     }
@@ -404,14 +407,22 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-// Read the app metadata from the expanded world, applying the `--name`
-// override and deriving anything the Application asset left unset.
-fn read_app_meta(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> AppMeta {
+// Read the app metadata from the expanded world, applying the `--name` /
+// `--version` overrides and deriving anything the Application asset left unset.
+fn read_app_meta(
+    cli_name: Option<&str>,
+    cli_version: Option<&str>,
+    assets: &[WorldJsonlAsset],
+) -> AppMeta {
     let display_name = resolve_display_name(cli_name, assets);
     let identifier =
         string_arg(assets, "application", "id").unwrap_or_else(|| derive_identifier(&display_name));
-    let version =
-        string_arg(assets, "application", "version").unwrap_or_else(|| "0.1.0".to_string());
+    let version = cli_version
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| string_arg(assets, "application", "version"))
+        .unwrap_or_else(|| "0.1.0".to_string());
     let icon = string_arg(assets, "application", "icon").map(PathBuf::from);
     AppMeta {
         display_name,
@@ -501,6 +512,31 @@ fn slug(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+// Short platform token for distributable artifact file names, from an OS string
+// (`std::env::consts::OS`). Export is host-only, so this always reflects the
+// bundle's actual platform.
+fn platform_tag(os: &str) -> &str {
+    match os {
+        "macos" => "mac",
+        "windows" => "win",
+        "linux" => "linux",
+        other => other,
+    }
+}
+
+// The base name for a distributable archive: `<slug>-<version>-<platform>` (e.g.
+// `My-Game-1.0.0-mac`). The `.app` bundle, the executable, and the in-archive top
+// folder keep the bare slug; only the `.zip` / `.dmg` carry the version and
+// platform so a release folder can hold builds of several versions side by side.
+fn artifact_stem(meta: &AppMeta, platform: &str) -> String {
+    format!(
+        "{}-{}-{}",
+        slug(&meta.display_name),
+        slug(&meta.version),
+        platform
+    )
 }
 
 // Synthesize the macOS Info.plist. The bundle display name comes from
@@ -860,7 +896,7 @@ mod tests {
     #[test]
     fn app_meta_derives_id_and_version_defaults() {
         // No Application: name falls to default, id derived, version defaulted.
-        let meta = read_app_meta(Some("My Cool App"), &[]);
+        let meta = read_app_meta(Some("My Cool App"), None, &[]);
         assert_eq!(meta.display_name, "My Cool App");
         assert_eq!(meta.identifier, "gg.concinnity.my-cool-app");
         assert_eq!(meta.version, "0.1.0");
@@ -874,11 +910,61 @@ mod tests {
                 "name": "Named", "id": "gg.studio.thing", "version": "2.3.4", "icon": "art/i.png"
             }),
         );
-        let meta = read_app_meta(None, std::slice::from_ref(&app));
+        let meta = read_app_meta(None, None, std::slice::from_ref(&app));
         assert_eq!(meta.display_name, "Named");
         assert_eq!(meta.identifier, "gg.studio.thing");
         assert_eq!(meta.version, "2.3.4");
         assert_eq!(meta.icon.as_deref(), Some(Path::new("art/i.png")));
+    }
+
+    #[test]
+    fn version_precedence_is_cli_then_application_then_default() {
+        let app = asset(
+            "app",
+            "Application",
+            serde_json::json!({"version": "2.3.4"}),
+        );
+
+        // --version overrides the Application version.
+        assert_eq!(
+            read_app_meta(None, Some("9.9.9"), std::slice::from_ref(&app)).version,
+            "9.9.9"
+        );
+        // A blank --version is ignored, falling back to the Application version.
+        assert_eq!(
+            read_app_meta(None, Some("  "), std::slice::from_ref(&app)).version,
+            "2.3.4"
+        );
+        // --version with no Application still wins over the default.
+        assert_eq!(read_app_meta(None, Some("3.0"), &[]).version, "3.0");
+        // No override, no Application: the default.
+        assert_eq!(read_app_meta(None, None, &[]).version, "0.1.0");
+    }
+
+    #[test]
+    fn platform_tag_maps_host_os() {
+        assert_eq!(platform_tag("macos"), "mac");
+        assert_eq!(platform_tag("windows"), "win");
+        assert_eq!(platform_tag("linux"), "linux");
+        // An unmapped OS passes through unchanged rather than being lost.
+        assert_eq!(platform_tag("freebsd"), "freebsd");
+    }
+
+    #[test]
+    fn artifact_stem_is_slug_version_platform() {
+        let meta = AppMeta {
+            display_name: "My Game".to_string(),
+            identifier: "gg.studio.mg".to_string(),
+            version: "1.0.0".to_string(),
+            icon: None,
+        };
+        assert_eq!(artifact_stem(&meta, "mac"), "My-Game-1.0.0-mac");
+        // The version is slugged too, so odd characters stay filesystem-safe.
+        let meta = AppMeta {
+            version: "1.0.0+build 7".to_string(),
+            ..meta
+        };
+        assert_eq!(artifact_stem(&meta, "win"), "My-Game-1.0.0-build-7-win");
     }
 
     #[test]
