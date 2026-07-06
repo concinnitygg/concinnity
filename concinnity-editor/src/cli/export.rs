@@ -158,11 +158,12 @@ fn export_macos(
 
     let blobs = copy_blobs(data_dir, &resources.join("data"))?;
 
-    // Build the .icns from the Application's icon, if it set one.
-    let icon_file = match &meta.icon {
-        Some(src) => Some(build_icns(src, &resources, &slug)?),
-        None => None,
-    };
+    // Build the .icns from the Application's icon, falling back to the bundled
+    // engine default so every macOS bundle carries an icon.
+    let icon_file = Some(match &meta.icon {
+        Some(src) => build_icns(src, &resources, &slug)?,
+        None => build_default_icns(&resources, &slug)?,
+    });
 
     fs::write(
         contents.join("Info.plist"),
@@ -598,6 +599,22 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
     Ok(icns_name)
 }
 
+// The engine's built-in fallback icon (the Concinnity mark on a dark gradient),
+// used when the Application asset sets no icon. Baked into the `cn` binary so a
+// shipped toolchain, which has no engine source tree, still carries it.
+const DEFAULT_ICON_PNG: &[u8] = include_bytes!("../../assets/default-icon.png");
+
+// Build `<resources>/<slug>.icns` from the bundled default icon. Writes the
+// embedded PNG to a temp file so it flows through the same sips/iconutil
+// pipeline as a user-supplied icon, then removes it.
+fn build_default_icns(resources: &Path, slug: &str) -> io::Result<String> {
+    let tmp = std::env::temp_dir().join(format!("cn-default-icon-{slug}.png"));
+    fs::write(&tmp, DEFAULT_ICON_PNG)?;
+    let result = build_icns(&tmp, resources, slug);
+    let _ = fs::remove_file(&tmp);
+    result
+}
+
 // Wrap a `.app` in a compressed `.dmg` via `hdiutil`. The `.app` is staged into
 // its own folder first so it lands at the disk image's root (hdiutil's
 // -srcfolder makes the folder the volume root).
@@ -985,6 +1002,15 @@ mod tests {
         assert_eq!(feature_hint("glsl"), " --features vulkan");
         assert_eq!(feature_hint("hlsl"), "");
         assert_eq!(feature_hint("metal"), "");
+    }
+
+    #[test]
+    fn default_icon_is_a_nonempty_png() {
+        // The bundled fallback must be a real PNG so sips can rasterize it into
+        // the iconset ladder; a missing/corrupt file would fail every export
+        // without an Application icon.
+        assert!(DEFAULT_ICON_PNG.len() > 1024);
+        assert_eq!(&DEFAULT_ICON_PNG[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     #[test]
