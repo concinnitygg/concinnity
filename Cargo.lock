@@ -744,7 +744,9 @@ name = "concinnity-runtime"
 version = "0.9.0"
 dependencies = [
  "concinnity-client",
+ "concinnity-core",
  "concinnity-toolchain",
+ "tempfile",
 ]
 
 [[package]]

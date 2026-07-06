@@ -24,6 +24,14 @@
 //   2. a root installed via `set_root` (wraps in `.concinnity`)
 //   3. the `CN_HOME` environment variable (wraps in `.concinnity`)
 //   4. none: `.concinnity` relative to the current directory (the default)
+//
+// The read-only content of the tree (`data/`) and the runtime-writable state
+// (`saves/` + `settings`) usually share one root, but a shipped game installed
+// in a read-only location (Program Files) cannot write beside its data. Such a
+// game installs a separate writable root via `set_writable_state_dir` so only
+// `saves/` and `settings` relocate to a per-user directory while `data/` stays
+// beside the executable. When no writable root is installed, writable state
+// stays with the content, so dev and portable installs are unaffected.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -43,6 +51,11 @@ fn installed_root() -> &'static Mutex<Option<PathBuf>> {
 fn flat_state_dir() -> &'static Mutex<Option<PathBuf>> {
     static FLAT: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     FLAT.get_or_init(|| Mutex::new(None))
+}
+
+fn writable_state_override() -> &'static Mutex<Option<PathBuf>> {
+    static WRITABLE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    WRITABLE.get_or_init(|| Mutex::new(None))
 }
 
 // Anchor `.concinnity/` to `dir` for the rest of the process, taking precedence
@@ -69,6 +82,21 @@ pub fn set_state_dir<P: Into<PathBuf>>(dir: P) {
 // Remove an installed flat state dir, restoring the wrapped resolution.
 pub fn clear_state_dir() {
     *flat_state_dir().lock().unwrap() = None;
+}
+
+// Anchor the runtime-writable state (`saves/` + `settings`) at `dir`, leaving
+// the read-only content (`data/`) at the resolved state dir. A shipped game
+// installs this when its content dir is not writable (a read-only install such
+// as Program Files), redirecting only what it writes at runtime to a per-user
+// directory. When unset, writable state stays beside `data/`.
+pub fn set_writable_state_dir<P: Into<PathBuf>>(dir: P) {
+    *writable_state_override().lock().unwrap() = Some(dir.into());
+}
+
+// Remove an installed writable-state dir, restoring writable state to the
+// content root beside `data/`.
+pub fn clear_writable_state_dir() {
+    *writable_state_override().lock().unwrap() = None;
 }
 
 // The resolved wrapping root, or `None` when paths should stay relative to the
@@ -98,6 +126,20 @@ fn resolve_state_dir(flat: Option<&Path>, root: Option<&Path>) -> PathBuf {
     }
 }
 
+// The directory holding runtime-writable state (`saves/` + `settings`): the
+// writable override when one is installed, otherwise the state dir (writable
+// state sits beside `data/`).
+pub fn writable_state_dir() -> PathBuf {
+    let over = writable_state_override().lock().unwrap().clone();
+    resolve_writable_dir(over.as_deref(), &state_dir())
+}
+
+// Pure resolution split out so the fallback rule is unit-testable without the
+// process-global override: the override verbatim, else the content state dir.
+fn resolve_writable_dir(over: Option<&Path>, state: &Path) -> PathBuf {
+    over.map_or_else(|| state.to_path_buf(), Path::to_path_buf)
+}
+
 // Join `rel` onto `root`, or return it unchanged (relative) when `root` is
 // `None`. Split out so the anchoring rule is unit-testable without touching the
 // process-global root.
@@ -117,15 +159,17 @@ pub fn data_dir() -> PathBuf {
 }
 
 // Directory holding the runtime save files (`auto`, `save1` ..). Created on
-// first write by the running game, never by a build.
+// first write by the running game, never by a build. Resolves under the
+// writable-state dir, which is the content root unless a game redirected it.
 pub fn saves_dir() -> PathBuf {
-    state_dir().join("saves")
+    writable_state_dir().join("saves")
 }
 
 // The mutable settings file (CBOR). Written by the in-engine settings menu,
-// never by a build. A sibling of `data/`, not a directory inside it.
+// never by a build. A sibling of `data/` in the common case, or under the
+// writable-state dir when a read-only install redirected it.
 pub fn settings_path() -> PathBuf {
-    state_dir().join("settings")
+    writable_state_dir().join("settings")
 }
 
 pub fn worlds_dir() -> PathBuf {
@@ -176,6 +220,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_writable_dir_prefers_override_then_falls_back() {
+        // An installed writable override wins verbatim, relocating only the
+        // writable state; without one, writable state stays with the content.
+        let state = Path::new("/game/MyGame");
+        let over = Path::new("/users/me/AppData/Local/MyGame");
+        assert_eq!(resolve_writable_dir(Some(over), state), over);
+        assert_eq!(resolve_writable_dir(None, state), state);
+    }
+
+    #[test]
     fn subdirs_hang_off_the_state_dir() {
         // The layout under the state dir is stable regardless of the anchor.
         // Exercised through the pure `anchor` helper so the assertion does not
@@ -200,8 +254,21 @@ mod tests {
         set_state_dir(flat);
         assert_eq!(state_dir(), flat);
         assert_eq!(data_dir(), flat.join("data"));
+        // With no writable override, writable state stays beside the data.
+        assert_eq!(writable_state_dir(), flat);
         assert_eq!(saves_dir(), flat.join("saves"));
         assert_eq!(settings_path(), flat.join("settings"));
+
+        // A writable override relocates only `saves/` + `settings`; `data/`
+        // (and cache/assets/worlds) stay at the content root.
+        let writable = Path::new("/tmp/per-user-probe");
+        set_writable_state_dir(writable);
+        assert_eq!(writable_state_dir(), writable);
+        assert_eq!(saves_dir(), writable.join("saves"));
+        assert_eq!(settings_path(), writable.join("settings"));
+        assert_eq!(data_dir(), flat.join("data"));
+        clear_writable_state_dir();
+        assert_eq!(saves_dir(), flat.join("saves"));
         clear_state_dir();
 
         // With no flat dir, an installed root anchors the `.concinnity` tree and

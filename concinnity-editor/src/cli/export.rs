@@ -59,10 +59,13 @@ pub fn export(
         ));
     }
 
-    // Fail fast, before building, on the two things export cannot recover from:
-    // a target that is not this platform, and a missing runtime player.
+    // Fail fast, before building, on the things export cannot recover from: a
+    // target that is not this platform, a missing runtime player, and a runtime
+    // built for a different backend than the blobs this `cn` cooks.
     check_target_platform(platform)?;
     let runtime = runtime_binary_path()?;
+    let runtime_platform = read_runtime_platform(&runtime)?;
+    verify_runtime_backend(runtime_platform.as_deref())?;
 
     // Build the world exactly like `cn build` (validates, compiles, writes the
     // blobs + world-lock.json, reuses the build cache).
@@ -83,15 +86,25 @@ pub fn export(
     if cfg!(target_os = "macos") {
         export_macos(&meta, &runtime, out_dir, &data_dir, make_zip, dmg)
     } else {
-        export_portable(&meta, &runtime, out_dir, &data_dir, make_zip)
+        export_portable(
+            &meta,
+            &runtime,
+            runtime_platform.as_deref(),
+            out_dir,
+            &data_dir,
+            make_zip,
+        )
     }
 }
 
 // A folder bundle (Windows / Linux): the renamed player beside `data/`, then a
-// zip of that folder.
+// zip of that folder. `runtime_platform` is the player's stamped shader
+// platform (`hlsl`/`glsl`/`metal`, or None when unstamped), used to decide
+// which native sidecars belong beside it.
 fn export_portable(
     meta: &AppMeta,
     runtime: &Path,
+    runtime_platform: Option<&str>,
     out_dir: &Path,
     data_dir: &Path,
     make_zip: bool,
@@ -104,7 +117,7 @@ fn export_portable(
     let exe_dst = bundle_dir.join(&exe_name);
     fs::copy(runtime, &exe_dst)?;
     make_executable(&exe_dst)?;
-    copy_runtime_sidecars(runtime, &bundle_dir)?;
+    copy_runtime_sidecars(runtime, runtime_platform, &bundle_dir)?;
 
     let blobs = copy_blobs(data_dir, &bundle_dir.join("data"))?;
     report_export(&meta.display_name, &bundle_dir, blobs)?;
@@ -271,6 +284,100 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
                 path.display()
             ),
         ))
+    }
+}
+
+// The fixed prefix of the backend stamp baked into `concinnity-runtime` (see
+// its definition in that crate's main.rs); the shader-platform key follows it.
+const RUNTIME_PLATFORM_MARKER: &[u8] = b"cn-runtime-platform:";
+
+// Read the runtime player's stamped shader platform (`hlsl` / `glsl` / `metal`)
+// by scanning its binary for the backend marker. Returns None for an older,
+// unstamped runtime, warning once so the skipped backend check is visible.
+fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
+    let bytes = fs::read(runtime)?;
+    let found = find_platform_stamp(&bytes);
+    if found.is_none() {
+        eprintln!(
+            "warning: no backend stamp found in {}; skipping the runtime/cook \
+             backend check (rebuild `concinnity-runtime` to enable it)",
+            runtime.display()
+        );
+    }
+    Ok(found)
+}
+
+// Reject a runtime player built for a different rendering backend than the one
+// this `cn` cooks blobs for. `cn` and `concinnity-runtime` compile
+// independently, so a DX-built `cn` sitting beside a Vulkan-built runtime would
+// otherwise silently ship a SPIR-V player with DXBC blobs (or vice versa) that
+// fails to load every shader at launch. `found` is the player's stamped shader
+// platform (None for an unstamped runtime, already warned about); compare it to
+// ours.
+fn verify_runtime_backend(found: Option<&str>) -> io::Result<()> {
+    let expected = concinnity_core::build::asset::Platform::current().key();
+    match found {
+        // Unstamped runtime: cannot verify, so proceed rather than block a
+        // possibly-fine export (the missing-stamp warning already printed).
+        None => Ok(()),
+        Some(found) if found == expected => Ok(()),
+        Some(found) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "runtime/cook backend mismatch: this `cn` cooks {} blobs, but the \
+                 `concinnity-runtime` player beside it was built for {}. Rebuild the \
+                 runtime for the same backend (`cargo build -p concinnity-runtime{}`) \
+                 before exporting.",
+                backend_label(expected),
+                backend_label(found),
+                feature_hint(expected),
+            ),
+        )),
+    }
+}
+
+// Extract the shader-platform token from a runtime binary's backend stamp: the
+// lowercase-ASCII run immediately after the marker prefix. Returns None when
+// the marker is absent (an older, unstamped runtime).
+fn find_platform_stamp(bytes: &[u8]) -> Option<String> {
+    let start = find_subslice(bytes, RUNTIME_PLATFORM_MARKER)? + RUNTIME_PLATFORM_MARKER.len();
+    let rest = &bytes[start..];
+    let end = rest
+        .iter()
+        .position(|b| !b.is_ascii_lowercase())
+        .unwrap_or(rest.len());
+    let token = &rest[..end];
+    if token.is_empty() {
+        None
+    } else {
+        std::str::from_utf8(token).ok().map(str::to_string)
+    }
+}
+
+// Index of the first occurrence of `needle` in `haystack`, or None.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+// A human-facing label for a shader-platform key.
+fn backend_label(platform_key: &str) -> &str {
+    match platform_key {
+        "metal" => "Metal (metallib)",
+        "hlsl" => "DirectX (DXBC)",
+        "glsl" => "Vulkan (SPIR-V)",
+        other => other,
+    }
+}
+
+// The cargo feature flag that reproduces a given cook backend when rebuilding
+// the runtime: only the Vulkan (SPIR-V) backend is feature-gated.
+fn feature_hint(platform_key: &str) -> &str {
+    match platform_key {
+        "glsl" => " --features vulkan",
+        _ => "",
     }
 }
 
@@ -541,10 +648,21 @@ fn run_tool(program: &str, args: &[&str]) -> io::Result<()> {
 // exe, so the bundle carries everything the player needs to launch. On Windows
 // the graphics-SDK runtime DLLs (FidelityFX / XeSS / DLSS / DXC) sit beside the
 // built runtime binary, and the Agility SDK D3D12 runtime lives in a `D3D12/`
-// subdir that the exe's `D3D12SDKPath` export points at (`.\D3D12\`); copy both.
-// A strict no-op on macOS and Linux, where the runtime links only system
-// frameworks / libraries (no sibling `.dll`, no `D3D12/`).
-fn copy_runtime_sidecars(runtime: &Path, dest_dir: &Path) -> io::Result<()> {
+// subdir that the exe's `D3D12SDKPath` export points at (`.\D3D12\`). A strict
+// no-op on macOS and Linux, where the runtime links only system frameworks /
+// libraries (no sibling `.dll`, no `D3D12/`).
+//
+// `runtime_platform` is the player's stamped shader platform. The `D3D12/` dir
+// is meaningful only to a DirectX player -- its `D3D12SDKPath` export is gated
+// on the DX backend, so a Vulkan or Metal player never references it. It is
+// copied only for a DX (or unstamped, so unknown) runtime, keeping a Vulkan
+// bundle from carrying an inert Agility runtime when built in a target dir
+// shared with a DX build.
+fn copy_runtime_sidecars(
+    runtime: &Path,
+    runtime_platform: Option<&str>,
+    dest_dir: &Path,
+) -> io::Result<()> {
     let Some(src_dir) = runtime.parent() else {
         return Ok(());
     };
@@ -564,11 +682,22 @@ fn copy_runtime_sidecars(runtime: &Path, dest_dir: &Path) -> io::Result<()> {
         }
     }
     // The Agility SDK D3D12 runtime, resolved by the exe relative to itself.
-    let d3d12 = src_dir.join("D3D12");
-    if d3d12.is_dir() {
-        copy_tree(&d3d12, &dest_dir.join("D3D12"))?;
+    // Only a DX player looks for it (see above).
+    if runtime_wants_d3d12(runtime_platform) {
+        let d3d12 = src_dir.join("D3D12");
+        if d3d12.is_dir() {
+            copy_tree(&d3d12, &dest_dir.join("D3D12"))?;
+        }
     }
     Ok(())
+}
+
+// Whether a player with the given stamped platform references the `D3D12/`
+// Agility runtime: a DX player does, a Vulkan or Metal player never does, and an
+// unstamped (unknown) runtime is treated as maybe-DX so nothing it needs is
+// dropped.
+fn runtime_wants_d3d12(runtime_platform: Option<&str>) -> bool {
+    !matches!(runtime_platform, Some("glsl") | Some("metal"))
 }
 
 // Recursively copy the directory tree at `src` to `dst`.
@@ -772,7 +901,8 @@ mod tests {
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
-        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), &dest).unwrap();
+        // A DX runtime pulls in its sibling DLLs and the Agility `D3D12/` dir.
+        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), Some("hlsl"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
         assert!(dest.join("libconcinnity_editor.dll").exists());
@@ -780,6 +910,81 @@ mod tests {
         // Non-DLL siblings and the exe itself are not carried along.
         assert!(!dest.join("notes.txt").exists());
         assert!(!dest.join("concinnity-runtime.exe").exists());
+    }
+
+    #[test]
+    fn copy_runtime_sidecars_skips_d3d12_for_a_non_dx_runtime() {
+        // A Vulkan runtime built in a target dir shared with a DX build has a
+        // stale `D3D12/` sibling; it must not land in the Vulkan bundle (the VK
+        // exe never references it), though the sibling DLLs still copy.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("D3D12")).unwrap();
+        fs::write(src.join("concinnity-runtime.exe"), b"exe").unwrap();
+        fs::write(src.join("amd_fidelityfx_vk.dll"), b"x").unwrap();
+        fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
+
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), Some("glsl"), &dest).unwrap();
+
+        assert!(dest.join("amd_fidelityfx_vk.dll").exists());
+        assert!(!dest.join("D3D12").exists());
+    }
+
+    #[test]
+    fn runtime_wants_d3d12_only_for_dx_or_unknown() {
+        assert!(runtime_wants_d3d12(Some("hlsl")));
+        // Unstamped: keep everything the runtime may need.
+        assert!(runtime_wants_d3d12(None));
+        assert!(!runtime_wants_d3d12(Some("glsl")));
+        assert!(!runtime_wants_d3d12(Some("metal")));
+    }
+
+    #[test]
+    fn find_platform_stamp_reads_the_token_after_the_marker() {
+        // Surround the stamp with binary noise, as it would appear in a real
+        // executable, and terminate it with the stamp's NUL.
+        let mut buf = vec![0xAAu8, 0x00, 0xFF, b'x'];
+        buf.extend_from_slice(b"cn-runtime-platform:hlsl\0");
+        buf.extend_from_slice(&[0x01, 0x02, 0x03]);
+        assert_eq!(find_platform_stamp(&buf).as_deref(), Some("hlsl"));
+
+        // Each backend token is recovered verbatim.
+        for token in ["metal", "hlsl", "glsl"] {
+            let stamp = format!("cn-runtime-platform:{token}\0");
+            assert_eq!(
+                find_platform_stamp(stamp.as_bytes()).as_deref(),
+                Some(token)
+            );
+        }
+    }
+
+    #[test]
+    fn find_platform_stamp_is_none_without_the_marker() {
+        assert_eq!(find_platform_stamp(b"no stamp here"), None);
+        assert_eq!(find_platform_stamp(b""), None);
+        // Marker present but immediately terminated: no token.
+        assert_eq!(find_platform_stamp(b"cn-runtime-platform:\0"), None);
+    }
+
+    #[test]
+    fn find_subslice_locates_and_reports_absence() {
+        assert_eq!(find_subslice(b"abcdef", b"cd"), Some(2));
+        assert_eq!(find_subslice(b"abcdef", b"abc"), Some(0));
+        assert_eq!(find_subslice(b"abcdef", b"xy"), None);
+        assert_eq!(find_subslice(b"ab", b"abc"), None);
+        assert_eq!(find_subslice(b"abc", b""), None);
+    }
+
+    #[test]
+    fn backend_label_and_feature_hint_cover_each_platform() {
+        assert_eq!(backend_label("metal"), "Metal (metallib)");
+        assert_eq!(backend_label("hlsl"), "DirectX (DXBC)");
+        assert_eq!(backend_label("glsl"), "Vulkan (SPIR-V)");
+        assert_eq!(feature_hint("glsl"), " --features vulkan");
+        assert_eq!(feature_hint("hlsl"), "");
+        assert_eq!(feature_hint("metal"), "");
     }
 
     #[test]
@@ -793,7 +998,7 @@ mod tests {
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
-        copy_runtime_sidecars(&src.join("concinnity-runtime"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-runtime"), Some("metal"), &dest).unwrap();
         assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
 }
