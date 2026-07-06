@@ -81,6 +81,20 @@ pub struct Animation {
     /// `weight` over this many seconds after the world starts. Zero (the
     /// default) plays the clip at full `weight` from the first frame.
     pub fade_in_secs: f32,
+    /// When true, the build strips the root joint's travel out of the pose
+    /// and bakes it into `root_track`: the pose stays anchored in place and
+    /// the runtime moves the character by the curve's frame-to-frame delta
+    /// instead (the [SkinnedMesh](#skinnedmesh) `capsule` is the usual
+    /// consumer). X and Z travel is always stripped; Y only with
+    /// `root_motion_y`.
+    pub root_motion: bool,
+    /// Also strip the root joint's vertical travel into `root_track`. Leave
+    /// false (the default) so jumps and crouches stay authored in the pose.
+    pub root_motion_y: bool,
+    /// The displacement curve baked out of the root joint by the build when
+    /// `root_motion` is set. Filled by the build; not usually authored by
+    /// hand.
+    pub root_track: Vec<crate::gfx::root_motion::RootKey>,
     /// Per-joint keyframe channels.
     pub tracks: Vec<AnimationTrack>,
 }
@@ -97,6 +111,9 @@ impl Default for Animation {
             looping: true,
             weight: 1.0,
             fade_in_secs: 0.0,
+            root_motion: false,
+            root_motion_y: false,
+            root_track: Vec::new(),
             tracks: Vec::new(),
         }
     }
@@ -124,6 +141,33 @@ impl Animation {
                         .collect(),
                 })
                 .collect(),
+            root: (!self.root_track.is_empty()).then(|| crate::gfx::root_motion::RootTrack {
+                keys: self.root_track.clone(),
+            }),
+        }
+    }
+
+    /// Strip the root joint's travel out of `tracks` and bake it into
+    /// `root_track`, per the `root_motion` / `root_motion_y` flags. The build
+    /// runs this once after any glTF import (a non-empty `root_track` marks
+    /// the strip as already done, so re-running a build pass is a no-op).
+    /// The root joint is joint 0 (skeletons are parents-before-children); a
+    /// clip with no track on it gains an empty curve and a warning upstream.
+    pub fn bake_root_motion(&mut self) {
+        if !self.root_motion || !self.root_track.is_empty() {
+            return;
+        }
+        let Some(track) = self.tracks.iter_mut().find(|t| t.joint == 0) else {
+            return;
+        };
+        let strip_y = self.root_motion_y;
+        for key in &mut track.keyframes {
+            let t = key.pose.translation;
+            self.root_track.push(crate::gfx::root_motion::RootKey {
+                time: key.time,
+                translation: [t[0], if strip_y { t[1] } else { 0.0 }, t[2]],
+            });
+            key.pose.translation = [0.0, if strip_y { 0.0 } else { t[1] }, 0.0];
         }
     }
 }
@@ -223,5 +267,62 @@ mod tests {
         };
         let clip = a.to_clip();
         assert!(clip.duration >= 1e-3);
+    }
+
+    // A 1s clip whose root (joint 0) walks +2 X while bobbing 1.0 -> 1.2 Y.
+    fn walking_clip() -> Animation {
+        serde_json::from_value(serde_json::json!({
+            "target": "hero",
+            "duration": 1.0,
+            "root_motion": true,
+            "tracks": [{"joint": 0, "keyframes": [
+                {"time": 0.0, "translation": [0.0, 1.0, 0.0]},
+                {"time": 1.0, "translation": [2.0, 1.2, 0.0]}
+            ]}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn bake_root_motion_strips_xz_and_keeps_y_in_the_pose() {
+        let mut a = walking_clip();
+        a.bake_root_motion();
+        assert_eq!(a.root_track.len(), 2);
+        assert_eq!(a.root_track[1].translation, [2.0, 0.0, 0.0]);
+        // The pose keeps the vertical bob but stays anchored horizontally.
+        assert_eq!(a.tracks[0].keyframes[1].pose.translation, [0.0, 1.2, 0.0]);
+        let clip = a.to_clip();
+        assert!(clip.root.is_some());
+    }
+
+    #[test]
+    fn bake_root_motion_y_moves_vertical_travel_too() {
+        let mut a = walking_clip();
+        a.root_motion_y = true;
+        a.bake_root_motion();
+        assert_eq!(a.root_track[1].translation, [2.0, 1.2, 0.0]);
+        assert_eq!(a.tracks[0].keyframes[1].pose.translation, [0.0; 3]);
+    }
+
+    #[test]
+    fn bake_root_motion_respects_flag_and_prior_bake() {
+        let mut plain = walking_clip();
+        plain.root_motion = false;
+        plain.bake_root_motion();
+        assert!(plain.root_track.is_empty());
+        assert_eq!(
+            plain.tracks[0].keyframes[1].pose.translation,
+            [2.0, 1.2, 0.0]
+        );
+
+        let mut baked = walking_clip();
+        baked.bake_root_motion();
+        let track = baked.root_track.clone();
+        baked.bake_root_motion();
+        assert_eq!(
+            baked.root_track.len(),
+            track.len(),
+            "second bake is a no-op"
+        );
     }
 }

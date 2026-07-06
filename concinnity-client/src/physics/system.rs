@@ -55,6 +55,10 @@ pub struct PhysicsSystem {
     world: Option<PhysicsWorld>,
     // The player capsule, when the world has a Camera3D + RigidBody.
     player: Option<PlayerPhysics>,
+    // One capsule per root-motion character rig (see `super::rig`).
+    rigs: Vec<super::rig::RigPhysics>,
+    // Reader cursor over the `RootMotion` event queue.
+    root_cursor: crate::ecs::EventCursor,
     // One entry per Prop that carries a collider.
     prop_bodies: Vec<PropPhysics>,
     // Index into `prop_bodies` of the prop currently being carried.
@@ -131,6 +135,8 @@ impl PhysicsSystem {
             terrain_offset_y: config.terrain_offset_y,
             world: None,
             player: None,
+            rigs: Vec::new(),
+            root_cursor: crate::ecs::EventCursor::default(),
             prop_bodies: Vec::new(),
             held: None,
         }
@@ -382,6 +388,10 @@ impl System for PhysicsSystem {
             );
         }
 
+        // Kinematic capsules for the root-motion character rigs published by
+        // GraphicsSystem (which ran init first this tick).
+        self.rigs = super::rig::init_rigs(&mut world, ctx);
+
         self.world = Some(world);
     }
 
@@ -551,6 +561,16 @@ impl System for PhysicsSystem {
                 new_center[2],
             ];
         }
+
+        // move the root-motion character rig capsules
+        super::rig::step_rigs(
+            world,
+            ctx,
+            &mut self.rigs,
+            &mut self.root_cursor,
+            dt,
+            GRAVITY,
+        );
 
         // advance the simulation
         world.step(dt);

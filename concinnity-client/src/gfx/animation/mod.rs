@@ -15,6 +15,7 @@
 mod commands;
 mod flat;
 mod graph;
+mod root;
 #[cfg(test)]
 mod tests;
 
@@ -325,11 +326,35 @@ impl System for AnimationSystem {
 
         // Advance each bucket's driver before sampling: flat buckets move
         // their weight transitions, graph buckets sync `AnimParams` and step
-        // their cursor.
+        // their cursor. Each advance also yields the frame's root-motion
+        // displacement (mesh-local), published as one `RootMotion` event per
+        // target that actually moved; the rig drive in PhysicsSystem
+        // consumes them next frame.
         for (target, state) in &mut self.targets {
-            match &mut state.mode {
-                TargetMode::Flat(flat) => flat::advance_weights(flat, t),
-                TargetMode::Graph(g) => graph::step_target(g, *target, ctx, dt),
+            let TargetState { clips, mode } = state;
+            let delta = match mode {
+                TargetMode::Flat(flat) => {
+                    flat::advance_weights(flat, t);
+                    root::flat_root_delta(clips, &flat.current_weights, t - dt, t)
+                }
+                TargetMode::Graph(g) => {
+                    let before = g.cursor.clone();
+                    graph::step_target(g, *target, ctx, dt);
+                    crate::gfx::anim_graph::cursor_root_delta(
+                        &g.graph,
+                        &before,
+                        &g.cursor,
+                        &g.params,
+                        &|i| &clips[i].clip,
+                    )
+                }
+            };
+            if delta != [0.0; 3] {
+                ctx.events_mut::<crate::assets::RootMotion>()
+                    .send(crate::assets::RootMotion {
+                        target: *target,
+                        delta,
+                    });
             }
         }
 

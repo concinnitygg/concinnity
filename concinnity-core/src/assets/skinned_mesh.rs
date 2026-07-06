@@ -153,9 +153,36 @@ pub struct SkinnedMesh {
     /// despawn returns it to the pool. Spawns past the reserve are dropped (a
     /// warning is logged). Capped at 4096.
     pub max_instances: u32,
+    /// Optional character capsule. When set, the mesh collides with the
+    /// scene as a kinematic character and is moved by the root motion of its
+    /// [Animation](#animation) clips (those with `root_motion` set): the
+    /// capsule slides along obstacles and settles under gravity, and the
+    /// rendered mesh follows it. The capsule stands on the mesh origin (its
+    /// feet), centred `half_height + radius` above it.
+    pub capsule: Option<CharacterCapsule>,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
+}
+
+/// A kinematic character capsule for a [SkinnedMesh](#skinnedmesh), in world
+/// units (after the mesh's `scale`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct CharacterCapsule {
+    /// Half-height of the capsule's cylindrical section.
+    pub half_height: f32,
+    /// Capsule radius.
+    pub radius: f32,
+}
+
+impl Default for CharacterCapsule {
+    fn default() -> Self {
+        Self {
+            half_height: 0.5,
+            radius: 0.3,
+        }
+    }
 }
 
 impl SkinnedMesh {

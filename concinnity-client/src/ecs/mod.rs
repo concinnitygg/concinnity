@@ -441,7 +441,13 @@ impl World {
             .next()
             .is_some()
             || self.query::<crate::assets::RigidBody>().next().is_some()
-            || self.query::<crate::assets::PropBody>().next().is_some();
+            || self.query::<crate::assets::PropBody>().next().is_some()
+            // A skinned mesh with a character capsule needs the rig drive
+            // (the CharacterRig itself is published later, by GraphicsSystem
+            // init, so gate on the authored asset).
+            || self
+                .query::<crate::assets::SkinnedMesh>()
+                .any(|sm| sm.capsule.is_some());
         if !needs {
             return None;
         }

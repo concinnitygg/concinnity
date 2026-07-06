@@ -9,11 +9,13 @@
 // `blend`, pose sampling in `sample`.
 
 mod blend;
+mod root;
 mod sample;
 #[cfg(test)]
 mod tests;
 
 pub use blend::{Blend1D, Blend2D, ClipPlay, StatePlay, blend1d_weights, blend2d_weights};
+pub use root::{cursor_root_delta, state_root_delta};
 pub use sample::sample_graph_pose;
 
 /// Comparison operator for a transition condition, evaluated as

@@ -9,6 +9,8 @@
 // init from the world's Props / bodies and steps it every frame.
 
 mod convert;
+// Root-motion character rigs: one kinematic capsule per `CharacterRig`.
+mod rig;
 // The internal physics system that builds and steps the simulation from the
 // world's bodies, driven by an optional `PhysicsConfig`.
 pub(crate) mod system;

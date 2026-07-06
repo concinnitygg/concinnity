@@ -831,6 +831,16 @@ impl GraphicsSystem {
                     {
                         backend.update_skinned_model(pose.skinned_index, transform.model_matrix());
                     }
+                    // Move rig-driven meshes to their capsule's resolved
+                    // position (PhysicsSystem wrote it on the previous tick;
+                    // `moved` persists across a menu pause, so no motion is
+                    // lost while uploads are skipped).
+                    for rig in ctx.query_mut::<crate::assets::CharacterRig>() {
+                        if rig.moved {
+                            backend.update_skinned_model(rig.skinned_index, rig.model());
+                            rig.moved = false;
+                        }
+                    }
                 }
 
                 // apply any imperative scene jumps sent by UiInputSystem this

@@ -459,6 +459,11 @@ pub struct AnimationClip {
     // When true, sampling past `duration` wraps; otherwise it holds the end.
     pub looping: bool,
     pub tracks: Vec<JointTrack>,
+    // The character-displacement curve stripped from the root joint at build
+    // time, when the clip opted into root motion. The pose tracks above keep
+    // the root anchored; the runtime turns this curve's frame delta into
+    // character movement instead.
+    pub root: Option<crate::gfx::root_motion::RootTrack>,
 }
 
 impl AnimationClip {
@@ -637,6 +642,7 @@ mod tests {
     fn clip_sampling_interpolates_between_keys() {
         let sk = chain();
         let clip = AnimationClip {
+            root: None,
             duration: 2.0,
             looping: true,
             tracks: vec![JointTrack {
@@ -671,6 +677,7 @@ mod tests {
     fn looping_clip_wraps_past_duration() {
         let sk = chain();
         let clip = AnimationClip {
+            root: None,
             duration: 2.0,
             looping: true,
             tracks: vec![JointTrack {

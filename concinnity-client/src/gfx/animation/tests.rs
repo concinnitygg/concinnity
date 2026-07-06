@@ -264,6 +264,106 @@ fn mode_mismatched_commands_are_rejected() {
     });
 }
 
+// A clip with a baked root track publishes per-frame `RootMotion` events
+// carrying the mesh-local displacement; clips without one stay silent.
+#[test]
+fn root_motion_clip_publishes_displacement_events() {
+    let target = intern("hero_rm");
+    let mut world = World::new_empty();
+    let mut a: Animation = serde_json::from_value(serde_json::json!({
+        "target": "hero_rm",
+        "duration": 1.0,
+        "looping": true,
+        "root_motion": true,
+        "root_track": [
+            {"time": 0.0, "translation": [0.0, 0.0, 0.0]},
+            {"time": 1.0, "translation": [2.0, 0.0, 0.0]}
+        ],
+    }))
+    .unwrap();
+    a.asset_id = intern("hero_rm_walk");
+    world.add_component(a);
+    world.start().unwrap();
+
+    world.step();
+    std::thread::sleep(Duration::from_millis(5));
+    world.step();
+
+    let events = world
+        .resource::<crate::ecs::Events<crate::assets::RootMotion>>()
+        .expect("RootMotion queue exists");
+    let mut cursor = crate::ecs::EventCursor::default();
+    let motions = events.read(&mut cursor);
+    assert!(!motions.is_empty(), "expected displacement events");
+    let total: f32 = motions
+        .iter()
+        .filter(|m| m.target == target)
+        .map(|m| m.delta[0])
+        .sum();
+    assert!(total > 0.0, "walk moves +X: {total}");
+    assert!(
+        motions
+            .iter()
+            .all(|m| m.delta[1] == 0.0 && m.delta[2] == 0.0)
+    );
+}
+
+// The full rig chain: a skinned mesh with a capsule + a root-motion clip
+// moves its CharacterRig through PhysicsSystem, staying grounded.
+#[test]
+fn rig_capsule_follows_root_motion() {
+    let target = intern("hero_rig");
+    let mut world = World::new_empty();
+    let mut a: Animation = serde_json::from_value(serde_json::json!({
+        "target": "hero_rig",
+        "duration": 1.0,
+        "looping": true,
+        "root_motion": true,
+        "root_track": [
+            {"time": 0.0, "translation": [0.0, 0.0, 0.0]},
+            {"time": 1.0, "translation": [2.0, 0.0, 0.0]}
+        ],
+    }))
+    .unwrap();
+    a.asset_id = intern("hero_rig_walk");
+    world.add_component(a);
+    world.add_component(crate::assets::PhysicsConfig::default());
+    // GraphicsSystem publishes rigs in a rendering world; this headless test
+    // seeds one directly before start so PhysicsSystem::init sees it.
+    world.add_component(crate::assets::CharacterRig::new(
+        target,
+        0,
+        crate::gfx::skinning::IDENTITY,
+        0.5,
+        0.3,
+    ));
+    world.start().unwrap();
+
+    for _ in 0..4 {
+        world.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let rig = world
+        .query::<crate::assets::CharacterRig>()
+        .next()
+        .expect("rig survives");
+    assert!(
+        rig.position[0] > 0.0,
+        "capsule advanced along the walk: {:?}",
+        rig.position
+    );
+    assert!(
+        rig.moved,
+        "render follow flag set (no GraphicsSystem to clear it)"
+    );
+    assert!(
+        rig.position[1] > -0.2,
+        "flat floor holds the capsule up: {:?}",
+        rig.position
+    );
+}
+
 // While a menu is open the animation step returns early, so graph clocks and
 // transitions freeze with the pose.
 #[test]

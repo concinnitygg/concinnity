@@ -18,6 +18,7 @@ mod audio_emitter;
 mod block_type;
 mod camera3d;
 mod camera_shot;
+mod character_rig;
 mod color_lut;
 mod controls_command;
 mod cubemap_texture;
@@ -58,6 +59,7 @@ mod reflection_probe;
 mod reparent_request;
 mod rigid_body;
 mod room;
+mod root_motion_event;
 mod scene;
 mod scene_command;
 mod scene_import;
@@ -121,6 +123,7 @@ pub use audio_emitter::AudioEmitter;
 pub use block_type::BlockType;
 pub use camera_shot::CameraShot;
 pub use camera3d::{Camera3D, CameraController};
+pub use character_rig::CharacterRig;
 pub use color_lut::ColorLut;
 pub use controls_command::ControlsCommand;
 pub use cubemap_texture::CubemapTexture;
@@ -170,6 +173,7 @@ pub use post_process_config::UpscalerBackend;
 pub use prefab::Prefab;
 pub use procedural_mesh::ProceduralMesh;
 pub use prop::Prop;
+pub use root_motion_event::RootMotion;
 // `PropCollider` is re-exported for tests / future consumers; the crate
 // currently only uses it through `Prop.collider`, so the re-export is unused
 // at compile time outside of the test module.
@@ -194,7 +198,9 @@ pub use setting_command::{SettingCommand, SettingOp};
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
 pub use shader_stage::{ShaderKind, ShaderStage};
 pub use skeleton_pose::SkeletonPose;
-pub use skinned_mesh::{JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs};
+pub use skinned_mesh::{
+    CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs,
+};
 pub use slider::Slider;
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;

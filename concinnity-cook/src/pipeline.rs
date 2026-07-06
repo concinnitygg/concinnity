@@ -166,6 +166,7 @@ pub fn build_compiled(
     desugar_gltf_meshes(&mut assets, &gltf_cache)?;
     desugar_fbx_meshes(&mut assets, &gltf_cache)?;
     desugar_gltf_animations(&mut assets)?;
+    desugar_root_motion(&mut assets)?;
 
     // Intern every asset name to a dense AssetId in declaration order, then
     // resolve the scene-by-naming-convention references that the runtime can
@@ -769,6 +770,64 @@ fn desugar_gltf_animations(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()
     Ok(())
 }
 
+// Bake root motion on every Animation that opted in: strip the root joint's
+// travel out of the pose tracks into the asset's `root_track` (see
+// `Animation::bake_root_motion`). Runs after the glTF pass so imported
+// tracks are already inline; an Animation without `root_motion` is
+// untouched. A root-motion clip whose root joint has no track produces an
+// empty curve, which would silently never move a character, so it warns.
+fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
+    use crate::assets::Animation;
+    use crate::ecs::Component;
+
+    for asset in assets.iter_mut() {
+        if asset.asset_type != Animation::NAME
+            || asset.args.get("root_motion").and_then(|v| v.as_bool()) != Some(true)
+        {
+            continue;
+        }
+        let mut anim: Animation = serde_json::from_value(asset.args.clone()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Asset '{}': root-motion bake failed to parse args: {}",
+                    asset.name, e
+                ),
+            )
+        })?;
+        anim.bake_root_motion();
+        if anim.root_track.is_empty() {
+            tracing::warn!(
+                "Asset '{}': root_motion is set but the clip has no track on the root \
+                 joint; the character will not move",
+                asset.name
+            );
+        }
+        let name = asset.name.clone();
+        let obj = asset.args.as_object_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Asset '{}': args is not a JSON object", name),
+            )
+        })?;
+        obj.insert(
+            "tracks".to_string(),
+            serde_json::to_value(&anim.tracks).expect("serialize animation tracks"),
+        );
+        obj.insert(
+            "root_track".to_string(),
+            serde_json::to_value(&anim.root_track).expect("serialize root track"),
+        );
+        tracing::info!(
+            "Asset '{}': baked root motion ({} key(s){})",
+            asset.name,
+            anim.root_track.len(),
+            if anim.root_motion_y { ", incl. Y" } else { "" },
+        );
+    }
+    Ok(())
+}
+
 // Validate world JSONL without running compilation. Runs the full front half
 // of the pipeline (load, expand, semantic checks) plus a per-asset type/args
 // resolution, but stops short of compiling payloads: intended for fast
@@ -1274,6 +1333,54 @@ mod tests {
         }];
         desugar_gltf_animations(&mut assets).expect("desugar succeeds");
         assert_eq!(assets[0].args, original);
+    }
+
+    // Opting into root motion strips the root joint's X/Z travel into
+    // `root_track` and anchors the pose; a clip without the flag is
+    // untouched, and a second pass over already-baked args is a no-op.
+    #[test]
+    fn desugar_root_motion_bakes_the_root_track() {
+        let walk = serde_json::json!({
+            "target": "hero",
+            "duration": 1.0,
+            "root_motion": true,
+            "tracks": [{"joint": 0, "keyframes": [
+                {"time": 0.0, "translation": [0.0, 1.0, 0.0]},
+                {"time": 1.0, "translation": [2.0, 1.0, 0.0]}
+            ]}],
+        });
+        let plain = serde_json::json!({
+            "target": "hero",
+            "duration": 1.0,
+            "tracks": [{"joint": 0, "keyframes": [
+                {"time": 1.0, "translation": [2.0, 1.0, 0.0]}
+            ]}],
+        });
+        let mut assets = vec![
+            crate::world::WorldJsonlAsset {
+                name: "walk".to_string(),
+                asset_type: "Animation".to_string(),
+                args: walk,
+            },
+            crate::world::WorldJsonlAsset {
+                name: "plain".to_string(),
+                asset_type: "Animation".to_string(),
+                args: plain.clone(),
+            },
+        ];
+        desugar_root_motion(&mut assets).expect("desugar succeeds");
+
+        let baked = &assets[0].args;
+        assert_eq!(baked["root_track"][1]["translation"][0], 2.0);
+        assert_eq!(baked["root_track"][1]["translation"][1], 0.0);
+        // The pose keeps Y but stays anchored on X.
+        assert_eq!(baked["tracks"][0]["keyframes"][1]["translation"][0], 0.0);
+        assert_eq!(baked["tracks"][0]["keyframes"][1]["translation"][1], 1.0);
+        assert_eq!(assets[1].args, plain, "flag-less clip untouched");
+
+        let after_first = assets[0].args.clone();
+        desugar_root_motion(&mut assets).expect("second pass succeeds");
+        assert_eq!(assets[0].args, after_first, "re-bake is a no-op");
     }
 
     #[test]

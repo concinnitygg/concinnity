@@ -199,6 +199,7 @@ fn pose_fixture(xs: &[f32]) -> (Skeleton, Vec<AnimationClip>) {
     let clips = xs
         .iter()
         .map(|&x| AnimationClip {
+            root: None,
             duration: 1.0,
             looping: true,
             tracks: vec![JointTrack {
@@ -355,6 +356,7 @@ fn synced_members_sample_at_shared_phase() {
         bind: JointPose::default(),
     }]);
     let ramp = |duration: f32| AnimationClip {
+        root: None,
         duration,
         looping: true,
         tracks: vec![JointTrack {
