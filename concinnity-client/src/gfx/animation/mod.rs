@@ -163,14 +163,12 @@ impl AnimationSystem {
         };
         slot.clip = clip;
         slot.declared_weight = weight;
-        // A graph compiled this clip's duration into any state playing it;
-        // keep those in sync so wrap / exit-time math tracks the new clip.
-        // The compiled loop mode is left as resolved at compile time.
+        // A graph compiled this clip's duration into any member playing it;
+        // keep those in sync so wrap / phase / exit-time math tracks the new
+        // clip. The compiled loop mode is left as resolved at compile time.
         if let TargetMode::Graph(g) = &mut bucket.mode {
             let duration = bucket.clips[clip_index].clip.duration;
-            for state in g.graph.states.iter_mut().filter(|s| s.clip == clip_index) {
-                state.duration_secs = duration;
-            }
+            g.graph.refresh_clip_duration(clip_index, duration);
         }
         true
     }
@@ -362,6 +360,7 @@ impl System for AnimationSystem {
                 TargetMode::Graph(g) => crate::gfx::anim_graph::sample_graph_pose(
                     &g.graph,
                     &g.cursor,
+                    &g.params,
                     |i| &state.clips[i].clip,
                     &pose.skeleton,
                 ),

@@ -108,7 +108,9 @@ mod debug_hud;
 mod fps_counter;
 mod stat_hud;
 
-pub use anim_graph::{AnimGraph, GraphCondition, GraphParam, GraphState, GraphTransition};
+pub use anim_graph::{
+    AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphParam, GraphState, GraphTransition,
+};
 pub use anim_params::AnimParams;
 pub use animation::Animation;
 pub use application::Application;

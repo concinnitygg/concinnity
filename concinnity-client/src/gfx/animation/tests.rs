@@ -133,6 +133,59 @@ fn graph_init_seeds_params_and_initial_state() {
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "idle");
     assert_eq!(report.params, vec![("speed".to_string(), 0.0)]);
+    assert!(
+        report.blend_weights.is_none(),
+        "single-clip states report no blend weights"
+    );
+}
+
+// A blendspace state's reported member weights track the parameter: parked
+// on the first point at default, split across the bracketing pair mid-range.
+#[test]
+fn blendspace_weights_follow_the_parameter() {
+    let target = intern("hero_blend");
+    let mut world = World::new_empty();
+    for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
+        let mut a = clip(name, duration);
+        a.target = Some(target);
+        world.add_component(a);
+    }
+    let mut g: AnimGraph = serde_json::from_value(serde_json::json!({
+        "target": "hero_blend",
+        "parameters": [{"name": "speed", "default": 0.0}],
+        "states": [
+            {"name": "locomotion", "blend": {"kind": "blend1d", "parameter": "speed",
+             "sync": true,
+             "points": [
+                 {"value": 0.0, "clip": "bl_idle"},
+                 {"value": 1.6, "clip": "bl_walk"},
+                 {"value": 5.0, "clip": "bl_run"}
+             ]}}
+        ]
+    }))
+    .unwrap();
+    g.asset_id = intern("hero_blend_graph");
+    world.add_component(g);
+    world.start().unwrap();
+    world.step();
+
+    let report = with_anim(&mut world, |anim| anim.graph_report(target).unwrap());
+    assert_eq!(report.state, "locomotion");
+    assert_eq!(report.blend_weights, Some(vec![1.0, 0.0, 0.0]));
+
+    // Half-way between the walk (1.6) and run (5.0) points.
+    with_anim(&mut world, |anim| {
+        anim.queue_param(target, "speed", 3.3).unwrap();
+    });
+    world.step();
+    let w = with_anim(&mut world, |anim| anim.graph_report(target).unwrap())
+        .blend_weights
+        .unwrap();
+    assert_eq!(w[0], 0.0);
+    assert!(
+        (w[1] - 0.5).abs() < 1e-4 && (w[2] - 0.5).abs() < 1e-4,
+        "{w:?}"
+    );
 }
 
 // Writing the `AnimParams` component (the gameplay surface) drives a

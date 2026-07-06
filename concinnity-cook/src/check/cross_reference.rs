@@ -231,7 +231,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             ));
         }
 
-        let mut referenced: HashSet<&str> = HashSet::new();
+        let mut referenced: HashSet<String> = HashSet::new();
         for state in graph
             .args
             .get("states")
@@ -239,19 +239,19 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             .map(|a| a.as_slice())
             .unwrap_or(&[])
         {
-            let clip = state.get("clip").and_then(|v| v.as_str()).unwrap_or("");
-            if clip.is_empty() {
-                continue; // missing clip already reported by cross_refs
-            }
-            referenced.insert(clip);
-            if let Some(&clip_target) = clip_targets.get(clip)
-                && clip_target != mesh
-            {
-                errors.push(format!(
-                    "AnimGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
-                     target '{}'",
-                    graph.name, clip, clip_target, mesh
-                ));
+            // Single-clip and blendspace members alike; a state naming no
+            // clips at all is already reported by cross_refs.
+            for clip in crate::assets::AnimGraph::state_clip_names(state) {
+                if let Some(&clip_target) = clip_targets.get(clip.as_str())
+                    && clip_target != mesh
+                {
+                    errors.push(format!(
+                        "AnimGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
+                         target '{}'",
+                        graph.name, clip, clip_target, mesh
+                    ));
+                }
+                referenced.insert(clip);
             }
         }
 
@@ -903,6 +903,27 @@ mod tests {
             }),
         ));
         assert!(err_text(&assets).contains("at most one graph"));
+    }
+
+    #[test]
+    fn blend_members_count_as_referenced_clips() {
+        let mut assets = graph_world();
+        assets[3].args["states"] = serde_json::json!([
+            {"name": "locomotion", "blend": {"kind": "blend1d", "parameter": "speed",
+             "points": [
+                 {"value": 0.0, "clip": "idle"},
+                 {"value": 5.0, "clip": "run"}
+             ]}}
+        ]);
+        assets[3].args["parameters"] = serde_json::json!([{"name": "speed"}]);
+        assert!(validate_cross_references(&assets).is_ok());
+
+        // A blend member resolving to a ghost clip still fails.
+        assets[3].args["states"][0]["blend"]["points"][1]["clip"] = serde_json::json!("ghost_clip");
+        let errs = err_text(&assets);
+        assert!(errs.contains("ghost_clip"));
+        // And the displaced 'run' clip is now unreferenced.
+        assert!(errs.contains("no graph state references it"));
     }
 
     #[test]

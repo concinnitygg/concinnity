@@ -22,6 +22,7 @@ A state with no outgoing transitions (or none passing) keeps playing;
 looping states wrap, non-looping states hold their final pose.
 
 ```jsonl
+// Two single-clip states:
 {"name":"hero_graph","type":"AnimGraph","args":{
   "target":"hero",
   "parameters":[{"name":"speed","default":0.0}],
@@ -35,6 +36,19 @@ looping states wrap, non-looping states hold their final pose.
      "conditions":[{"parameter":"speed","op":"gt","value":0.5}]},
     {"from":"run","to":"idle","duration_secs":0.3,
      "conditions":[{"parameter":"speed","op":"le","value":0.5}]}
+  ]
+}}
+// One locomotion blendspace state mixing idle/walk/run by speed:
+{"name":"hero_graph","type":"AnimGraph","args":{
+  "target":"hero",
+  "parameters":[{"name":"speed","default":0.0}],
+  "states":[
+    {"name":"locomotion","blend":{"kind":"blend1d","parameter":"speed","sync":true,
+     "points":[
+       {"value":0.0,"clip":"hero_idle"},
+       {"value":1.6,"clip":"hero_walk"},
+       {"value":5.0,"clip":"hero_run"}
+     ]}}
   ]
 }}
 ```

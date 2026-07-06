@@ -118,11 +118,16 @@ impl AnimationSystem {
         let g = self.graph_target_mut(&target, "anim-state")?;
         let state = &g.graph.states[g.cursor.state];
         let fade = g.cursor.fade.as_ref();
+        let weights = state.play.weights(&g.params);
+        let effective_duration = state.play.effective_duration(&weights);
         Ok(GraphStateReport {
             state: state.name.clone(),
-            clock_secs: normalized_time(state, g.cursor.clock_secs) * state.duration_secs,
+            clock_secs: normalized_time(state, g.cursor.clock, &g.params) * effective_duration,
             fading_from: fade.map(|f| g.graph.states[f.from_state].name.clone()),
             fade_progress: fade.map(|f| f.progress()),
+            // Only meaningful for blendspace states; a single clip is
+            // always [1.0], reported as None to keep the JSON quiet.
+            blend_weights: (weights.len() > 1).then_some(weights),
             params: g
                 .graph
                 .params

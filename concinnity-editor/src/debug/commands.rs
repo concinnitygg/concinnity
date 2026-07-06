@@ -316,6 +316,7 @@ pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
                 "clock_secs": report.clock_secs,
                 "fading_from": report.fading_from,
                 "fade_progress": report.fade_progress,
+                "blend_weights": report.blend_weights,
                 "params": params,
             })
             .to_string()

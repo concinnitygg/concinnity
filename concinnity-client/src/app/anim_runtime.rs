@@ -20,6 +20,9 @@ use crate::ecs::asset_id::AssetId;
 // command applies to; `weights` must match the clip count registered for
 // that target. `duration_secs == 0` snaps to the new weights on the next
 // frame. Rejected when the target is graph-driven (use `SetParam`).
+//
+// `dead_code` allow: the only constructor is the binary-only debug module,
+// so `cargo check --lib` sees the struct as unconstructed.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct CrossfadeRequest {
@@ -31,6 +34,8 @@ pub struct CrossfadeRequest {
 // One queued graph parameter write. `target` is the `SkinnedMesh` whose
 // graph declares the parameter; the value lands in the target's `AnimParams`
 // component on the next animation step.
+//
+// `dead_code` allow: same rationale as `CrossfadeRequest` above.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct SetParamRequest {
@@ -48,6 +53,9 @@ pub struct GraphStateReport {
     pub clock_secs: f32,
     pub fading_from: Option<String>,
     pub fade_progress: Option<f32>,
+    // One weight per blendspace member (point / grid order); None when the
+    // active state plays a single clip.
+    pub blend_weights: Option<Vec<f32>>,
     pub params: Vec<(String, f32)>,
 }
 

@@ -4,7 +4,8 @@ use crate::check::cross_reference::{CrossRef, CrossReferenced, RefKind};
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
 use crate::ecs::{AssetOrigin, Component};
 use crate::gfx::anim_graph::{
-    CmpOp, CompiledCondition, CompiledGraph, CompiledState, CompiledTransition, ParamSpec,
+    Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
+    CompiledTransition, ParamSpec, StatePlay,
 };
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
@@ -19,21 +20,80 @@ pub struct GraphParam {
     pub default: f32,
 }
 
-/// One state of the graph: a single [Animation](#animation) clip played on a
-/// loop (or once) while the state is active.
+/// One member of a 1D blendspace: a clip pinned at a parameter `value`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GraphBlendPoint {
+    /// Parameter value at which this clip plays alone.
+    pub value: f32,
+    /// The [Animation](#animation) clip at this point. Must target the same
+    /// [SkinnedMesh](#skinnedmesh) as the graph.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub clip: Option<AssetId>,
+}
+
+/// A blendspace: several clips mixed continuously by parameter value instead
+/// of one clip per state. `kind` selects the shape.
+///
+/// With `sync` true the members share one normalized phase clock -- a walk
+/// and a run cycle stay foot-aligned while the blend moves between them, so
+/// speed changes do not slide the feet. Leave it false for members that are
+/// not cyclic gaits.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum GraphBlend {
+    /// Clips along one parameter. The parameter picks the two neighbouring
+    /// `points` (by ascending `value`) and blends them; outside the range
+    /// the nearest end clip plays alone.
+    Blend1d {
+        /// Name of the declared graph parameter driving the blend.
+        parameter: String,
+        /// Members in ascending `value` order.
+        points: Vec<GraphBlendPoint>,
+        /// Phase-sync the members (see above).
+        #[serde(default)]
+        sync: bool,
+    },
+    /// Clips on a regular grid over two parameters, blended bilinearly
+    /// between the four grid neighbours of the parameter point (clamped at
+    /// the grid edges).
+    Blend2d {
+        /// Name of the parameter along the grid's x axis.
+        parameter_x: String,
+        /// Name of the parameter along the grid's y axis.
+        parameter_y: String,
+        /// Ascending x-axis sample positions, one per grid column.
+        x_values: Vec<f32>,
+        /// Ascending y-axis sample positions, one per grid row.
+        y_values: Vec<f32>,
+        /// One row of [Animation](#animation) clip names per `y_values`
+        /// entry, each row holding one clip per `x_values` entry.
+        rows: Vec<Vec<AssetId>>,
+        /// Phase-sync the members (see above).
+        #[serde(default)]
+        sync: bool,
+    },
+}
+
+/// One state of the graph: while active it plays either a single
+/// [Animation](#animation) `clip` or a `blend` (a blendspace mixing several
+/// clips by parameter value). Exactly one of the two must be set.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct GraphState {
     /// State name, referenced by `initial` and by transitions.
     pub name: String,
     /// The [Animation](#animation) clip this state plays. Must target the
-    /// same [SkinnedMesh](#skinnedmesh) as the graph.
+    /// same [SkinnedMesh](#skinnedmesh) as the graph. Leave unset when the
+    /// state plays a `blend` instead.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub clip: Option<AssetId>,
-    /// Playback speed scale; 1.0 plays the clip at its authored speed.
+    /// A blendspace to play instead of a single `clip`.
+    pub blend: Option<GraphBlend>,
+    /// Playback speed scale; 1.0 plays at authored speed.
     pub rate: f32,
-    /// Overrides the clip's own `looping` flag while this state plays. Leave
-    /// unset to keep the clip's flag.
+    /// Overrides the loop mode while this state plays: a single `clip`
+    /// defaults to its own `looping` flag, a `blend` defaults to looping.
     pub loop_override: Option<bool>,
 }
 
@@ -42,6 +102,7 @@ impl Default for GraphState {
         Self {
             name: String::new(),
             clip: None,
+            blend: None,
             rate: 1.0,
             loop_override: None,
         }
@@ -102,6 +163,7 @@ pub struct GraphTransition {
 /// looping states wrap, non-looping states hold their final pose.
 ///
 /// ```jsonl
+/// // Two single-clip states:
 /// {"name":"hero_graph","type":"AnimGraph","args":{
 ///   "target":"hero",
 ///   "parameters":[{"name":"speed","default":0.0}],
@@ -115,6 +177,19 @@ pub struct GraphTransition {
 ///      "conditions":[{"parameter":"speed","op":"gt","value":0.5}]},
 ///     {"from":"run","to":"idle","duration_secs":0.3,
 ///      "conditions":[{"parameter":"speed","op":"le","value":0.5}]}
+///   ]
+/// }}
+/// // One locomotion blendspace state mixing idle/walk/run by speed:
+/// {"name":"hero_graph","type":"AnimGraph","args":{
+///   "target":"hero",
+///   "parameters":[{"name":"speed","default":0.0}],
+///   "states":[
+///     {"name":"locomotion","blend":{"kind":"blend1d","parameter":"speed","sync":true,
+///      "points":[
+///        {"value":0.0,"clip":"hero_idle"},
+///        {"value":1.6,"clip":"hero_walk"},
+///        {"value":5.0,"clip":"hero_run"}
+///      ]}}
 ///   ]
 /// }}
 /// ```
@@ -167,24 +242,49 @@ impl AnimGraph {
 
         let mut states: Vec<CompiledState> = Vec::with_capacity(self.states.len());
         for s in &self.states {
-            let Some(clip_id) = s.clip else {
-                return Err(ctx(format!("state '{}' has no clip", s.name)));
-            };
-            let Some((clip, duration_secs, clip_looping)) = resolve_clip(clip_id) else {
-                return Err(ctx(format!(
-                    "state '{}': clip {clip_id} is not a clip on the graph's target",
-                    s.name
-                )));
-            };
             if s.rate <= 0.0 {
                 return Err(ctx(format!("state '{}': rate must be positive", s.name)));
             }
+            // The member resolver: an Animation reference -> a ClipPlay,
+            // shared by the single-clip and blendspace arms.
+            let play_for = |clip_id: AssetId| -> Result<(ClipPlay, bool), String> {
+                let Some((clip, duration_secs, clip_looping)) = resolve_clip(clip_id) else {
+                    return Err(ctx(format!(
+                        "state '{}': clip {clip_id} is not a clip on the graph's target",
+                        s.name
+                    )));
+                };
+                Ok((
+                    ClipPlay {
+                        clip,
+                        duration_secs,
+                    },
+                    clip_looping,
+                ))
+            };
+            let (play, default_looping) = match (&s.clip, &s.blend) {
+                (Some(_), Some(_)) => {
+                    return Err(ctx(format!(
+                        "state '{}' sets both `clip` and `blend`; pick one",
+                        s.name
+                    )));
+                }
+                (None, None) => {
+                    return Err(ctx(format!("state '{}' has no `clip` or `blend`", s.name)));
+                }
+                (Some(clip_id), None) => {
+                    let (clip_play, clip_looping) = play_for(*clip_id)?;
+                    (StatePlay::Clip(clip_play), clip_looping)
+                }
+                // Blendspaces default to looping (their members are cyclic
+                // gaits far more often than one-shots).
+                (None, Some(blend)) => (compile_blend(s, blend, &param_index, &play_for)?, true),
+            };
             states.push(CompiledState {
                 name: s.name.clone(),
-                clip,
                 rate: s.rate,
-                looping: s.loop_override.unwrap_or(clip_looping),
-                duration_secs,
+                looping: s.loop_override.unwrap_or(default_looping),
+                play,
                 transitions: Vec::new(),
             });
         }
@@ -233,6 +333,89 @@ impl AnimGraph {
     }
 }
 
+// Compile one blendspace node: parameter and clip names resolve to indices,
+// axis positions must ascend strictly, and 2D grids must be complete.
+fn compile_blend(
+    state: &GraphState,
+    blend: &GraphBlend,
+    param_index: &impl Fn(&str) -> Option<usize>,
+    play_for: &impl Fn(AssetId) -> Result<(ClipPlay, bool), String>,
+) -> Result<StatePlay, String> {
+    let err = |detail: String| format!("state '{}': {detail}", state.name);
+    let param = |name: &str, axis: &str| {
+        param_index(name)
+            .ok_or_else(|| err(format!("blend {axis} '{name}' is not a declared parameter")))
+    };
+    let strictly_ascending = |v: &[f32]| v.windows(2).all(|w| w[0] < w[1]);
+    let member = |clip: Option<AssetId>| -> Result<ClipPlay, String> {
+        let id = clip.ok_or_else(|| err("blend member has no `clip`".into()))?;
+        Ok(play_for(id)?.0)
+    };
+
+    match blend {
+        GraphBlend::Blend1d {
+            parameter,
+            points,
+            sync,
+        } => {
+            if points.is_empty() {
+                return Err(err("blend has no `points`".into()));
+            }
+            let thresholds: Vec<f32> = points.iter().map(|p| p.value).collect();
+            if !strictly_ascending(&thresholds) {
+                return Err(err("blend point `value`s must be strictly ascending".into()));
+            }
+            let plays = points
+                .iter()
+                .map(|p| member(p.clip))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(StatePlay::Blend1D(Blend1D {
+                param: param(parameter, "parameter")?,
+                thresholds,
+                plays,
+                sync: *sync,
+            }))
+        }
+        GraphBlend::Blend2d {
+            parameter_x,
+            parameter_y,
+            x_values,
+            y_values,
+            rows,
+            sync,
+        } => {
+            if x_values.is_empty() || y_values.is_empty() {
+                return Err(err("blend `x_values` / `y_values` must not be empty".into()));
+            }
+            if !strictly_ascending(x_values) || !strictly_ascending(y_values) {
+                return Err(err(
+                    "blend `x_values` and `y_values` must be strictly ascending".into(),
+                ));
+            }
+            if rows.len() != y_values.len() || rows.iter().any(|r| r.len() != x_values.len()) {
+                return Err(err(format!(
+                    "blend `rows` must be {} row(s) of {} clip(s) to match the grid",
+                    y_values.len(),
+                    x_values.len()
+                )));
+            }
+            let plays = rows
+                .iter()
+                .flatten()
+                .map(|&clip| member(Some(clip)))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(StatePlay::Blend2D(Blend2D {
+                param_x: param(parameter_x, "parameter_x")?,
+                param_y: param(parameter_y, "parameter_y")?,
+                x_values: x_values.clone(),
+                y_values: y_values.clone(),
+                plays,
+                sync: *sync,
+            }))
+        }
+    }
+}
+
 impl Component for AnimGraph {
     const NAME: &'static str = "AnimGraph";
     const ORIGIN: AssetOrigin = AssetOrigin::External;
@@ -275,18 +458,60 @@ impl CrossReferenced for AnimGraph {
             } else {
                 format!("state '{state_name}'")
             };
-            match state.get("clip").and_then(|v| v.as_str()).unwrap_or("") {
-                "" => refs.push(CrossRef::Issue(format!(
-                    "AnimGraph '{name}': {label} has no `clip` (an Animation asset name)"
-                ))),
-                clip => refs.push(CrossRef::Resolve {
-                    kind: RefKind::Animation,
-                    target: clip.to_string(),
+            let clips = AnimGraph::state_clip_names(state);
+            if clips.is_empty() {
+                refs.push(CrossRef::Issue(format!(
+                    "AnimGraph '{name}': {label} names no Animation (set `clip`, or `blend` \
+                     members)"
+                )));
+            }
+            for clip in clips {
+                refs.push(CrossRef::Resolve {
                     error: format!("AnimGraph '{name}': {label} clip '{clip}' not found"),
-                }),
+                    kind: RefKind::Animation,
+                    target: clip,
+                });
             }
         }
         refs
+    }
+}
+
+impl AnimGraph {
+    /// Every [Animation](#animation) name a state's raw JSON references: its
+    /// `clip`, or all of its blendspace members. Serves reference validation
+    /// over the raw world; empty/missing names are skipped.
+    pub fn state_clip_names(state: &serde_json::Value) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut push = |v: Option<&serde_json::Value>| {
+            if let Some(clip) = v.and_then(|v| v.as_str())
+                && !clip.is_empty()
+            {
+                names.push(clip.to_string());
+            }
+        };
+        push(state.get("clip"));
+        if let Some(blend) = state.get("blend") {
+            for point in blend
+                .get("points")
+                .and_then(|v| v.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[])
+            {
+                push(point.get("clip"));
+            }
+            for row in blend
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[])
+            {
+                for cell in row.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+                    push(Some(cell));
+                }
+            }
+        }
+        names
     }
 }
 
@@ -414,5 +639,123 @@ mod tests {
         assert_eq!(issues.len(), 2);
         assert!(issues[0].contains("target"));
         assert!(issues[1].contains("clip"));
+    }
+
+    fn blend1d_graph_json() -> serde_json::Value {
+        serde_json::json!({
+            "target": "hero",
+            "parameters": [{"name": "speed", "default": 0.0}],
+            "states": [
+                {"name": "locomotion", "blend": {"kind": "blend1d", "parameter": "speed",
+                 "sync": true,
+                 "points": [
+                     {"value": 0.0, "clip": "idle"},
+                     {"value": 1.6, "clip": "walk"},
+                     {"value": 5.0, "clip": "run"}
+                 ]}}
+            ]
+        })
+    }
+
+    fn blend2d_graph_json() -> serde_json::Value {
+        serde_json::json!({
+            "target": "hero",
+            "parameters": [{"name": "speed"}, {"name": "strafe"}],
+            "states": [
+                {"name": "locomotion", "blend": {"kind": "blend2d",
+                 "parameter_x": "speed", "parameter_y": "strafe",
+                 "x_values": [0.0, 5.0], "y_values": [-1.0, 1.0],
+                 "rows": [["run_l", "run_l"], ["run_r", "run_r"]]}}
+            ]
+        })
+    }
+
+    #[test]
+    fn compiles_blend1d_state() {
+        let g: AnimGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
+        let compiled = g.compile(any_clip).unwrap();
+        let StatePlay::Blend1D(b) = &compiled.states[0].play else {
+            panic!("expected a 1D blendspace");
+        };
+        assert_eq!(b.param, 0);
+        assert_eq!(b.thresholds, vec![0.0, 1.6, 5.0]);
+        assert_eq!(b.plays.len(), 3);
+        assert!(b.sync);
+        assert!(compiled.states[0].looping, "blendspaces default to looping");
+    }
+
+    #[test]
+    fn compiles_blend2d_state() {
+        let g: AnimGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
+        let compiled = g.compile(any_clip).unwrap();
+        let StatePlay::Blend2D(b) = &compiled.states[0].play else {
+            panic!("expected a 2D blendspace");
+        };
+        assert_eq!((b.param_x, b.param_y), (0, 1));
+        assert_eq!(b.plays.len(), 4);
+        assert!(!b.sync);
+    }
+
+    #[test]
+    fn compile_rejects_clip_and_blend_together_or_neither() {
+        let mut v = blend1d_graph_json();
+        v["states"][0]["clip"] = serde_json::json!("idle");
+        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        assert!(g.compile(any_clip).unwrap_err().contains("pick one"));
+
+        let v = serde_json::json!({"target":"hero","states":[{"name":"empty"}]});
+        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        assert!(
+            g.compile(any_clip)
+                .unwrap_err()
+                .contains("no `clip` or `blend`")
+        );
+    }
+
+    #[test]
+    fn compile_rejects_unsorted_blend_points() {
+        let mut v = blend1d_graph_json();
+        v["states"][0]["blend"]["points"][2]["value"] = serde_json::json!(1.0);
+        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        assert!(g.compile(any_clip).unwrap_err().contains("ascending"));
+    }
+
+    #[test]
+    fn compile_rejects_undeclared_blend_parameter() {
+        let mut v = blend1d_graph_json();
+        v["states"][0]["blend"]["parameter"] = serde_json::json!("nope");
+        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        assert!(g.compile(any_clip).unwrap_err().contains("nope"));
+    }
+
+    #[test]
+    fn compile_rejects_mismatched_grid_rows() {
+        let mut v = blend2d_graph_json();
+        v["states"][0]["blend"]["rows"] = serde_json::json!([["a", "b"]]);
+        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        assert!(g.compile(any_clip).unwrap_err().contains("rows"));
+    }
+
+    #[test]
+    fn cross_refs_cover_blend_members() {
+        let refs = AnimGraph::cross_refs("g", &blend1d_graph_json());
+        // One target resolve + three point-clip resolves.
+        assert_eq!(refs.len(), 4);
+        assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
+
+        let refs = AnimGraph::cross_refs("g", &blend2d_graph_json());
+        // One target resolve + four grid-cell resolves.
+        assert_eq!(refs.len(), 5);
+    }
+
+    #[test]
+    fn state_clip_names_walks_clip_points_and_rows() {
+        let names = AnimGraph::state_clip_names(&serde_json::json!({"clip":"solo"}));
+        assert_eq!(names, vec!["solo"]);
+        let names = AnimGraph::state_clip_names(&blend1d_graph_json()["states"][0]);
+        assert_eq!(names, vec!["idle", "walk", "run"]);
+        let names = AnimGraph::state_clip_names(&blend2d_graph_json()["states"][0]);
+        assert_eq!(names, vec!["run_l", "run_l", "run_r", "run_r"]);
+        assert!(AnimGraph::state_clip_names(&serde_json::json!({})).is_empty());
     }
 }
