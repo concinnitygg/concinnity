@@ -11,8 +11,8 @@
 // `pub` so the editor crate can reach these core GPU-layout modules through
 // `concinnity_client::gfx::*` (e.g. shader-layout reflection).
 pub use concinnity_core::gfx::{
-    auto_exposure, camera, frustum, lod, mesh_payload, mesh_seed, profile, render_types,
-    rt_reflections, skinning, ssao, ssgi, ssr,
+    anim_graph, auto_exposure, camera, frustum, ik, lod, mesh_payload, mesh_seed, profile,
+    render_types, root_motion, rt_reflections, skinning, ssao, ssgi, ssr,
 };
 // Chunk-streaming layout helpers: driven only by the Metal backend today, so
 // the re-exports are unused on other backends (mirrors the chunk_window /
@@ -45,6 +45,9 @@ pub(crate) mod camera_controller;
 pub(crate) mod csm;
 pub(crate) mod cursor;
 pub mod decal;
+// Third-person character controller. Internal system, constructed instead of
+// Camera3DSystem when the controlling camera's controller has a `follow` block.
+pub(crate) mod third_person;
 // The display-mode list behind the "Resolution" settings row: label format,
 // dedup/sort, persisted-choice recovery, and the no-enumeration fallback.
 pub(crate) mod display_mode;

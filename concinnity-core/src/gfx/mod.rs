@@ -6,11 +6,13 @@
 // allocator helpers, and the post-process setting structs. No backend handles
 // and no rendering logic: the render graph, draw lists, and per-backend
 // executors stay in the client crate's own `gfx` module.
+pub mod anim_graph;
 pub mod auto_exposure;
 pub mod camera;
 pub mod chunk_coord;
 pub mod dropdown;
 pub mod frustum;
+pub mod ik;
 pub mod lod;
 pub mod mesh_payload;
 pub mod mesh_seed;
@@ -18,6 +20,7 @@ pub mod overlay;
 pub mod profile;
 pub mod range_alloc;
 pub mod render_types;
+pub mod root_motion;
 pub mod rt_reflections;
 pub mod scroll_layout;
 pub mod settings;

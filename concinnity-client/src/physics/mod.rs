@@ -9,6 +9,10 @@
 // init from the world's Props / bodies and steps it every frame.
 
 mod convert;
+// Raycast probe answering for animation IK and the follow camera.
+mod probes;
+// Root-motion character rigs: one kinematic capsule per `CharacterRig`.
+mod rig;
 // The internal physics system that builds and steps the simulation from the
 // world's bodies, driven by an optional `PhysicsConfig`.
 pub(crate) mod system;
@@ -102,6 +106,15 @@ pub struct CharacterMove {
     pub grounded: bool,
 }
 
+// One raycast hit: the surface point, its outward normal, and the distance
+// from the ray origin.
+#[derive(Debug, Clone, Copy)]
+pub struct RayHit {
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub distance: f32,
+}
+
 // One Rapier rigid-body simulation.
 pub struct PhysicsWorld {
     bodies: RigidBodySet,
@@ -116,8 +129,6 @@ pub struct PhysicsWorld {
     ccd_solver: CCDSolver,
     gravity: Vector,
     character: KinematicCharacterController,
-    // Collider of the player capsule, excluded from its own movement query.
-    character_collider: Option<ColliderHandle>,
 }
 
 impl std::fmt::Debug for PhysicsWorld {
@@ -146,7 +157,6 @@ impl PhysicsWorld {
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, -gravity, 0.0),
             character: KinematicCharacterController::default(),
-            character_collider: None,
         }
     }
 
@@ -238,10 +248,8 @@ impl PhysicsWorld {
             .build();
         let handle = self.bodies.insert(body);
         let collider = ColliderBuilder::capsule_y(half_height, radius).build();
-        let collider_handle = self
-            .colliders
+        self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
-        self.character_collider = Some(collider_handle);
         BodyHandle(handle)
     }
 
@@ -352,8 +360,11 @@ impl PhysicsWorld {
         );
     }
 
-    // Resolve a desired move of the player capsule against the world without
+    // Resolve a desired move of a character capsule against the world without
     // mutating it. Apply the result with [`Self::set_kinematic_translation`].
+    // `exclude` is the moving capsule's own body (from [`Self::add_character`]),
+    // left out of the query so the character does not collide with itself;
+    // other characters' capsules stay solid to it.
     pub fn move_character(
         &self,
         half_height: f32,
@@ -361,12 +372,10 @@ impl PhysicsWorld {
         center: [f32; 3],
         desired: [f32; 3],
         dt: f32,
+        exclude: BodyHandle,
     ) -> CharacterMove {
         let dispatcher = DefaultQueryDispatcher;
-        let mut filter = QueryFilter::default();
-        if let Some(collider) = self.character_collider {
-            filter = filter.exclude_collider(collider);
-        }
+        let filter = QueryFilter::default().exclude_rigid_body(exclude.0);
         let query =
             self.broad_phase
                 .as_query_pipeline(&dispatcher, &self.bodies, &self.colliders, filter);
@@ -383,6 +392,43 @@ impl PhysicsWorld {
             translation: from_vec(movement.translation),
             grounded: movement.grounded,
         }
+    }
+
+    // Cast a ray into the scene, returning the nearest hit within
+    // `max_dist`. `dir` need not be unit length (a zero direction misses).
+    // `exclude` leaves one body out of the query -- pass the probing
+    // character's own capsule so a ray from inside it reaches the world.
+    pub fn raycast(
+        &self,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        max_dist: f32,
+        exclude: Option<BodyHandle>,
+    ) -> Option<RayHit> {
+        let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        if len < 1.0e-6 || max_dist <= 0.0 {
+            return None;
+        }
+        let unit = [dir[0] / len, dir[1] / len, dir[2] / len];
+        let dispatcher = DefaultQueryDispatcher;
+        let mut filter = QueryFilter::default();
+        if let Some(handle) = exclude {
+            filter = filter.exclude_rigid_body(handle.0);
+        }
+        let query =
+            self.broad_phase
+                .as_query_pipeline(&dispatcher, &self.bodies, &self.colliders, filter);
+        let ray = Ray::new(to_vec(origin), to_vec(unit));
+        let (_, hit) = query.cast_ray_and_get_normal(&ray, max_dist, true)?;
+        Some(RayHit {
+            point: [
+                origin[0] + unit[0] * hit.time_of_impact,
+                origin[1] + unit[1] * hit.time_of_impact,
+                origin[2] + unit[2] * hit.time_of_impact,
+            ],
+            normal: [hit.normal.x, hit.normal.y, hit.normal.z],
+            distance: hit.time_of_impact,
+        })
     }
 
     // Set the next-frame target position of a kinematic body.
@@ -534,10 +580,17 @@ mod tests {
             [0.0; 3],
             0.5,
         );
-        world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
         // The broad-phase BVH the movement query reads is built by step().
         world.step(1.0 / 60.0);
-        let moved = world.move_character(0.6, 0.3, [0.0, 1.0, 0.0], [5.0, 0.0, 0.0], 1.0 / 60.0);
+        let moved = world.move_character(
+            0.6,
+            0.3,
+            [0.0, 1.0, 0.0],
+            [5.0, 0.0, 0.0],
+            1.0 / 60.0,
+            capsule,
+        );
         // The wall stands at x = 1.25 (1.5 - 0.25); a 0.3-radius capsule from
         // x = 0 cannot advance the full 5 units into it.
         assert!(
@@ -553,15 +606,64 @@ mod tests {
         ground(&mut world, 0.0);
         // Capsule centre at 1.5: with half-height 0.6 + radius 0.3 the bottom
         // sits 0.6 above the floor, so a 10-unit drop should be arrested.
-        world.add_character(0.6, 0.3, [0.0, 1.5, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.5, 0.0]);
         world.step(1.0 / 60.0);
-        let moved = world.move_character(0.6, 0.3, [0.0, 1.5, 0.0], [0.0, -10.0, 0.0], 1.0 / 60.0);
+        let moved = world.move_character(
+            0.6,
+            0.3,
+            [0.0, 1.5, 0.0],
+            [0.0, -10.0, 0.0],
+            1.0 / 60.0,
+            capsule,
+        );
         assert!(
             moved.translation[1] > -1.0 && moved.grounded,
             "fall should be arrested by the floor, dy = {}, grounded = {}",
             moved.translation[1],
             moved.grounded,
         );
+    }
+
+    #[test]
+    fn raycast_hits_the_ground_with_point_and_normal() {
+        let mut world = PhysicsWorld::new(G);
+        ground(&mut world, 0.0);
+        world.step(1.0 / 60.0);
+        let hit = world
+            .raycast([0.5, 2.0, -0.25], [0.0, -1.0, 0.0], 5.0, None)
+            .expect("ray hits the floor");
+        assert!((hit.point[1] - 0.0).abs() < 1e-3, "{:?}", hit.point);
+        assert!((hit.point[0] - 0.5).abs() < 1e-4);
+        assert!((hit.distance - 2.0).abs() < 1e-3);
+        assert!(hit.normal[1] > 0.99, "upward normal: {:?}", hit.normal);
+        // Out of range or pointing away: no hit.
+        assert!(
+            world
+                .raycast([0.0, 2.0, 0.0], [0.0, -1.0, 0.0], 1.0, None)
+                .is_none()
+        );
+        assert!(
+            world
+                .raycast([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 100.0, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn raycast_excluded_body_is_transparent() {
+        let mut world = PhysicsWorld::new(G);
+        ground(&mut world, 0.0);
+        // A capsule standing between the ray origin and the floor.
+        let capsule = world.add_character(0.5, 0.3, [0.0, 0.8, 0.0]);
+        world.step(1.0 / 60.0);
+        let through = world
+            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, Some(capsule))
+            .expect("ray passes through the excluded capsule");
+        assert!((through.point[1] - 0.0).abs() < 1e-3, "{:?}", through.point);
+        let blocked = world
+            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, None)
+            .expect("ray hits the capsule");
+        assert!(blocked.point[1] > 1.0, "{:?}", blocked.point);
     }
 
     // Test helper: a tiny zero-volume static body acting as a world anchor.

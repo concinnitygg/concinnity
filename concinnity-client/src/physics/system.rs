@@ -15,8 +15,9 @@ use crate::physics::{BodyHandle, ColliderShape, PhysicsWorld};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-// Acceleration due to gravity in world units per second squared.
-const GRAVITY: f32 = 20.0;
+// Acceleration due to gravity in world units per second squared. Shared with
+// the third-person controller so its jump takeoff matches the rig's fall.
+pub(crate) const GRAVITY: f32 = 20.0;
 // Friction coefficient for static (non-PropBody) prop colliders.
 const STATIC_FRICTION: f32 = 0.8;
 // Largest physics timestep; longer frames are clamped for solver stability.
@@ -55,6 +56,10 @@ pub struct PhysicsSystem {
     world: Option<PhysicsWorld>,
     // The player capsule, when the world has a Camera3D + RigidBody.
     player: Option<PlayerPhysics>,
+    // One capsule per root-motion character rig (see `super::rig`).
+    rigs: Vec<super::rig::RigPhysics>,
+    // Reader cursor over the `RootMotion` event queue.
+    root_cursor: crate::ecs::EventCursor,
     // One entry per Prop that carries a collider.
     prop_bodies: Vec<PropPhysics>,
     // Index into `prop_bodies` of the prop currently being carried.
@@ -131,6 +136,8 @@ impl PhysicsSystem {
             terrain_offset_y: config.terrain_offset_y,
             world: None,
             player: None,
+            rigs: Vec::new(),
+            root_cursor: crate::ecs::EventCursor::default(),
             prop_bodies: Vec::new(),
             held: None,
         }
@@ -341,9 +348,20 @@ impl System for PhysicsSystem {
         }
 
         // player capsule for the Camera3D
-        // Every camera is collided as a capsule. A RigidBody upgrades it from
-        // a free-flying spectator to a grounded, gravity-bound character.
-        let camera_pos = ctx.query::<Camera3D>().next().map(|c| c.position);
+        // Every first-person camera is collided as a capsule. A RigidBody
+        // upgrades it from a free-flying spectator to a grounded,
+        // gravity-bound character. A third-person camera (a controller with
+        // a `follow` block) gets no capsule: it is a virtual orbit around the
+        // followed character, whose own rig capsule is the collided body.
+        let camera_pos = ctx
+            .query::<Camera3D>()
+            .next()
+            .filter(|c| {
+                c.controller
+                    .as_ref()
+                    .is_none_or(|ctrl| ctrl.follow.is_none())
+            })
+            .map(|c| c.position);
         if let Some(cam_pos) = camera_pos {
             let rb_opt = ctx.query::<RigidBody>().next().cloned();
             let has_gravity = rb_opt.is_some();
@@ -381,6 +399,10 @@ impl System for PhysicsSystem {
                 has_gravity,
             );
         }
+
+        // Kinematic capsules for the root-motion character rigs published by
+        // GraphicsSystem (which ran init first this tick).
+        self.rigs = super::rig::init_rigs(&mut world, ctx);
 
         self.world = Some(world);
     }
@@ -531,8 +553,14 @@ impl System for PhysicsSystem {
 
             let center = [cam_pos[0], cam_pos[1] - player.eye_offset, cam_pos[2]];
             let desired = [desired_move[0] * dt, player.vy * dt, desired_move[2] * dt];
-            let moved =
-                world.move_character(player.half_height, player.radius, center, desired, dt);
+            let moved = world.move_character(
+                player.half_height,
+                player.radius,
+                center,
+                desired,
+                dt,
+                player.handle,
+            );
             let new_center = [
                 center[0] + moved.translation[0],
                 center[1] + moved.translation[1],
@@ -551,6 +579,19 @@ impl System for PhysicsSystem {
                 new_center[2],
             ];
         }
+
+        // move the root-motion character rig capsules
+        super::rig::step_rigs(
+            world,
+            ctx,
+            &mut self.rigs,
+            &mut self.root_cursor,
+            dt,
+            GRAVITY,
+        );
+
+        // answer the IK ground probes and the follow camera's occlusion probe
+        super::probes::step_probes(world, ctx, &self.rigs);
 
         // advance the simulation
         world.step(dt);
@@ -810,6 +851,54 @@ mod tests {
         let mut world = World::new_empty();
         world.start().unwrap();
         assert!(world.systems().is_empty());
+    }
+
+    // A third-person camera is a virtual orbit: no player capsule is created
+    // for it. (Regression: the spectator capsule spawned at the camera eye
+    // overlapped the followed rig's capsule and squeezed it through the
+    // floor.) A first-person camera keeps its capsule.
+    #[test]
+    fn third_person_camera_gets_no_player_capsule() {
+        use crate::assets::{CameraController, FollowController};
+
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        let mut camera = controlled_camera();
+        camera.controller = Some(CameraController {
+            follow: Some(FollowController {
+                target: Some(AssetId(1)),
+                ..FollowController::default()
+            }),
+            ..CameraController::default()
+        });
+        world.add_component(camera);
+        world.start().unwrap();
+        let physics = world
+            .systems()
+            .iter()
+            .find_map(|s| match s {
+                crate::ecs::SystemAsset::PhysicsSystem(p) => Some(p),
+                _ => None,
+            })
+            .expect("physics system present");
+        assert!(physics.player.is_none(), "no capsule for the orbit camera");
+
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        world.add_component(controlled_camera());
+        world.start().unwrap();
+        let physics = world
+            .systems()
+            .iter()
+            .find_map(|s| match s {
+                crate::ecs::SystemAsset::PhysicsSystem(p) => Some(p),
+                _ => None,
+            })
+            .expect("physics system present");
+        assert!(
+            physics.player.is_some(),
+            "first-person camera keeps its capsule"
+        );
     }
 
     // PhysicsSystem runs before Camera3DSystem: it consumes the camera's

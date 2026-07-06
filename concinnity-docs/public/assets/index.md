@@ -2,6 +2,7 @@
 
 # Assets
 
+- [AnimGraph](AnimGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
 - [Application](Application.md) - Names and identifies the application for distribution.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
@@ -73,9 +74,17 @@
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
+- [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
 - [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
+- [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
+- [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
+- [GraphCondition](GraphCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
+- [GraphIkChain](GraphIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
+- [GraphParam](GraphParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
+- [GraphState](GraphState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
+- [GraphTransition](GraphTransition.md) - One directed transition between two states.
 - [IndirectLighting](IndirectLighting.md) - Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`. `Ibl` is the image-based-lighting-only ambient term the renderer has always used; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
 - [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.

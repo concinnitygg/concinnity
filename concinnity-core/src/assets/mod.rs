@@ -7,6 +7,8 @@
 // `crate::assets::*` paths.
 
 // Component data types.
+mod anim_graph;
+mod anim_params;
 mod animation;
 mod application;
 pub mod audio_clip;
@@ -15,7 +17,9 @@ mod audio_cue;
 mod audio_emitter;
 mod block_type;
 mod camera3d;
+mod camera_probe;
 mod camera_shot;
+mod character_rig;
 mod color_lut;
 mod controls_command;
 mod cubemap_texture;
@@ -29,6 +33,7 @@ mod font;
 mod frame_input;
 mod glass_panel;
 mod graphics_config;
+mod ground_probes;
 mod hit_region;
 mod input_key;
 pub mod instanced_prop;
@@ -56,6 +61,7 @@ mod reflection_probe;
 mod reparent_request;
 mod rigid_body;
 mod room;
+mod root_motion_event;
 mod scene;
 mod scene_command;
 mod scene_import;
@@ -106,6 +112,11 @@ mod debug_hud;
 mod fps_counter;
 mod stat_hud;
 
+pub use anim_graph::{
+    AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphIkChain, GraphParam, GraphState,
+    GraphTransition,
+};
+pub use anim_params::AnimParams;
 pub use animation::Animation;
 pub use application::Application;
 pub use audio_clip::AudioClip;
@@ -113,8 +124,10 @@ pub use audio_command::AudioCommand;
 pub use audio_cue::{AudioCue, CueKind};
 pub use audio_emitter::AudioEmitter;
 pub use block_type::BlockType;
+pub use camera_probe::CameraProbe;
 pub use camera_shot::CameraShot;
-pub use camera3d::{Camera3D, CameraController};
+pub use camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
+pub use character_rig::CharacterRig;
 pub use color_lut::ColorLut;
 pub use controls_command::ControlsCommand;
 pub use cubemap_texture::CubemapTexture;
@@ -130,6 +143,7 @@ pub use glass_panel::GlassPanel;
 pub use graphics_config::GraphicsConfig;
 #[allow(unused_imports)]
 pub use graphics_config::ShadowUpdate;
+pub use ground_probes::{GroundProbe, GroundProbes};
 pub use hit_region::HitRegion;
 pub use input_key::Key;
 pub use instanced_prop::InstancedProp;
@@ -164,6 +178,7 @@ pub use post_process_config::UpscalerBackend;
 pub use prefab::Prefab;
 pub use procedural_mesh::ProceduralMesh;
 pub use prop::Prop;
+pub use root_motion_event::RootMotion;
 // `PropCollider` is re-exported for tests / future consumers; the crate
 // currently only uses it through `Prop.collider`, so the re-export is unused
 // at compile time outside of the test module.
@@ -188,7 +203,9 @@ pub use setting_command::{SettingCommand, SettingOp};
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
 pub use shader_stage::{ShaderKind, ShaderStage};
 pub use skeleton_pose::SkeletonPose;
-pub use skinned_mesh::{JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs};
+pub use skinned_mesh::{
+    CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs,
+};
 pub use slider::Slider;
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;

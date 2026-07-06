@@ -21,10 +21,12 @@ use std::collections::HashSet;
 // to a `CrossReferenced` impl in the named asset's file.
 fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
     use crate::assets::{
-        DebugHud, Decal, FpsCounter, InstancedProp, Joint, Material, Model, ParticleEmitter, Prop,
-        Scene, SceneReel, StatHud, VoxelChunk, VoxelWorld,
+        AnimGraph, Camera3D, DebugHud, Decal, FpsCounter, InstancedProp, Joint, Material, Model,
+        ParticleEmitter, Prop, Scene, SceneReel, StatHud, VoxelChunk, VoxelWorld,
     };
     match type_norm {
+        "animgraph" => AnimGraph::cross_refs(name, args),
+        "camera3d" => Camera3D::cross_refs(name, args),
         "prop" => Prop::cross_refs(name, args),
         "model" => Model::cross_refs(name, args),
         "scenereel" | "scenreel" => SceneReel::cross_refs(name, args),
@@ -55,6 +57,8 @@ struct RefScope<'a> {
     camera3ds: HashSet<&'a str>,
     block_types: HashSet<&'a str>,
     text_labels: HashSet<&'a str>,
+    skinned_meshes: HashSet<&'a str>,
+    animations: HashSet<&'a str>,
 }
 
 impl<'a> RefScope<'a> {
@@ -98,6 +102,8 @@ impl<'a> RefScope<'a> {
             camera3ds: by_type(&|t| t == "camera3d"),
             block_types: by_type(&|t| t == "blocktype" || t == "block"),
             text_labels: by_type(&|t| t == "textlabel"),
+            skinned_meshes: by_type(&|t| t == "skinnedmesh"),
+            animations: by_type(&|t| t == "animation"),
         }
     }
 
@@ -113,6 +119,8 @@ impl<'a> RefScope<'a> {
             RefKind::CameraShot => self.camera3ds.contains(name),
             RefKind::BlockType => self.block_types.contains(name),
             RefKind::TextLabel => self.text_labels.contains(name),
+            RefKind::SkinnedMesh => self.skinned_meshes.contains(name),
+            RefKind::Animation => self.animations.contains(name),
         }
     }
 }
@@ -171,10 +179,155 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
         }
     }
 
+    check_graph_ownership(assets, &mut errors);
+    check_follow_targets(assets, &mut errors);
+
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+// AnimGraph ownership rules. A graph owns its target mesh's animation set:
+// at most one graph per SkinnedMesh, every clip a graph references must
+// actually target that mesh, and every Animation targeting a graph-driven
+// mesh must be referenced by the graph (a loose clip would silently never
+// play, since the graph decides what runs). These need the whole world, so
+// they live here rather than in the per-asset checks.
+fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    let norm = |t: &str| t.to_lowercase().replace('_', "");
+    let graphs: Vec<&WorldJsonlAsset> = assets
+        .iter()
+        .filter(|a| norm(&a.asset_type) == "animgraph")
+        .collect();
+    if graphs.is_empty() {
+        return;
+    }
+
+    // Animation name -> its target SkinnedMesh name.
+    let clip_targets: std::collections::HashMap<&str, &str> = assets
+        .iter()
+        .filter(|a| norm(&a.asset_type) == "animation")
+        .map(|a| {
+            let target = a.args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            (a.name.as_str(), target)
+        })
+        .collect();
+
+    let mut owner_by_mesh: std::collections::HashMap<&str, &str> = Default::default();
+    for graph in &graphs {
+        let mesh = graph
+            .args
+            .get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if mesh.is_empty() {
+            continue; // missing target already reported by cross_refs
+        }
+        if let Some(other) = owner_by_mesh.insert(mesh, graph.name.as_str()) {
+            errors.push(format!(
+                "AnimGraph '{}': SkinnedMesh '{}' is already driven by AnimGraph '{}'; \
+                 a mesh can have at most one graph",
+                graph.name, mesh, other
+            ));
+        }
+
+        let mut referenced: HashSet<String> = HashSet::new();
+        for state in graph
+            .args
+            .get("states")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+        {
+            // Single-clip and blendspace members alike; a state naming no
+            // clips at all is already reported by cross_refs.
+            for clip in crate::assets::AnimGraph::state_clip_names(state) {
+                if let Some(&clip_target) = clip_targets.get(clip.as_str())
+                    && clip_target != mesh
+                {
+                    errors.push(format!(
+                        "AnimGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
+                         target '{}'",
+                        graph.name, clip, clip_target, mesh
+                    ));
+                }
+                referenced.insert(clip);
+            }
+        }
+
+        for (&clip, &clip_target) in &clip_targets {
+            if clip_target == mesh && !referenced.contains(clip) {
+                errors.push(format!(
+                    "Animation '{}': targets SkinnedMesh '{}', which AnimGraph '{}' drives, \
+                     but no graph state references it; add a state for it or remove the clip",
+                    clip, mesh, graph.name
+                ));
+            }
+        }
+    }
+}
+
+// Third-person follow rules. The followed SkinnedMesh must declare a
+// `capsule` (the controller moves its character capsule), and an explicitly
+// named speed parameter must exist on an AnimGraph driving that mesh. An
+// omitted `speed_parameter` (the "speed" default) is not enforced, so a
+// graph-less direct-drive character still builds; the runtime warns and
+// skips the writes instead. These need the whole world, so they live here
+// rather than in the per-asset checks.
+fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    let norm = |t: &str| t.to_lowercase().replace('_', "");
+    for camera in assets.iter().filter(|a| norm(&a.asset_type) == "camera3d") {
+        let Some(follow) = camera
+            .args
+            .get("controller")
+            .and_then(|c| c.get("follow"))
+            .filter(|f| !f.is_null())
+        else {
+            continue;
+        };
+        let target = follow.get("target").and_then(|v| v.as_str()).unwrap_or("");
+        if target.is_empty() {
+            continue; // missing target already reported by cross_refs
+        }
+
+        let has_capsule = assets.iter().any(|a| {
+            norm(&a.asset_type) == "skinnedmesh"
+                && a.name == target
+                && a.args.get("capsule").is_some_and(|c| !c.is_null())
+        });
+        if !has_capsule {
+            errors.push(format!(
+                "Camera3D '{}': follow target SkinnedMesh '{}' has no `capsule`; the \
+                 third-person controller needs a character capsule to move",
+                camera.name, target
+            ));
+        }
+
+        if let Some(param) = follow.get("speed_parameter").and_then(|v| v.as_str())
+            && !param.is_empty()
+        {
+            let declared = assets.iter().any(|a| {
+                norm(&a.asset_type) == "animgraph"
+                    && a.args.get("target").and_then(|v| v.as_str()) == Some(target)
+                    && a.args
+                        .get("parameters")
+                        .and_then(|p| p.as_array())
+                        .is_some_and(|params| {
+                            params
+                                .iter()
+                                .any(|p| p.get("name").and_then(|n| n.as_str()) == Some(param))
+                        })
+            });
+            if !declared {
+                errors.push(format!(
+                    "Camera3D '{}': no AnimGraph on follow target '{}' declares the speed \
+                     parameter '{}'",
+                    camera.name, target, param
+                ));
+            }
+        }
     }
 }
 
@@ -734,6 +887,192 @@ mod tests {
             ),
         ];
         assert!(err_text(&assets).contains("frumpus"));
+    }
+
+    // A minimal skinned world: mesh + two clips + a graph referencing both.
+    fn graph_world() -> Vec<WorldJsonlAsset> {
+        vec![
+            asset("hero", "SkinnedMesh", serde_json::json!({})),
+            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
+            asset("run", "Animation", serde_json::json!({"target":"hero"})),
+            asset(
+                "g",
+                "AnimGraph",
+                serde_json::json!({
+                    "target":"hero",
+                    "states":[
+                        {"name":"idle","clip":"idle"},
+                        {"name":"run","clip":"run"}
+                    ]
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn anim_graph_valid_references_pass() {
+        assert!(validate_cross_references(&graph_world()).is_ok());
+    }
+
+    #[test]
+    fn anim_graph_missing_target_mesh_fails() {
+        let mut assets = graph_world();
+        assets.remove(0);
+        assert!(err_text(&assets).contains("'hero' not found"));
+    }
+
+    #[test]
+    fn anim_graph_missing_clip_fails() {
+        let mut assets = graph_world();
+        assets[3].args["states"][1]["clip"] = serde_json::json!("ghost_clip");
+        assert!(err_text(&assets).contains("ghost_clip"));
+    }
+
+    #[test]
+    fn anim_graph_unreferenced_clip_on_target_fails() {
+        let mut assets = graph_world();
+        assets.push(asset(
+            "wave",
+            "Animation",
+            serde_json::json!({"target":"hero"}),
+        ));
+        assert!(err_text(&assets).contains("no graph state references it"));
+    }
+
+    #[test]
+    fn anim_graph_clip_targeting_other_mesh_fails() {
+        let mut assets = graph_world();
+        assets.push(asset("other", "SkinnedMesh", serde_json::json!({})));
+        assets.push(asset(
+            "other_idle",
+            "Animation",
+            serde_json::json!({"target":"other"}),
+        ));
+        assets[3].args["states"][1]["clip"] = serde_json::json!("other_idle");
+        let errs = err_text(&assets);
+        assert!(errs.contains("not the graph's"));
+        // The displaced 'run' clip is now also unreferenced.
+        assert!(errs.contains("no graph state references it"));
+    }
+
+    #[test]
+    fn two_graphs_on_one_mesh_fails() {
+        let mut assets = graph_world();
+        assets.push(asset(
+            "g2",
+            "AnimGraph",
+            serde_json::json!({
+                "target":"hero",
+                "states":[{"name":"idle","clip":"idle"},{"name":"run","clip":"run"}]
+            }),
+        ));
+        assert!(err_text(&assets).contains("at most one graph"));
+    }
+
+    #[test]
+    fn blend_members_count_as_referenced_clips() {
+        let mut assets = graph_world();
+        assets[3].args["states"] = serde_json::json!([
+            {"name": "locomotion", "blend": {"kind": "blend1d", "parameter": "speed",
+             "points": [
+                 {"value": 0.0, "clip": "idle"},
+                 {"value": 5.0, "clip": "run"}
+             ]}}
+        ]);
+        assets[3].args["parameters"] = serde_json::json!([{"name": "speed"}]);
+        assert!(validate_cross_references(&assets).is_ok());
+
+        // A blend member resolving to a ghost clip still fails.
+        assets[3].args["states"][0]["blend"]["points"][1]["clip"] = serde_json::json!("ghost_clip");
+        let errs = err_text(&assets);
+        assert!(errs.contains("ghost_clip"));
+        // And the displaced 'run' clip is now unreferenced.
+        assert!(errs.contains("no graph state references it"));
+    }
+
+    #[test]
+    fn clips_without_graph_stay_unowned_and_pass() {
+        let assets = vec![
+            asset("hero", "SkinnedMesh", serde_json::json!({})),
+            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
+        ];
+        assert!(validate_cross_references(&assets).is_ok());
+    }
+
+    // A third-person world: a capsuled skinned mesh, a graph declaring the
+    // speed parameter, its clip, and a camera following the mesh.
+    fn follow_world() -> Vec<WorldJsonlAsset> {
+        vec![
+            asset(
+                "hero",
+                "SkinnedMesh",
+                serde_json::json!({"capsule":{"half_height":0.5,"radius":0.3}}),
+            ),
+            asset("walk", "Animation", serde_json::json!({"target":"hero"})),
+            asset(
+                "g",
+                "AnimGraph",
+                serde_json::json!({
+                    "target":"hero",
+                    "parameters":[{"name":"speed"}],
+                    "states":[{"name":"walk","clip":"walk"}]
+                }),
+            ),
+            asset(
+                "cam",
+                "Camera3D",
+                serde_json::json!({"controller":{"follow":{
+                    "target":"hero","speed_parameter":"speed"
+                }}}),
+            ),
+        ]
+    }
+
+    #[test]
+    fn follow_valid_references_pass() {
+        assert!(validate_cross_references(&follow_world()).is_ok());
+    }
+
+    #[test]
+    fn follow_missing_target_fails() {
+        let mut assets = follow_world();
+        assets[3].args["controller"]["follow"]["target"] = serde_json::json!("ghost");
+        assert!(err_text(&assets).contains("'ghost' not found"));
+    }
+
+    #[test]
+    fn follow_without_target_field_fails() {
+        let mut assets = follow_world();
+        assets[3].args["controller"]["follow"] = serde_json::json!({});
+        assert!(err_text(&assets).contains("`controller.follow.target` is required"));
+    }
+
+    #[test]
+    fn follow_target_without_capsule_fails() {
+        let mut assets = follow_world();
+        assets[0].args = serde_json::json!({});
+        assert!(err_text(&assets).contains("has no `capsule`"));
+    }
+
+    #[test]
+    fn follow_explicit_speed_parameter_must_be_declared() {
+        let mut assets = follow_world();
+        assets[3].args["controller"]["follow"]["speed_parameter"] = serde_json::json!("velocity");
+        assert!(err_text(&assets).contains("declares the speed parameter 'velocity'"));
+    }
+
+    #[test]
+    fn follow_omitted_speed_parameter_is_not_enforced() {
+        // No graph at all: a direct-drive character with the defaulted
+        // "speed" name still builds; the runtime warns instead.
+        let mut assets = follow_world();
+        assets[3].args["controller"]["follow"]
+            .as_object_mut()
+            .unwrap()
+            .remove("speed_parameter");
+        assets.remove(2); // drop the graph
+        assets.remove(1); // and its clip (now unowned, which is fine)
+        assert!(validate_cross_references(&assets).is_ok());
     }
 
     #[test]

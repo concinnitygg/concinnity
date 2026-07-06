@@ -1116,7 +1116,17 @@ impl GraphicsSystem {
         // template index is recorded explicitly rather than inferred from
         // position because pre-reserved instance copies interleave the draw-object
         // list (template, copies, template, copies, ...).
-        let mut skinned_skeletons: Vec<(AssetId, usize, skinning::Skeleton)> = Vec::new();
+        // (mesh id, draw index, skeleton, authored model, optional capsule)
+        // per skinned mesh; drives the SkeletonPose + CharacterRig publish
+        // after the geometry upload below.
+        type SkinnedSkeletonEntry = (
+            AssetId,
+            usize,
+            skinning::Skeleton,
+            [[f32; 4]; 4],
+            Option<crate::assets::CharacterCapsule>,
+        );
+        let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
         // `(template_index, instance_index)` pairs seeding the backend skinned
         // instance pool: each instance is a hidden bind-pose copy reserved from
         // SkinnedMesh.max_instances.
@@ -1277,7 +1287,13 @@ impl GraphicsSystem {
                 skinned_pool_reservations.push((skinned_index, copy_skinned_index));
             }
 
-            skinned_skeletons.push((sm.asset_id, skinned_index, skeleton));
+            skinned_skeletons.push((
+                sm.asset_id,
+                skinned_index,
+                skeleton,
+                sm.model_matrix(),
+                sm.capsule.clone(),
+            ));
         }
 
         // read all payloads before releasing -- they may share a blob
@@ -2349,7 +2365,7 @@ impl GraphicsSystem {
                 backend.seed_skinned_instance_pool(std::mem::take(&mut skinned_pool_reservations));
             }
             let skinned_count = skinned_skeletons.len();
-            for (mesh_id, template_index, skeleton) in skinned_skeletons {
+            for (mesh_id, template_index, skeleton, model, capsule) in skinned_skeletons {
                 let entity = ctx.components.spawn();
                 ctx.insert(
                     entity,
@@ -2361,6 +2377,18 @@ impl GraphicsSystem {
                 // clones this template's skeleton + pose into a pooled slot.
                 if let Some(by_name) = ctx.resource_mut::<crate::ecs::decompose::EntityByName>() {
                     by_name.0.insert(mesh_id, entity);
+                }
+                // A mesh with a capsule gets a character rig: PhysicsSystem
+                // (init runs later this tick) creates the kinematic capsule
+                // from it, and the render transform follows it each frame.
+                if let Some(capsule) = capsule {
+                    ctx.push(crate::assets::CharacterRig::new(
+                        mesh_id,
+                        template_index,
+                        model,
+                        capsule.half_height.max(0.05),
+                        capsule.radius.max(0.05),
+                    ));
                 }
             }
             tracing::info!("GraphicsSystem: {} skinned mesh(es) ready", skinned_count);

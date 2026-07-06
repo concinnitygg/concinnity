@@ -441,7 +441,13 @@ impl World {
             .next()
             .is_some()
             || self.query::<crate::assets::RigidBody>().next().is_some()
-            || self.query::<crate::assets::PropBody>().next().is_some();
+            || self.query::<crate::assets::PropBody>().next().is_some()
+            // A skinned mesh with a character capsule needs the rig drive
+            // (the CharacterRig itself is published later, by GraphicsSystem
+            // init, so gate on the authored asset).
+            || self
+                .query::<crate::assets::SkinnedMesh>()
+                .any(|sm| sm.capsule.is_some());
         if !needs {
             return None;
         }
@@ -453,13 +459,19 @@ impl World {
         Some(crate::physics::system::PhysicsSystem::new(config).into())
     }
 
-    // Camera3DSystem: present whenever a `Camera3D` has a `controller` (the
-    // default; `null` opts out for cutscene cameras). Built from the first
-    // controlled camera's settings.
+    // Camera controller: present whenever a `Camera3D` has a `controller`
+    // (the default; `null` opts out for cutscene cameras). Built from the
+    // first controlled camera's settings: a `follow` block selects the
+    // third-person controller, otherwise the first-person / fly one.
     fn build_camera(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::Camera3D>()
-            .find_map(|c| c.controller.clone())
-            .map(|ctrl| crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into())
+        let ctrl = self
+            .query::<crate::assets::Camera3D>()
+            .find_map(|c| c.controller.clone())?;
+        Some(if ctrl.follow.is_some() {
+            crate::gfx::third_person::ThirdPersonSystem::new(&ctrl).into()
+        } else {
+            crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into()
+        })
     }
 
     // FpsCounter: present whenever the world declares an `FpsCounter`; built from
@@ -486,12 +498,14 @@ impl World {
             .map(|cfg| crate::hud::debug_hud::DebugHudSystem::new(cfg).into())
     }
 
-    // AnimationSystem: present whenever the world declares any `Animation`. It
-    // drains every `Animation` at init and writes `SkeletonPose` each frame.
+    // AnimationSystem: present whenever the world declares any `Animation` or
+    // `AnimGraph`. It drains both at init and writes `SkeletonPose` each
+    // frame. (A graph without clips is a build error, so the second check
+    // only matters for hand-assembled worlds.)
     fn build_animation(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::Animation>()
-            .next()
-            .map(|_| crate::gfx::animation::AnimationSystem::new().into())
+        let declared = self.query::<crate::assets::Animation>().next().is_some()
+            || self.query::<crate::assets::AnimGraph>().next().is_some();
+        declared.then(|| crate::gfx::animation::AnimationSystem::new().into())
     }
 
     // StorySystem: present whenever the world declares a `Story` (a compiled

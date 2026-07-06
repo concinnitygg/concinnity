@@ -97,6 +97,7 @@ fn imported_to_clip(
     looping: bool,
 ) -> AnimationClip {
     AnimationClip {
+        root: None,
         duration: imported.duration.max(1e-3),
         looping,
         tracks: imported

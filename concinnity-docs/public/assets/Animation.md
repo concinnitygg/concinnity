@@ -39,4 +39,7 @@ first skinned node are dropped. The same `.glb` should back the target
 - `looping`: A boolean. When true, playback wraps after `duration`. Defaults to `true`.
 - `weight`: A float. Blend weight used when several clips target the same [SkinnedMesh](SkinnedMesh.md). Ignored when this is the only clip on its target. Defaults to `1.0`.
 - `fade_in_secs`: A float. When non-zero, the clip's contribution ramps from 0 to its declared `weight` over this many seconds after the world starts. Zero (the default) plays the clip at full `weight` from the first frame.
+- `root_motion`: A boolean. When true, the build strips the root joint's travel out of the pose and bakes it into `root_track`: the pose stays anchored in place and the runtime moves the character by the curve's frame-to-frame delta instead (the [SkinnedMesh](SkinnedMesh.md) `capsule` is the usual consumer). X and Z travel is always stripped; Y only with `root_motion_y`. Defaults to `false`.
+- `root_motion_y`: A boolean. Also strip the root joint's vertical travel into `root_track`. Leave false (the default) so jumps and crouches stay authored in the pose.
+- `root_track`: An array of objects. The displacement curve baked out of the root joint by the build when `root_motion` is set. Filled by the build; not usually authored by hand.
 - `tracks`: An array of [AnimationTrack](AnimationTrack.md) objects. Per-joint keyframe channels.
