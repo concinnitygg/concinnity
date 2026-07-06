@@ -16,10 +16,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::tungstenite::{Message, accept};
 
 use super::commands::{
-    error_reply, handle_anim_crossfade, handle_camera_move, handle_camera_set, handle_camera_stop,
-    handle_decal_add, handle_decal_remove, handle_despawn, handle_emitter_add,
-    handle_emitter_remove, handle_quality_set, handle_rebind, handle_reparent, handle_screenshot,
-    handle_spawn, handle_story,
+    error_reply, handle_anim_crossfade, handle_anim_param, handle_anim_state, handle_camera_move,
+    handle_camera_set, handle_camera_stop, handle_decal_add, handle_decal_remove, handle_despawn,
+    handle_emitter_add, handle_emitter_remove, handle_quality_set, handle_rebind, handle_reparent,
+    handle_screenshot, handle_spawn, handle_story,
 };
 use super::{hot_reload, runtime_spawn};
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
@@ -190,7 +190,7 @@ impl DebugServer {
                 }
                 SystemAsset::AnimationSystem(anim) => {
                     crate::anim_reload::reload_clips_if_pending(anim);
-                    anim.apply_crossfade_commands();
+                    anim.apply_runtime_commands();
                 }
                 _ => {}
             }
@@ -633,6 +633,16 @@ fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> String {
             let names = state.names.clone();
             drop(state);
             return handle_anim_crossfade(text, &names);
+        }
+        "anim-param" => {
+            let names = state.names.clone();
+            drop(state);
+            return handle_anim_param(text, &names);
+        }
+        "anim-state" => {
+            let names = state.names.clone();
+            drop(state);
+            return handle_anim_state(text, &names);
         }
         "screenshot" => {
             // Drop the snapshot lock before blocking on the engine reply: the

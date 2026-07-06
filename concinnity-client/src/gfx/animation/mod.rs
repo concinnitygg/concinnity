@@ -1,9 +1,22 @@
-// src/gfx/animation.rs
+// src/gfx/animation/mod.rs
 //
 // Skeletal animation playback. An internal system (not a declarable asset):
 // `World::start` constructs one whenever the world contains any `Animation`
-// component, then it samples the clip(s) targeting each `SkeletonPose` every
-// frame to produce fresh skinning matrices.
+// or `AnimGraph` component, then it produces fresh skinning matrices for each
+// `SkeletonPose` every frame.
+//
+// Each target `SkinnedMesh` gets a bucket of clips driven in one of two
+// modes: `Flat` blends every clip by a live weight vector (startup fade-in +
+// runtime crossfades; see `flat`), while `Graph` walks a compiled animation
+// state machine whose transitions are driven by the target's `AnimParams`
+// component (see `graph`). Runtime debug commands for both modes are drained
+// in `commands`.
+
+mod commands;
+mod flat;
+mod graph;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -14,39 +27,23 @@ use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::skinning::{self, AnimationClip};
 use crate::jobs;
 
-// A runtime clip plus the static metadata captured from its `Animation`
-// asset. The live blend weight is stored separately on the owning
-// [`TargetState`] so a runtime crossfade can re-weight clips without
-// rewriting their data.
-struct ClipEntry {
-    clip: AnimationClip,
-    // The declared steady-state weight from the asset. The bucket settles
-    // on this once any initial fade-in or runtime crossfade completes.
-    declared_weight: f32,
-    // Seconds the clip ramps from zero to `declared_weight` at world start.
-    // Zero plays the clip at full strength from the first frame.
-    fade_in_secs: f32,
-}
+use flat::{ClipEntry, FlatState, Transition};
+use graph::GraphTarget;
 
-// One ramp between two weight vectors. The bucket holds at most one
-// transition at a time; a new transition supersedes any in flight.
-#[derive(Debug)]
-struct Transition {
-    source_weights: Vec<f32>,
-    target_weights: Vec<f32>,
-    // Wall-clock seconds since the system's first step.
-    start_secs: f32,
-    // Length of the ramp. Zero snaps to `target_weights` on the next
-    // `step`.
-    duration_secs: f32,
-}
-
-// Per-`SkinnedMesh` bucket of clips. `current_weights` is the live blend
-// vector consumed by [`skinning::blend_many`].
+// Per-`SkinnedMesh` bucket: the clips targeting it plus the mode that drives
+// them. Clip storage is mode-independent so hot-reload can swap a clip in
+// place either way.
 struct TargetState {
     clips: Vec<ClipEntry>,
-    current_weights: Vec<f32>,
-    transition: Option<Transition>,
+    mode: TargetMode,
+}
+
+// How a bucket's clips are driven each frame.
+enum TargetMode {
+    // Weighted blend of every clip (the default).
+    Flat(FlatState),
+    // A compiled `AnimGraph` state machine owns the bucket.
+    Graph(GraphTarget),
 }
 
 // One hot-reload entry for a file-backed `Animation`. Captured at init
@@ -85,14 +82,16 @@ pub struct AnimationReloadEntry {
 }
 
 // Skeletal animation playback behavior. Constructed internally by
-// `World::start` when the world declares any `Animation`; never a
-// world-declared asset, so it carries no config.
+// `World::start` when the world declares any `Animation` or `AnimGraph`;
+// never a world-declared asset, so it carries no config.
 pub struct AnimationSystem {
     // Per-target clip buckets keyed by the `SkinnedMesh` asset id they
-    // animate. Buckets with several clips blend each frame.
+    // animate.
     targets: HashMap<AssetId, TargetState>,
     // Wall-clock origin, captured on the first step.
     start: Option<Instant>,
+    // Clip time `t` of the previous step, for the graph clocks' delta time.
+    last_step_secs: Option<f32>,
     // When a menu opened (and froze playback), if currently paused. On resume
     // the origin `start` is shifted forward by the paused span so clip time `t`
     // is continuous across the pause: the animation freezes on its current pose
@@ -119,12 +118,13 @@ impl Default for AnimationSystem {
 }
 
 impl AnimationSystem {
-    // Fresh playback state with no clips. Clips are drained from the world's
-    // `Animation` components in [`System::init`].
+    // Fresh playback state with no clips. Clips and graphs are drained from
+    // the world's components in [`System::init`].
     pub fn new() -> Self {
         Self {
             targets: HashMap::new(),
             start: None,
+            last_step_secs: None,
             pause_anchor: None,
             reload_entries: Vec::new(),
         }
@@ -163,60 +163,16 @@ impl AnimationSystem {
         };
         slot.clip = clip;
         slot.declared_weight = weight;
-        true
-    }
-
-    // Drain pending runtime crossfade commands against the system's own clock.
-    // Wraps [`Self::drain_runtime_commands`] with the same `start` / elapsed
-    // bookkeeping `step` uses, so the binary-only `DebugHook::tick` drive can
-    // apply `anim-crossfade` commands from outside the per-system step. The
-    // library never calls this (the drive is in the `cn debug` binary), hence
-    // the `dead_code` allowance. `step` runs after the hook on the same frame,
-    // so the `start` anchor set here is shared.
-    #[allow(dead_code)]
-    pub fn apply_crossfade_commands(&mut self) {
-        let now = Instant::now();
-        let start = *self.start.get_or_insert(now);
-        let t = (now - start).as_secs_f32();
-        self.drain_runtime_commands(t);
-    }
-
-    // Drain pending runtime crossfade commands and apply them. Each
-    // command targets one bucket and sets up a new ramp from the bucket's
-    // current weights to the requested target over `duration_secs`.
-    // Mismatched-length weight vectors or unknown targets fail without
-    // touching the bucket. Commands run in queue order, so a later
-    // command for the same target supersedes an earlier one.
-    fn drain_runtime_commands(&mut self, now_secs: f32) {
-        for cmd in crate::app::anim_runtime::drain() {
-            match cmd {
-                crate::app::anim_runtime::AnimCommand::Crossfade { req, reply } => {
-                    let Some(state) = self.targets.get_mut(&req.target) else {
-                        let _ = reply.send(Err(format!(
-                            "anim-crossfade: no Animation registered for target {}",
-                            req.target
-                        )));
-                        continue;
-                    };
-                    if req.weights.len() != state.clips.len() {
-                        let _ = reply.send(Err(format!(
-                            "anim-crossfade: weight count {} does not match clip count {} for target {}",
-                            req.weights.len(),
-                            state.clips.len(),
-                            req.target,
-                        )));
-                        continue;
-                    }
-                    state.transition = Some(Transition {
-                        source_weights: state.current_weights.clone(),
-                        target_weights: req.weights,
-                        start_secs: now_secs,
-                        duration_secs: req.duration_secs.max(0.0),
-                    });
-                    let _ = reply.send(Ok(()));
-                }
+        // A graph compiled this clip's duration into any state playing it;
+        // keep those in sync so wrap / exit-time math tracks the new clip.
+        // The compiled loop mode is left as resolved at compile time.
+        if let TargetMode::Graph(g) = &mut bucket.mode {
+            let duration = bucket.clips[clip_index].clip.duration;
+            for state in g.graph.states.iter_mut().filter(|s| s.clip == clip_index) {
+                state.duration_secs = duration;
             }
         }
+        true
     }
 }
 
@@ -229,37 +185,15 @@ fn resumed_origin(start: Instant, anchor: Instant, now: Instant) -> Instant {
     start + now.saturating_duration_since(anchor)
 }
 
-// Advance one bucket's `current_weights` along its active transition (if
-// any). Returns the live weights to feed the blend.
-fn advance_weights(state: &mut TargetState, now_secs: f32) -> &[f32] {
-    if let Some(tr) = &state.transition {
-        let finished = if tr.duration_secs <= 0.0 {
-            true
-        } else {
-            now_secs >= tr.start_secs + tr.duration_secs
-        };
-        if finished {
-            state.current_weights.clone_from(&tr.target_weights);
-            state.transition = None;
-        } else {
-            let progress = ((now_secs - tr.start_secs) / tr.duration_secs).clamp(0.0, 1.0);
-            for (slot, (src, dst)) in state
-                .current_weights
-                .iter_mut()
-                .zip(tr.source_weights.iter().zip(tr.target_weights.iter()))
-            {
-                *slot = src + (dst - src) * progress;
-            }
-        }
-    }
-    &state.current_weights
-}
-
 impl System for AnimationSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        // Clips accumulate per target mesh; several clips on one target are
-        // blended each frame rather than overwriting one another.
+        // Clips accumulate per target mesh; how a bucket's clips combine is
+        // decided below (graph if the world declares one, weighted blend
+        // otherwise).
         let capture_sources = crate::app::dev_flags::enabled();
+        // Animation asset id -> (target bucket, clip slot), for resolving
+        // graph clip references onto bucket indices.
+        let mut clip_slots: HashMap<AssetId, (AssetId, usize)> = HashMap::new();
         let mut count = 0usize;
         for anim in ctx.drain::<Animation>() {
             let Some(target) = anim.target else {
@@ -270,8 +204,7 @@ impl System for AnimationSystem {
             let fade_in_secs = anim.fade_in_secs.max(0.0);
             let state = self.targets.entry(target).or_insert_with(|| TargetState {
                 clips: Vec::new(),
-                current_weights: Vec::new(),
-                transition: None,
+                mode: TargetMode::Flat(FlatState::default()),
             });
             let clip_index = state.clips.len();
             state.clips.push(ClipEntry {
@@ -279,10 +212,13 @@ impl System for AnimationSystem {
                 declared_weight: weight,
                 fade_in_secs,
             });
+            clip_slots.insert(anim.asset_id, (target, clip_index));
             // Each new clip starts at full declared weight unless it requests
             // a fade-in, in which case it begins at zero and ramps up.
             let initial = if fade_in_secs > 0.0 { 0.0 } else { weight };
-            state.current_weights.push(initial);
+            if let TargetMode::Flat(flat) = &mut state.mode {
+                flat.current_weights.push(initial);
+            }
             if capture_sources && !anim.source.is_empty() {
                 self.reload_entries.push(AnimationReloadEntry {
                     target,
@@ -296,20 +232,29 @@ impl System for AnimationSystem {
             }
             count += 1;
         }
-        // Build a startup transition for any bucket whose clips requested a
-        // fade-in. The transition runs from zero to the declared weights over
+
+        // Graphs take ownership of their target's bucket; each publishes an
+        // `AnimParams` component seeded with its declared defaults.
+        let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots);
+
+        // Build a startup transition for any flat bucket whose clips requested
+        // a fade-in. The transition runs from zero to the declared weights over
         // the bucket's longest fade-in; clips with `fade_in_secs == 0` start
         // already at their declared weight via `current_weights`, so the lerp
-        // leaves them alone.
+        // leaves them alone. Graph buckets ignore fade-in (the graph owns
+        // weights outright).
         for state in self.targets.values_mut() {
+            let TargetMode::Flat(flat) = &mut state.mode else {
+                continue;
+            };
             let max_fade = state
                 .clips
                 .iter()
                 .fold(0.0f32, |m, c| m.max(c.fade_in_secs));
             if max_fade > 0.0 {
-                let source = state.current_weights.clone();
+                let source = flat.current_weights.clone();
                 let target: Vec<f32> = state.clips.iter().map(|c| c.declared_weight).collect();
-                state.transition = Some(Transition {
+                flat.transition = Some(Transition {
                     source_weights: source,
                     target_weights: target,
                     // Start the ramp on the first step (negative until then,
@@ -319,21 +264,14 @@ impl System for AnimationSystem {
                 });
             }
         }
-        if capture_sources && !self.reload_entries.is_empty() {
-            tracing::info!(
-                "AnimationSystem: {} clip(s) loaded across {} target mesh(es); {} \
-                 file-backed clip(s) captured for hot-reload",
-                count,
-                self.targets.len(),
-                self.reload_entries.len()
-            );
-        } else {
-            tracing::info!(
-                "AnimationSystem: {} clip(s) loaded across {} target mesh(es)",
-                count,
-                self.targets.len()
-            );
-        }
+        tracing::info!(
+            "AnimationSystem: {} clip(s) across {} target mesh(es); {} graph(s); {} \
+             file-backed clip(s) captured for hot-reload",
+            count,
+            self.targets.len(),
+            graph_count,
+            self.reload_entries.len()
+        );
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -365,27 +303,36 @@ impl System for AnimationSystem {
 
         let start = *self.start.get_or_insert(now);
         let t = (now - start).as_secs_f32();
+        // Graph clocks advance by delta time; the origin shift above keeps
+        // `t` continuous across a pause, so the first post-pause delta stays
+        // one frame long.
+        let dt = t - self.last_step_secs.replace(t).unwrap_or(t);
 
         // First-frame fix-up: the startup transition built in `init` has
         // `start_secs == 0.0`. We don't know the wall-clock origin until the
         // first step, so re-anchor any in-flight transition that hasn't yet
         // started elapsing.
         for state in self.targets.values_mut() {
-            if let Some(tr) = state.transition.as_mut()
+            if let TargetMode::Flat(flat) = &mut state.mode
+                && let Some(tr) = flat.transition.as_mut()
                 && tr.start_secs == 0.0
             {
                 tr.start_secs = t;
             }
         }
 
-        // Runtime crossfade commands (`cn debug` WS `anim-crossfade`) are
-        // drained from the binary's `DebugHook::tick` via
-        // `apply_crossfade_commands`, not here.
+        // Runtime commands (`cn debug` WS `anim-crossfade` / `anim-param` /
+        // `anim-state`) are drained from the binary's `DebugHook::tick` via
+        // `apply_runtime_commands`, not here.
 
-        // Advance each bucket's weights along its active transition (if any)
-        // before sampling, so the per-pose blend uses the live values.
-        for state in self.targets.values_mut() {
-            let _ = advance_weights(state, t);
+        // Advance each bucket's driver before sampling: flat buckets move
+        // their weight transitions, graph buckets sync `AnimParams` and step
+        // their cursor.
+        for (target, state) in &mut self.targets {
+            match &mut state.mode {
+                TargetMode::Flat(flat) => flat::advance_weights(flat, t),
+                TargetMode::Graph(g) => graph::step_target(g, *target, ctx, dt),
+            }
         }
 
         // Each `SkeletonPose` is sampled and skinned independently, so the
@@ -396,73 +343,32 @@ impl System for AnimationSystem {
             let Some(state) = targets.get(&pose.mesh_id) else {
                 return;
             };
-            let locals = match state.clips.as_slice() {
-                [] => return,
-                [single] => {
-                    // One-clip buckets ignore weight and play at full
-                    // strength; the blend would be a no-op anyway.
-                    single.clip.sample(t, &pose.skeleton)
-                }
-                many => {
-                    let sampled: Vec<_> = many
-                        .iter()
-                        .map(|c| c.clip.sample(t, &pose.skeleton))
-                        .collect();
-                    skinning::blend_many(&sampled, &state.current_weights)
-                }
+            let locals = match &state.mode {
+                TargetMode::Flat(flat) => match state.clips.as_slice() {
+                    [] => return,
+                    [single] => {
+                        // One-clip buckets ignore weight and play at full
+                        // strength; the blend would be a no-op anyway.
+                        single.clip.sample(t, &pose.skeleton)
+                    }
+                    many => {
+                        let sampled: Vec<_> = many
+                            .iter()
+                            .map(|c| c.clip.sample(t, &pose.skeleton))
+                            .collect();
+                        skinning::blend_many(&sampled, &flat.current_weights)
+                    }
+                },
+                TargetMode::Graph(g) => crate::gfx::anim_graph::sample_graph_pose(
+                    &g.graph,
+                    &g.cursor,
+                    |i| &state.clips[i].clip,
+                    &pose.skeleton,
+                ),
             };
             pose.joint_matrices = pose.skeleton.skinning_matrices(&locals);
         });
 
         StepResult::Continue
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resumed_origin;
-    use crate::assets::Animation;
-    use crate::ecs::World;
-    use std::time::{Duration, Instant};
-
-    // Resuming after a pause must leave clip time `t = now - origin` exactly
-    // where it was when the pause began, so playback continues from the frozen
-    // pose with no jump, no matter how long the menu was open.
-    #[test]
-    fn resumed_origin_freezes_clip_time_across_pause() {
-        let start = Instant::now();
-        // Paused at t = 5s, menu held open for 30s of real time.
-        let anchor = start + Duration::from_secs(5);
-        let now = anchor + Duration::from_secs(30);
-
-        let t_at_pause = (anchor - start).as_secs_f32();
-        let new_origin = resumed_origin(start, anchor, now);
-        let t_on_resume = (now - new_origin).as_secs_f32();
-
-        assert!(
-            (t_on_resume - t_at_pause).abs() < 1e-6,
-            "clip time jumped across the pause: {t_at_pause} -> {t_on_resume}"
-        );
-    }
-
-    // An `Animation` in the world implies the internal AnimationSystem: it is
-    // constructed by `World::start`, not declared as an asset.
-    #[test]
-    fn animation_component_spawns_internal_system() {
-        let mut world = World::new_empty();
-        world.add_component(Animation::default());
-        world.start().unwrap();
-
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["AnimationSystem"]);
-    }
-
-    // No `Animation` means no AnimationSystem; the gate keys purely off world
-    // content.
-    #[test]
-    fn no_animation_no_internal_system() {
-        let mut world = World::new_empty();
-        world.start().unwrap();
-        assert!(world.systems().is_empty());
     }
 }

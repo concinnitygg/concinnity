@@ -21,10 +21,11 @@ use std::collections::HashSet;
 // to a `CrossReferenced` impl in the named asset's file.
 fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
     use crate::assets::{
-        DebugHud, Decal, FpsCounter, InstancedProp, Joint, Material, Model, ParticleEmitter, Prop,
-        Scene, SceneReel, StatHud, VoxelChunk, VoxelWorld,
+        AnimGraph, DebugHud, Decal, FpsCounter, InstancedProp, Joint, Material, Model,
+        ParticleEmitter, Prop, Scene, SceneReel, StatHud, VoxelChunk, VoxelWorld,
     };
     match type_norm {
+        "animgraph" => AnimGraph::cross_refs(name, args),
         "prop" => Prop::cross_refs(name, args),
         "model" => Model::cross_refs(name, args),
         "scenereel" | "scenreel" => SceneReel::cross_refs(name, args),
@@ -55,6 +56,8 @@ struct RefScope<'a> {
     camera3ds: HashSet<&'a str>,
     block_types: HashSet<&'a str>,
     text_labels: HashSet<&'a str>,
+    skinned_meshes: HashSet<&'a str>,
+    animations: HashSet<&'a str>,
 }
 
 impl<'a> RefScope<'a> {
@@ -98,6 +101,8 @@ impl<'a> RefScope<'a> {
             camera3ds: by_type(&|t| t == "camera3d"),
             block_types: by_type(&|t| t == "blocktype" || t == "block"),
             text_labels: by_type(&|t| t == "textlabel"),
+            skinned_meshes: by_type(&|t| t == "skinnedmesh"),
+            animations: by_type(&|t| t == "animation"),
         }
     }
 
@@ -113,6 +118,8 @@ impl<'a> RefScope<'a> {
             RefKind::CameraShot => self.camera3ds.contains(name),
             RefKind::BlockType => self.block_types.contains(name),
             RefKind::TextLabel => self.text_labels.contains(name),
+            RefKind::SkinnedMesh => self.skinned_meshes.contains(name),
+            RefKind::Animation => self.animations.contains(name),
         }
     }
 }
@@ -171,10 +178,92 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
         }
     }
 
+    check_graph_ownership(assets, &mut errors);
+
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+// AnimGraph ownership rules. A graph owns its target mesh's animation set:
+// at most one graph per SkinnedMesh, every clip a graph references must
+// actually target that mesh, and every Animation targeting a graph-driven
+// mesh must be referenced by the graph (a loose clip would silently never
+// play, since the graph decides what runs). These need the whole world, so
+// they live here rather than in the per-asset checks.
+fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    let norm = |t: &str| t.to_lowercase().replace('_', "");
+    let graphs: Vec<&WorldJsonlAsset> = assets
+        .iter()
+        .filter(|a| norm(&a.asset_type) == "animgraph")
+        .collect();
+    if graphs.is_empty() {
+        return;
+    }
+
+    // Animation name -> its target SkinnedMesh name.
+    let clip_targets: std::collections::HashMap<&str, &str> = assets
+        .iter()
+        .filter(|a| norm(&a.asset_type) == "animation")
+        .map(|a| {
+            let target = a.args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            (a.name.as_str(), target)
+        })
+        .collect();
+
+    let mut owner_by_mesh: std::collections::HashMap<&str, &str> = Default::default();
+    for graph in &graphs {
+        let mesh = graph
+            .args
+            .get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if mesh.is_empty() {
+            continue; // missing target already reported by cross_refs
+        }
+        if let Some(other) = owner_by_mesh.insert(mesh, graph.name.as_str()) {
+            errors.push(format!(
+                "AnimGraph '{}': SkinnedMesh '{}' is already driven by AnimGraph '{}'; \
+                 a mesh can have at most one graph",
+                graph.name, mesh, other
+            ));
+        }
+
+        let mut referenced: HashSet<&str> = HashSet::new();
+        for state in graph
+            .args
+            .get("states")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+        {
+            let clip = state.get("clip").and_then(|v| v.as_str()).unwrap_or("");
+            if clip.is_empty() {
+                continue; // missing clip already reported by cross_refs
+            }
+            referenced.insert(clip);
+            if let Some(&clip_target) = clip_targets.get(clip)
+                && clip_target != mesh
+            {
+                errors.push(format!(
+                    "AnimGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
+                     target '{}'",
+                    graph.name, clip, clip_target, mesh
+                ));
+            }
+        }
+
+        for (&clip, &clip_target) in &clip_targets {
+            if clip_target == mesh && !referenced.contains(clip) {
+                errors.push(format!(
+                    "Animation '{}': targets SkinnedMesh '{}', which AnimGraph '{}' drives, \
+                     but no graph state references it; add a state for it or remove the clip",
+                    clip, mesh, graph.name
+                ));
+            }
+        }
     }
 }
 
@@ -734,6 +823,95 @@ mod tests {
             ),
         ];
         assert!(err_text(&assets).contains("frumpus"));
+    }
+
+    // A minimal skinned world: mesh + two clips + a graph referencing both.
+    fn graph_world() -> Vec<WorldJsonlAsset> {
+        vec![
+            asset("hero", "SkinnedMesh", serde_json::json!({})),
+            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
+            asset("run", "Animation", serde_json::json!({"target":"hero"})),
+            asset(
+                "g",
+                "AnimGraph",
+                serde_json::json!({
+                    "target":"hero",
+                    "states":[
+                        {"name":"idle","clip":"idle"},
+                        {"name":"run","clip":"run"}
+                    ]
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn anim_graph_valid_references_pass() {
+        assert!(validate_cross_references(&graph_world()).is_ok());
+    }
+
+    #[test]
+    fn anim_graph_missing_target_mesh_fails() {
+        let mut assets = graph_world();
+        assets.remove(0);
+        assert!(err_text(&assets).contains("'hero' not found"));
+    }
+
+    #[test]
+    fn anim_graph_missing_clip_fails() {
+        let mut assets = graph_world();
+        assets[3].args["states"][1]["clip"] = serde_json::json!("ghost_clip");
+        assert!(err_text(&assets).contains("ghost_clip"));
+    }
+
+    #[test]
+    fn anim_graph_unreferenced_clip_on_target_fails() {
+        let mut assets = graph_world();
+        assets.push(asset(
+            "wave",
+            "Animation",
+            serde_json::json!({"target":"hero"}),
+        ));
+        assert!(err_text(&assets).contains("no graph state references it"));
+    }
+
+    #[test]
+    fn anim_graph_clip_targeting_other_mesh_fails() {
+        let mut assets = graph_world();
+        assets.push(asset("other", "SkinnedMesh", serde_json::json!({})));
+        assets.push(asset(
+            "other_idle",
+            "Animation",
+            serde_json::json!({"target":"other"}),
+        ));
+        assets[3].args["states"][1]["clip"] = serde_json::json!("other_idle");
+        let errs = err_text(&assets);
+        assert!(errs.contains("not the graph's"));
+        // The displaced 'run' clip is now also unreferenced.
+        assert!(errs.contains("no graph state references it"));
+    }
+
+    #[test]
+    fn two_graphs_on_one_mesh_fails() {
+        let mut assets = graph_world();
+        assets.push(asset(
+            "g2",
+            "AnimGraph",
+            serde_json::json!({
+                "target":"hero",
+                "states":[{"name":"idle","clip":"idle"},{"name":"run","clip":"run"}]
+            }),
+        ));
+        assert!(err_text(&assets).contains("at most one graph"));
+    }
+
+    #[test]
+    fn clips_without_graph_stay_unowned_and_pass() {
+        let assets = vec![
+            asset("hero", "SkinnedMesh", serde_json::json!({})),
+            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
+        ];
+        assert!(validate_cross_references(&assets).is_ok());
     }
 
     #[test]

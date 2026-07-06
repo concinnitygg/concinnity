@@ -1,15 +1,16 @@
 // src/app/anim_runtime.rs
 //
-// Process-wide command queue for runtime animation crossfades. Mirrors the
-// shape of `crate::debug::runtime_spawn`, but separate so the AnimationSystem
-// can drain its own commands without contending with GraphicsSystem's
-// decal / particle queue.
+// Process-wide command queue for runtime animation control (crossfades,
+// graph parameter writes, graph state queries). Mirrors the shape of
+// `crate::debug::runtime_spawn`, but separate so the AnimationSystem can
+// drain its own commands without contending with GraphicsSystem's decal /
+// particle queue.
 //
 // The debug WebSocket server (binary-only, off the engine thread) pushes
-// commands here; `AnimationSystem::step` drains them at frame start and
-// applies a new target weight vector + transition duration to the matching
-// per-target clip bucket. Each command carries a reply channel so the WS
-// handler can hand a synchronous result back to its client.
+// commands here; the editor's per-frame debug drive drains them via
+// `AnimationSystem::apply_runtime_commands` every frame -- including while a
+// menu pauses playback, so a blocked WS client always gets its reply. Each
+// command carries a reply channel the drain fulfils synchronously.
 
 use std::sync::Mutex;
 
@@ -18,7 +19,7 @@ use crate::ecs::asset_id::AssetId;
 // One queued crossfade request. `target` is the `SkinnedMesh` asset id the
 // command applies to; `weights` must match the clip count registered for
 // that target. `duration_secs == 0` snaps to the new weights on the next
-// frame.
+// frame. Rejected when the target is graph-driven (use `SetParam`).
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct CrossfadeRequest {
@@ -27,17 +28,48 @@ pub struct CrossfadeRequest {
     pub duration_secs: f32,
 }
 
+// One queued graph parameter write. `target` is the `SkinnedMesh` whose
+// graph declares the parameter; the value lands in the target's `AnimParams`
+// component on the next animation step.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct SetParamRequest {
+    pub target: AssetId,
+    pub name: String,
+    pub value: f32,
+}
+
+// Snapshot of a graph target's live state, answered synchronously to the
+// `anim-state` debug command. Parameter values are as of the last completed
+// animation step (a pending `SetParam` shows up after the next step).
+#[derive(Debug, Clone)]
+pub struct GraphStateReport {
+    pub state: String,
+    pub clock_secs: f32,
+    pub fading_from: Option<String>,
+    pub fade_progress: Option<f32>,
+    pub params: Vec<(String, f32)>,
+}
+
 // One runtime command pushed onto [`enqueue`] by the debug WS server and
-// consumed by [`AnimationSystem::step`](crate::gfx::animation::AnimationSystem::step).
+// drained by `AnimationSystem::apply_runtime_commands`.
 //
 // `dead_code` allow: the only producer is the binary-only `crate::debug`
 // module (declared by main.rs, not lib.rs), so `cargo check --lib` sees the
-// variant as unconstructed.
+// variants as unconstructed.
 #[allow(dead_code)]
 pub enum AnimCommand {
     Crossfade {
         req: CrossfadeRequest,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+    SetParam {
+        req: SetParamRequest,
+        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+    QueryState {
+        target: AssetId,
+        reply: std::sync::mpsc::SyncSender<Result<GraphStateReport, String>>,
     },
 }
 
@@ -57,7 +89,7 @@ pub fn enqueue(cmd: AnimCommand) {
     q.push(cmd);
 }
 
-// Take every queued command. Drained by `AnimationSystem::apply_crossfade_commands`,
+// Take every queued command. Drained by `AnimationSystem::apply_runtime_commands`,
 // which the `cn debug` drive (`DebugHook::tick`) calls each frame. The
 // returned `Vec` is the live list: the queue is reset to empty.
 pub(crate) fn drain() -> Vec<AnimCommand> {

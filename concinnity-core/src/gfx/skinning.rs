@@ -465,7 +465,14 @@ impl AnimationClip {
     // Sample the clip at time `t` against `skeleton`, returning one local
     // matrix per joint. Joints with no track keep their bind transform.
     pub fn sample(&self, t: f32, skeleton: &Skeleton) -> Vec<Mat4> {
-        let local_t = if self.looping && self.duration > 1e-6 {
+        self.sample_looped(t, self.looping, skeleton)
+    }
+
+    // `sample` with the loop mode supplied by the caller instead of the
+    // clip's own flag. Lets a graph state override looping without cloning
+    // the clip.
+    pub fn sample_looped(&self, t: f32, looping: bool, skeleton: &Skeleton) -> Vec<Mat4> {
+        let local_t = if looping && self.duration > 1e-6 {
             t.rem_euclid(self.duration)
         } else {
             t.clamp(0.0, self.duration)

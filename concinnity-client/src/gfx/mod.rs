@@ -11,8 +11,8 @@
 // `pub` so the editor crate can reach these core GPU-layout modules through
 // `concinnity_client::gfx::*` (e.g. shader-layout reflection).
 pub use concinnity_core::gfx::{
-    auto_exposure, camera, frustum, lod, mesh_payload, mesh_seed, profile, render_types,
-    rt_reflections, skinning, ssao, ssgi, ssr,
+    anim_graph, auto_exposure, camera, frustum, lod, mesh_payload, mesh_seed, profile,
+    render_types, rt_reflections, skinning, ssao, ssgi, ssr,
 };
 // Chunk-streaming layout helpers: driven only by the Metal backend today, so
 // the re-exports are unused on other backends (mirrors the chunk_window /

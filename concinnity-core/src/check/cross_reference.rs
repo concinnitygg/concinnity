@@ -23,6 +23,8 @@ pub enum RefKind {
     CameraShot,
     BlockType,
     TextLabel,
+    SkinnedMesh,
+    Animation,
 }
 
 // One item produced by a referencing asset's `cross_refs`.

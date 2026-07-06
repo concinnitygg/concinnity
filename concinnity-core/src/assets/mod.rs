@@ -7,6 +7,8 @@
 // `crate::assets::*` paths.
 
 // Component data types.
+mod anim_graph;
+mod anim_params;
 mod animation;
 mod application;
 pub mod audio_clip;
@@ -106,6 +108,8 @@ mod debug_hud;
 mod fps_counter;
 mod stat_hud;
 
+pub use anim_graph::{AnimGraph, GraphCondition, GraphParam, GraphState, GraphTransition};
+pub use anim_params::AnimParams;
 pub use animation::Animation;
 pub use application::Application;
 pub use audio_clip::AudioClip;

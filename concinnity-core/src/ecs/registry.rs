@@ -102,6 +102,8 @@ crate::define_components! {
         AudioCue          => assets::AudioCue,          83,
         Story             => assets::Story,             84,
         Application       => assets::Application,       85,
+        AnimGraph         => assets::AnimGraph,         86,
+        AnimParams        => assets::AnimParams,        87,
 }
 
 #[cfg(test)]

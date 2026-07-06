@@ -227,6 +227,104 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
     }
 }
 
+// Resolve a `target` asset name against the interner names table (indexed by
+// `AssetId`; a small linear scan is fine for a debug command that fires at
+// most a few times per second).
+fn resolve_target(
+    cmd: &str,
+    target: &str,
+    names: &[String],
+) -> Result<crate::ecs::asset_id::AssetId, String> {
+    if target.is_empty() {
+        return Err(format!("{cmd}: missing 'target'"));
+    }
+    names
+        .iter()
+        .position(|n| n == target)
+        .map(|idx| crate::ecs::asset_id::AssetId(idx as u32))
+        .ok_or_else(|| format!("{cmd}: unknown asset name '{target}'"))
+}
+
+#[derive(serde::Deserialize)]
+struct AnimParamRequest {
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    value: f32,
+}
+
+pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
+    let req: AnimParamRequest = match serde_json::from_str(text) {
+        Ok(r) => r,
+        Err(e) => return error_reply(&format!("anim-param: {e}")),
+    };
+    if req.name.is_empty() {
+        return error_reply("anim-param: missing 'name' (a graph parameter)");
+    }
+    let target = match resolve_target("anim-param", &req.target, names) {
+        Ok(t) => t,
+        Err(e) => return error_reply(&e),
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::SetParam {
+        req: crate::app::anim_runtime::SetParamRequest {
+            target,
+            name: req.name,
+            value: req.value,
+        },
+        reply: tx,
+    });
+    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
+        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
+        Ok(Err(e)) => error_reply(&e),
+        Err(_) => error_reply("anim-param: timed out waiting for engine"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AnimStateRequest {
+    #[serde(default)]
+    target: String,
+}
+
+pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
+    let req: AnimStateRequest = match serde_json::from_str(text) {
+        Ok(r) => r,
+        Err(e) => return error_reply(&format!("anim-state: {e}")),
+    };
+    let target = match resolve_target("anim-state", &req.target, names) {
+        Ok(t) => t,
+        Err(e) => return error_reply(&e),
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::QueryState {
+        target,
+        reply: tx,
+    });
+    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
+        Ok(Ok(report)) => {
+            let params: serde_json::Map<String, serde_json::Value> = report
+                .params
+                .into_iter()
+                .map(|(name, value)| (name, serde_json::json!(value)))
+                .collect();
+            serde_json::json!({
+                "ok": true,
+                "state": report.state,
+                "clock_secs": report.clock_secs,
+                "fading_from": report.fading_from,
+                "fade_progress": report.fade_progress,
+                "params": params,
+            })
+            .to_string()
+        }
+        Ok(Err(e)) => error_reply(&e),
+        Err(_) => error_reply("anim-state: timed out waiting for engine"),
+    }
+}
+
 // Longer than the spawn timeout: the capture idles the GPU, copies the
 // swapchain image back, and PNG-encodes + writes it on the render thread, which
 // can take noticeably longer than a simple state mutation.

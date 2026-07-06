@@ -486,12 +486,14 @@ impl World {
             .map(|cfg| crate::hud::debug_hud::DebugHudSystem::new(cfg).into())
     }
 
-    // AnimationSystem: present whenever the world declares any `Animation`. It
-    // drains every `Animation` at init and writes `SkeletonPose` each frame.
+    // AnimationSystem: present whenever the world declares any `Animation` or
+    // `AnimGraph`. It drains both at init and writes `SkeletonPose` each
+    // frame. (A graph without clips is a build error, so the second check
+    // only matters for hand-assembled worlds.)
     fn build_animation(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::Animation>()
-            .next()
-            .map(|_| crate::gfx::animation::AnimationSystem::new().into())
+        let declared = self.query::<crate::assets::Animation>().next().is_some()
+            || self.query::<crate::assets::AnimGraph>().next().is_some();
+        declared.then(|| crate::gfx::animation::AnimationSystem::new().into())
     }
 
     // StorySystem: present whenever the world declares a `Story` (a compiled
