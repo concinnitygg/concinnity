@@ -159,6 +159,52 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
         }
     }
 
+    // IK chains: three named joints, a usable pole, and a declared weight
+    // parameter. Joint names resolve against the target skeleton at runtime
+    // (the skeleton may come from a binary payload the check never sees).
+    for (i, chain) in args
+        .get("ik_chains")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        let joints = chain
+            .get("joints")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+        if joints.len() != 3 {
+            return err(format!(
+                "ik_chains[{i}]: `joints` must name exactly three joints (root, middle, end), \
+                 got {}",
+                joints.len()
+            ));
+        }
+        for (j, joint) in joints.iter().enumerate() {
+            if joint.as_str().is_none_or(|s| s.is_empty()) {
+                return err(format!("ik_chains[{i}]: joints[{j}] must be a joint name"));
+            }
+        }
+        if let Some(pole) = chain.get("pole").and_then(|v| v.as_array()) {
+            let mag: f64 = pole.iter().filter_map(|v| v.as_f64()).map(|v| v * v).sum();
+            if pole.len() != 3 || mag < 1.0e-8 {
+                return err(format!(
+                    "ik_chains[{i}]: `pole` must be a non-zero [x, y, z] bend direction"
+                ));
+            }
+        }
+        if let Some(param) = chain.get("weight_parameter").and_then(|v| v.as_str())
+            && !param.is_empty()
+            && !declared_param(param)
+        {
+            return err(format!(
+                "ik_chains[{i}]: weight parameter '{param}' is not declared in `parameters`"
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -459,5 +505,44 @@ mod tests {
             "rows": [["a", "b"], ["c", "d"]]
         });
         assert!(check("g", &v).unwrap_err().contains("ascending"));
+    }
+
+    #[test]
+    fn valid_ik_chain_passes() {
+        let mut v = base();
+        v["ik_chains"] = serde_json::json!([{
+            "joints": ["hip", "knee", "foot"],
+            "pole": [0.0, 0.0, 1.0],
+            "weight_parameter": "speed"
+        }]);
+        assert!(check("g", &v).is_ok());
+    }
+
+    #[test]
+    fn ik_chain_needs_exactly_three_named_joints() {
+        let mut v = base();
+        v["ik_chains"] = serde_json::json!([{"joints": ["hip", "foot"]}]);
+        assert!(check("g", &v).unwrap_err().contains("exactly three"));
+        v["ik_chains"] = serde_json::json!([{"joints": ["hip", "", "foot"]}]);
+        assert!(check("g", &v).unwrap_err().contains("joints[1]"));
+    }
+
+    #[test]
+    fn ik_chain_rejects_zero_pole_and_unknown_weight_parameter() {
+        let mut v = base();
+        v["ik_chains"] = serde_json::json!([{
+            "joints": ["hip", "knee", "foot"],
+            "pole": [0.0, 0.0, 0.0]
+        }]);
+        assert!(check("g", &v).unwrap_err().contains("non-zero"));
+        v["ik_chains"] = serde_json::json!([{
+            "joints": ["hip", "knee", "foot"],
+            "weight_parameter": "ghost"
+        }]);
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .contains("'ghost' is not declared")
+        );
     }
 }

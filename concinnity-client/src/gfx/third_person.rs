@@ -140,6 +140,16 @@ impl System for ThirdPersonSystem {
                 rig.position[2],
             ];
         }
+
+        // Occlusion probe: PhysicsSystem raycasts pivot-to-camera each frame
+        // and reports the largest unobstructed distance, so walls never cut
+        // between the camera and the character.
+        ctx.push(crate::assets::CameraProbe {
+            target,
+            pivot: self.pivot,
+            desired: self.pivot,
+            clearance: None,
+        });
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -269,16 +279,34 @@ impl System for ThirdPersonSystem {
             }
         }
 
-        // Place the camera on the orbit sphere behind the pivot and commit
-        // the pose. The player-capsule intents stay cleared: in third person
-        // the character capsule moves, not a camera capsule.
+        // Place the camera on the orbit sphere behind the pivot, pulled in
+        // to the occlusion probe's clearance (answered by PhysicsSystem this
+        // frame from last frame's ray) so a wall never cuts the view, and
+        // commit the pose. The player-capsule intents stay cleared: in third
+        // person the character capsule moves, not a camera capsule.
         let (sin_yaw, cos_yaw) = yaw.sin_cos();
         let (sin_pitch, cos_pitch) = pitch.sin_cos();
         let look = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
-        let position = [
+        let desired = [
             self.pivot[0] - look[0] * self.distance,
             self.pivot[1] - look[1] * self.distance,
             self.pivot[2] - look[2] * self.distance,
+        ];
+        let mut distance = self.distance;
+        if let Some(probe) = ctx
+            .query_mut::<crate::assets::CameraProbe>()
+            .find(|p| Some(p.target) == self.target)
+        {
+            if let Some(clearance) = probe.clearance {
+                distance = distance.min(clearance);
+            }
+            probe.pivot = self.pivot;
+            probe.desired = desired;
+        }
+        let position = [
+            self.pivot[0] - look[0] * distance,
+            self.pivot[1] - look[1] * distance,
+            self.pivot[2] - look[2] * distance,
         ];
         for camera in ctx.query_mut::<Camera3D>() {
             if let Some(fov) = pending_fov {
@@ -523,6 +551,42 @@ mod tests {
             rig.position[1] > -0.2,
             "flat floor holds the capsule up: {:?}",
             rig.position
+        );
+    }
+
+    // A wall between the character and the orbit camera pulls the camera in
+    // front of it: the occlusion probe (answered by PhysicsSystem) clamps
+    // the follow distance so the view is never cut.
+    #[test]
+    fn wall_behind_the_camera_pulls_it_in() {
+        let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
+        world.add_component(crate::assets::PhysicsConfig::default());
+        // A wall crossing the camera's line at z = +2 (the camera orbits to
+        // z = +4 at yaw 0, the pivot sits at z = 0).
+        world.add_component(crate::assets::Prop {
+            asset_id: intern("wall"),
+            position: [0.0, 1.5, 2.0],
+            collider: Some(crate::assets::PropCollider {
+                shape: "cuboid".to_string(),
+                half_extents: [3.0, 1.5, 0.2],
+                radius: 0.0,
+                half_height: 0.0,
+            }),
+            ..Default::default()
+        });
+        world.start().unwrap();
+        step_held(&mut world, FrameInput::default(), 6);
+
+        let camera = world.query::<crate::assets::Camera3D>().next().unwrap();
+        assert!(
+            camera.position[2] < 1.9,
+            "camera pulled in front of the wall at z = 2: {:?}",
+            camera.position
+        );
+        assert!(
+            camera.position[2] > 0.3,
+            "camera stays behind the pivot: {:?}",
+            camera.position
         );
     }
 

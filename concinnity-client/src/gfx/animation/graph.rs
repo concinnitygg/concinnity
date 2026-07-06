@@ -27,6 +27,9 @@ pub(super) struct GraphTarget {
     // `AnimParams` component at the top of the next step (the component
     // stays the single authoritative store).
     pub pending: Vec<(usize, f32)>,
+    // Foot-pinning IK chains, resolved against the target skeleton at
+    // install (see `super::ik`). Empty when the graph authored none.
+    pub chains: Vec<super::ik::IkChainRuntime>,
 }
 
 // Compile every declared `AnimGraph` onto its target bucket and publish one
@@ -69,11 +72,39 @@ pub(super) fn install_graphs(
             Ok(graph) => {
                 let params = graph.default_params();
                 ctx.push(AnimParams::new(target, params.clone()));
+                // IK chains resolve joint names against the target's
+                // skeleton (published by GraphicsSystem init, which ran
+                // before this one) and get a ground-probe exchange for
+                // PhysicsSystem to answer.
+                let chains = if g.ik_chains.is_empty() {
+                    Vec::new()
+                } else if let Some(skeleton) = ctx
+                    .query::<crate::assets::SkeletonPose>()
+                    .find(|p| p.mesh_id == target)
+                    .map(|p| p.skeleton.clone())
+                {
+                    super::ik::resolve_chains(g.asset_id, &g.ik_chains, &g.parameters, &skeleton)
+                } else {
+                    tracing::warn!(
+                        "AnimationSystem: AnimGraph {} has ik_chains but target {} has no \
+                         skeleton pose; IK disabled",
+                        g.asset_id,
+                        target
+                    );
+                    Vec::new()
+                };
+                if !chains.is_empty() {
+                    ctx.push(crate::assets::GroundProbes {
+                        target,
+                        probes: Vec::new(),
+                    });
+                }
                 bucket.mode = TargetMode::Graph(GraphTarget {
                     cursor: GraphCursor::start(&graph),
                     graph,
                     params,
                     pending: Vec::new(),
+                    chains,
                 });
                 installed += 1;
             }

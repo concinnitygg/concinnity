@@ -17,6 +17,7 @@ mod audio_cue;
 mod audio_emitter;
 mod block_type;
 mod camera3d;
+mod camera_probe;
 mod camera_shot;
 mod character_rig;
 mod color_lut;
@@ -32,6 +33,7 @@ mod font;
 mod frame_input;
 mod glass_panel;
 mod graphics_config;
+mod ground_probes;
 mod hit_region;
 mod input_key;
 pub mod instanced_prop;
@@ -111,7 +113,8 @@ mod fps_counter;
 mod stat_hud;
 
 pub use anim_graph::{
-    AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphParam, GraphState, GraphTransition,
+    AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphIkChain, GraphParam, GraphState,
+    GraphTransition,
 };
 pub use anim_params::AnimParams;
 pub use animation::Animation;
@@ -121,6 +124,7 @@ pub use audio_command::AudioCommand;
 pub use audio_cue::{AudioCue, CueKind};
 pub use audio_emitter::AudioEmitter;
 pub use block_type::BlockType;
+pub use camera_probe::CameraProbe;
 pub use camera_shot::CameraShot;
 pub use camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
 pub use character_rig::CharacterRig;
@@ -139,6 +143,7 @@ pub use glass_panel::GlassPanel;
 pub use graphics_config::GraphicsConfig;
 #[allow(unused_imports)]
 pub use graphics_config::ShadowUpdate;
+pub use ground_probes::{GroundProbe, GroundProbes};
 pub use hit_region::HitRegion;
 pub use input_key::Key;
 pub use instanced_prop::InstancedProp;

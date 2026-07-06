@@ -15,6 +15,7 @@
 mod commands;
 mod flat;
 mod graph;
+mod ik;
 mod root;
 #[cfg(test)]
 mod tests;
@@ -358,6 +359,11 @@ impl System for AnimationSystem {
             }
         }
 
+        // Foot-pinning inputs for this frame: per graph target with IK
+        // chains, the rig transform and each chain's ground pin (probe hits
+        // answered by PhysicsSystem earlier this tick).
+        let ik_frames = ik::frame_inputs(&self.targets, ctx);
+
         // Each `SkeletonPose` is sampled and skinned independently, so the
         // per-pose work fans across the job pool and joins before returning.
         let targets = &self.targets;
@@ -366,7 +372,7 @@ impl System for AnimationSystem {
             let Some(state) = targets.get(&pose.mesh_id) else {
                 return;
             };
-            let locals = match &state.mode {
+            let mut locals = match &state.mode {
                 TargetMode::Flat(flat) => match state.clips.as_slice() {
                     [] => return,
                     [single] => {
@@ -390,8 +396,17 @@ impl System for AnimationSystem {
                     &pose.skeleton,
                 ),
             };
+            if let TargetMode::Graph(g) = &state.mode
+                && let Some(frame) = ik_frames.get(&pose.mesh_id)
+            {
+                ik::apply_chains(&pose.skeleton, &mut locals, &g.chains, frame);
+            }
             pose.joint_matrices = pose.skeleton.skinning_matrices(&locals);
         });
+
+        // Refresh the ground-probe rays from the posed foot positions for
+        // PhysicsSystem to answer next frame.
+        ik::refresh_rays(&self.targets, ctx);
 
         StepResult::Continue
     }

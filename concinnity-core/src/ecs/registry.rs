@@ -105,6 +105,8 @@ crate::define_components! {
         AnimGraph         => assets::AnimGraph,         86,
         AnimParams        => assets::AnimParams,        87,
         CharacterRig      => assets::CharacterRig,      88,
+        GroundProbes      => assets::GroundProbes,      89,
+        CameraProbe       => assets::CameraProbe,       90,
 }
 
 #[cfg(test)]

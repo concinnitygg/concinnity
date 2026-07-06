@@ -590,6 +590,9 @@ impl System for PhysicsSystem {
             GRAVITY,
         );
 
+        // answer the IK ground probes and the follow camera's occlusion probe
+        super::probes::step_probes(world, ctx, &self.rigs);
+
         // advance the simulation
         world.step(dt);
 

@@ -109,6 +109,43 @@ impl Default for GraphState {
     }
 }
 
+/// One two-bone IK chain, pinning the chain's end joint (typically a foot)
+/// to the ground the physics scene finds beneath it.
+///
+/// `joints` names the chain root, middle, and end in the target skeleton --
+/// e.g. a hip, knee, and foot. The middle joint must be the direct child of
+/// the root and the end the direct child of the middle. Every frame the
+/// runtime probes straight down from the animated end joint; when a surface
+/// is within range, the chain bends so the end lands `foot_height` above it.
+/// Pinning pauses automatically while the character is airborne.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GraphIkChain {
+    /// Names of the chain's root, middle, and end joints, in order. Exactly
+    /// three are required, matching the target skeleton's joint names.
+    pub joints: Vec<String>,
+    /// Bend direction in mesh space: the middle joint bows toward this
+    /// vector (a knee points forward, an elbow backward).
+    pub pole: [f32; 3],
+    /// Name of a declared graph parameter scaling the solve in `[0, 1]`;
+    /// empty pins at full strength. Lets gameplay fade IK in and out.
+    pub weight_parameter: String,
+    /// Height the end joint rests above the probed surface, in mesh units
+    /// (the sole-to-ankle offset for a foot).
+    pub foot_height: f32,
+}
+
+impl Default for GraphIkChain {
+    fn default() -> Self {
+        Self {
+            joints: Vec::new(),
+            pole: [0.0, 0.0, 1.0],
+            weight_parameter: String::new(),
+            foot_height: 0.0,
+        }
+    }
+}
+
 /// One transition condition, `parameter <op> value`. All of a transition's
 /// conditions must pass for it to fire.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -210,6 +247,9 @@ pub struct AnimGraph {
     pub states: Vec<GraphState>,
     /// Directed transitions between states.
     pub transitions: Vec<GraphTransition>,
+    /// Two-bone IK chains applied on top of every state's pose; see
+    /// [GraphIkChain](#graphikchain).
+    pub ik_chains: Vec<GraphIkChain>,
 }
 
 impl AnimGraph {

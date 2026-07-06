@@ -60,3 +60,4 @@ looping states wrap, non-looping states hold their final pose.
 - `initial`: A string. Name of the state the graph starts in. Defaults to the first state.
 - `states`: An array of [GraphState](GraphState.md) objects. The graph's states. At least one is required.
 - `transitions`: An array of [GraphTransition](GraphTransition.md) objects. Directed transitions between states.
+- `ik_chains`: An array of [GraphIkChain](GraphIkChain.md) objects. Two-bone IK chains applied on top of every state's pose; see [GraphIkChain](GraphIkChain.md).

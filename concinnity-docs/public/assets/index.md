@@ -81,6 +81,7 @@
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
 - [GraphCondition](GraphCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
+- [GraphIkChain](GraphIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
 - [GraphParam](GraphParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
 - [GraphState](GraphState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
 - [GraphTransition](GraphTransition.md) - One directed transition between two states.

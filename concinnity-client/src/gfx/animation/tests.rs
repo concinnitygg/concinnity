@@ -310,6 +310,117 @@ fn root_motion_clip_publishes_displacement_events() {
 
 // The full rig chain: a skinned mesh with a capsule + a root-motion clip
 // moves its CharacterRig through PhysicsSystem, staying grounded.
+// Full IK chain: the graph authors an ik_chain on a three-joint leg whose
+// foot hangs over a raised ledge (off to the side of the capsule, which
+// stands on the flat floor). Probe rays go out, physics answers them, and
+// the solve bends the leg so the foot rests on the ledge instead of
+// clipping through it.
+#[test]
+fn ik_pins_the_foot_to_a_raised_ledge() {
+    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+
+    let target = intern("hero_ik");
+    let mut world = World::new_empty();
+
+    // A leg hanging from x = 0.6: hip at y = 2, knee at y = 1, foot at
+    // y = 0 (bind). Named joints so the chain resolves.
+    let joint = |name: &str, parent: Option<usize>, t: [f32; 3]| Joint {
+        name: name.to_string(),
+        parent,
+        bind: JointPose {
+            translation: t,
+            ..JointPose::default()
+        },
+    };
+    let skeleton = Skeleton::new(vec![
+        joint("hip", None, [0.6, 2.0, 0.0]),
+        joint("knee", Some(0), [0.0, -1.0, 0.0]),
+        joint("foot", Some(1), [0.0, -1.0, 0.0]),
+    ]);
+    world.add_component(crate::assets::SkeletonPose::new(target, 0, skeleton));
+    world.add_component(crate::assets::CharacterRig::new(
+        target,
+        0,
+        crate::gfx::skinning::IDENTITY,
+        0.5,
+        0.3,
+    ));
+
+    // A constant clip (the bind pose) so the graph has something to play.
+    let mut stand: Animation = serde_json::from_value(serde_json::json!({
+        "target": "hero_ik",
+        "duration": 1.0,
+        "looping": true,
+        "tracks": [{"joint": 0, "keyframes": [
+            {"time": 0.0, "translation": [0.6, 2.0, 0.0]},
+            {"time": 1.0, "translation": [0.6, 2.0, 0.0]}
+        ]}],
+    }))
+    .unwrap();
+    stand.asset_id = intern("hero_ik_stand");
+    world.add_component(stand);
+
+    let mut graph: AnimGraph = serde_json::from_value(serde_json::json!({
+        "target": "hero_ik",
+        "states": [{"name": "stand", "clip": "hero_ik_stand"}],
+        "ik_chains": [{"joints": ["hip", "knee", "foot"], "pole": [0.0, 0.0, 1.0]}],
+    }))
+    .unwrap();
+    graph.asset_id = intern("hero_ik_graph");
+    world.add_component(graph);
+
+    // Flat floor for the capsule; a ledge (top at y = 0.25) under the foot
+    // only, clear of the capsule standing at the origin.
+    world.add_component(crate::assets::PhysicsConfig::default());
+    world.add_component(crate::assets::Prop {
+        asset_id: intern("ledge"),
+        position: [0.75, 0.1, 0.0],
+        collider: Some(crate::assets::PropCollider {
+            shape: "cuboid".to_string(),
+            half_extents: [0.3, 0.15, 0.3],
+            radius: 0.0,
+            half_height: 0.0,
+        }),
+        ..Default::default()
+    });
+    world.start().unwrap();
+
+    // Ray out -> physics answer -> solve; a few extra steps let the capsule
+    // settle onto the floor.
+    for _ in 0..8 {
+        world.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let pose = world
+        .query::<crate::assets::SkeletonPose>()
+        .next()
+        .expect("pose survives");
+    let foot_mesh = {
+        let m = pose.joint_matrices[2];
+        let b = pose.skeleton.bind_position(2);
+        [
+            m[0][0] * b[0] + m[1][0] * b[1] + m[2][0] * b[2] + m[3][0],
+            m[0][1] * b[0] + m[1][1] * b[1] + m[2][1] * b[2] + m[3][1],
+            m[0][2] * b[0] + m[1][2] * b[1] + m[2][2] * b[2] + m[3][2],
+        ]
+    };
+    let rig_y = world
+        .query::<crate::assets::CharacterRig>()
+        .next()
+        .unwrap()
+        .position[1];
+    // The ledge top is at world 0.25; the foot's mesh-space height plus the
+    // rig's world height must land there (the animated pose kept it at ~0).
+    let foot_world_y = foot_mesh[1] + rig_y;
+    assert!(
+        (foot_world_y - 0.25).abs() < 0.03,
+        "foot pinned to the ledge top: world y = {foot_world_y}"
+    );
+    // The foot stays put horizontally: pinning only lifts it.
+    assert!((foot_mesh[0] - 0.6).abs() < 0.02, "{foot_mesh:?}");
+}
+
 #[test]
 fn rig_capsule_follows_root_motion() {
     let target = intern("hero_rig");

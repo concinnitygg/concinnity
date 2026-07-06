@@ -314,6 +314,10 @@ impl JointPose {
 // One joint in a skeleton: a parent link and a local bind transform.
 #[derive(Debug, Clone)]
 pub struct Joint {
+    // Authored joint name (empty when the source declared none). Resolved to
+    // an index at load time by consumers that reference joints by name
+    // (e.g. IK chains); never compared per frame.
+    pub name: String,
     // Index of the parent joint, or `None` for a root. Parents must appear
     // before their children so a single forward pass resolves the hierarchy.
     pub parent: Option<usize>,
@@ -328,6 +332,10 @@ pub struct Skeleton {
     joints: Vec<Joint>,
     // World-space inverse bind matrix per joint.
     inverse_bind: Vec<Mat4>,
+    // World-space bind position per joint. With a skinning matrix
+    // `S = world * inverse_bind`, `S * bind_position` recovers the joint's
+    // current mesh-space position without another hierarchy walk.
+    bind_positions: Vec<[f32; 3]>,
 }
 
 impl Skeleton {
@@ -345,9 +353,14 @@ impl Skeleton {
             world_bind.push(world);
         }
         let inverse_bind = world_bind.iter().map(|m| mat4_affine_inverse(*m)).collect();
+        let bind_positions = world_bind
+            .iter()
+            .map(|m| [m[3][0], m[3][1], m[3][2]])
+            .collect();
         Self {
             joints,
             inverse_bind,
+            bind_positions,
         }
     }
 
@@ -363,15 +376,22 @@ impl Skeleton {
         &self.joints
     }
 
-    // Compose `local_poses` (one local matrix per joint) into world-space
-    // joint matrices, then multiply by the inverse bind matrices to produce
-    // the skinning matrices the vertex shader applies. `local_poses` shorter
-    // than the skeleton has its missing tail filled from the bind pose.
-    //
-    // The result is capped at `MAX_JOINTS` entries (the GPU joint buffer is
-    // fixed-size) and is always at least one matrix so the buffer is never
-    // empty.
-    pub fn skinning_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
+    // Index of the joint with the given authored name, or `None`. Load-time
+    // lookup for by-name joint references (IK chains); linear scan is fine.
+    pub fn joint_index(&self, name: &str) -> Option<usize> {
+        (!name.is_empty()).then(|| self.joints.iter().position(|j| j.name == name))?
+    }
+
+    // World-space bind position of one joint.
+    pub fn bind_position(&self, joint: usize) -> [f32; 3] {
+        self.bind_positions.get(joint).copied().unwrap_or([0.0; 3])
+    }
+
+    // Compose `local_poses` (one local matrix per joint) into mesh-space
+    // joint matrices with a single forward pass over the hierarchy.
+    // `local_poses` shorter than the skeleton has its missing tail filled
+    // from the bind pose.
+    pub fn world_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
         let n = self.joints.len();
         let mut world: Vec<Mat4> = Vec::with_capacity(n);
         for (i, joint) in self.joints.iter().enumerate() {
@@ -385,7 +405,19 @@ impl Skeleton {
             };
             world.push(world_mat);
         }
-        let mut out: Vec<Mat4> = world
+        world
+    }
+
+    // Compose `local_poses` into world-space joint matrices, then multiply
+    // by the inverse bind matrices to produce the skinning matrices the
+    // vertex shader applies.
+    //
+    // The result is capped at `MAX_JOINTS` entries (the GPU joint buffer is
+    // fixed-size) and is always at least one matrix so the buffer is never
+    // empty.
+    pub fn skinning_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
+        let mut out: Vec<Mat4> = self
+            .world_matrices(local_poses)
             .iter()
             .zip(&self.inverse_bind)
             .map(|(w, ib)| mat4_mul(*w, *ib))
@@ -568,10 +600,12 @@ mod tests {
     fn chain() -> Skeleton {
         Skeleton::new(vec![
             Joint {
+                name: String::new(),
                 parent: None,
                 bind: JointPose::default(),
             },
             Joint {
+                name: String::new(),
                 parent: Some(0),
                 bind: JointPose {
                     translation: [0.0, 1.0, 0.0],
@@ -702,6 +736,7 @@ mod tests {
         // A joint whose parent index does not precede it must not panic and
         // must behave as a root.
         let sk = Skeleton::new(vec![Joint {
+            name: String::new(),
             parent: Some(5),
             bind: JointPose::default(),
         }]);

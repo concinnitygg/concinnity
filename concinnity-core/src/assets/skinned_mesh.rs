@@ -76,6 +76,7 @@ pub fn build_skeleton_from_joint_defs(defs: &[JointDef]) -> crate::gfx::skinning
     let joints = defs
         .iter()
         .map(|jd| skinning::Joint {
+            name: jd.name.clone(),
             parent: (jd.parent >= 0).then_some(jd.parent as usize),
             bind: skinning::JointPose {
                 translation: jd.translation,

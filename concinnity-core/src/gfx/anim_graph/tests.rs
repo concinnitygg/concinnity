@@ -193,6 +193,7 @@ fn normalized_time_saturates_non_looping_and_wraps_looping() {
 // blended output is directly readable off the matrix translation column.
 fn pose_fixture(xs: &[f32]) -> (Skeleton, Vec<AnimationClip>) {
     let skeleton = Skeleton::new(vec![Joint {
+        name: String::new(),
         parent: None,
         bind: JointPose::default(),
     }]);
@@ -352,6 +353,7 @@ fn synced_members_sample_at_shared_phase() {
     // own duration: at any shared phase both members agree on X, so the
     // blended pose equals that X regardless of the blend weight.
     let skeleton = Skeleton::new(vec![Joint {
+        name: String::new(),
         parent: None,
         bind: JointPose::default(),
     }]);
