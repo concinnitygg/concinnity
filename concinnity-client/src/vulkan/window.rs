@@ -628,12 +628,10 @@ impl GlfwWindow {
                     glfw::MouseButton::Button1,
                     glfw::Action::Press,
                     _,
-                ) => {
-                    if !self.cursor_captured {
-                        self.input.left_click = true;
-                        // Begin a held-button (UI drag) gesture.
-                        self.input.left_button_down = true;
-                    }
+                ) if !self.cursor_captured => {
+                    self.input.left_click = true;
+                    // Begin a held-button (UI drag) gesture.
+                    self.input.left_button_down = true;
                 }
                 glfw::WindowEvent::MouseButton(
                     glfw::MouseButton::Button1,
