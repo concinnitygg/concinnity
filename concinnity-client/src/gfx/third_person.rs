@@ -483,13 +483,17 @@ mod tests {
     fn strafe_turns_heading_and_root_motion_drive_stays_passive() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
         world.start().unwrap();
+        // The turn budget is turn_speed x accumulated wall-clock dt, so give
+        // the quarter turn several times the steps it needs: with tight 5 ms
+        // sleeps 4 steps sat right at the pi/2 boundary and failed on fast
+        // runners (the arrival assert below is exact).
         step_held(
             &mut world,
             FrameInput {
                 right: true,
                 ..Default::default()
             },
-            4,
+            12,
         );
 
         let rig = world.query::<crate::assets::CharacterRig>().next().unwrap();
