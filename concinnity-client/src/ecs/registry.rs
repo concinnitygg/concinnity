@@ -15,6 +15,7 @@ crate::define_system_assets! {
     GraphicsSystem  => crate::gfx::graphics_system::GraphicsSystem,
     PhysicsSystem   => crate::physics::system::PhysicsSystem,
     Camera3DSystem  => crate::gfx::camera_controller::Camera3DSystem,
+    ThirdPersonSystem => crate::gfx::third_person::ThirdPersonSystem,
     AnimationSystem => crate::gfx::animation::AnimationSystem,
     AudioSystem     => crate::audio::system::AudioSystem,
     StorySystem     => crate::story::StorySystem,

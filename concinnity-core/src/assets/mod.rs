@@ -122,7 +122,7 @@ pub use audio_cue::{AudioCue, CueKind};
 pub use audio_emitter::AudioEmitter;
 pub use block_type::BlockType;
 pub use camera_shot::CameraShot;
-pub use camera3d::{Camera3D, CameraController};
+pub use camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
 pub use character_rig::CharacterRig;
 pub use color_lut::ColorLut;
 pub use controls_command::ControlsCommand;

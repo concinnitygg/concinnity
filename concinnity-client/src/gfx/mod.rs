@@ -42,9 +42,12 @@ pub(crate) mod fullscreen;
 // First-person / fly-through camera controller. Internal system, constructed by
 // `World::start` from a `Camera3D`'s controller settings.
 pub(crate) mod camera_controller;
+// Third-person character controller. Internal system, constructed instead of
+// Camera3DSystem when the controlling camera's controller has a `follow` block.
 pub(crate) mod csm;
 pub(crate) mod cursor;
 pub mod decal;
+pub(crate) mod third_person;
 // The display-mode list behind the "Resolution" settings row: label format,
 // dedup/sort, persisted-choice recovery, and the no-enumeration fallback.
 pub(crate) mod display_mode;

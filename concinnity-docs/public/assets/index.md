@@ -78,6 +78,8 @@
 - [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
+- [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
+- [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
 - [GraphCondition](GraphCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
 - [GraphParam](GraphParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
 - [GraphState](GraphState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.

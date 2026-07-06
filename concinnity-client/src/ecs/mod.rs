@@ -459,13 +459,19 @@ impl World {
         Some(crate::physics::system::PhysicsSystem::new(config).into())
     }
 
-    // Camera3DSystem: present whenever a `Camera3D` has a `controller` (the
-    // default; `null` opts out for cutscene cameras). Built from the first
-    // controlled camera's settings.
+    // Camera controller: present whenever a `Camera3D` has a `controller`
+    // (the default; `null` opts out for cutscene cameras). Built from the
+    // first controlled camera's settings: a `follow` block selects the
+    // third-person controller, otherwise the first-person / fly one.
     fn build_camera(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::Camera3D>()
-            .find_map(|c| c.controller.clone())
-            .map(|ctrl| crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into())
+        let ctrl = self
+            .query::<crate::assets::Camera3D>()
+            .find_map(|c| c.controller.clone())?;
+        Some(if ctrl.follow.is_some() {
+            crate::gfx::third_person::ThirdPersonSystem::new(&ctrl).into()
+        } else {
+            crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into()
+        })
     }
 
     // FpsCounter: present whenever the world declares an `FpsCounter`; built from

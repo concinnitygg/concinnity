@@ -118,8 +118,6 @@ pub struct PhysicsWorld {
     ccd_solver: CCDSolver,
     gravity: Vector,
     character: KinematicCharacterController,
-    // Collider of the player capsule, excluded from its own movement query.
-    character_collider: Option<ColliderHandle>,
 }
 
 impl std::fmt::Debug for PhysicsWorld {
@@ -148,7 +146,6 @@ impl PhysicsWorld {
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, -gravity, 0.0),
             character: KinematicCharacterController::default(),
-            character_collider: None,
         }
     }
 
@@ -240,10 +237,8 @@ impl PhysicsWorld {
             .build();
         let handle = self.bodies.insert(body);
         let collider = ColliderBuilder::capsule_y(half_height, radius).build();
-        let collider_handle = self
-            .colliders
+        self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
-        self.character_collider = Some(collider_handle);
         BodyHandle(handle)
     }
 
@@ -354,8 +349,11 @@ impl PhysicsWorld {
         );
     }
 
-    // Resolve a desired move of the player capsule against the world without
+    // Resolve a desired move of a character capsule against the world without
     // mutating it. Apply the result with [`Self::set_kinematic_translation`].
+    // `exclude` is the moving capsule's own body (from [`Self::add_character`]),
+    // left out of the query so the character does not collide with itself;
+    // other characters' capsules stay solid to it.
     pub fn move_character(
         &self,
         half_height: f32,
@@ -363,12 +361,10 @@ impl PhysicsWorld {
         center: [f32; 3],
         desired: [f32; 3],
         dt: f32,
+        exclude: BodyHandle,
     ) -> CharacterMove {
         let dispatcher = DefaultQueryDispatcher;
-        let mut filter = QueryFilter::default();
-        if let Some(collider) = self.character_collider {
-            filter = filter.exclude_collider(collider);
-        }
+        let filter = QueryFilter::default().exclude_rigid_body(exclude.0);
         let query =
             self.broad_phase
                 .as_query_pipeline(&dispatcher, &self.bodies, &self.colliders, filter);
@@ -536,10 +532,17 @@ mod tests {
             [0.0; 3],
             0.5,
         );
-        world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
         // The broad-phase BVH the movement query reads is built by step().
         world.step(1.0 / 60.0);
-        let moved = world.move_character(0.6, 0.3, [0.0, 1.0, 0.0], [5.0, 0.0, 0.0], 1.0 / 60.0);
+        let moved = world.move_character(
+            0.6,
+            0.3,
+            [0.0, 1.0, 0.0],
+            [5.0, 0.0, 0.0],
+            1.0 / 60.0,
+            capsule,
+        );
         // The wall stands at x = 1.25 (1.5 - 0.25); a 0.3-radius capsule from
         // x = 0 cannot advance the full 5 units into it.
         assert!(
@@ -555,9 +558,16 @@ mod tests {
         ground(&mut world, 0.0);
         // Capsule centre at 1.5: with half-height 0.6 + radius 0.3 the bottom
         // sits 0.6 above the floor, so a 10-unit drop should be arrested.
-        world.add_character(0.6, 0.3, [0.0, 1.5, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.5, 0.0]);
         world.step(1.0 / 60.0);
-        let moved = world.move_character(0.6, 0.3, [0.0, 1.5, 0.0], [0.0, -10.0, 0.0], 1.0 / 60.0);
+        let moved = world.move_character(
+            0.6,
+            0.3,
+            [0.0, 1.5, 0.0],
+            [0.0, -10.0, 0.0],
+            1.0 / 60.0,
+            capsule,
+        );
         assert!(
             moved.translation[1] > -1.0 && moved.grounded,
             "fall should be arrested by the floor, dy = {}, grounded = {}",

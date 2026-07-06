@@ -33,14 +33,25 @@ fn center_of(rig: &CharacterRig) -> [f32; 3] {
     ]
 }
 
+// Small height a rig capsule spawns above its authored position. A capsule
+// whose bottom starts exactly in contact with the ground never gets its
+// downward moves clipped (the character shape-cast ignores hits it starts
+// inside), so it would sink a little every frame; spawning just above lets
+// the first gravity steps settle it onto the controller's contact offset.
+const SPAWN_LIFT: f32 = 0.05;
+
 // Create one kinematic capsule per published `CharacterRig`.
 pub(crate) fn init_rigs(world: &mut PhysicsWorld, ctx: &mut PipelineContext) -> Vec<RigPhysics> {
     let rigs: Vec<RigPhysics> = ctx
-        .query::<CharacterRig>()
-        .map(|rig| RigPhysics {
-            target: rig.target,
-            handle: world.add_character(rig.half_height, rig.radius, center_of(rig)),
-            vy: 0.0,
+        .query_mut::<CharacterRig>()
+        .map(|rig| {
+            rig.position[1] += SPAWN_LIFT;
+            rig.moved = true;
+            RigPhysics {
+                target: rig.target,
+                handle: world.add_character(rig.half_height, rig.radius, center_of(rig)),
+                vy: 0.0,
+            }
         })
         .collect();
     if !rigs.is_empty() {
@@ -80,7 +91,23 @@ pub(crate) fn step_rigs(
         for motion in motions.iter().filter(|m| m.target == rig_body.target) {
             local = add3(local, motion.delta);
         }
-        let displacement = rig.world_delta(local);
+        // Root-motion displacement plus the controller's direct drive.
+        let displacement = add3(
+            rig.world_delta(local),
+            [
+                rig.desired_move[0] * dt,
+                rig.desired_move[1] * dt,
+                rig.desired_move[2] * dt,
+            ],
+        );
+        // A one-shot jump only takes off from the ground; discard it either
+        // way so a press cannot latch until the next landing.
+        if rig.jump_velocity > 0.0 {
+            if rig.grounded {
+                rig_body.vy = rig.jump_velocity;
+            }
+            rig.jump_velocity = 0.0;
+        }
         rig_body.vy -= gravity * dt;
         let center = center_of(rig);
         let desired = [
@@ -88,7 +115,14 @@ pub(crate) fn step_rigs(
             displacement[1] + rig_body.vy * dt,
             displacement[2],
         ];
-        let moved = world.move_character(rig.half_height, rig.radius, center, desired, dt);
+        let moved = world.move_character(
+            rig.half_height,
+            rig.radius,
+            center,
+            desired,
+            dt,
+            rig_body.handle,
+        );
         let new_center = add3(center, moved.translation);
         world.set_kinematic_translation(rig_body.handle, new_center);
         if moved.grounded && rig_body.vy < 0.0 {
