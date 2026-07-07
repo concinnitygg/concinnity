@@ -1,0 +1,83 @@
+[package]
+name = "concinnity-device"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "concinnity_device"
+crate-type = ["rlib"]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Build the Windows device against the Vulkan backend instead of the default
+# DirectX one. Linux always uses Vulkan and macOS always uses Metal regardless;
+# build.rs resolves the backend cfg from the target and this feature. On
+# non-Windows targets the feature is inert (the deps it activates are
+# Windows-only optional deps).
+vulkan = [
+    "dep:ash",
+    "dep:shaderc",
+    "concinnity-core/vulkan",
+    "concinnity-render/vulkan",
+]
+
+[dependencies]
+# The GPU-free layers the device backends build on: core (repr(C) GPU layouts,
+# render math, asset data) and render (the RenderBackend/SceneControl trait seam,
+# record builders, render graph, the Metal host-struct layout contract, jobs).
+concinnity-core = { path = "../concinnity-core" }
+concinnity-render = { path = "../concinnity-render" }
+libloading = "0.9.0"
+png = "0.18.1"
+rayon = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+tracing = "0.1.44"
+# Backend shader hot-reload watches each backend's shader dir for edits.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+ash = "0.38"
+glfw = "0.61.0"
+shaderc = "0.10.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Direct3D_Dxc",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Activated by the `vulkan` feature for a Vulkan build on Windows (shared native
+# Win32 windowing, no glfw). `shaderc` compiles GLSL to SPIR-V at runtime.
+ash = { version = "0.38", optional = true }
+shaderc = { version = "0.10.1", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-metal = "0.3.2"
+objc2-metal-fx = "0.3.2"
+objc2-metal-kit = "0.3.2"
+objc2-quartz-core = "0.3.2"
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }

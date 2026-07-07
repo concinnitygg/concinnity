@@ -33,15 +33,18 @@ jobs:
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      # GPU backend code needs a real device/window and is verified by
-      # screenshot probes rather than unit tests, so it is excluded from the
-      # coverage metric. The same applies to the interpreted-run render loop
-      # (concinnity-editor/src/run.rs) and the Metal shader-layout reflection
-      # (concinnity-app/src/shader_reflect.rs), which need a live device.
+      # The hardware backends live in concinnity-device (Metal/DirectX/Vulkan/
+      # Win32); they need a real device/window and are verified by screenshot
+      # probes rather than unit tests, so the whole crate is excluded from the
+      # coverage metric. The GPU-free render-prep they build on lives in
+      # concinnity-render and IS counted. The same device-bound exclusion applies
+      # to the debug wire protocol (concinnity-editor/src/debug/wire), the
+      # interpreted-run render loop (concinnity-editor/src/run.rs), and the Metal
+      # shader-layout reflection (concinnity-app/src/shader_reflect.rs).
       - name: Generate Coverage Report
         run: >
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          --ignore-filename-regex '/(metal|vulkan|directx|win32|wire)/|concinnity-editor/src/run\.rs|concinnity-app/src/shader_reflect\.rs'
+          --ignore-filename-regex 'concinnity-device/|/wire/|concinnity-editor/src/run\.rs|concinnity-app/src/shader_reflect\.rs'
 
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v5

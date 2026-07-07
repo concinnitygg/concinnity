@@ -1,25 +1,18 @@
 // src/lib.rs
 //
-// The runtime crate. Holds the world loop, the ECS, the three renderer
-// backends, audio, physics, and the lean runtime FFI. Depends on
-// concinnity-core alone (no concinnity-cook, no image decoders). The editor
-// crate (concinnity-editor) drives this crate's App / renderer through the
-// public API widened here; the modules the editor reaches into are `pub` so it
-// can name their paths, but individual internals stay `pub(crate)` unless the
-// editor specifically needs them.
+// The runtime crate. Holds the world loop, the ECS, the GraphicsSystem renderer
+// driver, audio, and physics. The GPU-free render-prep lives in
+// concinnity-render and the hardware backends (Metal/DirectX/Vulkan/Win32) in
+// concinnity-device; this crate drives them through a `Box<dyn RenderBackend>`
+// from `concinnity_device::init_backend` and never names a concrete backend.
+// Depends on concinnity-core/render/device (no concinnity-cook, no image
+// decoders). The editor crate (concinnity-editor) drives this crate's App /
+// renderer through the public API widened here; the modules the editor reaches
+// into are `pub` so it can name their paths, but individual internals stay
+// `pub(crate)` unless the editor specifically needs them.
 pub mod assets;
 pub mod blob;
-#[cfg(backend_dx)]
-pub mod directx;
 pub mod ecs;
-#[cfg(backend_metal)]
-pub mod metal;
-#[cfg(backend_vk)]
-pub mod vulkan;
-// Native Win32 window/input/display-mode layer shared by the HWND-rendering
-// backends (DirectX always; Vulkan on Windows instead of GLFW).
-#[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
-pub(crate) mod win32;
 
 // Renderer-free foundation shared with the build/validate pipeline lives in
 // concinnity-core. Re-export its modules under the historical crate::* paths so
@@ -33,7 +26,11 @@ pub(crate) mod audio;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;
-pub mod jobs;
+// The rayon job pool now lives in concinnity-render (the lowest layer the device
+// backends and the client's animation fan-out share); re-export it under the
+// historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps
+// reaching it through `concinnity_client::jobs`.
+pub use concinnity_render::jobs;
 pub(crate) mod physics;
 pub(crate) mod story;
 pub(crate) mod ui;

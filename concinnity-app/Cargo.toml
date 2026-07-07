@@ -18,9 +18,11 @@ path = "src/lib.rs"
 doctest = false
 
 [features]
-# Forward a Vulkan build down to the runtime, the compile pipeline, and core.
+# Forward a Vulkan build down to the runtime, the device backends, the compile
+# pipeline, and core.
 vulkan = [
     "concinnity-client/vulkan",
+    "concinnity-device/vulkan",
     "concinnity-cook/vulkan",
     "concinnity-core/vulkan",
 ]
@@ -28,6 +30,9 @@ vulkan = [
 [dependencies]
 # The runtime crate (rlib): App, the renderer, ECS, and asset types.
 concinnity-client = { path = "../concinnity-client" }
+# The device backends: the Metal shader-layout contract (shader_reflect) and the
+# embedded-preview FFI hooks (set_preview_view) the Swift app drives.
+concinnity-device = { path = "../concinnity-device" }
 # The asset compile pipeline that ffi/authoring drive (gltf/png/jpeg/fbx
 # decoders live here, not in core).
 concinnity-cook = { path = "../concinnity-cook" }

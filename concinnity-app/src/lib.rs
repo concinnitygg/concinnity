@@ -8,12 +8,14 @@
 
 // Bridge: re-export the runtime/core modules the authoring + ffi code names
 // under crate::* so their `crate::<module>` import paths resolve.
-#[cfg(backend_metal)]
-#[allow(unused_imports)]
-pub(crate) use concinnity_client::metal;
 #[allow(unused_imports)]
 pub(crate) use concinnity_client::{blob, ecs, gfx};
 pub(crate) use concinnity_core::world;
+// The Metal backend (for shader-layout reflection + the embedded-preview FFI
+// hooks) now lives in concinnity-device.
+#[cfg(backend_metal)]
+#[allow(unused_imports)]
+pub(crate) use concinnity_device::metal;
 
 // Authoring / in-memory build: private modules with a flat public API.
 mod add;

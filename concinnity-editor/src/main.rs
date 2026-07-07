@@ -7,15 +7,6 @@
 // Bridge: re-export the runtime crate's modules under crate::* so the editor
 // code moved out of the runtime crate keeps its historical `crate::<module>`
 // import paths. Mirrors lib.rs (a binary is a separate crate root).
-#[cfg(backend_dx)]
-#[allow(unused_imports)]
-pub(crate) use concinnity_client::directx;
-#[cfg(backend_metal)]
-#[allow(unused_imports)]
-pub(crate) use concinnity_client::metal;
-#[cfg(backend_vk)]
-#[allow(unused_imports)]
-pub(crate) use concinnity_client::vulkan;
 #[allow(unused_imports)]
 pub(crate) use concinnity_client::{app, assets, blob, config, ecs, gfx, jobs};
 #[allow(unused_imports)]

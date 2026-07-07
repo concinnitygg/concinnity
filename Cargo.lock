@@ -592,6 +592,7 @@ dependencies = [
  "concinnity-client",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-device",
  "concinnity-toolchain",
  "core-foundation",
  "objc2 0.6.4",
@@ -607,38 +608,24 @@ dependencies = [
 name = "concinnity-client"
 version = "0.9.0"
 dependencies = [
- "ash",
  "bitflags 2.11.1",
- "block2",
  "ciborium",
  "concinnity-core",
+ "concinnity-device",
+ "concinnity-render",
  "concinnity-toolchain",
  "core-foundation",
  "ctrlc",
  "directories",
- "dispatch2",
- "glfw",
  "kira",
- "libloading 0.9.0",
  "mint",
- "notify",
  "objc2 0.6.4",
  "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-metal",
- "objc2-metal-fx",
- "objc2-metal-kit",
- "objc2-quartz-core",
- "png",
  "rand 0.8.6",
  "rapier3d",
- "rayon",
  "serde",
  "serde_bytes",
  "serde_json",
- "shaderc",
  "slotmap",
  "tempfile",
  "thiserror 2.0.18",
@@ -646,7 +633,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -688,6 +674,36 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
+]
+
+[[package]]
+name = "concinnity-device"
+version = "0.9.0"
+dependencies = [
+ "ash",
+ "block2",
+ "concinnity-core",
+ "concinnity-render",
+ "concinnity-toolchain",
+ "dispatch2",
+ "glfw",
+ "libloading 0.9.0",
+ "notify",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-metal-fx",
+ "objc2-metal-kit",
+ "objc2-quartz-core",
+ "png",
+ "rayon",
+ "serde_json",
+ "shaderc",
+ "tracing",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -755,6 +771,17 @@ dependencies = [
  "ureq",
  "windows 0.61.3",
  "zip",
+]
+
+[[package]]
+name = "concinnity-render"
+version = "0.9.0"
+dependencies = [
+ "ciborium",
+ "concinnity-core",
+ "rayon",
+ "serde",
+ "tracing",
 ]
 
 [[package]]

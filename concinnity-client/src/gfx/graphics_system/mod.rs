@@ -538,7 +538,7 @@ impl GraphicsSystem {
         if let Some(hooks) = &self.test_hooks {
             return hooks.gpu_profile;
         }
-        helpers::probe_gpu_profile()
+        concinnity_device::probe_gpu_profile()
     }
 
     // Seed and persist the first-launch `Auto` quality preset. Skipped under
