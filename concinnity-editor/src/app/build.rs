@@ -65,3 +65,33 @@ pub(crate) fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     }
     Ok(world)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_accepts_a_valid_world() {
+        let loaded =
+            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
+        assert!(loaded.assets.iter().any(|a| a.name == "phys"));
+        assert!(loaded.authored.contains(&"phys".to_string()));
+    }
+
+    #[test]
+    fn prepare_rejects_an_invalid_world() {
+        assert!(prepare("{\"name\":\"odd\",\"type\":\"NotARealAssetType\"}\n").is_err());
+        assert!(prepare("{ not json\n").is_err());
+    }
+
+    #[test]
+    fn world_from_loaded_assembles_an_in_memory_world() {
+        let loaded =
+            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
+        let expanded = loaded.assets.len();
+        let world = world_from_loaded(loaded).unwrap();
+        // Every expanded asset landed as a component; nothing was dropped on
+        // the way through compile + assembly.
+        assert_eq!(world.component_count(), expanded);
+    }
+}

@@ -1113,4 +1113,166 @@ mod tests {
         copy_runtime_sidecars(&src.join("concinnity-runtime"), Some("metal"), &dest).unwrap();
         assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
+
+    #[test]
+    fn export_rejects_an_unknown_format_up_front() {
+        // The format check runs before any path resolution or build, so this
+        // touches nothing on disk.
+        let err = export(None, None, None, None, "out", "tarball", false).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("tarball"), "got: {err}");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn export_rejects_dmg_off_macos() {
+        let err = export(None, None, None, None, "out", "zip", true).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn derive_identifier_reduces_names_to_bundle_id_form() {
+        assert_eq!(derive_identifier("My Game"), "gg.concinnity.my-game");
+        assert_eq!(
+            derive_identifier("Space:  Above!"),
+            "gg.concinnity.space-above"
+        );
+        assert_eq!(derive_identifier("***"), "gg.concinnity.app");
+        assert_eq!(derive_identifier(""), "gg.concinnity.app");
+    }
+
+    #[test]
+    fn xml_escape_escapes_every_entity() {
+        assert_eq!(
+            xml_escape(r#"<a href="x">Tom & Jerry's</a>"#),
+            "&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&apos;s&lt;/a&gt;"
+        );
+        assert_eq!(xml_escape("plain"), "plain");
+    }
+
+    #[test]
+    fn verify_runtime_backend_accepts_matching_or_unstamped() {
+        let expected = concinnity_core::build::asset::Platform::current().key();
+        verify_runtime_backend(None).unwrap();
+        verify_runtime_backend(Some(expected)).unwrap();
+
+        let foreign = if expected == "metal" { "hlsl" } else { "metal" };
+        let err = verify_runtime_backend(Some(foreign)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn read_runtime_platform_reads_a_stamp_or_warns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stamped = tmp.path().join("stamped");
+        fs::write(&stamped, b"junk cn-runtime-platform:metal\0 junk").unwrap();
+        assert_eq!(
+            read_runtime_platform(&stamped).unwrap().as_deref(),
+            Some("metal")
+        );
+
+        let unstamped = tmp.path().join("unstamped");
+        fs::write(&unstamped, b"no marker in here").unwrap();
+        assert_eq!(read_runtime_platform(&unstamped).unwrap(), None);
+    }
+
+    #[test]
+    fn copy_blobs_takes_only_integer_named_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("0"), b"blob0").unwrap();
+        fs::write(src.join("12"), b"blob12").unwrap();
+        fs::write(src.join("default_vert.air"), b"scratch").unwrap();
+        fs::write(src.join("settings"), b"state").unwrap();
+
+        let dst = tmp.path().join("out");
+        let count = copy_blobs(&src, &dst).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(fs::read(dst.join("0")).unwrap(), b"blob0");
+        assert_eq!(fs::read(dst.join("12")).unwrap(), b"blob12");
+        assert!(!dst.join("default_vert.air").exists());
+        assert!(!dst.join("settings").exists());
+    }
+
+    #[test]
+    fn reset_dir_clears_previous_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bundle");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("nested").join("stale"), b"old").unwrap();
+
+        reset_dir(&dir).unwrap();
+        assert!(dir.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn copy_tree_copies_nested_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("a").join("b")).unwrap();
+        fs::write(src.join("top.txt"), b"1").unwrap();
+        fs::write(src.join("a").join("b").join("deep.txt"), b"2").unwrap();
+
+        let dst = tmp.path().join("dst");
+        copy_tree(&src, &dst).unwrap();
+        assert_eq!(fs::read(dst.join("top.txt")).unwrap(), b"1");
+        assert_eq!(
+            fs::read(dst.join("a").join("b").join("deep.txt")).unwrap(),
+            b"2"
+        );
+    }
+
+    #[test]
+    fn collect_files_walks_the_whole_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("tree");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("a"), b"1").unwrap();
+        fs::write(dir.join("sub").join("b"), b"2").unwrap();
+
+        let mut files = Vec::new();
+        collect_files(&dir, &mut files).unwrap();
+        files.sort();
+        assert_eq!(files, vec![dir.join("a"), dir.join("sub").join("b")]);
+    }
+
+    #[test]
+    fn zip_tree_archives_under_a_top_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join("My-Game");
+        fs::create_dir_all(bundle.join("data")).unwrap();
+        fs::write(bundle.join("My-Game"), b"player").unwrap();
+        fs::write(bundle.join("data").join("0"), b"blob").unwrap();
+
+        let zip_path = tmp.path().join("My-Game-1.0.0-mac.zip");
+        zip_tree(&bundle, "My-Game", "My-Game", &zip_path).unwrap();
+
+        let file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert_eq!(archive.len(), 2);
+        assert!(
+            names.contains(&"My-Game/My-Game".to_string()),
+            "got: {names:?}"
+        );
+        assert!(
+            names.contains(&"My-Game/data/0".to_string()),
+            "got: {names:?}"
+        );
+        // The player entry carries the executable bit for Unix extraction.
+        let exe = archive.by_name("My-Game/My-Game").unwrap();
+        assert_eq!(exe.unix_mode().map(|m| m & 0o777), Some(0o755));
+    }
+
+    #[test]
+    fn build_icns_rejects_a_missing_source_before_running_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = build_icns(&tmp.path().join("missing.png"), tmp.path(), "slug").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
 }

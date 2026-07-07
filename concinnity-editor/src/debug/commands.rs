@@ -884,4 +884,822 @@ mod tests {
         assert_eq!(req.child, "box_a");
         assert!(req.parent.is_none());
     }
+
+    // Assert a handler reply is the error shape and names the problem.
+    fn assert_err_reply(reply: &str, needle: &str) {
+        assert!(
+            reply.contains(r#""ok":false"#),
+            "expected an error reply, got: {reply}"
+        );
+        assert!(
+            reply.contains(needle),
+            "expected '{needle}' in error reply: {reply}"
+        );
+    }
+
+    #[test]
+    fn error_reply_is_json_with_ok_false() {
+        let reply = error_reply("boom");
+        assert_err_reply(&reply, "boom");
+    }
+
+    // Malformed / validation-failing command text returns an error reply
+    // before anything is enqueued, so these run without touching the
+    // process-global queues.
+
+    #[test]
+    fn decal_add_rejects_malformed_json() {
+        assert_err_reply(&handle_decal_add("not json"), "decal-add");
+    }
+
+    #[test]
+    fn decal_remove_rejects_missing_id() {
+        assert_err_reply(
+            &handle_decal_remove(r#"{"cmd":"decal-remove"}"#),
+            "decal-remove",
+        );
+    }
+
+    #[test]
+    fn emitter_add_rejects_malformed_json() {
+        assert_err_reply(&handle_emitter_add("not json"), "emitter-add");
+    }
+
+    #[test]
+    fn emitter_remove_rejects_missing_id() {
+        assert_err_reply(&handle_emitter_remove("{}"), "emitter-remove");
+    }
+
+    #[test]
+    fn anim_crossfade_rejects_malformed_json() {
+        assert_err_reply(&handle_anim_crossfade("not json", &[]), "anim-crossfade");
+    }
+
+    #[test]
+    fn anim_crossfade_requires_a_target() {
+        assert_err_reply(&handle_anim_crossfade("{}", &[]), "missing 'target'");
+    }
+
+    #[test]
+    fn anim_crossfade_rejects_an_unknown_target_name() {
+        let names = vec!["hero".to_string()];
+        let reply = handle_anim_crossfade(r#"{"target":"villain","weights":[1.0]}"#, &names);
+        assert_err_reply(&reply, "unknown asset name 'villain'");
+    }
+
+    #[test]
+    fn anim_param_rejects_malformed_json() {
+        assert_err_reply(&handle_anim_param("not json", &[]), "anim-param");
+    }
+
+    #[test]
+    fn anim_param_requires_a_parameter_name() {
+        assert_err_reply(
+            &handle_anim_param(r#"{"target":"hero"}"#, &[]),
+            "missing 'name'",
+        );
+    }
+
+    #[test]
+    fn anim_param_requires_a_target() {
+        assert_err_reply(
+            &handle_anim_param(r#"{"name":"speed"}"#, &[]),
+            "missing 'target'",
+        );
+    }
+
+    #[test]
+    fn anim_param_rejects_an_unknown_target_name() {
+        let names = vec!["hero".to_string()];
+        let reply = handle_anim_param(r#"{"target":"villain","name":"speed","value":1.0}"#, &names);
+        assert_err_reply(&reply, "unknown asset name 'villain'");
+    }
+
+    #[test]
+    fn anim_state_rejects_malformed_json() {
+        assert_err_reply(&handle_anim_state("not json", &[]), "anim-state");
+    }
+
+    #[test]
+    fn anim_state_requires_a_target() {
+        assert_err_reply(&handle_anim_state("{}", &[]), "missing 'target'");
+    }
+
+    #[test]
+    fn anim_state_rejects_an_unknown_target_name() {
+        let names = vec!["hero".to_string()];
+        assert_err_reply(
+            &handle_anim_state(r#"{"target":"villain"}"#, &names),
+            "unknown asset name 'villain'",
+        );
+    }
+
+    #[test]
+    fn resolve_target_maps_a_name_to_its_table_index() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let id = resolve_target("cmd", "b", &names).expect("known name resolves");
+        assert_eq!(id, crate::ecs::asset_id::AssetId(1));
+    }
+
+    #[test]
+    fn screenshot_rejects_malformed_json() {
+        assert_err_reply(&handle_screenshot("not json"), "screenshot");
+    }
+
+    #[test]
+    fn screenshot_requires_a_path() {
+        assert_err_reply(&handle_screenshot("{}"), "missing 'path'");
+        assert_err_reply(&handle_screenshot(r#"{"path":"   "}"#), "missing 'path'");
+    }
+
+    #[test]
+    fn camera_set_handler_rejects_malformed_json() {
+        assert_err_reply(&handle_camera_set(r#"{"position":"nope"}"#), "camera-set");
+    }
+
+    #[test]
+    fn camera_move_handler_rejects_malformed_json() {
+        assert_err_reply(&handle_camera_move(r#"{"frames":"lots"}"#), "camera-move");
+    }
+
+    #[test]
+    fn quality_set_rejects_malformed_json() {
+        assert_err_reply(&handle_quality_set("not json"), "quality-set");
+    }
+
+    #[test]
+    fn quality_set_requires_a_setting() {
+        assert_err_reply(&handle_quality_set("{}"), "missing 'setting'");
+    }
+
+    #[test]
+    fn quality_set_rejects_an_unknown_op() {
+        assert_err_reply(
+            &handle_quality_set(r#"{"setting":"taa","op":"sideways"}"#),
+            "unknown op 'sideways'",
+        );
+    }
+
+    #[test]
+    fn rebind_rejects_malformed_json() {
+        assert_err_reply(&handle_rebind("not json"), "rebind");
+    }
+
+    #[test]
+    fn rebind_requires_a_setting() {
+        assert_err_reply(&handle_rebind(r#"{"key":"W"}"#), "missing 'setting'");
+    }
+
+    #[test]
+    fn rebind_rejects_an_unknown_key_name() {
+        assert_err_reply(
+            &handle_rebind(r#"{"setting":"key_forward","key":"NotAKey"}"#),
+            "unknown key 'NotAKey'",
+        );
+    }
+
+    #[test]
+    fn despawn_rejects_malformed_json() {
+        assert_err_reply(&handle_despawn("not json"), "despawn");
+    }
+
+    #[test]
+    fn despawn_requires_a_name() {
+        assert_err_reply(&handle_despawn("{}"), "missing 'name'");
+        assert_err_reply(&handle_despawn(r#"{"name":"  "}"#), "missing 'name'");
+    }
+
+    #[test]
+    fn story_rejects_malformed_json() {
+        assert_err_reply(&handle_story("not json"), "story");
+    }
+
+    #[test]
+    fn story_rejects_an_unknown_action() {
+        assert_err_reply(
+            &handle_story(r#"{"action":"dance"}"#),
+            "unknown action 'dance'",
+        );
+    }
+
+    #[test]
+    fn reparent_rejects_malformed_json() {
+        assert_err_reply(&handle_reparent("not json"), "reparent");
+    }
+
+    #[test]
+    fn reparent_requires_a_child() {
+        assert_err_reply(&handle_reparent("{}"), "missing 'child'");
+        assert_err_reply(&handle_reparent(r#"{"child":" "}"#), "missing 'child'");
+    }
+
+    #[test]
+    fn spawn_rejects_malformed_json() {
+        assert_err_reply(&handle_spawn("not json"), "spawn");
+    }
+
+    #[test]
+    fn spawn_requires_template_and_name() {
+        assert_err_reply(&handle_spawn("{}"), "missing 'template'");
+        assert_err_reply(&handle_spawn(r#"{"template":"crate_a"}"#), "missing 'name'");
+    }
+
+    // Success-path handler tests. Each handler blocks on a reply channel the
+    // per-frame drive normally fulfils; here a worker thread runs the handler
+    // while the test drains the process-global queue and answers in its place.
+    // Serialised behind the shared test lock because the queue is
+    // process-global; any unrelated command drained alongside is re-enqueued
+    // untouched.
+
+    use crate::app::pending::test_support;
+    use crate::debug::runtime_spawn::{self, RuntimeCommand};
+
+    // A heavily loaded test host can stall either thread past the handler's
+    // one-second engine timeout; when the handler reports that timeout the
+    // whole exchange is retried, so the tests assert the reply semantics
+    // rather than the scheduler. Reply sends never unwrap for the same
+    // reason: a timed-out handler has already dropped its receiver.
+    fn drive_runtime_handler(
+        handler: impl Fn() -> String + Send + Sync + 'static,
+        mut reply: impl FnMut(RuntimeCommand) -> Option<RuntimeCommand>,
+    ) -> String {
+        let handler = std::sync::Arc::new(handler);
+        for _ in 0..5 {
+            let h = std::sync::Arc::clone(&handler);
+            let worker = std::thread::spawn(move || h());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut replied = false;
+            while !worker.is_finished() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "handler never returned"
+                );
+                for cmd in runtime_spawn::drain() {
+                    if replied {
+                        runtime_spawn::enqueue(cmd);
+                    } else if let Some(foreign) = reply(cmd) {
+                        runtime_spawn::enqueue(foreign);
+                    } else {
+                        replied = true;
+                    }
+                }
+                std::thread::yield_now();
+            }
+            let response = worker.join().expect("handler thread panicked");
+            if !response.contains("timed out waiting for engine") {
+                return response;
+            }
+            // The timed-out attempt may have left its command queued; answer
+            // it into the void (the receiver is gone) and keep anything
+            // foreign, then try again.
+            for cmd in runtime_spawn::drain() {
+                if let Some(foreign) = reply(cmd) {
+                    runtime_spawn::enqueue(foreign);
+                }
+            }
+        }
+        panic!("handler kept timing out under load");
+    }
+
+    #[test]
+    fn decal_add_round_trips_args_and_reports_the_new_id() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || {
+                handle_decal_add(
+                    r#"{"texture":"grid","position":[1.0,2.0,3.0],"size":[2.0,2.0,2.0],"tint":[1.0,0.0,0.0,1.0]}"#,
+                )
+            },
+            |cmd| match cmd {
+                RuntimeCommand::DecalAdd { args, reply } => {
+                    assert_eq!(args.texture.as_deref(), Some("grid"));
+                    assert_eq!(args.position, [1.0, 2.0, 3.0]);
+                    assert_eq!(args.size, [2.0, 2.0, 2.0]);
+                    assert_eq!(args.tint, [1.0, 0.0, 0.0, 1.0]);
+                    let _ = reply.send(Ok(7));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""ok":true"#), "got: {reply}");
+        assert!(reply.contains(r#""id":7"#), "got: {reply}");
+    }
+
+    #[test]
+    fn decal_add_surfaces_an_engine_error() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_decal_add("{}"),
+            |cmd| match cmd {
+                RuntimeCommand::DecalAdd { reply, .. } => {
+                    let _ = reply.send(Err("no free decal slot".to_string()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert_err_reply(&reply, "no free decal slot");
+    }
+
+    #[test]
+    fn decal_remove_reports_removed() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_decal_remove(r#"{"id":3}"#),
+            |cmd| match cmd {
+                RuntimeCommand::DecalRemove { id, reply } => {
+                    assert_eq!(id, 3);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""removed":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn emitter_add_defaults_and_reports_the_new_id() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_emitter_add("{}"),
+            |cmd| match cmd {
+                RuntimeCommand::EmitterAdd { args, reply } => {
+                    // A bare command carries the emitter defaults through.
+                    assert_eq!(args.direction, [0.0, 1.0, 0.0]);
+                    assert_eq!(args.max_particles, 256);
+                    let _ = reply.send(Ok(2));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""id":2"#), "got: {reply}");
+    }
+
+    #[test]
+    fn emitter_remove_reports_removed() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_emitter_remove(r#"{"id":5}"#),
+            |cmd| match cmd {
+                RuntimeCommand::EmitterRemove { id, reply } => {
+                    assert_eq!(id, 5);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""removed":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn screenshot_echoes_the_saved_path() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_screenshot(r#"{"path":"shot.png"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::Screenshot { path, reply } => {
+                    assert_eq!(path, "shot.png");
+                    let _ = reply.send(Ok("shot.png".to_string()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""path":"shot.png""#), "got: {reply}");
+    }
+
+    #[test]
+    fn camera_set_round_trips_the_pose() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || {
+                handle_camera_set(
+                    r#"{"position":[1.0,2.0,3.0],"yaw":0.5,"pitch":-0.25,"fov_y_degrees":60.0}"#,
+                )
+            },
+            |cmd| match cmd {
+                RuntimeCommand::CameraSet { args, reply } => {
+                    assert_eq!(args.position, [1.0, 2.0, 3.0]);
+                    assert_eq!(args.yaw, 0.5);
+                    assert_eq!(args.pitch, -0.25);
+                    assert_eq!(args.fov_y_degrees, Some(60.0));
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""set":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn camera_move_reports_finite_frames() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_camera_move(r#"{"forward":1.5,"frames":3}"#),
+            |cmd| match cmd {
+                RuntimeCommand::CameraMove { args, reply } => {
+                    assert_eq!(args.forward, 1.5);
+                    assert_eq!(args.frames, 3);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""frames":3"#), "got: {reply}");
+        assert!(reply.contains(r#""holding":false"#), "got: {reply}");
+    }
+
+    #[test]
+    fn camera_move_defaults_to_an_indefinite_hold() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_camera_move("{}"),
+            |cmd| match cmd {
+                RuntimeCommand::CameraMove { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""holding":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn camera_stop_reports_stopped() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(handle_camera_stop, |cmd| match cmd {
+            RuntimeCommand::CameraStop { reply } => {
+                let _ = reply.send(Ok(()));
+                None
+            }
+            other => Some(other),
+        });
+        assert!(reply.contains(r#""stopped":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn quality_set_maps_ops_and_reports_queued() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_quality_set(r#"{"setting":"taa","op":"prev"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::QualitySet { setting, op, reply } => {
+                    assert_eq!(setting, "taa");
+                    assert_eq!(op, crate::assets::SettingOp::Prev);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+
+        // An omitted op defaults to Next.
+        let reply = drive_runtime_handler(
+            || handle_quality_set(r#"{"setting":"ssao"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::QualitySet { op, reply, .. } => {
+                    assert_eq!(op, crate::assets::SettingOp::Next);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn rebind_resolves_the_key_variant() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_rebind(r#"{"setting":"key_forward","key":"Space"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::Rebind {
+                    setting,
+                    key,
+                    reply,
+                } => {
+                    assert_eq!(setting, "key_forward");
+                    assert_eq!(key, crate::assets::Key::Space);
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn despawn_round_trips_the_name() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_despawn(r#"{"name":"crate_a"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::Despawn { name, reply } => {
+                    assert_eq!(name, "crate_a");
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn story_maps_every_action_to_its_command() {
+        use crate::assets::StoryCommand;
+        let _guard = test_support::lock();
+        let cases = [
+            ("start", StoryCommand::Start),
+            ("continue", StoryCommand::Continue),
+            ("advance", StoryCommand::Advance),
+            ("auto", StoryCommand::ToggleAuto),
+            ("skip", StoryCommand::ToggleSkip),
+            ("log", StoryCommand::ToggleLog),
+            ("save", StoryCommand::OpenSave),
+            ("load", StoryCommand::OpenLoad),
+            ("pause", StoryCommand::TogglePause),
+            ("settings", StoryCommand::OpenSettings),
+            ("settings_back", StoryCommand::CloseSettings),
+        ];
+        for (action, expected) in cases {
+            let text = format!(r#"{{"action":"{action}"}}"#);
+            let reply = drive_runtime_handler(
+                move || handle_story(&text),
+                |cmd| match cmd {
+                    RuntimeCommand::Story { command, reply } => {
+                        assert_eq!(command, expected, "action '{action}'");
+                        let _ = reply.send(Ok(()));
+                        None
+                    }
+                    other => Some(other),
+                },
+            );
+            assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+        }
+    }
+
+    #[test]
+    fn story_choose_and_slot_carry_the_option_index() {
+        use crate::assets::StoryCommand;
+        let _guard = test_support::lock();
+        for (action, expected) in [
+            ("choose", StoryCommand::Choose(2)),
+            ("slot", StoryCommand::Slot(2)),
+        ] {
+            let text = format!(r#"{{"action":"{action}","option":2}}"#);
+            let reply = drive_runtime_handler(
+                move || handle_story(&text),
+                |cmd| match cmd {
+                    RuntimeCommand::Story { command, reply } => {
+                        assert_eq!(command, expected);
+                        let _ = reply.send(Ok(()));
+                        None
+                    }
+                    other => Some(other),
+                },
+            );
+            assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+        }
+    }
+
+    #[test]
+    fn reparent_filters_a_whitespace_parent_to_detach() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_reparent(r#"{"child":"box_a","parent":"  "}"#),
+            |cmd| match cmd {
+                RuntimeCommand::Reparent {
+                    child,
+                    parent,
+                    reply,
+                } => {
+                    assert_eq!(child, "box_a");
+                    assert!(parent.is_none(), "whitespace parent must detach");
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn reparent_keeps_a_real_parent() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || handle_reparent(r#"{"child":"box_a","parent":"frame"}"#),
+            |cmd| match cmd {
+                RuntimeCommand::Reparent { parent, reply, .. } => {
+                    assert_eq!(parent.as_deref(), Some("frame"));
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn spawn_round_trips_transform_and_lifetime() {
+        let _guard = test_support::lock();
+        let reply = drive_runtime_handler(
+            || {
+                handle_spawn(
+                    r#"{"template":"crate_a","name":"crate_b","position":[1.0,0.0,-1.0],"rotation_deg":[0.0,90.0,0.0],"scale":[2.0,2.0,2.0],"lifetime":2.5}"#,
+                )
+            },
+            |cmd| match cmd {
+                RuntimeCommand::Spawn {
+                    template,
+                    name,
+                    position,
+                    rotation_deg,
+                    scale,
+                    lifetime,
+                    reply,
+                } => {
+                    assert_eq!(template, "crate_a");
+                    assert_eq!(name, "crate_b");
+                    assert_eq!(position, [1.0, 0.0, -1.0]);
+                    assert_eq!(rotation_deg, [0.0, 90.0, 0.0]);
+                    assert_eq!(scale, [2.0, 2.0, 2.0]);
+                    assert_eq!(lifetime, Some(2.5));
+                    let _ = reply.send(Ok(()));
+                    None
+                }
+                other => Some(other),
+            },
+        );
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    // Animation handler success paths: these enqueue onto the runtime crate's
+    // animation queue, which only `AnimationSystem::apply_runtime_commands`
+    // can drain. Drive a real system built from a small world while the
+    // handler blocks, exactly as the per-frame debug drive would.
+
+    fn anim_clip(name: &str, duration: f32) -> crate::assets::Animation {
+        let mut a: crate::assets::Animation = serde_json::from_value(serde_json::json!({
+            "target": "hero",
+            "duration": duration,
+            "looping": true,
+        }))
+        .unwrap();
+        a.asset_id = crate::ecs::asset_id::intern(name);
+        a
+    }
+
+    fn hero_graph() -> crate::assets::AnimGraph {
+        let mut g: crate::assets::AnimGraph = serde_json::from_value(serde_json::json!({
+            "target": "hero",
+            "parameters": [{"name": "speed", "default": 0.0}],
+            "initial": "idle",
+            "states": [
+                {"name": "idle", "clip": "idle_clip"},
+                {"name": "run", "clip": "run_clip"}
+            ],
+            "transitions": [
+                {"from": "idle", "to": "run",
+                 "conditions": [{"parameter": "speed", "op": "gt", "value": 0.5}]},
+                {"from": "run", "to": "idle",
+                 "conditions": [{"parameter": "speed", "op": "le", "value": 0.5}]}
+            ]
+        }))
+        .unwrap();
+        g.asset_id = crate::ecs::asset_id::intern("hero_graph");
+        g
+    }
+
+    fn graph_world() -> crate::ecs::World {
+        let mut world = crate::ecs::World::new_empty();
+        world.add_component(anim_clip("idle_clip", 1.0));
+        world.add_component(anim_clip("run_clip", 0.8));
+        world.add_component(hero_graph());
+        world.start().unwrap();
+        world
+    }
+
+    fn flat_world() -> crate::ecs::World {
+        let mut world = crate::ecs::World::new_empty();
+        world.add_component(anim_clip("wave_clip", 1.0));
+        world.add_component(anim_clip("bow_clip", 0.5));
+        world.start().unwrap();
+        world
+    }
+
+    fn with_anim<R>(
+        world: &mut crate::ecs::World,
+        f: impl FnOnce(&mut crate::gfx::animation::AnimationSystem) -> R,
+    ) -> R {
+        for system in world.systems_mut() {
+            if let crate::ecs::SystemAsset::AnimationSystem(anim) = system {
+                return f(anim);
+            }
+        }
+        panic!("AnimationSystem not constructed");
+    }
+
+    // Same retry rationale as `drive_runtime_handler`: a stalled test host
+    // can trip the handler's engine timeout, which is a scheduler artifact,
+    // not the semantics under test.
+    fn drive_anim_handler(
+        world: &mut crate::ecs::World,
+        handler: impl Fn() -> String + Send + Sync + 'static,
+    ) -> String {
+        let handler = std::sync::Arc::new(handler);
+        for _ in 0..5 {
+            let h = std::sync::Arc::clone(&handler);
+            let worker = std::thread::spawn(move || h());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !worker.is_finished() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "anim handler never returned"
+                );
+                with_anim(world, |anim| anim.apply_runtime_commands());
+                std::thread::yield_now();
+            }
+            // One final drain so a command left behind by a handler timeout
+            // can never leak into another test.
+            with_anim(world, |anim| anim.apply_runtime_commands());
+            let response = worker.join().expect("handler thread panicked");
+            if !response.contains("timed out waiting for engine") {
+                return response;
+            }
+        }
+        panic!("anim handler kept timing out under load");
+    }
+
+    #[test]
+    fn anim_param_queues_a_graph_parameter_write() {
+        let _guard = test_support::lock();
+        let mut world = graph_world();
+        let names = crate::ecs::asset_id::name_table();
+        let reply = drive_anim_handler(&mut world, move || {
+            handle_anim_param(r#"{"target":"hero","name":"speed","value":1.0}"#, &names)
+        });
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn anim_param_surfaces_an_unknown_parameter() {
+        let _guard = test_support::lock();
+        let mut world = graph_world();
+        let names = crate::ecs::asset_id::name_table();
+        let reply = drive_anim_handler(&mut world, move || {
+            handle_anim_param(r#"{"target":"hero","name":"altitude","value":1.0}"#, &names)
+        });
+        assert_err_reply(&reply, "no parameter 'altitude'");
+    }
+
+    #[test]
+    fn anim_state_reports_the_live_graph_state() {
+        let _guard = test_support::lock();
+        let mut world = graph_world();
+        let names = crate::ecs::asset_id::name_table();
+        let reply = drive_anim_handler(&mut world, move || {
+            handle_anim_state(r#"{"target":"hero"}"#, &names)
+        });
+        assert!(reply.contains(r#""ok":true"#), "got: {reply}");
+        assert!(reply.contains(r#""state":"idle""#), "got: {reply}");
+        assert!(reply.contains(r#""params":{"speed":0.0}"#), "got: {reply}");
+    }
+
+    #[test]
+    fn anim_crossfade_queues_on_a_flat_target() {
+        let _guard = test_support::lock();
+        let mut world = flat_world();
+        let names = crate::ecs::asset_id::name_table();
+        let reply = drive_anim_handler(&mut world, move || {
+            handle_anim_crossfade(
+                r#"{"target":"hero","weights":[0.0,1.0],"duration_secs":0.5}"#,
+                &names,
+            )
+        });
+        assert!(reply.contains(r#""queued":true"#), "got: {reply}");
+    }
+
+    #[test]
+    fn anim_crossfade_is_rejected_on_a_graph_target() {
+        let _guard = test_support::lock();
+        let mut world = graph_world();
+        let names = crate::ecs::asset_id::name_table();
+        let reply = drive_anim_handler(&mut world, move || {
+            handle_anim_crossfade(r#"{"target":"hero","weights":[1.0,0.0]}"#, &names)
+        });
+        assert_err_reply(&reply, "graph-driven");
+    }
 }

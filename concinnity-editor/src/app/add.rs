@@ -1444,4 +1444,193 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // entry_from_inline_json
+
+    #[test]
+    fn inline_json_must_be_an_object() {
+        let err = entry_from_inline_json("[1, 2]").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("must be an object"), "got: {err}");
+    }
+
+    #[test]
+    fn inline_json_requires_a_type_field() {
+        let err = entry_from_inline_json(r#"{"name":"thing"}"#).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("`type` field"), "got: {err}");
+    }
+
+    #[test]
+    fn inline_json_rejects_malformed_text() {
+        let err = entry_from_inline_json("{ nope").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn inline_json_rejects_build_config() {
+        let err = entry_from_inline_json(r#"{"type":"BuildConfig"}"#).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        // The underscore spelling is caught by the same normalisation.
+        let err = entry_from_inline_json(r#"{"type":"build_config"}"#).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn inline_json_defaults_the_name_to_the_lowercased_type() {
+        let entry = entry_from_inline_json(r#"{"type":"Window"}"#).unwrap();
+        assert_eq!(entry["name"], "window");
+        assert_eq!(entry["type"], "Window");
+        // Default args are materialized as an object.
+        assert!(entry["args"].is_object());
+    }
+
+    #[test]
+    fn inline_json_keeps_an_explicit_name() {
+        let entry = entry_from_inline_json(r#"{"type":"Window","name":"main"}"#).unwrap();
+        assert_eq!(entry["name"], "main");
+    }
+
+    // entry_from_type_name
+
+    #[test]
+    fn type_name_builds_a_default_entry() {
+        let entry = entry_from_type_name("Window").unwrap();
+        assert_eq!(entry["name"], "window");
+        assert_eq!(entry["type"], "Window");
+        assert!(entry["args"].is_object());
+    }
+
+    #[test]
+    fn type_name_rejects_build_config() {
+        let err = entry_from_type_name("BuildConfig").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn type_name_rejects_an_unknown_type() {
+        assert!(entry_from_type_name("NotARealAssetType").is_err());
+    }
+
+    // entry_from_json_file
+
+    #[test]
+    fn json_file_requires_a_type_field() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("thing.json");
+        std::fs::write(&path, r#"{"name":"thing"}"#).unwrap();
+
+        let err = entry_from_json_file(&path, "thing").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("no `type` field"), "got: {err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_file_rejects_build_config() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("cfg.json");
+        std::fs::write(&path, r#"{"type":"BuildConfig"}"#).unwrap();
+
+        let err = entry_from_json_file(&path, "cfg").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_file_uses_the_stem_when_unnamed() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("main_window.json");
+        std::fs::write(&path, r#"{"type":"Window","args":{}}"#).unwrap();
+
+        let entry = entry_from_json_file(&path, "main_window").unwrap();
+        assert_eq!(entry["name"], "main_window");
+        assert_eq!(entry["type"], "Window");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_file_read_and_parse_failures_are_reported() {
+        let dir = text_test_dir(line!());
+        // Missing file.
+        let missing = dir.join("missing.json");
+        assert!(entry_from_json_file(&missing, "missing").is_err());
+        // Unparseable content.
+        let junk = dir.join("junk.json");
+        std::fs::write(&junk, "{ nope").unwrap();
+        let err = entry_from_json_file(&junk, "junk").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // resolve_add_target
+
+    #[test]
+    fn resolve_add_target_dispatches_type_names_and_inline_json() {
+        let entries = resolve_add_target("Window").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["type"], "Window");
+
+        let entries = resolve_add_target(r#"{"type":"Window","name":"main"}"#).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "main");
+    }
+
+    #[test]
+    fn resolve_add_target_reports_an_unresolvable_target() {
+        let err = resolve_add_target("DefinitelyNotAnAssetOrFile").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("could not resolve"), "got: {err}");
+    }
+
+    // import_entry
+
+    #[test]
+    fn import_entry_sets_the_source_on_registration_defaults() {
+        let entry = import_entry("SceneImport", "bistro", "scenes/bistro.fbx").unwrap();
+        assert_eq!(entry["name"], "bistro");
+        assert_eq!(entry["type"], "SceneImport");
+        assert_eq!(entry["args"]["source"], "scenes/bistro.fbx");
+    }
+
+    #[test]
+    fn import_entry_rejects_an_unknown_type() {
+        assert!(import_entry("NotARealAssetType", "x", "x.glb").is_err());
+    }
+
+    // ensure_world_file_exists
+
+    #[test]
+    fn ensure_world_file_exists_creates_parents_and_is_idempotent() {
+        let dir = text_test_dir(line!());
+        let world = dir.join("nested").join("deeper").join("world.jsonl");
+
+        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        assert!(world.exists());
+        assert_eq!(std::fs::read_to_string(&world).unwrap(), "");
+
+        // A second call leaves the existing file alone.
+        std::fs::write(&world, "content").unwrap();
+        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&world).unwrap(), "content");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // is_path_like
+
+    #[test]
+    fn is_path_like_recognises_separators_prefixes_and_dotted_files() {
+        assert!(is_path_like("models/scene.glb"));
+        assert!(is_path_like("models\\scene.glb"));
+        assert!(is_path_like("./scene.glb"));
+        assert!(is_path_like("~/scene.glb"));
+        assert!(is_path_like("scene.glb"));
+        // A bare known type name is not a path, even without a dot.
+        assert!(!is_path_like("Window"));
+    }
 }

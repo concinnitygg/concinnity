@@ -50,3 +50,53 @@ pub fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
 
     build_from_path(world_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Removal failures surface before any rebuild runs, so these tests never
+    // touch the compile pipeline.
+
+    #[test]
+    fn rm_of_a_missing_world_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.jsonl");
+        assert!(rm_at_path(path.to_str().unwrap(), "anything").is_err());
+    }
+
+    #[test]
+    fn rm_of_an_unknown_name_lists_the_known_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"name\":\"log\",\"type\":\"Logger\",\"args\":{}}\n",
+                "{\"name\":\"log2\",\"type\":\"Logger\",\"args\":{}}\n",
+            ),
+        )
+        .unwrap();
+
+        let err = rm_at_path(path.to_str().unwrap(), "ghost").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let msg = err.to_string();
+        assert!(msg.contains("no asset named 'ghost'"), "got: {msg}");
+        assert!(msg.contains("Known names: log, log2"), "got: {msg}");
+        // The world file itself is left intact.
+        let survived = std::fs::read_to_string(&path).unwrap();
+        assert!(survived.contains("\"log\""));
+        assert!(survived.contains("\"log2\""));
+    }
+
+    #[test]
+    fn rm_from_an_empty_world_reports_no_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(&path, "").unwrap();
+
+        let err = rm_at_path(path.to_str().unwrap(), "ghost").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("no assets declared"), "got: {err}");
+    }
+}

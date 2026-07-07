@@ -45,3 +45,37 @@ fn init_in_dir(dir: &str) -> std::io::Result<()> {
     let world_path_str = world_path.to_str().unwrap_or(WORLD_JSONL);
     build_from_path(world_path_str)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Only the paths that stop before the initial build are exercised here;
+    // a successful `cn new` runs the full compile pipeline.
+
+    #[test]
+    fn new_refuses_a_directory_that_already_has_a_world() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(WORLD_JSONL), "").unwrap();
+
+        let err = new(dir.path().to_str().unwrap()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(err.to_string().contains(WORLD_JSONL), "got: {err}");
+    }
+
+    #[test]
+    fn init_in_dir_skips_when_a_world_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join(WORLD_JSONL);
+        std::fs::write(
+            &world,
+            "{\"name\":\"keep\",\"type\":\"Logger\",\"args\":{}}\n",
+        )
+        .unwrap();
+
+        init_in_dir(dir.path().to_str().unwrap()).unwrap();
+        // The existing world is untouched, not overwritten by the starter.
+        let content = std::fs::read_to_string(&world).unwrap();
+        assert!(content.contains("\"keep\""), "got: {content}");
+    }
+}

@@ -674,3 +674,259 @@ fn run_world_loop_default(app: &mut App) {
     }
     BLOCKING_WORLD_STOP.store(false, Ordering::Relaxed);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pending::test_support;
+    use std::ffi::CString;
+
+    fn c(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+
+    // A NUL-terminated byte sequence that is not valid UTF-8.
+    const INVALID_UTF8: &[u8] = &[0xff, 0xfe, 0];
+
+    fn invalid_utf8_ptr() -> *const c_char {
+        INVALID_UTF8.as_ptr() as *const c_char
+    }
+
+    // Tests that read or mutate the process-global STATE / cwd take the shared
+    // test lock; pure marshaling checks that fail before reaching it run free.
+
+    #[test]
+    fn ptr_to_str_handles_null_invalid_and_valid() {
+        assert!(ptr_to_str(std::ptr::null()).is_none());
+        assert!(ptr_to_str(invalid_utf8_ptr()).is_none());
+        let s = c("hello");
+        assert_eq!(ptr_to_str(s.as_ptr()).as_deref(), Some("hello"));
+        let empty = c("");
+        assert_eq!(ptr_to_str(empty.as_ptr()).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn cn_init_is_idempotent() {
+        let _guard = test_support::lock();
+        assert_eq!(cn_init(), 1);
+        assert_eq!(cn_init(), 1);
+    }
+
+    #[test]
+    fn cn_connect_rejects_null_and_invalid_utf8() {
+        let url = c("ws://example.invalid");
+        let aid = c("acct");
+        assert_eq!(cn_connect(std::ptr::null(), aid.as_ptr()), 0);
+        assert_eq!(cn_connect(url.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(cn_connect(invalid_utf8_ptr(), aid.as_ptr()), 0);
+        assert_eq!(cn_connect(url.as_ptr(), invalid_utf8_ptr()), 0);
+    }
+
+    #[test]
+    fn connect_disconnect_lifecycle_tracks_the_channel() {
+        let _guard = test_support::lock();
+        assert_eq!(cn_init(), 1);
+
+        // Disconnecting while not connected is a safe no-op.
+        cn_disconnect();
+        assert_eq!(cn_is_connected(), 0);
+
+        // The connect call only spawns the client thread; a syntactically
+        // invalid URL fails inside that thread without opening a socket, but
+        // the channel is installed either way.
+        let url = c("not a url");
+        let aid = c("acct");
+        assert_eq!(cn_connect(url.as_ptr(), aid.as_ptr()), 1);
+        assert_eq!(cn_is_connected(), 1);
+
+        cn_disconnect();
+        assert_eq!(cn_is_connected(), 0);
+        // Double disconnect stays a no-op.
+        cn_disconnect();
+        assert_eq!(cn_is_connected(), 0);
+    }
+
+    #[test]
+    fn cn_set_server_config_validates_pointers_then_stores() {
+        let _guard = test_support::lock();
+        let server = c("http://127.0.0.1:1");
+        let aid = c("acct");
+        assert_eq!(cn_set_server_config(std::ptr::null(), aid.as_ptr()), 0);
+        assert_eq!(cn_set_server_config(server.as_ptr(), std::ptr::null()), 0);
+        assert_eq!(cn_set_server_config(invalid_utf8_ptr(), aid.as_ptr()), 0);
+
+        assert_eq!(cn_init(), 1);
+        assert_eq!(cn_set_server_config(server.as_ptr(), aid.as_ptr()), 1);
+    }
+
+    #[test]
+    fn cn_build_world_fails_cleanly_before_the_pipeline() {
+        let _guard = test_support::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let assets = c(dir.path().join("assets").to_str().unwrap());
+        let jsonl_path = dir.path().join("world.jsonl");
+        let jsonl = c(jsonl_path.to_str().unwrap());
+
+        // Null pointers.
+        assert_eq!(cn_build_world(std::ptr::null(), jsonl.as_ptr()), 0);
+        assert_eq!(cn_build_world(assets.as_ptr(), std::ptr::null()), 0);
+
+        // Missing world file.
+        assert_eq!(cn_build_world(assets.as_ptr(), jsonl.as_ptr()), 0);
+
+        // Invalid world content fails validation; the cwd guard must restore
+        // the working directory afterwards.
+        let before = std::env::current_dir().unwrap();
+        std::fs::write(
+            &jsonl_path,
+            "{\"name\":\"odd\",\"type\":\"NotARealAssetType\"}\n",
+        )
+        .unwrap();
+        assert_eq!(cn_build_world(assets.as_ptr(), jsonl.as_ptr()), 0);
+        assert_eq!(std::env::current_dir().unwrap(), before);
+    }
+
+    #[test]
+    fn cn_check_world_reports_validity() {
+        let null_result = cn_check_world(std::ptr::null());
+        assert_eq!(null_result, 0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let missing = c(dir.path().join("missing.jsonl").to_str().unwrap());
+        assert_eq!(cn_check_world(missing.as_ptr()), 0);
+
+        let bad = dir.path().join("bad.jsonl");
+        std::fs::write(&bad, "{\"name\":\"odd\",\"type\":\"NotARealAssetType\"}\n").unwrap();
+        let bad_c = c(bad.to_str().unwrap());
+        assert_eq!(cn_check_world(bad_c.as_ptr()), 0);
+
+        let good = dir.path().join("good.jsonl");
+        std::fs::write(
+            &good,
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+        )
+        .unwrap();
+        let good_c = c(good.to_str().unwrap());
+        assert_eq!(cn_check_world(good_c.as_ptr()), 1);
+    }
+
+    #[test]
+    fn cn_rm_fails_cleanly_before_the_rebuild() {
+        let _guard = test_support::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let assets = c(dir.path().join("assets").to_str().unwrap());
+        let name = c("ghost");
+
+        // Null pointers.
+        assert_eq!(cn_rm(std::ptr::null(), std::ptr::null(), name.as_ptr()), 0);
+
+        // Missing world file.
+        let missing = c(dir.path().join("missing.jsonl").to_str().unwrap());
+        assert_eq!(cn_rm(assets.as_ptr(), missing.as_ptr(), name.as_ptr()), 0);
+
+        // Unknown name errors before any build runs.
+        let world = dir.path().join("world.jsonl");
+        std::fs::write(
+            &world,
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+        )
+        .unwrap();
+        let world_c = c(world.to_str().unwrap());
+        assert_eq!(cn_rm(assets.as_ptr(), world_c.as_ptr(), name.as_ptr()), 0);
+    }
+
+    #[test]
+    fn cn_add_fails_cleanly_before_the_rebuild() {
+        let _guard = test_support::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let assets = c(dir.path().join("assets").to_str().unwrap());
+        let world = dir.path().join("world.jsonl");
+        std::fs::write(&world, "").unwrap();
+        let world_c = c(world.to_str().unwrap());
+
+        // Null target.
+        assert_eq!(
+            cn_add(
+                assets.as_ptr(),
+                world_c.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null()
+            ),
+            0
+        );
+
+        // An unresolvable target errors before touching the pipeline.
+        let target = c("DefinitelyNotAnAssetOrFile");
+        assert_eq!(
+            cn_add(
+                assets.as_ptr(),
+                world_c.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null()
+            ),
+            0
+        );
+
+        // An unknown template is rejected up front.
+        let glb = c("scene.glb");
+        let template = c("nope");
+        assert_eq!(
+            cn_add_with_template(
+                assets.as_ptr(),
+                world_c.as_ptr(),
+                glb.as_ptr(),
+                std::ptr::null(),
+                template.as_ptr()
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn preview_entry_points_handle_the_inactive_state() {
+        let _guard = test_support::lock();
+        // A null view is rejected before anything else.
+        let assets = c("/tmp/assets");
+        let world = c("/tmp/world.jsonl");
+        assert_eq!(
+            cn_preview_start(std::ptr::null_mut(), assets.as_ptr(), world.as_ptr()),
+            0
+        );
+
+        assert_eq!(cn_init(), 1);
+        // Stopping with no preview is a no-op; stepping reports inactivity.
+        cn_preview_stop();
+        assert_eq!(cn_preview_step(), -1);
+    }
+
+    #[test]
+    fn cn_stop_world_blocking_raises_the_stop_flag() {
+        use std::sync::atomic::Ordering;
+        let _guard = test_support::lock();
+        cn_stop_world_blocking();
+        assert!(BLOCKING_WORLD_STOP.load(Ordering::Relaxed));
+        // Reset so an unrelated blocking-run test never sees a stale stop.
+        BLOCKING_WORLD_STOP.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn enter_work_dir_switches_and_restores_the_cwd() {
+        let _guard = test_support::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("assets");
+        let before = std::env::current_dir().unwrap();
+        {
+            let _cwd = enter_work_dir(assets.to_str().unwrap()).expect("guard");
+            // The parent of assets_path becomes the working directory, created
+            // on demand.
+            assert_eq!(
+                std::env::current_dir().unwrap().canonicalize().unwrap(),
+                dir.path().canonicalize().unwrap()
+            );
+        }
+        assert_eq!(std::env::current_dir().unwrap(), before);
+
+        // A path with no parent has no work dir to enter.
+        assert!(enter_work_dir("/").is_none());
+    }
+}

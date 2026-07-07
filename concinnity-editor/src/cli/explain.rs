@@ -43,3 +43,49 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     println!("{}", serde_json::to_string(&line)?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_world(content: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(&path, content).unwrap();
+        (dir, path.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn explain_prints_a_known_asset() {
+        let (_dir, path) =
+            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+        explain("gfx", Some(&path)).unwrap();
+    }
+
+    #[test]
+    fn explain_of_an_unknown_name_offers_close_matches() {
+        let (_dir, path) =
+            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+        let err = explain("gf", Some(&path)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let msg = err.to_string();
+        assert!(msg.contains("close matches"), "got: {msg}");
+        assert!(msg.contains("gfx"), "got: {msg}");
+    }
+
+    #[test]
+    fn explain_of_an_unknown_name_without_matches_has_no_hint() {
+        let (_dir, path) =
+            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+        let err = explain("zzz_nothing", Some(&path)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!err.to_string().contains("close matches"), "got: {err}");
+    }
+
+    #[test]
+    fn explain_surfaces_validation_failures() {
+        let (_dir, path) =
+            write_world("{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
+        assert!(explain("odd", Some(&path)).is_err());
+    }
+}

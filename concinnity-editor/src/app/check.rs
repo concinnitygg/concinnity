@@ -24,3 +24,46 @@ pub fn check_from_str(content: &str, label: &str) -> std::io::Result<()> {
         Err(errors) => Err(concinnity_cook::check::report_validation_errors(&errors)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_from_str_accepts_a_valid_world() {
+        check_from_str(
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+            "test",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn check_from_str_rejects_an_unknown_type() {
+        let err = check_from_str(
+            "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+            "test",
+        )
+        .unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn check_at_path_reports_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.jsonl");
+        assert!(check_at_path(path.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn check_at_path_accepts_a_valid_world_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &path,
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+        )
+        .unwrap();
+        check_at_path(path.to_str().unwrap()).unwrap();
+    }
+}
