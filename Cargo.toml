@@ -7,6 +7,7 @@ members = [
     "concinnity-toolchain",
     "concinnity-client",
     "concinnity-runtime",
+    "concinnity-app",
     "concinnity-editor",
     "concinnity-docs",
     "examples/common",
@@ -20,6 +21,7 @@ default-members = [
     "concinnity-toolchain",
     "concinnity-client",
     "concinnity-runtime",
+    "concinnity-app",
     "concinnity-editor",
     "concinnity-docs",
 ]

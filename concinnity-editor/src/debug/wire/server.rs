@@ -7,7 +7,7 @@
 // `super::super::dispatch::handle_request`; spawn / crossfade command handlers
 // live in `super::super::commands`.
 
-use crate::app::DebugHook;
+use crate::debug_hook::DebugHook;
 use crate::ecs::{SystemAsset, World};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};

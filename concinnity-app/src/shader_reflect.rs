@@ -15,9 +15,8 @@
 // issue and fails open: only a layout mismatch we actually observed fails the
 // build.
 
-// Driven only by the binary's build chain (cn build / cn debug); the FFI lib
-// never registers the validator, so these items read as dead under the lib.
-#![allow(dead_code)]
+// The Metal shader-layout validator, registered with the core build pipeline
+// through `authoring::build::prepare`. Compiled only under the Metal backend.
 
 use std::collections::HashMap;
 use std::sync::Once;

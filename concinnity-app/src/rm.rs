@@ -1,4 +1,4 @@
-// src/app/rm.rs
+// src/rm.rs
 // Remove an asset from a world JSONL by its unique `name` field and rebuild.
 
 use crate::world::{WORLD_JSONL, known_names, patch_world_jsonl};

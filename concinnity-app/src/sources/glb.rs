@@ -1,4 +1,4 @@
-// src/app/sources/glb.rs
+// src/sources/glb.rs
 //
 // Content template presets for `cn add <scene> --template <name>`. The
 // renderer stack itself (GraphicsConfig, Window, shader stages, menu, HUDs,

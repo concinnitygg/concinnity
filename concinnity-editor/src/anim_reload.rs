@@ -121,8 +121,8 @@ fn imported_to_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::test_support;
     use crate::ecs::asset_id::intern;
+    use crate::test_support;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
     // two-joint skeleton and one animation named "wave" (two translation keys

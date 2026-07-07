@@ -23,8 +23,8 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::sync::{Mutex, OnceLock};
 
-use crate::app::state::App;
 use crate::ecs::StepResult;
+use concinnity_client::app::state::App;
 
 struct ClientState {
     // App instance used for the in-tab preview.
@@ -47,7 +47,7 @@ static BLOCKING_WORLD_STOP: std::sync::atomic::AtomicBool =
 //
 // The log level is not a parameter: it follows the same default as the CLI
 // (info for debug builds, warn for release builds) and is overridden by
-// RUST_LOG. See crate::app::run::init_logging.
+// RUST_LOG. See concinnity_client::app::run::init_logging.
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_init() -> c_int {
     concinnity_client::app::run::init_logging();
@@ -185,7 +185,7 @@ pub extern "C" fn cn_add_with_template(
         None => return 0,
     };
 
-    match crate::app::add::add_to_path(
+    match crate::add::add_to_path(
         &jsonl_path_str,
         name_str.as_deref(),
         &target_str,
@@ -228,7 +228,7 @@ pub extern "C" fn cn_rm(
         None => return 0,
     };
 
-    match crate::app::rm::rm_at_path(&jsonl_path_str, &name_str) {
+    match crate::rm::rm_at_path(&jsonl_path_str, &name_str) {
         Ok(()) => {
             tracing::info!("cn_rm: removed '{name_str}' from {jsonl_path_str}");
             1
@@ -250,7 +250,7 @@ pub extern "C" fn cn_check_world(world_jsonl_path: *const c_char) -> c_int {
         None => return 0,
     };
 
-    match crate::app::check::check_at_path(&jsonl_path_str) {
+    match crate::check::check_at_path(&jsonl_path_str) {
         Ok(()) => 1,
         Err(e) => {
             tracing::error!("cn_check_world: {e}");
@@ -321,7 +321,7 @@ pub extern "C" fn cn_preview_start(
         }
     };
 
-    let world = match crate::app::build::world_from_loaded(loaded) {
+    let world = match crate::build::world_from_loaded(loaded) {
         Ok(w) => w,
         Err(e) => {
             tracing::error!("cn_preview_start: build failed: {e}");
@@ -575,7 +575,7 @@ fn run_world_loop_default(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::test_support;
+    use crate::test_support;
     use std::ffi::CString;
 
     fn c(s: &str) -> CString {

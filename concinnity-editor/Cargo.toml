@@ -6,23 +6,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+# The `concinnity` dev CLI binary. The shared authoring/build code and the full
+# C-ABI cdylib the Swift app links live in the concinnity-app crate; this crate
+# is bin-only and depends on it.
 [[bin]]
 name = "concinnity"
 path = "src/main.rs"
-
-# The editor crate owns the full C-ABI surface now that it has moved out of the
-# runtime crate. The lib is named `concinnity_editor` (not `concinnity`) so it
-# does not collide with the `concinnity` bin: on Windows a bin and a cdylib that
-# share a name both emit `<name>.pdb`, which Cargo rejects as an output filename
-# collision. The cdylib is therefore `libconcinnity_editor.dylib` (macOS) /
-# `concinnity_editor.dll` (Windows). The Swift app (concinnity-xcode) link
-# settings and bridging header must reference that artifact name; the generated
-# C header path (include/concinnity.h) is unchanged.
-[lib]
-name = "concinnity_editor"
-crate-type = ["cdylib", "rlib"]
-path = "src/lib.rs"
-doctest = false
 
 [features]
 # Mirror the client's Vulkan feature so an editor build can target the Vulkan
@@ -30,20 +19,24 @@ doctest = false
 vulkan = [
     "dep:ash",
     "dep:shaderc",
+    "concinnity-app/vulkan",
     "concinnity-client/vulkan",
     "concinnity-cook/vulkan",
     "concinnity-core/vulkan",
 ]
 
 [dependencies]
+# The embedding + authoring library: the shared add / rm / check / build code
+# (`concinnity_app::authoring`) the CLI drives, plus the C-ABI cdylib.
+concinnity-app = { path = "../concinnity-app" }
 # The runtime crate (rlib): the editor drives a live App and the renderer
 # through the runtime's public API.
 concinnity-client = { path = "../concinnity-client" }
-# The asset compile pipeline: cn build / cn add / cn debug / the editor FFI.
-# Carries the gltf/png/jpeg decoders; the editor calls them through
+# The asset compile pipeline: cn build / cn add / cn debug.
+# Carries the gltf/png/jpeg decoders; the CLI calls them through
 # concinnity_cook::{glb,texture,color_lut,mesh_reimport}.
 concinnity-cook = { path = "../concinnity-cook" }
-# Direct core access for the world/geometry/ecs types the moved build code names
+# Direct core access for the world/geometry/ecs types the CLI/debug code names
 # (concinnity_core::{world,build,geometry,ecs}).
 concinnity-core = { path = "../concinnity-core" }
 argon2 = "0.5"
@@ -118,5 +111,4 @@ objc2-quartz-core = "0.3.2"
 tempfile = "3.25.0"
 
 [build-dependencies]
-cbindgen = "0.29"
 concinnity-toolchain = { path = "../concinnity-toolchain" }

@@ -1,4 +1,4 @@
-// src/app/build.rs: CLI build command + shared build orchestration
+// src/build.rs: shared in-memory build orchestration
 
 #[allow(unused_imports)]
 pub use concinnity_cook::{
@@ -12,12 +12,10 @@ use concinnity_cook::world::LoadedWorld;
 // source files for a world. The returned LoadedWorld has passed the full
 // validation front half and is ready for concinnity_cook::build_compiled.
 //
-// This is the shared front half of every build path: the CLI build, the
-// interpreted `run`, and the Swift FFI build/preview entry points all funnel
-// through here so validation and asset fetching behave identically.
-// Driven by the binary's CLI build and interpreted run; unreferenced in the
-// FFI lib build, which prepares through concinnity_cook directly.
-#[allow(dead_code)]
+// This is the shared front half of every in-memory build: `build_world_from_path`
+// (the CLI interpreted `run` and the FFI preview) funnels through here so
+// validation and asset fetching behave identically. The `cn build` blob path
+// prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
     // Install the render backend's shader-layout validator before any shader
     // compiles, so a user shader that mis-declares an engine buffer struct fails
@@ -35,13 +33,11 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
 // Only the Metal backend ships one today; other backends leave the hook
 // unregistered and build exactly as before.
 #[cfg(backend_metal)]
-#[allow(dead_code)]
 fn ensure_shader_layout_validator() {
     crate::shader_reflect::register_shader_layout_validator();
 }
 
 #[cfg(not(backend_metal))]
-#[allow(dead_code)]
 fn ensure_shader_layout_validator() {}
 
 // Compile a prepared world and assemble it into an in-memory World, ready to
@@ -67,9 +63,10 @@ pub(crate) fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 }
 
 // Read a world.jsonl file from disk and run the full in-memory pipeline on it,
-// returning a ready-to-run World. The interpreted `run` loads its world through
-// here; it is the file-backed counterpart of `prepare` + `world_from_loaded`.
-pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
+// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
+// loads its world through here; it is the file-backed counterpart of `prepare`
+// + `world_from_loaded`.
+pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
     let loaded = prepare(&content)?;
     world_from_loaded(loaded)

@@ -1,4 +1,4 @@
-// src/app/add.rs
+// src/add.rs
 // Add an asset to a world JSONL and rebuild.
 //
 // The CLI and FFI both funnel through `add_to_path`, which:

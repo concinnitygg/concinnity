@@ -17,23 +17,23 @@ pub(crate) use concinnity_client::metal;
 #[allow(unused_imports)]
 pub(crate) use concinnity_client::vulkan;
 #[allow(unused_imports)]
-pub(crate) use concinnity_client::{assets, blob, config, ecs, gfx, jobs};
+pub(crate) use concinnity_client::{app, assets, blob, config, ecs, gfx, jobs};
 #[allow(unused_imports)]
 pub(crate) use concinnity_core::{build, geometry, result, world};
 
-// Editor-owned modules (moved out of the runtime crate).
-mod app;
+// CLI-owned modules. The shared authoring/build code and the full C-ABI surface
+// live in the concinnity-app crate (linked as a dependency); this binary drives
+// them and owns the dev CLI plus the localhost debug server.
 mod cli;
 mod debug;
-// C-ABI module compiled into the binary's tree so that helpers it consumes
-// aren't flagged as dead code here. The exported symbols are unused from the
-// CLI but harmless.
-#[cfg(target_os = "macos")]
-mod ffi;
-#[cfg(backend_metal)]
-mod shader_reflect;
+mod debug_hook;
+mod run;
 // Animation clip hot-reload decode (driven by the debug server).
 mod anim_reload;
+
+// Process-global test serialization lock; test builds only.
+#[cfg(test)]
+mod test_support;
 
 // Microsoft Agility SDK opt-in.
 //
@@ -448,14 +448,15 @@ fn main() -> std::io::Result<()> {
                 app::dev_flags::set_enabled(true);
                 app::dev_flags::set_validation(args.validation);
                 let port = args.debug_port.unwrap_or(8777);
-                let debug_hook: Box<dyn app::DebugHook> = match debug::DebugServer::start(port) {
-                    Ok(srv) => Box::new(srv),
-                    Err(e) => {
-                        eprintln!("error: could not start debug server: {e}");
-                        return Err(e);
-                    }
-                };
-                app::run_interpreted(args.file.as_deref(), Some(debug_hook))
+                let debug_hook: Box<dyn crate::debug_hook::DebugHook> =
+                    match debug::DebugServer::start(port) {
+                        Ok(srv) => Box::new(srv),
+                        Err(e) => {
+                            eprintln!("error: could not start debug server: {e}");
+                            return Err(e);
+                        }
+                    };
+                run::run_interpreted(args.file.as_deref(), Some(debug_hook))
             }
         },
         Commands::Add(args) => {

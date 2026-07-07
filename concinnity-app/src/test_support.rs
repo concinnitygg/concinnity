@@ -1,4 +1,4 @@
-// src/app/test_support.rs
+// src/test_support.rs
 //
 // Process-global test serialization lock. Tests that touch process-global state
 // -- notably the current working directory switched by the FFI build / add / rm

@@ -1,19 +1,14 @@
-// src/app/debug_hook.rs
-// Runtime injection point for the binary-only debug subsystem.
+// src/debug_hook.rs
+// Per-frame injection point for the debug subsystem.
 //
-// The library owns the world loop but knows nothing about debugging. A
-// `DebugHook` is an optional per-frame callback the loop invokes on the main
-// thread; the only implementation lives in `crate::debug` (CLI binary only),
-// so the lib never carries the debug server. The trait is `pub(crate)` to
-// keep it out of the library's public API: both the lib and the binary
-// compile this source, so the binary's `debug` module can still implement it.
+// The run loop (`crate::run`) owns the world loop but knows nothing about
+// debugging. A `DebugHook` is an optional per-frame callback it invokes on the
+// main thread; the only implementation is `crate::debug::DebugServer`. The
+// trait stays `pub(crate)` so it is not part of any public surface.
 
 use crate::ecs::World;
 use tokio_util::sync::CancellationToken;
 
-// Implemented only by the binary's debug subsystem; unreferenced in the FFI
-// lib build.
-#[allow(dead_code)]
 pub(crate) trait DebugHook: Send {
     // Called once per frame on the main thread, just before the world step.
     // Receives the live world so the hook can inspect (and later mutate) it.

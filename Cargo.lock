@@ -585,6 +585,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-app"
+version = "0.9.0"
+dependencies = [
+ "cbindgen",
+ "concinnity-client",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-toolchain",
+ "core-foundation",
+ "objc2 0.6.4",
+ "objc2-foundation",
+ "objc2-metal",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "concinnity-client"
 version = "0.9.0"
 dependencies = [
@@ -691,10 +710,10 @@ dependencies = [
  "async-stream",
  "bitflags 2.11.1",
  "block2",
- "cbindgen",
  "chrono",
  "ciborium",
  "clap",
+ "concinnity-app",
  "concinnity-client",
  "concinnity-cook",
  "concinnity-core",

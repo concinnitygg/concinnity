@@ -1,7 +1,7 @@
-// src/cli/rm.rs: discovery wrapper around crate::app::rm::rm_at_path
+// src/cli/rm.rs: discovery wrapper around concinnity_app::rm_at_path
 
-use crate::app::rm::rm_at_path;
 use crate::world::find_world_jsonl;
+use concinnity_app::rm_at_path;
 
 pub fn rm(name: &str) -> std::io::Result<()> {
     let world_path = find_world_jsonl(None)?;

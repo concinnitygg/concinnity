@@ -1,10 +1,10 @@
-// src/cli/check.rs: discovery wrapper around crate::app::check::check_at_path
+// src/cli/check.rs: discovery wrapper around concinnity_app::check_at_path
 //
 // `cn test` accepts an optional --file path. When the path is missing or
 // doesn't exist on disk, fall back to discovery via find_world_jsonl.
 
-use crate::app::check::check_at_path;
 use crate::world::find_world_jsonl;
+use concinnity_app::check_at_path;
 
 pub fn check(json_path: &str) -> std::io::Result<()> {
     let resolved;

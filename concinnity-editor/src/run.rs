@@ -1,15 +1,11 @@
-// src/app/run.rs
+// src/run.rs
 //
 // The interpreted (`cn debug`) run path: compiles world.jsonl fully in memory
 // and drives the system loop with the per-frame debug hook. The production
 // `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
-// The interpreted run path is driven only by the binary's `cn debug` command;
-// unreferenced in the FFI lib build.
-#![allow(dead_code)]
-
-use crate::app::DebugHook;
 use crate::app::state::App;
+use crate::debug_hook::DebugHook;
 use crate::world::find_world_jsonl;
 
 // Interpreted entry point (`cn debug`). Compiles world.jsonl fully in memory
@@ -32,7 +28,7 @@ pub(crate) fn run_interpreted(
     };
 
     let mut app = App::new();
-    *app.world_mut() = super::build::build_world_from_path(json_path).map_err(|e| {
+    *app.world_mut() = concinnity_app::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");
         e
     })?;

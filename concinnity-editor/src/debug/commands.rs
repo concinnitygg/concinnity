@@ -1111,8 +1111,8 @@ mod tests {
     // process-global; any unrelated command drained alongside is re-enqueued
     // untouched.
 
-    use crate::app::test_support;
     use crate::debug::runtime_spawn::{self, RuntimeCommand};
+    use crate::test_support;
 
     // A heavily loaded test host can stall either thread past the handler's
     // one-second engine timeout; when the handler reports that timeout the

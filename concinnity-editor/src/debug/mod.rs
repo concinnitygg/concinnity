@@ -8,7 +8,7 @@
 // `cn-client debug` starts a localhost WebSocket server. The engine
 // stays debug-agnostic: the only coupling is the `DebugHook` trait, which the
 // run loop invokes once per frame on the main thread (see
-// `crate::app::debug_hook`). `DebugServer::tick` snapshots the live world into
+// `crate::debug_hook`). `DebugServer::tick` snapshots the live world into
 // shared state; the server thread answers client queries from that snapshot.
 //
 // Protocol, each WS text frame is one JSON request:
