@@ -5,8 +5,7 @@
 // `include/concinnity.h`, so the function list below is the public
 // surface.
 //
-// Lifecycle / runtime: cn_init, cn_connect, cn_disconnect,
-// cn_is_connected, cn_set_server_config.
+// Lifecycle / runtime: cn_init.
 //
 // Build / run: cn_build_world, cn_run_world_blocking,
 // cn_run_world_blocking_in_view, cn_stop_world_blocking.
@@ -25,17 +24,10 @@ use std::os::raw::{c_char, c_int};
 use std::sync::{Mutex, OnceLock};
 
 use crate::app::state::App;
-use crate::app::ws_client::{self, CmdReceiver};
 use crate::ecs::StepResult;
 
 struct ClientState {
-    app: App,
-    ws_rx: Option<CmdReceiver>,
-    started: bool,
-    // Server URL and account_id set by cn_set_server_config; used by
-    // cn_build_world and cn_preview_start to fetch missing asset files.
-    server_config: Option<(String, String)>,
-    // Separate App instance used for the in-tab preview.
+    // App instance used for the in-tab preview.
     preview_app: Option<App>,
 }
 
@@ -60,104 +52,9 @@ static BLOCKING_WORLD_STOP: std::sync::atomic::AtomicBool =
 pub extern "C" fn cn_init() -> c_int {
     concinnity_client::app::run::init_logging();
 
-    STATE.get_or_init(|| {
-        Mutex::new(ClientState {
-            app: App::new(),
-            ws_rx: None,
-            started: false,
-            server_config: None,
-            preview_app: None,
-        })
-    });
+    STATE.get_or_init(|| Mutex::new(ClientState { preview_app: None }));
 
     1
-}
-
-// Connect the world-command WebSocket to the server. `ws_url` is the full
-// WebSocket URL and `account_id` is the authenticated user's account id.
-// Returns 1 on success, 0 on failure.
-#[unsafe(no_mangle)]
-pub extern "C" fn cn_connect(ws_url: *const c_char, account_id: *const c_char) -> c_int {
-    if ws_url.is_null() || account_id.is_null() {
-        return 0;
-    }
-
-    let url = match unsafe { CStr::from_ptr(ws_url) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return 0,
-    };
-    let aid = match unsafe { CStr::from_ptr(account_id) }.to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return 0,
-    };
-
-    let state_mutex = match STATE.get() {
-        Some(m) => m,
-        None => return 0,
-    };
-    let mut state = match state_mutex.lock() {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-
-    match ws_client::connect(&url, &aid) {
-        Ok(rx) => {
-            state.ws_rx = Some(rx);
-            if !state.started {
-                if let Err(e) = state.app.start() {
-                    tracing::warn!("app.start() failed (empty world is OK): {:?}", e);
-                }
-                state.started = true;
-            }
-            1
-        }
-        Err(e) => {
-            tracing::error!("cn_connect failed: {e}");
-            0
-        }
-    }
-}
-
-// Drop the WebSocket connection. Safe to call even when not connected.
-#[unsafe(no_mangle)]
-pub extern "C" fn cn_disconnect() {
-    if let Some(state_mutex) = STATE.get()
-        && let Ok(mut state) = state_mutex.lock()
-    {
-        state.ws_rx = None;
-    }
-}
-
-// Returns 1 if a WebSocket connection is active, 0 otherwise.
-#[unsafe(no_mangle)]
-pub extern "C" fn cn_is_connected() -> c_int {
-    STATE
-        .get()
-        .and_then(|m| m.lock().ok())
-        .map(|s| if s.ws_rx.is_some() { 1 } else { 0 })
-        .unwrap_or(0)
-}
-
-// Store the infra server URL and account_id so that cn_build_world and
-// cn_preview_start can fetch missing asset files before building. Call
-// before cn_build_world or cn_preview_start. Returns 1 on success, 0 on failure.
-#[unsafe(no_mangle)]
-pub extern "C" fn cn_set_server_config(server: *const c_char, account_id: *const c_char) -> c_int {
-    let server = match ptr_to_str(server) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let account_id = match ptr_to_str(account_id) {
-        Some(s) => s,
-        None => return 0,
-    };
-    if let Some(state_mutex) = STATE.get()
-        && let Ok(mut state) = state_mutex.lock()
-    {
-        state.server_config = Some((server, account_id));
-        return 1;
-    }
-    0
 }
 
 //
@@ -678,7 +575,7 @@ fn run_world_loop_default(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pending::test_support;
+    use crate::app::test_support;
     use std::ffi::CString;
 
     fn c(s: &str) -> CString {
@@ -710,53 +607,6 @@ mod tests {
         let _guard = test_support::lock();
         assert_eq!(cn_init(), 1);
         assert_eq!(cn_init(), 1);
-    }
-
-    #[test]
-    fn cn_connect_rejects_null_and_invalid_utf8() {
-        let url = c("ws://example.invalid");
-        let aid = c("acct");
-        assert_eq!(cn_connect(std::ptr::null(), aid.as_ptr()), 0);
-        assert_eq!(cn_connect(url.as_ptr(), std::ptr::null()), 0);
-        assert_eq!(cn_connect(invalid_utf8_ptr(), aid.as_ptr()), 0);
-        assert_eq!(cn_connect(url.as_ptr(), invalid_utf8_ptr()), 0);
-    }
-
-    #[test]
-    fn connect_disconnect_lifecycle_tracks_the_channel() {
-        let _guard = test_support::lock();
-        assert_eq!(cn_init(), 1);
-
-        // Disconnecting while not connected is a safe no-op.
-        cn_disconnect();
-        assert_eq!(cn_is_connected(), 0);
-
-        // The connect call only spawns the client thread; a syntactically
-        // invalid URL fails inside that thread without opening a socket, but
-        // the channel is installed either way.
-        let url = c("not a url");
-        let aid = c("acct");
-        assert_eq!(cn_connect(url.as_ptr(), aid.as_ptr()), 1);
-        assert_eq!(cn_is_connected(), 1);
-
-        cn_disconnect();
-        assert_eq!(cn_is_connected(), 0);
-        // Double disconnect stays a no-op.
-        cn_disconnect();
-        assert_eq!(cn_is_connected(), 0);
-    }
-
-    #[test]
-    fn cn_set_server_config_validates_pointers_then_stores() {
-        let _guard = test_support::lock();
-        let server = c("http://127.0.0.1:1");
-        let aid = c("acct");
-        assert_eq!(cn_set_server_config(std::ptr::null(), aid.as_ptr()), 0);
-        assert_eq!(cn_set_server_config(server.as_ptr(), std::ptr::null()), 0);
-        assert_eq!(cn_set_server_config(invalid_utf8_ptr(), aid.as_ptr()), 0);
-
-        assert_eq!(cn_init(), 1);
-        assert_eq!(cn_set_server_config(server.as_ptr(), aid.as_ptr()), 1);
     }
 
     #[test]

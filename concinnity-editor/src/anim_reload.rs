@@ -121,7 +121,7 @@ fn imported_to_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pending::test_support;
+    use crate::app::test_support;
     use crate::ecs::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a

@@ -66,6 +66,15 @@ pub(crate) fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     Ok(world)
 }
 
+// Read a world.jsonl file from disk and run the full in-memory pipeline on it,
+// returning a ready-to-run World. The interpreted `run` loads its world through
+// here; it is the file-backed counterpart of `prepare` + `world_from_loaded`.
+pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
+    let content = std::fs::read_to_string(world_path)?;
+    let loaded = prepare(&content)?;
+    world_from_loaded(loaded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +102,12 @@ mod tests {
         // Every expanded asset landed as a component; nothing was dropped on
         // the way through compile + assembly.
         assert_eq!(world.component_count(), expanded);
+    }
+
+    #[test]
+    fn build_world_from_missing_path_is_not_found() {
+        let err = build_world_from_path("/no/such/concinnity-world-xyz.jsonl")
+            .expect_err("a missing world path must error");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

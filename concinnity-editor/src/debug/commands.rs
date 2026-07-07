@@ -6,7 +6,7 @@
 // matching process-wide queue (`super::runtime_spawn` /
 // `crate::app::anim_runtime`), and blocks on a one-shot reply channel the
 // per-frame debug drive fulfils. The query commands + dispatch live in
-// `super::server::handle_request`.
+// `super::dispatch::handle_request`.
 
 // Maximum wait for `GraphicsSystem::step` to drain a runtime-spawn command
 // and reply. The drain runs once per frame, so a healthy 60 Hz engine
@@ -1111,7 +1111,7 @@ mod tests {
     // process-global; any unrelated command drained alongside is re-enqueued
     // untouched.
 
-    use crate::app::pending::test_support;
+    use crate::app::test_support;
     use crate::debug::runtime_spawn::{self, RuntimeCommand};
 
     // A heavily loaded test host can stall either thread past the handler's

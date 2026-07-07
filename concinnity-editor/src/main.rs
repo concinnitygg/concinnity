@@ -153,21 +153,16 @@ struct Cli {
 
 #[derive(Debug, clap::Args)]
 pub struct DebugArgs {
+    /// Query or drive a running `cn debug` server instead of starting one
+    // When present, `cn debug` acts as a client: it connects to an already
+    // running server's localhost WebSocket. When absent, `cn debug` starts the
+    // server (the interpreted run below).
+    #[command(subcommand)]
+    pub client: Option<DebugClientCommand>,
+
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
-
-    /// Connect to the server's WebSocket command channel
-    // Value is the ws:// or wss:// URL of the endpoint,
-    // e.g. ws://127.0.0.1:8080/v1/ws
-    #[arg(long)]
-    pub websocket: Option<String>,
-
-    /// Account ID to authenticate with when connecting over WebSocket
-    // Must be non-empty, <= 128 chars, and not prefixed with "guest:".
-    // Required when --websocket is set.
-    #[arg(long)]
-    pub ws_user: Option<String>,
 
     /// Base HTTP URL of the infra server used to fetch missing asset files
     // Defaults to the value in the client config (~/.config/concinnity/config.json).
@@ -187,6 +182,80 @@ pub struct DebugArgs {
     // and off for release. See `RunArgs::validation`.
     #[arg(long)]
     pub validation: Option<bool>,
+}
+
+// Client-side `cn debug` subcommands. Each connects to a running server's
+// localhost WebSocket, sends one request, and prints the reply; the transport
+// lives in `debug::client` (re-exported from `debug::wire`).
+#[derive(Subcommand, Debug)]
+pub enum DebugClientCommand {
+    /// Send one raw JSON command and print the reply
+    #[command(name = "send")]
+    Send(DebugSendArgs),
+
+    /// Headless render-loop liveness check (pass/fail)
+    #[command(name = "smoke")]
+    Smoke(DebugSmokeArgs),
+
+    /// Capture the last presented frame to a PNG
+    #[command(name = "screenshot")]
+    Screenshot(DebugScreenshotArgs),
+
+    /// Poll a read-only snapshot and print it until Ctrl-C
+    #[command(name = "watch")]
+    Watch(DebugWatchArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DebugSendArgs {
+    /// Raw JSON object including its own "cmd" field
+    // e.g. '{"cmd":"state"}' or '{"cmd":"emitter-remove","id":0}'
+    pub json: String,
+
+    /// Debug server port
+    #[arg(long, default_value_t = 8777)]
+    pub port: u16,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DebugSmokeArgs {
+    /// Seconds to wait for the render loop to start
+    // The first build bakes a 4K HDRI and is slow, hence the generous default.
+    #[arg(long, default_value_t = 240)]
+    pub wait: u64,
+
+    /// Stop the client after probing so no window is left running
+    #[arg(long)]
+    pub shutdown: bool,
+
+    /// Debug server port
+    #[arg(long, default_value_t = 8777)]
+    pub port: u16,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DebugScreenshotArgs {
+    /// Output PNG path (resolved to absolute)
+    pub path: String,
+
+    /// Debug server port
+    #[arg(long, default_value_t = 8777)]
+    pub port: u16,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DebugWatchArgs {
+    /// Which read-only snapshot to poll
+    #[arg(value_enum, default_value = "camera")]
+    pub target: debug::WatchTarget,
+
+    /// Milliseconds between polls
+    #[arg(long, default_value_t = 500)]
+    pub interval: u64,
+
+    /// Debug server port
+    #[arg(long, default_value_t = 8777)]
+    pub port: u16,
 }
 
 #[derive(Debug, clap::Args)]
@@ -317,10 +386,11 @@ pub struct ExportArgs {
 fn reexec_with_metal_validation(cli: &Cli) {
     use std::os::unix::process::CommandExt;
 
-    // Only the rendering commands create a Metal context.
+    // Only the rendering commands create a Metal context. A `cn debug` client
+    // subcommand starts no renderer, so it needs no validation re-exec.
     let requested = match &cli.command {
         Commands::Run(args) => args.validation,
-        Commands::Debug(args) => args.validation,
+        Commands::Debug(args) if args.client.is_none() => args.validation,
         _ => return,
     };
     if !requested.unwrap_or(cfg!(debug_assertions)) {
@@ -365,24 +435,29 @@ fn main() -> std::io::Result<()> {
             app::dev_flags::set_validation(args.validation);
             concinnity_client::app::run()
         }
-        Commands::Debug(args) => {
-            app::dev_flags::set_enabled(true);
-            app::dev_flags::set_validation(args.validation);
-            let port = args.debug_port.unwrap_or(8777);
-            let debug_hook: Box<dyn app::DebugHook> = match debug::DebugServer::start(port) {
-                Ok(srv) => Box::new(srv),
-                Err(e) => {
-                    eprintln!("error: could not start debug server: {e}");
-                    return Err(e);
-                }
-            };
-            app::run_interpreted(
-                args.file.as_deref(),
-                args.websocket.clone(),
-                args.ws_user.clone(),
-                Some(debug_hook),
-            )
-        }
+        // A client subcommand talks to an already running server; its absence
+        // means start the server (the interpreted run below).
+        Commands::Debug(args) => match &args.client {
+            Some(DebugClientCommand::Send(a)) => debug::client::send(a.port, &a.json),
+            Some(DebugClientCommand::Smoke(a)) => debug::client::smoke(a.port, a.wait, a.shutdown),
+            Some(DebugClientCommand::Screenshot(a)) => debug::client::screenshot(a.port, &a.path),
+            Some(DebugClientCommand::Watch(a)) => {
+                debug::client::watch(a.port, a.target, a.interval)
+            }
+            None => {
+                app::dev_flags::set_enabled(true);
+                app::dev_flags::set_validation(args.validation);
+                let port = args.debug_port.unwrap_or(8777);
+                let debug_hook: Box<dyn app::DebugHook> = match debug::DebugServer::start(port) {
+                    Ok(srv) => Box::new(srv),
+                    Err(e) => {
+                        eprintln!("error: could not start debug server: {e}");
+                        return Err(e);
+                    }
+                };
+                app::run_interpreted(args.file.as_deref(), Some(debug_hook))
+            }
+        },
         Commands::Add(args) => {
             cli::add(args.name.as_deref(), &args.target, args.template.as_deref())
         }
@@ -402,5 +477,156 @@ fn main() -> std::io::Result<()> {
             &args.format,
             args.dmg,
         ),
+    }
+}
+
+// Argument-parsing tests. `main` itself (the engine-launching dispatch and the
+// Metal re-exec) is exercised by the `tests/cli.rs` integration tests, which
+// run the built binary; these cover the clap surface -- the command tree, the
+// per-subcommand defaults, and the value-enum parsing -- without a process.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    // Walks the whole command tree and asserts clap's own invariants (no
+    // conflicting args, valid defaults, unique names). A cheap guard against
+    // an ill-formed derive that would only surface at runtime otherwise.
+    #[test]
+    fn cli_config_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn debug_without_subcommand_starts_the_server() {
+        let cli = Cli::try_parse_from(["concinnity", "debug", "-f", "world.jsonl"]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        assert!(a.client.is_none());
+        assert_eq!(a.file.as_deref(), Some("world.jsonl"));
+    }
+
+    #[test]
+    fn debug_send_parses_json_with_default_port() {
+        let cli =
+            Cli::try_parse_from(["concinnity", "debug", "send", r#"{"cmd":"state"}"#]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Send(s)) = a.client else {
+            panic!("expected send");
+        };
+        assert_eq!(s.json, r#"{"cmd":"state"}"#);
+        assert_eq!(s.port, 8777);
+    }
+
+    #[test]
+    fn debug_smoke_defaults() {
+        let cli = Cli::try_parse_from(["concinnity", "debug", "smoke"]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Smoke(s)) = a.client else {
+            panic!("expected smoke");
+        };
+        assert_eq!(s.wait, 240);
+        assert!(!s.shutdown);
+        assert_eq!(s.port, 8777);
+    }
+
+    #[test]
+    fn debug_smoke_flags_override_defaults() {
+        let cli = Cli::try_parse_from([
+            "concinnity",
+            "debug",
+            "smoke",
+            "--wait",
+            "30",
+            "--shutdown",
+            "--port",
+            "8799",
+        ])
+        .unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Smoke(s)) = a.client else {
+            panic!("expected smoke");
+        };
+        assert_eq!(s.wait, 30);
+        assert!(s.shutdown);
+        assert_eq!(s.port, 8799);
+    }
+
+    #[test]
+    fn debug_screenshot_parses_path() {
+        let cli = Cli::try_parse_from(["concinnity", "debug", "screenshot", "out.png"]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Screenshot(s)) = a.client else {
+            panic!("expected screenshot");
+        };
+        assert_eq!(s.path, "out.png");
+        assert_eq!(s.port, 8777);
+    }
+
+    #[test]
+    fn debug_watch_defaults_to_camera() {
+        let cli = Cli::try_parse_from(["concinnity", "debug", "watch"]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Watch(w)) = a.client else {
+            panic!("expected watch");
+        };
+        assert!(matches!(w.target, crate::debug::WatchTarget::Camera));
+        assert_eq!(w.interval, 500);
+        assert_eq!(w.port, 8777);
+    }
+
+    #[test]
+    fn debug_watch_accepts_named_target() {
+        let cli = Cli::try_parse_from(["concinnity", "debug", "watch", "streaming"]).unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        let Some(DebugClientCommand::Watch(w)) = a.client else {
+            panic!("expected watch");
+        };
+        assert!(matches!(w.target, crate::debug::WatchTarget::Streaming));
+    }
+
+    #[test]
+    fn debug_watch_rejects_unknown_target() {
+        assert!(Cli::try_parse_from(["concinnity", "debug", "watch", "nonsense"]).is_err());
+    }
+
+    #[test]
+    fn export_defaults() {
+        let cli = Cli::try_parse_from(["concinnity", "export"]).unwrap();
+        let Commands::Export(e) = cli.command else {
+            panic!("expected export");
+        };
+        assert_eq!(e.out, "dist");
+        assert_eq!(e.format, "zip");
+        assert!(!e.dmg);
+    }
+
+    #[test]
+    fn add_requires_a_target() {
+        assert!(Cli::try_parse_from(["concinnity", "add"]).is_err());
+        let cli = Cli::try_parse_from(["concinnity", "add", "Logger", "--name", "log"]).unwrap();
+        let Commands::Add(a) = cli.command else {
+            panic!("expected add");
+        };
+        assert_eq!(a.target, "Logger");
+        assert_eq!(a.name.as_deref(), Some("log"));
+    }
+
+    #[test]
+    fn missing_subcommand_is_an_error() {
+        assert!(Cli::try_parse_from(["concinnity"]).is_err());
     }
 }

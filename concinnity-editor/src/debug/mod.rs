@@ -91,17 +91,29 @@
 // `names` returns the build interner's `AssetId` -> name table (index = id),
 // so a client can remap any runtime `AssetId` back to its world.jsonl name.
 // `shutdown` cancels the app shutdown token, so the engine exits cleanly on
-// its next loop iteration: used by `scripts/debug_probe.py` to stop the
+// its next loop iteration: `cn debug smoke --shutdown` uses it to stop the
 // client after a headless smoke test instead of leaving the window open.
 
 // Submodules (all binary-only):
-//   server    DebugServer + DebugState + the WS accept / connection loop
+//   wire      WS transport (server accept loop + client); coverage-excluded
+//   dispatch  the socket-free `handle_request` command dispatcher (testable)
+//   state     the shared world-snapshot data model (testable)
+//   protocol  socket-free client helpers: payload validation + watch targets
 //   commands  spawn / crossfade command handlers + request bodies
 //   hot_reload  asset / shader / world.jsonl reload machinery
 //   runtime_spawn  decal / emitter / screenshot spawn queue + dispatch
+//
+// The `wire` submodule holds everything that can only run against a live socket
+// (and, for the server, a live engine). It is excluded from coverage like the
+// per-backend GPU directories; the logic it wraps lives in `dispatch` /
+// `state` / `protocol`, which are unit-tested without a running process.
 mod commands;
+mod dispatch;
 mod hot_reload;
+mod protocol;
 mod runtime_spawn;
-mod server;
+mod state;
+mod wire;
 
-pub use server::DebugServer;
+pub use protocol::WatchTarget;
+pub use wire::{DebugServer, client};

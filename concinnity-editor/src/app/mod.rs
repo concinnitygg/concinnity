@@ -1,21 +1,21 @@
 // src/app/mod.rs
 //
 // Editor-side app helpers moved out of the runtime crate: the build / add / rm /
-// check commands, the WebSocket command channel, the interpreted (`cn debug`)
-// run path, and the per-frame debug hook. Runtime app items (App, dev_flags,
-// anim_runtime) are re-exported from the runtime crate so the moved code's
-// `crate::app::<item>` paths keep resolving.
+// check commands, the interpreted (`cn debug`) run path, and the per-frame debug
+// hook. Runtime app items (App, dev_flags, anim_runtime) are re-exported from the
+// runtime crate so the moved code's `crate::app::<item>` paths keep resolving.
 
 pub(crate) mod add;
 pub(crate) mod build;
 pub(crate) mod check;
-pub(crate) mod commands;
 pub(crate) mod debug_hook;
-pub(crate) mod pending;
 pub(crate) mod rm;
 pub(crate) mod run;
 pub(crate) mod sources;
-pub(crate) mod ws_client;
+
+// Shared process-global test lock; test builds only.
+#[cfg(test)]
+pub(crate) mod test_support;
 
 // Per-frame runtime callback implemented by the debug subsystem.
 // Used by the binary's debug subsystem; unreferenced in the lib build.

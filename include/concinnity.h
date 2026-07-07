@@ -4,14 +4,6 @@
 
 int cn_init(void);
 
-int cn_connect(const char *ws_url, const char *account_id);
-
-void cn_disconnect(void);
-
-int cn_is_connected(void);
-
-int cn_set_server_config(const char *server, const char *account_id);
-
 int cn_build_world(const char *assets_path, const char *world_jsonl_path);
 
 int cn_add(const char *assets_path,

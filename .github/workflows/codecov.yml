@@ -39,7 +39,7 @@ jobs:
       - name: Generate Coverage Report
         run: >
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          --ignore-filename-regex '/(metal|vulkan|directx|win32)/'
+          --ignore-filename-regex '/(metal|vulkan|directx|win32|wire)/'
 
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v5

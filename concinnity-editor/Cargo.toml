@@ -55,7 +55,6 @@ clap = { version = "4", features = ["derive"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ctrlc = "3.5.2"
 directories = "6.0.0"
-futures = "0.3.32"
 gltf = { version = "1", default-features = false, features = ["utils", "names"] }
 hex = "0.4.3"
 hmac = "0.12.1"
