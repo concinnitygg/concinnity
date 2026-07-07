@@ -844,6 +844,244 @@ fn lcg_hash(mut v: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glb::test_fixtures::make_glb;
+
+    // Encode an 8-bit PNG in memory for decode-path tests.
+    fn encode_png(width: u32, height: u32, color: png::ColorType, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, width, height);
+        enc.set_color(color);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().expect("png header");
+        writer.write_image_data(data).expect("png data");
+        writer.finish().expect("png finish");
+        out
+    }
+
+    fn write_file(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("write fixture");
+        path.to_string_lossy().into_owned()
+    }
+
+    // PNG decode
+
+    #[test]
+    fn decode_source_reads_an_rgba_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(2, 1, png::ColorType::Rgba, &data),
+        );
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(px, data);
+    }
+
+    #[test]
+    fn decode_source_expands_rgb_png_to_opaque_rgba() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = [10u8, 20, 30, 40, 50, 60];
+        let src = write_file(&dir, "t.png", &encode_png(2, 1, png::ColorType::Rgb, &data));
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(px, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+
+    #[test]
+    fn decode_source_expands_grayscale_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(2, 1, png::ColorType::Grayscale, &[7, 200]),
+        );
+        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!(px, vec![7, 7, 7, 255, 200, 200, 200, 255]);
+    }
+
+    #[test]
+    fn decode_source_expands_grayscale_alpha_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(1, 1, png::ColorType::GrayscaleAlpha, &[9, 128]),
+        );
+        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!(px, vec![9, 9, 9, 128]);
+    }
+
+    #[test]
+    fn decode_source_rejects_garbage_png_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.png", b"definitely not a png");
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(err.contains("failed to read PNG info"), "got: {err}");
+    }
+
+    // Non-PNG formats: error paths only (no encoder available for these).
+
+    #[test]
+    fn decode_source_rejects_garbage_jpeg_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.jpg", b"not a jpeg");
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_rejects_garbage_dds_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.dds", b"nope");
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(err.contains(".dds"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_rejects_garbage_tga_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.tga", b"x");
+        assert!(decode_source(&src, 0).is_err());
+    }
+
+    // GLB-embedded images
+
+    fn glb_with_png_image(png_bytes: &[u8], mime: &str) -> Vec<u8> {
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": png_bytes.len()}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": png_bytes.len()}
+            ],
+            "images": [{"bufferView": 0, "mimeType": mime}]
+        });
+        make_glb(&json, Some(png_bytes))
+    }
+
+    #[test]
+    fn decode_glb_image_reads_an_embedded_png() {
+        let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[11, 22, 33, 44]);
+        let glb = glb_with_png_image(&png_bytes, "image/png");
+        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let (w, h, px) = decode_glb_image_from_doc(&doc, "t.glb", 0).expect("decode");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px, vec![11, 22, 33, 44]);
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_an_out_of_range_index() {
+        let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
+        let glb = glb_with_png_image(&png_bytes, "image/png");
+        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 5).unwrap_err();
+        assert!(err.contains("image_index 5 is out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_a_missing_binary_chunk() {
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 16}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 16}],
+            "images": [{"bufferView": 0, "mimeType": "image/png"}]
+        });
+        let doc = gltf::Gltf::from_slice(&make_glb(&json, None)).expect("parse glb");
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("has no blob"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_a_buffer_view_past_the_blob() {
+        // Declared view is much larger than the actual binary chunk.
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 4096}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 4096}],
+            "images": [{"bufferView": 0, "mimeType": "image/png"}]
+        });
+        let doc = gltf::Gltf::from_slice(&make_glb(&json, Some(&[0u8; 4]))).expect("parse glb");
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("exceeds blob size"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_an_external_uri_image() {
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "images": [{"uri": "external.png"}]
+        });
+        let doc = gltf::Gltf::from_slice(&make_glb(&json, None)).expect("parse glb");
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("external URI"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_an_unsupported_mime_type() {
+        let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
+        let glb = glb_with_png_image(&png_bytes, "image/webp");
+        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("unsupported MIME type"), "got: {err}");
+    }
+
+    // compile_texture_payload: file-backed branch and payload envelope
+
+    #[test]
+    fn compile_texture_payload_wraps_file_pixels_in_the_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(2, 1, png::ColorType::Rgba, &data),
+        );
+        let payload = compile_texture_payload(&serde_json::json!({"source": src})).expect("ok");
+        assert_eq!(&payload[0..4], &2u32.to_le_bytes());
+        assert_eq!(&payload[4..8], &1u32.to_le_bytes());
+        assert_eq!(&payload[8..], &data);
+    }
+
+    #[test]
+    fn compile_texture_payload_downscales_to_max_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = vec![128u8; 4 * 4 * 4];
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(4, 4, png::ColorType::Rgba, &data),
+        );
+        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
+            .expect("ok");
+        assert_eq!(&payload[0..4], &2u32.to_le_bytes());
+        assert_eq!(&payload[4..8], &2u32.to_le_bytes());
+        assert_eq!(payload.len(), 8 + 2 * 2 * 4);
+    }
+
+    #[test]
+    fn compile_texture_payload_requires_a_source_when_no_generator() {
+        let err = compile_texture_payload(&serde_json::json!({})).unwrap_err();
+        assert!(err.contains("requires a `source` path"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_texture_payload_rejects_mistyped_args() {
+        let err = compile_texture_payload(&serde_json::json!({"generator": 5})).unwrap_err();
+        assert!(err.contains("invalid args"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_texture_payload_sky_is_a_narrow_vertical_gradient() {
+        let payload =
+            compile_texture_payload(&serde_json::json!({"generator": "sky", "resolution": 64}))
+                .expect("ok");
+        // Sky is always 4 pixels wide by `resolution` tall.
+        assert_eq!(&payload[0..4], &4u32.to_le_bytes());
+        assert_eq!(&payload[4..8], &64u32.to_le_bytes());
+        assert_eq!(payload.len(), 8 + 4 * 64 * 4);
+    }
 
     // The reload decoder dispatches by extension, so a missing file's error
     // text reveals which loader it routed to. These lock in parity with the

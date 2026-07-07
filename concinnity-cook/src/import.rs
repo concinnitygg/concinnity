@@ -751,4 +751,273 @@ mod tests {
         assert_eq!(cam["type"], "Camera3D");
         assert_eq!(cam["name"], "scene_cam");
     }
+
+    #[test]
+    fn framed_camera_sits_above_and_in_front_looking_down() {
+        let cam = framed_camera_entry("s", Some(([-1.0; 3], [1.0; 3]))).unwrap();
+        let args = &cam["args"];
+        assert_eq!(args["fov_y_degrees"], serde_json::json!(60.0));
+
+        let pos: Vec<f64> = args["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        // Centre is the origin: the camera sits above (y > 0) and on the +Z
+        // side, pitched down toward the scene.
+        assert!(pos[1] > 0.0);
+        assert!(pos[2] > 1.0);
+        assert!(args["pitch"].as_f64().unwrap() < 0.0);
+
+        let near = args["near"].as_f64().unwrap();
+        let far = args["far"].as_f64().unwrap();
+        assert!(near > 0.0);
+        assert!(far > near);
+    }
+
+    #[test]
+    fn transform_point_applies_rotation_scale_and_translation() {
+        // Column-major affine: columns scale x by 2 and translate by (10, 20, 30).
+        let m: Mat4 = [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [10.0, 20.0, 30.0, 1.0],
+        ];
+        assert_eq!(transform_point(m, [1.0, 2.0, 3.0]), [12.0, 22.0, 33.0]);
+        assert_eq!(transform_point(IDENTITY, [4.0, 5.0, 6.0]), [4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn expand_aabb_grows_to_cover_every_point() {
+        let mut aabb = None;
+        expand_aabb(&mut aabb, [1.0, 2.0, 3.0]);
+        assert_eq!(aabb, Some(([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])));
+
+        expand_aabb(&mut aabb, [-1.0, 5.0, 3.0]);
+        assert_eq!(aabb, Some(([-1.0, 2.0, 3.0], [1.0, 5.0, 3.0])));
+
+        // A point inside the current bounds changes nothing.
+        expand_aabb(&mut aabb, [0.0, 3.0, 3.0]);
+        assert_eq!(aabb, Some(([-1.0, 2.0, 3.0], [1.0, 5.0, 3.0])));
+    }
+
+    #[test]
+    fn aabb_corners_enumerates_all_eight() {
+        let corners = aabb_corners([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]);
+        let mut unique: Vec<String> = corners.iter().map(|c| format!("{c:?}")).collect();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 8);
+        for c in corners {
+            assert!(c[0] == 0.0 || c[0] == 1.0);
+            assert!(c[1] == 0.0 || c[1] == 2.0);
+            assert!(c[2] == 0.0 || c[2] == 3.0);
+        }
+    }
+
+    // Assemble a valid binary glTF container: 12-byte header, a JSON chunk
+    // padded with spaces, and a BIN chunk padded with zeros.
+    fn glb_bytes(json: &str, bin: &[u8]) -> Vec<u8> {
+        let mut json_bytes = json.as_bytes().to_vec();
+        while !json_bytes.len().is_multiple_of(4) {
+            json_bytes.push(b' ');
+        }
+        let mut bin_bytes = bin.to_vec();
+        while !bin_bytes.len().is_multiple_of(4) {
+            bin_bytes.push(0);
+        }
+        let total = 12 + 8 + json_bytes.len() + 8 + bin_bytes.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json_bytes);
+        out.extend_from_slice(&(bin_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin_bytes);
+        out
+    }
+
+    // One scene, one node named "Crate Box" at (1,2,3), one mesh with a single
+    // triangle primitive of `vertex_count` positions, and one PBR material.
+    // Growing `vertex_count` past the u16 limit exercises the chunking path.
+    fn triangle_glb(vertex_count: usize) -> Vec<u8> {
+        let mut bin = Vec::with_capacity(vertex_count * 12 + 12);
+        for i in 0..vertex_count {
+            let p: [f32; 3] = match i {
+                0 => [0.0, 0.0, 0.0],
+                1 => [1.0, 0.0, 0.0],
+                2 => [0.0, 1.0, 0.0],
+                _ => [0.0; 3],
+            };
+            for c in p {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let pos_len = bin.len();
+        for idx in [0u32, 1, 2] {
+            bin.extend_from_slice(&idx.to_le_bytes());
+        }
+        let json = format!(
+            r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0, "name": "Crate Box", "translation": [1, 2, 3]}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": 4}}]}}],
+  "materials": [{{"pbrMetallicRoughness": {{"baseColorFactor": [0.5, 0.25, 0.125, 1.0], "metallicFactor": 0.5, "roughnessFactor": 0.25}}, "emissiveFactor": [0.5, 0.0, 0.0]}}],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": {vc}, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"}}
+  ],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": {pos_len}}},
+    {{"buffer": 0, "byteOffset": {pos_len}, "byteLength": 12}}
+  ],
+  "buffers": [{{"byteLength": {total}}}]
+}}"#,
+            vc = vertex_count,
+            pos_len = pos_len,
+            total = bin.len(),
+        );
+        glb_bytes(&json, &bin)
+    }
+
+    fn find<'a>(entries: &'a [serde_json::Value], name: &str, ty: &str) -> &'a serde_json::Value {
+        entries
+            .iter()
+            .find(|e| e["name"] == name && e["type"] == ty)
+            .unwrap_or_else(|| panic!("expected entry {name} of type {ty} in {entries:#?}"))
+    }
+
+    #[test]
+    fn glb_scene_expands_to_materials_meshes_models_props_and_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.glb");
+        std::fs::write(&path, triangle_glb(3)).unwrap();
+        let path = path.to_str().unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "scn".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path, &opts).expect("expand glb");
+
+        // Material 0 maps the glTF PBR factors; the powers of two used in the
+        // fixture are exact in f32/f64, so equality holds.
+        let mat = find(&entries, "scn_mat_0", "Material");
+        assert_eq!(mat["args"]["tint"], serde_json::json!([0.5, 0.25, 0.125]));
+        assert_eq!(mat["args"]["metallic"], serde_json::json!(0.5));
+        assert_eq!(mat["args"]["roughness"], serde_json::json!(0.25));
+        assert_eq!(
+            mat["args"]["emissive_factor"],
+            serde_json::json!([0.5, 0.0, 0.0])
+        );
+
+        // A fallback material is always emitted for unassigned primitives.
+        find(&entries, "scn_mat_default", "Material");
+
+        // The mesh entry references the source by path with no inline data.
+        let mesh = find(&entries, "scn_prim_0", "Mesh");
+        assert_eq!(mesh["args"]["source"], serde_json::json!(path));
+        assert_eq!(mesh["args"]["primitive_index"], serde_json::json!(0));
+        assert!(mesh["args"].get("chunk_index").is_none());
+        assert!(mesh["args"].get("vertices").is_none());
+
+        // The model groups the primitive with its material.
+        let model = find(&entries, "scn_model_0", "Model");
+        assert_eq!(model["args"]["meshes"][0]["mesh"], "scn_prim_0");
+        assert_eq!(model["args"]["meshes"][0]["material"], "scn_mat_0");
+
+        // The node becomes a Prop named from the sanitized node name with the
+        // node's translation applied.
+        let prop = find(&entries, "scn_crate_box", "Prop");
+        assert_eq!(prop["args"]["model"], "scn_model_0");
+        assert_eq!(prop["args"]["position"], serde_json::json!([1.0, 2.0, 3.0]));
+
+        // A camera is framed to the world-space AABB.
+        let cam = find(&entries, "scn_cam", "Camera3D");
+        assert!(cam["args"]["position"][2].as_f64().unwrap() > 3.0);
+    }
+
+    #[test]
+    fn glb_scene_with_emit_camera_false_omits_the_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.glb");
+        std::fs::write(&path, triangle_glb(3)).unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "scn".to_string(),
+            emit_camera: false,
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        assert!(entries.iter().all(|e| e["type"] != "Camera3D"));
+    }
+
+    #[test]
+    fn glb_oversized_primitive_fans_into_chunked_meshes() {
+        // One more vertex than the u16 index space forces the chunk path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.glb");
+        std::fs::write(&path, triangle_glb(U16_CAPACITY + 1)).unwrap();
+        let path = path.to_str().unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "big".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path, &opts).expect("expand glb");
+
+        // The single triangle re-chunks into one u16-safe slice; the entry
+        // carries the chunk index and there is no unchunked mesh entry.
+        let mesh = find(&entries, "big_prim_0_chunk_0", "Mesh");
+        assert_eq!(mesh["args"]["chunk_index"], serde_json::json!(0));
+        assert!(entries.iter().all(|e| e["name"] != "big_prim_0"));
+
+        let model = find(&entries, "big_model_0", "Model");
+        assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");
+    }
+
+    #[test]
+    fn glb_extension_dispatch_is_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("upper.GLB");
+        std::fs::write(&path, triangle_glb(3)).unwrap();
+
+        let entries =
+            entries_from_scene(path.to_str().unwrap(), &ImportOptions::default()).expect("expand");
+        assert!(entries.iter().any(|e| e["type"] == "Mesh"));
+    }
+
+    #[test]
+    fn missing_glb_file_errors_with_the_path() {
+        let err = entries_from_scene("/no/such/scene.glb", &ImportOptions::default())
+            .expect_err("missing file");
+        assert!(err.to_string().contains("/no/such/scene.glb"));
+    }
+
+    #[test]
+    fn corrupt_glb_errors_as_invalid_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("junk.glb");
+        std::fs::write(&path, b"definitely not a glb").unwrap();
+
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+            .expect_err("corrupt file");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("not a valid glTF"));
+    }
+
+    #[test]
+    fn missing_fbx_file_errors() {
+        let err = entries_from_scene("/no/such/scene.fbx", &ImportOptions::default())
+            .expect_err("missing file");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("/no/such/scene.fbx"));
+    }
 }

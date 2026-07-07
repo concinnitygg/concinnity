@@ -1411,4 +1411,358 @@ mod tests {
         assert!(!bytes.is_empty());
         let _ = world; // keeps the inline jsonl reference for documentation
     }
+
+    fn wja(name: &str, ty: &str, args: serde_json::Value) -> crate::world::WorldJsonlAsset {
+        crate::world::WorldJsonlAsset {
+            name: name.to_string(),
+            asset_type: ty.to_string(),
+            args,
+        }
+    }
+
+    fn ctx() -> crate::asset::BuildCtx<'static> {
+        crate::asset::BuildCtx {
+            name: "test",
+            artifacts_dir: None,
+            all_assets: &[],
+        }
+    }
+
+    // A cache map that claims a compiled payload is already in hand for the
+    // named asset, so every desugar pass must skip its source parse.
+    fn hit_cache(name: &str) -> std::collections::HashMap<String, GltfCacheEntry> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            name.to_string(),
+            GltfCacheEntry {
+                key: "k".to_string(),
+                bytes: Some(vec![1, 2, 3]),
+            },
+        );
+        m
+    }
+
+    #[test]
+    fn build_from_path_missing_world_file_errors() {
+        assert!(build_from_path("/no/such/world.jsonl").is_err());
+    }
+
+    #[test]
+    fn build_pipeline_from_str_rejects_malformed_jsonl() {
+        let Err(err) = build_pipeline_from_str("{not json\n", None) else {
+            panic!("malformed line must not build");
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn build_pipeline_from_str_reports_unknown_asset_types() {
+        let world = r#"{"name":"mystery","type":"NotAType","args":{}}"#;
+        let Err(err) = build_pipeline_from_str(world, None) else {
+            panic!("unknown type must not build");
+        };
+        assert!(
+            err.to_string().contains("NotAType"),
+            "error should name the unknown type: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_asset_accepts_build_time_expansion_types() {
+        // Build-time types are expanded before the runtime registry sees
+        // them, so they validate structurally regardless of args.
+        for ty in ["SceneImport", "Environment", "LightRig", "Prefab"] {
+            validate_asset(ty, "x", &serde_json::json!({}))
+                .unwrap_or_else(|e| panic!("{ty} should validate: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_asset_unknown_type_mentions_the_asset_name() {
+        let err =
+            validate_asset("Bogus", "my_thing", &serde_json::json!({})).expect_err("unknown type");
+        assert!(err.contains("my_thing"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_asset_bad_args_mention_the_asset_name() {
+        // `generator` must be a string; a number fails args deserialization.
+        let err = validate_asset(
+            "ProceduralMesh",
+            "bad_mesh",
+            &serde_json::json!({"generator": 5}),
+        )
+        .expect_err("bad args");
+        assert!(err.contains("bad_mesh"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_gltf_skinned_meshes_leaves_inline_and_cached_untouched() {
+        use crate::assets::SkinnedMesh;
+        use crate::ecs::Component;
+
+        let inline_args = serde_json::json!({"vertices": [], "indices": []});
+        let cached_args = serde_json::json!({"source": "/no/such/hero.glb"});
+        let mut assets = vec![
+            wja("inline", SkinnedMesh::NAME, inline_args.clone()),
+            wja("cached", SkinnedMesh::NAME, cached_args.clone()),
+        ];
+        desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        // No source: untouched. Cache hit: the missing .glb is never parsed
+        // and the args stay pre-desugar so the next probe key matches.
+        assert_eq!(assets[0].args, inline_args);
+        assert_eq!(assets[1].args, cached_args);
+    }
+
+    #[test]
+    fn desugar_gltf_skinned_meshes_missing_source_errors() {
+        use crate::assets::SkinnedMesh;
+        use crate::ecs::Component;
+
+        let mut assets = vec![wja(
+            "hero",
+            SkinnedMesh::NAME,
+            serde_json::json!({"source": "/no/such/hero.glb"}),
+        )];
+        let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default())
+            .expect_err("missing .glb");
+        assert!(err.to_string().contains("Asset 'hero'"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_gltf_meshes_skips_non_glb_sources_and_cache_hits() {
+        use crate::assets::Mesh;
+        use crate::ecs::Component;
+
+        let fbx_args = serde_json::json!({"source": "/no/such/scene.fbx"});
+        let cached_args = serde_json::json!({"source": "/no/such/scene.glb"});
+        let inline_args = serde_json::json!({"vertices": [], "indices": []});
+        let mut assets = vec![
+            wja("from_fbx", Mesh::NAME, fbx_args.clone()),
+            wja("cached", Mesh::NAME, cached_args.clone()),
+            wja("inline", Mesh::NAME, inline_args.clone()),
+        ];
+        desugar_gltf_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        assert_eq!(
+            assets[0].args, fbx_args,
+            ".fbx sources belong to the fbx pass"
+        );
+        assert_eq!(assets[1].args, cached_args, "cache hit skips the parse");
+        assert_eq!(assets[2].args, inline_args, "no source: untouched");
+    }
+
+    #[test]
+    fn desugar_gltf_meshes_missing_source_errors() {
+        use crate::assets::Mesh;
+        use crate::ecs::Component;
+
+        let mut assets = vec![wja(
+            "crate_mesh",
+            Mesh::NAME,
+            serde_json::json!({"source": "/no/such/scene.glb"}),
+        )];
+        let err = desugar_gltf_meshes(&mut assets, &Default::default()).expect_err("missing .glb");
+        assert!(err.to_string().contains("Asset 'crate_mesh'"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_fbx_meshes_missing_source_errors() {
+        use crate::assets::Mesh;
+        use crate::ecs::Component;
+
+        let mut assets = vec![wja(
+            "bistro",
+            Mesh::NAME,
+            serde_json::json!({"source": "/no/such/scene.fbx"}),
+        )];
+        let err = desugar_fbx_meshes(&mut assets, &Default::default()).expect_err("missing .fbx");
+        assert!(err.to_string().contains("Asset 'bistro'"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_fbx_meshes_skips_cache_hits_and_non_fbx_sources() {
+        use crate::assets::Mesh;
+        use crate::ecs::Component;
+
+        let cached_args = serde_json::json!({"source": "/no/such/scene.fbx"});
+        let glb_args = serde_json::json!({"source": "/no/such/scene.glb"});
+        let mut assets = vec![
+            wja("cached", Mesh::NAME, cached_args.clone()),
+            wja("from_glb", Mesh::NAME, glb_args.clone()),
+        ];
+        desugar_fbx_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        assert_eq!(assets[0].args, cached_args);
+        assert_eq!(assets[1].args, glb_args);
+    }
+
+    #[test]
+    fn desugar_gltf_animations_missing_source_errors() {
+        let mut assets = vec![wja(
+            "walk",
+            "Animation",
+            serde_json::json!({"source": "/no/such/anim.glb"}),
+        )];
+        let err = desugar_gltf_animations(&mut assets).expect_err("missing .glb");
+        assert!(err.to_string().contains("Asset 'walk'"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_gltf_animations_missing_named_clip_errors() {
+        // The by-name lookup also starts by reading the file, so a missing
+        // source fails before the name search; the error still names the asset.
+        let mut assets = vec![wja(
+            "run",
+            "Animation",
+            serde_json::json!({"source": "/no/such/anim.glb", "animation_name": "Run"}),
+        )];
+        let err = desugar_gltf_animations(&mut assets).expect_err("missing .glb");
+        assert!(err.to_string().contains("Asset 'run'"), "got: {err}");
+    }
+
+    #[test]
+    fn desugar_root_motion_rejects_malformed_args() {
+        let mut assets = vec![wja(
+            "walk",
+            "Animation",
+            serde_json::json!({"root_motion": true, "duration": "long"}),
+        )];
+        let err = desugar_root_motion(&mut assets).expect_err("bad duration");
+        assert!(
+            err.to_string()
+                .contains("root-motion bake failed to parse args"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn desugar_root_motion_tolerates_a_clip_with_no_root_track() {
+        // Only joint 1 is animated: there is nothing to strip from the root,
+        // so the bake warns and leaves an empty curve rather than failing.
+        let mut assets = vec![wja(
+            "wave",
+            "Animation",
+            serde_json::json!({
+                "root_motion": true,
+                "duration": 1.0,
+                "tracks": [{"joint": 1, "keyframes": [
+                    {"time": 0.0, "translation": [1.0, 0.0, 0.0]}
+                ]}],
+            }),
+        )];
+        desugar_root_motion(&mut assets).expect("bake succeeds");
+        assert_eq!(assets[0].args["root_track"], serde_json::json!([]));
+        // The non-root track is untouched.
+        assert_eq!(
+            assets[0].args["tracks"][0]["keyframes"][0]["translation"][0],
+            1.0
+        );
+    }
+
+    #[test]
+    fn resolve_scene_refs_prop_scene_prefix_rules() {
+        let mut assets = vec![
+            wja("level", "Scene", serde_json::json!({})),
+            wja("level_boss", "Scene", serde_json::json!({})),
+            wja("level_boss_door", "Prop", serde_json::json!({})),
+            wja("level_gate", "Prop", serde_json::json!({"scene": "other"})),
+            wja("solo_thing", "Prop", serde_json::json!({})),
+        ];
+        super::resolve_scene_refs(&mut assets);
+
+        // Longest scene prefix wins for the nested name.
+        assert_eq!(assets[2].args["scene"], "level_boss");
+        // An authored `scene` arg is never overwritten.
+        assert_eq!(assets[3].args["scene"], "other");
+        // No matching prefix: no `scene` arg appears.
+        assert!(assets[4].args.get("scene").is_none());
+    }
+
+    #[test]
+    fn resolve_scene_refs_rewrites_action_names_to_interned_ids() {
+        crate::ecs::asset_id::reset_interner();
+        let mut assets = vec![
+            wja(
+                "btn",
+                "HitRegion",
+                serde_json::json!({"action": "view:show:pause"}),
+            ),
+            wja(
+                "key",
+                "KeyBinding",
+                serde_json::json!({"action": "scene:day"}),
+            ),
+        ];
+        super::resolve_scene_refs(&mut assets);
+
+        // Names intern in resolution order on this thread's fresh interner:
+        // "pause" -> 0, "day" -> 1.
+        assert_eq!(assets[0].args["action"], "view:show:0");
+        assert_eq!(assets[1].args["action"], "scene:1");
+    }
+
+    #[test]
+    fn resolve_scene_refs_leaves_numeric_and_foreign_actions_alone() {
+        let mut assets = vec![
+            wja(
+                "a",
+                "HitRegion",
+                serde_json::json!({"action": "view:toggle:3"}),
+            ),
+            wja("b", "HitRegion", serde_json::json!({"action": "quit"})),
+            wja("c", "KeyBinding", serde_json::json!({"action": "scene:"})),
+        ];
+        super::resolve_scene_refs(&mut assets);
+
+        // Already an id, not a recognised prefix, and an empty target: all
+        // pass through unchanged.
+        assert_eq!(assets[0].args["action"], "view:toggle:3");
+        assert_eq!(assets[1].args["action"], "quit");
+        assert_eq!(assets[2].args["action"], "scene:");
+    }
+
+    #[test]
+    fn probe_gltf_cache_probes_only_source_backed_mesh_assets() {
+        use crate::assets::{Mesh, SkinnedMesh};
+        use crate::ecs::Component;
+
+        let assets = vec![
+            wja("m", Mesh::NAME, serde_json::json!({"source": "x.glb"})),
+            wja("inline", Mesh::NAME, serde_json::json!({"vertices": []})),
+            wja(
+                "s",
+                SkinnedMesh::NAME,
+                serde_json::json!({"source": "y.glb"}),
+            ),
+            wja(
+                "p",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "box"}),
+            ),
+        ];
+        let probed = probe_gltf_cache(&assets, None);
+
+        let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["m", "s"]);
+        for entry in probed.values() {
+            assert!(!entry.key.is_empty());
+            // The payload cache is disabled under cargo test, so a probe can
+            // only ever record a miss here.
+            assert!(entry.bytes.is_none());
+        }
+    }
+
+    #[test]
+    fn compile_by_type_without_build_impl_errors() {
+        let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
+        let err = compile_by_type(ct, &serde_json::json!({}), &ctx())
+            .expect_err("Prop has no BuildAsset impl");
+        assert!(err.to_string().contains("no BuildAsset impl"), "got: {err}");
+    }
+
+    #[test]
+    fn source_files_by_type_defaults_to_empty() {
+        let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
+        assert!(source_files_by_type(ct, &serde_json::json!({}), &ctx()).is_empty());
+    }
 }

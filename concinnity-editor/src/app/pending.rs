@@ -99,3 +99,90 @@ pub fn save() -> std::io::Result<()> {
     );
     Ok(())
 }
+
+// Serialises every test that touches the process-global PENDING scene, both
+// here and in app::commands. Cargo runs tests in parallel threads within one
+// binary, so unsynchronised access would interleave staged scenes.
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(crate) fn lock() -> std::sync::MutexGuard<'static, ()> {
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every test resets the staged scene through `load` first, which both
+    // gives a known baseline and keeps `ensure_initialized` from reading
+    // whatever world.jsonl the test runner's cwd happens to contain.
+
+    #[test]
+    fn add_rejects_a_duplicate_name() {
+        let _guard = test_support::lock();
+        load(vec![serde_json::json!({
+            "name": "crate", "type": "Prop", "args": {}
+        })]);
+        let err = add("Prop".to_string(), Some("crate".to_string()), None).unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn add_defaults_the_name_to_the_lowercased_type() {
+        let _guard = test_support::lock();
+        load(Vec::new());
+        add("Prop".to_string(), None, None).unwrap();
+        // A second default-named add collides, proving the first landed as
+        // "prop".
+        let err = add("Prop".to_string(), Some("prop".to_string()), None).unwrap_err();
+        assert!(err.contains("'prop'"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn add_stores_supplied_args() {
+        let _guard = test_support::lock();
+        load(Vec::new());
+        add(
+            "Prop".to_string(),
+            Some("table".to_string()),
+            Some(serde_json::json!({"position": [1, 2, 3]})),
+        )
+        .unwrap();
+        // Present: removing it succeeds.
+        rm("table").unwrap();
+    }
+
+    #[test]
+    fn rm_removes_a_staged_asset_once() {
+        let _guard = test_support::lock();
+        load(vec![serde_json::json!({
+            "name": "lamp", "type": "Prop", "args": {}
+        })]);
+        rm("lamp").unwrap();
+        let err = rm("lamp").unwrap_err();
+        assert!(err.contains("no asset named"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rm_of_an_unknown_name_errors() {
+        let _guard = test_support::lock();
+        load(Vec::new());
+        assert!(rm("ghost").is_err());
+    }
+
+    #[test]
+    fn load_replaces_the_whole_scene() {
+        let _guard = test_support::lock();
+        load(vec![serde_json::json!({
+            "name": "old", "type": "Prop", "args": {}
+        })]);
+        load(vec![serde_json::json!({
+            "name": "new", "type": "Prop", "args": {}
+        })]);
+        assert!(rm("old").is_err());
+        rm("new").unwrap();
+    }
+}

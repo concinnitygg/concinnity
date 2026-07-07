@@ -746,3 +746,1299 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
     assert_eq!(entries[0].vertex_count, 12);
     assert_eq!(entries[0].index_count, 36);
 }
+
+// Shared fixtures for the decode / poll / pass tests below.
+
+// A minimal RenderBackend that records every hot-reload dispatch so tests can
+// assert which trait calls a pass made. Failure toggles let the error branches
+// fire without a real GPU.
+#[derive(Default)]
+struct RecordingBackend {
+    texture_updates: Vec<(usize, u32, u32)>,
+    normal_updates: Vec<(usize, u32, u32)>,
+    lut_updates: Vec<u32>,
+    mesh_updates: Vec<usize>,
+    static_rebuild_change_counts: Vec<usize>,
+    skinned_updates: Vec<usize>,
+    skinned_rebuild_change_counts: Vec<usize>,
+    skeleton_updates: Vec<(usize, usize)>,
+    env_updates: usize,
+    fog_updates: usize,
+    // Overrides for `draw_geometry_size`; absent draws report `None` like the
+    // trait default.
+    geometry_sizes: std::collections::HashMap<usize, (usize, usize)>,
+    // Layouts `rebuild_skinned_geometry` hands back on success, stored as
+    // (skinned_index, vertex_base, vertex_count, index_count).
+    skinned_layouts: Vec<(usize, u16, usize, usize)>,
+    fail_texture_updates: bool,
+    fail_mesh_updates: bool,
+    fail_static_rebuild: bool,
+    fail_skinned_rebuild: bool,
+    fail_skeleton_update: bool,
+}
+
+impl crate::gfx::scene_reel::SceneControl for RecordingBackend {
+    fn update_visibility(&mut self, _: usize, _: bool) {}
+    fn update_clear_color(&mut self, _: [f32; 4]) {}
+}
+
+impl crate::gfx::backend::RenderBackend for RecordingBackend {
+    fn window_closed(&mut self) -> bool {
+        false
+    }
+    fn capture_cursor(&mut self) {}
+    fn take_input(&mut self) -> crate::gfx::input::RenderInput {
+        crate::gfx::input::RenderInput::default()
+    }
+    fn wait_idle(&self) {}
+    fn draw_frame(&mut self, _: crate::gfx::backend::FrameParams<'_>) -> Result<(), String> {
+        Ok(())
+    }
+    fn update_view(&mut self, _: [[f32; 4]; 4]) {}
+    fn update_model(&mut self, _: usize, _: [[f32; 4]; 4]) {}
+    fn retire_draw_object(&mut self, _: usize) {}
+    fn upload_skinned(
+        &mut self,
+        _: &[crate::gfx::mesh_payload::SkinnedVertex],
+        _: &[u16],
+        _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
+        _: &[u8],
+        _: &[u8],
+        _: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
+    fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
+        Ok(())
+    }
+    fn update_texture_slot(&mut self, slot: usize, w: u32, h: u32, _: &[u8]) -> Result<(), String> {
+        self.texture_updates.push((slot, w, h));
+        if self.fail_texture_updates {
+            return Err("texture update rejected".to_string());
+        }
+        Ok(())
+    }
+    fn evict_normal_map_slot(&mut self, _: usize) -> Result<(), String> {
+        Ok(())
+    }
+    fn update_normal_map_slot(
+        &mut self,
+        slot: usize,
+        w: u32,
+        h: u32,
+        _: &[u8],
+    ) -> Result<(), String> {
+        self.normal_updates.push((slot, w, h));
+        Ok(())
+    }
+    fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+        Ok(())
+    }
+    fn upload_mesh(
+        &mut self,
+        _: usize,
+        _: &[crate::gfx::mesh_payload::Vertex],
+        _: &[u16],
+        _: u64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn setup_chunk_streaming(
+        &mut self,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn add_chunk_mesh(&mut self, _: crate::gfx::backend::ChunkMesh<'_>) -> Result<usize, String> {
+        Ok(0)
+    }
+    fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> Result<(), String> {
+        self.lut_updates.push(size);
+        Ok(())
+    }
+    fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
+        self.geometry_sizes.get(&draw_idx).copied()
+    }
+    fn update_mesh_geometry(
+        &mut self,
+        draw_idx: usize,
+        _: &[crate::gfx::mesh_payload::Vertex],
+        _: &[u16],
+        _: &[(f32, Vec<u16>)],
+    ) -> Result<(), String> {
+        self.mesh_updates.push(draw_idx);
+        if self.fail_mesh_updates {
+            return Err("mesh update rejected".to_string());
+        }
+        Ok(())
+    }
+    fn rebuild_static_geometry(
+        &mut self,
+        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+    ) -> Result<(), String> {
+        self.static_rebuild_change_counts.push(changes.len());
+        if self.fail_static_rebuild {
+            return Err("static rebuild rejected".to_string());
+        }
+        Ok(())
+    }
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: usize,
+        _: u16,
+        _: &[crate::gfx::mesh_payload::SkinnedVertex],
+        _: &[u16],
+    ) -> Result<(), String> {
+        self.skinned_updates.push(skinned_index);
+        Ok(())
+    }
+    fn rebuild_skinned_geometry(
+        &mut self,
+        changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
+    ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {
+        self.skinned_rebuild_change_counts.push(changes.len());
+        if self.fail_skinned_rebuild {
+            return Err("skinned rebuild rejected".to_string());
+        }
+        Ok(self
+            .skinned_layouts
+            .iter()
+            .map(|&(skinned_index, vertex_base, vertex_count, index_count)| {
+                crate::gfx::backend::SkinnedSlotLayout {
+                    skinned_index,
+                    vertex_base,
+                    vertex_count,
+                    index_count,
+                }
+            })
+            .collect())
+    }
+    fn update_skinned_skeleton(
+        &mut self,
+        skinned_index: usize,
+        new_joint_count: usize,
+    ) -> Result<(), String> {
+        self.skeleton_updates.push((skinned_index, new_joint_count));
+        if self.fail_skeleton_update {
+            return Err("skeleton update rejected".to_string());
+        }
+        Ok(())
+    }
+    fn update_environment_map(&mut self, _: &[u8]) -> Result<(), String> {
+        self.env_updates += 1;
+        Ok(())
+    }
+    fn update_fog_settings(&mut self, _: Option<crate::gfx::volumetric_fog::FogSettings>) {
+        self.fog_updates += 1;
+    }
+}
+
+// CRC-32 (IEEE) for the hand-rolled PNG chunks below. Bitwise so the test
+// fixture needs no image or checksum dependency.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let mut crc_input = kind.to_vec();
+    crc_input.extend_from_slice(data);
+    out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
+    out
+}
+
+// Write a valid 1x1 RGBA8 PNG using a stored (uncompressed) deflate block so
+// the texture-decode path has a real file to chew on without an encoder dep.
+fn write_tiny_png(path: &std::path::Path) {
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&1u32.to_be_bytes());
+    ihdr.extend_from_slice(&1u32.to_be_bytes());
+    // 8-bit RGBA, deflate, adaptive filtering, no interlace.
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    // One scanline: filter byte 0 + a single RGBA pixel.
+    let raw = [0u8, 10, 20, 30, 255];
+    let mut idat = vec![0x78, 0x01, 0x01];
+    idat.extend_from_slice(&(raw.len() as u16).to_le_bytes());
+    idat.extend_from_slice(&(!(raw.len() as u16)).to_le_bytes());
+    idat.extend_from_slice(&raw);
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in &raw {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    idat.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.extend(png_chunk(b"IHDR", &ihdr));
+    png.extend(png_chunk(b"IDAT", &idat));
+    png.extend(png_chunk(b"IEND", &[]));
+    std::fs::write(path, png).unwrap();
+}
+
+// Write a 2x2x2 identity-ish Adobe Cube LUT (8 data lines).
+fn write_tiny_cube(path: &std::path::Path) {
+    let text = "LUT_3D_SIZE 2\n\
+                0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    std::fs::write(path, text).unwrap();
+}
+
+fn zero_vertex() -> crate::gfx::mesh_payload::Vertex {
+    crate::gfx::mesh_payload::Vertex {
+        pos: [0.0; 3],
+        normal: [0.0; 3],
+        tangent: [0.0; 3],
+        color: [0.0; 3],
+        uv: [0.0; 2],
+    }
+}
+
+fn zero_skinned_vertex() -> crate::gfx::mesh_payload::SkinnedVertex {
+    crate::gfx::mesh_payload::SkinnedVertex {
+        pos: [0.0; 3],
+        normal: [0.0; 3],
+        tangent: [0.0; 3],
+        color: [0.0; 3],
+        uv: [0.0; 2],
+        joints: [0; 4],
+        weights: [0.0; 4],
+    }
+}
+
+fn joint_def(name: &str) -> crate::assets::JointDef {
+    crate::assets::JointDef {
+        name: name.to_string(),
+        parent: -1,
+        translation: [0.0; 3],
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    }
+}
+
+// Push a ready-made decode batch into the state's in-flight slot as if a
+// worker had just finished, so `poll_pending_assets` has something to drain.
+fn inject_batch(state: &AssetHotReloadState, batch: DecodedAssetBatch) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(batch).unwrap();
+    *state.asset_batch_inflight.lock().unwrap() = Some(rx);
+}
+
+// decode_asset_batch
+
+#[test]
+fn decode_asset_batch_decodes_a_png_texture() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("albedo.png");
+    write_tiny_png(&png);
+    let entry = TextureSourceEntry {
+        source: png.to_string_lossy().into_owned(),
+        image_index: 0,
+        slot: 3,
+        kind: TextureKind::Albedo,
+    };
+    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    assert_eq!(batch.decode_failures, 0);
+    assert_eq!(batch.textures.len(), 1);
+    let tex = &batch.textures[0];
+    assert_eq!(tex.slot, 3);
+    assert_eq!(tex.kind, TextureKind::Albedo);
+    assert_eq!((tex.width, tex.height), (1, 1));
+    assert_eq!(tex.pixels, vec![10, 20, 30, 255]);
+}
+
+#[test]
+fn decode_asset_batch_counts_a_missing_texture_as_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = TextureSourceEntry {
+        source: dir
+            .path()
+            .join("never_written.png")
+            .to_string_lossy()
+            .into_owned(),
+        image_index: 0,
+        slot: 0,
+        kind: TextureKind::Albedo,
+    };
+    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    assert!(batch.textures.is_empty());
+    assert_eq!(batch.decode_failures, 1);
+}
+
+#[test]
+fn decode_asset_batch_mixes_successes_and_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("ok.png");
+    write_tiny_png(&png);
+    let good = TextureSourceEntry {
+        source: png.to_string_lossy().into_owned(),
+        image_index: 0,
+        slot: 1,
+        kind: TextureKind::NormalMap,
+    };
+    let bad = TextureSourceEntry {
+        source: dir.path().join("gone.png").to_string_lossy().into_owned(),
+        image_index: 0,
+        slot: 2,
+        kind: TextureKind::Albedo,
+    };
+    let batch = decode_asset_batch(vec![good, bad], None, Vec::new(), Vec::new());
+    assert_eq!(batch.textures.len(), 1);
+    assert_eq!(batch.textures[0].kind, TextureKind::NormalMap);
+    assert_eq!(batch.decode_failures, 1);
+}
+
+#[test]
+fn decode_asset_batch_counts_an_unparseable_glb_texture_as_a_failure() {
+    // A `.glb`-suffixed source routes through the shared parse cache; garbage
+    // bytes must fail the parse and count, not panic.
+    let dir = tempfile::tempdir().unwrap();
+    let glb = dir.path().join("broken.glb");
+    std::fs::write(&glb, b"not a glb at all").unwrap();
+    let entry = TextureSourceEntry {
+        source: glb.to_string_lossy().into_owned(),
+        image_index: 0,
+        slot: 0,
+        kind: TextureKind::Albedo,
+    };
+    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    assert!(batch.textures.is_empty());
+    assert_eq!(batch.decode_failures, 1);
+}
+
+#[test]
+fn decode_asset_batch_decodes_a_cube_lut() {
+    let dir = tempfile::tempdir().unwrap();
+    let cube = dir.path().join("grade.cube");
+    write_tiny_cube(&cube);
+    let lut = ColorLutSource {
+        resolved_path: cube.to_string_lossy().into_owned(),
+    };
+    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    assert_eq!(batch.decode_failures, 0);
+    let lut = batch.color_lut.expect("decoded lut");
+    assert_eq!(lut.size, 2);
+    assert_eq!(lut.data.len(), 2 * 2 * 2 * 4);
+}
+
+#[test]
+fn decode_asset_batch_counts_a_missing_lut_as_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let lut = ColorLutSource {
+        resolved_path: dir.path().join("gone.cube").to_string_lossy().into_owned(),
+    };
+    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    assert!(batch.color_lut.is_none());
+    assert_eq!(batch.decode_failures, 1);
+}
+
+#[test]
+fn decode_asset_batch_counts_a_missing_mesh_source_as_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = MeshSourceEntry {
+        source: dir.path().join("gone.glb").to_string_lossy().into_owned(),
+        primitive_index: 0,
+        lod_levels: 1,
+        lod_distances: Vec::new(),
+        draw_indices: vec![0],
+    };
+    let batch = decode_asset_batch(Vec::new(), None, vec![entry], Vec::new());
+    assert!(batch.meshes.is_empty());
+    assert_eq!(batch.decode_failures, 1);
+}
+
+#[test]
+fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = SkinnedMeshSourceEntry {
+        source: dir.path().join("gone.glb").to_string_lossy().into_owned(),
+        skinned_index: 0,
+        vertex_base: 0,
+        vertex_count: 8,
+        index_count: 24,
+        joint_count: 2,
+    };
+    let batch = decode_asset_batch(Vec::new(), None, Vec::new(), vec![entry]);
+    assert!(batch.skinned_meshes.is_empty());
+    assert_eq!(batch.decode_failures, 1);
+}
+
+// reload_assets (worker spawn plumbing)
+
+#[test]
+fn reload_assets_with_no_sources_spawns_nothing() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    reload_assets(&state);
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn reload_assets_skips_the_spawn_while_a_batch_is_in_flight() {
+    let mut map = TextureSourceMap::new();
+    map.push_albedo("standalone.png".to_string(), 0, 0);
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        map,
+        ..Default::default()
+    });
+    // Simulate a still-running worker: a receiver with a live sender and no
+    // payload yet.
+    let (_tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
+    *state.asset_batch_inflight.lock().unwrap() = Some(rx);
+    reload_assets(&state);
+    // Our receiver is still in the slot (a fresh spawn would have replaced it
+    // with one whose worker sends a decode-failure batch).
+    let slot = state.asset_batch_inflight.lock().unwrap();
+    assert!(matches!(
+        slot.as_ref().unwrap().try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+}
+
+#[test]
+fn reload_assets_spawns_a_decode_worker_for_a_lut_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let cube = dir.path().join("grade.cube");
+    write_tiny_cube(&cube);
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        color_lut: Some(ColorLutSource {
+            resolved_path: cube.to_string_lossy().into_owned(),
+        }),
+        ..Default::default()
+    });
+    reload_assets(&state);
+    let rx = state
+        .asset_batch_inflight
+        .lock()
+        .unwrap()
+        .take()
+        .expect("worker scheduled");
+    // The worker terminates after decoding the single small LUT, so a
+    // blocking receive completes without wall-clock timing assumptions.
+    let batch = rx.recv().expect("worker sent a batch");
+    assert_eq!(batch.color_lut.expect("decoded lut").size, 2);
+    // No EnvironmentMap declared: the envmap slot stays untouched.
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+// poll_pending_assets
+
+#[test]
+fn poll_pending_assets_with_nothing_in_flight_returns_false() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let mut backend = RecordingBackend::default();
+    assert!(!poll_pending_assets(&mut state, &mut backend));
+}
+
+#[test]
+fn poll_pending_assets_keeps_waiting_while_the_worker_runs() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (_tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
+    *state.asset_batch_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(!poll_pending_assets(&mut state, &mut backend));
+    // Still parked for the next frame.
+    assert!(state.asset_batch_inflight.lock().unwrap().is_some());
+}
+
+#[test]
+fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
+    drop(tx);
+    *state.asset_batch_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_assets_dispatches_textures_by_kind() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let batch = DecodedAssetBatch {
+        textures: vec![
+            DecodedTexture {
+                slot: 2,
+                kind: TextureKind::Albedo,
+                width: 4,
+                height: 4,
+                pixels: vec![0; 64],
+                source: "a.png".to_string(),
+            },
+            DecodedTexture {
+                slot: 5,
+                kind: TextureKind::NormalMap,
+                width: 8,
+                height: 8,
+                pixels: vec![0; 256],
+                source: "n.png".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.texture_updates, vec![(2, 4, 4)]);
+    assert_eq!(backend.normal_updates, vec![(5, 8, 8)]);
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_assets_survives_a_backend_texture_rejection() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let batch = DecodedAssetBatch {
+        textures: vec![DecodedTexture {
+            slot: 0,
+            kind: TextureKind::Albedo,
+            width: 1,
+            height: 1,
+            pixels: vec![0; 4],
+            source: "a.png".to_string(),
+        }],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_texture_updates: true,
+        ..Default::default()
+    };
+    // The failure is tallied and logged; the poll still reports consumption.
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.texture_updates.len(), 1);
+}
+
+#[test]
+fn poll_pending_assets_applies_a_color_lut() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let batch = DecodedAssetBatch {
+        color_lut: Some(DecodedColorLut {
+            size: 2,
+            data: vec![0; 32],
+            source: "grade.cube".to_string(),
+        }),
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.lut_updates, vec![2]);
+}
+
+fn one_mesh_state(draw_indices: Vec<usize>) -> AssetHotReloadState {
+    let mut meshes = MeshSourceMap::new();
+    meshes.entries.push(MeshSourceEntry {
+        source: "model.glb".to_string(),
+        primitive_index: 0,
+        lod_levels: 1,
+        lod_distances: Vec::new(),
+        draw_indices,
+    });
+    AssetHotReloadState::from_sources(HotReloadSources {
+        meshes,
+        ..Default::default()
+    })
+}
+
+fn decoded_mesh(entry_idx: usize, vertex_count: usize) -> DecodedMesh {
+    DecodedMesh {
+        entry_idx,
+        vertices: vec![zero_vertex(); vertex_count],
+        indices: vec![0; vertex_count * 3],
+        lod_alternates: Vec::new(),
+    }
+}
+
+#[test]
+fn poll_pending_assets_updates_meshes_in_place_per_draw_slot() {
+    let mut state = one_mesh_state(vec![2, 5]);
+    let batch = DecodedAssetBatch {
+        meshes: vec![decoded_mesh(0, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    // Default draw_geometry_size (None) means no size change is detectable:
+    // the in-place path fires for every draw slot of the entry.
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.mesh_updates, vec![2, 5]);
+    assert!(backend.static_rebuild_change_counts.is_empty());
+}
+
+#[test]
+fn poll_pending_assets_rebuilds_a_size_changed_mesh() {
+    let mut state = one_mesh_state(vec![2, 5]);
+    let batch = DecodedAssetBatch {
+        meshes: vec![decoded_mesh(0, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    // The backend reports different init-time counts for draw 2, so the
+    // whole entry (both slots) is queued into one rebuild call.
+    backend.geometry_sizes.insert(2, (999, 999));
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.mesh_updates.is_empty());
+    assert_eq!(backend.static_rebuild_change_counts, vec![2]);
+}
+
+#[test]
+fn poll_pending_assets_skips_an_out_of_range_mesh_entry() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let batch = DecodedAssetBatch {
+        meshes: vec![decoded_mesh(7, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.mesh_updates.is_empty());
+    assert!(backend.static_rebuild_change_counts.is_empty());
+}
+
+fn one_skinned_state(entry: SkinnedMeshSourceEntry) -> AssetHotReloadState {
+    let mut skinned = SkinnedMeshSourceMap::new();
+    skinned.entries.push(entry);
+    AssetHotReloadState::from_sources(HotReloadSources {
+        skinned_meshes: skinned,
+        ..Default::default()
+    })
+}
+
+fn skinned_entry() -> SkinnedMeshSourceEntry {
+    SkinnedMeshSourceEntry {
+        source: "rig.glb".to_string(),
+        skinned_index: 4,
+        vertex_base: 0,
+        vertex_count: 2,
+        index_count: 3,
+        joint_count: 2,
+    }
+}
+
+fn decoded_skinned(entry_idx: usize, vertex_count: usize, joints: usize) -> DecodedSkinnedMesh {
+    DecodedSkinnedMesh {
+        entry_idx,
+        vertices: vec![zero_skinned_vertex(); vertex_count],
+        indices: vec![0; 3],
+        skeleton: (0..joints).map(|i| joint_def(&format!("j{i}"))).collect(),
+    }
+}
+
+#[test]
+fn poll_pending_assets_updates_skinned_meshes_in_place() {
+    let mut state = one_skinned_state(skinned_entry());
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 2, 2)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.skinned_updates, vec![4]);
+    assert!(backend.skinned_rebuild_change_counts.is_empty());
+    assert!(state.pending_skeleton_updates.is_empty());
+}
+
+#[test]
+fn poll_pending_assets_rebuilds_size_changed_skinned_and_refreshes_the_layout() {
+    let mut state = one_skinned_state(skinned_entry());
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 5, 2)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    backend.skinned_layouts.push((4, 7, 5, 3));
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.skinned_updates.is_empty());
+    assert_eq!(backend.skinned_rebuild_change_counts, vec![1]);
+    let entry = &state.skinned_meshes.entries[0];
+    assert_eq!(entry.vertex_base, 7);
+    assert_eq!(entry.vertex_count, 5);
+    assert_eq!(entry.index_count, 3);
+}
+
+#[test]
+fn poll_pending_assets_queues_a_skeleton_update_on_joint_count_change() {
+    let mut state = one_skinned_state(skinned_entry());
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 2, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.skeleton_updates, vec![(4, 3)]);
+    assert_eq!(state.skinned_meshes.entries[0].joint_count, 3);
+    let drained = state.drain_pending_skeleton_updates();
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].skinned_index, 4);
+}
+
+#[test]
+fn poll_pending_assets_failed_skinned_rebuild_drops_queued_skeleton_updates() {
+    let mut state = one_skinned_state(skinned_entry());
+    // Both the joint count and the vertex count changed, so the rebuild path
+    // fires with a skeleton update queued behind it.
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 5, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_skinned_rebuild: true,
+        ..Default::default()
+    };
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    // The geometry kept its old shape, so the SkeletonPose refresh and the
+    // joint-count write must both be discarded.
+    assert!(state.pending_skeleton_updates.is_empty());
+    assert!(backend.skeleton_updates.is_empty());
+    assert_eq!(state.skinned_meshes.entries[0].joint_count, 2);
+}
+
+#[test]
+fn poll_pending_assets_failed_joint_resize_keeps_the_old_count() {
+    let mut state = one_skinned_state(skinned_entry());
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 2, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_skeleton_update: true,
+        ..Default::default()
+    };
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(state.skinned_meshes.entries[0].joint_count, 2);
+    // The queued SkeletonPose update is pruned so it cannot desync from the
+    // unchanged backend joint buffers.
+    assert!(state.pending_skeleton_updates.is_empty());
+}
+
+// poll_pending_envmap
+
+#[test]
+fn poll_pending_envmap_with_nothing_in_flight_returns_false() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let mut backend = RecordingBackend::default();
+    assert!(!poll_pending_envmap(&state, &mut backend));
+    assert_eq!(backend.env_updates, 0);
+}
+
+#[test]
+fn poll_pending_envmap_keeps_waiting_while_the_worker_runs() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (_tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(!poll_pending_envmap(&state, &mut backend));
+    assert!(state.env_map_inflight.lock().unwrap().is_some());
+}
+
+#[test]
+fn poll_pending_envmap_applies_a_successful_payload() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Ok(vec![1u8, 2, 3])).unwrap();
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_envmap(&state, &mut backend));
+    assert_eq!(backend.env_updates, 1);
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_envmap_consumes_a_failed_convolution_without_a_backend_call() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Err("bad hdr".to_string())).unwrap();
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_envmap(&state, &mut backend));
+    assert_eq!(backend.env_updates, 0);
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+    drop(tx);
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_envmap(&state, &mut backend));
+    assert_eq!(backend.env_updates, 0);
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+// reload_volumetric_fog
+
+fn write_world_line(dir: &std::path::Path, line: &str) -> String {
+    let path = dir.join("world.jsonl");
+    std::fs::write(&path, format!("{line}\n")).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn reload_volumetric_fog_missing_file_is_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gone.jsonl");
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    let r = reload_volumetric_fog(path.to_str().unwrap(), &mut last, &mut backend);
+    assert!(!r.updated);
+    assert!(last.is_none());
+    assert_eq!(backend.fog_updates, 0);
+}
+
+#[test]
+fn reload_volumetric_fog_invalid_jsonl_is_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), "{ this is not json");
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
+    assert!(!r.updated);
+    assert_eq!(backend.fog_updates, 0);
+}
+
+#[test]
+fn reload_volumetric_fog_pushes_an_enabled_fog_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"enabled":true,"density":0.5}}"#,
+    );
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
+    assert!(r.updated);
+    assert!(last.is_some());
+    assert_eq!(backend.fog_updates, 1);
+
+    // Unchanged file: the dedupe swallows the second pass.
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
+    assert!(!r.updated);
+    assert_eq!(backend.fog_updates, 1);
+}
+
+#[test]
+fn reload_volumetric_fog_disabling_pushes_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"enabled":true}}"#,
+    );
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
+    assert!(last.is_some());
+
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"enabled":false}}"#,
+    );
+    assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
+    assert!(last.is_none());
+    assert_eq!(backend.fog_updates, 2);
+}
+
+#[test]
+fn reload_volumetric_fog_removed_asset_pushes_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"enabled":true}}"#,
+    );
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
+
+    // The fog line disappears from the world entirely.
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+    );
+    assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
+    assert!(last.is_none());
+}
+
+#[test]
+fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"density":"oops"}}"#,
+    );
+    let mut last = None;
+    let mut backend = RecordingBackend::default();
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
+    assert!(!r.updated);
+    assert!(last.is_none());
+    assert_eq!(backend.fog_updates, 0);
+}
+
+// reload_procedural_meshes
+
+fn normalised_box_args(half: f32) -> serde_json::Value {
+    let pm: crate::assets::ProceduralMesh = serde_json::from_value(serde_json::json!({
+        "generator": "box",
+        "half_extents": [half, half, half],
+    }))
+    .unwrap();
+    serde_json::to_value(&pm).unwrap()
+}
+
+fn one_proc_mesh_map(name: &str, args: serde_json::Value) -> ProceduralMeshSourceMap {
+    let mut map = ProceduralMeshSourceMap::new();
+    map.entries.push(ProceduralMeshSourceEntry {
+        name: name.to_string(),
+        args,
+        draw_indices: vec![0, 1],
+    });
+    map
+}
+
+fn box_world_line(name: &str, half: f32) -> String {
+    format!(
+        r#"{{"name":"{name}","type":"ProceduralMesh","args":{{"generator":"box","half_extents":[{half},{half},{half}]}}}}"#,
+    )
+}
+
+#[test]
+fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
+    let mut map = ProceduralMeshSourceMap::new();
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes("does_not_matter.jsonl", &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
+}
+
+#[test]
+fn reload_procedural_meshes_missing_file_regenerates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes(
+        dir.path().join("gone.jsonl").to_str().unwrap(),
+        &mut map,
+        &mut backend,
+    );
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
+    assert!(backend.mesh_updates.is_empty());
+}
+
+#[test]
+fn reload_procedural_meshes_skips_unchanged_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), &box_world_line("box_mesh", 0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
+    assert!(backend.mesh_updates.is_empty());
+}
+
+#[test]
+fn reload_procedural_meshes_treats_a_missing_jsonl_entry_as_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+    );
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
+}
+
+#[test]
+fn reload_procedural_meshes_treats_unparseable_args_as_unchanged() {
+    // A live-edited entry with args the generator cannot parse never reaches
+    // the regen; the entry falls out of the new-args map and reads as
+    // missing-from-jsonl.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"box_mesh","type":"ProceduralMesh","args":{"generator":42}}"#,
+    );
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
+}
+
+#[test]
+fn reload_procedural_meshes_regenerates_changed_args_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
+    // In-place path (the default backend reports no size data): one update
+    // per draw slot, and the captured args advance to the new snapshot.
+    assert_eq!(backend.mesh_updates, vec![0, 1]);
+    assert!(backend.static_rebuild_change_counts.is_empty());
+    assert_eq!(map.entries[0].args, normalised_box_args(1.0));
+}
+
+#[test]
+fn reload_procedural_meshes_keeps_args_when_the_backend_rejects_the_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend {
+        fail_mesh_updates: true,
+        ..Default::default()
+    };
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 1));
+    // The captured args stay at the pre-edit snapshot so the next reload
+    // still sees the pending change.
+    assert_eq!(map.entries[0].args, normalised_box_args(0.5));
+}
+
+#[test]
+fn reload_procedural_meshes_rebuilds_on_size_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend::default();
+    backend.geometry_sizes.insert(0, (1, 1));
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
+    assert!(backend.mesh_updates.is_empty());
+    assert_eq!(backend.static_rebuild_change_counts, vec![2]);
+    assert_eq!(map.entries[0].args, normalised_box_args(1.0));
+}
+
+#[test]
+fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
+    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut backend = RecordingBackend {
+        fail_static_rebuild: true,
+        ..Default::default()
+    };
+    backend.geometry_sizes.insert(0, (1, 1));
+    let r = reload_procedural_meshes(&path, &mut map, &mut backend);
+    assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 1));
+    assert_eq!(map.entries[0].args, normalised_box_args(0.5));
+}
+
+// reload_stories (edge cases beyond the round-trip test above)
+
+#[test]
+fn reload_stories_missing_world_file_returns_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut snapshots = std::collections::HashMap::new();
+    let stories = reload_stories(
+        dir.path().join("gone.jsonl").to_str().unwrap(),
+        &mut snapshots,
+    );
+    assert!(stories.is_empty());
+    assert!(snapshots.is_empty());
+}
+
+#[test]
+fn reload_stories_ignores_worlds_without_stories() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_world_line(
+        dir.path(),
+        r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+    );
+    let mut snapshots = std::collections::HashMap::new();
+    assert!(reload_stories(&path, &mut snapshots).is_empty());
+    assert!(snapshots.is_empty());
+}
+
+// reload_shader_stages
+
+#[test]
+fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
+    use crate::assets::shader_stage::ShaderKind;
+    let dir = tempfile::tempdir().unwrap();
+    let mut map = ShaderStageSourceMap::new();
+    map.entries.push(ShaderStageSourceEntry {
+        kind: ShaderKind::Vertex,
+        resolved_path: dir
+            .path()
+            .join("zz_never_written_stage.metal")
+            .to_string_lossy()
+            .into_owned(),
+    });
+    // The RecordingBackend would record a pipeline rebuild; a compile failure
+    // must abort the pass before the backend is touched.
+    let mut backend = RecordingBackend::default();
+    let r = reload_shader_stages(&map, &mut backend);
+    assert_eq!(r.recompiled, 0);
+    assert_eq!(r.failed, 1);
+    assert!(!r.pipelines_rebuilt);
+}
+
+// AssetHotReloadState
+
+#[test]
+fn state_reload_flag_round_trips() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    assert!(!state.reload_requested());
+    state
+        .pending
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(state.reload_requested());
+    state.clear_flag();
+    assert!(!state.reload_requested());
+}
+
+#[test]
+fn state_debug_format_summarises_the_catalogue() {
+    let mut map = TextureSourceMap::new();
+    map.push_albedo("standalone.png".to_string(), 0, 0);
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        map,
+        ..Default::default()
+    });
+    let dump = format!("{state:?}");
+    assert!(dump.contains("AssetHotReloadState"));
+    assert!(dump.contains("entries: 1"));
+    assert!(dump.contains("pending: false"));
+    assert!(dump.contains("env_map_inflight: false"));
+    assert!(dump.contains("asset_batch_inflight: false"));
+}
+
+#[test]
+fn fresh_state_starts_with_empty_story_snapshots() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    assert!(state.story_snapshots.is_empty());
+    assert!(state.world_jsonl_path.is_none());
+}
+
+// watcher helpers
+
+#[test]
+fn access_events_are_not_asset_events() {
+    let evt = Event::new(EventKind::Access(notify::event::AccessKind::Any))
+        .add_path(PathBuf::from("/tmp/a.png"));
+    assert!(!is_asset_event(&evt));
+}
+
+#[test]
+fn events_without_paths_are_not_asset_events() {
+    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any));
+    assert!(!is_asset_event(&evt));
+}
+
+#[test]
+fn extensionless_paths_are_not_asset_events() {
+    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(PathBuf::from("/tmp/Makefile"));
+    assert!(!is_asset_event(&evt));
+}
+
+#[test]
+fn create_and_remove_events_count_as_asset_events() {
+    let create = Event::new(EventKind::Create(notify::event::CreateKind::Any))
+        .add_path(PathBuf::from("/tmp/a.png"));
+    assert!(is_asset_event(&create));
+    let remove = Event::new(EventKind::Remove(notify::event::RemoveKind::Any))
+        .add_path(PathBuf::from("/tmp/a.png"));
+    assert!(is_asset_event(&remove));
+}
+
+#[test]
+fn uppercase_texture_extension_still_matches() {
+    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(PathBuf::from("/tmp/ALBEDO.PNG"));
+    assert!(is_asset_event(&evt));
+}
+
+#[test]
+fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meshes = MeshSourceMap::new();
+    meshes.entries.push(MeshSourceEntry {
+        source: dir
+            .path()
+            .join("no_such_subdir")
+            .join("model.glb")
+            .to_string_lossy()
+            .into_owned(),
+        primitive_index: 0,
+        lod_levels: 1,
+        lod_distances: Vec::new(),
+        draw_indices: vec![0],
+    });
+    let sources = HotReloadSources {
+        meshes,
+        ..Default::default()
+    };
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    assert!(spawn_watcher(&sources, flag).is_none());
+}
+
+#[test]
+fn spawn_watcher_subscribes_to_an_existing_source_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut map = TextureSourceMap::new();
+    map.push_albedo(
+        dir.path().join("albedo.png").to_string_lossy().into_owned(),
+        0,
+        0,
+    );
+    let sources = HotReloadSources {
+        map,
+        ..Default::default()
+    };
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // No file is ever written into the watched directory, so the closure
+    // never fires and the process-global pending flags stay untouched.
+    assert!(spawn_watcher(&sources, flag).is_some());
+}
+
+#[test]
+fn story_source_dirs_collects_unique_parents_from_story_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let world = dir.path().join("world.jsonl");
+    let lines = [
+        r#"{"name":"s1","type":"StoryImport","args":{"source":"stories/tale.md"}}"#,
+        r#"{"name":"s2","type":"StoryImport","args":{"source":"bare.md"}}"#,
+        r#"{"name":"s3","type":"StoryImport","args":{"source":"stories/other.md"}}"#,
+        r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+        r#"{"name":"s4","type":"StoryImport","args":{}}"#,
+        "not json at all",
+    ];
+    std::fs::write(&world, lines.join("\n")).unwrap();
+    let dirs = story_source_dirs(world.to_str().unwrap());
+    assert_eq!(dirs.len(), 2);
+    assert!(dirs.contains(&PathBuf::from(".")));
+    assert!(dirs.contains(&PathBuf::from("stories")));
+}
+
+#[test]
+fn story_source_dirs_of_a_missing_world_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let dirs = story_source_dirs(dir.path().join("gone.jsonl").to_str().unwrap());
+    assert!(dirs.is_empty());
+}

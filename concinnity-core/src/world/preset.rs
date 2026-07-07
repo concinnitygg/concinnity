@@ -46,3 +46,22 @@ pub fn load_preset_obj(name: &str, subdir: &str) -> serde_json::Value {
     };
     serde_json::from_str::<serde_json::Value>(&content).unwrap_or(serde_json::Value::Null)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Only the miss paths are exercised here: the hit paths resolve against
+    // the process-global assets-dir anchor, which paths.rs tests may redirect
+    // concurrently, so pointing it at a temp tree in this test would race them.
+    #[test]
+    fn find_in_assets_misses_cleanly() {
+        assert_eq!(find_in_assets("cn_test_no_such_asset.json"), None);
+    }
+
+    #[test]
+    fn load_preset_obj_returns_null_when_absent() {
+        let v = load_preset_obj("cn_test_no_such_preset", "cn_test_subdir");
+        assert!(v.is_null());
+    }
+}

@@ -272,6 +272,7 @@ fn fetch_assets(names: &[String], base_url: &str, _account_id: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::pending::test_support;
 
     #[test]
     fn write_file_rejects_traversal() {
@@ -283,5 +284,96 @@ mod tests {
     fn write_file_rejects_absolute() {
         let result = write_file("/etc/passwd", "bad");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_file_rejects_embedded_traversal() {
+        let err = write_file("shaders/../../outside.txt", "bad").unwrap_err();
+        assert!(err.contains(".."), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn load_and_add_commands_report_no_effect() {
+        let _guard = test_support::lock();
+        let (out, effect) = process_command(AppCommand::Load { assets: Vec::new() }).unwrap();
+        assert!(out.is_empty());
+        assert_eq!(effect, CommandEffect::None);
+
+        let (out, effect) = process_command(AppCommand::Add {
+            asset_type: "Prop".to_string(),
+            name: Some("staged".to_string()),
+            args: None,
+        })
+        .unwrap();
+        assert!(out.is_empty());
+        assert_eq!(effect, CommandEffect::None);
+    }
+
+    #[test]
+    fn add_command_surfaces_duplicate_errors() {
+        let _guard = test_support::lock();
+        process_command(AppCommand::Load { assets: Vec::new() }).unwrap();
+        process_command(AppCommand::Add {
+            asset_type: "Prop".to_string(),
+            name: Some("twin".to_string()),
+            args: None,
+        })
+        .unwrap();
+        let err = process_command(AppCommand::Add {
+            asset_type: "Prop".to_string(),
+            name: Some("twin".to_string()),
+            args: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rm_command_surfaces_missing_name_errors() {
+        let _guard = test_support::lock();
+        process_command(AppCommand::Load { assets: Vec::new() }).unwrap();
+        let err = process_command(AppCommand::Rm {
+            name: "ghost".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.contains("no asset named"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_world_rejects_invalid_content() {
+        let err = process_command(AppCommand::TestWorld {
+            content: "{ not json".to_string(),
+        })
+        .unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn test_world_rejects_an_unknown_asset_type() {
+        let err = process_command(AppCommand::TestWorld {
+            content: r#"{"name":"odd","type":"NotARealAssetType","args":{}}"#.to_string(),
+        })
+        .unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn fetch_assets_rejects_path_like_names() {
+        // Every name is invalid, so the helper errors before any request is
+        // attempted (no network in tests).
+        let names = vec![
+            "../evil.png".to_string(),
+            "a/b.png".to_string(),
+            "c\\d.png".to_string(),
+        ];
+        let err = fetch_assets(&names, "http://127.0.0.1:0", "acct").unwrap_err();
+        assert!(err.contains("plain filename"), "unexpected error: {err}");
+        assert_eq!(err.matches("plain filename").count(), 3);
+    }
+
+    #[test]
+    fn fetch_assets_with_no_names_is_an_empty_success() {
+        let out = fetch_assets(&[], "http://127.0.0.1:0", "acct").unwrap();
+        assert_eq!(out, "fetched: ");
     }
 }

@@ -62,3 +62,99 @@ fn check_f32x3(v: &serde_json::Value, label: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn empty_instances_pass() {
+        check("p", &json!({"instances": []})).expect("empty cluster");
+    }
+
+    #[test]
+    fn full_transform_instances_pass() {
+        let args = json!({"instances": [
+            {"position": [1.0, 2.0, 3.0], "rotation_deg": [0, 90, 0], "scale": [1, 1, 1]},
+            {}
+        ]});
+        check("p", &args).expect("valid instances");
+    }
+
+    #[test]
+    fn missing_instances_errors() {
+        let err = check("p", &json!({})).unwrap_err();
+        assert!(err.contains("`instances` must be an array"), "got: {err}");
+    }
+
+    #[test]
+    fn instances_over_the_cap_error() {
+        let entries: Vec<serde_json::Value> = (0..MAX_INSTANCES_PER_CLUSTER + 1)
+            .map(|_| json!({}))
+            .collect();
+        let err = check("p", &json!({"instances": entries})).unwrap_err();
+        assert!(err.contains("16385 instances"), "got: {err}");
+        assert!(err.contains("cap is 16384"), "got: {err}");
+    }
+
+    #[test]
+    fn instances_at_the_cap_pass() {
+        let entries: Vec<serde_json::Value> =
+            (0..MAX_INSTANCES_PER_CLUSTER).map(|_| json!({})).collect();
+        check("p", &json!({"instances": entries})).expect("at cap");
+    }
+
+    #[test]
+    fn non_object_instance_errors() {
+        let err = check("p", &json!({"instances": [{}, 3]})).unwrap_err();
+        assert!(err.contains("instances[1] must be an object"), "got: {err}");
+    }
+
+    #[test]
+    fn non_array_position_errors() {
+        let args = json!({"instances": [{"position": "origin"}]});
+        let err = check("p", &args).unwrap_err();
+        assert!(
+            err.contains("instances[0].position must be an array of 3 numbers"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn short_position_errors() {
+        let args = json!({"instances": [{"position": [1.0, 2.0]}]});
+        let err = check("p", &args).unwrap_err();
+        assert!(err.contains("must have 3 elements, got 2"), "got: {err}");
+    }
+
+    #[test]
+    fn non_numeric_position_component_errors() {
+        let args = json!({"instances": [{"position": [1.0, null, 3.0]}]});
+        let err = check("p", &args).unwrap_err();
+        assert!(err.contains("position[1] must be a number"), "got: {err}");
+    }
+
+    #[test]
+    fn extra_position_components_are_ignored() {
+        let args = json!({"instances": [{"position": [1.0, 2.0, 3.0, "extra"]}]});
+        check("p", &args).expect("only the first 3 components are validated");
+    }
+
+    #[test]
+    fn bad_rotation_and_scale_are_validated_too() {
+        let args = json!({"instances": [{"rotation_deg": [0, 0, "x"]}]});
+        let err = check("p", &args).unwrap_err();
+        assert!(
+            err.contains("rotation_deg[2] must be a number"),
+            "got: {err}"
+        );
+
+        let args = json!({"instances": [{"scale": 2.0}]});
+        let err = check("p", &args).unwrap_err();
+        assert!(
+            err.contains("scale must be an array of 3 numbers"),
+            "got: {err}"
+        );
+    }
+}

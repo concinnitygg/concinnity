@@ -575,6 +575,34 @@ mod tests {
     }
 
     #[test]
+    fn env_probes_default_on_when_unset() {
+        // No test (or CI job) sets this variable, so the probe reports enabled.
+        assert!(enabled("CN_TOOLCHAIN_TEST_UNSET_PROBE"));
+    }
+
+    #[test]
+    fn workspace_root_finds_the_workspace_manifest() {
+        // Cargo sets CARGO_MANIFEST_DIR for test binaries, so the walk starts
+        // at this crate and must land on the workspace's own Cargo.toml.
+        let root = workspace_root().expect("workspace root");
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+        assert!(manifest.contains("[workspace]"));
+    }
+
+    #[test]
+    fn graphics_sdk_setup_is_a_noop_off_windows_targets() {
+        // Metal never has SDKs to set up, and the Vulkan arm is gated on a
+        // Windows target OS (CARGO_CFG_TARGET_OS is unset outside build
+        // scripts), so neither requires any SDK to be present.
+        for bundle_dlls in [false, true] {
+            setup_graphics_sdks(Backend::Metal, SdkOptions { bundle_dlls });
+            setup_graphics_sdks(Backend::Vk, SdkOptions { bundle_dlls });
+        }
+        // The check-cfg list is emitted unconditionally and must not panic.
+        emit_check_cfgs();
+    }
+
+    #[test]
     fn version_dirs_sort_oldest_to_newest() {
         let dirs = vec![
             PathBuf::from("10.0.22621.0"),

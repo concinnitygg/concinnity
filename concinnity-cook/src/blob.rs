@@ -221,3 +221,178 @@ fn now_iso8601() -> String {
         .format(&Rfc3339)
         .expect("time format")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity_core::ecs::AssetKind;
+
+    fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
+        BlobAssetDef {
+            name: None,
+            kind: AssetKind::Component,
+            discriminant,
+            args_bytes,
+            payload: None,
+        }
+    }
+
+    #[test]
+    fn packer_appends_within_the_limit() {
+        let mut p = PayloadPacker::new(100);
+        let a = p.push(&[1, 2, 3]);
+        let b = p.push(&[4, 5]);
+
+        assert_eq!((a.blob_index, a.offset, a.len), (0, 0, 3));
+        assert_eq!((b.blob_index, b.offset, b.len), (0, 3, 2));
+        assert_eq!(p.finish(), vec![vec![1, 2, 3, 4, 5]]);
+    }
+
+    #[test]
+    fn packer_rolls_to_a_new_blob_at_the_limit() {
+        let mut p = PayloadPacker::new(4);
+        let a = p.push(&[1, 2, 3]);
+        // 3 + 2 exceeds the 4-byte cap, so this payload starts blob 1.
+        let b = p.push(&[4, 5]);
+
+        assert_eq!(a.blob_index, 0);
+        assert_eq!((b.blob_index, b.offset, b.len), (1, 0, 2));
+        assert_eq!(p.finish(), vec![vec![1, 2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn packer_keeps_an_oversized_payload_in_an_empty_blob() {
+        // A single payload larger than the cap cannot be split, so it stays
+        // in the current (empty) blob rather than rolling forever.
+        let mut p = PayloadPacker::new(4);
+        let a = p.push(&[7; 10]);
+        assert_eq!((a.blob_index, a.offset, a.len), (0, 0, 10));
+
+        // The next payload rolls to a fresh blob.
+        let b = p.push(&[1]);
+        assert_eq!((b.blob_index, b.offset), (1, 0));
+    }
+
+    #[test]
+    fn packer_zero_length_payload_gets_a_valid_locator() {
+        let mut p = PayloadPacker::new(8);
+        let a = p.push(&[]);
+        let b = p.push(&[1]);
+        assert_eq!((a.blob_index, a.offset, a.len), (0, 0, 0));
+        assert_eq!((b.blob_index, b.offset, b.len), (0, 0, 1));
+    }
+
+    #[test]
+    fn write_cnb_round_trips_defs_and_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0.cnb");
+        let path = path.to_str().unwrap();
+
+        let defs = vec![def(3, vec![1, 2]), def(9, vec![])];
+        let payload = [0xAA, 0xBB, 0xCC];
+        write_cnb(&defs, &payload, path).unwrap();
+
+        let (read_defs, payload_start) = read_cnb(path).expect("read back");
+        assert_eq!(read_defs.len(), 2);
+        assert_eq!(read_defs[0].discriminant, 3);
+        assert_eq!(read_defs[0].args_bytes, vec![1, 2]);
+        assert_eq!(read_defs[1].discriminant, 9);
+        assert!(read_defs[1].args_bytes.is_empty());
+
+        // The payload section starts right after the header + defs table and
+        // holds exactly the bytes we packed.
+        let data = fs::read(path).unwrap();
+        assert_eq!(&data[payload_start..], &payload);
+        assert_eq!(
+            payload_section_start(path).expect("header-only offset"),
+            payload_start as u64
+        );
+    }
+
+    #[test]
+    fn write_cnb_with_no_defs_and_no_payload_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.cnb");
+        let path = path.to_str().unwrap();
+
+        write_cnb(&[], &[], path).unwrap();
+
+        let (defs, payload_start) = read_cnb(path).expect("read back");
+        assert!(defs.is_empty());
+        assert_eq!(fs::read(path).unwrap().len(), payload_start);
+    }
+
+    #[test]
+    fn write_cnb_emits_magic_and_version_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hdr.cnb");
+        let path = path.to_str().unwrap();
+
+        write_cnb(&[], &[1], path).unwrap();
+
+        let data = fs::read(path).unwrap();
+        assert_eq!(&data[0..4], &BLOB_MAGIC);
+        assert_eq!(
+            u32::from_le_bytes(data[4..8].try_into().unwrap()),
+            BLOB_VERSION
+        );
+        let defs_len = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
+        assert_eq!(data.len(), HEADER_SIZE + defs_len + 1);
+    }
+
+    #[test]
+    fn read_cnb_rejects_a_non_blob_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("garbage.cnb");
+        fs::write(&path, b"this is not a blob file at all").unwrap();
+        assert!(read_cnb(path.to_str().unwrap()).is_err());
+        assert!(payload_section_start(path.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn checksum_matches_known_sha256_vectors() {
+        assert_eq!(
+            checksum(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            checksum(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn now_iso8601_is_rfc3339_parseable() {
+        let stamp = now_iso8601();
+        assert!(OffsetDateTime::parse(&stamp, &Rfc3339).is_ok());
+    }
+
+    #[test]
+    fn blob_lock_serializes_injected_type_field_as_type() {
+        // The lock file is read by humans and tools; the serde rename on
+        // LockedInjection keeps the JSON key `type`, matching world.jsonl.
+        let lock = BlobLock {
+            engine_version: "0.0.0".to_string(),
+            built_at: "2026-01-01T00:00:00Z".to_string(),
+            blobs: vec![BlobEntry {
+                path: "data/0".to_string(),
+                checksum: "00".to_string(),
+                payload_bytes: 4,
+            }],
+            assets: vec![],
+            injected: vec![LockedInjection {
+                name: "debug_hud".to_string(),
+                asset_type: "DebugHud".to_string(),
+                args: serde_json::json!({}),
+                injected_by: "engine".to_string(),
+            }],
+        };
+        let json = serde_json::to_value(&lock).unwrap();
+        assert_eq!(json["injected"][0]["type"], "DebugHud");
+        assert!(json["injected"][0].get("asset_type").is_none());
+
+        let back: BlobLock = serde_json::from_value(json).unwrap();
+        assert_eq!(back.injected[0].asset_type, "DebugHud");
+        assert_eq!(back.blobs[0].payload_bytes, 4);
+    }
+}

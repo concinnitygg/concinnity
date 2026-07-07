@@ -439,4 +439,92 @@ mod tests {
         );
         assert_eq!(load_in(dir.path(), "missing"), None);
     }
+
+    #[test]
+    fn store_in_creates_the_directory_and_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("cache").join("deep");
+
+        store_in(&nested, "k", b"one");
+        assert_eq!(load_in(&nested, "k").as_deref(), Some(&b"one"[..]));
+
+        // A second store for the same key replaces the entry in place.
+        store_in(&nested, "k", b"two");
+        assert_eq!(load_in(&nested, "k").as_deref(), Some(&b"two"[..]));
+    }
+
+    #[test]
+    fn payload_key_is_namespaced_by_platform() {
+        let key = payload_key(1, &json!({}), &ctx(), &[]);
+        let platform = concinnity_core::build::Platform::current().key();
+        assert!(
+            key.starts_with(&format!("{platform}-")),
+            "key '{key}' must carry the '{platform}-' platform prefix"
+        );
+    }
+
+    #[test]
+    fn collect_strings_walks_nested_arrays_and_objects() {
+        let mut out = Vec::new();
+        collect_strings(
+            &json!({"a": ["x", {"b": "y"}], "n": 5, "f": true, "z": null}),
+            &mut out,
+        );
+        out.sort();
+        assert_eq!(out, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn referenced_files_resolve_through_the_artifacts_dir() {
+        // A bare filename that exists neither directly nor under
+        // .concinnity/assets/ still resolves when the build supplied an
+        // account artifacts directory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("fx.hdr"), b"pixels").unwrap();
+        let artifacts = dir.path().to_str().unwrap().to_string();
+        let artifact_ctx = BuildCtx {
+            name: "test",
+            artifacts_dir: Some(&artifacts),
+            all_assets: &[],
+        };
+
+        // Nested placement also exercises the recursive JSON string walk.
+        let args = json!({"maps": [{"source": "fx.hdr"}]});
+        let files = referenced_files(&args, &artifact_ctx);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].0.ends_with("fx.hdr"));
+
+        // The same reference without an artifacts dir resolves nothing.
+        assert!(referenced_files(&args, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn resolve_source_skips_non_file_looking_strings() {
+        // No extension and no separator: never probed, even when a file of
+        // that exact name exists in the artifacts dir.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chrome"), b"x").unwrap();
+        let artifacts = dir.path().to_str().unwrap().to_string();
+        let artifact_ctx = BuildCtx {
+            name: "test",
+            artifacts_dir: Some(&artifacts),
+            all_assets: &[],
+        };
+        assert_eq!(resolve_source("chrome", &artifact_ctx), None);
+    }
+
+    #[test]
+    fn expand_key_is_stable_when_the_source_is_missing() {
+        // A missing source file contributes no hash; the key is still a
+        // deterministic function of the remaining inputs.
+        let args = json!({ "prefix": "scn" });
+        let a = expand_key("/no/such/scene.glb", &args);
+        let b = expand_key("/no/such/scene.glb", &args);
+        assert_eq!(a, b);
+        assert!(a.starts_with("expand-"));
+        assert_ne!(
+            a,
+            expand_key("/no/such/scene.glb", &json!({ "prefix": "x" }))
+        );
+    }
 }

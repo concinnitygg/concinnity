@@ -724,8 +724,170 @@ fn sampled<T: Copy>(
     }
 }
 
+// Builders for minimal in-memory GLB containers. Shared by the glb, gltf,
+// and texture test modules so each can assemble a fixture without a binary
+// file checked into the repo.
+#[cfg(test)]
+pub(crate) mod test_fixtures {
+    // Little-endian byte helpers for building GLB binary chunks.
+    pub(crate) fn f32s(vals: &[f32]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    pub(crate) fn u16s(vals: &[u16]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    // Assemble a GLB container: header, JSON chunk, optional BIN chunk.
+    pub(crate) fn make_glb(json: &serde_json::Value, bin: Option<&[u8]>) -> Vec<u8> {
+        let mut json_bytes = serde_json::to_vec(json).expect("serialise glTF json");
+        while !json_bytes.len().is_multiple_of(4) {
+            json_bytes.push(b' ');
+        }
+        let mut bin_bytes = bin.map(|b| b.to_vec());
+        if let Some(b) = bin_bytes.as_mut() {
+            while !b.len().is_multiple_of(4) {
+                b.push(0);
+            }
+        }
+        let total = 12 + 8 + json_bytes.len() + bin_bytes.as_ref().map_or(0, |b| 8 + b.len());
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json_bytes);
+        if let Some(b) = &bin_bytes {
+            out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            out.extend_from_slice(b"BIN\0");
+            out.extend_from_slice(b);
+        }
+        out
+    }
+
+    // A single indexed triangle: positions at bin offset 0, u16 indices at 36.
+    pub(crate) fn static_triangle_bin() -> Vec<u8> {
+        let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        bin.extend(u16s(&[0, 1, 2]));
+        bin
+    }
+
+    pub(crate) fn static_triangle_json() -> serde_json::Value {
+        serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 42}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 6}
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                 "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0]},
+                {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+            "nodes": [{"mesh": 0}],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0
+        })
+    }
+
+    pub(crate) fn static_triangle_glb() -> Vec<u8> {
+        make_glb(&static_triangle_json(), Some(&static_triangle_bin()))
+    }
+
+    // A one-triangle skinned mesh with a two-joint skeleton authored
+    // child-first (skin joint 0 = node 2 "tip", skin joint 1 = node 1 "root")
+    // so the importer's topological remap is exercised. Every vertex binds to
+    // skin joint 0 with full weight. The bin also carries one animation
+    // sampler (times 0 and 1, translations [0,0,0] and [0,2,0]).
+    pub(crate) fn skinned_bin() -> Vec<u8> {
+        let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]); // 36
+        bin.extend(u16s(&[0, 1, 2])); // 42
+        bin.extend([0u8; 2]); // pad to 44
+        bin.extend([0u8; 12]); // JOINTS_0, all skin joint 0 -> 56
+        bin.extend(f32s(&[
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        ])); // WEIGHTS_0 -> 104
+        bin.extend(f32s(&[0.0, 1.0])); // animation input times -> 112
+        bin.extend(f32s(&[0.0, 0.0, 0.0, 0.0, 2.0, 0.0])); // translations -> 136
+        bin
+    }
+
+    pub(crate) fn skinned_json(
+        with_joints: bool,
+        with_weights: bool,
+        with_anim: bool,
+    ) -> serde_json::Value {
+        let mut attributes = serde_json::json!({"POSITION": 0});
+        if with_joints {
+            attributes["JOINTS_0"] = 2.into();
+        }
+        if with_weights {
+            attributes["WEIGHTS_0"] = 3.into();
+        }
+        let mut root = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 136}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 6},
+                {"buffer": 0, "byteOffset": 44, "byteLength": 12},
+                {"buffer": 0, "byteOffset": 56, "byteLength": 48},
+                {"buffer": 0, "byteOffset": 104, "byteLength": 8},
+                {"buffer": 0, "byteOffset": 112, "byteLength": 24}
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                 "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0]},
+                {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"},
+                {"bufferView": 2, "componentType": 5121, "count": 3, "type": "VEC4"},
+                {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC4"},
+                {"bufferView": 4, "componentType": 5126, "count": 2, "type": "SCALAR",
+                 "min": [0.0], "max": [1.0]},
+                {"bufferView": 5, "componentType": 5126, "count": 2, "type": "VEC3"}
+            ],
+            "meshes": [{"primitives": [{"attributes": attributes, "indices": 1}]}],
+            "skins": [{"joints": [2, 1]}],
+            "nodes": [
+                {"mesh": 0, "skin": 0},
+                {"name": "root", "children": [2], "translation": [0.0, 1.0, 0.0]},
+                {"name": "tip", "translation": [0.0, 0.5, 0.0]}
+            ],
+            "scenes": [{"nodes": [0, 1]}],
+            "scene": 0
+        });
+        if with_anim {
+            // Channel 0 targets the "tip" joint; channel 1 targets the mesh
+            // node (not a joint) and must be dropped by the importer.
+            root["animations"] = serde_json::json!([{
+                "name": "wave",
+                "channels": [
+                    {"sampler": 0, "target": {"node": 2, "path": "translation"}},
+                    {"sampler": 1, "target": {"node": 0, "path": "translation"}}
+                ],
+                "samplers": [
+                    {"input": 4, "output": 5, "interpolation": "LINEAR"},
+                    {"input": 4, "output": 5, "interpolation": "LINEAR"}
+                ]
+            }]);
+        }
+        root
+    }
+
+    pub(crate) fn skinned_glb() -> Vec<u8> {
+        make_glb(&skinned_json(true, true, true), Some(&skinned_bin()))
+    }
+
+    pub(crate) fn parse(bytes: &[u8]) -> gltf::Gltf {
+        gltf::Gltf::from_slice(bytes).expect("fixture GLB must parse")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures::*;
     use super::*;
 
     #[test]
@@ -827,5 +989,312 @@ mod tests {
         let values: Vec<[f32; 3]> = vec![[0.0; 3]];
         assert!(sampled(&times, &values, Interpolation::Linear).is_empty());
         assert!(sampled(&times, &values, Interpolation::CubicSpline).is_empty());
+    }
+
+    // Container / static geometry
+
+    #[test]
+    fn read_primitive_geometry_reads_an_indexed_triangle() {
+        let doc = parse(&static_triangle_glb());
+        let (vertices, indices) = read_primitive_geometry(&doc, "t.glb", 0).expect("geometry");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(vertices[1].pos, [1.0, 0.0, 0.0]);
+        // No TEXCOORD_0 / COLOR_0 in the fixture: fall back to defaults.
+        assert_eq!(vertices[0].uv, [0.0, 0.0]);
+        assert_eq!(vertices[0].color, NEUTRAL_COLOR);
+    }
+
+    #[test]
+    fn read_primitive_geometry_without_indices_draws_sequentially() {
+        let mut json = static_triangle_json();
+        json["meshes"][0]["primitives"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("indices");
+        let doc = parse(&make_glb(&json, Some(&static_triangle_bin())));
+        let (vertices, indices) = read_primitive_geometry(&doc, "t.glb", 0).expect("geometry");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn read_primitive_geometry_rejects_out_of_range_primitive_index() {
+        let doc = parse(&static_triangle_glb());
+        let err = read_primitive_geometry(&doc, "t.glb", 3).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn read_primitive_geometry_rejects_non_triangle_topology() {
+        let mut json = static_triangle_json();
+        // Mode 0 is POINTS.
+        json["meshes"][0]["primitives"][0]["mode"] = 0.into();
+        let doc = parse(&make_glb(&json, Some(&static_triangle_bin())));
+        let err = read_primitive_geometry(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("only TRIANGLES is supported"), "got: {err}");
+    }
+
+    #[test]
+    fn read_primitive_geometry_rejects_missing_binary_chunk() {
+        // A GLB with no BIN chunk cannot resolve the POSITION accessor.
+        let doc = parse(&make_glb(&static_triangle_json(), None));
+        let err = read_primitive_geometry(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("no POSITION data"), "got: {err}");
+    }
+
+    #[test]
+    fn read_primitive_geometry_rejects_indices_past_the_vertex_array() {
+        let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        bin.extend(u16s(&[0, 1, 9]));
+        let doc = parse(&make_glb(&static_triangle_json(), Some(&bin)));
+        let err = read_primitive_geometry(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("index 9 out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn import_static_glb_primitive_narrows_indices_to_u16() {
+        let doc = parse(&static_triangle_glb());
+        let (vertices, indices) =
+            import_static_glb_primitive_from_doc(&doc, "t.glb", 0).expect("import");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices, vec![0u16, 1, 2]);
+    }
+
+    // A non-indexed primitive larger than u16 can address: JSON references one
+    // POSITION accessor of 65538 vertices (all zero), forcing sequential u32
+    // indices past u16::MAX.
+    fn oversized_nonindexed_glb() -> Vec<u8> {
+        let count = u16::MAX as usize + 3; // 65538, a multiple of 3
+        let bin = vec![0u8; count * 12];
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": bin.len()}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": bin.len()}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": count, "type": "VEC3",
+                 "min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "nodes": [{"mesh": 0}],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0
+        });
+        make_glb(&json, Some(&bin))
+    }
+
+    #[test]
+    fn import_static_glb_primitive_rejects_oversized_primitives() {
+        let doc = parse(&oversized_nonindexed_glb());
+        let err = import_static_glb_primitive_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("u16 index limit"), "got: {err}");
+    }
+
+    // Skinned import
+
+    #[test]
+    fn import_skinned_reorders_joints_and_remaps_vertex_bindings() {
+        let doc = parse(&skinned_glb());
+        let imported = import_skinned_from_doc(&doc, "s.glb").expect("skinned import");
+
+        // Skin joints are authored child-first ([tip, root]); the importer
+        // must emit the root before its child.
+        assert_eq!(imported.skeleton.len(), 2);
+        assert_eq!(imported.skeleton[0].name, "root");
+        assert_eq!(imported.skeleton[0].parent, -1);
+        assert_eq!(imported.skeleton[0].translation, [0.0, 1.0, 0.0]);
+        assert_eq!(imported.skeleton[1].name, "tip");
+        assert_eq!(imported.skeleton[1].parent, 0);
+        assert_eq!(imported.skeleton[1].translation, [0.0, 0.5, 0.0]);
+
+        // Vertices bind to skin joint 0 (the tip), remapped to sorted index 1.
+        assert_eq!(imported.vertices.len(), 3);
+        assert_eq!(imported.indices, vec![0, 1, 2]);
+        assert_eq!(imported.vertices[0].joints, [1, 1, 1, 1]);
+        assert_eq!(imported.vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_rejects_a_file_with_no_skinned_node() {
+        let doc = parse(&static_triangle_glb());
+        let err = import_skinned_from_doc(&doc, "t.glb")
+            .err()
+            .expect("expected error");
+        assert!(
+            err.contains("no node with both a mesh and a skin"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_skinned_rejects_missing_weights() {
+        let doc = parse(&make_glb(
+            &skinned_json(true, false, false),
+            Some(&skinned_bin()),
+        ));
+        let err = import_skinned_from_doc(&doc, "s.glb")
+            .err()
+            .expect("expected error");
+        assert!(err.contains("missing WEIGHTS_0"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_rejects_a_mesh_with_only_static_primitives() {
+        // The node carries a skin but no primitive has JOINTS_0.
+        let doc = parse(&make_glb(
+            &skinned_json(false, false, false),
+            Some(&skinned_bin()),
+        ));
+        let err = import_skinned_from_doc(&doc, "s.glb")
+            .err()
+            .expect("expected error");
+        assert!(err.contains("no skinned primitives"), "got: {err}");
+    }
+
+    // Animation import
+
+    #[test]
+    fn import_animations_extracts_joint_tracks_and_drops_non_joint_channels() {
+        let doc = parse(&skinned_glb());
+        let anims = import_glb_animations_from_doc(&doc, "s.glb").expect("animations");
+        assert_eq!(anims.len(), 1);
+        let anim = &anims[0];
+        assert_eq!(anim.name, "wave");
+        assert!((anim.duration - 1.0).abs() < 1e-6);
+
+        // Only the joint-targeted channel survives; the mesh-node channel is
+        // dropped. Joint 1 is the remapped "tip".
+        assert_eq!(anim.tracks.len(), 1);
+        let track = &anim.tracks[0];
+        assert_eq!(track.joint, 1);
+        assert_eq!(track.keys.len(), 2);
+        assert_eq!(track.keys[0].time, 0.0);
+        assert_eq!(track.keys[0].pose.translation, [0.0, 0.0, 0.0]);
+        assert_eq!(track.keys[1].time, 1.0);
+        assert_eq!(track.keys[1].pose.translation, [0.0, 2.0, 0.0]);
+        // Untouched properties keep the bind pose.
+        assert_eq!(track.keys[1].pose.scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn import_animation_from_doc_selects_by_name() {
+        let doc = parse(&skinned_glb());
+        let anim = import_glb_animation_from_doc(&doc, "s.glb", 7, "wave").expect("clip");
+        assert_eq!(anim.name, "wave");
+    }
+
+    #[test]
+    fn import_animation_from_doc_rejects_an_unknown_name() {
+        let doc = parse(&skinned_glb());
+        let err = import_glb_animation_from_doc(&doc, "s.glb", 0, "sprint").unwrap_err();
+        assert!(err.contains("no animation named 'sprint'"), "got: {err}");
+        assert!(err.contains("1 clip"), "got: {err}");
+    }
+
+    #[test]
+    fn import_animation_from_doc_falls_back_to_index_when_name_is_empty() {
+        let doc = parse(&skinned_glb());
+        let anim = import_glb_animation_from_doc(&doc, "s.glb", 0, "").expect("clip");
+        assert_eq!(anim.name, "wave");
+    }
+
+    #[test]
+    fn import_animation_from_doc_rejects_an_out_of_range_index() {
+        let doc = parse(&skinned_glb());
+        let err = import_glb_animation_from_doc(&doc, "s.glb", 1, "").unwrap_err();
+        assert!(err.contains("animation_index 1 out of range"), "got: {err}");
+    }
+
+    // parse_glb / resolve_source
+
+    #[test]
+    fn parse_glb_reads_a_file_from_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tri.glb");
+        std::fs::write(&path, static_triangle_glb()).expect("write glb");
+        let doc = parse_glb(path.to_str().unwrap()).expect("parse");
+        assert_eq!(doc.document.meshes().count(), 1);
+    }
+
+    #[test]
+    fn parse_glb_reports_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing.glb");
+        let err = parse_glb(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("failed to read"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_glb_reports_invalid_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("junk.glb");
+        std::fs::write(&path, b"not a glb at all").expect("write junk");
+        let err = parse_glb(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("not a valid glTF/GLB file"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_source_keeps_paths_with_a_directory_component() {
+        assert_eq!(resolve_source("sub/f.glb"), "sub/f.glb");
+        assert_eq!(resolve_source("./f.glb"), "./f.glb");
+        assert_eq!(resolve_source("/abs/f.glb"), "/abs/f.glb");
+    }
+
+    // split_into_u16_chunks
+
+    fn vert(i: u32) -> VertexData {
+        VertexData {
+            pos: [i as f32, 0.0, 0.0],
+            color: [0.0; 3],
+            uv: [0.0; 2],
+        }
+    }
+
+    #[test]
+    fn split_small_mesh_yields_one_chunk_with_first_use_order() {
+        let vertices: Vec<VertexData> = (0..4).map(vert).collect();
+        // Two triangles sharing vertices 0 and 2, authored out of order.
+        let indices = [2u32, 1, 0, 0, 2, 3];
+        let chunks = split_into_u16_chunks(&vertices, &indices);
+        assert_eq!(chunks.len(), 1);
+        let (cv, ci) = &chunks[0];
+        assert_eq!(cv.len(), 4);
+        // Local indices follow first use: 2 -> 0, 1 -> 1, 0 -> 2, 3 -> 3.
+        assert_eq!(ci, &vec![0u16, 1, 2, 2, 0, 3]);
+        // Remapped geometry references the original positions.
+        assert_eq!(cv[ci[0] as usize].pos, vertices[2].pos);
+        assert_eq!(cv[ci[5] as usize].pos, vertices[3].pos);
+    }
+
+    #[test]
+    fn split_with_no_triangles_yields_no_chunks() {
+        let vertices: Vec<VertexData> = (0..3).map(vert).collect();
+        assert!(split_into_u16_chunks(&vertices, &[]).is_empty());
+        // A trailing partial triangle is dropped by chunks_exact.
+        assert!(split_into_u16_chunks(&vertices, &[0, 1]).is_empty());
+    }
+
+    #[test]
+    fn split_flushes_a_chunk_when_the_u16_limit_would_overflow() {
+        // 21846 disjoint triangles = 65538 unique vertices, just past u16.
+        let count = u16::MAX as u32 + 3;
+        let vertices: Vec<VertexData> = (0..count).map(vert).collect();
+        let indices: Vec<u32> = (0..count).collect();
+        let chunks = split_into_u16_chunks(&vertices, &indices);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].0.len(), 65535);
+        assert_eq!(chunks[1].0.len(), 3);
+        // Every chunk index stays within its own vertex buffer and the
+        // triangle count is preserved across the split.
+        let mut triangles = 0;
+        for (cv, ci) in &chunks {
+            assert!(ci.iter().all(|&i| (i as usize) < cv.len()));
+            triangles += ci.len() / 3;
+        }
+        assert_eq!(triangles, count as usize / 3);
+        // The second chunk's remapped triangle is the original last triangle.
+        let (cv, ci) = &chunks[1];
+        assert_eq!(cv[ci[0] as usize].pos, vert(count - 3).pos);
+        assert_eq!(cv[ci[2] as usize].pos, vert(count - 1).pos);
     }
 }

@@ -187,3 +187,91 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
     println!("Use `cn explain <name>` to print an entry for overriding.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_world(content: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(&path, content).unwrap();
+        (dir, path.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn resolve_world_path_prefers_an_explicit_existing_path() {
+        let (_dir, path) = write_world("");
+        assert_eq!(resolve_world_path(Some(&path)).unwrap(), path);
+    }
+
+    fn loaded_world_fixture() -> concinnity_cook::world::LoadedWorld {
+        concinnity_cook::world::LoadedWorld {
+            assets: Vec::new(),
+            injected: vec![concinnity_cook::world::InjectedAsset {
+                name: "debug_hud".to_string(),
+                asset_type: "DebugHud".to_string(),
+                args: serde_json::json!({}),
+                injected_by: "debug_hud",
+            }],
+            authored: vec!["cam".to_string()],
+        }
+    }
+
+    #[test]
+    fn provenance_reports_authored_names() {
+        assert_eq!(provenance(&loaded_world_fixture(), "cam"), "authored");
+    }
+
+    #[test]
+    fn provenance_reports_the_injection_pass() {
+        assert_eq!(
+            provenance(&loaded_world_fixture(), "debug_hud"),
+            "injected:debug_hud"
+        );
+    }
+
+    #[test]
+    fn provenance_falls_back_to_expanded() {
+        assert_eq!(provenance(&loaded_world_fixture(), "anything"), "expanded");
+    }
+
+    #[test]
+    fn list_of_an_empty_world_is_ok() {
+        let (_dir, path) = write_world("");
+        list(Some(&path), false).unwrap();
+    }
+
+    #[test]
+    fn list_prints_known_and_unknown_types() {
+        // GraphicsConfig resolves through the registry; the made-up type
+        // falls back to "?" origin / payload without erroring.
+        let (_dir, path) = write_world(concat!(
+            "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n",
+            "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+            "{\"type\":\"GraphicsConfig\",\"args\":{}}\n",
+        ));
+        list(Some(&path), false).unwrap();
+    }
+
+    #[test]
+    fn list_with_invalid_json_errors() {
+        let (_dir, path) = write_world("{ not json\n");
+        let err = list(Some(&path), false).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn list_expanded_runs_the_build_front_half() {
+        let (_dir, path) =
+            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+        list(Some(&path), true).unwrap();
+    }
+
+    #[test]
+    fn list_expanded_rejects_an_unknown_asset_type() {
+        let (_dir, path) =
+            write_world("{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
+        assert!(list(Some(&path), true).is_err());
+    }
+}

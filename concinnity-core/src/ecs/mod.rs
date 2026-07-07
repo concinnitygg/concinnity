@@ -602,4 +602,187 @@ mod tests {
         // The same cursor sees nothing new on a second read.
         assert!(ctx.events::<u32>().unwrap().read(&mut cursor).is_empty());
     }
+
+    #[test]
+    fn registration_predicates_follow_origin_and_payload() {
+        let reg = |origin, payload| Registration {
+            type_name: "T",
+            origin,
+            payload,
+            default_args: None,
+        };
+        let external = reg(AssetOrigin::External, AssetPayload::Compiled);
+        assert!(external.addable());
+        assert!(external.serializable());
+        assert!(external.runtime_present());
+        assert!(external.needs_compilation());
+
+        let runtime = reg(AssetOrigin::RuntimeOnly, AssetPayload::None);
+        assert!(!runtime.addable());
+        assert!(!runtime.serializable());
+        assert!(runtime.runtime_present());
+        assert!(!runtime.needs_compilation());
+
+        let build = reg(AssetOrigin::BuildOnly, AssetPayload::None);
+        assert!(!build.addable());
+        assert!(build.serializable());
+        assert!(!build.runtime_present());
+    }
+
+    #[test]
+    fn component_types_round_trip_name_and_discriminant() {
+        for &(ty, _) in ComponentType::all() {
+            assert_eq!(ComponentType::parse(ty.as_str()), Some(ty));
+            assert_eq!(
+                ComponentType::from_discriminant(ty.discriminant()),
+                Some(ty)
+            );
+        }
+        assert_eq!(ComponentType::parse("NotARealComponent"), None);
+        assert_eq!(ComponentType::from_discriminant(255), None);
+    }
+
+    #[test]
+    fn component_discriminants_are_unique_and_in_range() {
+        let mut seen = std::collections::HashSet::new();
+        for &(ty, _) in ComponentType::all() {
+            let d = ty.discriminant();
+            assert!(
+                d < 128,
+                "{} discriminant {} outside the component range",
+                ty.as_str(),
+                d
+            );
+            assert!(seen.insert(d), "duplicate discriminant {d}");
+        }
+    }
+
+    #[test]
+    fn reserialize_args_round_trips_and_rejects_bad_types() {
+        let ty = ComponentType::parse("Mesh").unwrap();
+        let bytes = ty
+            .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
+            .unwrap();
+        let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back["source"], "a.glb");
+        assert_eq!(
+            ty.reserialize_args(&serde_json::json!({ "source": 42 }))
+                .unwrap_err(),
+            CnResult::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn companions_default_to_none() {
+        let ty = ComponentType::parse("Transform").unwrap();
+        assert!(ty.companions(&serde_json::json!({}), &[]).is_empty());
+    }
+
+    #[test]
+    fn component_asset_defs_round_trip_through_from_def() {
+        let mut asset: ComponentAsset = crate::assets::Transform::default().into();
+        // A payloadless component accepts a locator injection as a no-op.
+        asset.inject_locator(PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 0,
+        });
+        let def = asset.to_def();
+        assert_eq!(def.kind, AssetKind::Component);
+        assert_eq!(
+            def.discriminant,
+            ComponentType::parse("Transform").unwrap().discriminant()
+        );
+        let back = ComponentAsset::from_def(&def).unwrap();
+        assert!(matches!(back, ComponentAsset::Transform(_)));
+    }
+
+    #[test]
+    fn from_def_rejects_unknown_discriminants() {
+        let def = BlobAssetDef {
+            name: None,
+            kind: AssetKind::Component,
+            discriminant: 255,
+            args_bytes: b"{}".to_vec(),
+            payload: None,
+        };
+        assert_eq!(
+            ComponentAsset::from_def(&def).unwrap_err(),
+            CnResult::AssetInvalidType
+        );
+    }
+
+    #[test]
+    fn storage_push_dispatches_into_the_typed_column() {
+        let mut storage = ComponentStorage::default();
+        storage.push(crate::assets::Transform::default().into());
+        let defs = storage.all_defs();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(
+            defs[0].discriminant,
+            ComponentType::parse("Transform").unwrap().discriminant()
+        );
+    }
+
+    #[test]
+    fn context_component_ops_cover_the_entity_lifecycle() {
+        use crate::assets::{GlobalTransform, Transform};
+        let (mut c, mut b, mut p, mut r) = parts();
+        let mut ctx = PipelineContext {
+            components: &mut c,
+            blob: &mut b,
+            profile: &mut p,
+            resources: &mut r,
+        };
+
+        ctx.push(Transform::default());
+        let e = ctx.components.push_typed(Transform::default());
+        assert!(ctx.is_alive(e));
+        assert_eq!(ctx.query::<Transform>().count(), 2);
+        assert_eq!(ctx.query_with_entity::<Transform>().count(), 2);
+
+        // Mutate through each of the mutable access paths.
+        for t in ctx.query_mut::<Transform>() {
+            t.position[0] = 1.0;
+        }
+        ctx.query_slice_mut::<Transform>()[0].position[1] = 2.0;
+        ctx.get_mut::<Transform>(e).unwrap().position[2] = 3.0;
+        assert_eq!(ctx.get::<Transform>(e).unwrap().position, [1.0, 0.0, 3.0]);
+
+        // A second component on the same entity, then remove it again.
+        ctx.insert(e, GlobalTransform::default());
+        assert_eq!(ctx.join2::<Transform, GlobalTransform>().count(), 1);
+        assert!(ctx.remove::<GlobalTransform>(e).is_some());
+        assert!(ctx.remove::<GlobalTransform>(e).is_none());
+
+        // Despawn kills the entity and its remaining components.
+        ctx.despawn(e);
+        assert!(!ctx.is_alive(e));
+        assert_eq!(ctx.query::<Transform>().count(), 1);
+        assert!(ctx.get::<Transform>(e).is_none());
+
+        // Drain empties the column and returns the survivors.
+        let drained = ctx.drain::<Transform>();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(ctx.query::<Transform>().count(), 0);
+    }
+
+    #[test]
+    fn read_payload_errors_on_an_empty_blob_store() {
+        let (mut c, mut b, mut p, mut r) = parts();
+        let mut ctx = PipelineContext {
+            components: &mut c,
+            blob: &mut b,
+            profile: &mut p,
+            resources: &mut r,
+        };
+        let loc = PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 4,
+        };
+        assert_eq!(ctx.read_payload(&loc).unwrap_err(), CnResult::FileIo);
+        // Releasing a blob that does not exist is a no-op.
+        ctx.release_blob(0);
+    }
 }

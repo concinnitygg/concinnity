@@ -63,3 +63,21 @@ pub fn find_world_jsonl(name: Option<&str>) -> std::io::Result<String> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Only the named-miss branch is exercised here: the unnamed lookup reads
+    // the process-global path anchors and walks up from the cwd, both of which
+    // are shared with other tests in this binary (paths.rs owns the global
+    // mutation), so redirecting them to a temp tree would race those tests.
+    #[test]
+    fn missing_named_world_is_a_not_found_error() {
+        let err = find_world_jsonl(Some("cn_test_no_such_world")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let msg = err.to_string();
+        assert!(msg.contains("cn_test_no_such_world"), "message was: {msg}");
+        assert!(msg.contains(".jsonl"), "message was: {msg}");
+    }
+}

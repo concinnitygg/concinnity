@@ -711,4 +711,198 @@ mod tests {
         assert!((t[2] - 5.0).abs() < 1e-4);
         assert!((s[0] - 1.0).abs() < 1e-4);
     }
+
+    fn assert_vec3_eq(a: [f32; 3], b: [f32; 3]) {
+        for i in 0..3 {
+            assert!((a[i] - b[i]).abs() < 1e-4, "component {i}: {a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn rot_y_90_maps_z_to_x() {
+        assert_vec3_eq(
+            transform_point(rot_y(90.0), [0.0, 0.0, 1.0]),
+            [1.0, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn rot_z_90_maps_x_to_y() {
+        assert_vec3_eq(
+            transform_point(rot_z(90.0), [1.0, 0.0, 0.0]),
+            [0.0, 1.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn transform_point_applies_translation_last() {
+        let m = translate([1.0, 2.0, 3.0]);
+        assert_vec3_eq(transform_point(m, [1.0, 1.0, 1.0]), [2.0, 3.0, 4.0]);
+    }
+
+    // TRS order: scale first, then rotate, then translate.
+    #[test]
+    fn trs_matrix_applies_scale_then_rotation_then_translation() {
+        let m = trs_matrix([1.0, 0.0, 0.0], [0.0, 0.0, 90.0], [2.0, 2.0, 2.0]);
+        // (1,0,0) scales to (2,0,0), rotates about Z to (0,2,0), then
+        // translates to (1,2,0).
+        assert_vec3_eq(transform_point(m, [1.0, 0.0, 0.0]), [1.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn world_matrix_chains_parent_transforms() {
+        let mut locals: HashMap<i64, (Mat4, Mat4)> = HashMap::new();
+        locals.insert(1, (translate([1.0, 0.0, 0.0]), IDENTITY));
+        locals.insert(2, (translate([2.0, 0.0, 0.0]), IDENTITY));
+        let mut parents: HashMap<i64, i64> = HashMap::new();
+        parents.insert(1, 0); // scene root
+        parents.insert(2, 1);
+        let w = world_matrix(2, &locals, &parents);
+        assert_vec3_eq(transform_point(w, [0.0, 0.0, 0.0]), [3.0, 0.0, 0.0]);
+        // A root-parented node keeps its local transform.
+        let w = world_matrix(1, &locals, &parents);
+        assert_vec3_eq(transform_point(w, [0.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn world_matrix_of_an_unknown_id_is_identity() {
+        let locals = HashMap::new();
+        let parents = HashMap::new();
+        let w = world_matrix(42, &locals, &parents);
+        assert_vec3_eq(transform_point(w, [5.0, 6.0, 7.0]), [5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn expand_aabb_ignores_empty_vertex_lists() {
+        let mut aabb = None;
+        expand_aabb(&mut aabb, &[], IDENTITY);
+        assert!(aabb.is_none());
+    }
+
+    fn vert(pos: [f32; 3]) -> VertexData {
+        VertexData {
+            pos,
+            color: NEUTRAL_COLOR,
+            uv: [0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn expand_aabb_merges_transformed_bounds() {
+        let mut aabb = None;
+        expand_aabb(
+            &mut aabb,
+            &[vert([-1.0, 0.0, 0.0]), vert([1.0, 1.0, 1.0])],
+            IDENTITY,
+        );
+        let (min, max) = aabb.expect("first primitive seeds the box");
+        assert_vec3_eq(min, [-1.0, 0.0, 0.0]);
+        assert_vec3_eq(max, [1.0, 1.0, 1.0]);
+
+        // A second primitive translated +10 on X widens the box.
+        expand_aabb(
+            &mut aabb,
+            &[vert([0.0, 0.0, 0.0]), vert([1.0, 0.0, 0.0])],
+            translate([10.0, 0.0, 0.0]),
+        );
+        let (min, max) = aabb.expect("merged box");
+        assert_vec3_eq(min, [-1.0, 0.0, 0.0]);
+        assert_vec3_eq(max, [11.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn lookup_uv_defaults_to_zero_without_a_layer() {
+        assert_eq!(lookup_uv(None, false, None, 3), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn lookup_uv_indexed_falls_back_to_the_first_entry_when_out_of_range() {
+        let uv = [0.25f64, 0.75, 0.5, 0.5];
+        let idx = [1i32];
+        // pv 5 is past the index array: k falls back to 0 -> uv[0].
+        let out = lookup_uv(Some(&uv), true, Some(&idx), 5);
+        assert!((out[0] - 0.25).abs() < 1e-6);
+        assert!((out[1] - 0.25).abs() < 1e-6);
+    }
+
+    // Attribute coercions
+
+    #[test]
+    fn attr_i64_accepts_both_integer_widths() {
+        assert_eq!(attr_i64(&AttributeValue::I64(7)), Some(7));
+        assert_eq!(attr_i64(&AttributeValue::I32(-3)), Some(-3));
+        assert_eq!(attr_i64(&AttributeValue::F64(1.0)), None);
+    }
+
+    #[test]
+    fn attr_f64_coerces_numeric_variants() {
+        assert_eq!(attr_f64(&AttributeValue::F64(1.5)), Some(1.5));
+        assert_eq!(attr_f64(&AttributeValue::F32(0.5)), Some(0.5));
+        assert_eq!(attr_f64(&AttributeValue::I32(2)), Some(2.0));
+        assert_eq!(attr_f64(&AttributeValue::I64(3)), Some(3.0));
+        assert_eq!(attr_f64(&AttributeValue::Bool(true)), None);
+    }
+
+    #[test]
+    fn attr_str_only_accepts_strings() {
+        assert_eq!(attr_str(&AttributeValue::String("hi".into())), Some("hi"));
+        assert_eq!(attr_str(&AttributeValue::I32(1)), None);
+    }
+
+    // Scene accessors
+
+    fn one_primitive_scene() -> FbxScene {
+        FbxScene {
+            materials: Vec::new(),
+            primitives: vec![FbxPrimitive {
+                vertices: vec![vert([0.0, 0.0, 0.0]), vert([1.0, 0.0, 0.0])],
+                indices: vec![0, 1, 0],
+                material: None,
+            }],
+            props: Vec::new(),
+            aabb: None,
+        }
+    }
+
+    #[test]
+    fn primitive_vertex_count_reads_the_indexed_primitive() {
+        let scene = one_primitive_scene();
+        assert_eq!(primitive_vertex_count(&scene, 0), Some(2));
+        assert_eq!(primitive_vertex_count(&scene, 1), None);
+    }
+
+    #[test]
+    fn read_primitive_geometry_clones_out_of_the_scene() {
+        let scene = one_primitive_scene();
+        let (vertices, indices) = read_primitive_geometry(&scene, 0).expect("geometry");
+        assert_eq!(vertices.len(), 2);
+        assert_eq!(indices, vec![0, 1, 0]);
+        let err = read_primitive_geometry(&scene, 9).unwrap_err();
+        assert!(err.contains("primitive_index 9 out of range"), "got: {err}");
+    }
+
+    // parse_fbx error paths (a valid binary FBX fixture requires a writer we
+    // do not link; the tree-walking import itself stays covered by the real
+    // asset imports exercised in `cn add`).
+
+    #[test]
+    fn parse_fbx_reports_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing.fbx");
+        let err = parse_fbx(path.to_str().unwrap())
+            .err()
+            .expect("expected error");
+        assert!(err.contains("could not open"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_fbx_rejects_non_fbx_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("junk.fbx");
+        std::fs::write(&path, b"this is not an fbx file at all").expect("write junk");
+        let err = parse_fbx(path.to_str().unwrap())
+            .err()
+            .expect("expected error");
+        assert!(err.contains("not a valid FBX file"), "got: {err}");
+    }
 }

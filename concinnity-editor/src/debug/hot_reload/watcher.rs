@@ -185,7 +185,7 @@ pub(super) fn spawn_watcher(
 // file, so the watcher hears `.md` saves. Read from the raw JSONL (one asset
 // declaration per line); a malformed line is skipped like the build would
 // reject it later.
-fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
+pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
     let mut dirs = BTreeSet::new();
     let Ok(content) = std::fs::read_to_string(world_jsonl_path) else {
         return dirs;
