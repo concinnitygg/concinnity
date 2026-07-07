@@ -16,12 +16,21 @@
 //    binaries only the NGX link is needed (no DLL copy), selected with
 //    `SdkOptions { bundle_dlls: false }`.
 //
-// Every function here emits `cargo::` directives on stdout, which Cargo
+// The public entry points emit `cargo::` directives on stdout, which Cargo
 // attributes to the build script of whichever package called in. That is what
 // lets an example binary's build script pick up the same NGX link and DLL
 // bundling the editor's does, without duplicating any of this logic.
+//
+// This file is the thin environment-reading layer: it snapshots everything the
+// setup needs from the process environment into an `SdkEnv` and prints the
+// directives. The probe/copy/directive logic itself lives in the `sdks`
+// module, which never touches the environment or stdout.
 
 use std::path::{Path, PathBuf};
+
+mod sdks;
+
+use sdks::SdkEnv;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -31,7 +40,7 @@ pub enum Backend {
 }
 
 impl Backend {
-    fn cfg_name(self) -> &'static str {
+    pub(crate) fn cfg_name(self) -> &'static str {
         match self {
             Backend::Metal => "backend_metal",
             Backend::Dx => "backend_dx",
@@ -63,17 +72,8 @@ pub fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
 // Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
 // A package only needs this if its own source references one of these cfgs.
 pub fn emit_check_cfgs() {
-    for cfg in [
-        "backend_metal",
-        "backend_dx",
-        "backend_vk",
-        "agility_sdk_configured",
-        "ffx_sdk_bundled",
-        "xess_sdk_bundled",
-        "ngx_sdk_bundled",
-        "dxc_bundled",
-    ] {
-        println!("cargo::rustc-check-cfg=cfg({cfg})");
+    for line in sdks::check_cfg_directives() {
+        println!("{line}");
     }
 }
 
@@ -83,377 +83,54 @@ pub fn emit_backend_cfg() -> Backend {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
     let backend = resolve_backend(&target_os, vulkan);
-    println!("cargo::rustc-cfg={}", backend.cfg_name());
+    println!("{}", sdks::backend_cfg_directive(backend));
     backend
 }
 
 // Set up the optional graphics SDKs for the given backend. On a non-Windows
 // target (or the Metal backend) this is a no-op: none of these SDKs apply.
 pub fn setup_graphics_sdks(backend: Backend, opts: SdkOptions) {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    match backend {
-        Backend::Dx => {
-            setup_agility_sdk(opts.bundle_dlls);
-            setup_fidelityfx_dx_sdk(opts.bundle_dlls);
-            setup_xess_sdk(opts.bundle_dlls);
-            setup_dlss_sdk(opts.bundle_dlls);
-            if opts.bundle_dlls {
-                setup_dxc_sdk();
-            }
-        }
-        Backend::Vk if target_os == "windows" => {
-            // DLSS (NGX) and XeSS expose Vulkan entry points from the same
-            // binaries the DirectX backend uses, so the setup helpers are
-            // backend-agnostic and reused here. Windowing comes from the
-            // shared native Win32 layer (no GLFW DLL to bundle).
-            setup_fidelityfx_vk_sdk(opts.bundle_dlls);
-            setup_dlss_sdk(opts.bundle_dlls);
-            setup_xess_sdk(opts.bundle_dlls);
-        }
-        _ => {}
+    let env = sdk_env_from_cargo();
+    for line in sdks::graphics_sdk_directives(backend, opts, &env) {
+        println!("{line}");
     }
 }
 
-// Default SDK install roots, overridable via the matching env var.
+// Default SDK install roots, used when the matching env var is unset.
 const DEFAULT_AGILITY_SDK_ROOT: &str = "C:\\microsoft.direct3d.d3d12.1.619.3";
 const DEFAULT_FIDELITYFX_SDK_ROOT: &str = "C:\\FidelityFX-SDK-v1.1.4";
 const DEFAULT_XESS_SDK_ROOT: &str = "C:\\XeSS_SDK_3.0.1";
 const DEFAULT_STREAMLINE_SDK_ROOT: &str = "C:\\streamline-sdk-v2.11.1";
+const DEFAULT_WINDOWS_SDK_BIN: &str = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
 
-// Returns true when `var` is unset or set to anything other than "0". Each SDK
-// probe uses this so it defaults to ON and can be opted out of with `<VAR>=0`.
-fn enabled(var: &str) -> bool {
-    println!("cargo::rerun-if-env-changed={var}");
-    std::env::var(var).ok().as_deref() != Some("0")
-}
-
-// Microsoft's Agility SDK D3D12 runtime. The DLL copy and the binary's
-// `D3D12SDKVersion`/`D3D12SDKPath` exports are only emitted when bundling for a
-// final binary; the `agility_sdk_configured` cfg is always emitted when the SDK
-// is present so the runtime FSR3 gate matches what the binary actually carries.
-fn setup_agility_sdk(bundle_dlls: bool) {
-    if !enabled("CN_ENABLE_AGILITY_SDK") {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=Agility SDK setup skipped (CN_ENABLE_AGILITY_SDK=0); \
-                 binary will use the OS-bundled D3D12 runtime"
-            );
-        }
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=AGILITY_SDK_ROOT");
-
-    let sdk_root =
-        std::env::var("AGILITY_SDK_ROOT").unwrap_or_else(|_| DEFAULT_AGILITY_SDK_ROOT.to_string());
-    let sdk_bin = PathBuf::from(&sdk_root)
-        .join("build")
-        .join("native")
-        .join("bin")
-        .join("x64");
-    let core_dll = sdk_bin.join("D3D12Core.dll");
-
-    if !core_dll.exists() {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=Agility SDK not found at {} - set AGILITY_SDK_ROOT \
-                 or install the `microsoft.direct3d.d3d12` NuGet package. FidelityFX \
-                 FSR3 will be unavailable (the binary falls back to the OS-bundled \
-                 D3D12 runtime).",
-                sdk_bin.display()
-            );
-        }
-        return;
-    }
-
-    if bundle_dlls {
-        // `D3D12SDKPath = ".\\D3D12\\"` resolves relative to the .exe, so the
-        // DLLs must live in `<target>/<profile>/D3D12/`.
-        let Some(profile_dir) = target_profile_dir() else {
-            return;
-        };
-        let d3d12_dir = profile_dir.join("D3D12");
-        if let Err(e) = std::fs::create_dir_all(&d3d12_dir) {
-            println!(
-                "cargo::warning=Agility SDK: could not create {}: {e}",
-                d3d12_dir.display()
-            );
-            return;
-        }
-        for dll in ["D3D12Core.dll", "d3d12SDKLayers.dll"] {
-            let src = sdk_bin.join(dll);
-            let dst = d3d12_dir.join(dll);
-            if let Err(e) = std::fs::copy(&src, &dst) {
-                println!(
-                    "cargo::warning=Agility SDK: could not copy {} -> {}: {e}",
-                    src.display(),
-                    dst.display()
-                );
-                return;
-            }
-            println!("cargo::rerun-if-changed={}", src.display());
-        }
-
-        // Export the two symbols `d3d12.dll` reads at process start. `,DATA` is
-        // critical: without it the linker inserts a code thunk that `d3d12.dll`
-        // would dereference as a pointer. The symbols themselves are defined as
-        // `#[used]` statics in the binary crate's source.
-        println!("cargo::rustc-link-arg-bins=/EXPORT:D3D12SDKVersion,DATA");
-        println!("cargo::rustc-link-arg-bins=/EXPORT:D3D12SDKPath,DATA");
-    }
-
-    println!("cargo::rustc-cfg=agility_sdk_configured");
-}
-
-// AMD FidelityFX DX12 upscaler runtime. The renderer loads the DLL with
-// `LoadLibrary` at runtime, so bundling only copies it next to the .exe; the
-// `ffx_sdk_bundled` cfg is emitted when the SDK is present regardless.
-fn setup_fidelityfx_dx_sdk(bundle_dlls: bool) {
-    if !enabled("CN_ENABLE_FFX_FSR3") {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
-                 temporal upscaling will be unavailable unless amd_fidelityfx_dx12.dll \
-                 is on PATH at runtime"
-            );
-        }
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=FIDELITYFX_SDK_ROOT");
-
-    let sdk_root = std::env::var("FIDELITYFX_SDK_ROOT")
-        .unwrap_or_else(|_| DEFAULT_FIDELITYFX_SDK_ROOT.to_string());
-    let dll_src = PathBuf::from(&sdk_root)
-        .join("bin")
-        .join("amd_fidelityfx_dx12.dll");
-    if !dll_src.exists() {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=FidelityFX SDK not found at {} - set FIDELITYFX_SDK_ROOT \
-                 or install the SDK. Temporal upscaling will be unavailable unless \
-                 amd_fidelityfx_dx12.dll is on PATH at runtime.",
-                dll_src.display()
-            );
-        }
-        return;
-    }
-
-    if bundle_dlls && !copy_next_to_exe(&dll_src, "amd_fidelityfx_dx12.dll") {
-        return;
-    }
-    println!("cargo::rustc-cfg=ffx_sdk_bundled");
-}
-
-// AMD FidelityFX Vulkan upscaler runtime. Prefers the in-repo patched DLL under
-// `concinnity-client/third_party/ffx/` (carries the FSR3 rw_luma_history format
-// fix), falling back to the stock SDK copy.
-fn setup_fidelityfx_vk_sdk(bundle_dlls: bool) {
-    if !enabled("CN_ENABLE_FFX_FSR3") {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
-                 Vulkan temporal upscaling will be unavailable unless amd_fidelityfx_vk.dll \
-                 is on PATH at runtime"
-            );
-        }
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=FIDELITYFX_SDK_ROOT");
-
-    // The vendored DLL lives at a fixed location relative to the workspace root,
-    // resolved by walking up from the caller's manifest so this works no matter
-    // which package's build script called in.
-    let vendored = workspace_root().map(|root| {
-        root.join("concinnity-client")
-            .join("third_party")
-            .join("ffx")
-            .join("amd_fidelityfx_vk.dll")
-    });
-    let sdk_root = std::env::var("FIDELITYFX_SDK_ROOT")
-        .unwrap_or_else(|_| DEFAULT_FIDELITYFX_SDK_ROOT.to_string());
-    let sdk_dll = PathBuf::from(&sdk_root)
-        .join("bin")
-        .join("amd_fidelityfx_vk.dll");
-
-    let dll_src = match vendored {
-        Some(v) if v.exists() => v,
-        _ => sdk_dll,
+// Snapshot every environment input the SDK setup reads. This is the only place
+// the setup consults the process environment; everything downstream works on
+// the returned struct.
+fn sdk_env_from_cargo() -> SdkEnv {
+    let var = |name: &str| std::env::var(name).ok();
+    let root = |name: &str, default: &str| {
+        var(name)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(default))
     };
-    if !dll_src.exists() {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=FidelityFX VK runtime not found ({}). Set FIDELITYFX_SDK_ROOT, \
-                 run scripts/setup_ffx_vk_dll.ps1, or put amd_fidelityfx_vk.dll on PATH at \
-                 runtime; Vulkan temporal upscaling will fall back to native resolution.",
-                dll_src.display()
-            );
-        }
-        return;
+    // Each SDK probe defaults to ON and is opted out of with `<VAR>=0`.
+    let enabled = |name: &str| var(name).as_deref() != Some("0");
+    SdkEnv {
+        target_os: var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
+        out_dir: var("OUT_DIR").map(PathBuf::from),
+        workspace_root: workspace_root(),
+        agility_root: root("AGILITY_SDK_ROOT", DEFAULT_AGILITY_SDK_ROOT),
+        fidelityfx_root: root("FIDELITYFX_SDK_ROOT", DEFAULT_FIDELITYFX_SDK_ROOT),
+        xess_root: root("XESS_SDK_ROOT", DEFAULT_XESS_SDK_ROOT),
+        streamline_root: root("STREAMLINE_SDK_ROOT", DEFAULT_STREAMLINE_SDK_ROOT),
+        dxc_root: var("DXC_SDK_ROOT").map(PathBuf::from),
+        windows_sdk_bin: PathBuf::from(DEFAULT_WINDOWS_SDK_BIN),
+        agility_enabled: enabled("CN_ENABLE_AGILITY_SDK"),
+        ffx_enabled: enabled("CN_ENABLE_FFX_FSR3"),
+        xess_enabled: enabled("CN_ENABLE_XESS"),
+        dlss_enabled: enabled("CN_ENABLE_DLSS"),
+        dxc_enabled: enabled("CN_ENABLE_DXC"),
     }
-
-    if bundle_dlls && !copy_next_to_exe(&dll_src, "amd_fidelityfx_vk.dll") {
-        return;
-    }
-    println!("cargo::rustc-cfg=ffx_sdk_bundled");
-}
-
-// Intel XeSS upscaler runtime. Pure `LoadLibrary` at runtime, so bundling only
-// copies the DLL; the cfg gates the copy and a log.
-fn setup_xess_sdk(bundle_dlls: bool) {
-    if !enabled("CN_ENABLE_XESS") {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=XeSS SDK bundling skipped (CN_ENABLE_XESS=0); the XeSS \
-                 upscaler will be unavailable unless libxess.dll is on PATH at runtime"
-            );
-        }
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=XESS_SDK_ROOT");
-
-    let sdk_root =
-        std::env::var("XESS_SDK_ROOT").unwrap_or_else(|_| DEFAULT_XESS_SDK_ROOT.to_string());
-    let dll_src = PathBuf::from(&sdk_root).join("bin").join("libxess.dll");
-    if !dll_src.exists() {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=XeSS SDK not found at {} - set XESS_SDK_ROOT or install \
-                 the SDK. The XeSS upscaler backend will be unavailable unless \
-                 libxess.dll is on PATH at runtime.",
-                dll_src.display()
-            );
-        }
-        return;
-    }
-
-    if bundle_dlls && !copy_next_to_exe(&dll_src, "libxess.dll") {
-        return;
-    }
-    println!("cargo::rustc-cfg=xess_sdk_bundled");
-}
-
-// DLSS via raw NGX. The import lib is always linked when present (the DLSS code
-// compiled into the runtime rlib references its symbols, so every final binary
-// and the rlib's own tests must resolve them). When bundling for a final binary
-// the feature DLL `nvngx_dlss.dll` is also copied next to the .exe.
-fn setup_dlss_sdk(bundle_dlls: bool) {
-    if !enabled("CN_ENABLE_DLSS") {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=DLSS (NGX) setup skipped (CN_ENABLE_DLSS=0); the DLSS \
-                 upscaler backend will be unavailable"
-            );
-        }
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=STREAMLINE_SDK_ROOT");
-
-    let sdk_root = std::env::var("STREAMLINE_SDK_ROOT")
-        .unwrap_or_else(|_| DEFAULT_STREAMLINE_SDK_ROOT.to_string());
-    let ngx_lib = PathBuf::from(&sdk_root)
-        .join("external")
-        .join("ngx-sdk")
-        .join("lib")
-        .join("Windows_x86_64")
-        .join("nvsdk_ngx_d.lib");
-    if !ngx_lib.exists() {
-        if bundle_dlls {
-            println!(
-                "cargo::warning=NGX import lib not found at {} - set STREAMLINE_SDK_ROOT. \
-                 The DLSS upscaler backend will be unavailable.",
-                ngx_lib.display()
-            );
-        }
-        return;
-    }
-
-    // Pass the NGX static import lib straight to the linker for the final
-    // artifact (a build-script `rustc-link-lib` does not reliably propagate, and
-    // `rustc-link-arg` is scoped to the calling package's own targets, so each
-    // package that links the DLSS code must emit this itself).
-    println!("cargo::rustc-link-arg={}", ngx_lib.display());
-    println!("cargo::rerun-if-changed={}", ngx_lib.display());
-    println!("cargo::rustc-cfg=ngx_sdk_bundled");
-
-    if bundle_dlls {
-        let dll_src = PathBuf::from(&sdk_root)
-            .join("bin")
-            .join("x64")
-            .join("nvngx_dlss.dll");
-        if !dll_src.exists() {
-            println!(
-                "cargo::warning=NGX feature DLL not found at {} - DLSS will fail to \
-                 create its feature at runtime.",
-                dll_src.display()
-            );
-            return;
-        }
-        copy_next_to_exe(&dll_src, "nvngx_dlss.dll");
-    }
-}
-
-// DirectX Shader Compiler (`dxcompiler.dll` + `dxil.dll`) for the runtime DXC
-// path that compiles the inline ray-tracing reflection shader. Copy-only, so
-// only relevant when bundling for a final binary.
-fn setup_dxc_sdk() {
-    if !enabled("CN_ENABLE_DXC") {
-        println!(
-            "cargo::warning=DXC bundling skipped (CN_ENABLE_DXC=0); hardware \
-             ray-traced reflections will be unavailable unless dxcompiler.dll + \
-             dxil.dll are on PATH at runtime (the renderer falls back to SSR)"
-        );
-        return;
-    }
-    println!("cargo::rerun-if-env-changed=DXC_SDK_ROOT");
-
-    let Some(dxc_dir) = find_dxc_dir() else {
-        println!(
-            "cargo::warning=dxcompiler.dll + dxil.dll not found - set DXC_SDK_ROOT \
-             to a directory containing them, or install the Windows SDK. Hardware \
-             ray-traced reflections will be unavailable (the renderer falls back \
-             to SSR)."
-        );
-        return;
-    };
-
-    for dll in ["dxcompiler.dll", "dxil.dll"] {
-        let src = dxc_dir.join(dll);
-        if !copy_next_to_exe(&src, dll) {
-            return;
-        }
-    }
-    println!("cargo::rustc-cfg=dxc_bundled");
-}
-
-// Copy `src` to `<target>/<profile>/<file_name>` so `LoadLibrary` (which
-// searches the .exe directory first) finds it. Returns false on failure after
-// emitting a `cargo::warning`.
-fn copy_next_to_exe(src: &Path, file_name: &str) -> bool {
-    let Some(profile_dir) = target_profile_dir() else {
-        return false;
-    };
-    let dst = profile_dir.join(file_name);
-    if let Err(e) = std::fs::copy(src, &dst) {
-        println!(
-            "cargo::warning=could not copy {} -> {}: {e}",
-            src.display(),
-            dst.display()
-        );
-        return false;
-    }
-    println!("cargo::rerun-if-changed={}", src.display());
-    true
-}
-
-// `<target>/<profile>/`, where the final binaries and bundled DLLs land. Derived
-// from `OUT_DIR` (`<target>/<profile>/build/<pkg>-<hash>/out/`).
-fn target_profile_dir() -> Option<PathBuf> {
-    let out_dir = std::env::var("OUT_DIR").ok()?;
-    profile_dir_from_out_dir(Path::new(&out_dir)).map(|p| p.to_path_buf())
-}
-
-// Pure form of the above: walk up to `<target>/<profile>/` from an `OUT_DIR`.
-fn profile_dir_from_out_dir(out_dir: &Path) -> Option<&Path> {
-    out_dir.ancestors().nth(3)
 }
 
 // Locate the workspace root by walking up from the caller's manifest until a
@@ -480,42 +157,6 @@ fn find_ancestor_with(start: &Path, pred: impl Fn(&Path) -> bool) -> Option<Path
     }
 }
 
-// Locate a directory holding both `dxcompiler.dll` and `dxil.dll`: the
-// `DXC_SDK_ROOT` override, else the highest-versioned Windows SDK `x64` bin that
-// carries both.
-fn find_dxc_dir() -> Option<PathBuf> {
-    let has_both = |d: &Path| d.join("dxcompiler.dll").exists() && d.join("dxil.dll").exists();
-
-    if let Ok(root) = std::env::var("DXC_SDK_ROOT") {
-        let dir = PathBuf::from(root);
-        if has_both(&dir) {
-            return Some(dir);
-        }
-    }
-
-    let sdk_bin = PathBuf::from("C:\\Program Files (x86)\\Windows Kits\\10\\bin");
-    let versions = sorted_version_dirs(
-        std::fs::read_dir(&sdk_bin)
-            .ok()?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-    );
-    versions
-        .into_iter()
-        .rev()
-        .map(|ver| ver.join("x64"))
-        .find(|x64| has_both(x64))
-}
-
-// Sort version directories ascending so the newest is last. Lexicographic is
-// adequate because every Windows SDK entry is `10.0.NNNNN.0` (equal width).
-fn sorted_version_dirs(mut dirs: Vec<PathBuf>) -> Vec<PathBuf> {
-    dirs.sort();
-    dirs
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,33 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn profile_dir_walks_up_from_out_dir() {
-        // Backslash paths only parse into components on Windows; on other hosts
-        // `Path` treats the whole string as one component, so this case is
-        // Windows-only. The Unix-style case below runs everywhere.
-        #[cfg(windows)]
-        {
-            let out =
-                Path::new("C:\\proj\\target\\release\\build\\concinnity-client-abcd1234\\out");
-            assert_eq!(
-                profile_dir_from_out_dir(out),
-                Some(Path::new("C:\\proj\\target\\release"))
-            );
-        }
-
-        let out_debug = Path::new("/proj/target/debug/build/bistro-deadbeef/out");
-        assert_eq!(
-            profile_dir_from_out_dir(out_debug),
-            Some(Path::new("/proj/target/debug"))
-        );
-    }
-
-    #[test]
-    fn profile_dir_none_when_too_shallow() {
-        assert_eq!(profile_dir_from_out_dir(Path::new("out")), None);
-    }
-
-    #[test]
     fn ancestor_search_finds_marked_dir() {
         let start = Path::new("/a/b/c/d");
         let hit = find_ancestor_with(start, |p| p == Path::new("/a/b"));
@@ -575,18 +189,35 @@ mod tests {
     }
 
     #[test]
-    fn env_probes_default_on_when_unset() {
-        // No test (or CI job) sets this variable, so the probe reports enabled.
-        assert!(enabled("CN_TOOLCHAIN_TEST_UNSET_PROBE"));
-    }
-
-    #[test]
     fn workspace_root_finds_the_workspace_manifest() {
         // Cargo sets CARGO_MANIFEST_DIR for test binaries, so the walk starts
         // at this crate and must land on the workspace's own Cargo.toml.
         let root = workspace_root().expect("workspace root");
         let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
         assert!(manifest.contains("[workspace]"));
+    }
+
+    #[test]
+    fn sdk_env_snapshot_defaults_probes_on() {
+        let env = sdk_env_from_cargo();
+        // Probes default ON when their opt-out variable is unset. Only assert
+        // for variables the surrounding environment leaves unset, so a local
+        // `<VAR>=0` opt-out does not fail the test.
+        for (var, flag) in [
+            ("CN_ENABLE_AGILITY_SDK", env.agility_enabled),
+            ("CN_ENABLE_FFX_FSR3", env.ffx_enabled),
+            ("CN_ENABLE_XESS", env.xess_enabled),
+            ("CN_ENABLE_DLSS", env.dlss_enabled),
+            ("CN_ENABLE_DXC", env.dxc_enabled),
+        ] {
+            if std::env::var(var).is_err() {
+                assert!(flag, "{var} should default on");
+            }
+        }
+        // Roots fall back to the hardcoded defaults when unset.
+        if std::env::var("XESS_SDK_ROOT").is_err() {
+            assert_eq!(env.xess_root, PathBuf::from(DEFAULT_XESS_SDK_ROOT));
+        }
     }
 
     #[test]
@@ -600,23 +231,5 @@ mod tests {
         }
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();
-    }
-
-    #[test]
-    fn version_dirs_sort_oldest_to_newest() {
-        let dirs = vec![
-            PathBuf::from("10.0.22621.0"),
-            PathBuf::from("10.0.19041.0"),
-            PathBuf::from("10.0.20348.0"),
-        ];
-        let sorted = sorted_version_dirs(dirs);
-        assert_eq!(
-            sorted,
-            vec![
-                PathBuf::from("10.0.19041.0"),
-                PathBuf::from("10.0.20348.0"),
-                PathBuf::from("10.0.22621.0"),
-            ]
-        );
     }
 }

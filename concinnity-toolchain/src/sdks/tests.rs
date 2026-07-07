@@ -1,0 +1,716 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use tempfile::TempDir;
+
+use super::*;
+
+// Create `path` (and its parents) with junk bytes standing in for a DLL.
+fn touch(path: &Path) {
+    touch_with(path, b"junk dll bytes");
+}
+
+fn touch_with(path: &Path, bytes: &[u8]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+// An SdkEnv rooted in `dir`: every SDK root points at a subdirectory of the
+// tempdir, every probe is enabled, and OUT_DIR mirrors the real cargo layout
+// (`<target>/<profile>/build/<pkg>-<hash>/out`).
+fn env_in(dir: &Path) -> SdkEnv {
+    fs::create_dir_all(profile(dir)).unwrap();
+    SdkEnv {
+        target_os: "windows".to_string(),
+        out_dir: Some(profile(dir).join("build").join("pkg-0123abcd").join("out")),
+        workspace_root: None,
+        agility_root: dir.join("agility"),
+        fidelityfx_root: dir.join("ffx"),
+        xess_root: dir.join("xess"),
+        streamline_root: dir.join("streamline"),
+        dxc_root: None,
+        windows_sdk_bin: dir.join("winkits"),
+        agility_enabled: true,
+        ffx_enabled: true,
+        xess_enabled: true,
+        dlss_enabled: true,
+        dxc_enabled: true,
+    }
+}
+
+fn profile(dir: &Path) -> PathBuf {
+    dir.join("target").join("debug")
+}
+
+fn has(lines: &[String], needle: &str) -> bool {
+    lines.iter().any(|l| l.contains(needle))
+}
+
+fn warnings(lines: &[String]) -> Vec<&String> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with("cargo::warning="))
+        .collect()
+}
+
+fn install_agility(dir: &Path) {
+    let bin = dir
+        .join("agility")
+        .join("build")
+        .join("native")
+        .join("bin")
+        .join("x64");
+    touch(&bin.join("D3D12Core.dll"));
+    touch(&bin.join("d3d12SDKLayers.dll"));
+}
+
+fn install_ffx_dx(dir: &Path) {
+    touch(&dir.join("ffx").join("bin").join("amd_fidelityfx_dx12.dll"));
+}
+
+fn install_ffx_vk_sdk(dir: &Path, bytes: &[u8]) {
+    touch_with(
+        &dir.join("ffx").join("bin").join("amd_fidelityfx_vk.dll"),
+        bytes,
+    );
+}
+
+fn install_xess(dir: &Path) {
+    touch(&dir.join("xess").join("bin").join("libxess.dll"));
+}
+
+fn install_ngx_lib(dir: &Path) {
+    touch(
+        &dir.join("streamline")
+            .join("external")
+            .join("ngx-sdk")
+            .join("lib")
+            .join("Windows_x86_64")
+            .join("nvsdk_ngx_d.lib"),
+    );
+}
+
+fn install_ngx_dll(dir: &Path) {
+    touch(
+        &dir.join("streamline")
+            .join("bin")
+            .join("x64")
+            .join("nvngx_dlss.dll"),
+    );
+}
+
+fn install_winkits_dxc(dir: &Path, version: &str, bytes: &[u8]) {
+    let x64 = dir.join("winkits").join(version).join("x64");
+    touch_with(&x64.join("dxcompiler.dll"), bytes);
+    touch_with(&x64.join("dxil.dll"), bytes);
+}
+
+#[test]
+fn check_cfg_directives_declare_every_gated_cfg() {
+    let lines = check_cfg_directives();
+    assert_eq!(lines.len(), 8);
+    for cfg in [
+        "backend_metal",
+        "backend_dx",
+        "backend_vk",
+        "agility_sdk_configured",
+        "ffx_sdk_bundled",
+        "xess_sdk_bundled",
+        "ngx_sdk_bundled",
+        "dxc_bundled",
+    ] {
+        assert!(lines.contains(&format!("cargo::rustc-check-cfg=cfg({cfg})")));
+    }
+}
+
+#[test]
+fn backend_cfg_directive_names_the_backend() {
+    assert_eq!(
+        backend_cfg_directive(Backend::Metal),
+        "cargo::rustc-cfg=backend_metal"
+    );
+    assert_eq!(
+        backend_cfg_directive(Backend::Dx),
+        "cargo::rustc-cfg=backend_dx"
+    );
+    assert_eq!(
+        backend_cfg_directive(Backend::Vk),
+        "cargo::rustc-cfg=backend_vk"
+    );
+}
+
+#[test]
+fn agility_bundles_dlls_and_emits_exports() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    agility_directives(&env, true, &mut out);
+
+    let d3d12 = profile(tmp.path()).join("D3D12");
+    assert!(d3d12.join("D3D12Core.dll").is_file());
+    assert!(d3d12.join("d3d12SDKLayers.dll").is_file());
+    assert!(has(
+        &out,
+        "cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK"
+    ));
+    assert!(has(&out, "cargo::rerun-if-env-changed=AGILITY_SDK_ROOT"));
+    assert!(has(&out, "/EXPORT:D3D12SDKVersion,DATA"));
+    assert!(has(&out, "/EXPORT:D3D12SDKPath,DATA"));
+    assert!(out.contains(&"cargo::rustc-cfg=agility_sdk_configured".to_string()));
+    // A rerun-if-changed per copied source DLL.
+    assert!(has(&out, "cargo::rerun-if-changed") && has(&out, "D3D12Core.dll"));
+    assert!(warnings(&out).is_empty());
+}
+
+#[test]
+fn agility_present_without_bundling_emits_cfg_only() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    agility_directives(&env, false, &mut out);
+
+    assert!(out.contains(&"cargo::rustc-cfg=agility_sdk_configured".to_string()));
+    assert!(!has(&out, "/EXPORT:"));
+    assert!(!profile(tmp.path()).join("D3D12").exists());
+}
+
+#[test]
+fn agility_missing_warns_only_when_bundling() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut bundled = Vec::new();
+    agility_directives(&env, true, &mut bundled);
+    assert!(has(&bundled, "Agility SDK not found at"));
+    assert!(!has(&bundled, "agility_sdk_configured"));
+
+    let mut quiet = Vec::new();
+    agility_directives(&env, false, &mut quiet);
+    assert!(warnings(&quiet).is_empty());
+    // Only the two rerun directives remain.
+    assert_eq!(
+        quiet,
+        vec![
+            "cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK".to_string(),
+            "cargo::rerun-if-env-changed=AGILITY_SDK_ROOT".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn agility_opt_out_skips_the_probe() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    let env = SdkEnv {
+        agility_enabled: false,
+        ..env_in(tmp.path())
+    };
+
+    let mut bundled = Vec::new();
+    agility_directives(&env, true, &mut bundled);
+    assert!(has(&bundled, "CN_ENABLE_AGILITY_SDK=0"));
+    assert!(!has(&bundled, "agility_sdk_configured"));
+    assert!(!has(&bundled, "AGILITY_SDK_ROOT"));
+    assert!(!profile(tmp.path()).join("D3D12").exists());
+
+    let mut quiet = Vec::new();
+    agility_directives(&env, false, &mut quiet);
+    assert_eq!(
+        quiet,
+        vec!["cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK".to_string()]
+    );
+}
+
+#[test]
+fn agility_without_out_dir_emits_no_cfg() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    let env = SdkEnv {
+        out_dir: None,
+        ..env_in(tmp.path())
+    };
+
+    let mut out = Vec::new();
+    agility_directives(&env, true, &mut out);
+    assert!(!has(&out, "agility_sdk_configured"));
+    assert!(!has(&out, "/EXPORT:"));
+}
+
+#[test]
+fn ffx_dx_bundles_dll_next_to_exe() {
+    let tmp = TempDir::new().unwrap();
+    install_ffx_dx(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    fidelityfx_dx_directives(&env, true, &mut out);
+
+    assert!(
+        profile(tmp.path())
+            .join("amd_fidelityfx_dx12.dll")
+            .is_file()
+    );
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(has(&out, "cargo::rerun-if-changed"));
+    assert!(warnings(&out).is_empty());
+}
+
+#[test]
+fn ffx_dx_present_without_bundling_emits_cfg_without_copy() {
+    let tmp = TempDir::new().unwrap();
+    install_ffx_dx(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    fidelityfx_dx_directives(&env, false, &mut out);
+
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(!profile(tmp.path()).join("amd_fidelityfx_dx12.dll").exists());
+}
+
+#[test]
+fn ffx_dx_missing_or_opted_out_emits_no_cfg() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut missing = Vec::new();
+    fidelityfx_dx_directives(&env, true, &mut missing);
+    assert!(has(&missing, "FidelityFX SDK not found at"));
+    assert!(!has(&missing, "ffx_sdk_bundled"));
+
+    let disabled_env = SdkEnv {
+        ffx_enabled: false,
+        ..env_in(tmp.path())
+    };
+    let mut disabled = Vec::new();
+    fidelityfx_dx_directives(&disabled_env, true, &mut disabled);
+    assert!(has(&disabled, "CN_ENABLE_FFX_FSR3=0"));
+    assert!(!has(&disabled, "ffx_sdk_bundled"));
+    assert!(!has(&disabled, "FIDELITYFX_SDK_ROOT"));
+}
+
+#[test]
+fn ffx_vk_prefers_the_vendored_dll() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ws");
+    let vendored = ws
+        .join("concinnity-client")
+        .join("third_party")
+        .join("ffx")
+        .join("amd_fidelityfx_vk.dll");
+    touch_with(&vendored, b"vendored");
+    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    let env = SdkEnv {
+        workspace_root: Some(ws),
+        ..env_in(tmp.path())
+    };
+
+    let mut out = Vec::new();
+    fidelityfx_vk_directives(&env, true, &mut out);
+
+    let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
+    assert_eq!(fs::read(&dst).unwrap(), b"vendored");
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(has(&out, &vendored_str(&env)));
+}
+
+// The rerun-if-changed directive must point at the vendored source path.
+fn vendored_str(env: &SdkEnv) -> String {
+    env.workspace_root
+        .as_ref()
+        .unwrap()
+        .join("concinnity-client")
+        .join("third_party")
+        .join("ffx")
+        .join("amd_fidelityfx_vk.dll")
+        .display()
+        .to_string()
+}
+
+#[test]
+fn ffx_vk_falls_back_to_the_sdk_root() {
+    let tmp = TempDir::new().unwrap();
+    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    fidelityfx_vk_directives(&env, true, &mut out);
+
+    let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
+    assert_eq!(fs::read(&dst).unwrap(), b"stock sdk");
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+}
+
+#[test]
+fn ffx_vk_missing_everywhere_warns_when_bundling() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    fidelityfx_vk_directives(&env, true, &mut out);
+    assert!(has(&out, "FidelityFX VK runtime not found"));
+    assert!(!has(&out, "ffx_sdk_bundled"));
+
+    let mut quiet = Vec::new();
+    fidelityfx_vk_directives(&env, false, &mut quiet);
+    assert!(warnings(&quiet).is_empty());
+}
+
+#[test]
+fn xess_bundles_dll_and_emits_cfg() {
+    let tmp = TempDir::new().unwrap();
+    install_xess(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    xess_directives(&env, true, &mut out);
+
+    assert!(profile(tmp.path()).join("libxess.dll").is_file());
+    assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
+    assert!(warnings(&out).is_empty());
+}
+
+#[test]
+fn xess_missing_or_opted_out_emits_no_cfg() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut missing = Vec::new();
+    xess_directives(&env, true, &mut missing);
+    assert!(has(&missing, "XeSS SDK not found at"));
+    assert!(!has(&missing, "xess_sdk_bundled"));
+
+    let disabled_env = SdkEnv {
+        xess_enabled: false,
+        ..env_in(tmp.path())
+    };
+    let mut disabled = Vec::new();
+    xess_directives(&disabled_env, true, &mut disabled);
+    assert!(has(&disabled, "CN_ENABLE_XESS=0"));
+    assert!(!has(&disabled, "XESS_SDK_ROOT"));
+}
+
+#[test]
+fn dlss_links_import_lib_without_bundling() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dlss_directives(&env, false, &mut out);
+
+    assert!(has(&out, "cargo::rustc-link-arg="));
+    assert!(has(&out, "nvsdk_ngx_d.lib"));
+    assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
+    assert!(!profile(tmp.path()).join("nvngx_dlss.dll").exists());
+}
+
+#[test]
+fn dlss_bundles_the_feature_dll() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    install_ngx_dll(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dlss_directives(&env, true, &mut out);
+
+    assert!(profile(tmp.path()).join("nvngx_dlss.dll").is_file());
+    assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
+    assert!(warnings(&out).is_empty());
+}
+
+#[test]
+fn dlss_missing_feature_dll_still_links_the_lib() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dlss_directives(&env, true, &mut out);
+
+    assert!(has(&out, "NGX feature DLL not found at"));
+    assert!(has(&out, "cargo::rustc-link-arg="));
+    assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
+    assert!(!profile(tmp.path()).join("nvngx_dlss.dll").exists());
+}
+
+#[test]
+fn dlss_missing_import_lib_emits_nothing_linkable() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dlss_directives(&env, true, &mut out);
+    assert!(has(&out, "NGX import lib not found at"));
+    assert!(!has(&out, "cargo::rustc-link-arg="));
+    assert!(!has(&out, "ngx_sdk_bundled"));
+}
+
+#[test]
+fn dlss_opt_out_skips_the_probe() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    let env = SdkEnv {
+        dlss_enabled: false,
+        ..env_in(tmp.path())
+    };
+
+    let mut out = Vec::new();
+    dlss_directives(&env, true, &mut out);
+    assert!(has(&out, "CN_ENABLE_DLSS=0"));
+    assert!(!has(&out, "cargo::rustc-link-arg="));
+    assert!(!has(&out, "STREAMLINE_SDK_ROOT"));
+}
+
+#[test]
+fn dxc_override_root_wins_over_windows_sdk() {
+    let tmp = TempDir::new().unwrap();
+    let override_dir = tmp.path().join("dxc-override");
+    touch_with(&override_dir.join("dxcompiler.dll"), b"override");
+    touch_with(&override_dir.join("dxil.dll"), b"override");
+    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
+    let env = SdkEnv {
+        dxc_root: Some(override_dir),
+        ..env_in(tmp.path())
+    };
+
+    let mut out = Vec::new();
+    dxc_directives(&env, &mut out);
+
+    let dst = profile(tmp.path()).join("dxcompiler.dll");
+    assert_eq!(fs::read(&dst).unwrap(), b"override");
+    assert!(profile(tmp.path()).join("dxil.dll").is_file());
+    assert!(out.contains(&"cargo::rustc-cfg=dxc_bundled".to_string()));
+}
+
+#[test]
+fn dxc_falls_back_to_the_newest_complete_windows_sdk() {
+    let tmp = TempDir::new().unwrap();
+    install_winkits_dxc(tmp.path(), "10.0.19041.0", b"old");
+    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"new");
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dxc_directives(&env, &mut out);
+
+    let dst = profile(tmp.path()).join("dxcompiler.dll");
+    assert_eq!(fs::read(&dst).unwrap(), b"new");
+    assert!(out.contains(&"cargo::rustc-cfg=dxc_bundled".to_string()));
+}
+
+#[test]
+fn dxc_skips_an_incomplete_newer_windows_sdk() {
+    let tmp = TempDir::new().unwrap();
+    install_winkits_dxc(tmp.path(), "10.0.19041.0", b"old");
+    // The newer version has only one of the two DLLs.
+    touch(
+        &tmp.path()
+            .join("winkits")
+            .join("10.0.22621.0")
+            .join("x64")
+            .join("dxcompiler.dll"),
+    );
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dxc_directives(&env, &mut out);
+
+    let dst = profile(tmp.path()).join("dxcompiler.dll");
+    assert_eq!(fs::read(&dst).unwrap(), b"old");
+}
+
+#[test]
+fn dxc_override_missing_a_dll_falls_through_to_windows_sdk() {
+    let tmp = TempDir::new().unwrap();
+    let override_dir = tmp.path().join("dxc-override");
+    touch_with(&override_dir.join("dxcompiler.dll"), b"override");
+    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
+    let env = SdkEnv {
+        dxc_root: Some(override_dir),
+        ..env_in(tmp.path())
+    };
+
+    assert_eq!(
+        find_dxc_dir(&env),
+        Some(tmp.path().join("winkits").join("10.0.22621.0").join("x64"))
+    );
+}
+
+#[test]
+fn dxc_not_found_or_opted_out_warns_without_cfg() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    let mut missing = Vec::new();
+    dxc_directives(&env, &mut missing);
+    assert!(has(&missing, "dxcompiler.dll + dxil.dll not found"));
+    assert!(!has(&missing, "dxc_bundled"));
+    assert_eq!(find_dxc_dir(&env), None);
+
+    let disabled_env = SdkEnv {
+        dxc_enabled: false,
+        ..env_in(tmp.path())
+    };
+    let mut disabled = Vec::new();
+    dxc_directives(&disabled_env, &mut disabled);
+    assert!(has(&disabled, "CN_ENABLE_DXC=0"));
+    assert!(!has(&disabled, "DXC_SDK_ROOT"));
+}
+
+#[test]
+fn copy_next_to_exe_reports_failures() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    // Missing source: warning recorded, copy reported failed.
+    let mut out = Vec::new();
+    let missing_src = tmp.path().join("nope.dll");
+    assert!(!copy_next_to_exe(&env, &missing_src, "nope.dll", &mut out));
+    assert!(has(&out, "could not copy"));
+
+    // No OUT_DIR: silently reported failed (matches build-script behavior).
+    let no_out_env = SdkEnv {
+        out_dir: None,
+        ..env_in(tmp.path())
+    };
+    let mut quiet = Vec::new();
+    let src = tmp.path().join("real.dll");
+    touch(&src);
+    assert!(!copy_next_to_exe(&no_out_env, &src, "real.dll", &mut quiet));
+    assert!(quiet.is_empty());
+}
+
+#[test]
+fn profile_dir_walks_up_from_out_dir() {
+    // Backslash paths only parse into components on Windows; on other hosts
+    // `Path` treats the whole string as one component, so this case is
+    // Windows-only. The Unix-style case below runs everywhere.
+    #[cfg(windows)]
+    {
+        let out = Path::new("C:\\proj\\target\\release\\build\\concinnity-client-abcd1234\\out");
+        assert_eq!(
+            profile_dir_from_out_dir(out),
+            Some(Path::new("C:\\proj\\target\\release"))
+        );
+    }
+
+    let out_debug = Path::new("/proj/target/debug/build/bistro-deadbeef/out");
+    assert_eq!(
+        profile_dir_from_out_dir(out_debug),
+        Some(Path::new("/proj/target/debug"))
+    );
+}
+
+#[test]
+fn profile_dir_none_when_too_shallow() {
+    assert_eq!(profile_dir_from_out_dir(Path::new("out")), None);
+}
+
+#[test]
+fn version_dirs_sort_oldest_to_newest() {
+    let dirs = vec![
+        PathBuf::from("10.0.22621.0"),
+        PathBuf::from("10.0.19041.0"),
+        PathBuf::from("10.0.20348.0"),
+    ];
+    let sorted = sorted_version_dirs(dirs);
+    assert_eq!(
+        sorted,
+        vec![
+            PathBuf::from("10.0.19041.0"),
+            PathBuf::from("10.0.20348.0"),
+            PathBuf::from("10.0.22621.0"),
+        ]
+    );
+}
+
+#[test]
+fn metal_and_non_windows_vulkan_are_noops() {
+    let tmp = TempDir::new().unwrap();
+    let env = SdkEnv {
+        target_os: "linux".to_string(),
+        ..env_in(tmp.path())
+    };
+    for bundle_dlls in [false, true] {
+        let opts = SdkOptions { bundle_dlls };
+        assert!(graphics_sdk_directives(Backend::Metal, opts, &env).is_empty());
+        assert!(graphics_sdk_directives(Backend::Vk, opts, &env).is_empty());
+    }
+}
+
+#[test]
+fn windows_vulkan_sets_up_the_vulkan_sdks() {
+    let tmp = TempDir::new().unwrap();
+    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    install_ngx_lib(tmp.path());
+    install_ngx_dll(tmp.path());
+    install_xess(tmp.path());
+    let env = env_in(tmp.path());
+
+    let out = graphics_sdk_directives(Backend::Vk, SdkOptions { bundle_dlls: true }, &env);
+
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
+    // No DirectX-only setup on the Vulkan path.
+    assert!(!has(&out, "CN_ENABLE_AGILITY_SDK"));
+    assert!(!has(&out, "CN_ENABLE_DXC"));
+}
+
+#[test]
+fn directx_bundling_runs_every_sdk() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    install_ffx_dx(tmp.path());
+    install_xess(tmp.path());
+    install_ngx_lib(tmp.path());
+    install_ngx_dll(tmp.path());
+    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
+    let env = env_in(tmp.path());
+
+    let out = graphics_sdk_directives(Backend::Dx, SdkOptions { bundle_dlls: true }, &env);
+
+    for cfg in [
+        "agility_sdk_configured",
+        "ffx_sdk_bundled",
+        "xess_sdk_bundled",
+        "ngx_sdk_bundled",
+        "dxc_bundled",
+    ] {
+        assert!(out.contains(&format!("cargo::rustc-cfg={cfg}")), "{cfg}");
+    }
+    assert!(warnings(&out).is_empty());
+
+    let prof = profile(tmp.path());
+    for file in [
+        "D3D12/D3D12Core.dll",
+        "D3D12/d3d12SDKLayers.dll",
+        "amd_fidelityfx_dx12.dll",
+        "libxess.dll",
+        "nvngx_dlss.dll",
+        "dxcompiler.dll",
+        "dxil.dll",
+    ] {
+        assert!(prof.join(file).is_file(), "{file}");
+    }
+}
+
+#[test]
+fn directx_without_bundling_skips_dxc() {
+    let tmp = TempDir::new().unwrap();
+    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
+    let env = env_in(tmp.path());
+
+    let out = graphics_sdk_directives(Backend::Dx, SdkOptions { bundle_dlls: false }, &env);
+
+    assert!(!has(&out, "CN_ENABLE_DXC"));
+    assert!(!has(&out, "dxc_bundled"));
+    assert!(!profile(tmp.path()).join("dxcompiler.dll").exists());
+    // No warnings for absent SDKs when not producing a final binary.
+    assert!(warnings(&out).is_empty());
+}

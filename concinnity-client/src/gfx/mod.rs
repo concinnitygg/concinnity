@@ -61,6 +61,10 @@ pub(crate) mod skinned_pool;
 pub mod graphics_system;
 pub(crate) mod hdr_output;
 pub mod input;
+// Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
+// compiled only into the unit-test binary.
+#[cfg(test)]
+pub(crate) mod mock_backend;
 // The runtime, rebindable key map (canonical action -> physical key) for the
 // gameplay movement keys. Persisted in `ControlsSettings` and pushed to the
 // active backend, which resolves it to native key codes.

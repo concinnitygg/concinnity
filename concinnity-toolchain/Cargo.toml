@@ -16,3 +16,6 @@ publish = false
 name = "concinnity_toolchain"
 path = "src/lib.rs"
 doctest = false
+
+[dev-dependencies]
+tempfile = "3.25.0"

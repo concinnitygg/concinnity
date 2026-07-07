@@ -319,6 +319,11 @@ pub struct GraphicsSystem {
     occlusion_two_pass: bool,
     texture_cap: u32,
     texture_budget: u32,
+    // Test-only injection seam: pre-resolved settings, a fabricated GPU
+    // profile, and a mock backend factory, so unit tests can drive
+    // run_init / run_step without a GPU device or the on-disk settings store.
+    #[cfg(test)]
+    pub(crate) test_hooks: Option<crate::gfx::mock_backend::TestHooks>,
 }
 
 // One key-rebind row's runtime bookkeeping: the action it rebinds and the value
@@ -509,6 +514,44 @@ impl GraphicsSystem {
             occlusion_two_pass: false,
             texture_cap: 96,
             texture_budget: 4,
+            #[cfg(test)]
+            test_hooks: None,
+        }
+    }
+
+    // The persisted settings store consulted at init. Reads the on-disk file
+    // in production; a test-injected copy takes its place so unit tests never
+    // read (or depend on) the developer's real settings.
+    fn persisted_settings(&self) -> crate::config::Settings {
+        #[cfg(test)]
+        if let Some(hooks) = &self.test_hooks {
+            return hooks.settings.clone();
+        }
+        crate::config::Settings::load()
+    }
+
+    // Detect the GPU performance profile for quality auto-config. Probes the
+    // real device in production; a test-injected profile takes its place so
+    // unit tests never create a GPU handle.
+    fn detect_gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+        #[cfg(test)]
+        if let Some(hooks) = &self.test_hooks {
+            return hooks.gpu_profile;
+        }
+        helpers::probe_gpu_profile()
+    }
+
+    // Seed and persist the first-launch `Auto` quality preset. Skipped under
+    // the test injection seam so tests never write the settings file.
+    fn seed_first_launch_preset(&self) {
+        #[cfg(test)]
+        if self.test_hooks.is_some() {
+            return;
+        }
+        let mut s = crate::config::Settings::load();
+        s.graphics.quality_preset = Some(crate::gfx::quality_preset::QualityPreset::Auto);
+        if let Err(e) = s.save() {
+            tracing::warn!("first-launch quality preset save failed: {e}");
         }
     }
 
@@ -735,3 +778,5 @@ mod init;
 mod scene;
 mod spawn;
 mod streaming;
+#[cfg(test)]
+mod tests;

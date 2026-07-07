@@ -23,12 +23,12 @@ impl GraphicsSystem {
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         // Persisted settings-menu choices override the world's authored defaults
         // below (each field is None when the user never changed that setting).
-        let user_graphics = crate::config::Settings::load().graphics;
+        let user_graphics = self.persisted_settings().graphics;
 
         // Detect the GPU before the backend is built so the auto-config quality
         // ceiling can influence the render targets / effect pipelines sized at
         // backend init. Held on self for later (e.g. the menu's preset label).
-        self.gpu_profile = probe_gpu_profile();
+        self.gpu_profile = self.detect_gpu_profile();
         // Resolve the master quality preset. An ephemeral `CN_QUALITY_PRESET`
         // env override wins first and is never persisted, so a test / CI / GPU
         // smoke can force a preset (e.g. `custom` for no clamp) without touching
@@ -43,16 +43,12 @@ impl GraphicsSystem {
         let env_preset = std::env::var("CN_QUALITY_PRESET")
             .ok()
             .and_then(|s| QualityPreset::parse(&s));
-        let active_preset = env_preset.unwrap_or_else(|| {
-            user_graphics.quality_preset.unwrap_or_else(|| {
-                let mut s = crate::config::Settings::load();
-                s.graphics.quality_preset = Some(QualityPreset::Auto);
-                if let Err(e) = s.save() {
-                    tracing::warn!("first-launch quality preset save failed: {e}");
-                }
+        let active_preset = env_preset
+            .or(user_graphics.quality_preset)
+            .unwrap_or_else(|| {
+                self.seed_first_launch_preset();
                 QualityPreset::Auto
-            })
-        });
+            });
         // Hold the resolved preset as the live value the settings-menu master
         // row cycles (and that an individual quality-row change flips to Custom).
         self.quality_preset = active_preset;
@@ -567,7 +563,7 @@ impl GraphicsSystem {
         // Audio / controls value labels read from the persisted settings store
         // (with the baseline default when unset); their owning systems apply the
         // value at their own init.
-        let user_settings = crate::config::Settings::load();
+        let user_settings = self.persisted_settings();
         let master_volume = user_settings
             .audio
             .master_volume
@@ -2209,7 +2205,17 @@ impl GraphicsSystem {
             requirements: Default::default(),
         };
         backend_init.resolve_requirements();
-        self.backend = init_backend(backend_init);
+        // Tests inject a mock backend factory through `test_hooks`; production
+        // always routes to the compile-time-selected real backend. Inline (not
+        // a method) because `backend_init` still borrows `self.window_args`.
+        #[cfg(test)]
+        let built = match self.test_hooks.as_mut() {
+            Some(hooks) => (hooks.backend_factory)(backend_init),
+            None => init_backend(backend_init),
+        };
+        #[cfg(not(test))]
+        let built = init_backend(backend_init);
+        self.backend = built;
 
         if self.backend.is_none() {
             self.failed = true;
