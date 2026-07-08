@@ -34,6 +34,7 @@ mod raytrace;
 mod resources;
 mod scoped_encoder;
 mod screenshot;
+mod shader_reflect;
 mod streaming;
 mod texture;
 mod transient;
@@ -52,3 +53,6 @@ pub(crate) use concinnity_render::metal::{math, uniforms};
 
 pub use context::{MtlContext, set_embedded_pump_events, set_preview_view};
 pub(crate) use gpu_profile::probe_gpu_profile;
+// Build-time Metal shader-layout reflection, driven by the cook pipeline through
+// the thin `ShaderBuildValidator` bridge in concinnity-app.
+pub use shader_reflect::{ShaderLayoutIssue, metal_device_available, validate_metal_shader_layout};
