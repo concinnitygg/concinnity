@@ -344,3 +344,122 @@ mod builtin_source_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::{Platform, SourceBacked};
+    use serde_json::json;
+
+    #[test]
+    fn compile_kind_maps_each_stage() {
+        assert_eq!(ShaderKind::Vertex.compile_kind(), "vertex");
+        assert_eq!(ShaderKind::VertexInstanced.compile_kind(), "vertex");
+        assert_eq!(ShaderKind::Fragment.compile_kind(), "fragment");
+        assert_eq!(ShaderKind::default(), ShaderKind::Vertex);
+    }
+
+    #[test]
+    fn default_declares_metal_and_hlsl_sources() {
+        let s = ShaderStage::default();
+        let sources = s.sources.expect("default has a sources map");
+        assert_eq!(
+            sources.get("metal").map(String::as_str),
+            Some("default.metal")
+        );
+        assert_eq!(
+            sources.get("hlsl").map(String::as_str),
+            Some("default_vert.hlsl")
+        );
+        assert!(s.source.is_empty());
+    }
+
+    #[test]
+    fn source_path_selects_per_platform() {
+        // A sources-map entry for the requested platform wins.
+        let args = json!({"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
+        assert_eq!(
+            ShaderStage::source_path(&args, Platform::Metal),
+            Some("a.metal".to_string())
+        );
+        assert_eq!(
+            ShaderStage::source_path(&args, Platform::Hlsl),
+            Some("a.hlsl".to_string())
+        );
+        assert_eq!(
+            ShaderStage::source_path(&args, Platform::Glsl),
+            Some("a.glsl".to_string())
+        );
+
+        // A single `source` is accepted when its extension matches the
+        // platform, rejected when it is another backend's shader extension.
+        let metal_only = json!({"source": "s.metal"});
+        assert_eq!(
+            ShaderStage::source_path(&metal_only, Platform::Metal),
+            Some("s.metal".to_string())
+        );
+        assert_eq!(ShaderStage::source_path(&metal_only, Platform::Hlsl), None);
+
+        // No source at all -> None.
+        assert_eq!(
+            ShaderStage::source_path(&json!({"kind": "vertex"}), Platform::Metal),
+            None
+        );
+    }
+
+    #[test]
+    fn current_platform_source_resolves_for_any_backend() {
+        // Declaring every platform source resolves on whichever backend the
+        // test build targets.
+        let stage = ShaderStage {
+            kind: ShaderKind::Vertex,
+            source: String::new(),
+            sources: Some(
+                [("metal", "v.metal"), ("hlsl", "v.hlsl"), ("glsl", "v.glsl")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ),
+            locator: None,
+        };
+        assert!(stage.current_platform_source().is_some());
+    }
+
+    #[test]
+    fn check_requires_a_current_platform_source() {
+        // With every platform declared, check passes on any backend.
+        let ok = json!({"kind": "vertex", "sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
+        assert!(check(&ok).is_ok());
+        assert!(resolve_source_from_args(&ok).is_some());
+
+        // With nothing declared, GLSL/Vulkan is a non-fatal fallback while the
+        // other backends flag the missing source. Only one arm runs per build,
+        // so branch on the active platform key to stay deterministic.
+        let missing = check(&json!({"kind": "vertex"}));
+        if platform_key() == "glsl" {
+            assert!(missing.is_ok());
+        } else {
+            assert!(missing.is_err());
+        }
+    }
+
+    #[test]
+    fn resolvers_keep_paths_with_a_directory_component() {
+        // A path that already contains a directory is returned verbatim by both
+        // resolvers; the bare-filename branch consults process-global asset
+        // anchors and is left to integration coverage.
+        assert_eq!(
+            resolve_runtime_source_path("shaders/x.metal"),
+            "shaders/x.metal"
+        );
+        let ctx = crate::build::BuildCtx {
+            name: "s",
+            artifacts_dir: None,
+            all_assets: &[],
+        };
+        assert_eq!(
+            resolve_source_path_for("shaders/x.metal", &ctx),
+            "shaders/x.metal"
+        );
+    }
+}

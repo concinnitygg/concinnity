@@ -410,4 +410,283 @@ mod tests {
 
         assert!((applied_master_volume(&world) - 0.25).abs() < 1.0e-6);
     }
+
+    // The following tests drive AudioSystem::init / step against a hand-built
+    // PipelineContext and an in-memory blob, so no audio device is opened. They
+    // assert on the engine-independent state the system tracks (its cue
+    // bindings, cached payloads, and match counter) rather than on playback,
+    // which needs a real device. Cue payloads are opaque to the caching path,
+    // so any bytes serve.
+    use super::{AudioSystem, EmitterBinding};
+    use crate::assets::{
+        AudioClip, AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
+    };
+    use crate::audio::EmitterId;
+    use crate::blob::BlobData;
+    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::decompose::EntityByName;
+    use crate::ecs::{
+        Component, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources,
+        StepResult, System,
+    };
+    use crate::gfx::profile::FrameProfile;
+
+    // Accumulates audio components + one blob section serving every payload
+    // locator handed out, then seals into a context-owning world.
+    struct AudioWorld {
+        components: ComponentStorage,
+        section: Vec<u8>,
+    }
+
+    struct SealedAudio {
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: FrameProfile,
+        resources: Resources,
+    }
+
+    impl AudioWorld {
+        fn new() -> Self {
+            Self {
+                components: ComponentStorage::default(),
+                section: Vec::new(),
+            }
+        }
+
+        fn payload(&mut self, bytes: &[u8]) -> PayloadLocator {
+            let offset = self.section.len() as u64;
+            self.section.extend_from_slice(bytes);
+            PayloadLocator {
+                blob_index: 0,
+                offset,
+                len: bytes.len() as u64,
+            }
+        }
+
+        fn push<C: ComponentSlot>(&mut self, c: C) {
+            self.components.push_typed(c);
+        }
+
+        // Push an AudioClip whose payload is `bytes`, returning its id.
+        fn clip(&mut self, id: AssetId, bytes: &[u8]) {
+            let locator = self.payload(bytes);
+            self.push(AudioClip {
+                asset_id: id,
+                locator: Some(locator),
+                ..Default::default()
+            });
+        }
+
+        fn seal(self) -> SealedAudio {
+            SealedAudio {
+                components: self.components,
+                blob: BlobData::new(vec![Some(self.section)]),
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+            }
+        }
+    }
+
+    impl SealedAudio {
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+    }
+
+    // init binds a view-triggered cue and caches its clip payload up front, so
+    // firing the cue later never touches the blob.
+    #[test]
+    fn init_binds_cue_and_caches_its_payload() {
+        let view = AssetId(90);
+        let clip = AssetId(91);
+        let bytes = b"cue-clip-bytes";
+
+        let mut w = AudioWorld::new();
+        w.clip(clip, bytes);
+        w.push(AudioCue {
+            view: Some(view),
+            clip: Some(clip),
+            kind: CueKind::Music,
+            volume: 0.7,
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new();
+        sys.init(&mut sealed.ctx());
+
+        let bindings = sys.cues.get(&view).expect("cue bound to its view");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].clip, clip);
+        assert_eq!(bindings[0].kind, CueKind::Music);
+        assert!((bindings[0].volume - 0.7).abs() < 1.0e-6);
+        assert_eq!(
+            sys.cue_clip_bytes.get(&clip).map(Vec::as_slice),
+            Some(&bytes[..])
+        );
+    }
+
+    // A cue missing its view or its clip is ignored: nothing is bound and no
+    // payload is cached.
+    #[test]
+    fn init_ignores_cue_without_clip() {
+        let mut w = AudioWorld::new();
+        w.push(AudioCue {
+            view: Some(AssetId(90)),
+            clip: None,
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new();
+        sys.init(&mut sealed.ctx());
+
+        assert!(sys.cues.is_empty());
+        assert!(sys.cue_clip_bytes.is_empty());
+    }
+
+    // A story caches every clip payload up front (it plays them by direct
+    // PlayCue request, not through view-keyed cues).
+    #[test]
+    fn init_caches_story_clip_payloads() {
+        let clip = AssetId(91);
+        let bytes = b"story-page-audio";
+
+        let mut w = AudioWorld::new();
+        w.clip(clip, bytes);
+        w.push(Story::default());
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new();
+        sys.init(&mut sealed.ctx());
+
+        assert!(sys.cues.is_empty(), "no cues declared");
+        assert_eq!(
+            sys.cue_clip_bytes.get(&clip).map(Vec::as_slice),
+            Some(&bytes[..])
+        );
+    }
+
+    // A shown view fires each of its cues once, across both playback kinds; the
+    // engine-independent match counter tracks the progress.
+    #[test]
+    fn step_fires_cued_view_across_both_kinds() {
+        let view = AssetId(90);
+        let music_clip = AssetId(91);
+        let sound_clip = AssetId(92);
+
+        let mut w = AudioWorld::new();
+        w.clip(music_clip, b"music");
+        w.clip(sound_clip, b"sound");
+        w.push(AudioCue {
+            view: Some(view),
+            clip: Some(music_clip),
+            kind: CueKind::Music,
+            volume: 1.0,
+            ..Default::default()
+        });
+        w.push(AudioCue {
+            view: Some(view),
+            clip: Some(sound_clip),
+            kind: CueKind::Sound,
+            volume: 1.0,
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new();
+        sys.init(&mut sealed.ctx());
+        assert_eq!(sys.cues.get(&view).map(Vec::len), Some(2));
+
+        {
+            let mut ctx = sealed.ctx();
+            ctx.events_mut::<ViewShown>().send(ViewShown { view });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.cues_matched, 2, "both the view's cues matched");
+
+        // A view with no cue leaves the counter untouched.
+        {
+            let mut ctx = sealed.ctx();
+            ctx.events_mut::<ViewShown>()
+                .send(ViewShown { view: AssetId(999) });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.cues_matched, 2);
+    }
+
+    // A direct PlayCue request (the story system's page audio) is played the
+    // same tick it is sent.
+    #[test]
+    fn step_plays_direct_play_cue_requests() {
+        let clip = AssetId(91);
+
+        let mut w = AudioWorld::new();
+        w.clip(clip, b"page-audio");
+        w.push(Story::default());
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new();
+        sys.init(&mut sealed.ctx());
+
+        {
+            let mut ctx = sealed.ctx();
+            let events = ctx.events_mut::<PlayCue>();
+            events.send(PlayCue {
+                clip,
+                kind: CueKind::Music,
+                volume: 1.0,
+            });
+            events.send(PlayCue {
+                clip,
+                kind: CueKind::Sound,
+                volume: 0.5,
+            });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.cues_matched, 2, "both direct requests fired");
+    }
+
+    // A prop-bound emitter tracks its prop's Transform each step, and the
+    // listener rides the camera. Neither needs a device; the step drives the
+    // lookups and returns Continue.
+    #[test]
+    fn step_follows_prop_emitter_and_moves_listener() {
+        let prop = AssetId(200);
+
+        let mut sealed = AudioWorld::new().seal();
+        let entity = {
+            let mut ctx = sealed.ctx();
+            ctx.push(Camera3D::from_args(Default::default()));
+            let e = ctx.components.spawn();
+            ctx.insert(
+                e,
+                Transform {
+                    position: [3.0, 4.0, 5.0],
+                    rotation_deg: [0.0; 3],
+                    scale: [1.0; 3],
+                },
+            );
+            let mut by_name = std::collections::HashMap::new();
+            by_name.insert(prop, e);
+            ctx.insert_resource(EntityByName(by_name));
+            e
+        };
+        assert!(sealed.ctx().get::<Transform>(entity).is_some());
+
+        let mut sys = AudioSystem::new();
+        // A live emitter that follows the prop, seeded directly (a real
+        // emitter needs a device, which the headless test has no access to).
+        sys.emitters.push(EmitterBinding {
+            id: EmitterId(0),
+            follows: Some(prop),
+        });
+
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+    }
 }

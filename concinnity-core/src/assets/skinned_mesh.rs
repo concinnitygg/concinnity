@@ -298,4 +298,75 @@ mod tests {
         let skel = build_skeleton_from_joint_defs(&defs);
         assert_eq!(skel.joints()[0].parent, None);
     }
+
+    #[test]
+    fn from_args_clamps_transform_and_reserve() {
+        // A zero scale becomes unit; lod_levels floors at 1; max_instances is
+        // capped at 4096.
+        let clamped = SkinnedMesh::from_args(SkinnedMesh {
+            scale: [0.0, 0.0, 0.0],
+            lod_levels: 0,
+            max_instances: 999_999,
+            ..SkinnedMesh::default()
+        });
+        assert_eq!(clamped.scale, [1.0, 1.0, 1.0]);
+        assert_eq!(clamped.lod_levels, 1);
+        assert_eq!(clamped.max_instances, 4096);
+
+        // lod_levels is also capped at the 8-level ceiling.
+        let capped = SkinnedMesh::from_args(SkinnedMesh {
+            lod_levels: 99,
+            scale: [1.0, 1.0, 1.0],
+            ..SkinnedMesh::default()
+        });
+        assert_eq!(capped.lod_levels, 8);
+    }
+
+    #[test]
+    fn model_matrix_places_translation_in_last_column() {
+        let mesh = SkinnedMesh {
+            position: [2.0, 3.0, 4.0],
+            scale: [1.0, 1.0, 1.0],
+            ..SkinnedMesh::default()
+        };
+        let m = mesh.model_matrix();
+        // Column-major: the translation lives in the last column, identity
+        // scale keeps the diagonal at 1.
+        assert_eq!([m[3][0], m[3][1], m[3][2]], [2.0, 3.0, 4.0]);
+        assert_eq!(m[3][3], 1.0);
+        assert_eq!(m[0][0], 1.0);
+    }
+
+    #[test]
+    fn skinned_vertex_defaults_fill_color_uv_and_weights() {
+        // A vertex authored with only a position picks up the serde defaults:
+        // white colour, zero uv, and full weight on joint 0.
+        let v: SkinnedVertexData =
+            serde_json::from_value(serde_json::json!({"pos": [0.0, 0.0, 0.0]})).unwrap();
+        assert_eq!(v.color, [1.0, 1.0, 1.0]);
+        assert_eq!(v.uv, [0.0, 0.0]);
+        assert_eq!(v.weights, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(v.joints, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn capsule_joint_defaults_and_source_path() {
+        let cap = CharacterCapsule::default();
+        assert_eq!(cap.half_height, 0.5);
+        assert_eq!(cap.radius, 0.3);
+
+        let jd: JointDef = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(jd.parent, -1);
+        assert_eq!(jd.scale, [1.0, 1.0, 1.0]);
+
+        use crate::build::{Platform, SourceBacked};
+        assert_eq!(
+            SkinnedMesh::source_path(&serde_json::json!({"source": "hero.glb"}), Platform::Metal),
+            Some("hero.glb".to_string())
+        );
+        assert_eq!(
+            SkinnedMesh::source_path(&serde_json::json!({}), Platform::Metal),
+            None
+        );
+    }
 }

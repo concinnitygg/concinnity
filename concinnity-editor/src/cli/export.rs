@@ -1275,4 +1275,148 @@ mod tests {
         let err = build_icns(&tmp.path().join("missing.png"), tmp.path(), "slug").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
+
+    #[test]
+    fn run_tool_reports_success_failure_and_missing() {
+        // A tool that exits 0 succeeds.
+        run_tool("true", &[]).unwrap();
+        // A non-zero exit is surfaced as an error naming the tool.
+        let err = run_tool("false", &[]).unwrap_err();
+        assert!(err.to_string().contains("false"), "got: {err}");
+        // A missing program is surfaced as an error rather than a panic. How
+        // it is reported is platform-dependent: some spawn paths fail to spawn
+        // (ErrorKind::NotFound -> "failed to run"), others run and exit non-zero
+        // (127 -> "`prog` failed"). Both name the tool, so assert on that.
+        let err = run_tool("cn-nonexistent-tool-xyz", &[]).unwrap_err();
+        assert!(
+            err.to_string().contains("cn-nonexistent-tool-xyz"),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn make_executable_sets_the_exec_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("player");
+        fs::write(&f, b"bin").unwrap();
+        // A freshly written file carries no execute bits.
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o111, 0);
+        make_executable(&f).unwrap();
+        assert_ne!(fs::metadata(&f).unwrap().permissions().mode() & 0o111, 0);
+    }
+
+    #[test]
+    fn report_export_errors_on_zero_blobs_and_succeeds_otherwise() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No blobs is a hard error: a bundle with an empty data/ cannot run.
+        let err = report_export("My Game", tmp.path(), 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // One and many blobs both succeed (singular / plural wording).
+        report_export("My Game", tmp.path(), 1).unwrap();
+        report_export("My Game", tmp.path(), 3).unwrap();
+    }
+
+    // A folder bundle assembles the renamed player beside the copied blobs and
+    // archives them. Cross-platform: a `metal` runtime pulls in no Windows
+    // sidecars, so this runs identically on macOS and Linux.
+    #[test]
+    fn export_portable_assembles_folder_and_zip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("0"), b"blob0").unwrap();
+        fs::write(data.join("1"), b"blob1").unwrap();
+        fs::write(data.join("scratch.air"), b"ignored").unwrap();
+
+        let runtime = tmp.path().join(exe_file_name("concinnity-runtime"));
+        fs::write(&runtime, b"runtime-bin").unwrap();
+
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+
+        let meta = AppMeta {
+            display_name: "My Game".to_string(),
+            identifier: "gg.studio.mg".to_string(),
+            version: "1.0.0".to_string(),
+            icon: None,
+        };
+        export_portable(&meta, &runtime, Some("metal"), &out, &data, true).unwrap();
+
+        let bundle = out.join("My-Game");
+        let exe = bundle.join(exe_file_name("My-Game"));
+        assert!(exe.exists(), "renamed player missing");
+        assert_eq!(fs::read(&exe).unwrap(), b"runtime-bin");
+        assert!(bundle.join("data").join("0").exists());
+        assert!(bundle.join("data").join("1").exists());
+        // Build scratch is not packaged.
+        assert!(!bundle.join("data").join("scratch.air").exists());
+
+        // The versioned archive was written beside the folder.
+        let stem = artifact_stem(&meta, platform_tag(std::env::consts::OS));
+        assert!(out.join(format!("{stem}.zip")).exists(), "zip missing");
+    }
+
+    // The full `.app` assembly, including the bundled default `.icns` icon
+    // ladder (sips + iconutil). macOS-only: it shells out to the stock Apple
+    // icon tools, which do not exist on the Linux CI runner.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn export_macos_builds_app_bundle_with_default_icon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("0"), b"blob0").unwrap();
+
+        let runtime = tmp.path().join("concinnity-runtime");
+        fs::write(&runtime, b"runtime-bin").unwrap();
+
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+
+        let meta = AppMeta {
+            display_name: "My Game".to_string(),
+            identifier: "gg.studio.mg".to_string(),
+            version: "1.0.0".to_string(),
+            icon: None,
+        };
+        // No Application icon -> the bundled default flows through the icon
+        // pipeline. make_zip on, make_dmg off (dmg needs a slow hdiutil).
+        export_macos(&meta, &runtime, &out, &data, true, false).unwrap();
+
+        let app = out.join("My-Game.app");
+        assert!(app.join("Contents/MacOS/My-Game").exists(), "exe missing");
+        assert!(
+            app.join("Contents/Resources/data/0").exists(),
+            "blob missing"
+        );
+        assert!(
+            app.join("Contents/Resources/My-Game.icns").exists(),
+            "icns missing"
+        );
+
+        let plist = fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains("<string>My-Game.icns</string>"));
+        assert!(plist.contains("gg.studio.mg"));
+
+        let stem = artifact_stem(&meta, platform_tag(std::env::consts::OS));
+        assert!(out.join(format!("{stem}.zip")).exists(), "zip missing");
+    }
+
+    // The icon ladder rasterizes a real PNG into an `.icns` via sips + iconutil.
+    // macOS-only for the same reason as the `.app` test.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_icns_produces_an_icns_from_a_valid_png() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("icon.png");
+        fs::write(&src, DEFAULT_ICON_PNG).unwrap();
+        let resources = tmp.path().join("Resources");
+        fs::create_dir_all(&resources).unwrap();
+
+        let name = build_icns(&src, &resources, "app").unwrap();
+        assert_eq!(name, "app.icns");
+        assert!(resources.join("app.icns").exists());
+    }
 }

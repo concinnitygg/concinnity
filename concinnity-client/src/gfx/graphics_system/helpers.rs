@@ -163,3 +163,202 @@ pub(super) fn build_texture_payload_source(
         crate::app::texture_stream::DiskPayloadSource::new(disk_locators),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::render_types::{DrawObject, MaterialUniforms};
+
+    // A finite-bounds draw object at `model` covering `[index_offset, +count)`
+    // of the shared index buffer. Culling stays enabled unless the caller
+    // passes a non-finite AABB.
+    fn draw(
+        model: [[f32; 4]; 4],
+        bb_min: [f32; 3],
+        bb_max: [f32; 3],
+        index_offset: usize,
+        index_count: usize,
+        base_vertex: i32,
+    ) -> DrawObject {
+        DrawObject {
+            vertex_offset: 0,
+            vertex_count: 0,
+            index_offset,
+            index_count,
+            base_vertex,
+            model,
+            texture_slot: 0,
+            normal_map_slot: 0,
+            material: MaterialUniforms::DEFAULT,
+            visible: true,
+            resident: true,
+            bb_min,
+            bb_max,
+            cull_distance: 0.0,
+            lod_alternates: Vec::new(),
+        }
+    }
+
+    fn vert(pos: [f32; 3]) -> Vertex {
+        Vertex {
+            pos,
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            uv: [0.0, 0.0],
+        }
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // A per-face override wins where set; the remaining faces fall back to the
+    // uv_min/uv_max rectangle. Mirrors build-time resolve_block_type.
+    #[test]
+    fn block_type_to_chunk_overrides_then_falls_back() {
+        let bt = BlockType {
+            solid: true,
+            uv_min: [0.1, 0.2],
+            uv_max: [0.6, 0.7],
+            uv_top: Some([0.0, 0.0, 0.25, 0.25]),
+            uv_bottom: None,
+            uv_side: None,
+            ..Default::default()
+        };
+        let chunk = block_type_to_chunk(&bt);
+        assert!(chunk.solid);
+        assert_eq!(chunk.uv_top, [0.0, 0.0, 0.25, 0.25], "override kept");
+        let fallback = [0.1, 0.2, 0.6, 0.7];
+        assert_eq!(
+            chunk.uv_bottom, fallback,
+            "unset face -> uv_min/uv_max rect"
+        );
+        assert_eq!(chunk.uv_side, fallback);
+    }
+
+    #[test]
+    fn block_type_to_chunk_air_is_not_solid() {
+        let bt = BlockType {
+            solid: false,
+            ..Default::default()
+        };
+        assert!(!block_type_to_chunk(&bt).solid);
+    }
+
+    // The translation column is the integer chunk delta scaled by chunk size;
+    // the basis stays identity.
+    #[test]
+    fn chunk_model_matrix_offsets_by_chunk_delta() {
+        use crate::gfx::chunk_coord::ChunkCoord;
+        let m = chunk_model_matrix(ChunkCoord::new(2, -3), ChunkCoord::new(0, 0), 16.0, 10.0);
+        assert_eq!(m[3], [32.0, 0.0, -30.0, 1.0]);
+        assert_eq!(m[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(m[1], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(m[2], [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn chunk_model_matrix_origin_chunk_is_untranslated() {
+        use crate::gfx::chunk_coord::ChunkCoord;
+        let c = ChunkCoord::new(5, 7);
+        let m = chunk_model_matrix(c, c, 16.0, 16.0);
+        assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    // Finite bounds score at the AABB centre.
+    #[test]
+    fn draw_object_position_uses_aabb_centre_when_finite() {
+        let obj = draw(IDENTITY, [-2.0, 0.0, 4.0], [4.0, 6.0, 8.0], 0, 0, 0);
+        assert_eq!(draw_object_position(&obj), [1.0, 3.0, 6.0]);
+    }
+
+    // A non-finite (dynamic sentinel) AABB falls back to the model translation.
+    #[test]
+    fn draw_object_position_uses_model_translation_when_unbounded() {
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [7.0, 8.0, 9.0, 1.0],
+        ];
+        let obj = draw(model, [f32::NAN; 3], [f32::NAN; 3], 0, 0, 0);
+        assert_eq!(draw_object_position(&obj), [7.0, 8.0, 9.0]);
+    }
+
+    // A cullable draw's indexed triangle is transformed to world space by its
+    // model matrix, honouring base_vertex.
+    #[test]
+    fn gather_auto_seed_triangles_transforms_by_model_and_base_vertex() {
+        // Translate the whole draw by +10 on X; base_vertex shifts the index
+        // fetch by one so indices 0,1,2 read vertices 1,2,3.
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0],
+        ];
+        let verts = vec![
+            vert([0.0, 0.0, 0.0]),
+            vert([0.0, 0.0, 0.0]),
+            vert([1.0, 0.0, 0.0]),
+            vert([0.0, 0.0, 1.0]),
+        ];
+        let idx = vec![0u32, 1, 2];
+        let objs = vec![draw(model, [-1.0; 3], [1.0; 3], 0, 3, 1)];
+        let tris = gather_auto_seed_triangles(&objs, &verts, &idx).expect("one triangle");
+        assert_eq!(tris.len(), 1);
+        assert_eq!(tris[0][0], [10.0, 0.0, 0.0]);
+        assert_eq!(tris[0][1], [11.0, 0.0, 0.0]);
+        assert_eq!(tris[0][2], [10.0, 0.0, 1.0]);
+    }
+
+    // With no cullable geometry (a non-finite AABB draw) the auto-seed gather
+    // returns None so the caller falls back to coarse AABB occupancy.
+    #[test]
+    fn gather_auto_seed_triangles_none_without_cullable_geometry() {
+        let objs = vec![draw(IDENTITY, [f32::NAN; 3], [f32::NAN; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 2]).is_none());
+    }
+
+    // An index range past the end of the shared buffer is skipped rather than
+    // panicking; with nothing left to gather the result is None.
+    #[test]
+    fn gather_auto_seed_triangles_skips_out_of_range_index_span() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 6, 0)];
+        // index_count claims 6 indices but the buffer holds only 3.
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 2]).is_none());
+    }
+
+    // A triangle referencing a vertex past the end of the vertex buffer is
+    // dropped; an all-dropped scene yields None.
+    #[test]
+    fn gather_auto_seed_triangles_skips_out_of_range_vertex_index() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        // Index 9 is out of range for a 3-vertex buffer.
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 9]).is_none());
+    }
+
+    // The RAM-resident source decodes a compiled texture payload on fetch.
+    #[test]
+    fn build_texture_payload_source_mem_backed_decodes_payload() {
+        // 1x1 RGBA payload: width, height, then one pixel.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&[0x11, 0x22, 0x33, 0xFF]);
+
+        let src = build_texture_payload_source(vec![payload], &[], false).expect("mem source");
+        let decoded = src.fetch(0).expect("decodes item 0");
+        assert_eq!((decoded.width, decoded.height), (1, 1));
+        assert_eq!(decoded.pixels, vec![0x11, 0x22, 0x33, 0xFF]);
+        // Out-of-range item id surfaces an error rather than panicking.
+        assert!(src.fetch(1).is_err());
+    }
+}
