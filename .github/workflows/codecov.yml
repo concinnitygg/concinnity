@@ -33,13 +33,10 @@ jobs:
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      # GPU backend code needs a real device/window and is verified by
-      # screenshot probes rather than unit tests, so it is excluded from
-      # the coverage metric.
       - name: Generate Coverage Report
         run: >
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          --ignore-filename-regex '/(metal|vulkan|directx|win32)/'
+          --ignore-filename-regex 'concinnity-device/|/wire/'
 
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v5

@@ -2211,10 +2211,10 @@ impl GraphicsSystem {
         #[cfg(test)]
         let built = match self.test_hooks.as_mut() {
             Some(hooks) => (hooks.backend_factory)(backend_init),
-            None => init_backend(backend_init),
+            None => concinnity_device::init_backend(backend_init),
         };
         #[cfg(not(test))]
-        let built = init_backend(backend_init);
+        let built = concinnity_device::init_backend(backend_init);
         self.backend = built;
 
         if self.backend.is_none() {

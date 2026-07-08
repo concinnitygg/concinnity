@@ -998,7 +998,7 @@ mod tests {
         fs::create_dir_all(src.join("D3D12")).unwrap();
         fs::write(src.join("concinnity-runtime.exe"), b"exe").unwrap();
         fs::write(src.join("amd_fidelityfx_dx12.dll"), b"x").unwrap();
-        fs::write(src.join("libconcinnity_editor.dll"), b"x").unwrap();
+        fs::write(src.join("libconcinnity_app.dll"), b"x").unwrap();
         fs::write(src.join("notes.txt"), b"x").unwrap();
         fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
 
@@ -1008,7 +1008,7 @@ mod tests {
         copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), Some("hlsl"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
-        assert!(dest.join("libconcinnity_editor.dll").exists());
+        assert!(dest.join("libconcinnity_app.dll").exists());
         assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
         // Non-DLL siblings and the exe itself are not carried along.
         assert!(!dest.join("notes.txt").exists());
@@ -1106,7 +1106,7 @@ mod tests {
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(src.join("concinnity-runtime"), b"exe").unwrap();
-        fs::write(src.join("libconcinnity_editor.dylib"), b"x").unwrap();
+        fs::write(src.join("libconcinnity_app.dylib"), b"x").unwrap();
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();

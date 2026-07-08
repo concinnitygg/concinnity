@@ -232,10 +232,10 @@ pub struct ShadowUniforms {
 // Used so the shadow vertex shader can index `ShadowUniforms.light_vps[i]`
 // from a single bound UBO instead of re-binding a different uniform per pass.
 //
-// Currently consumed only by the Metal shadow pass; Vulkan and DirectX each
+// Consumed at runtime only by the Metal shadow pass (Vulkan and DirectX each
 // define their own private push-constant layouts in their respective `draw.rs`
-// modules.
-#[cfg(backend_metal)]
+// modules), but kept un-gated like the rest of this module so the shared
+// shader-layout contract can validate its MSL layout on every platform.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct ShadowPassPush {
@@ -1440,7 +1440,6 @@ mod tests {
         assert_eq!(size_of::<ShadowUniforms>() % 16, 0);
     }
 
-    #[cfg(backend_metal)]
     #[test]
     fn shadow_pass_push_layout_matches_msl() {
         // MSL `ShadowPassPush` in shadow_map.metal: a uint + three pad uints.

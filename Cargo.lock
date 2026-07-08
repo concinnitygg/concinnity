@@ -585,41 +585,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-app"
+version = "0.9.0"
+dependencies = [
+ "cbindgen",
+ "concinnity-client",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-toolchain",
+ "core-foundation",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "concinnity-client"
 version = "0.9.0"
 dependencies = [
- "ash",
  "bitflags 2.11.1",
- "block2",
  "ciborium",
  "concinnity-core",
+ "concinnity-device",
+ "concinnity-render",
  "concinnity-toolchain",
  "core-foundation",
  "ctrlc",
  "directories",
- "dispatch2",
- "glfw",
  "kira",
- "libloading 0.9.0",
  "mint",
- "notify",
  "objc2 0.6.4",
  "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-metal",
- "objc2-metal-fx",
- "objc2-metal-kit",
- "objc2-quartz-core",
- "png",
  "rand 0.8.6",
  "rapier3d",
- "rayon",
  "serde",
  "serde_bytes",
  "serde_json",
- "shaderc",
  "slotmap",
  "tempfile",
  "thiserror 2.0.18",
@@ -627,7 +630,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -672,6 +674,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-device"
+version = "0.9.0"
+dependencies = [
+ "ash",
+ "block2",
+ "concinnity-core",
+ "concinnity-render",
+ "concinnity-toolchain",
+ "dispatch2",
+ "glfw",
+ "libloading 0.9.0",
+ "notify",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-metal-fx",
+ "objc2-metal-kit",
+ "objc2-quartz-core",
+ "png",
+ "rayon",
+ "serde_json",
+ "shaderc",
+ "tracing",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "concinnity-docs"
 version = "0.9.0"
 dependencies = [
@@ -690,20 +722,16 @@ dependencies = [
  "ash",
  "async-stream",
  "bitflags 2.11.1",
- "block2",
- "cbindgen",
  "chrono",
  "ciborium",
  "clap",
+ "concinnity-app",
  "concinnity-client",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-toolchain",
- "core-foundation",
  "ctrlc",
  "directories",
- "dispatch2",
- "futures",
  "glfw",
  "gltf",
  "hex",
@@ -712,14 +740,6 @@ dependencies = [
  "jsonwebtoken",
  "libloading 0.9.0",
  "notify",
- "objc2 0.6.4",
- "objc2-app-kit",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-metal",
- "objc2-metal-fx",
- "objc2-metal-kit",
- "objc2-quartz-core",
  "rand 0.8.6",
  "rayon",
  "serde",
@@ -737,6 +757,17 @@ dependencies = [
  "ureq",
  "windows 0.61.3",
  "zip",
+]
+
+[[package]]
+name = "concinnity-render"
+version = "0.9.0"
+dependencies = [
+ "ciborium",
+ "concinnity-core",
+ "rayon",
+ "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -1223,52 +1254,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "futures"
-version = "0.3.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
-dependencies = [
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-io",
- "futures-sink",
- "futures-task",
- "futures-util",
-]
-
-[[package]]
-name = "futures-channel"
-version = "0.3.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
-dependencies = [
- "futures-core",
- "futures-sink",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
-
-[[package]]
-name = "futures-executor"
-version = "0.3.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf29c38818342a3b26b5b923639e7b1f4a61fc5e76102d4b1981c6dc7a7579d"
-dependencies = [
- "futures-core",
- "futures-task",
- "futures-util",
-]
-
-[[package]]
-name = "futures-io"
-version = "0.3.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cecba35d7ad927e23624b22ad55235f2239cfa44fd10428eecbeba6d6a717718"
 
 [[package]]
 name = "futures-macro"
@@ -1299,13 +1288,10 @@ version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
- "futures-channel",
  "futures-core",
- "futures-io",
  "futures-macro",
  "futures-sink",
  "futures-task",
- "memchr",
  "pin-project-lite",
  "slab",
 ]

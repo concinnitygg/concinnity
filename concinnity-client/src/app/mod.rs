@@ -8,6 +8,7 @@ pub mod anim_runtime;
 
 pub mod dev_flags;
 pub mod run;
+pub mod runloop;
 pub mod state;
 
 // Async asset-streaming drivers. Currently driven only by the Metal

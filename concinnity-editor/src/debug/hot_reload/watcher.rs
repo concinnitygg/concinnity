@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::gfx::graphics_system::hot_reload_sources::*;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
-// `concinnity_client::metal::hot_reload`: 150 ms debounce, only
+// `concinnity_device::metal::hot_reload`: 150 ms debounce, only
 // modify/create/remove events fire the flag, only relevant extensions count.
 pub(super) fn spawn_watcher(
     sources: &HotReloadSources,

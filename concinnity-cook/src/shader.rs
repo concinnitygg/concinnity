@@ -208,7 +208,7 @@ fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     options.set_optimization_level(OptimizationLevel::Performance);
     // Target Vulkan 1.2 so the emitted module is SPIR-V 1.5 (not the 1.6 a 1.3
     // target produces). The runtime instance is created at Vulkan 1.2 (see
-    // `concinnity_client::vulkan::init`), and `vkCreateShaderModule` rejects a SPIR-V version
+    // `concinnity_device::vulkan::init`), and `vkCreateShaderModule` rejects a SPIR-V version
     // newer than the instance's, so a world-authored ShaderStage compiled to
     // SPIR-V 1.6 fails to load. 1.5 loads cleanly on a 1.2-or-newer instance.
     options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
@@ -286,7 +286,7 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
     // matrices and defaults them to row_major; without this flag a custom
     // shader that reads e.g. an instance-matrix StructuredBuffer would see
     // every transform transposed. Mirrors the same flag in
-    // `concinnity_client::directx::pipeline::compile_hlsl`.
+    // `concinnity_device::directx::pipeline::compile_hlsl`.
     let flags = if cfg!(debug_assertions) {
         D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION | D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
     } else {

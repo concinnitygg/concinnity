@@ -1165,7 +1165,7 @@ mod tests {
     // `#[ignore]`d: run explicitly, e.g.
     //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
     //       dump_settings_tab_probe_world -- --ignored
-    // then `concinnity debug -f world.jsonl` + `debug_probe.py screenshot`.
+    // then `concinnity debug -f world.jsonl` + `concinnity debug screenshot`.
     #[test]
     #[ignore]
     fn dump_settings_tab_probe_world() {
