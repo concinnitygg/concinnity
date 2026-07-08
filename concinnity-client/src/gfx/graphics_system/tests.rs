@@ -601,6 +601,75 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     }
 }
 
+// A `MenuOverride(Some(true))` forces edit mode on a plain first-person world
+// (no menu UI): the backend is put into menu mode, the cursor is released, the
+// freeze resource is set, and gameplay input is frozen -- everything a menu open
+// would do, without the world declaring one.
+#[test]
+fn menu_override_true_forces_cursor_free_and_freezes_input() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+    // A plain camera world starts in first-person capture, menu mode off.
+    assert!(lock(&state).saw(&Call::SetMenuMode(false)));
+
+    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    lock(&state).next_input.forward = true;
+    step(&mut gs, &mut world);
+
+    let s = lock(&state);
+    assert!(
+        s.saw(&Call::SetMenuMode(true)),
+        "override forces backend menu mode"
+    );
+    assert!(
+        s.saw(&Call::SetCameraCapture(false)),
+        "override releases the cursor"
+    );
+    drop(s);
+    let ctx = world.ctx();
+    assert!(
+        ctx.resource::<crate::ecs::MenuActive>().unwrap().0,
+        "freeze resource set"
+    );
+    assert!(
+        !ctx.resource::<FrameInput>().unwrap().forward,
+        "gameplay input frozen in edit mode"
+    );
+}
+
+// A `MenuOverride(Some(false))` forces play mode: the backend stays in menu mode
+// (so an editor session's clicks still route sanely), but the cursor is captured
+// and gameplay input runs -- the world plays behind the editor.
+#[test]
+fn menu_override_false_captures_cursor_and_runs_input() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    world
+        .resources
+        .insert(crate::ecs::MenuOverride(Some(false)));
+    lock(&state).next_input.forward = true;
+    step(&mut gs, &mut world);
+
+    let s = lock(&state);
+    assert!(
+        s.saw(&Call::SetCameraCapture(true)),
+        "override captures the cursor"
+    );
+    drop(s);
+    let ctx = world.ctx();
+    assert!(
+        !ctx.resource::<crate::ecs::MenuActive>().unwrap().0,
+        "not frozen"
+    );
+    assert!(
+        ctx.resource::<FrameInput>().unwrap().forward,
+        "gameplay input runs in play mode"
+    );
+}
+
 #[test]
 fn window_close_stops_after_wait_idle() {
     let (state, hooks) = recording_hooks();

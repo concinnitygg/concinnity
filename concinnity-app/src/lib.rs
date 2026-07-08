@@ -22,7 +22,6 @@ mod add;
 mod build;
 mod check;
 mod rm;
-mod sources;
 
 pub mod ffi;
 #[cfg(backend_metal)]

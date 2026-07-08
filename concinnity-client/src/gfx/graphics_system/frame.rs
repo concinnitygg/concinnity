@@ -591,6 +591,15 @@ impl GraphicsSystem {
                     .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
             (calls, want_cursor, menu_active, world_hidden)
         };
+        // An external per-frame driver (the `cn editor` HUD) can force the
+        // menu-active state through the `MenuOverride` resource, so it frees the
+        // cursor + freezes the world regardless of the world's own menu UI.
+        // `None` leaves the world's own logic in charge. This shadows
+        // `menu_active` for every use below (capture, the freeze resource, the
+        // gameplay-input gate), but not `world_hidden` above: the editor keeps
+        // the world visible.
+        let menu_override = ctx.resource::<crate::ecs::MenuOverride>().and_then(|m| m.0);
+        let menu_active = menu_override.unwrap_or(menu_active);
         // The pacer (above, next frame) clamps the frame rate while a menu is
         // open; record this frame's state for it to read.
         self.menu_active_prev = menu_active;
@@ -608,10 +617,17 @@ impl GraphicsSystem {
         // (edge-triggered in the backend, so this is cheap every frame).
         backend.set_ui_cursor_hidden(want_ui_cursor);
 
-        // In menu mode (a MainMenu over a controlled camera), capture the cursor
-        // for the camera unless a menu view is open. Edge-triggered in the
-        // backend, so this is cheap every frame and a no-op in other worlds.
-        if self.menu_mode {
+        // The `MenuOverride` driver also needs the backend in menu mode so a
+        // click with a freed cursor fires a UI action instead of re-capturing the
+        // camera; a genuine menu-mode world already had this set at init.
+        if menu_override.is_some() {
+            backend.set_menu_mode(true);
+        }
+        // In menu mode (a MainMenu over a controlled camera, or an editor
+        // override), capture the cursor for the camera unless a menu is active.
+        // Edge-triggered in the backend, so this is cheap every frame and a no-op
+        // in a plain first-person world.
+        if self.menu_mode || menu_override.is_some() {
             backend.set_camera_capture(!menu_active);
         }
 

@@ -49,8 +49,13 @@ pub(crate) fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> st
     let entries = concinnity_core::world::parse_world_jsonl(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // Inject the editor HUD before start, so build_internal_systems constructs
-    // the editor HUD system from it alongside the world's own systems.
+    // The editor HUD replaces the baked-in debug HUD (both would answer F1), so
+    // drop the world's DebugHud before start -- build_internal_systems then never
+    // constructs its system, leaving F1 to the editor.
+    app.world_mut().remove_all::<crate::assets::DebugHud>();
+
+    // Inject the editor HUD elements before start; the editor's DebugHook tick
+    // drives them each frame.
     inject::editor_hud(app.world_mut());
 
     let editor_hook = EditorHook::new(json_path, entries);

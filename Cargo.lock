@@ -593,6 +593,7 @@ dependencies = [
  "concinnity-cook",
  "concinnity-core",
  "concinnity-device",
+ "concinnity-templates",
  "concinnity-toolchain",
  "core-foundation",
  "serde_json",
@@ -729,6 +730,7 @@ dependencies = [
  "concinnity-client",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-templates",
  "concinnity-toolchain",
  "ctrlc",
  "directories",
@@ -778,6 +780,13 @@ dependencies = [
  "concinnity-core",
  "concinnity-toolchain",
  "tempfile",
+]
+
+[[package]]
+name = "concinnity-templates"
+version = "0.9.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

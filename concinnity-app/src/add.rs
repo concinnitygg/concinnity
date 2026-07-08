@@ -219,19 +219,38 @@ fn scaffold_to_inject(
     }
 }
 
-// Map a `--template <name>` value to its scaffold entries. Returns:
+// Map a `--template <name>` value to its entries, looked up in the engine-owned
+// `concinnity-templates` registry and parsed from its JSONL. Returns:
 //   - `Ok(None)`              when no template was requested (use default scaffold)
 //   - `Ok(Some(entries))`     when the named template is known
 //   - `Err(InvalidInput)`     when the name is unrecognised (typo → fail fast)
 fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_json::Value>>> {
-    match template {
-        None => Ok(None),
-        Some("showcase") => Ok(Some(super::sources::glb::template_showcase())),
-        Some(other) => Err(std::io::Error::new(
+    let Some(name) = template else {
+        return Ok(None);
+    };
+    match concinnity_templates::by_name(name) {
+        Some(t) => {
+            let entries = crate::world::parse_world_jsonl(t.jsonl)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+            Ok(Some(entries))
+        }
+        None => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("unknown template '{other}'; available: showcase"),
+            format!(
+                "unknown template '{name}'; available: {}",
+                available_templates()
+            ),
         )),
     }
+}
+
+// Comma-separated list of known template names, for the "unknown template" error.
+fn available_templates() -> String {
+    concinnity_templates::TEMPLATES
+        .iter()
+        .map(|t| t.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // Asset types that either declare the renderer or trigger its companion
@@ -1146,12 +1165,45 @@ mod tests {
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("showcase"))
             .expect("showcase template should apply for renderer-less glb add");
+        let expected = crate::world::parse_world_jsonl(
+            concinnity_templates::by_name("showcase").unwrap().jsonl,
+        )
+        .unwrap()
+        .len();
         assert_eq!(
             scaffold.len(),
-            super::super::sources::glb::template_showcase().len(),
+            expected,
             "expected the showcase template entries"
         );
         assert!(!scaffold.is_empty());
+    }
+
+    // Every entry of every engine-owned template validates as a real, buildable
+    // asset with its declared args. This is the typed round-trip the templates
+    // crate (pure data) cannot do itself: it guards against a template naming a
+    // type that doesn't exist or shipping args the asset rejects.
+    #[test]
+    fn every_template_entry_validates_as_a_real_asset() {
+        let _guard = crate::test_support::lock();
+        for t in concinnity_templates::TEMPLATES {
+            let entries = crate::world::parse_world_jsonl(t.jsonl)
+                .unwrap_or_else(|e| panic!("template '{}' JSONL parse failed: {e}", t.name));
+            assert!(!entries.is_empty(), "template '{}' is empty", t.name);
+            for entry in entries {
+                let ty = entry["type"].as_str().expect("entry has a type");
+                let name = entry["name"].as_str().expect("entry has a name");
+                let args = entry
+                    .get("args")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                concinnity_cook::validate_asset(ty, name, &args).unwrap_or_else(|e| {
+                    panic!(
+                        "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
+                        t.name
+                    )
+                });
+            }
+        }
     }
 
     #[test]

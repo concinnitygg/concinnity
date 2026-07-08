@@ -54,6 +54,17 @@ pub enum StepResult {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuActive(pub bool);
 
+// An external per-frame driver (the `cn editor` HUD) can force the world's
+// "menu active" state through this resource: `Some(true)` frees the cursor and
+// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
+// cursor and lets the world run (play mode), both regardless of whether the
+// world has its own menu UI. GraphicsSystem also puts the backend in menu mode
+// while it is set, so a click frees to a UI action instead of re-capturing the
+// camera. `None` (the default absence) leaves the world's own menu logic in
+// charge; a shipped runtime never publishes it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MenuOverride(pub Option<bool>);
+
 // Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
 // (which runs first) and read by `StatHudSystem` the same tick. Each field is
 // the effective on/off for that chip: the master "Display performance stats"
@@ -214,6 +225,14 @@ impl World {
         self.components.push(c.into());
     }
 
+    // Remove and drop every component of type C. Used by `cn editor` to suppress
+    // the world's baked-in `DebugHud` before start, since the editor HUD's own
+    // F1 toggle replaces it. Cross-crate caller, so unused from the client itself.
+    #[allow(dead_code)]
+    pub fn remove_all<C: ComponentSlot>(&mut self) {
+        let _ = self.components.drain::<C>();
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.components.is_empty() && self.systems.is_empty()
@@ -323,10 +342,11 @@ impl World {
         self.components.despawn(entity);
     }
 
-    // Seed a singleton resource that persists across steps. Stands in for the
-    // GraphicsSystem-published resources (e.g. `MenuActive`) in system tests
-    // that drive a later system directly without a GraphicsSystem in the world.
-    #[cfg(test)]
+    // Seed (or replace) a singleton resource that persists across steps. The
+    // `cn editor` drive publishes `MenuOverride` through this each frame; it also
+    // stands in for the GraphicsSystem-published resources (e.g. `MenuActive`) in
+    // system tests that drive a later system directly without a GraphicsSystem.
+    #[allow(dead_code)]
     pub fn insert_resource<T: std::any::Any>(&mut self, value: T) {
         self.resources.insert(value);
     }

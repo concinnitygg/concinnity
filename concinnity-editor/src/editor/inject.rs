@@ -20,6 +20,7 @@ use crate::ecs::asset_id::AssetId;
 const REF_W: f32 = 1280.0;
 const SAVE_W: f32 = 88.0;
 const ADD_W: f32 = 132.0;
+const TPL_W: f32 = 132.0;
 const GAP: f32 = 8.0;
 
 // Reuse an existing HUD label's font for the button text. Every rendering world
@@ -30,14 +31,15 @@ fn hud_font(world: &World) -> Option<AssetId> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
-// Inject the editor HUD: the SAVE + Add buttons and the (initially hidden)
-// add-asset dropdown rows, all view-less window-space overlays. Injected once by
-// the caller, before start.
+// Inject the editor HUD: the SAVE / Add / Templates buttons, the capture
+// checkbox, and the (initially hidden) shared dropdown rows -- all view-less
+// window-space overlays. Injected once by the caller, before start.
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
 
     let save_rect = [REF_W - SAVE_W, 0.0, SAVE_W, hud::BTN_H];
-    let add_rect = [REF_W - SAVE_W - GAP - ADD_W, 0.0, ADD_W, hud::BTN_H];
+    let add_rect = [save_rect[0] - GAP - ADD_W, 0.0, ADD_W, hud::BTN_H];
+    let tpl_rect = [add_rect[0] - GAP - TPL_W, 0.0, TPL_W, hud::BTN_H];
 
     world.add_component(button_sprite(
         hud::SAVE_BUTTON,
@@ -51,12 +53,43 @@ pub(crate) fn editor_hud(world: &mut World) {
         [0.20, 0.34, 0.52, 1.0],
         true,
     ));
+    world.add_component(button_sprite(
+        hud::TPL_BUTTON,
+        tpl_rect,
+        [0.28, 0.24, 0.44, 1.0],
+        true,
+    ));
     world.add_component(centered_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
     world.add_component(centered_label(hud::ADD_LABEL, "Add", add_rect, font));
+    world.add_component(centered_label(hud::TPL_LABEL, "Templates", tpl_rect, font));
 
-    // One hidden row per offered type; the tick shows/positions/colours them
-    // while the dropdown is open. Row labels carry the type name.
-    for (i, ty) in hud::ADD_TYPES.iter().enumerate() {
+    // The capture checkbox (shown whenever the HUD is): a row background, the box
+    // indicator, and its label. The tick repositions + colours them each frame.
+    let check = hud::checkbox_rect(REF_W);
+    world.add_component(button_sprite(
+        hud::CHECK_BG,
+        check,
+        [0.12, 0.12, 0.15, 0.92],
+        true,
+    ));
+    world.add_component(button_sprite(
+        hud::CHECK_BOX,
+        [check[0] + 8.0, check[1] + 7.0, 20.0, 20.0],
+        [0.30, 0.30, 0.34, 1.0],
+        true,
+    ));
+    world.add_component(row_label(
+        hud::CHECK_LABEL,
+        "Capture mouse",
+        [check[0] + 24.0, check[1], check[2], check[3]],
+        font,
+        true,
+    ));
+
+    // Shared hidden dropdown rows (enough for whichever menu is longest); the
+    // tick shows/positions/labels them from the open menu. Content is set per
+    // frame, so inject them empty.
+    for i in 0..hud::max_rows() {
         let rect = hud::dropdown_row_rect(REF_W, i);
         world.add_component(button_sprite(
             hud::dropdown_bg(i),
@@ -64,7 +97,7 @@ pub(crate) fn editor_hud(world: &mut World) {
             [0.14, 0.14, 0.17, 0.96],
             false,
         ));
-        world.add_component(row_label(hud::dropdown_label(i), ty, rect, font));
+        world.add_component(row_label(hud::dropdown_label(i), "", rect, font, false));
     }
 }
 
@@ -95,7 +128,13 @@ fn centered_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<Asset
     }
 }
 
-fn row_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
+fn row_label(
+    id: AssetId,
+    content: &str,
+    rect: [f32; 4],
+    font: Option<AssetId>,
+    visible: bool,
+) -> TextLabel {
     TextLabel {
         asset_id: id,
         font,
@@ -104,8 +143,9 @@ fn row_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) 
         y: rect[1] + 10.0,
         color: [0.9, 0.9, 0.92],
         align: TextAlign::Left,
-        // Hidden until the dropdown opens; the tick flips visibility.
-        visible: false,
+        // Dropdown rows start hidden (the tick flips them on open); the checkbox
+        // label starts shown.
+        visible,
         ..Default::default()
     }
 }
@@ -114,29 +154,37 @@ fn row_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) 
 mod tests {
     use super::*;
 
-    // Injection adds the two buttons + their labels plus one hidden row (bg +
-    // label) per offered type, all at reserved ids as view-less overlays.
+    // Injection adds the three buttons, the capture checkbox (bg + box + label),
+    // and enough hidden shared dropdown rows (bg + label) for the longest menu --
+    // all at reserved ids as view-less overlays.
     #[test]
-    fn injects_buttons_and_hidden_rows() {
+    fn injects_buttons_checkbox_and_hidden_rows() {
         let mut world = World::new_empty();
         editor_hud(&mut world);
 
-        let n = hud::ADD_TYPES.len();
-        assert_eq!(world.query::<Sprite>().count(), 2 + n, "buttons + row bgs");
-        assert_eq!(
-            world.query::<TextLabel>().count(),
-            2 + n,
-            "labels + row labels"
-        );
+        let n = hud::max_rows();
+        // Sprites: SAVE + Add + Templates buttons, checkbox bg + box, one bg per row.
+        assert_eq!(world.query::<Sprite>().count(), 5 + n);
+        // Labels: SAVE + Add + Templates + checkbox label, one per row.
+        assert_eq!(world.query::<TextLabel>().count(), 4 + n);
 
-        // Buttons are visible; every dropdown row starts hidden.
-        assert!(
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == hud::SAVE_BUTTON)
-                .unwrap()
-                .visible
-        );
+        // Buttons + checkbox are visible; every dropdown row starts hidden.
+        for id in [
+            hud::SAVE_BUTTON,
+            hud::ADD_BUTTON,
+            hud::TPL_BUTTON,
+            hud::CHECK_BG,
+            hud::CHECK_BOX,
+        ] {
+            assert!(
+                world
+                    .query::<Sprite>()
+                    .find(|s| s.asset_id == id)
+                    .unwrap()
+                    .visible,
+                "{id:?} visible"
+            );
+        }
         for i in 0..n {
             assert!(
                 !world
@@ -146,15 +194,6 @@ mod tests {
                     .visible,
                 "row {i} bg hidden"
             );
-        }
-
-        // Row labels carry the offered type names.
-        for (i, ty) in hud::ADD_TYPES.iter().enumerate() {
-            let lbl = world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == hud::dropdown_label(i))
-                .unwrap();
-            assert_eq!(&lbl.content, ty);
         }
 
         // View-less: window space, never overlay-scaled.
