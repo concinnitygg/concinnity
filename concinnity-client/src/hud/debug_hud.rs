@@ -305,4 +305,76 @@ mod tests {
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["DebugHud"]);
     }
+
+    // Build a world with a DebugHud wired to three chips, a camera (no
+    // controller, so no camera system), and pre-filled chip labels.
+    fn hud_world() -> crate::ecs::World {
+        let mut world = crate::ecs::World::new_empty();
+        world.add_component(DebugHud {
+            passes_label: Some(AssetId(1)),
+            mouse_label: Some(AssetId(2)),
+            camera_label: Some(AssetId(3)),
+        });
+        for id in [1u32, 2, 3] {
+            world.add_component(TextLabel {
+                asset_id: AssetId(id),
+                content: "stale".to_string(),
+                ..Default::default()
+            });
+        }
+        world.add_component(Camera3D {
+            fov_y_degrees: 75.0,
+            near: 0.05,
+            far: 200.0,
+            view_matrix: [[0.0; 4]; 4],
+            position: [1.0, 2.0, 3.0],
+            yaw: 0.5,
+            pitch: -0.2,
+            desired_move: [0.0; 3],
+            jump_requested: false,
+            interact_requested: false,
+            controller: None,
+        });
+        world
+    }
+
+    fn chip(world: &crate::ecs::World, id: u32) -> String {
+        world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == AssetId(id))
+            .map(|l| l.content.clone())
+            .unwrap_or_default()
+    }
+
+    // Hidden by default: a step with no FrameInput blanks every chip (the
+    // hidden branch), clearing the pre-filled content.
+    #[test]
+    fn hidden_hud_blanks_all_chips() {
+        let mut world = hud_world();
+        world.start().unwrap();
+        world.step();
+        assert_eq!(chip(&world, 1), "");
+        assert_eq!(chip(&world, 2), "");
+        assert_eq!(chip(&world, 3), "");
+    }
+
+    // The F1 toggle (a FrameInput with hud_toggle) reveals the HUD, so the same
+    // step fills the mouse and camera chips from the live state.
+    #[test]
+    fn toggle_reveals_mouse_and_camera_chips() {
+        let mut world = hud_world();
+        world.start().unwrap();
+        world.insert_resource(FrameInput {
+            hud_toggle: true,
+            mouse_x: 640.4,
+            mouse_y: 360.6,
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(chip(&world, 2), "MOUSE 640, 361");
+        assert_eq!(
+            chip(&world, 3),
+            "CAM 1.00 2.00 3.00\nyaw 0.500 pitch -0.200"
+        );
+    }
 }

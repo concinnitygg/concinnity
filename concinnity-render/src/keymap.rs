@@ -201,6 +201,39 @@ mod tests {
     }
 
     #[test]
+    fn set_get_cover_every_action_arm() {
+        // Drive set + get across all seven actions with distinct keys, hitting
+        // every match arm in both methods.
+        let keys = [
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::Q,
+            Key::R,
+            Key::T,
+        ];
+        let mut m = KeyMap::default();
+        for (b, k) in Bindable::ALL.into_iter().zip(keys) {
+            m.set(b, k);
+        }
+        for (b, k) in Bindable::ALL.into_iter().zip(keys) {
+            assert_eq!(m.get(b), k);
+        }
+    }
+
+    #[test]
+    fn empty_cbor_map_uses_all_defaults() {
+        // A settings file predating every field (an empty map) still loads, each
+        // field falling back through its `serde(default = "def_*")` helper.
+        let empty: std::collections::BTreeMap<String, Key> = std::collections::BTreeMap::new();
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&empty, &mut bytes).unwrap();
+        let loaded: KeyMap = ciborium::from_reader(&bytes[..]).unwrap();
+        assert_eq!(loaded, KeyMap::DEFAULT);
+    }
+
+    #[test]
     fn action_for_key_finds_the_holder() {
         let m = KeyMap::default();
         assert_eq!(m.action_for_key(Key::W), Some(Bindable::Forward));

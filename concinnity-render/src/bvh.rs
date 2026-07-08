@@ -387,4 +387,90 @@ mod tests {
         let f = Frustum::from_view_projection(ident_vp());
         assert!(collect(&bvh, &f).is_empty());
     }
+
+    // A minimal DrawObject carrying only the fields partition_draw_objects
+    // reads: the bounding box (which decides `cullable`) and the cull distance.
+    fn draw_object(bb_min: [f32; 3], bb_max: [f32; 3]) -> DrawObject {
+        DrawObject {
+            vertex_offset: 0,
+            vertex_count: 0,
+            index_offset: 0,
+            index_count: 0,
+            base_vertex: 0,
+            model: ident_vp(),
+            texture_slot: 0,
+            normal_map_slot: 0,
+            material: crate::render_types::MaterialUniforms::DEFAULT,
+            visible: true,
+            resident: true,
+            bb_min,
+            bb_max,
+            cull_distance: 0.0,
+            lod_alternates: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn partition_splits_cullable_from_always_draw() {
+        // A NaN box opts out of culling, so it lands in the always-draw list;
+        // the two finite boxes become BVH leaves under one internal root.
+        let objs = vec![
+            draw_object([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]), // idx 0, cullable
+            draw_object([f32::NAN, 0.0, 0.0], [1.0, 1.0, 1.0]), // idx 1, opts out
+            draw_object([-0.3, -0.3, -0.3], [0.3, 0.3, 0.3]), // idx 2, cullable
+        ];
+        let (bvh, always_draw) = partition_draw_objects(&objs);
+        assert_eq!(always_draw, vec![1]);
+        assert!(bvh.root.is_some());
+        // Two leaves plus their internal root.
+        assert_eq!(bvh.nodes.len(), 3);
+        // The BVH carries the original draw indices through to the traversal.
+        let f = Frustum::from_view_projection(ident_vp());
+        assert_eq!(collect(&bvh, &f), vec![0, 2]);
+    }
+
+    #[test]
+    fn partition_with_no_cullable_objects_yields_empty_bvh() {
+        let objs = vec![
+            draw_object([f32::NAN, 0.0, 0.0], [1.0, 1.0, 1.0]),
+            draw_object([0.0, f32::NAN, 0.0], [1.0, 1.0, 1.0]),
+        ];
+        let (bvh, always_draw) = partition_draw_objects(&objs);
+        assert_eq!(always_draw, vec![0, 1]);
+        assert!(bvh.root.is_none());
+        assert_eq!(bvh.nodes.len(), 0);
+    }
+
+    #[test]
+    fn build_splits_on_the_y_axis() {
+        // Leaves spread along y with tiny x/z extent force the y-axis split
+        // branch (extent[1] is the largest).
+        let items: Vec<BvhItem> = (0..4)
+            .map(|i| {
+                let y = i as f32 * 0.2 - 0.3;
+                item(i, [-0.05, y, -0.05], [0.05, y + 0.05, 0.05])
+            })
+            .collect();
+        let bvh = Bvh::build(&items);
+        // Four leaves + three internal nodes in the balanced median split.
+        assert_eq!(bvh.nodes.len(), 7);
+        let f = Frustum::from_view_projection(ident_vp());
+        assert_eq!(collect(&bvh, &f), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn build_splits_on_the_z_axis() {
+        // Leaves spread along z with tiny x/y extent force the z-axis (else)
+        // split branch.
+        let items: Vec<BvhItem> = (0..4)
+            .map(|i| {
+                let z = i as f32 * 0.2 - 0.3;
+                item(i, [-0.05, -0.05, z], [0.05, 0.05, z + 0.05])
+            })
+            .collect();
+        let bvh = Bvh::build(&items);
+        assert_eq!(bvh.nodes.len(), 7);
+        let f = Frustum::from_view_projection(ident_vp());
+        assert_eq!(collect(&bvh, &f), vec![0, 1, 2, 3]);
+    }
 }

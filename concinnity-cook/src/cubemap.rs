@@ -145,4 +145,26 @@ mod tests {
         let args = serde_json::json!({ "source": "studio.hdr" });
         validate_cubemap_args(&args).expect("defaults should validate");
     }
+
+    #[test]
+    fn validate_cubemap_args_requires_a_source() {
+        let err = validate_cubemap_args(&serde_json::json!({})).unwrap_err();
+        assert!(err.contains("requires a `source`"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_cubemap_args_rejects_out_of_range_face_size() {
+        // 4 is a power of two but below the 8..=4096 range.
+        let args = serde_json::json!({ "source": "studio.hdr", "face_size": 4 });
+        let err = validate_cubemap_args(&args).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_cubemap_payload_surfaces_a_missing_hdr() {
+        // A directory-qualified path resolves verbatim; opening it fails.
+        let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr", "face_size": 8 });
+        let err = compile_cubemap_payload(&args).unwrap_err();
+        assert!(err.contains("failed to open HDR"), "got: {err}");
+    }
 }

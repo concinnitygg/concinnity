@@ -345,4 +345,71 @@ mod tests {
         assert!(gain_to_db(0.0) < -60.0); // silence clamped low, not -inf
         assert!(gain_to_db(0.0).is_finite());
     }
+
+    // A minimal 16-bit PCM mono WAV of `frames` silent samples, decodable by
+    // the symphonia backend without any file on disk.
+    fn pcm_wav_mono(frames: u32) -> Vec<u8> {
+        let sample_rate: u32 = 44_100;
+        let bits = 16u16;
+        let channels = 1u16;
+        let block_align = channels * bits / 8;
+        let byte_rate = sample_rate * block_align as u32;
+        let data_len = frames * block_align as u32;
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data_len).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&16u32.to_le_bytes()); // PCM fmt chunk size
+        w.extend_from_slice(&1u16.to_le_bytes()); // audio format: PCM
+        w.extend_from_slice(&channels.to_le_bytes());
+        w.extend_from_slice(&sample_rate.to_le_bytes());
+        w.extend_from_slice(&byte_rate.to_le_bytes());
+        w.extend_from_slice(&block_align.to_le_bytes());
+        w.extend_from_slice(&bits.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.to_le_bytes());
+        w.extend(vec![0u8; data_len as usize]);
+        w
+    }
+
+    #[test]
+    fn decode_clip_rejects_undecodable_bytes() {
+        // Garbage takes the from_cursor error arm and yields no sound data.
+        assert!(decode_clip(b"not an audio file", false, 1.0).is_none());
+        assert!(decode_clip(&[], true, 1.0).is_none());
+    }
+
+    #[test]
+    fn decode_clip_applies_loop_region_and_gain() {
+        let wav = pcm_wav_mono(64);
+        // A looping clip carries a loop region and the requested gain.
+        let looped = decode_clip(&wav, true, 0.5).expect("valid WAV decodes");
+        assert!(
+            looped.settings.loop_region.is_some(),
+            "looping sets a loop region"
+        );
+        match looped.settings.volume {
+            kira::Value::Fixed(db) => {
+                assert!(
+                    (db.0 - gain_to_db(0.5)).abs() < 0.01,
+                    "gain applied: {}",
+                    db.0
+                )
+            }
+            other => panic!("expected a fixed volume, got {other:?}"),
+        }
+        assert!(looped.num_frames() > 0, "decoded frames");
+
+        // A one-shot clip decodes with no loop region and unity gain.
+        let once = decode_clip(&wav, false, 1.0).expect("valid WAV decodes");
+        assert!(
+            once.settings.loop_region.is_none(),
+            "one-shot has no loop region"
+        );
+        match once.settings.volume {
+            kira::Value::Fixed(db) => assert!(db.0.abs() < 0.01, "unity gain: {}", db.0),
+            other => panic!("expected a fixed volume, got {other:?}"),
+        }
+    }
 }

@@ -66,3 +66,62 @@ pub(super) fn advance_weights(state: &mut FlatState, now_secs: f32) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A bucket mid-ramp between two weight vectors.
+    fn ramp(source: Vec<f32>, target: Vec<f32>, start: f32, duration: f32) -> FlatState {
+        FlatState {
+            current_weights: source.clone(),
+            transition: Some(Transition {
+                source_weights: source,
+                target_weights: target,
+                start_secs: start,
+                duration_secs: duration,
+            }),
+        }
+    }
+
+    #[test]
+    fn advance_weights_lerps_mid_ramp() {
+        // A quarter of the way through a 1s ramp: each slot sits a quarter of
+        // the way from its source toward its target, and the ramp stays live.
+        let mut s = ramp(vec![0.0, 1.0], vec![1.0, 0.0], 0.0, 1.0);
+        advance_weights(&mut s, 0.25);
+        assert!((s.current_weights[0] - 0.25).abs() < 1e-6);
+        assert!((s.current_weights[1] - 0.75).abs() < 1e-6);
+        assert!(s.transition.is_some(), "ramp still in flight");
+    }
+
+    #[test]
+    fn advance_weights_snaps_and_clears_at_end() {
+        // At start + duration the ramp finishes: weights snap to the target and
+        // the transition is dropped.
+        let mut s = ramp(vec![0.0], vec![1.0], 0.0, 1.0);
+        advance_weights(&mut s, 1.0);
+        assert_eq!(s.current_weights, vec![1.0]);
+        assert!(s.transition.is_none(), "finished ramp is cleared");
+    }
+
+    #[test]
+    fn advance_weights_zero_duration_snaps_immediately() {
+        // A zero-length ramp finishes on the next step, snapping to the target.
+        let mut s = ramp(vec![0.3], vec![0.9], 0.0, 0.0);
+        advance_weights(&mut s, 0.0);
+        assert_eq!(s.current_weights, vec![0.9]);
+        assert!(s.transition.is_none());
+    }
+
+    #[test]
+    fn advance_weights_without_a_transition_is_a_noop() {
+        // No ramp in flight: the weights are left untouched.
+        let mut s = FlatState {
+            current_weights: vec![0.4, 0.6],
+            transition: None,
+        };
+        advance_weights(&mut s, 5.0);
+        assert_eq!(s.current_weights, vec![0.4, 0.6]);
+    }
+}

@@ -282,4 +282,70 @@ mod tests {
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
+
+    // A world carrying a StatHud wired to fps + vram chips and their labels.
+    fn hud_world() -> crate::ecs::World {
+        let mut world = crate::ecs::World::new_empty();
+        world.add_component(StatHud {
+            fps_label: Some(AssetId(1)),
+            vram_label: Some(AssetId(2)),
+            ..StatHud::default()
+        });
+        for id in [1u32, 2] {
+            world.add_component(TextLabel {
+                asset_id: AssetId(id),
+                ..Default::default()
+            });
+        }
+        world
+    }
+
+    // Backdate the emit window so the next step crosses EMIT_INTERVAL_SECS
+    // without a real sleep (the field is injectable in-file).
+    fn force_emit_due(world: &mut crate::ecs::World) {
+        use std::time::Duration;
+        for system in world.systems_mut() {
+            if let crate::ecs::SystemAsset::StatHud(s) = system {
+                s.last_emit = Instant::now() - Duration::from_secs(1);
+            }
+        }
+    }
+
+    fn chip(world: &crate::ecs::World, id: u32) -> String {
+        world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == AssetId(id))
+            .map(|l| l.content.clone())
+            .unwrap_or_default()
+    }
+
+    // Once the averaging window elapses, the step body writes the FPS and VRAM
+    // chips (both shown when no HudPrefs is published).
+    #[test]
+    fn emit_window_writes_fps_and_vram_chips() {
+        let mut world = hud_world();
+        world.start().unwrap();
+        force_emit_due(&mut world);
+        world.step();
+        assert!(chip(&world, 1).starts_with("FPS "), "{}", chip(&world, 1));
+        assert_eq!(chip(&world, 2), "VRAM 0 MB");
+    }
+
+    // The HudPrefs resource (published by GraphicsSystem) gates each chip: with
+    // both off, the fps and vram chips blank on the next emit.
+    #[test]
+    fn hud_prefs_hide_fps_and_vram_chips() {
+        use crate::ecs::HudPrefs;
+
+        let mut world = hud_world();
+        world.start().unwrap();
+        world.insert_resource(HudPrefs {
+            show_fps: false,
+            show_vram: false,
+        });
+        force_emit_due(&mut world);
+        world.step();
+        assert_eq!(chip(&world, 1), "", "fps chip hidden");
+        assert_eq!(chip(&world, 2), "", "vram chip hidden");
+    }
 }

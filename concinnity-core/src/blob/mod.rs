@@ -433,4 +433,104 @@ mod tests {
         };
         assert!(bd.read(&loc).is_err());
     }
+
+    // A distinct temp path per test tag so parallel tests never collide.
+    fn tmp_path(tag: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("cn_blob_{}_{}.cnb", tag, std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    // A full .cnb image with a real postcard defs section, to drive read_cnb's
+    // success path (the write half lives in the build crate, so we build it by
+    // hand here).
+    fn cnb_with_defs(defs: &[BlobAssetDef], payload: &[u8]) -> Vec<u8> {
+        let defs_bytes = postcard::to_allocvec(defs).expect("serialize defs");
+        let mut data = Vec::new();
+        data.extend_from_slice(&BLOB_MAGIC);
+        data.extend_from_slice(&BLOB_VERSION.to_le_bytes());
+        data.extend_from_slice(&(defs_bytes.len() as u64).to_le_bytes());
+        data.extend_from_slice(&defs_bytes);
+        data.extend_from_slice(payload);
+        data
+    }
+
+    #[test]
+    fn read_cnb_parses_a_valid_header_and_defs() {
+        let defs = vec![BlobAssetDef {
+            name: Some(crate::ecs::asset_id::AssetId(1)),
+            kind: crate::ecs::AssetKind::Component,
+            discriminant: 7,
+            args_bytes: vec![1, 2, 3],
+            payload: None,
+        }];
+        let path = tmp_path("read_ok");
+        fs::write(&path, cnb_with_defs(&defs, b"payload")).unwrap();
+
+        let (got, payload_start) = read_cnb(&path).expect("read");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].discriminant, 7);
+        // The returned offset points exactly at the payload section.
+        let raw = fs::read(&path).unwrap();
+        assert_eq!(&raw[payload_start..], b"payload");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_cnb_rejects_short_bad_magic_and_wrong_version() {
+        let short = tmp_path("short");
+        fs::write(&short, vec![0u8; HEADER_SIZE - 1]).unwrap();
+        assert!(read_cnb(&short).is_err());
+        let _ = fs::remove_file(&short);
+
+        // Correct length but zeroed magic.
+        let magic = tmp_path("magic");
+        fs::write(&magic, vec![0u8; HEADER_SIZE]).unwrap();
+        assert!(read_cnb(&magic).is_err());
+        let _ = fs::remove_file(&magic);
+
+        // Valid magic, corrupted version.
+        let mut bytes = cnb_bytes(b"");
+        bytes[4] = 99;
+        let ver = tmp_path("version");
+        fs::write(&ver, &bytes).unwrap();
+        assert!(read_cnb(&ver).is_err());
+        let _ = fs::remove_file(&ver);
+    }
+
+    #[test]
+    fn read_cnb_rejects_a_truncated_defs_section() {
+        // The header claims more defs bytes than the file actually holds.
+        let mut data = Vec::new();
+        data.extend_from_slice(&BLOB_MAGIC);
+        data.extend_from_slice(&BLOB_VERSION.to_le_bytes());
+        data.extend_from_slice(&100u64.to_le_bytes());
+        data.extend_from_slice(b"short");
+        let path = tmp_path("truncated");
+        fs::write(&path, &data).unwrap();
+        assert!(read_cnb(&path).is_err());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_cnb_errors_on_a_missing_file() {
+        assert!(read_cnb("/nonexistent/cn/blob/path.cnb").is_err());
+    }
+
+    #[test]
+    fn read_payload_section_returns_empty_for_a_short_file() {
+        let path = tmp_path("payload_short");
+        fs::write(&path, vec![0u8; HEADER_SIZE - 1]).unwrap();
+        assert!(read_payload_section(&path).unwrap().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn blob_path_appends_the_index() {
+        // Tolerant of whatever the process-global data-dir anchor currently is:
+        // only the trailing index and distinctness are asserted.
+        assert!(blob_path(5).ends_with('5'));
+        assert_ne!(blob_path(0), blob_path(1));
+    }
 }

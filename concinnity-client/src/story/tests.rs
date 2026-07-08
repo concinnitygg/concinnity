@@ -1434,3 +1434,576 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
     assert_eq!(label_content(&world, "s_title_continue_lbl"), "");
     assert_eq!(label_content(&world, "s_title_load_lbl"), "");
 }
+
+// Redirect the world's StorySystem saves at a temp directory (the process
+// global state root must stay untouched: tests share it).
+fn point_saves(world: &mut World, dir: &std::path::Path) {
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.save_dir = dir.to_path_buf();
+        }
+    }
+}
+
+// Backdate the story clock so the next step sees `secs` of elapsed time,
+// driving the timed reader-assist paths (typewriter / auto / skip) without a
+// real sleep. `last_step` is a private field, reachable from this in-crate
+// test module.
+fn backdate_clock(world: &mut World, secs: f32) {
+    for system in world.systems_mut() {
+        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+            s.last_step = Some(Instant::now() - std::time::Duration::from_secs_f32(secs));
+        }
+    }
+}
+
+// A story world whose stage carries two option slots (the shared scaffold has
+// one), so an unoccupied slot is observable when a menu has fewer choices.
+fn two_option_world(story: Story) -> World {
+    let mut world = World::new_empty();
+    let mut story = story;
+    story.asset_id = intern("s");
+    let mut sc = scaffold();
+    sc.option_boxes = vec![intern("s_stage_opt0_box"), intern("s_stage_opt1_box")];
+    sc.options = vec![intern("s_stage_opt0_lbl"), intern("s_stage_opt1_lbl")];
+    story.scaffold = sc;
+    world.add_component(story);
+    for view in ["s_stage", "s_ending"] {
+        world.add_component(View {
+            asset_id: intern(view),
+            initial: view == "s_stage",
+            fade_in_secs: 0.0,
+        });
+    }
+    add_stage_furniture(&mut world);
+    // The second option slot beyond slot0 that add_stage_furniture provides.
+    world.add_component(Sprite {
+        view: Some(intern("s_stage")),
+        ..sprite_named("s_stage_opt1_box")
+    });
+    world.add_component(TextLabel {
+        view: Some(intern("s_stage")),
+        ..label_named("s_stage_opt1_lbl")
+    });
+    world
+}
+
+// A single choice node linking to a landing node (shared by several menu
+// tests). `choice_sounds` is optional so an audio-free variant stays silent.
+fn one_choice_story(label: &str, sounds: Vec<AssetId>) -> Story {
+    Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: vec![page("Pick.")],
+                choices: vec![StoryChoice {
+                    label: label.to_string(),
+                    target: 1,
+                    condition: None,
+                }],
+                choice_sounds: sounds,
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Picked.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+// With a positive speed the page reveals character by character as clip time
+// advances, rather than appearing whole.
+#[test]
+fn typewriter_reveals_the_page_over_time() {
+    let mut story = two_page_story();
+    story.text_speed = 100.0;
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    // First step's dt is zero, so nothing has revealed yet.
+    assert_eq!(label_content(&world, "s_stage_text"), "");
+
+    // Half a second at 100 cps budgets far more than the page's length.
+    backdate_clock(&mut world, 0.5);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+}
+
+// The Skip toggle snaps the current page to full immediately and lights the
+// Skip control.
+#[test]
+fn toggle_skip_snaps_the_current_page_to_full() {
+    let mut story = two_page_story();
+    story.text_speed = 0.0001;
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "");
+
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::ToggleSkip);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+    assert_eq!(label_color(&world, "s_stage_qskip_lbl"), QUICK_ACTIVE);
+}
+
+// A quick-row toggle is inert outside page mode: during a choice menu the row
+// is cleared and a ToggleSkip must not repaint or engage it.
+#[test]
+fn quick_toggle_is_inert_during_a_choice_menu() {
+    let mut world = story_world(one_choice_story("Go", Vec::new()));
+    world.start().unwrap();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Advance);
+    world.step();
+    // The menu cleared the quick row.
+    assert_eq!(label_content(&world, "s_stage_qskip_lbl"), "");
+    // ToggleSkip out of page mode does nothing, so the row stays cleared.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::ToggleSkip);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_qskip_lbl"), "");
+}
+
+// Skip mode turns fully revealed pages at its rapid cadence once enough clip
+// time has passed.
+#[test]
+fn skip_mode_turns_pages_at_its_cadence() {
+    let mut world = story_world(two_page_story());
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::ToggleSkip);
+    // A full second exceeds the skip page cadence.
+    backdate_clock(&mut world, 1.0);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// Auto mode turns a fully revealed page after its reading-time delay elapses.
+#[test]
+fn auto_mode_turns_a_read_page_after_the_delay() {
+    let mut world = story_world(two_page_story());
+    world.start().unwrap();
+    world.step();
+
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::ToggleAuto);
+    // Ten seconds far exceeds the base pause plus per-character reading time.
+    backdate_clock(&mut world, 10.0);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// A node with no pages, only choices, opens its menu directly on entry.
+#[test]
+fn pageless_node_enters_its_choice_menu_directly() {
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: Vec::new(),
+                choices: vec![StoryChoice {
+                    label: "Go".to_string(),
+                    target: 1,
+                    condition: None,
+                }],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Picked.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
+}
+
+// A passing choice gate on a pageless node redirects play past the menu on
+// entry.
+#[test]
+fn pageless_choice_gate_redirects_on_entry() {
+    use crate::assets::StoryGate;
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: Vec::new(),
+                choices: vec![StoryChoice {
+                    label: "Never".to_string(),
+                    target: 0,
+                    condition: None,
+                }],
+                choice_gates: vec![StoryGate {
+                    name: "x".to_string(),
+                    op: CmpOp::Eq,
+                    value: 0,
+                    target: 1,
+                }],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Landed.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
+}
+
+// A first-page gate redirects the moment its node is entered, before the page
+// is shown.
+#[test]
+fn first_page_gate_redirects_on_node_entry() {
+    use crate::assets::StoryGate;
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: vec![StoryPage {
+                    gates: vec![StoryGate {
+                        name: "x".to_string(),
+                        op: CmpOp::Eq,
+                        value: 0,
+                        target: 1,
+                    }],
+                    ..page("Skipped.")
+                }],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Landed.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
+}
+
+// A pageless node whose every choice is gated off falls through to the next
+// node, like a menu-less node.
+#[test]
+fn all_gated_choices_fall_through() {
+    use crate::assets::StoryCondition;
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: Vec::new(),
+                choices: vec![StoryChoice {
+                    label: "Secret".to_string(),
+                    target: 2,
+                    condition: Some(StoryCondition {
+                        name: "secret".to_string(),
+                        op: CmpOp::Ne,
+                        value: 0,
+                    }),
+                }],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Fell through.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Fell through.");
+}
+
+// Two pageless nodes gating to each other form a cycle; the hop budget stops
+// the loop instead of spinning forever, landing on no page.
+#[test]
+fn gate_loop_is_stopped_by_the_hop_limit() {
+    use crate::assets::StoryGate;
+    let dummy = || StoryChoice {
+        label: "x".to_string(),
+        target: 0,
+        condition: None,
+    };
+    let gate_to = |target: u32| StoryGate {
+        name: "x".to_string(),
+        op: CmpOp::Eq,
+        value: 0,
+        target,
+    };
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: Vec::new(),
+                choices: vec![dummy()],
+                choice_gates: vec![gate_to(1)],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: Vec::new(),
+                choices: vec![dummy()],
+                choice_gates: vec![gate_to(0)],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    // Must terminate rather than hang; nothing lands on the stage.
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "");
+}
+
+// A page reached under an active skip run is snapped to full on arrival by
+// render_page, rather than starting its own reveal.
+#[test]
+fn skip_snaps_a_freshly_entered_page_to_full() {
+    let mut story = two_page_story();
+    story.text_speed = 0.0001;
+    let mut world = story_world(story);
+    world.start().unwrap();
+    world.step();
+
+    // Skip on: snaps page 1 now.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::ToggleSkip);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+
+    // The skip cadence turns to page 2, which render_page snaps on arrival
+    // despite the slow speed.
+    backdate_clock(&mut world, 1.0);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// Entering a choice menu fires the node's one-shot choice sounds as PlayCue
+// events.
+#[test]
+fn choice_menu_fires_its_one_shot_sounds() {
+    let click = intern("s_click");
+    let mut world = story_world(one_choice_story("Go", vec![click]));
+    world.start().unwrap();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Advance);
+    world.step();
+
+    let mut cursor = crate::ecs::EventCursor::default();
+    let cues: Vec<PlayCue> = world
+        .events_mut::<PlayCue>()
+        .read(&mut cursor)
+        .into_iter()
+        .copied()
+        .collect();
+    assert!(
+        cues.iter()
+            .any(|c| c.clip == click && c.kind == CueKind::Sound),
+        "choice sound cue fired: {cues:?}"
+    );
+}
+
+// A menu with fewer options than slots leaves the spare slots blank and their
+// boxes transparent, while the occupied slot's box stays opaque.
+#[test]
+fn unoccupied_option_slots_blank_and_go_transparent() {
+    let mut world = two_option_world(one_choice_story("Go", Vec::new()));
+    world.start().unwrap();
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Advance);
+    world.step();
+
+    assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
+    assert_eq!(label_content(&world, "s_stage_opt1_lbl"), "");
+    let box1 = world
+        .query::<Sprite>()
+        .find(|s| s.asset_id == intern("s_stage_opt1_box"))
+        .unwrap();
+    assert_eq!(box1.tint[3], 0.0, "empty slot box is transparent");
+    let box0 = world
+        .query::<Sprite>()
+        .find(|s| s.asset_id == intern("s_stage_opt0_box"))
+        .unwrap();
+    assert!(box0.tint[3] > 0.0, "occupied slot box is opaque");
+}
+
+// Continue resumes play from a written auto-save (the real-save path, distinct
+// from the fresh-start fallback).
+#[test]
+fn continue_resumes_from_a_written_auto_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "cont".to_string();
+    let mut world = story_world(story);
+    world.start().unwrap();
+    point_saves(&mut world, dir.path());
+    world.step();
+
+    // Point the auto-save at page 2.
+    write_save(
+        &save_file(dir.path()),
+        &StorySave {
+            slug: "a".to_string(),
+            page: 1,
+            vars: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Continue);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+}
+
+// A save naming an unknown slug starts fresh from the top instead of resuming.
+#[test]
+fn continue_from_an_unknown_slug_starts_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "stale".to_string();
+    let mut world = story_world(story);
+    world.start().unwrap();
+    point_saves(&mut world, dir.path());
+    world.step();
+
+    write_save(
+        &save_file(dir.path()),
+        &StorySave {
+            slug: "ghost".to_string(),
+            page: 5,
+            vars: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Continue);
+    world.step();
+    assert_eq!(label_content(&world, "s_stage_text"), "First page.");
+}
+
+// A save pointing at a node with no pages falls back to a fresh start.
+#[test]
+fn continue_into_a_pageless_node_starts_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let story = Story {
+        title: "T".to_string(),
+        text_speed: 0.0,
+        save_key: "pageless".to_string(),
+        nodes: vec![
+            StoryNode {
+                slug: "a".to_string(),
+                pages: Vec::new(),
+                choices: vec![StoryChoice {
+                    label: "Go".to_string(),
+                    target: 1,
+                    condition: None,
+                }],
+                ..Default::default()
+            },
+            StoryNode {
+                slug: "b".to_string(),
+                pages: vec![page("Picked.")],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut world = story_world(story);
+    world.start().unwrap();
+    point_saves(&mut world, dir.path());
+    world.step();
+
+    write_save(
+        &save_file(dir.path()),
+        &StorySave {
+            slug: "a".to_string(),
+            page: 0,
+            vars: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Continue);
+    world.step();
+    // The pageless save cannot resume, so play restarts at the same node's
+    // menu.
+    assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
+}
+
+// Reaching the ending drops the auto-save so the next launch starts fresh.
+#[test]
+fn reaching_the_ending_clears_the_auto_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut story = two_page_story();
+    story.save_key = "endclear".to_string();
+    let mut world = story_world(story);
+    world.start().unwrap();
+    point_saves(&mut world, dir.path());
+    world.step();
+    assert!(
+        read_save(&save_file(dir.path())).is_some(),
+        "the first page auto-saved"
+    );
+
+    // Advance to page 2, then past it to the ending, which clears the save.
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Advance);
+    world.step();
+    world
+        .events_mut::<StoryCommand>()
+        .send(StoryCommand::Advance);
+    world.step();
+    assert!(
+        read_save(&save_file(dir.path())).is_none(),
+        "the ending cleared the auto-save"
+    );
+}

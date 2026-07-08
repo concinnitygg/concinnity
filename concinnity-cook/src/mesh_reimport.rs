@@ -96,3 +96,27 @@ pub fn decode_skinned_from_parsed_glb(
     let skeleton = payload_joints_to_defs(payload_joints);
     Ok((verts, idxs, skeleton))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::glb::test_fixtures::{parse, static_triangle_glb};
+
+    #[test]
+    fn decode_static_mesh_round_trips_a_triangle() {
+        let doc = parse(&static_triangle_glb());
+        let (vertices, indices, lods) =
+            decode_mesh_from_parsed_glb(&doc, "t.glb", 0, 1, &[]).expect("decode");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices.len(), 3);
+        // A single LOD level produces no alternates.
+        assert!(lods.is_empty());
+    }
+
+    #[test]
+    fn decode_static_mesh_rejects_out_of_range_primitive() {
+        let doc = parse(&static_triangle_glb());
+        let err = decode_mesh_from_parsed_glb(&doc, "t.glb", 3, 1, &[]).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+}

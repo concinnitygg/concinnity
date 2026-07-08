@@ -28,3 +28,42 @@ pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_only_passes() {
+        assert!(check("p", &serde_json::json!({ "model": "m" })).is_ok());
+    }
+
+    #[test]
+    fn prefab_only_passes() {
+        assert!(check("p", &serde_json::json!({ "prefab": "pf" })).is_ok());
+    }
+
+    #[test]
+    fn prefab_with_model_conflicts() {
+        let err = check("p", &serde_json::json!({ "prefab": "pf", "model": "m" })).unwrap_err();
+        assert!(err.contains("cannot also set"), "got: {err}");
+    }
+
+    #[test]
+    fn prefab_with_mesh_conflicts() {
+        let err = check("p", &serde_json::json!({ "prefab": "pf", "mesh": "m" })).unwrap_err();
+        assert!(err.contains("cannot also set"), "got: {err}");
+    }
+
+    #[test]
+    fn missing_all_sources_is_an_error() {
+        let err = check("p", &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("requires either"), "got: {err}");
+    }
+
+    #[test]
+    fn empty_string_source_is_treated_as_absent() {
+        let err = check("p", &serde_json::json!({ "model": "" })).unwrap_err();
+        assert!(err.contains("requires either"), "got: {err}");
+    }
+}

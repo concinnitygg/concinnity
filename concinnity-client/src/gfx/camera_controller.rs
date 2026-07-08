@@ -509,4 +509,62 @@ mod tests {
             "the Prop column is drained at load"
         );
     }
+
+    // A grounded (non-free-fly) camera clamps its position back inside the
+    // bounds box and hands the movement intent + jump to PhysicsSystem instead
+    // of moving itself, driving the FPS-walker basis and commit branch.
+    #[test]
+    fn fps_walker_clamps_bounds_and_hands_off_movement() {
+        use crate::assets::FrameInput;
+        use crate::gfx::camera::view_matrix;
+
+        let mut world = World::new_empty();
+        let ctrl = CameraController {
+            free_fly: false,
+            move_speed: 5.0,
+            player_radius: 0.5,
+            bounds_min: [-10.0, -10.0, -10.0],
+            bounds_max: [10.0, 10.0, 10.0],
+            ..CameraController::default()
+        };
+        let mut cam = camera(Some(ctrl));
+        // Well outside the +X wall so the containment clamp is observable.
+        cam.position = [100.0, 2.0, 0.0];
+        world.add_component(cam);
+        world.start().unwrap();
+
+        world.add_component(FrameInput {
+            forward: true,
+            jump: true,
+            ..Default::default()
+        });
+        world.step();
+
+        let c = world.query::<Camera3D>().next().unwrap();
+        // Pulled back to the wall minus the player radius (10 - 0.5).
+        assert!(
+            (c.position[0] - 9.5).abs() < 1e-4,
+            "x clamped: {}",
+            c.position[0]
+        );
+        // Jump is handed to physics rather than applied here.
+        assert!(c.jump_requested, "jump intent handed off");
+        // The FPS walker keeps the camera grounded: no direct vertical move.
+        assert_eq!(
+            c.position[1], 2.0,
+            "grounded walker leaves height to physics"
+        );
+        // The view matrix was rebuilt from the (clamped) pose.
+        assert_eq!(c.view_matrix, view_matrix(c.position, c.yaw, c.pitch));
+    }
+
+    // reset_velocity zeroes the smoothed movement velocity so a teleport does
+    // not drift the next step.
+    #[test]
+    fn reset_velocity_zeroes_smoothed_velocity() {
+        let mut sys = super::Camera3DSystem::new(CameraController::default());
+        sys.velocity = [1.0, -2.0, 3.0];
+        sys.reset_velocity();
+        assert_eq!(sys.velocity, [0.0; 3]);
+    }
 }

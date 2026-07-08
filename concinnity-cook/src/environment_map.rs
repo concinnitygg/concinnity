@@ -240,6 +240,47 @@ mod tests {
     }
 
     #[test]
+    fn validate_environment_map_args_rejects_out_of_range_prefilter_face() {
+        // 8 is a power of two but below the 16..=1024 prefilter range.
+        let args = serde_json::json!({ "generator": "sky", "prefilter_face_size": 8 });
+        let err = validate_environment_map_args(&args).unwrap_err();
+        assert!(err.contains("prefilter_face_size"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_environment_map_args_rejects_out_of_range_irradiance_face() {
+        // 4 is a power of two but below the 8..=128 irradiance range.
+        let args = serde_json::json!({ "generator": "sky", "irradiance_face_size": 4 });
+        let err = validate_environment_map_args(&args).unwrap_err();
+        assert!(err.contains("irradiance_face_size"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_environment_map_args_rejects_negative_prefilter_clamp() {
+        let args = serde_json::json!({ "generator": "sky", "prefilter_clamp": -1.0 });
+        let err = validate_environment_map_args(&args).unwrap_err();
+        assert!(err.contains("prefilter_clamp"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_environment_map_args_rejects_unknown_generator() {
+        let args = serde_json::json!({ "generator": "aurora" });
+        let err = validate_environment_map_args(&args).unwrap_err();
+        assert!(
+            err.contains("unknown EnvironmentMap generator"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn compile_environment_map_payload_surfaces_a_missing_hdr() {
+        // A directory-qualified path resolves verbatim, so the load fails on open.
+        let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr" });
+        let err = compile_environment_map_payload(&args).unwrap_err();
+        assert!(err.contains("HDR"), "got: {err}");
+    }
+
+    #[test]
     fn sky_generator_compiles_into_full_payload() {
         let args = serde_json::json!({
             "generator": "sky",

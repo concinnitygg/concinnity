@@ -632,4 +632,48 @@ mod tests {
         world.add_component(crate::assets::GraphicsConfig::default());
         assert!(world.renders());
     }
+
+    // The overlay HUD components each gate their internal system and build in
+    // the fixed schedule order (StatHud, then DebugHud, then FpsCounter).
+    // DebugHud is developer-only but `cfg!(debug_assertions)` holds under test.
+    #[test]
+    fn hud_components_spawn_in_schedule_order() {
+        use crate::assets::{DebugHud, FpsCounter, StatHud};
+
+        let mut world = World::new_empty();
+        world.add_component(FpsCounter::default());
+        world.add_component(StatHud::default());
+        world.add_component(DebugHud::default());
+        world.start().unwrap();
+
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["StatHud", "DebugHud", "FpsCounter"]);
+    }
+
+    // A Story gates the StorySystem. An empty-node story pulls in no audio
+    // device (build_audio needs a page/choice cue), so this stays device-free.
+    #[test]
+    fn story_component_spawns_story_system() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::Story::default());
+        world.start().unwrap();
+
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["StorySystem"]);
+    }
+
+    // The World Debug impl reports component and system counts rather than
+    // dumping their contents.
+    #[test]
+    fn world_debug_impl_reports_counts() {
+        use crate::assets::TextLabel;
+
+        let mut world = World::new_empty();
+        world.add_component(TextLabel::default());
+        world.add_component(TextLabel::default());
+        let text = format!("{world:?}");
+        assert!(text.contains("World"), "{text}");
+        assert!(text.contains("components: 2"), "{text}");
+        assert!(text.contains("systems: 0"), "{text}");
+    }
 }
