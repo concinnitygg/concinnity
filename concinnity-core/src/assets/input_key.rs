@@ -243,4 +243,94 @@ mod tests {
             );
         }
     }
+
+    // Every declared key, so both match tables are exercised end to end.
+    const ALL_KEYS: [Key; 57] = [
+        Key::A,
+        Key::B,
+        Key::C,
+        Key::D,
+        Key::E,
+        Key::F,
+        Key::G,
+        Key::H,
+        Key::I,
+        Key::J,
+        Key::K,
+        Key::L,
+        Key::M,
+        Key::N,
+        Key::O,
+        Key::P,
+        Key::Q,
+        Key::R,
+        Key::S,
+        Key::T,
+        Key::U,
+        Key::V,
+        Key::W,
+        Key::X,
+        Key::Y,
+        Key::Z,
+        Key::Num0,
+        Key::Num1,
+        Key::Num2,
+        Key::Num3,
+        Key::Num4,
+        Key::Num5,
+        Key::Num6,
+        Key::Num7,
+        Key::Num8,
+        Key::Num9,
+        Key::Space,
+        Key::Tab,
+        Key::Enter,
+        Key::Shift,
+        Key::Control,
+        Key::Alt,
+        Key::Up,
+        Key::Down,
+        Key::Left,
+        Key::Right,
+        Key::Minus,
+        Key::Equals,
+        Key::LeftBracket,
+        Key::RightBracket,
+        Key::Backslash,
+        Key::Semicolon,
+        Key::Quote,
+        Key::Comma,
+        Key::Period,
+        Key::Slash,
+        Key::Backtick,
+    ];
+
+    #[test]
+    fn all_variants_cover_name_and_display() {
+        // For every variant: name() and display_name() are non-empty, name()
+        // equals the serde spelling, and the binding round-trips. This walks
+        // both full match statements, not just a hand-picked sample.
+        for key in ALL_KEYS {
+            assert!(!key.name().is_empty(), "name empty for {key:?}");
+            assert!(!key.display_name().is_empty(), "display empty for {key:?}");
+            let json = serde_json::to_string(&key).unwrap();
+            assert_eq!(
+                json,
+                format!("\"{}\"", key.name()),
+                "serde vs name for {key:?}"
+            );
+            let back: Key = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, key, "round trip for {key:?}");
+        }
+    }
+
+    #[test]
+    fn variant_names_are_unique() {
+        // Names double as persisted identifiers, so no two variants may share
+        // one (this also guards ALL_KEYS against an accidental duplicate).
+        let mut seen = std::collections::HashSet::new();
+        for key in ALL_KEYS {
+            assert!(seen.insert(key.name()), "duplicate name {}", key.name());
+        }
+    }
 }
