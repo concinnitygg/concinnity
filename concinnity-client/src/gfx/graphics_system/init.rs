@@ -2205,16 +2205,69 @@ impl GraphicsSystem {
             requirements: Default::default(),
         };
         backend_init.resolve_requirements();
+        // Live editor swap: the rebuilt world may carry a render backend
+        // transplanted out of the pre-edit world (a `PendingBackend` resource,
+        // published by the `cn editor` live SAVE). Reuse it instead of building a
+        // new one -- so the edit applies without recreating the OS window or
+        // re-initialising the GPU device -- but only when the backend can hot-swap
+        // AND the swapchain-level config (pixel format / frames-in-flight / EDR)
+        // is unchanged. An incapable backend (DirectX / Vulkan, whose default
+        // `hot_swap_config` is `None`) or a swapchain change routes to a full
+        // rebuild instead: the transplanted backend is idled + dropped and a new
+        // window is created (a rare one-frame flash). Deciding via `hot_swap_config`
+        // up front leaves `backend_init` intact for that rebuild path.
+        let reuse_backend = match ctx
+            .resources
+            .remove::<crate::ecs::PendingBackend>()
+            .map(|p| p.0)
+        {
+            Some(backend) if backend.hot_swap_config() == Some(backend_init.swapchain_config()) => {
+                Some(backend)
+            }
+            Some(backend) => {
+                backend.wait_idle();
+                None
+            }
+            None => None,
+        };
         // Tests inject a mock backend factory through `test_hooks`; production
         // always routes to the compile-time-selected real backend. Inline (not
         // a method) because `backend_init` still borrows `self.window_args`.
         #[cfg(test)]
-        let built = match self.test_hooks.as_mut() {
-            Some(hooks) => (hooks.backend_factory)(backend_init),
-            None => concinnity_device::init_backend(backend_init),
+        let built = match reuse_backend {
+            Some(mut backend) => match backend.reload_world(backend_init) {
+                Ok(()) => {
+                    tracing::info!(
+                        "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
+                    );
+                    Some(backend)
+                }
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: reload_world failed: {e}");
+                    None
+                }
+            },
+            None => match self.test_hooks.as_mut() {
+                Some(hooks) => (hooks.backend_factory)(backend_init),
+                None => concinnity_device::init_backend(backend_init),
+            },
         };
         #[cfg(not(test))]
-        let built = concinnity_device::init_backend(backend_init);
+        let built = match reuse_backend {
+            Some(mut backend) => match backend.reload_world(backend_init) {
+                Ok(()) => {
+                    tracing::info!(
+                        "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
+                    );
+                    Some(backend)
+                }
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: reload_world failed: {e}");
+                    None
+                }
+            },
+            None => concinnity_device::init_backend(backend_init),
+        };
         self.backend = built;
 
         if self.backend.is_none() {

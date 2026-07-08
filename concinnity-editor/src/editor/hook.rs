@@ -14,14 +14,18 @@
 //
 // SAVE persists by re-serializing the authored entry list to world.jsonl and
 // recompiling the blobs through the validated cook tail (`build_world_to_disk`),
-// never by patching blobs directly. Phase 1 persists to disk only: the live
-// world keeps rendering the pre-edit scene, and added assets appear on the next
-// `cn editor` launch.
+// never by patching blobs directly. A successful SAVE then applies the edit to
+// the running world without recreating the window: the live render backend is
+// transplanted out of the world (`take_render_backend`) and `apply_world_swap`
+// rebuilds the recompiled world onto it (carried in as a `PendingBackend`), so
+// the edit shows immediately. When the backend cannot be transplanted (no live
+// GraphicsSystem yet) the SAVE is persist-only and the edit shows next launch.
 
 use super::hud::{self, HudAction, HudState, Menu};
+use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
-use crate::ecs::{MenuOverride, World};
+use crate::ecs::{MenuOverride, PendingBackend, World};
 
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
@@ -38,6 +42,11 @@ pub(crate) struct EditorHook {
     world_capture: bool,
     // Whether the whole HUD is shown (F1 toggle). Starts shown.
     hud_visible: bool,
+    // Set by a successful SAVE (in `tick`), consumed by `apply_world_swap` (run
+    // right after) to apply the recompiled world to the running one. The backend
+    // is not transplanted until `apply_world_swap` has rebuilt the new world off
+    // disk, so a rebuild failure leaves the live world (and its window) untouched.
+    swap_requested: bool,
 }
 
 impl EditorHook {
@@ -49,6 +58,7 @@ impl EditorHook {
             menu: None,
             world_capture: false,
             hud_visible: true,
+            swap_requested: false,
         }
     }
 
@@ -88,15 +98,20 @@ impl EditorHook {
     }
 
     // Persist the working entries: write world.jsonl, then recompile the blobs.
-    // On success the world is clean again; on failure it stays dirty so the user
-    // can retry.
-    fn save(&mut self) {
+    // On success the world is clean again and `true` is returned so the caller
+    // triggers the live world swap; on failure it stays dirty (so the user can
+    // retry) and `false` is returned (no swap).
+    fn save(&mut self) -> bool {
         match self.persist() {
             Ok(()) => {
                 self.dirty = false;
                 tracing::info!("editor: saved {}", self.world_path);
+                true
             }
-            Err(e) => tracing::error!("editor: save failed: {e}"),
+            Err(e) => {
+                tracing::error!("editor: save failed: {e}");
+                false
+            }
         }
     }
 
@@ -152,10 +167,12 @@ impl EditorHook {
     }
 
     // Route a resolved HUD click. Split out so the state transitions are
-    // unit-testable without a live world or the render loop.
-    fn apply(&mut self, action: HudAction) {
+    // unit-testable without a live world or the render loop. Returns `true` only
+    // when a SAVE succeeded, signalling the caller to transplant the backend and
+    // request a live world swap.
+    fn apply(&mut self, action: HudAction) -> bool {
         match action {
-            HudAction::Save => self.save(),
+            HudAction::Save => return self.save(),
             HudAction::OpenMenu(menu) => self.menu = Some(menu),
             HudAction::CloseMenu => self.menu = None,
             HudAction::ToggleCapture => self.world_capture = !self.world_capture,
@@ -172,6 +189,7 @@ impl EditorHook {
                 self.menu = None;
             }
         }
+        false
     }
 
     fn hud_state(&self) -> HudState {
@@ -208,8 +226,14 @@ impl DebugHook for EditorHook {
                     self.menu,
                     input.viewport[0],
                 )
+                && self.apply(action)
             {
-                self.apply(action);
+                // A SAVE just persisted the recompiled blobs. Request the App-level
+                // swap (`apply_world_swap`, run right after this tick) to apply the
+                // edit to the running world. The backend is transplanted there,
+                // only after the new world rebuilds, so a rebuild failure never
+                // tears down the live world.
+                self.swap_requested = true;
             }
         }
 
@@ -220,6 +244,56 @@ impl DebugHook for EditorHook {
 
         // Re-anchor + recolour the HUD (or hide it when F1-toggled off).
         hud::apply_layout(world, self.hud_state());
+    }
+
+    // Apply a pending live world swap: rebuild the recompiled world off disk,
+    // transplant the running render backend into it, and re-`start` it, so the
+    // edit renders without recreating the OS window. Run once per frame by the run
+    // loop right after `tick`.
+    //
+    // The recompiled world is built FIRST, in a throwaway App; only once that
+    // succeeds is the backend transplanted out of the live world and the swap
+    // performed. So a rebuild failure (e.g. a bad read of the just-written blobs)
+    // leaves the live world -- and its window -- fully intact and rendering; the
+    // next SAVE retries. The backend is never dropped on an error path.
+    fn apply_world_swap(&mut self, app: &mut App) {
+        if !self.swap_requested {
+            return;
+        }
+        self.swap_requested = false;
+
+        // Build the recompiled world off the freshly written blobs (reusing the
+        // boot path's build-if-needed / load / empty-seed logic). On failure the
+        // live world is left untouched.
+        let mut staged = App::new();
+        if let Err(e) = super::boot_world(&mut staged, &self.world_path, true) {
+            tracing::error!("editor: live swap rebuild failed, keeping current world: {e}");
+            return;
+        }
+        // Drop the baked DebugHud (the editor HUD owns F1), inject the editor HUD,
+        // and seed the cursor / freeze state so the freshly started world's first
+        // frame already honours edit/play mode (no one-frame cursor grab).
+        staged.world_mut().remove_all::<crate::assets::DebugHud>();
+        super::inject::editor_hud(staged.world_mut());
+        staged
+            .world_mut()
+            .insert_resource(MenuOverride(Some(!self.world_capture)));
+
+        // Only now transplant the live backend into the rebuilt world (as a
+        // `PendingBackend`, so its GraphicsSystem reuses the live window via
+        // `reload_world`), drop the pre-edit world (joining its streaming threads
+        // before the new world's start spawns its own), and start the new world.
+        let Some(backend) = app.world_mut().take_render_backend() else {
+            // No live backend to transplant (no started GraphicsSystem): the SAVE
+            // is persist-only and the edit shows on the next launch.
+            return;
+        };
+        staged.world_mut().insert_resource(PendingBackend(backend));
+        let new_world = std::mem::replace(staged.world_mut(), World::new_empty());
+        app.load_world(new_world);
+        if let Err(e) = app.start() {
+            tracing::error!("editor: live swap start failed: {e:?}");
+        }
     }
 }
 
@@ -292,6 +366,24 @@ mod tests {
         h.apply(HudAction::OpenMenu(Menu::Templates));
         h.apply(HudAction::Pick(0));
         assert_eq!(h.entries.len(), first, "re-apply is idempotent");
+    }
+
+    // Only a successful SAVE signals the caller to transplant the backend and
+    // swap the world; every other HUD action returns false (no swap).
+    #[test]
+    fn only_save_signals_a_world_swap() {
+        let mut h = hook(Vec::new());
+        assert!(
+            !h.apply(HudAction::OpenMenu(Menu::Add)),
+            "opening a menu is not a save"
+        );
+        assert!(!h.apply(HudAction::CloseMenu));
+        assert!(!h.apply(HudAction::ToggleCapture));
+        h.menu = Some(Menu::Add);
+        assert!(
+            !h.apply(HudAction::Pick(0)),
+            "adding an asset is not a save (it swaps on the next SAVE)"
+        );
     }
 
     // An out-of-range pick index (never produced by the HUD, but guarded) adds

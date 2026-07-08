@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::gfx::backend::{ChunkMesh, FrameParams, GpuProfile, RenderBackend};
-use crate::gfx::backend_init::{BackendInit, ShadowParams};
+use crate::gfx::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
@@ -61,6 +61,9 @@ pub(crate) struct InitSnapshot {
 pub(crate) enum Call {
     CaptureCursor,
     WaitIdle,
+    // A live world reload was applied onto this (transplanted) backend instead
+    // of building a fresh one -- the `cn editor` hot-swap path.
+    ReloadWorld,
     TakeInput,
     DrawFrame {
         world_hidden: bool,
@@ -135,6 +138,9 @@ pub(crate) struct MockState {
     pub window_closed: bool,
     // When set, draw_frame returns this error instead of Ok.
     pub fail_draw: Option<String>,
+    // When set, reload_world returns this error instead of Ok (exercising the
+    // hot-swap failure path where GraphicsSystem marks itself failed).
+    pub fail_reload: Option<String>,
     // Snapshot the next take_input() returns, then reset to default
     // (matching a real backend's drain-on-poll semantics).
     pub next_input: RenderInput,
@@ -154,6 +160,7 @@ impl Default for MockState {
             visibility: std::collections::HashMap::new(),
             window_closed: false,
             fail_draw: None,
+            fail_reload: None,
             next_input: RenderInput::default(),
             logical_size: (1280.0, 720.0),
             next_slot: 0,
@@ -187,6 +194,41 @@ impl MockState {
 
 pub(crate) struct MockBackend {
     state: Arc<Mutex<MockState>>,
+    // The swapchain config this backend reports as hot-swappable, mirroring a
+    // real backend that can reuse its window for a live world reload. `None`
+    // makes it behave like DirectX / Vulkan (never hot-swap; always rebuild).
+    hot_swap: Option<SwapchainConfig>,
+}
+
+// Capture the assembled `BackendInit` into the shared state (the parts tests
+// assert on), consuming it. Shared by the factory's fresh build and the
+// transplanted backend's `reload_world`, so both paths record identical
+// snapshots and a test can tell which one ran by which state was written.
+fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
+    let mut s = state.lock().unwrap();
+    s.next_slot = init.scene.draw_objects.len();
+    s.init = Some(InitSnapshot {
+        window_width: init.window.width,
+        window_height: init.window.height,
+        window_title: init.window.title.clone(),
+        clear_color: init.clear_color,
+        frames_in_flight: init.frames_in_flight,
+        vsync: init.vsync,
+        vertex_count: init.scene.vertices.len(),
+        index_count: init.scene.indices.len(),
+        draw_objects: init.scene.draw_objects,
+        instanced_cluster_count: init.scene.instanced_clusters.len(),
+        n_skinned: init.scene.n_skinned,
+        texture_count: init.media.textures.len(),
+        normal_map_count: init.media.normal_maps.len(),
+        text_atlas_count: init.media.text_atlases.len(),
+        shadows: init.shadows,
+        anisotropy: init.anisotropy,
+        scene_required: init.requirements.scene,
+        fog: init.fx.fog.is_some(),
+        taa_enabled: init.post.taa_enabled,
+        ssao_on: init.post.ssao.is_some(),
+    });
 }
 
 // Hooks with default settings (nothing persisted) and an unclassified GPU:
@@ -205,32 +247,13 @@ pub(crate) fn recording_hooks_with(
     let state = Arc::new(Mutex::new(MockState::default()));
     let factory_state = Arc::clone(&state);
     let backend_factory: BackendFactory = Box::new(move |init: BackendInit<'_>| {
-        let mut s = factory_state.lock().unwrap();
-        s.next_slot = init.scene.draw_objects.len();
-        s.init = Some(InitSnapshot {
-            window_width: init.window.width,
-            window_height: init.window.height,
-            window_title: init.window.title.clone(),
-            clear_color: init.clear_color,
-            frames_in_flight: init.frames_in_flight,
-            vsync: init.vsync,
-            vertex_count: init.scene.vertices.len(),
-            index_count: init.scene.indices.len(),
-            draw_objects: init.scene.draw_objects,
-            instanced_cluster_count: init.scene.instanced_clusters.len(),
-            n_skinned: init.scene.n_skinned,
-            texture_count: init.media.textures.len(),
-            normal_map_count: init.media.normal_maps.len(),
-            text_atlas_count: init.media.text_atlases.len(),
-            shadows: init.shadows,
-            anisotropy: init.anisotropy,
-            scene_required: init.requirements.scene,
-            fog: init.fx.fog.is_some(),
-            taa_enabled: init.post.taa_enabled,
-            ssao_on: init.post.ssao.is_some(),
-        });
+        // A fresh build advertises the world's own config as hot-swappable, so a
+        // backend built here can later be transplanted onto another world.
+        let hot_swap = Some(init.swapchain_config());
+        record_init(&factory_state, init);
         Some(Box::new(MockBackend {
             state: Arc::clone(&factory_state),
+            hot_swap,
         }) as Box<dyn RenderBackend>)
     });
     (
@@ -246,6 +269,18 @@ pub(crate) fn recording_hooks_with(
 impl MockBackend {
     fn record(&self, call: Call) {
         self.state.lock().unwrap().calls.push(call);
+    }
+
+    // A backend the test transplants into a rebuilt world (a `PendingBackend`),
+    // recording into its own `state` so a reload is distinguishable from a fresh
+    // factory build. `hot_swap` is the config it reports as hot-swappable: match
+    // the new world's `swapchain_config` to exercise the reload path, differ to
+    // exercise the swapchain-change full-rebuild path.
+    pub(crate) fn transplant(
+        state: Arc<Mutex<MockState>>,
+        hot_swap: Option<SwapchainConfig>,
+    ) -> MockBackend {
+        MockBackend { state, hot_swap }
     }
 }
 
@@ -278,6 +313,23 @@ impl RenderBackend for MockBackend {
 
     fn wait_idle(&self) {
         self.record(Call::WaitIdle);
+    }
+
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        self.hot_swap
+    }
+
+    fn reload_world(&mut self, init: BackendInit<'_>) -> Result<(), String> {
+        let fail = self.state.lock().unwrap().fail_reload.clone();
+        self.record(Call::ReloadWorld);
+        if let Some(e) = fail {
+            return Err(e);
+        }
+        // Record the reloaded world's content into this (transplanted) backend's
+        // state, exactly as the factory would for a fresh build, so a test can
+        // assert the reused backend now carries the new world.
+        record_init(&self.state, init);
+        Ok(())
     }
 
     fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {

@@ -20,7 +20,10 @@ use crate::ecs::{
     StepResult,
 };
 use crate::gfx::backend::{GpuProfile, GpuTier, GpuVendor};
-use crate::gfx::mock_backend::{Call, MockState, TestHooks, recording_hooks, recording_hooks_with};
+use crate::gfx::backend_init::SwapchainConfig;
+use crate::gfx::mock_backend::{
+    Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
+};
 use crate::gfx::profile::FrameProfile;
 use crate::gfx::quality_preset::QualityPreset;
 
@@ -167,9 +170,15 @@ fn texture_payload(w: u32, h: u32) -> Vec<u8> {
 // A representative renderable world: window + config + shaders + camera and
 // one textured quad placed by a prop.
 fn scene_builder() -> WorldBuilder {
+    titled_scene("mock world")
+}
+
+// The same representative world with a caller-chosen window title, so a test can
+// tell two worlds apart in the captured `InitSnapshot` (the live-swap tests).
+fn titled_scene(title: &str) -> WorldBuilder {
     let mut b = WorldBuilder::new();
     b.push(Window {
-        title: "mock world".to_string(),
+        title: title.to_string(),
         width: 640,
         height: 360,
         ..Default::default()
@@ -254,6 +263,153 @@ fn init_builds_draw_list_and_render_handles() {
         .collect();
     assert_eq!(globals.len(), 1);
     assert_eq!(globals[0][3][0], 1.0);
+}
+
+// The built backend can be taken exactly once (the `cn editor` transplant).
+#[test]
+fn take_backend_yields_the_backend_once() {
+    let (_state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(gs.take_backend().is_some(), "the built backend is taken");
+    assert!(gs.take_backend().is_none(), "and only once");
+}
+
+// A world carrying a transplanted backend whose swapchain config matches reuses
+// it (calls reload_world) instead of building a fresh one, and the reused
+// backend ends up carrying the new world's content -- proving the same instance
+// was swapped over (the `cn editor` live SAVE hot path).
+#[test]
+fn pending_backend_reuses_instance_and_ends_with_new_world() {
+    // World A builds its own backend (the factory records into state_a).
+    let (state_a, hooks_a) = recording_hooks();
+    let mut world_a = titled_scene("world A").build();
+    let mut gs_a = init_graphics(&mut world_a, hooks_a);
+    let backend_a = gs_a.take_backend().expect("world A built a backend");
+
+    // Transplant it into world B (a different world, same swapchain config).
+    let (state_b, hooks_b) = recording_hooks();
+    let mut world_b = titled_scene("world B").build();
+    world_b
+        .resources
+        .insert(crate::ecs::PendingBackend(backend_a));
+    let gs_b = init_graphics(&mut world_b, hooks_b);
+
+    assert!(!gs_b.failed);
+    assert!(gs_b.backend.is_some(), "the reused backend is installed");
+    let a = lock(&state_a);
+    assert!(
+        a.saw(&Call::ReloadWorld),
+        "the transplanted backend was reloaded, not rebuilt"
+    );
+    assert_eq!(
+        a.init.as_ref().unwrap().window_title,
+        "world B",
+        "the reused backend now carries the new world's content"
+    );
+    drop(a);
+    assert!(
+        state_b.lock().unwrap().init.is_none(),
+        "world B never built a fresh backend"
+    );
+}
+
+// A transplanted backend whose swapchain config differs (frames-in-flight, HDR)
+// cannot reuse the window: it is idled + dropped and a fresh backend is built.
+#[test]
+fn pending_backend_swapchain_change_forces_full_rebuild() {
+    let (state_t, _unused) = recording_hooks();
+    let transplant = MockBackend::transplant(
+        Arc::clone(&state_t),
+        Some(SwapchainConfig {
+            // The scene world uses the default 2 frames-in-flight; 3 mismatches.
+            frames_in_flight: 3,
+            hdr_display: false,
+            hdr_pq: false,
+        }),
+    );
+    let (state_b, hooks_b) = recording_hooks();
+    let mut world = scene_builder().build();
+    world
+        .resources
+        .insert(crate::ecs::PendingBackend(Box::new(transplant)));
+    let gs = init_graphics(&mut world, hooks_b);
+
+    assert!(!gs.failed);
+    assert!(gs.backend.is_some());
+    let t = lock(&state_t);
+    assert!(
+        t.saw(&Call::WaitIdle),
+        "the mismatched backend is idled before it is dropped"
+    );
+    assert!(
+        !t.saw(&Call::ReloadWorld),
+        "no reload is attempted across a swapchain change"
+    );
+    drop(t);
+    assert!(
+        state_b.lock().unwrap().init.is_some(),
+        "a fresh backend is built for the changed swapchain"
+    );
+}
+
+// The HDR axis of the swapchain identity is honoured too: a transplant whose
+// hdr_display request differs from the new world's forces a full rebuild rather
+// than an in-place reload (the pixel format would otherwise diverge).
+#[test]
+fn pending_backend_hdr_change_forces_full_rebuild() {
+    let (state_t, _unused) = recording_hooks();
+    let transplant = MockBackend::transplant(
+        Arc::clone(&state_t),
+        Some(SwapchainConfig {
+            // The scene world requests no HDR (PostProcessConfig default); an
+            // HDR-requesting transplant is a swapchain change.
+            frames_in_flight: 2,
+            hdr_display: true,
+            hdr_pq: false,
+        }),
+    );
+    let (state_b, hooks_b) = recording_hooks();
+    let mut world = scene_builder().build();
+    world
+        .resources
+        .insert(crate::ecs::PendingBackend(Box::new(transplant)));
+    let gs = init_graphics(&mut world, hooks_b);
+
+    assert!(!gs.failed);
+    let t = lock(&state_t);
+    assert!(
+        t.saw(&Call::WaitIdle),
+        "the HDR-mismatched backend is idled"
+    );
+    assert!(!t.saw(&Call::ReloadWorld), "no reload across an HDR change");
+    drop(t);
+    assert!(
+        state_b.lock().unwrap().init.is_some(),
+        "a fresh backend is built for the changed HDR output"
+    );
+}
+
+// A transplanted backend that reports hot-swap-capable but fails the reload
+// leaves GraphicsSystem failed (no silent fallback that loses the edit).
+#[test]
+fn reload_world_failure_marks_graphics_failed() {
+    let (state_a, hooks_a) = recording_hooks();
+    let mut world_a = scene_builder().build();
+    let mut gs_a = init_graphics(&mut world_a, hooks_a);
+    let backend_a = gs_a.take_backend().unwrap();
+    state_a.lock().unwrap().fail_reload = Some("boom".to_string());
+
+    let (_state_b, hooks_b) = recording_hooks();
+    let mut world_b = scene_builder().build();
+    world_b
+        .resources
+        .insert(crate::ecs::PendingBackend(backend_a));
+    let gs_b = init_graphics(&mut world_b, hooks_b);
+
+    assert!(gs_b.failed, "a failed reload marks the system failed");
+    assert!(gs_b.backend.is_none());
+    assert!(state_a.lock().unwrap().saw(&Call::ReloadWorld));
 }
 
 #[test]

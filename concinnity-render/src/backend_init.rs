@@ -158,6 +158,19 @@ pub struct BackendInit<'a> {
     pub requirements: RenderRequirements,
 }
 
+// The swapchain-level configuration a backend bakes into its window / surface
+// at construction: the ring depth and the HDR-output request that together fix
+// the drawable pixel format and frames-in-flight sizing. A live world swap
+// (`RenderBackend::reload_world`) can only reuse the existing window when these
+// are unchanged; a difference forces a full backend rebuild (a new window).
+// Kept small + `Eq` so the swap decision is one comparison.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct SwapchainConfig {
+    pub frames_in_flight: usize,
+    pub hdr_display: bool,
+    pub hdr_pq: bool,
+}
+
 // What the world's content requires of the renderer. Derived from the
 // assembled scene + fx data, backend-agnostic, so all three backends make
 // identical trimming decisions.
@@ -195,6 +208,21 @@ impl RenderRequirements {
 }
 
 impl BackendInit<'_> {
+    // The swapchain-level configuration this world needs. Compared against a
+    // transplanted backend's `RenderBackend::hot_swap_config` to decide whether
+    // a live SAVE can reuse the existing window (`reload_world`) or must rebuild.
+    pub fn swapchain_config(&self) -> SwapchainConfig {
+        SwapchainConfig {
+            // Normalise to at least 1 to match how the backends size their ring
+            // buffers (e.g. Metal stores `frames_in_flight.max(1)`), so an
+            // out-of-range authored 0 does not read as a swapchain change vs a
+            // backend that already clamped it, spuriously forcing a full rebuild.
+            frames_in_flight: self.frames_in_flight.max(1),
+            hdr_display: self.post.hdr_display,
+            hdr_pq: self.post.hdr_pq,
+        }
+    }
+
     // Derive the requirements from the assembled content and trim
     // scene-scoped features accordingly. Runtime spawning can only clone
     // assets already declared in the world, so the derivation here is

@@ -74,9 +74,12 @@ pub(crate) fn start_app(
     }
 
     // The interpreted path ticks its debug hook each frame before the world step.
+    // After the tick (which sees only `&mut World`), the hook is given the whole
+    // App so it can apply a pending world swap (the `cn editor` live SAVE).
     let on_tick = |app: &mut App| {
         if let Some(hook) = debug.as_deref_mut() {
             hook.tick(app.world_mut());
+            hook.apply_world_swap(app);
         }
     };
 

@@ -602,6 +602,18 @@ impl GraphicsSystem {
         }
     }
 
+    // Take the live render backend, leaving `self.backend == None`. The
+    // `cn editor` live SAVE transplants it across a full world rebuild (reusing
+    // the GPU device + window) so a save does not recreate the OS window; the
+    // rebuilt world's GraphicsSystem receives it back via a `PendingBackend`
+    // resource and calls `reload_world` instead of building a new backend.
+    // Reached through `World::take_render_backend`; unused from the client
+    // itself, hence the dead-code allowance.
+    #[allow(dead_code)]
+    pub fn take_backend(&mut self) -> Option<Box<dyn RenderBackend>> {
+        self.backend.take()
+    }
+
     // Disjoint mutable view of the backend + hot-reload bookkeeping the
     // binary-only `DebugHook::tick` reload drive applies changes through.
     // `None` until the backend is constructed. The library never calls this

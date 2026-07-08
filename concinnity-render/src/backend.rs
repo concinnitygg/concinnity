@@ -20,6 +20,7 @@
 // no-op impls so DX/VK don't need to override them.
 
 use crate::auto_exposure::AutoExposureSettings;
+use crate::backend_init::{BackendInit, SwapchainConfig};
 use crate::input::RenderInput;
 use crate::keymap::KeyMap;
 use crate::mesh_payload::{SkinnedVertex, Vertex};
@@ -924,6 +925,35 @@ pub trait RenderBackend: SceneControl + Send {
         let _ = (vert_bytes, frag_bytes, shadow_bytes, vert_instanced_bytes);
         Err("update_world_shader_pipelines: not implemented on this backend".to_string())
     }
+
+    // The swapchain-level configuration this live backend can hot-swap a world
+    // onto, or `None` when the backend cannot reload a world in place (it must
+    // be fully rebuilt instead). Read by GraphicsSystem when a transplanted
+    // backend is handed a new world (the `cn editor` live SAVE): the swap reuses
+    // the backend via [`Self::reload_world`] only when this equals the new
+    // world's `BackendInit::swapchain_config`; a `None` or a mismatch routes to a
+    // full rebuild (recreating the window). Default `None`: DirectX / Vulkan
+    // (and any backend without a real `reload_world`) always rebuild.
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        None
+    }
+
+    // Re-upload a new world's GPU content onto this already-constructed backend,
+    // reusing the live device + window + swapchain instead of building a new one.
+    // Driven by the `cn editor` live SAVE: after a structural edit recompiles the
+    // blobs, GraphicsSystem transplants the running backend into the rebuilt
+    // world and calls this so the edit applies without recreating the OS window
+    // or re-initialising the GPU device. The backend waits for the GPU to idle,
+    // drops the old world's content resources, and rebuilds them from `init` on
+    // the retained hardware. Only ever called when [`Self::hot_swap_config`]
+    // reported a config matching `init.swapchain_config()`, so the swapchain
+    // (pixel format / frames-in-flight / EDR) is guaranteed unchanged. Default
+    // `Err`/unsupported: DirectX / Vulkan fall back to a full rebuild (no
+    // regression; a real implementation is Windows-pending like the rest).
+    fn reload_world(&mut self, init: BackendInit<'_>) -> Result<(), String> {
+        let _ = init;
+        Err("reload_world: not supported on this backend".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -1182,6 +1212,8 @@ mod tests {
         assert!(backend.display_modes().is_empty());
         assert!(backend.current_display_mode().is_none());
         assert!(backend.shader_reload_flag().is_none());
+        // Not hot-swap-capable: a live world reload routes to a full rebuild.
+        assert!(backend.hot_swap_config().is_none());
         // No geometry-size introspection for the reload size check.
         assert!(backend.draw_geometry_size(0).is_none());
         assert!(backend.draw_lod_index_counts(0).is_none());
@@ -1248,6 +1280,88 @@ mod tests {
                 .update_world_shader_pipelines(None, None, None, None)
                 .is_err()
         );
+    }
+
+    // A minimal empty-world BackendInit borrowing `window`, for exercising the
+    // default `reload_world`. Empty slices are `'static`; the only real borrow
+    // is the window args.
+    fn empty_backend_init(window: &crate::assets::WindowArgs) -> BackendInit<'_> {
+        use crate::backend_init::{
+            MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
+        };
+        BackendInit {
+            window,
+            validation: false,
+            frames_in_flight: 2,
+            vsync: false,
+            clear_color: [0.0; 4],
+            hot_reload: false,
+            scene: SceneData {
+                vertices: &[],
+                indices: &[],
+                draw_objects: Vec::new(),
+                instanced_clusters: Vec::new(),
+                n_skinned: 0,
+                n_chunk_max: 0,
+            },
+            shaders: ShaderBytes {
+                vert: &[],
+                frag: &[],
+                shadow: &[],
+                vert_instanced: &[],
+            },
+            media: MediaPayloads {
+                textures: &[],
+                normal_maps: &[],
+                text_atlases: Vec::new(),
+                env_map_bytes: None,
+                color_lut_bytes: None,
+            },
+            light_uniforms: crate::render_types::LightUniforms::DEFAULT,
+            shadows: ShadowParams {
+                map_size: 0,
+                update: crate::assets::ShadowUpdate::default(),
+                distance: 0,
+                cascades: 1,
+            },
+            anisotropy: 1,
+            planar_planes: 0,
+            post: PostSettings {
+                post_process: PostProcessParams::DEFAULT,
+                taa_enabled: false,
+                ssao: None,
+                ssr: None,
+                ssgi: None,
+                rt_reflections: None,
+                reflection_blur_scale: 1,
+                auto_exposure: None,
+                auto_exposure_bias_ev: 0.0,
+                hdr_display: false,
+                hdr_pq: false,
+                temporal_upscaling: false,
+                upscale_scale: 1.0,
+                upscale_backend: crate::assets::UpscalerBackend::Auto,
+                occlusion_two_pass: false,
+            },
+            fx: WorldFx {
+                decals: Vec::new(),
+                particles: Vec::new(),
+                fog: None,
+                water_surfaces: Vec::new(),
+                glass_panels: Vec::new(),
+                sdf_volumes: Vec::new(),
+            },
+            requirements: Default::default(),
+        }
+    }
+
+    #[test]
+    fn default_reload_world_is_unsupported() {
+        // A backend without a real reload path reports the swap unsupported, so
+        // the caller falls back to a full rebuild.
+        let mut backend = StubBackend;
+        let window = crate::assets::WindowArgs::default();
+        assert!(backend.reload_world(empty_backend_init(&window)).is_err());
     }
 
     fn stub_decal() -> crate::decal::DecalRecord {

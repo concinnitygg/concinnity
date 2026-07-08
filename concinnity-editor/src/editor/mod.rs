@@ -159,6 +159,12 @@ impl DebugHook for MultiHook {
         }
     }
 
+    fn apply_world_swap(&mut self, app: &mut crate::app::state::App) {
+        for hook in &mut self.hooks {
+            hook.apply_world_swap(app);
+        }
+    }
+
     fn attach_shutdown(&mut self, shutdown: CancellationToken) {
         for hook in &mut self.hooks {
             hook.attach_shutdown(shutdown.clone());

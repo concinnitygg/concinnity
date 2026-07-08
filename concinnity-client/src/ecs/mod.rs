@@ -65,6 +65,15 @@ pub struct MenuActive(pub bool);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuOverride(pub Option<bool>);
 
+// A render backend transplanted out of a previous world, carried into a freshly
+// built world so its GraphicsSystem reuses the live GPU device + window instead
+// of constructing a new one. Published by the `cn editor` live SAVE swap between
+// building the post-edit world and starting it; GraphicsSystem `run_init` takes
+// it and calls `RenderBackend::reload_world` (reusing the window) instead of
+// `init_backend`, so a save applies without recreating the OS window. A shipped
+// runtime never publishes it; it exists only on the editor's live-update path.
+pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
+
 // Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
 // (which runs first) and read by `StatHudSystem` the same tick. Each field is
 // the effective on/off for that chip: the master "Display performance stats"
@@ -332,6 +341,20 @@ impl World {
     #[allow(dead_code)]
     pub fn systems(&self) -> &[SystemAsset] {
         &self.systems
+    }
+
+    // Take the live render backend out of this world's GraphicsSystem, leaving
+    // the system backend-less. The `cn editor` live SAVE swap transplants it into
+    // the rebuilt world (via a `PendingBackend` resource) so the edit applies
+    // without recreating the OS window / re-initialising the GPU device. `None`
+    // when the world has no started GraphicsSystem (or it already yielded its
+    // backend). Cross-crate caller (the editor), so unused from the client itself.
+    #[allow(dead_code)]
+    pub fn take_render_backend(&mut self) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
+        self.systems.iter_mut().find_map(|s| match s {
+            SystemAsset::GraphicsSystem(gs) => gs.take_backend(),
+            _ => None,
+        })
     }
 
     // Despawn an entity (all its components, recycling its id). Stands in for the

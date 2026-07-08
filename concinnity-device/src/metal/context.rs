@@ -105,6 +105,14 @@ pub struct MtlContext {
     // on the SDR path. Read only by the headless `screenshot` path to decode
     // the captured `RGBA16Float` EDR drawable. Mirrors DX `hdr_encoding`.
     pub(super) hdr_encoding: Option<crate::gfx::hdr_output::HdrEncoding>,
+    // The world's HDR-output *request* this context was built with (before EDR
+    // negotiation could fall it back to SDR). Reported by `hot_swap_config` so a
+    // live `cn editor` world reload can tell whether the new world would produce
+    // the same swapchain: comparing the request (not the negotiated result)
+    // keeps a display without EDR headroom from spuriously forcing a rebuild
+    // every save. Paired with `frames_in_flight` as the swapchain identity.
+    pub(super) hdr_display_requested: bool,
+    pub(super) hdr_pq_requested: bool,
     // Colour texture of the most recently presented drawable, retained so the
     // `cn debug` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
@@ -445,6 +453,13 @@ pub struct MtlContext {
     // MTKView with isPaused=true and enableSetNeedsDisplay=false so its internal
     // display link never fires. draw() is called manually from draw_frame().
     pub(super) mtk_view: Retained<MTKView>,
+    // Whether this context is responsible for tearing the window / view down on
+    // drop (closing the NSWindow, or removing the embedded subview). True for a
+    // normally constructed context; set false on the outgoing context of a live
+    // `cn editor` reload, which transplants the window to its successor -- the
+    // successor owns it now, so the outgoing drop must NOT close the shared
+    // window (that would order it out from under the reused context).
+    pub(super) owns_window: bool,
     pub(super) window_closed: bool,
     // Whether draw_frame should pump NSEvents and honour cursor capture.
     // True for windowed mode and for the blocking-in-view play path; false
@@ -1284,6 +1299,13 @@ impl Drop for MtlContext {
         // still executing a committed command buffer can corrupt ObjC retain
         // counts and produce EXC_BAD_ACCESS in objc_release.
         self.wait_idle();
+        // A context whose window was transplanted to a successor (a live editor
+        // reload) must tear nothing down: the successor owns the window, view,
+        // and cursor state now, so closing the window here would order the reused
+        // window out from under it.
+        if !self.owns_window {
+            return;
+        }
         // Always release the cursor on teardown so the OS mouse association and
         // cursor visibility are restored even if the caller didn't do it.
         self.release_cursor();
