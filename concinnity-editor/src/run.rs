@@ -40,7 +40,10 @@ pub(crate) fn run_interpreted(
 // loop itself (and the platform event-pump + window activation) is the shared
 // `concinnity_client::app::runloop` driver; the interpreted path's only
 // addition is ticking the debug hook each frame.
-fn start_app(mut app: App, mut debug: Option<Box<dyn DebugHook>>) -> std::io::Result<()> {
+pub(crate) fn start_app(
+    mut app: App,
+    mut debug: Option<Box<dyn DebugHook>>,
+) -> std::io::Result<()> {
     use crate::app::runloop;
 
     let shutdown = app.shutdown_token();

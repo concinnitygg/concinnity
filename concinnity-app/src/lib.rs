@@ -35,7 +35,7 @@ pub(crate) mod test_support;
 // The authoring API: add / remove / check assets in a world JSONL, and build a
 // world into a runnable in-memory World. Consumed as `concinnity_app::<fn>`.
 pub use add::add_to_path;
-pub use build::build_world_from_path;
+pub use build::{build_world_from_path, build_world_to_disk};
 pub use check::{check_at_path, check_from_str};
 pub use rm::rm_at_path;
 

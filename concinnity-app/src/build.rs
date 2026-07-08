@@ -72,6 +72,20 @@ pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     world_from_loaded(loaded)
 }
 
+// Compile a world.jsonl file and write the compiled blobs + world-lock.json to
+// the active `.concinnity/data/` state dir, exactly as `cn build` does. This is
+// `cn build` as a library call: the editor's SAVE goes through here to persist
+// edits, reusing the validated compile + blob-write tail rather than patching
+// blobs directly. Same-process recompiles are fast because the payload / expand
+// caches are warm.
+pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
+    let content = std::fs::read_to_string(world_path)?;
+    let loaded = prepare(&content)?;
+    let result = concinnity_cook::build_compiled(loaded.assets, None)?;
+    concinnity_cook::write_build_outputs(&result, &loaded.injected)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +120,46 @@ mod tests {
         let err = build_world_from_path("/no/such/concinnity-world-xyz.jsonl")
             .expect_err("a missing world path must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    // Restores the previous working directory on drop, so a chdir-in-test does
+    // not leak into other tests (they run in parallel threads of one process).
+    struct CwdGuard(std::path::PathBuf);
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    // build_world_to_disk compiles a world.jsonl and writes the blobs + lock to
+    // the cwd-relative state tree, exactly as `cn build` does. Runs under the
+    // process cwd lock in an isolated temp dir so it neither races other tests
+    // nor pollutes the repo. Uses a payload-free world (PhysicsConfig) so it
+    // needs no source files or shader compilation.
+    #[test]
+    fn build_world_to_disk_writes_blobs_and_lock() {
+        let _guard = crate::test_support::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CwdGuard(prev);
+
+        std::fs::write(
+            "world.jsonl",
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+        )
+        .unwrap();
+
+        build_world_to_disk("world.jsonl").expect("compile + write should succeed");
+
+        // The primary blob (data/0) and the provenance lock are both written.
+        assert!(
+            concinnity_core::paths::data_dir().join("0").exists(),
+            "data/0 blob written"
+        );
+        assert!(
+            dir.path().join("world-lock.json").exists(),
+            "world-lock.json written"
+        );
     }
 }

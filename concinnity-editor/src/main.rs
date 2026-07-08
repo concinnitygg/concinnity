@@ -18,6 +18,7 @@ pub(crate) use concinnity_core::{build, geometry, result, world};
 mod cli;
 mod debug;
 mod debug_hook;
+mod editor;
 mod run;
 // Animation clip hot-reload decode (driven by the debug server).
 mod anim_reload;
@@ -95,6 +96,16 @@ enum Commands {
     // use when they need to read or drive runtime state over a WebSocket.
     #[command(name = "debug")]
     Debug(DebugArgs),
+
+    /// Edit a compiled world in-engine with a save-back HUD
+    //
+    // Reads the compiled blobs (a prior `cn build` is required), overlays the
+    // editor HUD (a SAVE button plus an add-asset button), and persists edits by
+    // recompiling world.jsonl. No WebSocket command channel unless --debug-port
+    // is given (which stands up the same debug server `cn debug` uses, so
+    // `cn debug smoke` / `screenshot` can drive an editor session).
+    #[command(name = "editor")]
+    Editor(EditorArgs),
 
     /// Add an asset to the active world
     //
@@ -250,6 +261,24 @@ pub struct DebugWatchArgs {
 }
 
 #[derive(Debug, clap::Args)]
+pub struct EditorArgs {
+    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    #[arg(short = 'f', long)]
+    pub file: Option<String>,
+
+    /// Start the localhost debug server on this port alongside the editor
+    // Absent leaves the editor without a WebSocket channel; present makes an
+    // editor session inspectable/drivable (e.g. `cn debug smoke`, `screenshot`).
+    #[arg(long)]
+    pub debug_port: Option<u16>,
+
+    /// Enable graphics API validation. Omitted defaults to on for debug builds
+    // and off for release. See `RunArgs::validation`.
+    #[arg(long)]
+    pub validation: Option<bool>,
+}
+
+#[derive(Debug, clap::Args)]
 pub struct RunArgs {
     /// Enable graphics API validation. Omitted defaults to on for debug builds
     // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
@@ -382,6 +411,7 @@ fn reexec_with_metal_validation(cli: &Cli) {
     let requested = match &cli.command {
         Commands::Run(args) => args.validation,
         Commands::Debug(args) if args.client.is_none() => args.validation,
+        Commands::Editor(args) => args.validation,
         _ => return,
     };
     if !requested.unwrap_or(cfg!(debug_assertions)) {
@@ -450,6 +480,10 @@ fn main() -> std::io::Result<()> {
                 run::run_interpreted(args.file.as_deref(), Some(debug_hook))
             }
         },
+        Commands::Editor(args) => {
+            app::dev_flags::set_validation(args.validation);
+            editor::run_editor(args.file.as_deref(), args.debug_port)
+        }
         Commands::Add(args) => {
             cli::add(args.name.as_deref(), &args.target, args.template.as_deref())
         }
