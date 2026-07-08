@@ -21,7 +21,8 @@ mod registry;
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
     BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage, ComponentType,
-    Entity, EventCursor, Events, PayloadLocator, PipelineContext, Resources, asset_api, asset_id,
+    Entity, EventCursor, EventStore, Events, PayloadLocator, PipelineContext, Resources, asset_api,
+    asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's
@@ -292,7 +293,7 @@ impl World {
     // `PipelineContext::events`, for code holding a `World` directly (tests).
     #[allow(dead_code)]
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
-        self.resources.get::<Events<E>>()
+        self.resources.get::<EventStore>()?.get::<E>()
     }
 
     // Mutably borrow (creating if absent) the event queue for event type E.
@@ -300,12 +301,13 @@ impl World {
     // directly: tests, and the editor's debug-driven command injection.
     #[allow(dead_code)]
     pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
-        if !self.resources.contains::<Events<E>>() {
-            self.resources.insert(Events::<E>::new());
+        if !self.resources.contains::<EventStore>() {
+            self.resources.insert(EventStore::new());
         }
         self.resources
-            .get_mut::<Events<E>>()
-            .expect("Events<E> was just inserted")
+            .get_mut::<EventStore>()
+            .expect("EventStore was just inserted")
+            .get_mut_or_create::<E>()
     }
 
     #[allow(dead_code)]
@@ -557,25 +559,15 @@ impl World {
         &self.profile
     }
 
-    // Advance one event queue a frame so its two-frame retention holds for
-    // readers that run after the writer.
-    fn update_event_queue<E: 'static>(&mut self) {
-        if let Some(events) = self.resources.get_mut::<Events<E>>() {
-            events.update();
-        }
-    }
-
-    // Advance every migrated event queue once per frame, before systems run.
-    // Each migrated event type is listed here explicitly.
+    // Advance every event queue once per frame, before systems run, so each
+    // queue's two-frame retention holds for readers that run after the writer.
+    // The `EventStore` owns every queue `events_mut` ever created (on `World`
+    // or `PipelineContext`), so no per-type rotation list exists to fall out
+    // of sync.
     fn update_events(&mut self) {
-        self.update_event_queue::<crate::assets::SceneCommand>();
-        self.update_event_queue::<crate::assets::ViewCommand>();
-        self.update_event_queue::<crate::assets::SettingCommand>();
-        self.update_event_queue::<crate::assets::ControlsCommand>();
-        self.update_event_queue::<crate::assets::AudioCommand>();
-        self.update_event_queue::<crate::assets::DespawnRequest>();
-        self.update_event_queue::<crate::assets::ReparentRequest>();
-        self.update_event_queue::<crate::assets::SpawnRequest>();
+        if let Some(store) = self.resources.get_mut::<EventStore>() {
+            store.update_all();
+        }
     }
 
     // Tick -- systems run in order, Done systems are removed.
@@ -660,6 +652,29 @@ mod tests {
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["StorySystem"]);
+    }
+
+    // Every event queue rotates each step, whatever its type: an event sent
+    // once retires after two steps, so a queue written every frame stays
+    // bounded at two frames of events instead of growing for the session.
+    #[test]
+    fn event_queues_rotate_every_step() {
+        struct Ping;
+        struct Pong;
+
+        let mut world = World::new_empty();
+        world.start().unwrap();
+        for _ in 0..5 {
+            world.events_mut::<Ping>().send(Ping);
+            world.events_mut::<Pong>().send(Pong);
+            world.step();
+        }
+        for len in [
+            world.events::<Ping>().expect("Ping queue exists").len(),
+            world.events::<Pong>().expect("Pong queue exists").len(),
+        ] {
+            assert!(len <= 2, "queue holds at most two frames of events: {len}");
+        }
     }
 
     // The World Debug impl reports component and system counts rather than

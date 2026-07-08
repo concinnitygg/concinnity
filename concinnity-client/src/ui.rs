@@ -2937,12 +2937,13 @@ mod tests {
         assert!(produced_setting_commands(&world).is_empty());
     }
 
-    // Every ViewShown announcement so far, read with a fresh cursor.
-    fn shown_views(world: &World) -> Vec<AssetId> {
-        let mut cursor = crate::ecs::EventCursor::default();
+    // The ViewShown announcements the cursor has not yet consumed, read the
+    // way a real consumer (AudioCue) does: incrementally, before the queue's
+    // two-frame retention retires them.
+    fn shown_views(world: &World, cursor: &mut crate::ecs::EventCursor) -> Vec<AssetId> {
         world
             .events::<ViewShown>()
-            .map(|e| e.read(&mut cursor).into_iter().map(|s| s.view).collect())
+            .map(|e| e.read(cursor).into_iter().map(|s| s.view).collect())
             .unwrap_or_default()
     }
 
@@ -2961,20 +2962,21 @@ mod tests {
             });
         }
         world.start().unwrap();
-        assert_eq!(shown_views(&world), vec![first]);
+        let mut cursor = crate::ecs::EventCursor::default();
+        assert_eq!(shown_views(&world, &mut cursor), vec![first]);
 
         world
             .events_mut::<ViewCommand>()
             .send(ViewCommand::Show(second));
         world.step();
-        assert_eq!(shown_views(&world), vec![first, second]);
+        assert_eq!(shown_views(&world, &mut cursor), vec![second]);
 
         // Showing the already-active view is a no-op: no repeat announcement.
         world
             .events_mut::<ViewCommand>()
             .send(ViewCommand::Show(second));
         world.step();
-        assert_eq!(shown_views(&world), vec![first, second]);
+        assert!(shown_views(&world, &mut cursor).is_empty());
     }
 
     #[test]
