@@ -14,9 +14,9 @@ use crate::assets::{Sprite, TextAlign, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
-// Placeholder layout used only for frame 0; the tick re-anchors these to the
-// true window corner from the first frame's viewport. Sized to match the tick's
-// own geometry so the initial placement is already close.
+// Placeholder layout used only for frame 0; the tick re-anchors everything to
+// the true window corner from the first frame's viewport. Sized to match the
+// tick's geometry so the initial placement is already close.
 const REF_W: f32 = 1280.0;
 const SAVE_W: f32 = 88.0;
 const ADD_W: f32 = 132.0;
@@ -30,8 +30,9 @@ fn hud_font(world: &World) -> Option<AssetId> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
-// Inject the editor HUD's two buttons (SAVE and add-asset) as view-less
-// window-space overlay elements. Injected once by the caller, before start.
+// Inject the editor HUD: the SAVE + Add buttons and the (initially hidden)
+// add-asset dropdown rows, all view-less window-space overlays. Injected once by
+// the caller, before start.
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
 
@@ -42,17 +43,32 @@ pub(crate) fn editor_hud(world: &mut World) {
         hud::SAVE_BUTTON,
         save_rect,
         [0.82, 0.14, 0.16, 1.0],
+        true,
     ));
     world.add_component(button_sprite(
         hud::ADD_BUTTON,
         add_rect,
         [0.20, 0.34, 0.52, 1.0],
+        true,
     ));
-    world.add_component(button_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
-    world.add_component(button_label(hud::ADD_LABEL, "+ Light", add_rect, font));
+    world.add_component(centered_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
+    world.add_component(centered_label(hud::ADD_LABEL, "Add", add_rect, font));
+
+    // One hidden row per offered type; the tick shows/positions/colours them
+    // while the dropdown is open. Row labels carry the type name.
+    for (i, ty) in hud::ADD_TYPES.iter().enumerate() {
+        let rect = hud::dropdown_row_rect(REF_W, i);
+        world.add_component(button_sprite(
+            hud::dropdown_bg(i),
+            rect,
+            [0.14, 0.14, 0.17, 0.96],
+            false,
+        ));
+        world.add_component(row_label(hud::dropdown_label(i), ty, rect, font));
+    }
 }
 
-fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4]) -> Sprite {
+fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
     Sprite {
         asset_id: id,
         x: rect[0],
@@ -60,12 +76,12 @@ fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4]) -> Sprite {
         width: rect[2],
         height: rect[3],
         tint,
-        visible: true,
+        visible,
         ..Default::default()
     }
 }
 
-fn button_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
+fn centered_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
     TextLabel {
         asset_id: id,
         font,
@@ -79,34 +95,74 @@ fn button_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId
     }
 }
 
+fn row_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
+    TextLabel {
+        asset_id: id,
+        font,
+        content: content.to_string(),
+        x: rect[0] + 12.0,
+        y: rect[1] + 10.0,
+        color: [0.9, 0.9, 0.92],
+        align: TextAlign::Left,
+        // Hidden until the dropdown opens; the tick flips visibility.
+        visible: false,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Injection adds exactly the four HUD elements at their reserved ids, as
-    // view-less (window-space) overlays.
+    // Injection adds the two buttons + their labels plus one hidden row (bg +
+    // label) per offered type, all at reserved ids as view-less overlays.
     #[test]
-    fn injects_four_elements_at_reserved_ids() {
+    fn injects_buttons_and_hidden_rows() {
         let mut world = World::new_empty();
         editor_hud(&mut world);
 
-        let sprite_ids: Vec<AssetId> = world.query::<Sprite>().map(|s| s.asset_id).collect();
-        assert_eq!(sprite_ids.len(), 2);
-        assert!(sprite_ids.contains(&hud::SAVE_BUTTON));
-        assert!(sprite_ids.contains(&hud::ADD_BUTTON));
+        let n = hud::ADD_TYPES.len();
+        assert_eq!(world.query::<Sprite>().count(), 2 + n, "buttons + row bgs");
+        assert_eq!(
+            world.query::<TextLabel>().count(),
+            2 + n,
+            "labels + row labels"
+        );
 
-        let label_ids: Vec<AssetId> = world.query::<TextLabel>().map(|l| l.asset_id).collect();
-        assert_eq!(label_ids.len(), 2);
-        assert!(label_ids.contains(&hud::SAVE_LABEL));
-        assert!(label_ids.contains(&hud::ADD_LABEL));
+        // Buttons are visible; every dropdown row starts hidden.
+        assert!(
+            world
+                .query::<Sprite>()
+                .find(|s| s.asset_id == hud::SAVE_BUTTON)
+                .unwrap()
+                .visible
+        );
+        for i in 0..n {
+            assert!(
+                !world
+                    .query::<Sprite>()
+                    .find(|s| s.asset_id == hud::dropdown_bg(i))
+                    .unwrap()
+                    .visible,
+                "row {i} bg hidden"
+            );
+        }
+
+        // Row labels carry the offered type names.
+        for (i, ty) in hud::ADD_TYPES.iter().enumerate() {
+            let lbl = world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == hud::dropdown_label(i))
+                .unwrap();
+            assert_eq!(&lbl.content, ty);
+        }
 
         // View-less: window space, never overlay-scaled.
         assert!(world.query::<Sprite>().all(|s| s.view.is_none()));
         assert!(world.query::<TextLabel>().all(|l| l.view.is_none()));
     }
 
-    // The button text reuses whatever font an existing HUD label carries, so the
-    // labels render in the world's hud_font rather than defaulting.
+    // The button + row text reuses whatever font an existing HUD label carries.
     #[test]
     fn reuses_an_existing_label_font() {
         let mut world = World::new_empty();
@@ -121,5 +177,10 @@ mod tests {
             .find(|l| l.asset_id == hud::SAVE_LABEL)
             .unwrap();
         assert_eq!(save.font, Some(AssetId(42)));
+        let row0 = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == hud::dropdown_label(0))
+            .unwrap();
+        assert_eq!(row0.font, Some(AssetId(42)));
     }
 }
