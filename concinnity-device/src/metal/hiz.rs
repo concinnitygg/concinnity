@@ -42,21 +42,14 @@ use objc2_metal::{
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
 use super::pipeline::{ns_str, shader_source};
 use super::scoped_encoder::ScopedEncoder;
+// GPU-free repr(C) push struct; lives in concinnity-render so its layout test
+// counts toward coverage. Re-exported so this file's existing `HizParams` path
+// is unchanged.
+use super::uniforms::HizParams;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]`).
 const HIZ_TILE: usize = 8;
-
-// Per-dispatch params pushed inline at the kernels' buffer(0). Must match the
-// `HizParams` struct in `shaders/hiz_build.metal`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct HizParams {
-    dst_width: u32,
-    dst_height: u32,
-    src_mip: u32,
-    sample_count: u32,
-}
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
 // of-two sources end exactly at 1x1; non-power-of-two sources stop one mip
@@ -315,18 +308,7 @@ fn dispatch_2d(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{HizParams, hiz_mip_count};
-    use std::mem::{offset_of, size_of};
-
-    #[test]
-    fn hiz_params_layout_matches_msl() {
-        // MSL `HizParams` in hiz_build.metal: four tightly packed uints.
-        assert_eq!(size_of::<HizParams>(), 16);
-        assert_eq!(offset_of!(HizParams, dst_width), 0);
-        assert_eq!(offset_of!(HizParams, dst_height), 4);
-        assert_eq!(offset_of!(HizParams, src_mip), 8);
-        assert_eq!(offset_of!(HizParams, sample_count), 12);
-    }
+    use super::hiz_mip_count;
 
     #[test]
     fn mip_count_power_of_two() {

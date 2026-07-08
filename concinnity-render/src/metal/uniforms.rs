@@ -392,6 +392,96 @@ pub struct GlassMeshParams {
     pub prefilter_mip_count: f32,
 }
 
+// Per-dispatch params pushed inline at the Hi-Z build kernels' buffer(0). Must
+// match the `HizParams` struct in `shaders/hiz_build.metal`. 16 bytes.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct HizParams {
+    pub dst_width: u32,
+    pub dst_height: u32,
+    pub src_mip: u32,
+    pub sample_count: u32,
+}
+
+// One particle slot on the GPU. Layout must match the `Particle` MSL struct in
+// `shaders/particle.metal` (32 bytes per slot: `packed_float3 + float` twice).
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct GpuParticle {
+    pub position: [f32; 3],
+    pub age: f32,
+    pub velocity: [f32; 3],
+    pub lifetime: f32,
+}
+
+// Per-frame view inputs the raymarch pass binds at buffer(0). Layout matches
+// `RaymarchView` in `shaders/raymarch_helpers.metal`. 160 bytes.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct RaymarchView {
+    pub vp: [[f32; 4]; 4],
+    pub inv_vp: [[f32; 4]; 4],
+    // World-space camera position (xyz). `.w` is ignored.
+    pub cam_pos: [f32; 4],
+    // HDR target width / height in pixels: the shader divides `position.xy` by
+    // this to read the depth attachment with integer pixel coordinates.
+    pub viewport: [f32; 2],
+    // Wall-clock seconds since startup, available to the user SDF.
+    pub time: f32,
+    // Mip count of the bound IBL prefilter cube; 0 disables the cube-sample IBL
+    // path and the helper falls back to the hand-tuned hemispheric ambient.
+    // Mirrors `ViewUniforms.prefilter_mip_count` from the Main pass: same
+    // semantics, same gate.
+    pub prefilter_mip_count: f32,
+}
+
+// Per-volume uniforms uploaded at buffer(1). Layout matches `SdfVolumeUniforms`
+// in `shaders/raymarch_helpers.metal`. 176 bytes (two packed_float3 + pad = 32,
+// four scalars = 16, 32 float params = 128).
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct RaymarchVolumeUniforms {
+    // World-space centre (`packed_float3` + pad).
+    pub centre: [f32; 3],
+    pub _pad0: f32,
+    // XYZ half-widths of the bounding box (`packed_float3` + pad).
+    pub extent: [f32; 3],
+    pub _pad1: f32,
+    // `1 / max_gradient`; the cone-step scale factor in `coneRaymarch`.
+    pub cone_ratio: f32,
+    // Per-volume march far-clip in metres.
+    pub max_distance: f32,
+    // Per-volume step cap (clamped 8..256 at asset load).
+    pub max_steps: i32,
+    // Currently unused; reserved in the layout so user shaders that probe it
+    // find a stable slot.
+    pub receive_shadows: i32,
+    // Generic parameter block; the user shader casts it to whatever struct it
+    // interprets.
+    pub params: [f32; crate::assets::sdf_volume::SDF_PARAMS_LEN],
+}
+
+// Cascade selector pushed at buffer(4) for the raymarch shadow-caster pipeline.
+// Picks `shadow.light_vps[cascade_idx]` in both stages. Matches
+// `RaymarchShadowCascade` in `shaders/raymarch_shadow.metal`. 16 bytes.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct RaymarchShadowCascade {
+    pub cascade_idx: u32,
+    pub _pad: [u32; 3],
+}
+
+// Per-dispatch parameters for the `rt_skin` compute kernel. Matches the MSL
+// `SkinParams` in `shaders/rt_skin.metal`. 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SkinParams {
+    pub vertex_base: u32,
+    pub vertex_count: u32,
+    pub joint_count: u32,
+    pub _pad: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +721,77 @@ mod tests {
         assert_eq!(offset_of!(GlassMeshParams, fresnel_power), 88);
         assert_eq!(offset_of!(GlassMeshParams, prefilter_mip_count), 92);
         assert_eq!(size_of::<GlassMeshParams>() % 16, 0);
+    }
+
+    #[test]
+    fn hiz_params_layout_matches_msl() {
+        // MSL `HizParams` in hiz_build.metal: four tightly packed uints.
+        assert_eq!(size_of::<HizParams>(), 16);
+        assert_eq!(offset_of!(HizParams, dst_width), 0);
+        assert_eq!(offset_of!(HizParams, dst_height), 4);
+        assert_eq!(offset_of!(HizParams, src_mip), 8);
+        assert_eq!(offset_of!(HizParams, sample_count), 12);
+    }
+
+    #[test]
+    fn gpu_particle_layout_matches_msl() {
+        // Mirrors the `Particle` struct in `shaders/particle.metal`:
+        // packed_float3 + float, twice = 32 bytes, layout 0/12/16/28.
+        assert_eq!(size_of::<GpuParticle>(), 32);
+        assert_eq!(offset_of!(GpuParticle, position), 0);
+        assert_eq!(offset_of!(GpuParticle, age), 12);
+        assert_eq!(offset_of!(GpuParticle, velocity), 16);
+        assert_eq!(offset_of!(GpuParticle, lifetime), 28);
+    }
+
+    #[test]
+    fn raymarch_view_layout_matches_msl() {
+        // MSL `RaymarchView` in raymarch_helpers.metal: two float4x4, a
+        // packed_float3 cam_pos (+ pad), float2 viewport, then two scalars.
+        // The Rust `cam_pos: [f32; 4]` covers the same 16 bytes (xyz + pad)
+        // as the MSL `packed_float3 cam_pos; float _pad0;`.
+        assert_eq!(size_of::<RaymarchView>(), 160);
+        assert_eq!(offset_of!(RaymarchView, vp), 0);
+        assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
+        assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
+        assert_eq!(offset_of!(RaymarchView, viewport), 144);
+        assert_eq!(offset_of!(RaymarchView, time), 152);
+        assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
+        assert_eq!(size_of::<RaymarchView>() % 16, 0);
+    }
+
+    #[test]
+    fn raymarch_volume_uniforms_layout_matches_msl() {
+        // MSL `SdfVolumeUniforms` in raymarch_helpers.metal: two packed_float3
+        // (+ pad), four scalars, then `SdfParams { float vals[32]; }` at offset
+        // 48. The 176-byte size pins SDF_PARAMS_LEN == 32 (48 + 32*4).
+        assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, centre), 0);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad0), 12);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, extent), 16);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad1), 28);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_distance), 36);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
+        assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
+    }
+
+    #[test]
+    fn raymarch_shadow_cascade_layout_matches_msl() {
+        // MSL `RaymarchShadowCascade` in raymarch_shadow.metal: a uint + pad.
+        assert_eq!(size_of::<RaymarchShadowCascade>(), 16);
+        assert_eq!(offset_of!(RaymarchShadowCascade, cascade_idx), 0);
+        assert_eq!(offset_of!(RaymarchShadowCascade, _pad), 4);
+    }
+
+    #[test]
+    fn skin_params_layout_matches_msl() {
+        // MSL `SkinParams` in rt_skin.metal: four tightly packed uints.
+        assert_eq!(size_of::<SkinParams>(), 16);
+        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
+        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
+        assert_eq!(offset_of!(SkinParams, joint_count), 8);
+        assert_eq!(offset_of!(SkinParams, _pad), 12);
     }
 }

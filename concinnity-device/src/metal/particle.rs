@@ -37,19 +37,9 @@ use crate::gfx::render_types::ParticleParams;
 use super::context::MtlContext;
 use super::pipeline::{ns_str, shader_source};
 use super::scoped_encoder::ScopedEncoder;
-use super::uniforms::ParticleView;
-
-// One particle slot on the GPU. Layout must match the `Particle` MSL struct
-// in `shaders/particle.metal` (32 bytes per slot: `packed_float3 + float`
-// twice).
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-struct GpuParticle {
-    position: [f32; 3],
-    age: f32,
-    velocity: [f32; 3],
-    lifetime: f32,
-}
+// GPU-free repr(C) structs; live in concinnity-render so their layout tests
+// count toward coverage. Re-exported so this file's existing paths are unchanged.
+use super::uniforms::{GpuParticle, ParticleView};
 
 // Per-emitter persistent GPU state. The pool buffer lives in shared storage
 // so the CPU can zero-init it once; the atomic counter buffer is rewritten
@@ -441,20 +431,4 @@ pub(super) fn build_emitter_gpu_state(
         spawn_counter,
         spawn_state: ParticleSpawnState::default(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gpu_particle_layout_matches_msl() {
-        // Mirrors the `Particle` struct in `shaders/particle.metal`:
-        // packed_float3 + float, twice = 32 bytes, layout 0/12/16/28.
-        assert_eq!(std::mem::size_of::<GpuParticle>(), 32);
-        assert_eq!(std::mem::offset_of!(GpuParticle, position), 0);
-        assert_eq!(std::mem::offset_of!(GpuParticle, age), 12);
-        assert_eq!(std::mem::offset_of!(GpuParticle, velocity), 16);
-        assert_eq!(std::mem::offset_of!(GpuParticle, lifetime), 28);
-    }
 }

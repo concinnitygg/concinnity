@@ -57,6 +57,10 @@ use objc2_metal::{
 use super::transient::RetirePool;
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_reflections::RtReflectionSettings;
+// GPU-free repr(C) push struct; lives in concinnity-render so its layout test
+// counts toward coverage. Re-exported so this file's existing `SkinParams` path
+// is unchanged.
+use crate::metal::uniforms::SkinParams;
 
 // Marks a `RtGeomEntry.normal_index` as belonging to a skinned object: the
 // reflection kernel then fetches the hit triangle from the deformed-vertex /
@@ -682,17 +686,6 @@ fn attach_async_fault_logger(
     unsafe {
         cmd.addCompletedHandler(block2::RcBlock::as_ptr(&handler));
     }
-}
-
-// Per-dispatch parameters for the `rt_skin` compute kernel; matches the MSL
-// `SkinParams` (16 bytes).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SkinParams {
-    vertex_base: u32,
-    vertex_count: u32,
-    joint_count: u32,
-    _pad: u32,
 }
 
 // Identity matrix used as a one-joint fallback palette so a skinned object with
@@ -1882,17 +1875,6 @@ fn upload_buffer<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn skin_params_layout_matches_msl() {
-        // MSL `SkinParams` in rt_skin.metal: four tightly packed uints.
-        use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<SkinParams>(), 16);
-        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
-        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
-        assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, _pad), 12);
-    }
 
     #[test]
     fn pack_instance_transform_drops_affine_row_and_keeps_columns() {

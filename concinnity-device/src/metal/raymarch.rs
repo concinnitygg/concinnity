@@ -37,13 +37,19 @@ use objc2_metal::{
     MTLVertexStepFunction,
 };
 
-use crate::assets::sdf_volume::{SDF_PARAMS_LEN, SdfVolume};
+use crate::assets::sdf_volume::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::LightUniforms;
 
 use super::context::MtlContext;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
+// GPU-free repr(C) structs; live in concinnity-render so their layout tests
+// count toward coverage. Re-exported at `pub(in crate::metal)` (as before) so the
+// graph executor, shadow pass, and this file keep their existing paths.
+pub(in crate::metal) use crate::metal::uniforms::{
+    RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
+};
 
 // Engine-shipped header / template prepended + appended around each
 // user shader. The helpers carry the IQ primitive library + the cone-
@@ -66,64 +72,6 @@ const RAYMARCH_SHADOW_MSL: &str = include_str!("shaders/raymarch_shadow.metal");
 // accumulating Beer-Lambert transmittance and in-scattered light. Output is
 // alpha-blended; no depth write. Mirrors `directx/shaders/raymarch_volumetric_template.hlsl`.
 const RAYMARCH_VOLUMETRIC_MSL: &str = include_str!("shaders/raymarch_volumetric_template.metal");
-
-// Per-frame view inputs the raymarch pass binds at buffer(0). Layout
-// matches `RaymarchView` in `shaders/raymarch_helpers.metal`. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::metal) struct RaymarchView {
-    pub(in crate::metal) vp: [[f32; 4]; 4],
-    pub(in crate::metal) inv_vp: [[f32; 4]; 4],
-    // World-space camera position (xyz). `.w` is ignored.
-    pub(in crate::metal) cam_pos: [f32; 4],
-    // HDR target width / height in pixels: the shader divides
-    // `position.xy` by this to read the depth attachment with
-    // integer pixel coordinates.
-    pub(in crate::metal) viewport: [f32; 2],
-    // Wall-clock seconds since startup, available to the user SDF.
-    pub(in crate::metal) time: f32,
-    // Mip count of the bound IBL prefilter cube; 0 disables the cube-
-    // sample IBL path and the helper falls back to the hand-tuned
-    // hemispheric ambient. Mirrors `ViewUniforms.prefilter_mip_count`
-    // from the Main pass: same semantics, same gate.
-    pub(in crate::metal) prefilter_mip_count: f32,
-}
-
-// Per-volume uniforms uploaded at buffer(1). Layout matches
-// `SdfVolumeUniforms` in `shaders/raymarch_helpers.metal`. 176 bytes
-// (two packed_float3 + pad = 32, four scalars = 16, 32 float params = 128).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::metal) struct RaymarchVolumeUniforms {
-    // World-space centre (`packed_float3` + pad).
-    centre: [f32; 3],
-    _pad0: f32,
-    // XYZ half-widths of the bounding box (`packed_float3` + pad).
-    extent: [f32; 3],
-    _pad1: f32,
-    // `1 / max_gradient`; the cone-step scale factor in `coneRaymarch`.
-    cone_ratio: f32,
-    // Per-volume march far-clip in metres.
-    max_distance: f32,
-    // Per-volume step cap (clamped 8..256 at asset load).
-    max_steps: i32,
-    // Currently unused; reserved in the layout so user shaders that
-    // probe it find a stable slot.
-    receive_shadows: i32,
-    // Generic parameter block; the user shader casts it to whatever
-    // struct it interprets.
-    params: [f32; SDF_PARAMS_LEN],
-}
-
-// Cascade selector pushed at buffer(4) for the shadow-caster pipeline. Picks
-// `shadow.light_vps[cascade_idx]` in both stages. Matches
-// `RaymarchShadowCascade` in `shaders/raymarch_shadow.metal`. 16 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct RaymarchShadowCascade {
-    cascade_idx: u32,
-    _pad: [u32; 3],
-}
 
 // `RaymarchLights` mirror of `crate::gfx::render_types::LightUniforms`.
 // The Rust struct already has the right layout; we just hand the
@@ -1009,40 +957,6 @@ impl MtlContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
-
-    #[test]
-    fn raymarch_view_layout_matches_msl() {
-        // MSL `RaymarchView` in raymarch_helpers.metal: two float4x4, a
-        // packed_float3 cam_pos (+ pad), float2 viewport, then two scalars.
-        // The Rust `cam_pos: [f32; 4]` covers the same 16 bytes (xyz + pad)
-        // as the MSL `packed_float3 cam_pos; float _pad0;`.
-        assert_eq!(size_of::<RaymarchView>(), 160);
-        assert_eq!(offset_of!(RaymarchView, vp), 0);
-        assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
-        assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
-        assert_eq!(offset_of!(RaymarchView, viewport), 144);
-        assert_eq!(offset_of!(RaymarchView, time), 152);
-        assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
-        assert_eq!(size_of::<RaymarchView>() % 16, 0);
-    }
-
-    #[test]
-    fn raymarch_volume_uniforms_layout_matches_msl() {
-        // MSL `SdfVolumeUniforms` in raymarch_helpers.metal: two packed_float3
-        // (+ pad), four scalars, then `SdfParams { float vals[32]; }` at offset
-        // 48. The 176-byte size pins SDF_PARAMS_LEN == 32 (48 + 32*4).
-        assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, centre), 0);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad0), 12);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, extent), 16);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad1), 28);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_distance), 36);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
-    }
 
     #[test]
     fn volume_in_frustum_culls_offscreen_boxes() {
@@ -1066,13 +980,5 @@ mod tests {
             [100.0, 100.0, 100.0],
             &f
         ));
-    }
-
-    #[test]
-    fn raymarch_shadow_cascade_layout_matches_msl() {
-        // MSL `RaymarchShadowCascade` in raymarch_shadow.metal: a uint + pad.
-        assert_eq!(size_of::<RaymarchShadowCascade>(), 16);
-        assert_eq!(offset_of!(RaymarchShadowCascade, cascade_idx), 0);
-        assert_eq!(offset_of!(RaymarchShadowCascade, _pad), 4);
     }
 }
