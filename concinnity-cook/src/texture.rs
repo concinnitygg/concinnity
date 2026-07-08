@@ -1266,4 +1266,23 @@ mod tests {
         // plaster should be light (avg R > 210)
         assert!(avg_r > 200, "expected near-white, avg_r={avg_r}");
     }
+
+    // grass/brick/concrete had no compile-path coverage; each fills a square
+    // RGBA payload at the requested resolution behind the 8-byte header.
+    #[test]
+    fn compile_texture_payload_covers_remaining_procedural_generators() {
+        let res = 64u32;
+        for generator in ["grass", "brick", "concrete"] {
+            let args = serde_json::json!({"generator": generator, "resolution": res});
+            let payload = compile_texture_payload(&args)
+                .unwrap_or_else(|e| panic!("{generator} should compile: {e}"));
+            assert_eq!(&payload[0..4], &res.to_le_bytes(), "{generator} width");
+            assert_eq!(&payload[4..8], &res.to_le_bytes(), "{generator} height");
+            assert_eq!(
+                payload.len(),
+                8 + (res * res * 4) as usize,
+                "{generator} payload length"
+            );
+        }
+    }
 }

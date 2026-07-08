@@ -2042,3 +2042,223 @@ fn story_source_dirs_of_a_missing_world_is_empty() {
     let dirs = story_source_dirs(dir.path().join("gone.jsonl").to_str().unwrap());
     assert!(dirs.is_empty());
 }
+
+// decode backend-rejection sub-branches (poll_pending_assets)
+//
+// The static-mesh in-place and rebuild error paths are driven purely by the
+// RecordingBackend's failure toggles, so no real model file is needed. The
+// ColorLut and in-place skinned rejection paths have no matching toggle on the
+// shared RecordingBackend and are left uncovered here.
+
+#[test]
+fn poll_pending_assets_survives_an_in_place_mesh_rejection() {
+    // Default draw_geometry_size (None) keeps the in-place path; the backend
+    // rejects every update but the poll must tally the failure and still report
+    // the batch consumed rather than panic.
+    let mut state = one_mesh_state(vec![2, 5]);
+    let batch = DecodedAssetBatch {
+        meshes: vec![decoded_mesh(0, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_mesh_updates: true,
+        ..Default::default()
+    };
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    // Both draw slots were attempted before the rejection was recorded.
+    assert_eq!(backend.mesh_updates, vec![2, 5]);
+    assert!(backend.static_rebuild_change_counts.is_empty());
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_assets_survives_a_failed_static_rebuild() {
+    // A reported size change routes the whole entry into rebuild_static_geometry,
+    // which the backend rejects. The poll tallies the failure and clears the
+    // in-flight slot without touching the in-place path.
+    let mut state = one_mesh_state(vec![2, 5]);
+    let batch = DecodedAssetBatch {
+        meshes: vec![decoded_mesh(0, 3)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_static_rebuild: true,
+        ..Default::default()
+    };
+    backend.geometry_sizes.insert(2, (999, 999));
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.mesh_updates.is_empty());
+    assert_eq!(backend.static_rebuild_change_counts, vec![2]);
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+}
+
+// spawn_envmap_worker in-flight skip (via reload_assets)
+
+#[test]
+fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
+    // With only an EnvironmentMap declared, reload_assets spawns no asset-decode
+    // worker (no textures / LUT / meshes) and must leave an already-running
+    // envmap convolution untouched so the user re-triggers after it lands.
+    let dir = tempfile::tempdir().unwrap();
+    let env_map = EnvironmentMapSource {
+        resolved_path: dir.path().join("studio.hdr").to_string_lossy().into_owned(),
+        prefilter_face_size: 64,
+        irradiance_face_size: 16,
+        prefilter_samples: 64,
+        prefilter_clamp: 12.0,
+    };
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        environment_map: Some(env_map),
+        ..Default::default()
+    });
+    // Simulate a still-running convolution: a receiver whose sender is alive and
+    // has sent nothing yet.
+    let (_tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    reload_assets(&state);
+    // Our receiver is still parked (a fresh spawn would have replaced it), and
+    // no asset-decode batch was scheduled.
+    let slot = state.env_map_inflight.lock().unwrap();
+    assert!(matches!(
+        slot.as_ref().unwrap().try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+}
+
+// run_frame (the per-frame reload entry, driven over a RecordingBackend)
+
+// Reset the process-global reload flags so a run_frame test starts from a known
+// state regardless of what ran before it. Callers hold `test_support::lock()`
+// for the whole test so this is race-free.
+fn clear_pending_flags() {
+    super::pending::take_pending_world();
+    super::pending::take_pending_shader_stages();
+    super::pending::take_pending_stories();
+}
+
+// Drive one `run_frame` over a fresh RecordingBackend with an empty
+// WorldReloadState and fog bookkeeping, returning the effects, the backend (so
+// callers can assert which dispatches fired), and the fog bookkeeping the
+// world.jsonl pass may have updated.
+fn drive_run_frame(
+    state: &mut AssetHotReloadState,
+) -> (
+    FrameHotReloadEffects,
+    RecordingBackend,
+    Option<crate::gfx::volumetric_fog::FogSettings>,
+) {
+    let mut backend = RecordingBackend::default();
+    let world_reload: Option<crate::gfx::graphics_system::WorldReloadState> = None;
+    let mut last_fog: Option<crate::gfx::volumetric_fog::FogSettings> = None;
+    let effects = {
+        let mut apply = crate::gfx::graphics_system::HotReloadApplyParts {
+            backend: &mut backend,
+            world_reload: &world_reload,
+            last_fog_settings: &mut last_fog,
+        };
+        run_frame(state, &mut apply)
+    };
+    (effects, backend, last_fog)
+}
+
+#[test]
+fn run_frame_with_no_pending_flags_returns_empty_effects() {
+    let _guard = crate::test_support::lock();
+    clear_pending_flags();
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (effects, backend, last_fog) = drive_run_frame(&mut state);
+    assert!(effects.skeleton_updates.is_empty());
+    assert!(effects.story_updates.is_empty());
+    assert!(last_fog.is_none());
+    assert_eq!(backend.fog_updates, 0);
+    assert!(backend.mesh_updates.is_empty());
+    assert!(backend.texture_updates.is_empty());
+}
+
+#[test]
+fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalogue() {
+    let _guard = crate::test_support::lock();
+    clear_pending_flags();
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    state
+        .pending
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
+    // The flag was consumed and, with no file-backed sources, no worker spawned.
+    assert!(!state.reload_requested());
+    assert!(state.asset_batch_inflight.lock().unwrap().is_none());
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+    assert!(effects.story_updates.is_empty());
+}
+
+#[test]
+fn run_frame_consumes_the_shader_stage_flag() {
+    let _guard = crate::test_support::lock();
+    clear_pending_flags();
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    super::pending::set_pending_shader_stages();
+    let _ = drive_run_frame(&mut state);
+    // run_frame swallowed the flag; the empty ShaderStage map made the pass a
+    // no-op, but the flag consumption is the observable that it fired.
+    assert!(!super::pending::take_pending_shader_stages());
+}
+
+#[test]
+fn run_frame_reloads_stories_when_the_story_flag_is_set() {
+    let _guard = crate::test_support::lock();
+    clear_pending_flags();
+    let dir = tempfile::tempdir().unwrap();
+    let md = dir.path().join("tale.md");
+    std::fs::write(
+        &md,
+        "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello there.\n",
+    )
+    .unwrap();
+    let world = dir.path().join("world.jsonl");
+    std::fs::write(
+        &world,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "name": "tale", "type": "StoryImport",
+                "args": {"source": md.to_str().unwrap()}
+            })
+        ),
+    )
+    .unwrap();
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources {
+        world_jsonl_path: Some(world.to_string_lossy().into_owned()),
+        ..Default::default()
+    });
+    super::pending::set_pending_stories();
+    let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
+    assert_eq!(effects.story_updates.len(), 1);
+    assert_eq!(effects.story_updates[0].title, "Tale");
+    // The flag was consumed by the pass.
+    assert!(!super::pending::take_pending_stories());
+}
+
+#[test]
+fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
+    let _guard = crate::test_support::lock();
+    clear_pending_flags();
+    let dir = tempfile::tempdir().unwrap();
+    let world = write_world_line(
+        dir.path(),
+        r#"{"name":"fog","type":"VolumetricFog","args":{"enabled":true,"density":0.5}}"#,
+    );
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources {
+        world_jsonl_path: Some(world),
+        ..Default::default()
+    });
+    super::pending::set_pending_world();
+    let (_effects, backend, last_fog) = drive_run_frame(&mut state);
+    // The world.jsonl pass applied the enabled fog exactly once and recorded it
+    // into the caller's dedupe bookkeeping.
+    assert_eq!(backend.fog_updates, 1);
+    assert!(last_fog.is_some());
+    assert!(!super::pending::take_pending_world());
+}

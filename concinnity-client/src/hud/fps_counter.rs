@@ -70,4 +70,39 @@ mod tests {
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
+
+    // Once a second of wall time has elapsed the step writes the rate into the
+    // counter's label. The elapsed is injected by backdating `last_time` (an
+    // in-file-accessible field), so no real sleep is needed.
+    #[test]
+    fn rate_written_into_label_after_a_second() {
+        use crate::assets::TextLabel;
+        use crate::ecs::asset_id::AssetId;
+        use std::time::{Duration, Instant};
+
+        let mut world = World::new_empty();
+        world.add_component(FpsCounter {
+            label: Some(AssetId(1)),
+        });
+        world.add_component(TextLabel {
+            asset_id: AssetId(1),
+            ..Default::default()
+        });
+        world.start().unwrap();
+
+        // Backdate the window start so the next step crosses the 1s threshold.
+        for system in world.systems_mut() {
+            if let crate::ecs::SystemAsset::FpsCounter(s) = system {
+                s.last_time = Instant::now() - Duration::from_millis(1100);
+            }
+        }
+        world.step();
+
+        let content = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == AssetId(1))
+            .map(|l| l.content.clone())
+            .unwrap_or_default();
+        assert!(content.starts_with("FPS: "), "{content}");
+    }
 }

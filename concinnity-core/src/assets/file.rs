@@ -115,3 +115,96 @@ pub struct FileArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<FileKind>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::{Platform, SourceBacked};
+    use crate::ecs::Component;
+
+    #[test]
+    fn from_ext_maps_every_known_extension() {
+        let cases = [
+            ("obj", FileKind::Obj),
+            ("png", FileKind::Png),
+            ("jpg", FileKind::Jpg),
+            ("jpeg", FileKind::Jpeg),
+            ("bmp", FileKind::Bmp),
+            ("tga", FileKind::Tga),
+            ("gif", FileKind::Gif),
+            ("ttf", FileKind::Ttf),
+            ("otf", FileKind::Otf),
+            ("txt", FileKind::Txt),
+            ("md", FileKind::Md),
+            ("mtl", FileKind::Mtl),
+        ];
+        for (ext, want) in cases {
+            assert_eq!(FileKind::from_ext(ext), Some(want.clone()));
+            // Matching is case-insensitive.
+            assert_eq!(FileKind::from_ext(&ext.to_uppercase()), Some(want));
+        }
+        assert_eq!(FileKind::from_ext("zzz"), None);
+    }
+
+    #[test]
+    fn from_args_infers_kind_from_the_extension() {
+        // No explicit kind -> inferred from the path.
+        let f = File::from_args(FileArgs {
+            path: "models/box.obj".into(),
+            kind: None,
+        });
+        assert_eq!(f.kind, Some(FileKind::Obj));
+        assert_eq!(f.path, "models/box.obj");
+        // An explicit kind is kept even when it disagrees with the extension.
+        let g = File::from_args(FileArgs {
+            path: "data.obj".into(),
+            kind: Some(FileKind::Txt),
+        });
+        assert_eq!(g.kind, Some(FileKind::Txt));
+        // An unknown extension leaves the kind unset.
+        let h = File::from_args(FileArgs {
+            path: "notes.zzz".into(),
+            kind: None,
+        });
+        assert_eq!(h.kind, None);
+    }
+
+    #[test]
+    fn is_mesh_is_true_only_for_obj() {
+        assert!(FileKind::Obj.is_mesh());
+        assert!(!FileKind::Png.is_mesh());
+        assert!(!FileKind::Ttf.is_mesh());
+    }
+
+    #[test]
+    fn source_path_reads_the_path_field() {
+        assert_eq!(
+            File::source_path(&serde_json::json!({"path": "a.obj"}), Platform::Metal),
+            Some("a.obj".to_string())
+        );
+        assert_eq!(
+            File::source_path(&serde_json::json!({"path": ""}), Platform::Metal),
+            None
+        );
+        assert_eq!(
+            File::source_path(&serde_json::json!({}), Platform::Metal),
+            None
+        );
+    }
+
+    #[test]
+    fn file_args_and_kind_round_trip_through_json() {
+        let args = FileArgs {
+            path: "x.png".into(),
+            kind: Some(FileKind::Png),
+        };
+        let value = serde_json::to_value(&args).unwrap();
+        let back: FileArgs = serde_json::from_value(value).unwrap();
+        assert_eq!(back.path, "x.png");
+        assert_eq!(back.kind, Some(FileKind::Png));
+        // FileKind serializes to its lowercase name.
+        assert_eq!(serde_json::to_string(&FileKind::Jpeg).unwrap(), "\"jpeg\"");
+        // to_args mirrors the component fields.
+        assert_eq!(File::from_args(args).to_args().kind, Some(FileKind::Png));
+    }
+}

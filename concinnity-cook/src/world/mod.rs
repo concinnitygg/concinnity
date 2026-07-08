@@ -250,4 +250,111 @@ mod tests {
                 .any(|a| a.asset_type == "GraphicsConfig")
         );
     }
+
+    #[test]
+    fn load_world_rejects_runtime_only_type() {
+        // Transform is pushed by a system at runtime (RuntimeOnly), so it may
+        // not be authored in the world file.
+        let content = r#"{"name":"t","type":"Transform"}"#;
+        let errs = load_world(content).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("RuntimeOnly")));
+    }
+
+    #[test]
+    fn load_world_rejects_unknown_type() {
+        let content = r#"{"name":"x","type":"NotARealType"}"#;
+        let errs = load_world(content).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("unknown type")));
+    }
+
+    // asset_name_from_path
+
+    #[test]
+    fn asset_name_from_path_replaces_dots_in_stem() {
+        assert_eq!(asset_name_from_path("/a/b/hero.model.glb"), "hero_model");
+        assert_eq!(asset_name_from_path("hero.png"), "hero");
+    }
+
+    #[test]
+    fn asset_name_from_path_falls_back_to_the_raw_path() {
+        // A path with no file stem (e.g. "..") falls back to the input.
+        assert_eq!(asset_name_from_path(".."), "..");
+    }
+
+    // resolve_includes
+
+    fn write_temp(dir: &tempfile::TempDir, name: &str, contents: &str) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, contents).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn resolve_includes_passes_through_non_include_entries() {
+        let entries = vec![serde_json::json!({"name": "a", "type": "Window"})];
+        let out = resolve_includes(entries).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["name"], "a");
+    }
+
+    #[test]
+    fn resolve_includes_inlines_an_array_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp(
+            &dir,
+            "chunk.json",
+            r#"[{"name":"a","type":"Window"},{"name":"b","type":"Window"}]"#,
+        );
+        let entries = vec![
+            serde_json::json!({"$include": path}),
+            serde_json::json!({"name": "c", "type": "Window"}),
+        ];
+        let out = resolve_includes(entries).unwrap();
+        let names: Vec<&str> = out.iter().filter_map(|v| v["name"].as_str()).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn resolve_includes_inlines_a_single_object_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp(&dir, "one.json", r#"{"name":"solo","type":"Window"}"#);
+        let out = resolve_includes(vec![serde_json::json!({"$include": path})]).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["name"], "solo");
+    }
+
+    #[test]
+    fn resolve_includes_rejects_non_string_path() {
+        let err =
+            resolve_includes(vec![serde_json::json!({"$include": 42})]).expect_err("non-string");
+        assert!(err.to_string().contains("must be a string path"));
+    }
+
+    #[test]
+    fn resolve_includes_reports_a_read_error_with_the_path() {
+        let err = resolve_includes(vec![
+            serde_json::json!({"$include": "/no/such/include.json"}),
+        ])
+        .expect_err("missing file");
+        assert!(err.to_string().contains("/no/such/include.json"));
+    }
+
+    #[test]
+    fn resolve_includes_reports_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp(&dir, "broken.json", "{ not valid json");
+        let err =
+            resolve_includes(vec![serde_json::json!({"$include": path})]).expect_err("bad json");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn resolve_includes_rejects_a_non_object_non_array_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp(&dir, "scalar.json", "42");
+        let err = resolve_includes(vec![serde_json::json!({"$include": path})])
+            .expect_err("kind mismatch");
+        assert!(err.to_string().contains("expected object or array"));
+        assert!(err.to_string().contains("number"));
+    }
 }

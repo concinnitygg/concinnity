@@ -29,4 +29,20 @@ mod tests {
     fn non_mesh_kind_returns_error() {
         assert!(compile_file_payload("irrelevant.png", &FileKind::Png).is_err());
     }
+
+    #[test]
+    fn obj_source_compiles_to_a_non_empty_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.obj");
+        std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let payload =
+            compile_file_payload(path.to_str().unwrap(), &FileKind::Obj).expect("obj compiles");
+        assert!(!payload.is_empty());
+    }
+
+    #[test]
+    fn obj_read_error_surfaces_the_path() {
+        let err = compile_file_payload("/no/such/model.obj", &FileKind::Obj).unwrap_err();
+        assert!(err.contains("/no/such/model.obj"), "got: {err}");
+    }
 }

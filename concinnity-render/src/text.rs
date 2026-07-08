@@ -665,4 +665,116 @@ mod tests {
         let orphan = make_label(AssetId(99), "A", 0.0);
         assert!(measure_label_box(&orphan, &fonts).is_none());
     }
+
+    #[test]
+    fn align_center_and_right_shift_the_anchor() {
+        // Two 'A' glyphs, advance 10 each: rendered width = 20. A HUD label
+        // (view == None) anchored at x = 100 keeps that x when left-aligned,
+        // shifts left by half the width when centered, and by the full width
+        // when right-aligned.
+        let g = make_glyph(10, 12, 10.0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        let first_x = |align: TextAlign| {
+            let mut l = make_label(AssetId(0), "AA", 100.0);
+            l.align = align;
+            build_text_calls(&[&l], &fonts, 0.0, 0.0, &no_clips())[0].vertices[0].pos[0]
+        };
+        assert!((first_x(TextAlign::Left) - 100.0).abs() < 1e-4);
+        assert!((first_x(TextAlign::Center) - 90.0).abs() < 1e-4);
+        assert!((first_x(TextAlign::Right) - 80.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn clip_band_scissors_the_call() {
+        // A label registered in `clips` gets its call scissored to the band,
+        // mapped through the overlay transform to window space. At the reference
+        // viewport the overlay is identity, so the scissor equals the band.
+        let g = make_glyph(10, 12, 11.0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        let mut label = make_label(AssetId(0), "A", 0.0);
+        label.asset_id = AssetId(7);
+        let mut clips = std::collections::HashMap::new();
+        let band = [10.0, 20.0, 300.0, 40.0];
+        clips.insert(AssetId(7), band);
+        let calls = build_text_calls(&[&label], &fonts, 1280.0, 720.0, &clips);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].clip_rect, Some(band));
+        // A label absent from `clips` (asset_id 0) draws unclipped.
+        let other = make_label(AssetId(0), "A", 0.0);
+        let unclipped = build_text_calls(&[&other], &fonts, 1280.0, 720.0, &clips);
+        assert_eq!(unclipped[0].clip_rect, None);
+    }
+
+    #[test]
+    fn band_to_window_maps_through_the_overlay() {
+        // At a 2x viewport a reference band is scaled and recentered.
+        let overlay = OverlayTransform::from_viewport([2560.0, 1440.0]);
+        let mapped = band_to_window(&overlay, [640.0, 360.0, 100.0, 50.0]);
+        // forward(640,360) = center = (1280,720); the band doubles in size.
+        assert!((mapped[0] - 1280.0).abs() < 1e-3, "x={}", mapped[0]);
+        assert!((mapped[1] - 720.0).abs() < 1e-3, "y={}", mapped[1]);
+        assert!((mapped[2] - 200.0).abs() < 1e-3, "w={}", mapped[2]);
+        assert!((mapped[3] - 100.0).abs() < 1e-3, "h={}", mapped[3]);
+    }
+
+    #[test]
+    fn fit_bottom_and_cover_map_view_owned_labels() {
+        // A view-owned label maps its anchor through its `fit` transform. At a
+        // 4:3 viewport (taller than the 16:9 reference) Bottom pushes the label
+        // below plain Fit, and Cover scales it up, so each branch yields a
+        // distinct origin.
+        let g = make_glyph(10, 12, 11.0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        let vp = (1024.0, 768.0);
+        let first_y = |fit: SpriteFit| {
+            let mut l = make_label(AssetId(0), "A", 100.0);
+            l.y = 600.0;
+            l.view = Some(AssetId(5));
+            l.fit = fit;
+            build_text_calls(&[&l], &fonts, vp.0, vp.1, &no_clips())[0].vertices[0].pos[1]
+        };
+        let fit_y = first_y(SpriteFit::Fit);
+        let bottom_y = first_y(SpriteFit::Bottom);
+        let cover_y = first_y(SpriteFit::Cover);
+        assert!(bottom_y > fit_y, "bottom={bottom_y} fit={fit_y}");
+        assert!(
+            (cover_y - fit_y).abs() > 1e-3,
+            "cover={cover_y} fit={fit_y}"
+        );
+    }
+
+    #[test]
+    fn missing_glyph_falls_back_to_space_advance() {
+        // A code point with no metric advances the cursor by the space glyph's
+        // advance, so an unknown character still occupies layout width.
+        let space = make_glyph(0, 0, 7.0);
+        let g = make_glyph(10, 12, 11.0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(AssetId(0), make_font(&[(' ', space), ('A', g)]));
+        // '?' has no metric; it consumes one space advance before 'A'.
+        let label = make_label(AssetId(0), "?A", 0.0);
+        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].vertices.len(), 4); // only 'A' draws a quad
+        assert!((calls[0].vertices[0].pos[0] - 7.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn measure_uses_space_advance_for_missing_glyphs() {
+        // measure_text_width (via measure_label_box) also substitutes the space
+        // advance for an unknown glyph, keeping layout width stable.
+        let space = make_glyph(0, 0, 7.0);
+        let g = make_glyph(10, 12, 11.0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(AssetId(0), make_font(&[(' ', space), ('A', g)]));
+        let known = make_label(AssetId(0), "A", 0.0);
+        let with_missing = make_label(AssetId(0), "?A", 0.0);
+        let wk = measure_label_box(&known, &fonts).unwrap().w;
+        let wm = measure_label_box(&with_missing, &fonts).unwrap().w;
+        // The '?' contributes exactly one space advance (7) of extra width.
+        assert!((wm - wk - 7.0).abs() < 1e-4, "wk={wk} wm={wm}");
+    }
 }

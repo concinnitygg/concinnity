@@ -1320,6 +1320,629 @@ mod tests {
         );
     }
 
+    fn mesh_item(mesh: AssetId) -> RenderableItem {
+        RenderableItem {
+            asset_id: mesh,
+            model: None,
+            mesh: Some(mesh),
+            material: None,
+            texture: None,
+            cull_distance: 0.0,
+            is_dynamic: false,
+        }
+    }
+
+    fn model_item(model: AssetId) -> RenderableItem {
+        RenderableItem {
+            asset_id: model,
+            model: Some(model),
+            mesh: None,
+            material: None,
+            texture: None,
+            cull_distance: 0.0,
+            is_dynamic: false,
+        }
+    }
+
+    // The model path emits one draw object per sub-mesh, each over its own
+    // geometry region, and records both draws under the shared prop index.
+    #[test]
+    fn build_draw_list_model_emits_one_draw_per_submesh() {
+        let mut mesh_geometry = std::collections::HashMap::new();
+        mesh_geometry.insert(AssetId(10), unit_quad_mesh());
+        mesh_geometry.insert(AssetId(11), unit_quad_mesh());
+
+        let mut model_map = std::collections::HashMap::new();
+        model_map.insert(
+            AssetId(1),
+            vec![
+                SubMeshRef {
+                    mesh: Some(AssetId(10)),
+                    material: Some(AssetId(20)),
+                },
+                SubMeshRef {
+                    mesh: Some(AssetId(11)),
+                    material: None,
+                },
+            ],
+        );
+
+        let mut material_map = std::collections::HashMap::new();
+        material_map.insert(AssetId(20), (3usize, 4usize, MaterialUniforms::DEFAULT));
+
+        let (verts, idxs, draw_objects, clusters, prop_idxs, mesh_id_to_draws) =
+            build_draw_list(DrawListInputs {
+                items: &[model_item(AssetId(1))],
+                instanced_props: &[],
+                world_mats: &[IDENTITY4],
+                model_map: &model_map,
+                mesh_geometry: &mesh_geometry,
+                room_geometry: &[],
+                texture_name_to_slot: &std::collections::HashMap::new(),
+                material_map: &material_map,
+                always_resident_meshes: &std::collections::HashSet::new(),
+            })
+            .expect("build_draw_list");
+
+        assert!(clusters.is_empty());
+        // Two sub-meshes -> two draws, both belonging to the one prop.
+        assert_eq!(draw_objects.len(), 2);
+        assert_eq!(prop_idxs, vec![vec![0, 1]]);
+        assert_eq!(verts.len(), 8, "each quad's 4 verts appended once");
+        assert_eq!(idxs.len(), 12);
+        // First sub-mesh took its material's albedo/normal slots; the second
+        // used the default (slot 0, flat normal).
+        assert_eq!(draw_objects[0].texture_slot, 3);
+        assert_eq!(draw_objects[0].normal_map_slot, 4);
+        assert_eq!(draw_objects[1].texture_slot, 0);
+        assert_eq!(draw_objects[1].normal_map_slot, 0);
+        // Hot-reload map tracks each sub-mesh id -> its draw slot.
+        assert_eq!(mesh_id_to_draws.get(&AssetId(10)), Some(&vec![0]));
+        assert_eq!(mesh_id_to_draws.get(&AssetId(11)), Some(&vec![1]));
+    }
+
+    // A mesh present in the geometry table but referenced by no item, model, or
+    // instanced prop is auto-rendered at the origin with culling disabled.
+    #[test]
+    fn build_draw_list_auto_renders_unreferenced_mesh() {
+        let mut mesh_geometry = std::collections::HashMap::new();
+        mesh_geometry.insert(AssetId(0), unit_quad_mesh());
+
+        let (_v, _i, draw_objects, _c, prop_idxs, mesh_id_to_draws) =
+            build_draw_list(DrawListInputs {
+                items: &[],
+                instanced_props: &[],
+                world_mats: &[],
+                model_map: &std::collections::HashMap::new(),
+                mesh_geometry: &mesh_geometry,
+                room_geometry: &[],
+                texture_name_to_slot: &std::collections::HashMap::new(),
+                material_map: &std::collections::HashMap::new(),
+                always_resident_meshes: &std::collections::HashSet::new(),
+            })
+            .expect("build_draw_list");
+
+        assert!(prop_idxs.is_empty(), "no props drove this draw");
+        assert_eq!(draw_objects.len(), 1);
+        let d = &draw_objects[0];
+        assert_eq!(d.model, IDENTITY4);
+        assert_eq!(d.texture_slot, 0);
+        assert!(!d.cullable(), "unreferenced mesh draws unconditionally");
+        assert!(d.lod_alternates.is_empty());
+        assert_eq!(mesh_id_to_draws.get(&AssetId(0)), Some(&vec![0]));
+    }
+
+    // A Room is placed at the origin with culling disabled; its texture resolves
+    // through the name->slot map and its LOD alternates carry through.
+    #[test]
+    fn build_draw_list_places_room_at_origin_with_texture_and_lods() {
+        let room = Room {
+            asset_id: AssetId(50),
+            half_width: 8.0,
+            half_depth: 10.0,
+            ceiling_height: 3.5,
+            texture: Some(AssetId(70)),
+            wall_texture: None,
+            floor_texture: None,
+            ceiling_texture: None,
+            locator: None,
+        };
+        let verts = unit_quad_mesh().vertices;
+        let idxs = vec![0u16, 1, 2, 0, 2, 3];
+        let room_lods = vec![(12.0_f32, vec![0u16, 1, 2])];
+        let room_geometry = vec![(room, verts, idxs, room_lods)];
+
+        let mut texture_name_to_slot = std::collections::HashMap::new();
+        texture_name_to_slot.insert(AssetId(70), 6usize);
+
+        let (rv, ri, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+            items: &[],
+            instanced_props: &[],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &std::collections::HashMap::new(),
+            room_geometry: &room_geometry,
+            texture_name_to_slot: &texture_name_to_slot,
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+
+        assert_eq!(draw_objects.len(), 1);
+        let d = &draw_objects[0];
+        assert_eq!(d.model, IDENTITY4);
+        assert_eq!(d.texture_slot, 6, "room texture resolved to its slot");
+        assert!(!d.cullable(), "rooms enclose the camera and skip culling");
+        assert_eq!(d.lod_alternates.len(), 1);
+        assert_eq!(d.lod_alternates[0].switch_distance, 12.0);
+        // LOD0 (6) + one alternate (3) indices appended after the 4 verts.
+        assert_eq!(rv.len(), 4);
+        assert_eq!(ri.len(), 9);
+    }
+
+    // A single-mesh item with a texture (and no material) resolves the texture
+    // slot and keeps the default material.
+    #[test]
+    fn build_draw_list_single_mesh_resolves_texture_slot() {
+        let mut mesh_geometry = std::collections::HashMap::new();
+        mesh_geometry.insert(AssetId(0), unit_quad_mesh());
+        let mut texture_name_to_slot = std::collections::HashMap::new();
+        texture_name_to_slot.insert(AssetId(9), 2usize);
+
+        let item = RenderableItem {
+            asset_id: AssetId(0),
+            model: None,
+            mesh: Some(AssetId(0)),
+            material: None,
+            texture: Some(AssetId(9)),
+            cull_distance: 0.0,
+            is_dynamic: false,
+        };
+
+        let (_v, _i, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+            items: &[item],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_name_to_slot: &texture_name_to_slot,
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+
+        assert_eq!(draw_objects.len(), 1);
+        assert_eq!(draw_objects[0].texture_slot, 2);
+        assert_eq!(draw_objects[0].normal_map_slot, 0);
+    }
+
+    // Every missing-reference branch returns None (the error is logged and the
+    // build aborts) rather than emitting a partial draw list.
+    #[test]
+    fn build_draw_list_returns_none_on_missing_references() {
+        let mesh = || {
+            let mut m = std::collections::HashMap::new();
+            m.insert(AssetId(0), unit_quad_mesh());
+            m
+        };
+        let none = |inputs: DrawListInputs| build_draw_list(inputs).is_none();
+
+        // Model referenced by an item but absent from the model_map.
+        assert!(none(DrawListInputs {
+            items: &[model_item(AssetId(1))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Model sub-mesh with no mesh field.
+        let mut model_no_mesh = std::collections::HashMap::new();
+        model_no_mesh.insert(
+            AssetId(1),
+            vec![SubMeshRef {
+                mesh: None,
+                material: None,
+            }],
+        );
+        assert!(none(DrawListInputs {
+            items: &[model_item(AssetId(1))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &model_no_mesh,
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Model sub-mesh whose mesh id has no geometry.
+        let mut model_bad_geo = std::collections::HashMap::new();
+        model_bad_geo.insert(
+            AssetId(1),
+            vec![SubMeshRef {
+                mesh: Some(AssetId(999)),
+                material: None,
+            }],
+        );
+        assert!(none(DrawListInputs {
+            items: &[model_item(AssetId(1))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &model_bad_geo,
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Model sub-mesh referencing a material absent from the material_map.
+        let mut model_bad_mat = std::collections::HashMap::new();
+        model_bad_mat.insert(
+            AssetId(1),
+            vec![SubMeshRef {
+                mesh: Some(AssetId(0)),
+                material: Some(AssetId(404)),
+            }],
+        );
+        assert!(none(DrawListInputs {
+            items: &[model_item(AssetId(1))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &model_bad_mat,
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Single-mesh item whose mesh id has no geometry.
+        assert!(none(DrawListInputs {
+            items: &[mesh_item(AssetId(999))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Single-mesh item referencing a material absent from the material_map.
+        let mut item_bad_mat = mesh_item(AssetId(0));
+        item_bad_mat.material = Some(AssetId(404));
+        assert!(none(DrawListInputs {
+            items: &[item_bad_mat],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // Item carrying neither a model nor a mesh.
+        assert!(none(DrawListInputs {
+            items: &[RenderableItem {
+                asset_id: AssetId(0),
+                model: None,
+                mesh: None,
+                material: None,
+                texture: None,
+                cull_distance: 0.0,
+                is_dynamic: false,
+            }],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // InstancedProp mesh id has no geometry.
+        let inst_bad_mesh = InstancedProp {
+            asset_id: AssetId::default(),
+            mesh: Some(AssetId(999)),
+            material: None,
+            texture: None,
+            cull_distance: 0.0,
+            instances: vec![crate::assets::instanced_prop::InstanceTransform::default()],
+        };
+        assert!(none(DrawListInputs {
+            items: &[],
+            instanced_props: &[inst_bad_mesh],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+
+        // InstancedProp material absent from the material_map.
+        let inst_bad_mat = InstancedProp {
+            asset_id: AssetId::default(),
+            mesh: Some(AssetId(0)),
+            material: Some(AssetId(404)),
+            texture: None,
+            cull_distance: 0.0,
+            instances: vec![crate::assets::instanced_prop::InstanceTransform::default()],
+        };
+        assert!(none(DrawListInputs {
+            items: &[],
+            instanced_props: &[inst_bad_mat],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh(),
+            room_geometry: &[],
+            texture_name_to_slot: &std::collections::HashMap::new(),
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        }));
+    }
+
+    // Accumulates components + a single blob section so load_mesh_geometry /
+    // load_room_geometry can decode in-memory payloads, mirroring the
+    // GraphicsSystem WorldBuilder precedent.
+    struct BlobWorld {
+        components: crate::ecs::ComponentStorage,
+        section: Vec<u8>,
+    }
+
+    struct SealedWorld {
+        components: crate::ecs::ComponentStorage,
+        blob: crate::blob::BlobData,
+        profile: crate::gfx::profile::FrameProfile,
+        resources: crate::ecs::Resources,
+    }
+
+    impl BlobWorld {
+        fn new() -> Self {
+            Self {
+                components: crate::ecs::ComponentStorage::default(),
+                section: Vec::new(),
+            }
+        }
+
+        fn payload(&mut self, bytes: &[u8]) -> crate::ecs::PayloadLocator {
+            let offset = self.section.len() as u64;
+            self.section.extend_from_slice(bytes);
+            crate::ecs::PayloadLocator {
+                blob_index: 0,
+                offset,
+                len: bytes.len() as u64,
+            }
+        }
+
+        fn push<C: crate::ecs::ComponentSlot>(&mut self, c: C) {
+            self.components.push_typed(c);
+        }
+
+        fn seal(self) -> SealedWorld {
+            SealedWorld {
+                components: self.components,
+                blob: crate::blob::BlobData::new(vec![Some(self.section)]),
+                profile: crate::gfx::profile::FrameProfile::default(),
+                resources: crate::ecs::Resources::new(),
+            }
+        }
+    }
+
+    impl SealedWorld {
+        fn ctx(&mut self) -> crate::ecs::PipelineContext<'_> {
+            crate::ecs::PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+    }
+
+    // A single-triangle static mesh payload in the compiled format.
+    fn tri_payload() -> Vec<u8> {
+        let v = |x: f32, z: f32| {
+            (
+                [x, 0.0, z],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0],
+                [0.0, 0.0],
+            )
+        };
+        crate::gfx::mesh_payload::serialise(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
+    }
+
+    // load_mesh_geometry decodes a Mesh's in-memory payload into the geometry
+    // table keyed by asset id.
+    #[test]
+    fn load_mesh_geometry_decodes_in_memory_mesh() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        b.push(Mesh {
+            asset_id: AssetId(1),
+            locator: Some(loc),
+            ..Default::default()
+        });
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+
+        let (geometry, sources, resident) = load_mesh_geometry(&mut ctx).expect("decoded");
+        assert_eq!(geometry.len(), 1);
+        let m = geometry.get(&AssetId(1)).expect("mesh 1 present");
+        assert_eq!(m.vertices.len(), 3);
+        assert_eq!(m.indices, vec![0, 1, 2]);
+        assert!(m.lod_alternates.is_empty());
+        // The source-capture map only fills under the dev-flag global, which the
+        // tests never set, so it stays empty here.
+        assert!(sources.is_empty());
+        assert!(
+            resident.is_empty(),
+            "no skybox mesh -> nothing always-resident"
+        );
+    }
+
+    // A skybox ProceduralMesh decodes and is marked always-resident so its props
+    // opt out of culling and streaming.
+    #[test]
+    fn load_mesh_geometry_marks_skybox_always_resident() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        b.push(ProceduralMesh {
+            asset_id: AssetId(2),
+            generator: "skybox".to_string(),
+            locator: Some(loc),
+            ..Default::default()
+        });
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+
+        let (geometry, _sources, resident) = load_mesh_geometry(&mut ctx).expect("decoded");
+        assert!(geometry.contains_key(&AssetId(2)));
+        assert!(
+            resident.contains(&AssetId(2)),
+            "skybox generator stays resident"
+        );
+    }
+
+    // A Mesh with no compiled payload aborts the whole load.
+    #[test]
+    fn load_mesh_geometry_missing_locator_returns_none() {
+        let mut b = BlobWorld::new();
+        b.push(Mesh {
+            asset_id: AssetId(1),
+            locator: None,
+            ..Default::default()
+        });
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+        assert!(load_mesh_geometry(&mut ctx).is_none());
+    }
+
+    // A malformed payload (too short to hold its declared vertices) aborts.
+    #[test]
+    fn load_mesh_geometry_malformed_payload_returns_none() {
+        let mut b = BlobWorld::new();
+        // Claims one vertex but carries no vertex bytes.
+        let loc = b.payload(&1u32.to_le_bytes());
+        b.push(Mesh {
+            asset_id: AssetId(1),
+            locator: Some(loc),
+            ..Default::default()
+        });
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+        assert!(load_mesh_geometry(&mut ctx).is_none());
+    }
+
+    // An empty world (no mesh-bearing components) still succeeds with empty maps.
+    #[test]
+    fn load_mesh_geometry_empty_world_is_ok_and_empty() {
+        let mut world = BlobWorld::new().seal();
+        let mut ctx = world.ctx();
+        let (geometry, sources, resident) = load_mesh_geometry(&mut ctx).expect("ok");
+        assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
+    }
+
+    fn test_room(locator: Option<crate::ecs::PayloadLocator>) -> Room {
+        Room {
+            asset_id: AssetId(50),
+            half_width: 8.0,
+            half_depth: 10.0,
+            ceiling_height: 3.5,
+            texture: None,
+            wall_texture: None,
+            floor_texture: None,
+            ceiling_texture: None,
+            locator,
+        }
+    }
+
+    // load_room_geometry decodes each Room payload and reports its blob index.
+    #[test]
+    fn load_room_geometry_decodes_in_memory_room() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        b.push(test_room(Some(loc)));
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+
+        let (room_geometry, blob_indices) = load_room_geometry(&mut ctx).expect("decoded");
+        assert_eq!(room_geometry.len(), 1);
+        let (_room, verts, idxs, _lods) = &room_geometry[0];
+        assert_eq!(verts.len(), 3);
+        assert_eq!(*idxs, vec![0, 1, 2]);
+        assert_eq!(blob_indices, vec![0]);
+    }
+
+    // A Room with no compiled payload aborts the load.
+    #[test]
+    fn load_room_geometry_missing_locator_returns_none() {
+        let mut b = BlobWorld::new();
+        b.push(test_room(None));
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+        assert!(load_room_geometry(&mut ctx).is_none());
+    }
+
+    // resolve_world_matrices breaks a parent cycle: mutually-parented entities
+    // fall back to their own local matrix rather than looping forever.
+    #[test]
+    fn resolve_world_matrices_breaks_parent_cycle() {
+        use crate::assets::{Parent, Transform};
+
+        let mut components = crate::ecs::ComponentStorage::default();
+        let mut blob = crate::blob::BlobData::empty();
+        let mut profile = crate::gfx::profile::FrameProfile::default();
+        let mut resources = crate::ecs::Resources::new();
+        let mut ctx = crate::ecs::PipelineContext {
+            components: &mut components,
+            blob: &mut blob,
+            profile: &mut profile,
+            resources: &mut resources,
+        };
+
+        let a_t = Transform {
+            position: [1.0, 0.0, 0.0],
+            rotation_deg: [0.0; 3],
+            scale: [1.0; 3],
+        };
+        let b_t = Transform {
+            position: [0.0, 2.0, 0.0],
+            rotation_deg: [0.0; 3],
+            scale: [1.0; 3],
+        };
+
+        // a parents b and b parents a: a cycle with no root.
+        let a = ctx.components.spawn();
+        ctx.insert(a, a_t);
+        let b = ctx.components.spawn();
+        ctx.insert(b, b_t);
+        ctx.insert(a, Parent(b));
+        ctx.insert(b, Parent(a));
+
+        let world = resolve_world_matrices(&ctx);
+        assert_eq!(world.len(), 2);
+        // Neither resolved through the chain, so each keeps its own local matrix.
+        assert_eq!(world.get(&a).copied(), Some(a_t.model_matrix()));
+        assert_eq!(world.get(&b).copied(), Some(b_t.model_matrix()));
+    }
+
     // Same for a model entity: ModelRenderer fields, and with no dynamic tags the
     // item is static.
     #[test]

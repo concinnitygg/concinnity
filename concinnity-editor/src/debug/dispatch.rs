@@ -292,6 +292,9 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
+    use crate::gfx::graphics_system::StreamingStats;
+    use crate::gfx::profile::RenderStats;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     // Run one request against a hand-built snapshot and parse the reply.
     fn reply(text: &str, state: DebugState) -> serde_json::Value {
@@ -420,5 +423,105 @@ mod tests {
         let r = reply(r#"{"no_cmd":1}"#, DebugState::default());
         assert_eq!(r["ok"], false);
         assert!(r["error"].as_str().unwrap().contains("malformed request"));
+    }
+
+    #[test]
+    fn streaming_reports_populated_pools() {
+        let st = DebugState {
+            frame: 9,
+            streaming: StreamingStats {
+                texture: Some((10, 2, 1)),
+                normal_map: None,
+                mesh: Some((4, 0, 3)),
+                chunk: Some((7, 5)),
+            },
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"streaming"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["frame"], 9);
+        assert_eq!(r["texture"]["resident"], 10);
+        assert_eq!(r["texture"]["pending"], 2);
+        assert_eq!(r["texture"]["unloaded"], 1);
+        // A pool left at None still reports null.
+        assert!(r["normal_map"].is_null());
+        assert_eq!(r["mesh"]["resident"], 4);
+        // The chunk pool reports resident + pending but carries no unloaded count.
+        assert_eq!(r["chunk"]["resident"], 7);
+        assert_eq!(r["chunk"]["pending"], 5);
+        assert!(r["chunk"]["unloaded"].is_null());
+    }
+
+    #[test]
+    fn profile_reports_populated_render_passes() {
+        let mut render = RenderStats {
+            draw_calls: 128,
+            objects: 64,
+            ..Default::default()
+        };
+        // One populated pass; the remaining empty-name slots must be filtered out.
+        render.pass_times_us[0] = ("shadow", 900);
+        let st = DebugState {
+            profile_render: render,
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"profile"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["render"]["draw_calls"], 128);
+        assert_eq!(r["render"]["objects"], 64);
+        let passes = r["render"]["passes"].as_array().expect("passes array");
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0]["name"], "shadow");
+        assert_eq!(passes[0]["micros"], 900);
+    }
+
+    #[test]
+    fn reload_shaders_queues_and_flips_the_captured_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let st = DebugState {
+            shader_reload: Some(Arc::clone(&flag)),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"reload-shaders"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["reload_queued"], true);
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn reload_assets_queues_the_flag_and_raises_sibling_reloads() {
+        // The handler flips the primary asset flag AND raises the process-global
+        // sibling reload flags; serialize on the shared lock and drain those
+        // flags so the side effects do not leak into other tests.
+        let _guard = crate::test_support::lock();
+        hot_reload::take_pending_world();
+        hot_reload::take_pending_shader_stages();
+        hot_reload::take_pending_stories();
+        crate::app::dev_flags::take_pending_animations();
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let st = DebugState {
+            asset_reload: Some(Arc::clone(&flag)),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"reload-assets"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["reload_queued"], true);
+        assert!(flag.load(Ordering::SeqCst));
+        // The world, ShaderStage, and animation reload surfaces were signalled;
+        // drain them so they do not leak.
+        assert!(hot_reload::take_pending_world());
+        assert!(hot_reload::take_pending_shader_stages());
+        assert!(crate::app::dev_flags::take_pending_animations());
+        // Stories reload only on their own `.md` watch, so reload-assets leaves
+        // that flag clear.
+        assert!(!hot_reload::take_pending_stories());
+    }
+
+    #[test]
+    fn reload_assets_errors_without_flag() {
+        let r = reply(r#"{"cmd":"reload-assets"}"#, DebugState::default());
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].is_string());
     }
 }

@@ -27,3 +27,8 @@ mod tests;
 
 pub(crate) use pending::{set_pending_shader_stages, set_pending_stories, set_pending_world};
 pub(crate) use state::{AssetHotReloadState, run_frame};
+
+// The `reload-assets` dispatch test drains the sibling reload flags the handler
+// raises so they don't leak into other tests; only that test needs them.
+#[cfg(test)]
+pub(crate) use pending::{take_pending_shader_stages, take_pending_stories, take_pending_world};

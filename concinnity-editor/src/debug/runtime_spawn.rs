@@ -1146,4 +1146,713 @@ mod tests {
         };
         assert!(!apply_camera_move_step(&motion, &mut world));
     }
+
+    // A do-nothing RenderBackend for driving `dispatch_runtime_spawn` without a
+    // GPU. It overrides none of the runtime decal / emitter / screenshot hooks,
+    // so those fall through to the trait's default `Err` bodies -- exactly the
+    // failure arms the dispatch reply surfaces to a WS client.
+    struct StubBackend;
+
+    impl crate::gfx::scene_reel::SceneControl for StubBackend {
+        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
+        fn update_clear_color(&mut self, _color: [f32; 4]) {}
+    }
+
+    impl crate::gfx::backend::RenderBackend for StubBackend {
+        fn window_closed(&mut self) -> bool {
+            false
+        }
+        fn capture_cursor(&mut self) {}
+        fn take_input(&mut self) -> crate::gfx::input::RenderInput {
+            crate::gfx::input::RenderInput::default()
+        }
+        fn wait_idle(&self) {}
+        fn draw_frame(
+            &mut self,
+            _params: crate::gfx::backend::FrameParams<'_>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
+        fn update_model(&mut self, _index: usize, _model: [[f32; 4]; 4]) {}
+        fn retire_draw_object(&mut self, _draw_idx: usize) {}
+        fn upload_skinned(
+            &mut self,
+            _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
+            _indices: &[u16],
+            _draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
+            _vert_bytes: &[u8],
+            _frag_bytes: &[u8],
+            _shadow_bytes: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_texture_slot(
+            &mut self,
+            _slot: usize,
+            _w: u32,
+            _h: u32,
+            _px: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn evict_normal_map_slot(&mut self, _slot: usize) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_normal_map_slot(
+            &mut self,
+            _slot: usize,
+            _w: u32,
+            _h: u32,
+            _px: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn upload_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _verts: &[crate::gfx::mesh_payload::Vertex],
+            _idxs: &[u16],
+            _frame: u64,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn setup_chunk_streaming(
+            &mut self,
+            _chunk_vtx_bytes: usize,
+            _chunk_idx_bytes: usize,
+            _texture_slot: usize,
+            _normal_map_slot: usize,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn add_chunk_mesh(
+            &mut self,
+            _mesh: crate::gfx::backend::ChunkMesh<'_>,
+        ) -> Result<usize, String> {
+            Ok(0)
+        }
+        fn remove_chunk_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _retire_frame: u64,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_chunk_model(
+            &mut self,
+            _draw_idx: usize,
+            _model: [[f32; 4]; 4],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    // Drive one runtime-spawn command whose reply is `Result<(), String>` (the
+    // ECS-side variants) through the backend dispatch and return its reply.
+    fn dispatch_spawn_unit(
+        build: impl FnOnce(std::sync::mpsc::SyncSender<Result<(), String>>) -> RuntimeCommand,
+    ) -> Result<(), String> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(build(tx), None, &mut backend);
+        rx.recv().expect("dispatch replied")
+    }
+
+    // Every ECS-side command that reaches the backend dispatch is a misroute:
+    // the per-frame drive should have partitioned it to its ECS dispatcher. Each
+    // arm replies with a clear error that names itself.
+    #[test]
+    fn backend_dispatch_reports_misroute_for_ecs_commands() {
+        let cases: [(&str, Result<(), String>); 9] = [
+            (
+                "camera-set",
+                dispatch_spawn_unit(|reply| RuntimeCommand::CameraSet {
+                    args: CameraSetArgs::default(),
+                    reply,
+                }),
+            ),
+            (
+                "camera-move",
+                dispatch_spawn_unit(|reply| RuntimeCommand::CameraMove {
+                    args: CameraMoveArgs::default(),
+                    reply,
+                }),
+            ),
+            (
+                "camera-stop",
+                dispatch_spawn_unit(|reply| RuntimeCommand::CameraStop { reply }),
+            ),
+            (
+                "quality-set",
+                dispatch_spawn_unit(|reply| RuntimeCommand::QualitySet {
+                    setting: "ssao".to_string(),
+                    op: crate::assets::SettingOp::Next,
+                    reply,
+                }),
+            ),
+            (
+                "rebind",
+                dispatch_spawn_unit(|reply| RuntimeCommand::Rebind {
+                    setting: "key_forward".to_string(),
+                    key: crate::assets::Key::Space,
+                    reply,
+                }),
+            ),
+            (
+                "despawn",
+                dispatch_spawn_unit(|reply| RuntimeCommand::Despawn {
+                    name: "x".to_string(),
+                    reply,
+                }),
+            ),
+            (
+                "reparent",
+                dispatch_spawn_unit(|reply| RuntimeCommand::Reparent {
+                    child: "x".to_string(),
+                    parent: None,
+                    reply,
+                }),
+            ),
+            (
+                "spawn",
+                dispatch_spawn_unit(|reply| RuntimeCommand::Spawn {
+                    template: "x".to_string(),
+                    name: "y".to_string(),
+                    position: [0.0; 3],
+                    rotation_deg: [0.0; 3],
+                    scale: [1.0; 3],
+                    lifetime: None,
+                    reply,
+                }),
+            ),
+            (
+                "story",
+                dispatch_spawn_unit(|reply| RuntimeCommand::Story {
+                    command: crate::assets::StoryCommand::Advance,
+                    reply,
+                }),
+            ),
+        ];
+        for (label, result) in cases {
+            let err = result.expect_err("misroute should be an error");
+            assert!(err.contains(label), "expected '{label}' in: {err}");
+            assert!(err.contains("misrouted to backend dispatch"), "got: {err}");
+        }
+    }
+
+    // DecalAdd with no texture resolves to the white slot and, with a
+    // non-degenerate size, builds the DecalRecord before handing it to the
+    // backend, whose default `add_decal` reports the feature is unimplemented.
+    #[test]
+    fn backend_dispatch_decal_add_builds_record_then_surfaces_backend_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(
+            RuntimeCommand::DecalAdd {
+                args: DecalSpawnArgs::default(),
+                reply: tx,
+            },
+            None,
+            &mut backend,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("add_decal"), "got: {err}");
+    }
+
+    // A zero size makes the decal model matrix non-invertible, caught before the
+    // backend is touched.
+    #[test]
+    fn backend_dispatch_decal_add_rejects_degenerate_size() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(
+            RuntimeCommand::DecalAdd {
+                args: DecalSpawnArgs {
+                    size: [0.0, 0.0, 0.0],
+                    ..DecalSpawnArgs::default()
+                },
+                reply: tx,
+            },
+            None,
+            &mut backend,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("degenerate size"), "got: {err}");
+    }
+
+    #[test]
+    fn backend_dispatch_decal_remove_surfaces_backend_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(
+            RuntimeCommand::DecalRemove { id: 3, reply: tx },
+            None,
+            &mut backend,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("remove_decal"), "got: {err}");
+    }
+
+    // EmitterAdd normalizes / clamps the request into a ParticleEmitterRecord
+    // before the backend's default `add_emitter` reports it unimplemented. The
+    // two configs cover both the normalize branch (unit direction) and the
+    // degenerate-direction fallback plus every out-of-range clamp.
+    #[test]
+    fn backend_dispatch_emitter_add_normalizes_then_surfaces_backend_err() {
+        let configs = [
+            EmitterSpawnArgs::default(),
+            EmitterSpawnArgs {
+                direction: [0.0, 0.0, 0.0],
+                spread_deg: 500.0,
+                speed_min: -5.0,
+                speed_max: -10.0,
+                lifetime_min: -1.0,
+                lifetime_max: -2.0,
+                max_particles: 0,
+                spawn_rate: -1.0,
+                size_start: -1.0,
+                size_end: -1.0,
+                ..EmitterSpawnArgs::default()
+            },
+        ];
+        for args in configs {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let mut backend = StubBackend;
+            dispatch_runtime_spawn(
+                RuntimeCommand::EmitterAdd { args, reply: tx },
+                None,
+                &mut backend,
+            );
+            let err = rx.recv().unwrap().unwrap_err();
+            assert!(err.contains("add_emitter"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn backend_dispatch_emitter_remove_surfaces_backend_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(
+            RuntimeCommand::EmitterRemove { id: 5, reply: tx },
+            None,
+            &mut backend,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("remove_emitter"), "got: {err}");
+    }
+
+    #[test]
+    fn backend_dispatch_screenshot_surfaces_backend_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(
+            RuntimeCommand::Screenshot {
+                path: "shot.png".to_string(),
+                reply: tx,
+            },
+            None,
+            &mut backend,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(
+            err.contains("screenshot capture not supported"),
+            "got: {err}"
+        );
+    }
+
+    // resolve_texture_slot: the no-texture fallback, the three failure cases,
+    // and the live-pool hit. Touches the thread-local interner, so it takes the
+    // shared lock and resets the interner first, like the queue tests.
+    #[test]
+    fn resolve_texture_slot_covers_every_case() {
+        let _guard = test_support::lock();
+        crate::ecs::asset_id::reset_interner();
+
+        // None -> the renderer's white fallback slot, no interner or reload.
+        assert_eq!(resolve_texture_slot(None, None).unwrap(), 0);
+
+        // A name absent from the interner is a clear error.
+        let err = resolve_texture_slot(Some("ghost"), None).unwrap_err();
+        assert!(err.contains("not found in interner"), "got: {err}");
+
+        // Interned name but no world_reload (not `cn debug`): unavailable.
+        crate::ecs::asset_id::intern_all(&["grid"]);
+        let err = resolve_texture_slot(Some("grid"), None).unwrap_err();
+        assert!(err.contains("world_reload missing"), "got: {err}");
+
+        // Interned name, reload present, but the name is not in the pool map.
+        let empty = WorldReloadState {
+            texture_name_to_slot: std::collections::HashMap::new(),
+        };
+        let err = resolve_texture_slot(Some("grid"), Some(&empty)).unwrap_err();
+        assert!(err.contains("not in the live texture pool"), "got: {err}");
+
+        // Interned name present in the pool map -> its resolved slot.
+        let mut map = std::collections::HashMap::new();
+        map.insert(crate::ecs::asset_id::AssetId(0), 5usize);
+        let reload = WorldReloadState {
+            texture_name_to_slot: map,
+        };
+        assert_eq!(
+            resolve_texture_slot(Some("grid"), Some(&reload)).unwrap(),
+            5
+        );
+    }
+
+    // Each ECS dispatcher is only ever handed its own variant; a mismatched
+    // command hits the `let else { return }` guard and drops the reply channel
+    // without answering (so the receiver observes a disconnect). This never
+    // reaches the name table, so no interner setup is needed.
+    #[test]
+    fn ecs_dispatchers_ignore_mismatched_variants() {
+        fn dropped(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> bool {
+            rx.recv().is_err()
+        }
+        let mut world = crate::ecs::World::new_empty();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_camera_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_quality_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_rebind(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_despawn(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_reparent(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_spawn(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_story(RuntimeCommand::CameraStop { reply: tx }, &mut world);
+        assert!(dropped(rx));
+    }
+
+    fn controlled_camera() -> crate::assets::Camera3D {
+        use crate::assets::{Camera3D, CameraController};
+        Camera3D {
+            fov_y_degrees: 75.0,
+            near: 0.05,
+            far: 200.0,
+            view_matrix: [[0.0; 4]; 4],
+            position: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            desired_move: [0.0; 3],
+            jump_requested: false,
+            interact_requested: false,
+            controller: Some(CameraController::default()),
+        }
+    }
+
+    // The CameraSet wrapper applies the pose against the live ECS and replies Ok.
+    #[test]
+    fn dispatch_camera_set_applies_pose_and_replies_ok() {
+        use crate::assets::Camera3D;
+        use crate::ecs::World;
+
+        let mut world = World::new_empty();
+        world.add_component(controlled_camera());
+        world.start().unwrap();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_camera_set(
+            RuntimeCommand::CameraSet {
+                args: CameraSetArgs {
+                    position: [1.0, 2.0, 3.0],
+                    yaw: 0.5,
+                    pitch: -0.25,
+                    fov_y_degrees: Some(50.0),
+                },
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        let cam = world.query::<Camera3D>().next().expect("camera present");
+        assert_eq!(cam.position, [1.0, 2.0, 3.0]);
+        assert_eq!(cam.fov_y_degrees, 50.0);
+    }
+
+    #[test]
+    fn dispatch_quality_set_sends_setting_command() {
+        let mut world = crate::ecs::World::new_empty();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_quality_set(
+            RuntimeCommand::QualitySet {
+                setting: "ssao".to_string(),
+                op: crate::assets::SettingOp::Next,
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+
+        let events = world
+            .events::<crate::assets::SettingCommand>()
+            .expect("setting command queued");
+        let mut cursor = crate::ecs::EventCursor::default();
+        let seen = events.read(&mut cursor);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].setting, "ssao");
+        assert_eq!(seen[0].op, crate::assets::SettingOp::Next);
+        assert!(seen[0].persist);
+        assert!(seen[0].value_label.is_none());
+    }
+
+    #[test]
+    fn dispatch_rebind_sends_rebind_setting_command() {
+        let mut world = crate::ecs::World::new_empty();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_rebind(
+            RuntimeCommand::Rebind {
+                setting: "key_forward".to_string(),
+                key: crate::assets::Key::Space,
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+
+        let events = world
+            .events::<crate::assets::SettingCommand>()
+            .expect("setting command queued");
+        let mut cursor = crate::ecs::EventCursor::default();
+        let seen = events.read(&mut cursor);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].setting, "key_forward");
+        assert_eq!(
+            seen[0].op,
+            crate::assets::SettingOp::Rebind(crate::assets::Key::Space)
+        );
+    }
+
+    #[test]
+    fn dispatch_story_forwards_the_command() {
+        let mut world = crate::ecs::World::new_empty();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_story(
+            RuntimeCommand::Story {
+                command: crate::assets::StoryCommand::Choose(2),
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+
+        let events = world
+            .events::<crate::assets::StoryCommand>()
+            .expect("story command queued");
+        let mut cursor = crate::ecs::EventCursor::default();
+        let seen = events.read(&mut cursor);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(*seen[0], crate::assets::StoryCommand::Choose(2));
+    }
+
+    #[test]
+    fn dispatch_despawn_resolves_name_and_reports_unknown() {
+        let _guard = test_support::lock();
+        crate::ecs::asset_id::reset_interner();
+        crate::ecs::asset_id::intern_all(&["crate_a", "crate_b"]);
+        let mut world = crate::ecs::World::new_empty();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_despawn(
+            RuntimeCommand::Despawn {
+                name: "crate_b".to_string(),
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        let events = world
+            .events::<crate::assets::DespawnRequest>()
+            .expect("despawn request queued");
+        let mut cursor = crate::ecs::EventCursor::default();
+        let seen = events.read(&mut cursor);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].name, crate::ecs::asset_id::AssetId(1));
+
+        // An unknown name is a clean error.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_despawn(
+            RuntimeCommand::Despawn {
+                name: "ghost".to_string(),
+                reply: tx,
+            },
+            &mut world,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("'ghost' not found"), "got: {err}");
+    }
+
+    #[test]
+    fn dispatch_reparent_resolves_names_and_reports_errors() {
+        let _guard = test_support::lock();
+        crate::ecs::asset_id::reset_interner();
+        crate::ecs::asset_id::intern_all(&["box_a", "frame"]);
+        let mut world = crate::ecs::World::new_empty();
+        let mut cursor = crate::ecs::EventCursor::default();
+
+        // Both names known -> queued with both ids.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_reparent(
+            RuntimeCommand::Reparent {
+                child: "box_a".to_string(),
+                parent: Some("frame".to_string()),
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        {
+            let events = world
+                .events::<crate::assets::ReparentRequest>()
+                .expect("reparent request queued");
+            let seen = events.read(&mut cursor);
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].child, crate::ecs::asset_id::AssetId(0));
+            assert_eq!(seen[0].parent, Some(crate::ecs::asset_id::AssetId(1)));
+        }
+
+        // A None parent detaches the child to a root.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_reparent(
+            RuntimeCommand::Reparent {
+                child: "box_a".to_string(),
+                parent: None,
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        {
+            let events = world.events::<crate::assets::ReparentRequest>().unwrap();
+            let seen = events.read(&mut cursor);
+            assert_eq!(seen.len(), 1);
+            assert!(seen[0].parent.is_none());
+        }
+
+        // Unknown child.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_reparent(
+            RuntimeCommand::Reparent {
+                child: "ghost".to_string(),
+                parent: Some("frame".to_string()),
+                reply: tx,
+            },
+            &mut world,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("child 'ghost' not found"), "got: {err}");
+
+        // Known child, unknown parent.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_reparent(
+            RuntimeCommand::Reparent {
+                child: "box_a".to_string(),
+                parent: Some("void".to_string()),
+                reply: tx,
+            },
+            &mut world,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("parent 'void' not found"), "got: {err}");
+    }
+
+    #[test]
+    fn dispatch_spawn_resolves_template_interns_name_and_defaults_scale() {
+        let _guard = test_support::lock();
+        crate::ecs::asset_id::reset_interner();
+        crate::ecs::asset_id::intern_all(&["template_a"]);
+        let mut world = crate::ecs::World::new_empty();
+        let mut cursor = crate::ecs::EventCursor::default();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_spawn(
+            RuntimeCommand::Spawn {
+                template: "template_a".to_string(),
+                name: "instance_1".to_string(),
+                position: [1.0, 2.0, 3.0],
+                rotation_deg: [0.0, 90.0, 0.0],
+                scale: [2.0, 2.0, 2.0],
+                lifetime: Some(5.0),
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        {
+            let events = world
+                .events::<crate::assets::SpawnRequest>()
+                .expect("spawn request queued");
+            let seen = events.read(&mut cursor);
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].template, crate::ecs::asset_id::AssetId(0));
+            // The new instance name was interned to the next id.
+            assert_eq!(seen[0].name, crate::ecs::asset_id::AssetId(1));
+            assert_eq!(seen[0].transform.position, [1.0, 2.0, 3.0]);
+            assert_eq!(seen[0].transform.scale, [2.0, 2.0, 2.0]);
+            assert_eq!(seen[0].lifetime_secs, Some(5.0));
+        }
+
+        // A zero scale (the array default when omitted) is treated as unit scale
+        // so the spawned copy is visible.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_spawn(
+            RuntimeCommand::Spawn {
+                template: "template_a".to_string(),
+                name: "instance_2".to_string(),
+                position: [0.0; 3],
+                rotation_deg: [0.0; 3],
+                scale: [0.0; 3],
+                lifetime: None,
+                reply: tx,
+            },
+            &mut world,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        {
+            let events = world.events::<crate::assets::SpawnRequest>().unwrap();
+            let seen = events.read(&mut cursor);
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].transform.scale, [1.0, 1.0, 1.0]);
+        }
+
+        // An unknown template is a clean error.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_spawn(
+            RuntimeCommand::Spawn {
+                template: "missing".to_string(),
+                name: "instance_3".to_string(),
+                position: [0.0; 3],
+                rotation_deg: [0.0; 3],
+                scale: [1.0; 3],
+                lifetime: None,
+                reply: tx,
+            },
+            &mut world,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("template 'missing' not found"), "got: {err}");
+    }
 }

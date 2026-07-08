@@ -394,6 +394,42 @@ fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
 }
 
 #[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    fn args(asset_name: &str, source_path: &str) -> ShaderCompileArgs {
+        ShaderCompileArgs {
+            source_path: source_path.to_string(),
+            asset_name: asset_name.to_string(),
+            kind: "fragment".to_string(),
+        }
+    }
+
+    // A `.metal` source that is neither a built-in nor an on-disk file fails in
+    // `read_shader_source` before `compile_metal` runs, so no `xcrun` is spawned.
+    // This holds on every backend: the read happens in the dispatch arm.
+    #[test]
+    fn missing_metal_source_fails_at_read_before_any_compile() {
+        let err = compile_shader(args("user", "/no/such/user_frag.metal")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("Failed to read shader source"),
+            "got: {err}"
+        );
+    }
+
+    // On any backend other than DirectX, an `.hlsl` source (here a built-in, so
+    // the read always succeeds) routes to the Unsupported stub. On the DirectX
+    // backend this path really compiles, so the test is scoped away from it.
+    #[cfg(not(backend_dx))]
+    #[test]
+    fn builtin_hlsl_routes_to_unsupported_stub() {
+        let err = compile_shader(args("user", "default_frag.hlsl")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    }
+}
+
+#[cfg(test)]
 mod hook_tests {
     use super::*;
 

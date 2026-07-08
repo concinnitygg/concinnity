@@ -196,7 +196,9 @@ pub fn encode_fullscreen<E: FullscreenPass>(enc: &E, rec: &E::Rec) {
 
 #[cfg(test)]
 mod tests {
-    use super::clip_rect_to_scissor;
+    use super::*;
+    use crate::render_types::TextDrawCall;
+    use std::cell::RefCell;
 
     #[test]
     fn clip_inside_attachment_passes_through() {
@@ -233,5 +235,193 @@ mod tests {
             clip_rect_to_scissor([10.0, 10.0, 0.0, 50.0], 1280, 720),
             None
         );
+    }
+
+    // A text-only draw call for the composite driver: the drivers never inspect
+    // its contents, so the geometry is empty.
+    fn text_call() -> TextDrawCall {
+        TextDrawCall {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            atlas_slot: 0,
+            clip_rect: None,
+        }
+    }
+
+    // A mock bloom encoder recording each sub-pass in call order. The trait's
+    // associated types name no backend types, so both are `()`.
+    struct MockBloom {
+        mips: usize,
+        log: RefCell<Vec<String>>,
+    }
+
+    impl BloomEncoder for MockBloom {
+        type Rec = ();
+        type Args = ();
+
+        fn bloom_mip_count(&self) -> usize {
+            self.mips
+        }
+        fn begin_bloom(&self, _rec: &(), _args: &()) {
+            self.log.borrow_mut().push("begin".into());
+        }
+        fn bloom_prefilter(&self, _rec: &(), _args: &()) {
+            self.log.borrow_mut().push("prefilter".into());
+        }
+        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) {
+            self.log.borrow_mut().push(format!("down{dst}"));
+        }
+        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) {
+            self.log.borrow_mut().push(format!("up{dst}"));
+        }
+    }
+
+    #[test]
+    fn bloom_chain_encodes_prefilter_downsample_upsample_in_order() {
+        // 3 mips: prefilter, then the downsample chain 1..3, then the upsample
+        // chain walking back down (1, 0).
+        let enc = MockBloom {
+            mips: 3,
+            log: RefCell::new(Vec::new()),
+        };
+        encode_bloom_chain(&enc, &(), ());
+        assert_eq!(
+            *enc.log.borrow(),
+            ["begin", "prefilter", "down1", "down2", "up1", "up0"]
+        );
+    }
+
+    #[test]
+    fn bloom_chain_with_zero_mips_is_a_noop() {
+        // Bloom off: the driver returns before touching the encoder at all.
+        let enc = MockBloom {
+            mips: 0,
+            log: RefCell::new(Vec::new()),
+        };
+        encode_bloom_chain(&enc, &(), ());
+        assert!(enc.log.borrow().is_empty());
+    }
+
+    // A mock composite encoder. `text_ready` is the `begin_text` return; when
+    // `fail_at` matches a text-draw index that draw returns an error.
+    struct MockComposite {
+        text_ready: bool,
+        fail_at: Option<usize>,
+        log: RefCell<Vec<String>>,
+        text_seen: RefCell<usize>,
+    }
+
+    impl MockComposite {
+        fn new(text_ready: bool, fail_at: Option<usize>) -> Self {
+            Self {
+                text_ready,
+                fail_at,
+                log: RefCell::new(Vec::new()),
+                text_seen: RefCell::new(0),
+            }
+        }
+    }
+
+    impl CompositeEncoder for MockComposite {
+        type Rec = ();
+        type Args = ();
+
+        fn begin_composite(&self, _rec: &(), _args: &()) {
+            self.log.borrow_mut().push("begin".into());
+        }
+        fn composite_draw(&self, _rec: &(), _args: &()) {
+            self.log.borrow_mut().push("draw".into());
+        }
+        fn begin_text(&self, _rec: &(), _args: &()) -> bool {
+            self.log.borrow_mut().push("begin_text".into());
+            self.text_ready
+        }
+        fn text_draw(&self, _rec: &(), _args: &(), _call: &TextDrawCall) -> Result<(), String> {
+            let mut n = self.text_seen.borrow_mut();
+            self.log.borrow_mut().push(format!("text{}", *n));
+            let fail = self.fail_at == Some(*n);
+            *n += 1;
+            if fail {
+                return Err("text upload failed".into());
+            }
+            Ok(())
+        }
+        fn end_composite(&self, _rec: &(), _args: &()) {
+            self.log.borrow_mut().push("end".into());
+        }
+    }
+
+    #[test]
+    fn composite_chain_orders_passes_then_text_then_end() {
+        let enc = MockComposite::new(true, None);
+        let calls = [text_call(), text_call()];
+        let r = encode_composite_chain(&enc, &(), &(), &calls);
+        assert!(r.is_ok());
+        assert_eq!(
+            *enc.log.borrow(),
+            ["begin", "draw", "begin_text", "text0", "text1", "end"]
+        );
+    }
+
+    #[test]
+    fn composite_chain_propagates_text_error_without_ending() {
+        // The first text draw fails: the error propagates and, matching the
+        // prior DX/VK behaviour, the pass is left open (no `end_composite`) and
+        // the remaining text calls are skipped.
+        let enc = MockComposite::new(true, Some(0));
+        let calls = [text_call(), text_call()];
+        let r = encode_composite_chain(&enc, &(), &(), &calls);
+        assert_eq!(r, Err("text upload failed".into()));
+        let log = enc.log.borrow();
+        assert_eq!(*log, ["begin", "draw", "begin_text", "text0"]);
+        assert!(!log.contains(&"end".to_string()), "pass must stay open");
+    }
+
+    #[test]
+    fn composite_chain_with_no_text_skips_the_text_loop() {
+        // Empty text: `begin_text` is never called, but the pass still ends.
+        let enc = MockComposite::new(true, None);
+        let r = encode_composite_chain(&enc, &(), &(), &[]);
+        assert!(r.is_ok());
+        assert_eq!(*enc.log.borrow(), ["begin", "draw", "end"]);
+    }
+
+    #[test]
+    fn composite_chain_skips_draws_when_text_is_inert() {
+        // `begin_text` returns false (no pipeline / atlases): no per-call draws,
+        // but the pass still ends cleanly.
+        let enc = MockComposite::new(false, None);
+        let calls = [text_call()];
+        let r = encode_composite_chain(&enc, &(), &(), &calls);
+        assert!(r.is_ok());
+        assert_eq!(*enc.log.borrow(), ["begin", "draw", "begin_text", "end"]);
+    }
+
+    // A mock single-draw fullscreen pass recording its lifecycle.
+    struct MockFullscreen {
+        log: RefCell<Vec<String>>,
+    }
+
+    impl FullscreenPass for MockFullscreen {
+        type Rec = ();
+
+        fn begin(&self, _rec: &()) {
+            self.log.borrow_mut().push("begin".into());
+        }
+        fn draw(&self, _rec: &()) {
+            self.log.borrow_mut().push("draw".into());
+        }
+        fn end(&self, _rec: &()) {
+            self.log.borrow_mut().push("end".into());
+        }
+    }
+
+    #[test]
+    fn fullscreen_encodes_begin_draw_end() {
+        let enc = MockFullscreen {
+            log: RefCell::new(Vec::new()),
+        };
+        encode_fullscreen(&enc, &());
+        assert_eq!(*enc.log.borrow(), ["begin", "draw", "end"]);
     }
 }

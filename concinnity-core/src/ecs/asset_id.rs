@@ -225,4 +225,36 @@ mod tests {
         let by_id: Holder = serde_json::from_str("{\"r\":5}").unwrap();
         assert_eq!(by_id.r, Some(AssetId(5)));
     }
+
+    #[test]
+    fn display_formats_with_a_hash_prefix() {
+        assert_eq!(AssetId(42).to_string(), "#42");
+    }
+
+    #[test]
+    fn deserializes_from_a_negative_integer_via_visit_i64() {
+        // serde_json routes a negative literal through visit_i64, which wraps
+        // to u32. Covers the AssetId visitor's signed arm.
+        let id: AssetId = serde_json::from_str("-1").unwrap();
+        assert_eq!(id, AssetId(u32::MAX));
+
+        // The optional-reference visitor has its own visit_i64 arm.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            r: Option<AssetId>,
+        }
+        let neg: Holder = serde_json::from_str("{\"r\":-2}").unwrap();
+        assert_eq!(neg.r, Some(AssetId((-2i64) as u32)));
+    }
+
+    #[test]
+    fn round_trips_through_a_non_human_readable_format() {
+        // postcard is not self-describing, so this drives the plain-u32 branch
+        // of Deserialize (the blob defs-table path), not the visitor.
+        let id = AssetId(1234);
+        let bytes = postcard::to_allocvec(&id).unwrap();
+        let back: AssetId = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back, id);
+    }
 }

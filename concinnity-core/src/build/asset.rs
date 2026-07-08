@@ -95,3 +95,26 @@ impl Platform {
 pub trait SourceBacked: Component {
     fn source_path(args: &serde_json::Value, platform: Platform) -> Option<String>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_key_and_accepts_ext_cover_all_variants() {
+        assert_eq!(Platform::Metal.key(), "metal");
+        assert_eq!(Platform::Hlsl.key(), "hlsl");
+        assert_eq!(Platform::Glsl.key(), "glsl");
+
+        // The matching extension is accepted; another backend's shader
+        // extension is rejected; an unknown extension is accepted by default.
+        assert!(Platform::Metal.accepts_ext("metal"));
+        assert!(!Platform::Metal.accepts_ext("hlsl"));
+        assert!(!Platform::Metal.accepts_ext("glsl"));
+        assert!(Platform::Hlsl.accepts_ext("hlsl"));
+        assert!(!Platform::Hlsl.accepts_ext("metal"));
+        assert!(Platform::Glsl.accepts_ext("glsl"));
+        assert!(!Platform::Glsl.accepts_ext("hlsl"));
+        assert!(Platform::Metal.accepts_ext("txt"));
+    }
+}

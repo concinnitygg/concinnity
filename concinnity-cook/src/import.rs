@@ -1020,4 +1020,78 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("/no/such/scene.fbx"));
     }
+
+    // Like `triangle_glb`, but with one embedded image and a material that
+    // binds it as both base-color and normal texture, exercising the images()
+    // loop and the texture-reference branches in `entries_from_glb`.
+    fn textured_triangle_glb() -> Vec<u8> {
+        let mut bin = Vec::new();
+        for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            for c in p {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let pos_len = bin.len();
+        for idx in [0u32, 1, 2] {
+            bin.extend_from_slice(&idx.to_le_bytes());
+        }
+        let idx_end = bin.len();
+        // The image bytes are never decoded during expansion (only a Texture
+        // entry pointing at the source is emitted), so arbitrary padding stands
+        // in for the encoded pixels.
+        bin.extend_from_slice(&[0u8; 16]);
+        let json = format!(
+            r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0, "name": "Crate", "translation": [0, 0, 0]}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": 4}}]}}],
+  "materials": [{{
+    "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}, "metallicFactor": 0.0, "roughnessFactor": 1.0}},
+    "normalTexture": {{"index": 0}}
+  }}],
+  "textures": [{{"source": 0}}],
+  "images": [{{"bufferView": 2, "mimeType": "image/png"}}],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"}}
+  ],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": {pos_len}}},
+    {{"buffer": 0, "byteOffset": {pos_len}, "byteLength": 12}},
+    {{"buffer": 0, "byteOffset": {idx_end}, "byteLength": 16}}
+  ],
+  "buffers": [{{"byteLength": {total}}}]
+}}"#,
+            pos_len = pos_len,
+            idx_end = idx_end,
+            total = bin.len(),
+        );
+        glb_bytes(&json, &bin)
+    }
+
+    #[test]
+    fn glb_embedded_image_becomes_a_texture_bound_to_the_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tex.glb");
+        std::fs::write(&path, textured_triangle_glb()).unwrap();
+        let path = path.to_str().unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "scn".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path, &opts).expect("expand glb");
+
+        // The image yields a Texture entry referencing the GLB by path + index.
+        let tex = find(&entries, "scn_tex_0", "Texture");
+        assert_eq!(tex["args"]["source"], serde_json::json!(path));
+        assert_eq!(tex["args"]["image_index"], serde_json::json!(0));
+
+        // The material binds that texture as both albedo and normal map.
+        let mat = find(&entries, "scn_mat_0", "Material");
+        assert_eq!(mat["args"]["albedo"], "scn_tex_0");
+        assert_eq!(mat["args"]["normal_map"], "scn_tex_0");
+    }
 }

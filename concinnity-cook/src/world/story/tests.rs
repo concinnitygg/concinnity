@@ -67,6 +67,32 @@ fn missing_source_is_an_error() {
 }
 
 #[test]
+fn unreadable_source_file_is_an_error() {
+    let mut assets = vec![serde_json::json!({
+        "name": "story", "type": "StoryImport",
+        "args": {"source": "/no/such/story.md"}
+    })];
+    let err = expand_stories(&mut assets).unwrap_err();
+    assert!(err.contains("cannot read"), "{err}");
+    assert!(err.contains("/no/such/story.md"), "{err}");
+}
+
+#[test]
+fn parse_failure_is_wrapped_with_import_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad.md");
+    // Frontmatter with no `title` fails story parsing.
+    std::fs::write(&path, "---\ncharacters:\n---\n\n# a\n\nhi\n").unwrap();
+    let mut assets = vec![serde_json::json!({
+        "name": "story", "type": "StoryImport",
+        "args": {"source": path.to_str().unwrap()}
+    })];
+    let err = expand_stories(&mut assets).unwrap_err();
+    assert!(err.contains("StoryImport 'story'"), "{err}");
+    assert!(err.contains("title"), "{err}");
+}
+
+#[test]
 fn parses_frontmatter_nodes_and_flow() {
     let story = parse_story(CROSSROADS).unwrap();
     assert_eq!(story.title, "The Crossroads");

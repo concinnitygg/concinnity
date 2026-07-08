@@ -919,3 +919,282 @@ fn parse_color_value(val: &str) -> Result<[f32; 3], String> {
     };
     Ok([r, g, b])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Wrap a frontmatter block in a minimal valid body. Frontmatter errors
+    // surface before the body is validated, so a mis-set-up test still fails
+    // loudly rather than passing on the wrong error.
+    fn with_body(frontmatter: &str) -> String {
+        format!("---\n{frontmatter}\n---\n\n# a\n\nhi\n")
+    }
+
+    // Script sub-parsers reached directly.
+
+    #[test]
+    fn script_if_line_needs_a_jump_target() {
+        // `.err()` avoids requiring the Ok type (ScriptLine) to be Debug.
+        let err = parse_script_line("if asked").err().unwrap();
+        assert!(err.contains("jump target"), "{err}");
+    }
+
+    #[test]
+    fn script_jump_target_must_be_an_anchor() {
+        let err = parse_script_line("if asked -> b").err().unwrap();
+        assert!(err.contains("anchor"), "{err}");
+    }
+
+    #[test]
+    fn bare_condition_rejects_a_bad_flag() {
+        assert!(
+            parse_bare_condition("not BAD")
+                .unwrap_err()
+                .contains("not a variable name")
+        );
+        assert!(
+            parse_bare_condition("BAD")
+                .unwrap_err()
+                .contains("not a variable name")
+        );
+    }
+
+    #[test]
+    fn choice_condition_requires_an_if_prefix() {
+        let err = parse_condition("gold >= 3").unwrap_err();
+        assert!(err.contains("choice condition"), "{err}");
+        let ok = parse_condition("if gold >= 3").unwrap();
+        assert_eq!((ok.name.as_str(), ok.op, ok.value), ("gold", "ge", 3));
+    }
+
+    // Frontmatter scalar-value parsers reached directly.
+
+    #[test]
+    fn name_value_parses_quoted_and_plain() {
+        assert_eq!(parse_name_value("\"Ayame Doe\"").unwrap(), "Ayame Doe");
+        assert_eq!(parse_name_value("Plain Name").unwrap(), "Plain Name");
+    }
+
+    #[test]
+    fn name_value_rejects_unbalanced_quotes_and_empty() {
+        assert!(
+            parse_name_value("\"unterminated")
+                .unwrap_err()
+                .contains("unbalanced quotes")
+        );
+        assert!(
+            parse_name_value("\"\"")
+                .unwrap_err()
+                .contains("must not be empty")
+        );
+    }
+
+    #[test]
+    fn color_value_parses_a_triple() {
+        assert_eq!(
+            parse_color_value("[1.0, 0.5, 0.25]").unwrap(),
+            [1.0, 0.5, 0.25]
+        );
+    }
+
+    #[test]
+    fn color_value_rejects_non_arrays_and_wrong_lengths() {
+        // A non-array JSON value trips the serde branch; a well-formed array
+        // of the wrong length trips the component-count check.
+        assert!(parse_color_value("nope").unwrap_err().contains("[r, g, b]"));
+        assert!(
+            parse_color_value("[1, 2]")
+                .unwrap_err()
+                .contains("3 components")
+        );
+    }
+
+    #[test]
+    fn inline_character_parses_and_reports_its_own_errors() {
+        let ok = parse_character("{ name: \"Bo\", color: [1, 1, 1] }").unwrap();
+        assert_eq!(ok.name, "Bo");
+        let plain = parse_character("Bob").unwrap();
+        assert_eq!((plain.name.as_str(), plain.color), ("Bob", [1.0, 1.0, 1.0]));
+
+        assert!(
+            parse_character("{ name: X")
+                .unwrap_err()
+                .contains("unterminated")
+        );
+        assert!(
+            parse_character("{ name: X, bad }")
+                .unwrap_err()
+                .contains("key: value")
+        );
+        assert!(
+            parse_character("{ name: X, voice: low }")
+                .unwrap_err()
+                .contains("unknown key")
+        );
+        assert!(
+            parse_character("{ color: [1, 1, 1] }")
+                .unwrap_err()
+                .contains("missing `name`")
+        );
+        assert!(
+            parse_character("\"\"")
+                .unwrap_err()
+                .contains("display name")
+        );
+    }
+
+    // Frontmatter branches via full parses.
+
+    #[test]
+    fn frontmatter_unknown_key_is_an_error() {
+        let err = parse_story(&with_body("title: T\nfoo: bar")).unwrap_err();
+        assert!(err.contains("unknown key 'foo'"), "{err}");
+    }
+
+    #[test]
+    fn characters_key_with_inline_value_is_an_error() {
+        let err = parse_story(&with_body("title: T\ncharacters: stuff")).unwrap_err();
+        assert!(err.contains("indented block"), "{err}");
+    }
+
+    #[test]
+    fn top_level_line_without_a_colon_is_an_error() {
+        let err = parse_story(&with_body("title: T\nnocolon")).unwrap_err();
+        assert!(err.contains("key: value"), "{err}");
+    }
+
+    #[test]
+    fn stray_indented_line_outside_characters_is_an_error() {
+        let err = parse_story(&with_body("title: T\n  indented")).unwrap_err();
+        assert!(err.contains("unexpected indented line"), "{err}");
+    }
+
+    #[test]
+    fn character_field_without_a_colon_is_an_error() {
+        let err = parse_story(&with_body("title: T\ncharacters:\n  a:\n    nocolon")).unwrap_err();
+        assert!(err.contains("key: value"), "{err}");
+    }
+
+    #[test]
+    fn character_id_line_without_a_colon_is_an_error() {
+        let err = parse_story(&with_body("title: T\ncharacters:\n  nocolon")).unwrap_err();
+        assert!(err.contains("id: ..."), "{err}");
+    }
+
+    #[test]
+    fn invalid_character_id_is_an_error() {
+        let err = parse_story(&with_body("title: T\ncharacters:\n  bad id: Name")).unwrap_err();
+        assert!(err.contains("alphanumeric"), "{err}");
+    }
+
+    #[test]
+    fn inline_character_missing_name_reports_its_id() {
+        let err = parse_story(&with_body(
+            "title: T\ncharacters:\n  a: { color: [1, 1, 1] }",
+        ))
+        .unwrap_err();
+        assert!(err.contains("missing `name`"), "{err}");
+        assert!(err.contains("character 'a'"), "{err}");
+    }
+
+    // Body branches via full parses.
+
+    #[test]
+    fn heading_with_no_word_characters_is_an_error() {
+        let err = parse_story("---\ntitle: T\n---\n\n# !!!\n\nhi\n").unwrap_err();
+        assert!(err.contains("empty anchor"), "{err}");
+    }
+
+    #[test]
+    fn nested_lists_are_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n- [x](#a)\n  - [y](#a)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("nested lists"), "{err}");
+    }
+
+    #[test]
+    fn a_choice_must_be_exactly_one_link() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n- just words\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("exactly one link"), "{err}");
+    }
+
+    #[test]
+    fn bold_away_from_the_paragraph_start_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nhello **keeper:**\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("speaker attribution"), "{err}");
+    }
+
+    #[test]
+    fn bold_without_a_trailing_colon_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n**keeper** hi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("ending in ':'"), "{err}");
+    }
+
+    #[test]
+    fn an_image_inside_a_list_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n- ![bg](x.png)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("appear alone"), "{err}");
+    }
+
+    #[test]
+    fn a_link_with_no_label_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n[](#a)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("no label text"), "{err}");
+    }
+
+    #[test]
+    fn a_link_in_a_heading_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# [x](#a)\n\nhi\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("only appear in paragraphs"), "{err}");
+    }
+
+    #[test]
+    fn raw_html_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n<div>hi</div>\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("raw HTML"), "{err}");
+    }
+
+    #[test]
+    fn thematic_breaks_are_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n***\n\nbye\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("thematic breaks"), "{err}");
+    }
+
+    #[test]
+    fn indented_code_blocks_are_an_error() {
+        let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n    indented code\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("indented code"), "{err}");
+    }
+
+    #[test]
+    fn a_choice_link_title_needs_an_if_prefix() {
+        let src = "---\ntitle: T\n---\n\n# a\n\n- [Go](#a \"gold >= 3\")\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("choice condition"), "{err}");
+    }
+
+    #[test]
+    fn content_before_the_first_heading_in_a_list_is_an_error() {
+        let src = "---\ntitle: T\n---\n\n- [x](#a)\n";
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("before the first"), "{err}");
+    }
+
+    #[test]
+    fn soft_and_hard_breaks_join_paragraph_text() {
+        let soft = parse_story("---\ntitle: T\n---\n\n# a\n\nfirst\nsecond\n").unwrap();
+        assert_eq!(soft.nodes[0].pages[0].text, "first second");
+        let hard = parse_story("---\ntitle: T\n---\n\n# a\n\nfirst\\\nsecond\n").unwrap();
+        assert_eq!(hard.nodes[0].pages[0].text, "first\nsecond");
+    }
+}

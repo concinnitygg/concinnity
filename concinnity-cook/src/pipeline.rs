@@ -1765,4 +1765,209 @@ mod tests {
         let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
         assert!(source_files_by_type(ct, &serde_json::json!({}), &ctx()).is_empty());
     }
+
+    // Dispatch coverage: compile_by_type / source_files_by_type route each
+    // compiled ComponentType to its asset_impls wrapper.
+
+    fn ct(name: &str) -> ComponentType {
+        ComponentType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
+    }
+
+    // Arms whose outcome is deterministic from inline args alone: a valid
+    // minimal payload for the ones that need no source file, and the expected
+    // error for the ones that require a source but got none.
+    #[test]
+    fn compile_by_type_dispatches_deterministic_arms() {
+        let ok_cases: &[(&str, serde_json::Value)] = &[
+            (
+                "Texture",
+                serde_json::json!({"generator": "checker", "resolution": 32}),
+            ),
+            (
+                "Mesh",
+                serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
+            ),
+            (
+                "ProceduralMesh",
+                serde_json::json!({"generator": "sphere", "radius": 1.0}),
+            ),
+            ("Room", serde_json::json!({})),
+        ];
+        for case in ok_cases {
+            let name = case.0;
+            let args = &case.1;
+            let bytes = compile_by_type(ct(name), args, &ctx())
+                .unwrap_or_else(|e| panic!("{name} should compile: {e}"));
+            assert!(!bytes.is_empty(), "{name} payload should be non-empty");
+        }
+
+        let err_cases: &[(&str, serde_json::Value, &str)] = &[
+            ("AudioClip", serde_json::json!({}), "missing 'source'"),
+            (
+                "ColorLut",
+                serde_json::json!({}),
+                "requires a `source` path",
+            ),
+            (
+                "CubemapTexture",
+                serde_json::json!({}),
+                "requires a `source` path",
+            ),
+            (
+                "EnvironmentMap",
+                serde_json::json!({}),
+                "requires either `source` or `generator`",
+            ),
+            ("File", serde_json::json!({}), "unsupported File kind"),
+        ];
+        for case in err_cases {
+            let name = case.0;
+            let args = &case.1;
+            let needle = case.2;
+            let err = compile_by_type(ct(name), args, &ctx())
+                .expect_err(&format!("{name} with empty args should error"));
+            assert!(
+                err.to_string().contains(needle),
+                "{name} error should mention '{needle}', got: {err}"
+            );
+        }
+    }
+
+    // The File wrapper decodes an OBJ mesh source into a non-empty payload.
+    #[test]
+    fn compile_by_type_file_compiles_an_obj_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let obj = dir.path().join("tri.obj");
+        std::fs::write(&obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").expect("write obj");
+        let args = serde_json::json!({"path": obj.to_str().unwrap(), "kind": "obj"});
+        let bytes = compile_by_type(ct("File"), &args, &ctx()).expect("obj compiles");
+        assert!(!bytes.is_empty());
+    }
+
+    // The SkinnedMesh wrapper deserialises args + an optional skeleton, then
+    // bakes geometry: one vertex is enough for a payload, no vertices and a
+    // malformed skeleton are the two error arms.
+    #[test]
+    fn compile_by_type_skinned_mesh_wrapper_paths() {
+        let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
+        let bytes = compile_by_type(ct("SkinnedMesh"), &ok, &ctx()).expect("skinned compiles");
+        assert!(!bytes.is_empty());
+
+        let no_verts = compile_by_type(ct("SkinnedMesh"), &serde_json::json!({}), &ctx())
+            .expect_err("no vertices");
+        assert!(
+            no_verts.to_string().contains("at least one vertex"),
+            "got: {no_verts}"
+        );
+
+        let bad_skeleton = compile_by_type(
+            ct("SkinnedMesh"),
+            &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
+            &ctx(),
+        )
+        .expect_err("malformed skeleton");
+        assert!(
+            bad_skeleton.to_string().contains("invalid skeleton args"),
+            "got: {bad_skeleton}"
+        );
+    }
+
+    // The VoxelChunk wrapper resolves its palette from sibling BlockType assets
+    // in the build context.
+    #[test]
+    fn compile_by_type_voxel_chunk_resolves_palette_from_ctx() {
+        let blocks = vec![
+            wja("air", "BlockType", serde_json::json!({"solid": false})),
+            wja(
+                "stone",
+                "BlockType",
+                serde_json::json!({"uv_min": [0, 0], "uv_max": [1, 1]}),
+            ),
+        ];
+        let vctx = crate::asset::BuildCtx {
+            name: "chunk",
+            artifacts_dir: None,
+            all_assets: &blocks,
+        };
+        let args = serde_json::json!({
+            "palette": ["air", "stone"],
+            "dim": [2, 1, 1],
+            "blocks": [1, 1],
+            "block_size": 1.0,
+        });
+        let bytes = compile_by_type(ct("VoxelChunk"), &args, &vctx).expect("voxel compiles");
+        assert!(!bytes.is_empty());
+    }
+
+    // The SdfVolume wrapper transports the current backend's fragment shader
+    // bytes verbatim (no MSL/GLSL compilation); a missing source is a hard
+    // error rather than a silent empty payload.
+    #[test]
+    fn compile_by_type_sdf_volume_transports_shader_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shader = dir.path().join("blob.metal");
+        let source = b"// sdf fragment source\n";
+        std::fs::write(&shader, source).expect("write shader");
+        let path = shader.to_str().unwrap();
+        // Set every backend's key to the same file so the test is
+        // platform-independent: only the current backend's entry is read.
+        let args = serde_json::json!({
+            "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
+        });
+        let bytes = compile_by_type(ct("SdfVolume"), &args, &ctx()).expect("sdf reads source");
+        assert_eq!(bytes, source);
+
+        let err = compile_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx())
+            .expect_err("no fragment shader source");
+        assert!(
+            err.to_string().contains("no fragment shader source"),
+            "got: {err}"
+        );
+    }
+
+    // The ShaderStage wrapper's non-compiling arms: a missing source is either
+    // a hard error (Metal/HLSL) or the inline-GLSL stub (Vulkan). Neither shells
+    // out to a shader toolchain, so the test stays backend-agnostic.
+    #[test]
+    fn compile_by_type_shader_stage_missing_source_does_not_shell_out() {
+        let out = compile_by_type(
+            ct("ShaderStage"),
+            &serde_json::json!({"kind": "vertex"}),
+            &ctx(),
+        );
+        match out {
+            Ok(bytes) => assert!(bytes.is_empty(), "glsl stub yields empty bytes"),
+            Err(e) => assert!(e.to_string().contains("no shader source"), "got: {e}"),
+        }
+    }
+
+    // source_files_by_type routes to the two overriding wrappers: SdfVolume
+    // returns the resolved shader path, ShaderStage short-circuits built-ins
+    // and no-source to empty.
+    #[test]
+    fn source_files_by_type_covers_the_overriding_wrappers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shader = dir.path().join("blob.metal");
+        std::fs::write(&shader, b"x").expect("write shader");
+        let path = shader.to_str().unwrap();
+        let sdf_args = serde_json::json!({
+            "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
+        });
+        assert_eq!(
+            source_files_by_type(ct("SdfVolume"), &sdf_args, &ctx()),
+            vec![path.to_string()]
+        );
+        assert!(source_files_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).is_empty());
+
+        // A built-in shader name short-circuits to empty; so does no source.
+        assert!(
+            source_files_by_type(
+                ct("ShaderStage"),
+                &serde_json::json!({"source": "default.metal"}),
+                &ctx()
+            )
+            .is_empty()
+        );
+        assert!(source_files_by_type(ct("ShaderStage"), &serde_json::json!({}), &ctx()).is_empty());
+    }
 }

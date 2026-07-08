@@ -327,4 +327,46 @@ mod tests {
         let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 0 1 2";
         assert!(parse_obj(obj).is_err());
     }
+
+    #[test]
+    fn error_on_missing_vertex_component() {
+        // The `v` line lacks its z coordinate.
+        let err = parse_obj("v 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3").unwrap_err();
+        assert!(err.contains("missing z component"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_non_numeric_vertex_component() {
+        let err = parse_obj("v x 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3").unwrap_err();
+        assert!(err.contains("invalid float for x"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_non_numeric_position_index() {
+        let err = parse_obj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf a 2 3").unwrap_err();
+        assert!(err.contains("invalid position index"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_non_numeric_uv_index() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nf 1/x 2/1 3/1";
+        let err = parse_obj(obj).unwrap_err();
+        assert!(err.contains("invalid UV index"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_out_of_range_negative_index() {
+        // Only three vertices exist, so -9 reaches before the start of the list.
+        let err = parse_obj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -9 -2 -1").unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn single_component_vt_defaults_v_to_zero() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0.5\nvt 0.5\nvt 0.5\nf 1/1 2/2 3/3";
+        let (verts, _) = parse_obj(obj).unwrap();
+        for v in &verts {
+            assert_eq!(v.uv, [0.5, 0.0]);
+        }
+    }
 }

@@ -261,3 +261,147 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
         m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::GraphParam;
+    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+
+    // A valid hip -> knee -> foot chain (each the direct child of the last),
+    // plus an extra unrelated root joint the broken-parentage case names.
+    fn leg_skeleton() -> Skeleton {
+        let joint = |name: &str, parent: Option<usize>| Joint {
+            name: name.to_string(),
+            parent,
+            bind: JointPose::default(),
+        };
+        Skeleton::new(vec![
+            joint("hip", None),
+            joint("knee", Some(0)),
+            joint("foot", Some(1)),
+            joint("stray", None),
+        ])
+    }
+
+    fn chain(joints: &[&str], weight_parameter: &str) -> GraphIkChain {
+        GraphIkChain {
+            joints: joints.iter().map(|s| s.to_string()).collect(),
+            pole: [0.0, 0.0, 1.0],
+            weight_parameter: weight_parameter.to_string(),
+            foot_height: 0.05,
+        }
+    }
+
+    #[test]
+    fn resolves_a_valid_full_strength_chain() {
+        let skel = leg_skeleton();
+        let out = resolve_chains(
+            AssetId(1),
+            &[chain(&["hip", "knee", "foot"], "")],
+            &[],
+            &skel,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].chain.root, out[0].chain.mid, out[0].chain.end),
+            (0, 1, 2)
+        );
+        assert_eq!(
+            out[0].weight_param, None,
+            "empty weight name pins full strength"
+        );
+        assert!((out[0].foot_height - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolves_the_weight_parameter_to_its_declaration_index() {
+        let skel = leg_skeleton();
+        let params = [
+            GraphParam {
+                name: "unused".to_string(),
+                default: 0.0,
+            },
+            GraphParam {
+                name: "ik".to_string(),
+                default: 1.0,
+            },
+        ];
+        let out = resolve_chains(
+            AssetId(1),
+            &[chain(&["hip", "knee", "foot"], "ik")],
+            &params,
+            &skel,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].weight_param,
+            Some(1),
+            "resolved to declaration order"
+        );
+    }
+
+    #[test]
+    fn rejects_a_chain_with_the_wrong_joint_count() {
+        let skel = leg_skeleton();
+        let out = resolve_chains(AssetId(1), &[chain(&["hip", "knee"], "")], &[], &skel);
+        assert!(out.is_empty(), "a two-joint chain is dropped");
+    }
+
+    #[test]
+    fn rejects_a_chain_naming_a_missing_joint() {
+        let skel = leg_skeleton();
+        let out = resolve_chains(
+            AssetId(1),
+            &[chain(&["hip", "knee", "toe"], "")],
+            &[],
+            &skel,
+        );
+        assert!(out.is_empty(), "an unknown joint disables the chain");
+    }
+
+    #[test]
+    fn rejects_a_chain_that_is_not_a_direct_parent_line() {
+        let skel = leg_skeleton();
+        // hip -> stray -> foot: stray is a root, not hip's child, so parentage
+        // is broken.
+        let out = resolve_chains(
+            AssetId(1),
+            &[chain(&["hip", "stray", "foot"], "")],
+            &[],
+            &skel,
+        );
+        assert!(out.is_empty(), "broken parentage disables the chain");
+    }
+
+    #[test]
+    fn rejects_a_chain_with_an_undeclared_weight_parameter() {
+        let skel = leg_skeleton();
+        let out = resolve_chains(
+            AssetId(1),
+            &[chain(&["hip", "knee", "foot"], "ghost")],
+            &[],
+            &skel,
+        );
+        assert!(
+            out.is_empty(),
+            "an undeclared weight parameter disables the chain"
+        );
+    }
+
+    #[test]
+    fn keeps_the_good_chains_when_one_is_bad() {
+        let skel = leg_skeleton();
+        let out = resolve_chains(
+            AssetId(1),
+            &[
+                chain(&["hip", "knee"], ""),         // bad: wrong count
+                chain(&["hip", "knee", "foot"], ""), // good
+            ],
+            &[],
+            &skel,
+        );
+        assert_eq!(out.len(), 1, "one bad chain does not take down the rest");
+        assert_eq!(out[0].chain.end, 2);
+    }
+}

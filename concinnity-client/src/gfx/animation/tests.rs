@@ -498,3 +498,143 @@ fn graph_freezes_while_menu_open() {
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "run", "resumed step sees the parameter");
 }
+
+// A bare runtime clip of a given length, no tracks or root motion. Enough to
+// re-seat a bucket slot via `apply_reloaded_clip`.
+fn runtime_clip(duration: f32) -> crate::gfx::skinning::AnimationClip {
+    crate::gfx::skinning::AnimationClip {
+        duration,
+        looping: true,
+        tracks: Vec::new(),
+        root: None,
+    }
+}
+
+// A single flat clip targeting `target`, weight 1.
+fn flat_clip(name: &str, target: AssetId) -> Animation {
+    let mut a = clip(name, 1.0);
+    a.target = Some(target);
+    a
+}
+
+// A flat bucket accepts a re-imported clip into a valid slot and refuses a bad
+// target or an out-of-range slot without mutating anything.
+#[test]
+fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
+    let target = intern("flat_reload");
+    let mut world = World::new_empty();
+    world.add_component(flat_clip("fr_solo", target));
+    world.start().unwrap();
+    world.step();
+
+    with_anim(&mut world, |anim| {
+        assert!(
+            anim.apply_reloaded_clip(target, 0, runtime_clip(3.0), 0.5),
+            "a valid slot accepts the reload"
+        );
+        assert!(
+            !anim.apply_reloaded_clip(intern("nobody"), 0, runtime_clip(1.0), 1.0),
+            "an unknown target is refused"
+        );
+        assert!(
+            !anim.apply_reloaded_clip(target, 9, runtime_clip(1.0), 1.0),
+            "an out-of-range slot is refused"
+        );
+    });
+}
+
+// Reloading a clip a graph plays refreshes the state machine's compiled
+// duration for that slot; the graph keeps running afterward.
+#[test]
+fn apply_reloaded_clip_refreshes_graph_clip_duration() {
+    let mut world = graph_world();
+    world.step();
+
+    let applied = with_anim(&mut world, |anim| {
+        anim.apply_reloaded_clip(hero(), 0, runtime_clip(2.5), 1.0)
+    });
+    assert!(applied, "the graph bucket's idle slot reloads");
+    // The refresh path ran without disturbing the running graph.
+    world.step();
+    let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
+    assert_eq!(report.state, "idle");
+}
+
+// With hot-reload off (no `cn debug`) and inline clips, the reload catalogue
+// is empty: the getter returns an empty slice.
+#[test]
+fn reload_entries_is_empty_without_captured_sources() {
+    let mut world = graph_world();
+    world.step();
+    let count = with_anim(&mut world, |anim| anim.reload_entries().len());
+    assert_eq!(count, 0);
+}
+
+// The Debug impl summarizes the bucket and reload-catalogue counts rather than
+// dumping their contents.
+#[test]
+fn debug_impl_summarizes_target_and_reload_counts() {
+    let mut world = graph_world();
+    world.step();
+    let text = with_anim(&mut world, |anim| format!("{anim:?}"));
+    assert!(text.contains("AnimationSystem"), "{text}");
+    assert!(text.contains("targets: 1"), "{text}");
+    assert!(text.contains("reload_entries: 0"), "{text}");
+}
+
+// A one-joint pose for `target`, used to observe the flat sampling arms.
+fn single_joint_pose(target: AssetId) -> crate::assets::SkeletonPose {
+    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    let skeleton = Skeleton::new(vec![Joint {
+        name: "root".to_string(),
+        parent: None,
+        bind: JointPose::default(),
+    }]);
+    crate::assets::SkeletonPose::new(target, 0, skeleton)
+}
+
+// One flat clip drives the single-clip sampling arm: the pose gets one skinning
+// matrix per joint, at full strength regardless of the clip's weight.
+#[test]
+fn flat_single_clip_samples_the_pose() {
+    let target = intern("flat_single_pose");
+    let mut world = World::new_empty();
+    world.add_component(flat_clip("fs_solo", target));
+    world.add_component(single_joint_pose(target));
+    world.start().unwrap();
+    world.step();
+
+    let matrices = world
+        .query::<crate::assets::SkeletonPose>()
+        .next()
+        .map(|p| p.joint_matrices.len())
+        .unwrap();
+    assert_eq!(matrices, 1, "one skinning matrix for the one joint");
+}
+
+// Two flat clips with a fade-in drive the startup ramp and the multi-clip
+// weighted-blend arm: the fade transition anchors and advances on the first
+// steps and the blended pose is written every frame.
+#[test]
+fn flat_fade_in_blends_multiple_clips_into_the_pose() {
+    let target = intern("flat_blend_pose");
+    let mut world = World::new_empty();
+    // One clip requests a fade-in, so init builds a startup weight ramp.
+    let mut faded = flat_clip("fb_a", target);
+    faded.fade_in_secs = 0.5;
+    world.add_component(faded);
+    world.add_component(flat_clip("fb_b", target));
+    world.add_component(single_joint_pose(target));
+    world.start().unwrap();
+    // First step anchors the fade ramp; second advances it further. Both run
+    // the multi-clip blend arm and write the pose.
+    world.step();
+    world.step();
+
+    let matrices = world
+        .query::<crate::assets::SkeletonPose>()
+        .next()
+        .map(|p| p.joint_matrices.len())
+        .unwrap();
+    assert_eq!(matrices, 1, "the weighted blend produced a pose");
+}

@@ -96,3 +96,65 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
         [v[0] / len, v[1] / len, v[2] / len]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    #[test]
+    fn view_matrix_at_origin_with_zero_angles_is_identity() {
+        let m = view_matrix([0.0, 0.0, 0.0], 0.0, 0.0);
+        let id = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        for c in 0..4 {
+            for r in 0..4 {
+                assert!(
+                    (m[c][r] - id[c][r]).abs() < 1e-5,
+                    "m[{c}][{r}] = {} expected {}",
+                    m[c][r],
+                    id[c][r]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn view_matrix_basis_is_orthonormal() {
+        let m = view_matrix([1.0, 2.0, 3.0], 0.7, -0.3);
+        // The 3x3 rotation part's rows are the right / up / -forward basis; each
+        // is unit length and the three are mutually orthogonal.
+        let basis = |r: usize| [m[0][r], m[1][r], m[2][r]];
+        for r in 0..3 {
+            assert!(
+                (dot(basis(r), basis(r)) - 1.0).abs() < 1e-4,
+                "row {r} not unit"
+            );
+        }
+        assert!(dot(basis(0), basis(1)).abs() < 1e-4);
+        assert!(dot(basis(0), basis(2)).abs() < 1e-4);
+        assert!(dot(basis(1), basis(2)).abs() < 1e-4);
+        assert_eq!(m[0][3], 0.0);
+        assert_eq!(m[3][3], 1.0);
+    }
+
+    #[test]
+    fn normalize_falls_back_for_a_zero_vector() {
+        assert_eq!(normalize([0.0, 0.0, 0.0]), [0.0, 0.0, 1.0]);
+        let n = normalize([3.0, 0.0, 0.0]);
+        assert!((n[0] - 1.0).abs() < 1e-6);
+        assert_eq!([n[1], n[2]], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn cross_is_right_handed() {
+        assert_eq!(cross([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), [0.0, 0.0, 1.0]);
+    }
+}

@@ -468,4 +468,104 @@ mod tests {
         assert_eq!(r.first, 2);
         assert_eq!(r.last, 5);
     }
+
+    #[test]
+    fn pixel_format_texel_size_and_depth() {
+        assert_eq!(PixelFormat::Rgba16Float.bytes_per_texel(), 8);
+        assert_eq!(PixelFormat::Rgba8Unorm.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::Rg16Float.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::R32Float.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::Depth32Float.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::BgraSwapchain.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::R8Unorm.bytes_per_texel(), 1);
+        assert!(PixelFormat::Depth32Float.is_depth());
+        assert!(!PixelFormat::Rgba8Unorm.is_depth());
+        assert!(!PixelFormat::R8Unorm.is_depth());
+    }
+
+    #[test]
+    fn texture_size_resolves_and_floors_to_one() {
+        assert_eq!(TextureSize::Absolute(2048).resolve(720), 2048);
+        assert_eq!(TextureSize::Absolute(0).resolve(720), 1);
+        assert_eq!(TextureSize::Drawable.resolve(720), 720);
+        assert_eq!(TextureSize::Drawable.resolve(0), 1);
+        assert_eq!(TextureSize::DrawableScaled(0.5).resolve(720), 360);
+        // floor(1 * 0.5) = 0, floored back up to 1 so a mip never degenerates.
+        assert_eq!(TextureSize::DrawableScaled(0.5).resolve(1), 1);
+    }
+
+    #[test]
+    fn texture_desc_byte_size_multiplies_every_factor() {
+        let base = TextureDesc {
+            width: TextureSize::Drawable,
+            height: TextureSize::Drawable,
+            format: PixelFormat::Rgba16Float, // 8 bytes / texel
+            sample_count: 1,
+            array_layers: 1,
+            usage: TextureUsage::RENDER_TARGET,
+        };
+        assert_eq!(base.byte_size(4, 2), 4 * 2 * 8);
+        // Sample count and array layers both multiply in.
+        let multi = TextureDesc {
+            sample_count: 4,
+            array_layers: 6,
+            ..base
+        };
+        assert_eq!(multi.byte_size(4, 2), 4 * 2 * 8 * 4 * 6);
+        // A zero sample count / layer count clamps to 1 rather than zeroing.
+        let degenerate = TextureDesc {
+            sample_count: 0,
+            array_layers: 0,
+            ..base
+        };
+        assert_eq!(degenerate.byte_size(4, 2), 4 * 2 * 8);
+    }
+
+    #[test]
+    fn read_stages_bitset_and_pass_kind() {
+        let both = ReadStages::FRAGMENT | ReadStages::COMPUTE;
+        assert!(both.contains(ReadStages::FRAGMENT));
+        assert!(both.contains(ReadStages::COMPUTE));
+        assert!(!both.is_empty());
+        assert!(ReadStages::empty().is_empty());
+        assert!(!ReadStages::empty().contains(ReadStages::FRAGMENT));
+        // union with empty is the identity.
+        assert_eq!(both.union(ReadStages::empty()), both);
+        // A render pass reads in the fragment stage, a compute pass in compute.
+        assert_eq!(
+            ReadStages::for_pass_kind(PassKind::Render),
+            ReadStages::FRAGMENT
+        );
+        assert_eq!(
+            ReadStages::for_pass_kind(PassKind::Compute),
+            ReadStages::COMPUTE
+        );
+    }
+
+    #[test]
+    fn buffer_usage_bitset_ops() {
+        let u = BufferUsage::UNIFORM | BufferUsage::INDEX;
+        assert!(u.contains(BufferUsage::UNIFORM));
+        assert!(u.contains(BufferUsage::INDEX));
+        assert!(!u.contains(BufferUsage::VERTEX));
+        assert_eq!(BufferUsage::empty().0, 0);
+        assert_eq!(
+            u.union(BufferUsage::VERTEX).0,
+            BufferUsage::UNIFORM.0 | BufferUsage::INDEX.0 | BufferUsage::VERTEX.0
+        );
+    }
+
+    #[test]
+    fn barrier_op_accessors_expose_the_transition() {
+        let op = BarrierOp {
+            resource: ResourceId(4),
+            from: ResourceState::Read,
+            to: ResourceState::Write,
+            read_stages: ReadStages::FRAGMENT,
+        };
+        assert_eq!(op.resource_index(), 4);
+        assert_eq!(op.source_state(), ResourceState::Read);
+        assert_eq!(op.to_state(), ResourceState::Write);
+        assert_eq!(op.read_stages(), ReadStages::FRAGMENT);
+    }
 }

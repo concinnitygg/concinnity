@@ -1038,4 +1038,244 @@ mod tests {
             GpuTier::EntryDiscrete
         );
     }
+
+    // A do-nothing backend used to exercise the trait's provided (default)
+    // method bodies without a GPU. It supplies the smallest valid bodies for
+    // the required methods and overrides none of the defaults, so calling a
+    // defaulted method runs the trait's own body.
+    struct StubBackend;
+
+    impl SceneControl for StubBackend {
+        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
+        fn update_clear_color(&mut self, _color: [f32; 4]) {}
+    }
+
+    impl RenderBackend for StubBackend {
+        fn window_closed(&mut self) -> bool {
+            false
+        }
+        fn capture_cursor(&mut self) {}
+        fn take_input(&mut self) -> RenderInput {
+            RenderInput::default()
+        }
+        fn wait_idle(&self) {}
+        fn draw_frame(&mut self, _params: FrameParams<'_>) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
+        fn update_model(&mut self, _index: usize, _model: [[f32; 4]; 4]) {}
+        fn retire_draw_object(&mut self, _draw_idx: usize) {}
+        fn upload_skinned(
+            &mut self,
+            _vertices: &[SkinnedVertex],
+            _indices: &[u16],
+            _draw_objects: Vec<SkinnedDrawObject>,
+            _vert_bytes: &[u8],
+            _frag_bytes: &[u8],
+            _shadow_bytes: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_texture_slot(
+            &mut self,
+            _slot: usize,
+            _w: u32,
+            _h: u32,
+            _px: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn evict_normal_map_slot(&mut self, _slot: usize) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_normal_map_slot(
+            &mut self,
+            _slot: usize,
+            _w: u32,
+            _h: u32,
+            _px: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn upload_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _verts: &[Vertex],
+            _idxs: &[u16],
+            _frame: u64,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn setup_chunk_streaming(
+            &mut self,
+            _chunk_vtx_bytes: usize,
+            _chunk_idx_bytes: usize,
+            _texture_slot: usize,
+            _normal_map_slot: usize,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> Result<usize, String> {
+            Ok(0)
+        }
+        fn remove_chunk_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _retire_frame: u64,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_chunk_model(
+            &mut self,
+            _draw_idx: usize,
+            _model: [[f32; 4]; 4],
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // Minimal QualitySettings with every feature off, so no *Settings sub-type
+    // needs constructing.
+    fn stub_quality() -> QualitySettings {
+        QualitySettings {
+            taa: false,
+            ssao: None,
+            ssr: None,
+            rt_reflections: None,
+            ssgi: None,
+            reflection_blur_scale: 1,
+            auto_exposure: None,
+            auto_exposure_bias_ev: 0.0,
+        }
+    }
+
+    #[test]
+    fn default_query_methods_report_conservative_values() {
+        let backend = StubBackend;
+        // Capabilities fail open: a backend that does not report keeps every
+        // toggle live.
+        assert!(backend.capabilities().ray_tracing);
+        // Quality auto-config fails safe: the unknown/conservative profile.
+        assert_eq!(backend.gpu_profile().tier, GpuTier::Unknown);
+        assert_eq!(backend.gpu_profile().vendor, GpuVendor::Other);
+        assert_eq!(backend.gpu_profile().memory_budget_bytes, 0);
+        // Metal-only diagnostics: zeroed no-op defaults elsewhere.
+        assert_eq!(backend.logical_size(), (0.0, 0.0));
+        assert_eq!(backend.render_stats(), RenderStats::default());
+        // No window-bounds tracking: the in-engine cursor always draws.
+        assert!(!backend.cursor_outside_window());
+        // No display enumeration and no hot-reload flag wired.
+        assert!(backend.display_modes().is_empty());
+        assert!(backend.current_display_mode().is_none());
+        assert!(backend.shader_reload_flag().is_none());
+        // No geometry-size introspection for the reload size check.
+        assert!(backend.draw_geometry_size(0).is_none());
+        assert!(backend.draw_lod_index_counts(0).is_none());
+    }
+
+    #[test]
+    fn default_mutators_are_noops_and_fallible_hooks_report_defaults() {
+        let mut backend = StubBackend;
+
+        // Runtime skinned-spawn fallbacks: no pool, nothing to claim.
+        backend.seed_skinned_instance_pool(vec![]);
+        assert!(backend.spawn_skinned_instance(0, IDENTITY).is_none());
+        backend.retire_skinned_draw_object(0);
+        backend.update_skinned_model(0, IDENTITY);
+
+        // Streaming + cursor + capture no-ops.
+        backend.seed_mesh_streaming(0, 0, 0, 0);
+        backend.set_ui_cursor_hidden(true);
+        backend.set_menu_mode(true);
+        backend.set_camera_capture(true);
+        backend.set_reflection_probes(&[]);
+
+        // Presentation + window no-ops.
+        backend.set_vsync(true);
+        backend.set_window_mode(crate::assets::WindowMode::Fullscreen);
+        backend.set_window_size(1280, 720);
+        backend.set_display_mode(crate::display_mode::DisplayMode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        });
+
+        // Live look + input tunable no-ops.
+        backend.update_post_process(PostProcessParams::DEFAULT);
+        backend.set_ambient_intensity(1.0);
+        backend.set_keymap(&KeyMap::default());
+        backend.apply_quality_settings(stub_quality());
+        backend.update_quality_params(stub_quality());
+        backend.set_shadow_update(crate::assets::ShadowUpdate::EveryFrame);
+        backend.set_shadow_distance(200);
+        backend.set_shadow_cascades(3);
+        backend.update_fog_settings(None);
+        backend.set_draw_material(0, MaterialUniforms::DEFAULT, 0, 0);
+        backend.set_draw_cull_distance(0, 50.0);
+
+        // Fallible hot-reload hooks that succeed by default (no-op Ok).
+        assert!(backend.update_color_lut(2, &[0u8; 32]).is_ok());
+        assert!(backend.rebuild_static_geometry(vec![]).is_ok());
+        assert!(backend.update_skinned_mesh_geometry(0, 0, &[], &[]).is_ok());
+        assert!(backend.rebuild_skinned_geometry(vec![]).unwrap().is_empty());
+        assert!(backend.update_skinned_skeleton(0, 0).is_ok());
+        assert!(backend.update_mesh_geometry(0, &[], &[], &[]).is_ok());
+        assert!(backend.update_environment_map(&[]).is_ok());
+
+        // Fallible hooks a bare backend does not implement: they report Err.
+        assert!(backend.screenshot("unused.png").is_err());
+        assert!(backend.clone_static_draw_object(0, IDENTITY).is_err());
+        assert!(backend.add_decal(stub_decal()).is_err());
+        assert!(backend.remove_decal(0).is_err());
+        assert!(backend.add_emitter(stub_emitter()).is_err());
+        assert!(backend.remove_emitter(0).is_err());
+        assert!(
+            backend
+                .update_world_shader_pipelines(None, None, None, None)
+                .is_err()
+        );
+    }
+
+    fn stub_decal() -> crate::decal::DecalRecord {
+        crate::decal::DecalRecord {
+            model: IDENTITY,
+            inv_model: IDENTITY,
+            texture_slot: 0,
+            tint: [1.0; 4],
+        }
+    }
+
+    fn stub_emitter() -> crate::particles::ParticleEmitterRecord {
+        crate::particles::ParticleEmitterRecord {
+            texture_slot: 0,
+            position: [0.0; 3],
+            direction: [0.0, 1.0, 0.0],
+            spread_cos: 1.0,
+            speed_min: 0.0,
+            speed_max: 1.0,
+            lifetime_min: 0.0,
+            lifetime_max: 1.0,
+            gravity: [0.0, -9.8, 0.0],
+            spawn_rate: 1.0,
+            max_particles: 1,
+            size_start: 1.0,
+            size_end: 1.0,
+            color_start: [1.0; 4],
+            color_end: [1.0; 4],
+        }
+    }
 }

@@ -79,6 +79,9 @@ mod tests {
 
     #[test]
     fn world_flag_round_trips() {
+        // These flags are process-global; serialize on the shared lock so the
+        // reload-driving tests elsewhere don't observe a mid-toggle value.
+        let _guard = crate::test_support::lock();
         // Capture and restore so this test does not leak state into others.
         let prior = take_pending_world();
         assert!(!take_pending_world());
@@ -92,6 +95,7 @@ mod tests {
 
     #[test]
     fn stories_flag_round_trips() {
+        let _guard = crate::test_support::lock();
         let prior = take_pending_stories();
         assert!(!take_pending_stories());
         set_pending_stories();
@@ -104,6 +108,7 @@ mod tests {
 
     #[test]
     fn shader_stages_flag_round_trips() {
+        let _guard = crate::test_support::lock();
         let prior = take_pending_shader_stages();
         assert!(!take_pending_shader_stages());
         set_pending_shader_stages();

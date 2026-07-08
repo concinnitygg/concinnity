@@ -157,4 +157,72 @@ mod tests {
         assert_eq!(assets[0]["args"]["roughness"], 0.8);
         assert_eq!(assets[0]["args"]["metallic"], 0.0);
     }
+
+    // Expand a single-preset palette and return the alias suffix of every
+    // generated Material (the part after the "pal_" prefix).
+    fn expand_preset(preset: &str) -> Vec<String> {
+        let mut assets = vec![serde_json::json!({
+            "name": "pal",
+            "type": "MaterialPalette",
+            "args": {"preset": preset}
+        })];
+        expand_material_palettes(&mut assets);
+        assets
+            .iter()
+            .filter_map(|v| v["name"].as_str())
+            .map(|n| n.trim_start_matches("pal_").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn preset_wood_cabin_expands_its_surfaces() {
+        let aliases = expand_preset("pal_wood_cabin");
+        assert_eq!(aliases, ["floor", "wall", "beam", "trim"]);
+    }
+
+    #[test]
+    fn preset_metal_industrial_expands_its_surfaces() {
+        let mut assets = vec![serde_json::json!({
+            "name": "pal",
+            "type": "MaterialPalette",
+            "args": {"preset": "pal_metal_industrial"}
+        })];
+        expand_material_palettes(&mut assets);
+        let names: Vec<&str> = assets.iter().filter_map(|v| v["name"].as_str()).collect();
+        assert_eq!(names, ["pal_floor", "pal_wall", "pal_pipe", "pal_grate"]);
+        // The pipe surface is fully metallic per the preset table.
+        let pipe = assets.iter().find(|v| v["name"] == "pal_pipe").unwrap();
+        assert_eq!(pipe["args"]["metallic"], 1.0);
+    }
+
+    #[test]
+    fn preset_plaster_cottage_expands_its_surfaces() {
+        let aliases = expand_preset("pal_plaster_cottage");
+        assert_eq!(aliases, ["floor", "wall", "trim", "door"]);
+    }
+
+    #[test]
+    fn entry_fields_override_material_defaults() {
+        let mut assets = vec![serde_json::json!({
+            "name": "pal",
+            "type": "MaterialPalette",
+            "args": {"entries": [{
+                "alias": "hero",
+                "albedo": "tex_gold",
+                "normal_map": "tex_gold_n",
+                "roughness": 0.2,
+                "metallic": 1.0,
+                "tint": [0.9, 0.8, 0.1],
+                "emissive_factor": [0.5, 0.4, 0.0]
+            }]}
+        })];
+        expand_material_palettes(&mut assets);
+        let args = &assets[0]["args"];
+        assert_eq!(args["albedo"], "tex_gold");
+        assert_eq!(args["normal_map"], "tex_gold_n");
+        assert_eq!(args["roughness"], 0.2);
+        assert_eq!(args["metallic"], 1.0);
+        assert_eq!(args["tint"], serde_json::json!([0.9, 0.8, 0.1]));
+        assert_eq!(args["emissive_factor"], serde_json::json!([0.5, 0.4, 0.0]));
+    }
 }
