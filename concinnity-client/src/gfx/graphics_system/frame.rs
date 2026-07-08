@@ -3,7 +3,8 @@
 
 use crate::assets::{
     Camera3D, DespawnRequest, FrameInput, HitRegion, LabelBox, LayoutContainer, ReparentRequest,
-    SceneCommand, SettingCommand, SettingOp, SpawnRequest, Sprite, TextLabel, WindowMode,
+    SceneCommand, SettingCommand, SettingOp, SpawnRequest, Sprite, TextInput, TextLabel,
+    WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
@@ -417,6 +418,97 @@ fn build_dropdown_overlay(
     (sprites, labels)
 }
 
+// Synthesise the transient Sprites + TextLabels that draw a TextInput field: a
+// background box, the typed content (or the dimmer placeholder while empty and
+// unfocused), and a caret bar while focused. Fed through the same shapers as the
+// authored overlay elements, carrying the field's `view` / `fit` so view mapping
+// and visibility apply. Mirrors `build_dropdown_overlay`.
+fn build_text_input_overlay(
+    ti: &TextInput,
+    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+) -> (Vec<Sprite>, Vec<TextLabel>) {
+    const CARET_W: f32 = 2.0;
+    let font = ti.font.and_then(|f| loaded_fonts.get(&f));
+    let line_h = font
+        .map(|f| f.size_px * ti.scale)
+        .unwrap_or(ti.height * 0.6);
+    // Text baseline math centres the cap band in `[y, y + line_h]`, so placing
+    // the line box's top here vertically centres the text in the field.
+    let text_y = ti.y + (ti.height - line_h) / 2.0;
+
+    let bg = Sprite {
+        asset_id: AssetId::default(),
+        x: ti.x,
+        y: ti.y,
+        width: ti.width,
+        height: ti.height,
+        texture: None,
+        tint: ti.background,
+        follow_cursor: false,
+        visible: true,
+        view: ti.view,
+        fit: ti.fit,
+        corner_radius: ti.corner_radius,
+    };
+    let mut sprites = vec![bg];
+
+    // Placeholder only while empty and unfocused; otherwise the live content.
+    let showing_placeholder = ti.content.is_empty() && !ti.focused;
+    let (content, color) = if showing_placeholder {
+        (ti.placeholder.clone(), ti.placeholder_color)
+    } else {
+        (ti.content.clone(), ti.text_color)
+    };
+    let label = TextLabel {
+        asset_id: AssetId::default(),
+        font: ti.font,
+        content,
+        x: ti.x + ti.padding,
+        y: text_y,
+        color,
+        scale: ti.scale,
+        centered: false,
+        align: crate::assets::TextAlign::Left,
+        fit: ti.fit,
+        background: [0.0, 0.0, 0.0, 0.0],
+        padding: 0.0,
+        visible: true,
+        view: ti.view,
+    };
+
+    // Caret: a thin bar at the caret's character position (measured with the
+    // real font metrics), only while the field holds focus and the font loaded.
+    if ti.focused
+        && let Some(font) = font
+    {
+        let caret = ti.caret.min(ti.content.chars().count());
+        let byte = ti
+            .content
+            .char_indices()
+            .nth(caret)
+            .map(|(b, _)| b)
+            .unwrap_or(ti.content.len());
+        let caret_x =
+            ti.x + ti.padding + text::text_advance_width(&ti.content[..byte], font, ti.scale);
+        sprites.push(Sprite {
+            asset_id: AssetId::default(),
+            x: caret_x,
+            y: text_y,
+            width: CARET_W,
+            height: line_h,
+            texture: None,
+            tint: [ti.caret_color[0], ti.caret_color[1], ti.caret_color[2], 1.0],
+            follow_cursor: false,
+            visible: true,
+            view: ti.view,
+            fit: ti.fit,
+            corner_radius: 0.0,
+        });
+    }
+
+    (sprites, vec![label])
+}
+
 impl GraphicsSystem {
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if self.failed {
@@ -559,6 +651,31 @@ impl GraphicsSystem {
                 ));
             }
 
+            // Text-input fields draw as a background box + their text + a caret,
+            // synthesised the same way as the dropdown overlay and fed through the
+            // shapers (clipped like the rest, so a field inside a scroll band
+            // scissors correctly).
+            let text_inputs: Vec<&TextInput> = ctx.query::<TextInput>().collect();
+            for ti in text_inputs.iter().filter(|t| t.visible) {
+                let (ti_sprites, ti_labels) = build_text_input_overlay(ti, &self.loaded_fonts);
+                let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
+                calls.extend(gfx_sprite::build_sprite_calls(
+                    &sprite_refs,
+                    default_atlas_slot,
+                    &self.sprite_texture_slots,
+                    [win_w, win_h],
+                    &self.clip_rects,
+                ));
+                let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
+                calls.extend(text::build_text_calls(
+                    &label_refs,
+                    &self.loaded_fonts,
+                    win_w,
+                    win_h,
+                    &self.clip_rects,
+                ));
+            }
+
             // A menu cursor is present when any visible follow_cursor sprite is
             // opaque. Draw it (as an arrow pointer at the latest mouse position,
             // after the text so it sits on top) only while the real cursor is
@@ -579,7 +696,8 @@ impl GraphicsSystem {
             // to drive cursor capture and to freeze gameplay input below.
             let menu_active = labels.iter().any(|l| l.visible && l.view.is_some())
                 || scene_sprites.iter().any(|s| s.visible && s.view.is_some())
-                || cursor_sprites.iter().any(|s| s.visible && s.view.is_some());
+                || cursor_sprites.iter().any(|s| s.visible && s.view.is_some())
+                || text_inputs.iter().any(|t| t.visible && t.view.is_some());
             // The whole world render can be skipped when an opaque full-canvas
             // backdrop covers the scene (a menu authored with its dim alpha at
             // 1.0): nothing of the scene is visible, so every world pass is
@@ -2054,6 +2172,9 @@ impl GraphicsSystem {
                     // Not gated by `gameplay`: the rebind capture works while the
                     // settings menu is open (the camera is what freezes behind it).
                     captured_key: raw.captured_key,
+                    // Not gated by `gameplay`: text-input fields type while a menu
+                    // (or the in-engine editor) is up, like the rebind capture.
+                    typed_char: raw.typed_char,
                 };
                 // Publish the same snapshot two ways: the resource readers can
                 // fetch by type, and the component column the camera and UI

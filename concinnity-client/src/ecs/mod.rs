@@ -451,6 +451,7 @@ impl World {
             World::build_story,
             World::build_audio,
             World::build_ui_input,
+            World::build_text_input,
         ];
         for build in SCHEDULE {
             if let Some(system) = build(&*self) {
@@ -593,6 +594,15 @@ impl World {
             || self.query::<crate::assets::View>().next().is_some()
             || self.query::<crate::assets::KeyBinding>().next().is_some();
         needs.then(|| crate::ui::UiInputSystem::new().into())
+    }
+
+    // TextInputSystem: present whenever the world declares any `TextInput`. It
+    // edits the focused field in place from the frame's typed character and
+    // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
+    fn build_text_input(&self) -> Option<SystemAsset> {
+        self.query::<crate::assets::TextInput>()
+            .next()
+            .map(|_| crate::text_input_system::TextInputSystem::new().into())
     }
 
     // Per-frame profiling data: system CPU timings and render-backend stats

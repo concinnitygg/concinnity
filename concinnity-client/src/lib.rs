@@ -33,6 +33,7 @@ pub(crate) mod hud;
 pub use concinnity_render::jobs;
 pub(crate) mod physics;
 pub(crate) mod story;
+pub(crate) mod text_input_system;
 pub(crate) mod ui;
 
 // Asset API

@@ -56,6 +56,12 @@ pub fn derive_cap_px(
 // Sum the advance widths for a string given a font and scale. Used to centre
 // text. Newlines carry no advance and are skipped (a multi-line label is
 // measured as if the lines were concatenated).
+/// Advance width of `content` in scaled pixels for the given font, for placing a
+/// caret or sizing a field's text. Newlines carry no advance.
+pub fn text_advance_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
+    measure_text_width(content, font, scale)
+}
+
 fn measure_text_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
         .chars()

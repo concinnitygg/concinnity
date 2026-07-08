@@ -35,6 +35,7 @@
 - [Mesh](Mesh.md) - Raw geometry. Supply `vertices` and `indices` directly, or import them from a binary glTF file with `source` + `primitive_index`.
 - [Model](Model.md) - An ordered list of sub-meshes, each with its own material.
 - [OptionSelect](OptionSelect.md) - A settings row that cycles through a fixed set of values on click.
+- [Panel](Panel.md) - A titled background container for grouping UI overlay elements.
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
 - [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics floor / terrain.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
@@ -60,6 +61,7 @@
 - [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.
 - [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
 - [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.
+- [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
 - [View](View.md) - A named overlay layer drawn on top of the active [Scene](Scene.md).

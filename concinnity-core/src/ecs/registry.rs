@@ -107,6 +107,8 @@ crate::define_components! {
         CharacterRig      => assets::CharacterRig,      88,
         GroundProbes      => assets::GroundProbes,      89,
         CameraProbe       => assets::CameraProbe,       90,
+        TextInput         => assets::TextInput,         91,
+        Panel             => assets::Panel,             92,
 }
 
 #[cfg(test)]

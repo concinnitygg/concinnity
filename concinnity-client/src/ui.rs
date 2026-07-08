@@ -211,6 +211,7 @@ pub struct UiInputSystem {
     // Built at init() from `<view_name>_*` name prefixes.
     sprites_by_view: HashMap<AssetId, Vec<AssetId>>,
     labels_by_view: HashMap<AssetId, Vec<AssetId>>,
+    text_inputs_by_view: HashMap<AssetId, Vec<AssetId>>,
     // Index (into `regions`) of the slider currently being dragged, or `None`.
     // Set on the press edge over a slider track, cleared on button release.
     dragging: Option<usize>,
@@ -244,6 +245,7 @@ impl UiInputSystem {
             views: ViewRegistry::default(),
             sprites_by_view: HashMap::new(),
             labels_by_view: HashMap::new(),
+            text_inputs_by_view: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
             thumb_drag: None,
@@ -341,6 +343,14 @@ impl System for UiInputSystem {
                     .push(l.asset_id);
             }
         }
+        for t in ctx.query::<crate::assets::TextInput>() {
+            if let Some(view_id) = t.view {
+                self.text_inputs_by_view
+                    .entry(view_id)
+                    .or_default()
+                    .push(t.asset_id);
+            }
+        }
 
         // Drain ScrollPanels into runtime state and bucket the regions into
         // their rows (uses the regions drained just above).
@@ -363,6 +373,16 @@ impl System for UiInputSystem {
                 for lbl in ctx.query_mut::<TextLabel>() {
                     if lbl.asset_id == id {
                         lbl.visible = false;
+                        break;
+                    }
+                }
+            }
+        }
+        for ids in self.text_inputs_by_view.values() {
+            for &id in ids {
+                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                    if ti.asset_id == id {
+                        ti.visible = false;
                         break;
                     }
                 }
@@ -1002,6 +1022,16 @@ impl UiInputSystem {
                 for l in ctx.query_mut::<TextLabel>() {
                     if l.asset_id == id {
                         l.visible = visible;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(ids) = self.text_inputs_by_view.get(&view_id) {
+            for &id in ids {
+                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                    if ti.asset_id == id {
+                        ti.visible = visible;
                         break;
                     }
                 }

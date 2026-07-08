@@ -165,6 +165,9 @@ impl KeyState {
             // it is not reset below.
             ctrl: self.ctrl,
             captured_key: self.captured_key,
+            // Printable text input: wire from WM_CHAR when this layer is built on
+            // Windows (text-input fields read it). None until then.
+            typed_char: None,
         };
         self.interact_pending = false;
         self.jump_pending = false;

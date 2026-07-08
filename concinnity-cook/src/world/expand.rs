@@ -10,6 +10,7 @@ use super::light_rig::expand_light_rigs;
 use super::main_menu::expand_main_menus;
 use super::material_palette::expand_material_palettes;
 use super::option_select::expand_option_selects;
+use super::panel::expand_panels;
 use super::prefab::expand_prefabs;
 use super::room::expand_room_textures;
 use super::scene_import::expand_scene_imports;
@@ -117,6 +118,9 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // primitives (TextLabels + Sprites + HitRegion) on the same footing, before
     // companion injection.
     expand_sliders(assets)?;
+    // Panels expand to a background Sprite (+ title TextLabel), also before the
+    // second companion round so those pull in their GraphicsConfig / Font.
+    expand_panels(assets)?;
     // Second companion round: companions for the assets the defaults and menu
     // passes added. Idempotent for everything round one already covered.
     inject_companions(assets, &mut report);

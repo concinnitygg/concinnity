@@ -9,6 +9,7 @@
 mod hook;
 mod hud;
 mod inject;
+mod panel;
 
 use crate::app::state::App;
 use crate::debug_hook::DebugHook;

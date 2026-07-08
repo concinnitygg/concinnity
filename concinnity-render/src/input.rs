@@ -50,6 +50,13 @@ pub struct RenderInput {
     // capture state. Wired on Metal; DirectX / Vulkan set it from their key
     // callbacks.
     pub captured_key: Option<crate::assets::Key>,
+    // The printable character produced by this poll's key press (with the OS's
+    // shift / dead-key / layout handling applied), for text-input fields, or
+    // `None`. A one-frame pulse like `captured_key`, ungated by menu / capture
+    // state. Editing keys (Backspace / Delete / arrows) are not here: those
+    // arrive via `captured_key`. Wired on Metal; DirectX / Vulkan set it from
+    // their WM_CHAR / char callback when built on Windows / Linux.
+    pub typed_char: Option<char>,
 }
 
 // Scroll units emitted per physical wheel notch on backends whose wheel events

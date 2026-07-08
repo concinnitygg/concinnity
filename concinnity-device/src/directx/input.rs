@@ -137,6 +137,9 @@ impl KeyState {
             // built on Windows (a story's Ctrl fast-forward reads it).
             ctrl: false,
             captured_key: self.captured_key,
+            // Printable text input: wire from WM_CHAR when this backend is built
+            // on Windows (text-input fields read it). None until then.
+            typed_char: None,
         };
         self.interact_pending = false;
         self.jump_pending = false;

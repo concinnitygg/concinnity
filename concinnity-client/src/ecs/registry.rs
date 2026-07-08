@@ -20,6 +20,7 @@ crate::define_system_assets! {
     AudioSystem     => crate::audio::system::AudioSystem,
     StorySystem     => crate::story::StorySystem,
     UiInputSystem   => crate::ui::UiInputSystem,
+    TextInputSystem => crate::text_input_system::TextInputSystem,
     FpsCounter      => crate::hud::fps_counter::FpsCounterSystem,
     StatHud         => crate::hud::stat_hud::StatHudSystem,
     DebugHud        => crate::hud::debug_hud::DebugHudSystem,
