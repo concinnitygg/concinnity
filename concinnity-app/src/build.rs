@@ -62,14 +62,22 @@ pub(crate) fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     Ok(world)
 }
 
+// Run the full in-memory pipeline on a world.jsonl string, returning a
+// ready-to-run World without touching any blob files on disk. The editor uses
+// this to boot an empty (or otherwise non-renderable) world from a seeded
+// GraphicsConfig so a window still opens.
+pub fn build_world_from_str(content: &str) -> std::io::Result<World> {
+    let loaded = prepare(content)?;
+    world_from_loaded(loaded)
+}
+
 // Read a world.jsonl file from disk and run the full in-memory pipeline on it,
 // returning a ready-to-run World. The interpreted `run` (in the CLI crate)
 // loads its world through here; it is the file-backed counterpart of `prepare`
 // + `world_from_loaded`.
 pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    let loaded = prepare(&content)?;
-    world_from_loaded(loaded)
+    build_world_from_str(&content)
 }
 
 // Compile a world.jsonl file and write the compiled blobs + world-lock.json to
@@ -113,6 +121,16 @@ mod tests {
         // Every expanded asset landed as a component; nothing was dropped on
         // the way through compile + assembly.
         assert_eq!(world.component_count(), expanded);
+    }
+
+    #[test]
+    fn build_world_from_str_assembles_an_in_memory_world() {
+        // The string path is what the editor uses to seed an empty world; it
+        // must produce the same assembled world as the file-backed path.
+        let world =
+            build_world_from_str("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n")
+                .unwrap();
+        assert!(world.component_count() >= 1);
     }
 
     #[test]
