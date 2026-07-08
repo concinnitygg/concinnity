@@ -63,3 +63,12 @@ pub mod volumetric_fog;
 // so it is compiled unconditionally and its layout tests run on every platform's
 // CI. The Metal backend (concinnity-device) re-exports it under its own `metal`.
 pub mod metal;
+
+// The same for the DirectX and Vulkan backends: their repr(C) uniform / probe
+// structs + GPU-timing slot arithmetic (mirrored in the HLSL / GLSL shaders).
+// Backend-specific but device-free (plain repr(C), no windows/ash types), so
+// they compile unconditionally and their layout tests count toward coverage.
+// The DirectX / Vulkan backends (concinnity-device) re-export them under their
+// own `directx` / `vulkan`.
+pub mod directx;
+pub mod vulkan;

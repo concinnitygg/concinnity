@@ -24,6 +24,8 @@
 
 use ash::{Device, vk};
 
+use crate::vulkan::uniforms::{GBUFFER_PREPASS_PUSH_BYTES, GbModelPush, GbViewUniforms};
+
 use super::super::context::VkContext;
 use super::super::math::IDENTITY4;
 use super::super::pipeline::*;
@@ -63,37 +65,9 @@ pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R1
 // (four std140 mat4 = 256 B). Matches the `GbView` UBO in every pre-pass VS.
 pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
 
-// Size of the prepass push-constant block: cur_model (64) + prev_model (64) +
-// roughness (4) + 12 B pad so the block is 16-byte aligned. Both stages see the
-// full block; the vertex shaders reference cur/prev model, the fragment shader
-// only roughness.
-const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
-
-// std140 view block uploaded to the G-buffer pre-pass vertex shaders. Matches
-// the `GbView` UBO (set 0, binding 0): the jittered VP rasterises, the
-// un-jittered cur/prev VPs drive the motion vector, the view matrix transforms
-// the normal + depth.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GbViewUniforms {
-    jittered_vp: [[f32; 4]; 4],
-    cur_vp: [[f32; 4]; 4],
-    prev_vp: [[f32; 4]; 4],
-    view_mat: [[f32; 4]; 4],
-}
-
-// Push constant the prepass pipelines see. Layout-matched to the shared GLSL
-// `PushBlock` (`mat4 cur_model; mat4 prev_model; float roughness;`) plus
-// trailing pad. The motion vector reads cur/prev model; the fragment reads
-// roughness.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GbModelPush {
-    cur_model: [[f32; 4]; 4],
-    prev_model: [[f32; 4]; 4],
-    roughness: f32,
-    _pad: [f32; 3],
-}
+// `GbViewUniforms` (the std140 `GbView` UBO) and `GbModelPush` (the pre-pass
+// push constant), plus its `GBUFFER_PREPASS_PUSH_BYTES` size, are GPU-free
+// layout structs that live in concinnity-render (imported above).
 
 // SPIR-V blobs for every G-buffer pre-pass pipeline. Produced by
 // [`compile_gbuffer_shaders`]; consumed by `GbufferResources::new` at init and
@@ -2047,32 +2021,14 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
 
-    // GbViewUniforms must match the `GbView` UBO (set 0, binding 0) in every
-    // pre-pass VS: four std140 column-major mat4 at offsets 0, 64, 128, 192
-    // (256 B total).
+    // The `GbViewUniforms` / `GbModelPush` layout tests live with the structs in
+    // `concinnity_render::vulkan::uniforms`. `GbViewUniforms` fitting the
+    // `GBUFFER_VIEW_UBO_SIZE` allocation is checked here, where the size const
+    // (typed `vk::DeviceSize`) lives.
     #[test]
-    fn gb_view_uniforms_layout_matches_glsl() {
-        assert_eq!(size_of::<GbViewUniforms>(), 256);
-        assert_eq!(offset_of!(GbViewUniforms, jittered_vp), 0);
-        assert_eq!(offset_of!(GbViewUniforms, cur_vp), 64);
-        assert_eq!(offset_of!(GbViewUniforms, prev_vp), 128);
-        assert_eq!(offset_of!(GbViewUniforms, view_mat), 192);
-        // Upload size must not exceed the UBO allocation.
-        assert!(size_of::<GbViewUniforms>() as u64 <= GBUFFER_VIEW_UBO_SIZE);
-    }
-
-    // GbModelPush is pushed as the shared `PushBlock`: cur_model then prev_model
-    // (two column-major mat4) then roughness at offset 128, plus pad. The total
-    // must match the push-constant range size.
-    #[test]
-    fn gb_model_push_layout_matches_glsl() {
-        assert_eq!(size_of::<GbModelPush>(), 144);
-        assert_eq!(offset_of!(GbModelPush, cur_model), 0);
-        assert_eq!(offset_of!(GbModelPush, prev_model), 64);
-        assert_eq!(offset_of!(GbModelPush, roughness), 128);
-        assert_eq!(size_of::<GbModelPush>() as u32, GBUFFER_PREPASS_PUSH_BYTES);
+    fn gb_view_uniforms_fits_ubo_allocation() {
+        assert!(std::mem::size_of::<GbViewUniforms>() as u64 <= GBUFFER_VIEW_UBO_SIZE);
     }
 
     // Every G-buffer pre-pass GLSL (static + instanced + skinned vertex shaders

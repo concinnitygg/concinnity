@@ -27,6 +27,7 @@ use ash::{Device, vk};
 
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
+use crate::vulkan::uniforms::{GpuParticle, ParticleView};
 
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{compile_glsl, shader_source, spv_module};
@@ -46,30 +47,9 @@ pub(in crate::vulkan) const PARTICLE_FRAG_GLSL: &str = include_str!("shaders/par
 // DirectX cap.
 pub(in crate::vulkan) const MAX_EMITTERS: usize = 256;
 
-// One particle slot on the GPU. Layout must match the `Particle` GLSL
-// struct in `shaders/particle_simulate.comp` and `shaders/particle.vert`
-// (32 bytes per slot; std430 packs vec3+float into 16 bytes).
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-struct GpuParticle {
-    position: [f32; 3],
-    age: f32,
-    velocity: [f32; 3],
-    lifetime: f32,
-}
-
-// Per-frame view inputs to the particle render pass. Mirrors the
-// `ParticleView` uniform block in `particle.vert` (96 bytes: mat4 + two
-// (vec3, float) slots; std140 packs vec3+float into a single 16-byte block).
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct ParticleView {
-    vp: [[f32; 4]; 4],
-    cam_right: [f32; 3],
-    _pad0: f32,
-    cam_up: [f32; 3],
-    _pad1: f32,
-}
+// `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
+// view UBO) are GPU-free layout structs that live in concinnity-render
+// (imported above).
 
 // SPIR-V for the particle shader stages, in order: compute, vertex, fragment.
 type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
@@ -1381,27 +1361,8 @@ fn write_render_albedo_binding(
 mod tests {
     use super::*;
 
-    #[test]
-    fn gpu_particle_layout_matches_glsl() {
-        // Mirrors the `Particle` struct in `shaders/particle_simulate.comp`:
-        // std430 packs (vec3, float) into a 16-byte block, so the struct is
-        // 32 bytes total laid out at 0/12/16/28.
-        assert_eq!(std::mem::size_of::<GpuParticle>(), 32);
-        assert_eq!(std::mem::offset_of!(GpuParticle, position), 0);
-        assert_eq!(std::mem::offset_of!(GpuParticle, age), 12);
-        assert_eq!(std::mem::offset_of!(GpuParticle, velocity), 16);
-        assert_eq!(std::mem::offset_of!(GpuParticle, lifetime), 28);
-    }
-
-    #[test]
-    fn particle_view_layout_matches_glsl() {
-        // Mirrors the `ParticleView` uniform block in `particle.vert`:
-        // mat4 (64) + (vec3 + pad) + (vec3 + pad) = 96.
-        assert_eq!(std::mem::size_of::<ParticleView>(), 96);
-        assert_eq!(std::mem::offset_of!(ParticleView, vp), 0);
-        assert_eq!(std::mem::offset_of!(ParticleView, cam_right), 64);
-        assert_eq!(std::mem::offset_of!(ParticleView, cam_up), 80);
-    }
+    // The `GpuParticle` / `ParticleView` layout tests live with the structs in
+    // `concinnity_render::vulkan::uniforms`.
 
     #[test]
     fn particle_params_push_size_matches_glsl() {

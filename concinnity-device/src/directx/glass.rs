@@ -45,41 +45,11 @@ const GLASS_RT_PROBE_DEFINES: &str = "#define PROBE_CUBES_REGISTER t20\n";
 // RT-reflection resolve.
 const RT_PARAMS_UBO_SIZE: u64 = 144;
 
-// Per-frame view inputs to the transparent pass. Mirrors the `TransparentView`
-// cbuffer in glass.hlsl and `metal::uniforms::TransparentView`. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::directx) struct TransparentViewGpu {
-    pub(in crate::directx) vp: [[f32; 4]; 4],
-    pub(in crate::directx) inv_vp: [[f32; 4]; 4],
-    pub(in crate::directx) camera_pos: [f32; 4],
-    pub(in crate::directx) viewport: [f32; 2],
-    pub(in crate::directx) time: f32,
-    // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound. A per-frame
-    // "has env" gate for the glass reflection fallback (DX keeps it here rather
-    // than in the static per-panel GlassParams CBV).
-    pub(in crate::directx) prefilter_mip_count: f32,
-}
-
-// Per-panel uniforms bound before each draw. Mirrors the `GlassParams` cbuffer
-// in glass.hlsl and `metal::uniforms::GlassParams`. 64 bytes. Vec3 fields ride
-// in float4s (.w unused) so the layout is byte-identical regardless of HLSL
-// packing.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GlassParamsGpu {
-    centre: [f32; 4],
-    normal: [f32; 4],
-    tint: [f32; 4],
-    opacity: f32,
-    refraction_strength: f32,
-    fresnel_power: f32,
-    // 1.0 when this pane was assigned a planar reflection slot (the shader then
-    // samples the sharp mirror render at t3); 0.0 keeps the probe / sky path.
-    // Baked at init from the planar slot assignment (panes are immutable at
-    // runtime, and the planar pass runs every frame when the set exists).
-    planar: f32,
-}
+// `TransparentViewGpu` (per-frame transparent view cbuffer) and `GlassParamsGpu`
+// (per-panel cbuffer) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::directx::glass::{TransparentViewGpu,GlassParamsGpu}`
+// are unchanged for the encode + `glass_params_from` paths.
+pub(in crate::directx) use crate::directx::uniforms::{GlassParamsGpu, TransparentViewGpu};
 
 // Per-panel GPU state: the static world-space quad VB + IB plus the per-panel
 // uniform CBV. The quad is pre-transformed at build time and the params never
@@ -1226,18 +1196,9 @@ impl DxContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
 
-    #[test]
-    fn transparent_view_layout_matches_hlsl() {
-        assert_eq!(size_of::<TransparentViewGpu>(), 160);
-        assert_eq!(offset_of!(TransparentViewGpu, vp), 0);
-        assert_eq!(offset_of!(TransparentViewGpu, inv_vp), 64);
-        assert_eq!(offset_of!(TransparentViewGpu, camera_pos), 128);
-        assert_eq!(offset_of!(TransparentViewGpu, viewport), 144);
-        assert_eq!(offset_of!(TransparentViewGpu, time), 152);
-        assert_eq!(offset_of!(TransparentViewGpu, prefilter_mip_count), 156);
-    }
+    // The `TransparentViewGpu` / `GlassParamsGpu` layout tests live with the
+    // structs in `concinnity_render::directx::uniforms`.
 
     // The glass shader is concatenated from probe_common.hlsl + glass.hlsl and
     // compiled at runtime (FXC vs/ps_5_1). Compile it offline (both MSAA variants)
@@ -1266,18 +1227,6 @@ mod tests {
                 Err(e) => panic!("glass_rt shaders (msaa={msaa}) must compile: {e}"),
             }
         }
-    }
-
-    #[test]
-    fn glass_params_layout_matches_hlsl() {
-        assert_eq!(size_of::<GlassParamsGpu>(), 64);
-        assert_eq!(offset_of!(GlassParamsGpu, centre), 0);
-        assert_eq!(offset_of!(GlassParamsGpu, normal), 16);
-        assert_eq!(offset_of!(GlassParamsGpu, tint), 32);
-        assert_eq!(offset_of!(GlassParamsGpu, opacity), 48);
-        assert_eq!(offset_of!(GlassParamsGpu, refraction_strength), 52);
-        assert_eq!(offset_of!(GlassParamsGpu, fresnel_power), 56);
-        assert_eq!(offset_of!(GlassParamsGpu, planar), 60);
     }
 
     #[test]

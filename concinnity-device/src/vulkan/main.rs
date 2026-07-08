@@ -22,24 +22,9 @@
 use ash::vk;
 
 use crate::gfx::frustum::Frustum;
+use crate::vulkan::uniforms::MainPush;
 
 use super::context::VkContext;
-
-// Push constants for the main pass (112 bytes, std430).
-// Matches ModelUniforms(64) + MaterialUniforms(48) packed together.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct MainPush {
-    model: [[f32; 4]; 4],
-    roughness: f32,
-    metallic: f32,
-    _mpad0: f32,
-    _mpad1: f32,
-    tint: [f32; 3],
-    _mpad2: f32,
-    emissive: [f32; 3],
-    _mpad3: f32,
-}
 
 impl VkContext {
     // Recompute every instanced cluster's per-LOD-bucket partition for the
@@ -784,27 +769,5 @@ impl VkContext {
         // phase-2 MSAA colour into `hdr_resolve` and leaves it
         // SHADER_READ_ONLY_OPTIMAL, so the post stack reads the combined scene.
         unsafe { device.cmd_end_render_pass(cmd) };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // MainPush must match the `PushBlock` push constant in the main-pass
-    // shaders (std430): the model matrix, roughness/metallic with two pads,
-    // then tint and emissive vec3s each followed by a pad (112 B total).
-    #[test]
-    fn main_push_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<MainPush>(), 112);
-        assert_eq!(std::mem::offset_of!(MainPush, model), 0);
-        assert_eq!(std::mem::offset_of!(MainPush, roughness), 64);
-        assert_eq!(std::mem::offset_of!(MainPush, metallic), 68);
-        assert_eq!(std::mem::offset_of!(MainPush, _mpad0), 72);
-        assert_eq!(std::mem::offset_of!(MainPush, _mpad1), 76);
-        assert_eq!(std::mem::offset_of!(MainPush, tint), 80);
-        assert_eq!(std::mem::offset_of!(MainPush, _mpad2), 92);
-        assert_eq!(std::mem::offset_of!(MainPush, emissive), 96);
-        assert_eq!(std::mem::offset_of!(MainPush, _mpad3), 108);
     }
 }

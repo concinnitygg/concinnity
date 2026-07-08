@@ -42,6 +42,7 @@ use ash::{Device, vk};
 
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
+use crate::vulkan::uniforms::SkinParams;
 
 use super::pipeline::{compile_glsl_rt, spv_module};
 use super::texture::create_buffer;
@@ -62,16 +63,8 @@ const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 // SPIR-V 1.4 / Vulkan 1.2, the same target the ray-query shaders use).
 const RT_SKIN_COMP_GLSL: &str = include_str!("shaders/rt_skin.comp");
 
-// Per-dispatch parameters for the `rt_skin` compute kernel; matches the GLSL
-// `SkinParams` push-constant block (16 bytes).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SkinParams {
-    vertex_base: u32,
-    vertex_count: u32,
-    joint_count: u32,
-    _pad: u32,
-}
+// `SkinParams` (the `rt_skin` compute push constant) is a GPU-free layout struct
+// that lives in concinnity-render (imported above).
 
 // How the scene acceleration structure is kept current when props move. Selected
 // once at init from `CN_RT_DYNAMIC`; unset gives `Auto`, the shipping behaviour.
@@ -2963,18 +2956,8 @@ mod tests {
         assert!(super::super::pipeline::is_spirv(&spv));
     }
 
-    #[test]
-    fn skin_params_layout_matches_glsl() {
-        // GLSL `SkinParams` push-constant block in rt_skin.comp: four tightly
-        // packed uints (16 bytes). The skin kernel reads them as push constants,
-        // so the byte offsets must line up with this `#[repr(C)]` struct.
-        use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<SkinParams>(), 16);
-        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
-        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
-        assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, _pad), 12);
-    }
+    // The `SkinParams` layout test lives with the struct in
+    // `concinnity_render::vulkan::uniforms`.
 
     #[test]
     fn skinned_vertex_layout_pins_the_glsl_scalar_offsets() {

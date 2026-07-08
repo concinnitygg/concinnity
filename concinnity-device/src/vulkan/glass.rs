@@ -63,39 +63,11 @@ pub(in crate::vulkan) struct GlassRtDynamic {
     pub skinned_indices: vk::Buffer,
 }
 
-// Per-frame view UBO bound at set 0 binding 0. Layout matches the
-// `TransparentViewBlock` std140 block in `shaders/glass.{vert,frag}` and the
-// DirectX / Metal `TransparentView`. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::vulkan) struct TransparentView {
-    pub(in crate::vulkan) vp: [[f32; 4]; 4],
-    pub(in crate::vulkan) inv_vp: [[f32; 4]; 4],
-    pub(in crate::vulkan) camera_pos: [f32; 4],
-    pub(in crate::vulkan) viewport: [f32; 2],
-    pub(in crate::vulkan) time: f32,
-    // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound. The glass
-    // reflection keeps the white rim where no probe covers and no env cube exists.
-    pub(in crate::vulkan) prefilter_mip_count: f32,
-}
-
-// Per-panel UBO bound at set 1 binding 0. Layout matches the `GlassParamsBlock`
-// std140 block + the DirectX `GlassParamsGpu`. 64 bytes. Vec3 fields ride in
-// vec4s (.w unused) so the layout is byte-identical regardless of std140
-// packing.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GlassParams {
-    centre: [f32; 4],
-    normal: [f32; 4],
-    tint: [f32; 4],
-    opacity: f32,
-    refraction_strength: f32,
-    fresnel_power: f32,
-    // 1.0 when this pane was assigned a planar reflection slot (sample the sharp
-    // mirror render), 0.0 keeps the probe / sky reflection path.
-    planar: f32,
-}
+// `TransparentView` (per-frame glass view UBO) and `GlassParams` (per-panel
+// glass UBO) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::vulkan::glass::{TransparentView,GlassParams}` are
+// unchanged for the encode + `glass_params_from` paths.
+pub(in crate::vulkan) use crate::vulkan::uniforms::{GlassParams, TransparentView};
 
 // Build the per-panel `GlassParams` from an authored panel. `planar` is 1.0 when
 // the pane has a planar reflection slot, else 0.0. Pure; unit tested. Mirrors
@@ -1985,34 +1957,9 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
 
-    // The GLSL `TransparentViewBlock` std140 layout is 160 bytes; pin both the
-    // size and every field offset so a Rust-side reorder fails the suite
-    // without a GPU (mirrors the render_types `*_layout_matches_*` guards).
-    #[test]
-    fn transparent_view_layout_matches_glsl() {
-        assert_eq!(size_of::<TransparentView>(), 160);
-        assert_eq!(offset_of!(TransparentView, vp), 0);
-        assert_eq!(offset_of!(TransparentView, inv_vp), 64);
-        assert_eq!(offset_of!(TransparentView, camera_pos), 128);
-        assert_eq!(offset_of!(TransparentView, viewport), 144);
-        assert_eq!(offset_of!(TransparentView, time), 152);
-        assert_eq!(offset_of!(TransparentView, prefilter_mip_count), 156);
-    }
-
-    // The GLSL `GlassParamsBlock` std140 layout is 64 bytes.
-    #[test]
-    fn glass_params_layout_matches_glsl() {
-        assert_eq!(size_of::<GlassParams>(), 64);
-        assert_eq!(offset_of!(GlassParams, centre), 0);
-        assert_eq!(offset_of!(GlassParams, normal), 16);
-        assert_eq!(offset_of!(GlassParams, tint), 32);
-        assert_eq!(offset_of!(GlassParams, opacity), 48);
-        assert_eq!(offset_of!(GlassParams, refraction_strength), 52);
-        assert_eq!(offset_of!(GlassParams, fresnel_power), 56);
-        assert_eq!(offset_of!(GlassParams, planar), 60);
-    }
+    // The `TransparentView` / `GlassParams` layout tests live with the structs
+    // in `concinnity_render::vulkan::uniforms`.
 
     #[test]
     fn glass_params_from_maps_fields() {

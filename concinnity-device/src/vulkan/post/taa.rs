@@ -8,6 +8,7 @@
 use ash::{Device, vk};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
+use crate::vulkan::uniforms::TaaPush;
 
 use super::super::context::*;
 use super::super::pipeline::*;
@@ -396,13 +397,6 @@ impl TaaResources {
 
 //  Per-frame encoders (moved from draw.rs)
 
-// Push constant for the TAA resolve pass (4 bytes): history-valid flag.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct TaaPush {
-    history_valid: f32,
-}
-
 impl VkContext {
     // Encode the TAA resolve pass: one fullscreen-triangle draw blending the
     // HDR scene with the reprojected, neighbourhood-clipped history into the
@@ -701,13 +695,5 @@ mod tests {
     #[test]
     fn taa_shaders_compile() {
         super::compile_taa_shaders(false).expect("taa shaders compile");
-    }
-
-    // TaaPush must match the `TaaBlock` push constant in taa.frag: a single
-    // history-valid flag (4 bytes).
-    #[test]
-    fn taa_push_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<super::TaaPush>(), 4);
-        assert_eq!(std::mem::offset_of!(super::TaaPush, history_valid), 0);
     }
 }

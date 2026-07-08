@@ -55,16 +55,10 @@ const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 // HLSL source for the RT skinning compute kernel (compiled via DXC to SM 6.5).
 const RT_SKIN_HLSL: &str = include_str!("shaders/rt_skin.hlsl");
 
-// Per-dispatch parameters for the `rt_skin` compute kernel; matches the HLSL
-// `SkinParams` cbuffer (16 bytes).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SkinParams {
-    vertex_base: u32,
-    vertex_count: u32,
-    joint_count: u32,
-    _pad: u32,
-}
+// `SkinParams` (the `rt_skin` compute root-constant block) is a GPU-free layout
+// struct that lives in concinnity-render; re-export it so
+// `crate::directx::raytrace::SkinParams` is unchanged.
+pub(in crate::directx) use crate::directx::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader
@@ -2163,19 +2157,15 @@ mod tests {
         assert!(models_dirty(&a, &[]));
     }
 
+    // The `SkinParams` layout test lives with the struct in
+    // `concinnity_render::directx::uniforms`. The root-constant DWORD-count
+    // cross-check stays here, where `SKIN_PARAMS_DWORDS` is defined.
     #[test]
-    fn skin_params_layout_matches_hlsl() {
-        // HLSL `SkinParams` cbuffer in rt_skin.hlsl: four tightly packed uints
-        // (16 bytes). The skin kernel reads them as root constants, so the byte
-        // offsets must line up with this `#[repr(C)]` struct.
-        use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<SkinParams>(), 16);
-        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
-        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
-        assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, _pad), 12);
-        // The root-constant block is the struct's DWORD count.
-        assert_eq!(SKIN_PARAMS_DWORDS as usize, size_of::<SkinParams>() / 4);
+    fn skin_params_dwords_matches_size() {
+        assert_eq!(
+            SKIN_PARAMS_DWORDS as usize,
+            std::mem::size_of::<super::SkinParams>() / 4
+        );
     }
 
     #[test]

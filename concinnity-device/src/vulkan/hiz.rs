@@ -60,35 +60,11 @@ const HIZ_TILE: u32 = 8;
 // memory, and their persistently-mapped host pointers.
 type CullUboRing = (Vec<vk::Buffer>, Vec<vk::DeviceMemory>, Vec<*mut u8>);
 
-// Per-dispatch params pushed inline at the build kernels' push-constant block.
-// Must match the `HizParams` block in `shaders/hiz_init.comp` /
-// `shaders/hiz_downsample.comp`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct HizParams {
-    dst_width: u32,
-    dst_height: u32,
-    src_mip: u32,
-    sample_count: u32,
-}
-
-// Cull-side Hi-Z uniforms (set 1, binding 1). Bound by `encode_cull` each
-// frame. Layout must match the `CullHizParams` std140 UBO in
-// `shaders/cull.comp` (80 bytes) and the Metal / DirectX CullUniforms tail.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::vulkan) struct CullHizParams {
-    // Previous frame's un-jittered view-projection. Projects each AABB into the
-    // depth space the Hi-Z pyramid was reduced from (`M * v`).
-    pub prev_view_proj: [[f32; 4]; 4],
-    // Hi-Z mip-0 dimensions (in texels).
-    pub hiz_size: [f32; 2],
-    // How many mip levels live in the bound texture.
-    pub hiz_mip_count: u32,
-    // 0 skips the Hi-Z test entirely (first frame / after a resize, before a
-    // valid pyramid exists).
-    pub hiz_enabled: u32,
-}
+// `HizParams` (Hi-Z build push constant) and `CullHizParams` (cull-side Hi-Z
+// std140 UBO) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::vulkan::hiz::{HizParams,CullHizParams}` are
+// unchanged for the passes that fill them.
+pub(in crate::vulkan) use crate::vulkan::uniforms::{CullHizParams, HizParams};
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-of-
 // two sources end exactly at 1x1; non-power-of-two sources stop one mip short
@@ -1032,29 +1008,10 @@ fn write_uniform_buffer(
 
 #[cfg(test)]
 mod tests {
-    use super::{CullHizParams, HizParams, hiz_mip_count};
-    use std::mem::{offset_of, size_of};
+    use super::hiz_mip_count;
 
-    #[test]
-    fn hiz_params_layout() {
-        // GLSL HizParams push block: four tightly packed uints (16 bytes).
-        assert_eq!(size_of::<HizParams>(), 16);
-        assert_eq!(offset_of!(HizParams, dst_width), 0);
-        assert_eq!(offset_of!(HizParams, dst_height), 4);
-        assert_eq!(offset_of!(HizParams, src_mip), 8);
-        assert_eq!(offset_of!(HizParams, sample_count), 12);
-    }
-
-    #[test]
-    fn cull_hiz_params_layout_matches_glsl() {
-        // std140 CullHizParams in cull.comp: mat4 (64) + vec2 (8, 8-aligned) +
-        // two uints. Total 80 bytes, tightly packed after the mat4.
-        assert_eq!(size_of::<CullHizParams>(), 80);
-        assert_eq!(offset_of!(CullHizParams, prev_view_proj), 0);
-        assert_eq!(offset_of!(CullHizParams, hiz_size), 64);
-        assert_eq!(offset_of!(CullHizParams, hiz_mip_count), 72);
-        assert_eq!(offset_of!(CullHizParams, hiz_enabled), 76);
-    }
+    // The `HizParams` / `CullHizParams` layout tests live with the structs in
+    // `concinnity_render::vulkan::uniforms`.
 
     #[test]
     fn mip_count_power_of_two() {

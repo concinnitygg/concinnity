@@ -23,12 +23,10 @@ mod main;
 mod math;
 mod parallel_encoder;
 mod particle;
-mod pass_timing;
 mod pipeline;
 mod planar;
 mod post;
 mod probe;
-mod probe_uniforms;
 mod quality;
 mod raymarch;
 mod raytrace;
@@ -54,3 +52,9 @@ pub(crate) use window::GlfwWindow as PlatformWindow;
 
 pub use context::VkContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
+
+// GPU-free host structs live in concinnity-render (counted for coverage); the
+// backend keeps its existing `crate::vulkan::{pass_timing,probe_uniforms,uniforms}`
+// paths through these re-exports. `uniforms` holds the per-pass repr(C) structs;
+// each pass file re-exports the struct(s) it fills so their paths are unchanged.
+pub(crate) use concinnity_render::vulkan::{pass_timing, probe_uniforms, uniforms};

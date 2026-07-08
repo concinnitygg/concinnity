@@ -37,21 +37,10 @@ pub(in crate::directx) const CULL_PARAMS_DWORDS: u32 = 48;
 pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Root-constant block for the GPU-cull compute kernel (192 bytes = 48 DWORDs).
-// Must match the `CullParams` cbuffer at b0 in CULL_COMPUTE_HLSL: six
-// already-normalised frustum planes (xyz = normal, w = d), the camera position
-// + object count (sharing the last 16-byte cbuffer row), the previous frame's
-// view-projection (4x4), and the Hi-Z metadata (dims, mip count, enable flag).
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct CullParams {
-    planes: [[f32; 4]; 6],
-    cam_pos: [f32; 3],
-    object_count: u32,
-    prev_view_proj: [[f32; 4]; 4],
-    hiz_size: [f32; 2],
-    hiz_mip_count: u32,
-    hiz_enabled: u32,
-}
+// `CullParams` (the fused cull + Hi-Z cbuffer) is a GPU-free layout struct that
+// lives in concinnity-render; re-export it so `crate::directx::cull::CullParams`
+// is unchanged.
+pub(in crate::directx) use crate::directx::uniforms::CullParams;
 
 // Pipeline + command signature builders
 
@@ -945,25 +934,5 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
                 pResource: unsafe { std::mem::transmute_copy(resource) },
             }),
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // CullParams must match the `CullParams` cbuffer (b0) in cull.hlsl: six
-    // frustum planes, cam_pos sharing its row with object_count, the previous
-    // view-projection, then the Hi-Z metadata (192 B total).
-    #[test]
-    fn cull_params_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<CullParams>(), 192);
-        assert_eq!(std::mem::offset_of!(CullParams, planes), 0);
-        assert_eq!(std::mem::offset_of!(CullParams, cam_pos), 96);
-        assert_eq!(std::mem::offset_of!(CullParams, object_count), 108);
-        assert_eq!(std::mem::offset_of!(CullParams, prev_view_proj), 112);
-        assert_eq!(std::mem::offset_of!(CullParams, hiz_size), 176);
-        assert_eq!(std::mem::offset_of!(CullParams, hiz_mip_count), 184);
-        assert_eq!(std::mem::offset_of!(CullParams, hiz_enabled), 188);
     }
 }

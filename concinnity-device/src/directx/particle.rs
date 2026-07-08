@@ -44,29 +44,11 @@ pub const PARTICLE_FRAG_HLSL: &str = include_str!("shaders/particle_frag.hlsl");
 // the storage shape of `MAX_DECALS`.
 pub(in crate::directx) const MAX_EMITTERS: usize = 256;
 
-// One particle slot on the GPU. Layout must match the `Particle` HLSL struct
-// in `shaders/particle_simulate.hlsl` (32 bytes: `float3 + float` twice).
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-struct GpuParticle {
-    position: [f32; 3],
-    age: f32,
-    velocity: [f32; 3],
-    lifetime: f32,
-}
-
-// Per-frame view inputs to the particle render pass. Mirrors the
-// `ParticleView` cbuffer in `particle_vert.hlsl` (96 bytes: float4x4 + two
-// (float3, pad) slots).
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct ParticleView {
-    vp: [[f32; 4]; 4],
-    cam_right: [f32; 3],
-    _pad0: f32,
-    cam_up: [f32; 3],
-    _pad1: f32,
-}
+// `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
+// view cbuffer) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::directx::particle::{GpuParticle,ParticleView}` are
+// unchanged.
+pub(in crate::directx) use crate::directx::uniforms::{GpuParticle, ParticleView};
 
 // Compile the particle compute + vertex + fragment shaders. Used by
 // [`ParticleResources::new`] at init and (in the future) by shader hot-reload.
@@ -1016,31 +998,5 @@ impl DxContext {
         }
         self.particle.free_slots.push(emitter_id);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gpu_particle_layout_matches_hlsl() {
-        // Mirrors the `Particle` struct in `shaders/particle_simulate.hlsl`:
-        // float3 + float, twice = 32 bytes, layout 0/12/16/28.
-        assert_eq!(std::mem::size_of::<GpuParticle>(), 32);
-        assert_eq!(std::mem::offset_of!(GpuParticle, position), 0);
-        assert_eq!(std::mem::offset_of!(GpuParticle, age), 12);
-        assert_eq!(std::mem::offset_of!(GpuParticle, velocity), 16);
-        assert_eq!(std::mem::offset_of!(GpuParticle, lifetime), 28);
-    }
-
-    #[test]
-    fn particle_view_layout_matches_hlsl() {
-        // Mirrors the `ParticleView` cbuffer in `particle_vert.hlsl`:
-        // float4x4 (64) + (float3 + pad) + (float3 + pad) = 96.
-        assert_eq!(std::mem::size_of::<ParticleView>(), 96);
-        assert_eq!(std::mem::offset_of!(ParticleView, vp), 0);
-        assert_eq!(std::mem::offset_of!(ParticleView, cam_right), 64);
-        assert_eq!(std::mem::offset_of!(ParticleView, cam_up), 80);
     }
 }

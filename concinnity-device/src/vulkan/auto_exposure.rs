@@ -15,6 +15,7 @@
 use ash::{Device, vk};
 
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
+use crate::vulkan::uniforms::{AUTO_EXPOSURE_PUSH_BYTES, AutoExposureParams};
 
 use super::context::VkContext;
 use super::pipeline::{compile_glsl, shader_source, spv_module};
@@ -53,22 +54,7 @@ pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     Ok((build_cs, average_cs))
 }
 
-// Byte size of the `AutoExposureParams` push-constant block. Must match
-// the `layout(push_constant) ... AutoExposureParams` in both compute
-// shaders.
-const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
-
 // Push-constant payload pushed at the top of every compute dispatch.
-// Mirrors the HLSL / Metal struct of the same name.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct AutoExposureParams {
-    lum_log2_min: f32,
-    lum_log2_range: f32,
-    lum_to_bin_scale: f32,
-    _pad: f32,
-}
-
 // Owns the compute pipelines + GPU buffers + per-frame readback driving
 // the auto-exposure histogram path. Built only when the world's
 // `PostProcessConfig` opts in; the encoder is a no-op otherwise.
@@ -709,29 +695,5 @@ impl VkContext {
                 &[],
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // AutoExposureParams must match the `AutoExposureParams` push-constant
-    // block in both auto-exposure compute shaders: the three luminance-mapping
-    // scalars then a pad rounding to 16 bytes. Pinned by AUTO_EXPOSURE_PUSH_BYTES.
-    #[test]
-    fn auto_exposure_params_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<AutoExposureParams>(), 16);
-        assert_eq!(
-            std::mem::size_of::<AutoExposureParams>() as u32,
-            AUTO_EXPOSURE_PUSH_BYTES
-        );
-        assert_eq!(std::mem::offset_of!(AutoExposureParams, lum_log2_min), 0);
-        assert_eq!(std::mem::offset_of!(AutoExposureParams, lum_log2_range), 4);
-        assert_eq!(
-            std::mem::offset_of!(AutoExposureParams, lum_to_bin_scale),
-            8
-        );
-        assert_eq!(std::mem::offset_of!(AutoExposureParams, _pad), 12);
     }
 }

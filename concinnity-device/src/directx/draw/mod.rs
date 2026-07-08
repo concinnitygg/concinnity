@@ -27,32 +27,10 @@ mod text_upload;
 
 pub(super) use text_upload::TextUploadRing;
 
-// ViewUniforms layout (160 bytes) must match the HLSL ViewBlock at b1.
-// view_mat is the camera view matrix used to compute view-space depth in the
-// vertex shader for shadow cascade selection. cam_pos stored as three
-// individual floats to avoid HLSL packing surprises.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(super) struct ViewUniforms {
-    pub vp: [[f32; 4]; 4],
-    pub view_mat: [[f32; 4]; 4],
-    pub elapsed: f32,
-    // 1.0 when a reflection resolve (SSR resolve or RT reflections) composites
-    // over this frame's HDR scene. Below the reflection roughness cut the
-    // forward probe specular yields to that resolve (whose miss-fallback samples
-    // the same probe set), so a glossy dielectric does not show both the
-    // parallax-approximate forward probe reflection and the exact resolved one.
-    // 0.0 keeps the full forward probe specular (no resolve: probe-face / planar
-    // mirror bakes, reflections off, non-RT/SSR worlds).
-    pub reflections_enabled: f32,
-    pub cam_x: f32,
-    pub cam_y: f32,
-    pub cam_z: f32,
-    // Number of mip levels in the bound IBL prefilter cubemap. 0 = IBL off.
-    pub prefilter_mip_count: f32,
-    pub _ep0: f32,
-    pub _ep1: f32,
-}
+// `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
+// that lives in concinnity-render; re-export it so
+// `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
+pub(in crate::directx) use crate::directx::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence; drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different
@@ -525,28 +503,4 @@ pub(super) fn upload_light_uniforms(
         light_ubo.Unmap(0, None);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ViewUniforms must match the `ViewBlock` cbuffer (b1) in the main-pass
-    // shaders: two column-major float4x4 then elapsed/pad and the camera
-    // position as three scalars, prefilter mip count, and two end pads
-    // (160 B total).
-    #[test]
-    fn view_uniforms_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<ViewUniforms>(), 160);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, vp), 0);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, view_mat), 64);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, elapsed), 128);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, reflections_enabled), 132);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_x), 136);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_y), 140);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_z), 144);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, _ep0), 152);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, _ep1), 156);
-    }
 }

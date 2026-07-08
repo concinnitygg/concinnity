@@ -21,28 +21,32 @@
 // Layout reasoning. Keeping the whole-frame pair at the front of each block lets
 // the existing `gpu_frame_us` readback stay the first pair of the frame's block;
 // only the per-frame stride changes (from 2 to `SLOTS_PER_FRAME`).
+//
+// This is GPU-free slot-index arithmetic (no ash/vk types), so it lives in
+// concinnity-render and its layout tests count toward coverage; the Vulkan
+// backend re-exports it under `crate::vulkan::pass_timing`.
 
-use crate::gfx::render_graph::{PASS_COUNT, PassId};
+use crate::render_graph::{PASS_COUNT, PassId};
 
 // Per-frame block: [whole_frame_start, whole_frame_end, pass0_start, pass0_end,
 // ..., pass(PASS_COUNT-1)_start, pass(PASS_COUNT-1)_end]. 2 * (PASS_COUNT + 1)
 // u64 query slots.
-pub(in crate::vulkan) const SLOTS_PER_FRAME: usize = 2 * (PASS_COUNT + 1);
+pub const SLOTS_PER_FRAME: usize = 2 * (PASS_COUNT + 1);
 
 // First query slot of frame `frame`'s block.
-pub(in crate::vulkan) const fn frame_block_base(frame: usize) -> u32 {
+pub const fn frame_block_base(frame: usize) -> u32 {
     (frame * SLOTS_PER_FRAME) as u32
 }
 
 // (start, end) query slots for the whole-frame pair of `frame`. Matches the
 // legacy layout (whole-frame at the first pair of each block).
-pub(in crate::vulkan) const fn whole_frame_pair(frame: usize) -> (u32, u32) {
+pub const fn whole_frame_pair(frame: usize) -> (u32, u32) {
     let base = frame_block_base(frame);
     (base, base + 1)
 }
 
 // (start, end) query slots for `pass` within `frame`'s block.
-pub(in crate::vulkan) const fn pass_pair(frame: usize, pass: PassId) -> (u32, u32) {
+pub const fn pass_pair(frame: usize, pass: PassId) -> (u32, u32) {
     let base = frame_block_base(frame) + 2 + 2 * (pass as u32);
     (base, base + 1)
 }

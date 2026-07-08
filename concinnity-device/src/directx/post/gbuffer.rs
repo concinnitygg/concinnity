@@ -72,28 +72,11 @@ const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 // (four float4x4 = 256 B). Matches the `GbView` cbuffer in every pre-pass VS.
 const GBUFFER_VIEW_UBO_SIZE: u64 = 256;
 
-// View block uploaded to the G-buffer pre-pass vertex shader. Matches the
-// `GbView` cbuffer (b0) in gbuffer_prepass_vert*.hlsl: the jittered VP
-// rasterises, the un-jittered cur/prev VPs drive the motion vector, and the
-// view matrix transforms the normal + depth.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GbViewUniforms {
-    jittered_vp: [[f32; 4]; 4],
-    cur_vp: [[f32; 4]; 4],
-    prev_vp: [[f32; 4]; 4],
-    view: [[f32; 4]; 4],
-}
-
-// Per-draw model push (32 root constants at b1). Matches the `GbModel` cbuffer
-// in the static + skinned pre-pass VS: the current and previous model matrices
-// for the motion vector.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct GbModelPush {
-    cur_model: [[f32; 4]; 4],
-    prev_model: [[f32; 4]; 4],
-}
+// `GbViewUniforms` (the `GbView` cbuffer) and `GbModelPush` (the per-draw model
+// root constants) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::directx::post::gbuffer::{GbViewUniforms,GbModelPush}`
+// are unchanged.
+pub(in crate::directx) use crate::directx::uniforms::{GbModelPush, GbViewUniforms};
 
 // Shader compilation
 
@@ -1559,26 +1542,12 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    // GbViewUniforms must match the `GbView` cbuffer (b0) in every pre-pass VS:
-    // four column-major float4x4 at offsets 0, 64, 128, 192 (256 B total).
+    // The `GbViewUniforms` / `GbModelPush` layout tests live with the structs in
+    // `concinnity_render::directx::uniforms`. `GbViewUniforms` fitting the
+    // 256-aligned UBO allocation is checked here, where `align256` +
+    // `GBUFFER_VIEW_UBO_SIZE` live.
     #[test]
-    fn gb_view_uniforms_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<GbViewUniforms>(), 256);
-        assert_eq!(std::mem::offset_of!(GbViewUniforms, jittered_vp), 0);
-        assert_eq!(std::mem::offset_of!(GbViewUniforms, cur_vp), 64);
-        assert_eq!(std::mem::offset_of!(GbViewUniforms, prev_vp), 128);
-        assert_eq!(std::mem::offset_of!(GbViewUniforms, view), 192);
-        // Upload size must not exceed the 256-aligned UBO allocation.
+    fn gb_view_uniforms_fits_ubo_allocation() {
         assert!(std::mem::size_of::<GbViewUniforms>() as u64 <= align256(GBUFFER_VIEW_UBO_SIZE));
-    }
-
-    // GbModelPush is pushed as 32 root constants at b1, matching the `GbModel`
-    // cbuffer: cur_model then prev_model (two column-major float4x4).
-    #[test]
-    fn gb_model_push_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<GbModelPush>(), 128);
-        assert_eq!(std::mem::size_of::<GbModelPush>() / 4, 32);
-        assert_eq!(std::mem::offset_of!(GbModelPush, cur_model), 0);
-        assert_eq!(std::mem::offset_of!(GbModelPush, prev_model), 64);
     }
 }

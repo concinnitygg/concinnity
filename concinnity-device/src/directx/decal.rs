@@ -84,30 +84,10 @@ const CUBE_INDICES: [u16; 36] = [
     0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
 ];
 
-// Per-frame view inputs to the decal pass. Mirrors the `DecalView` cbuffer
-// in `decal_vert.hlsl` / `decal_frag.hlsl`. 144 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct DecalView {
-    vp: [[f32; 4]; 4],
-    inv_vp: [[f32; 4]; 4],
-    viewport: [f32; 2],
-    _pad: [f32; 2],
-}
-
-// Per-decal uniforms pushed before each draw. Mirrors the `DecalParams`
-// cbuffer in the decal shaders. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct DecalParams {
-    model: [[f32; 4]; 4],
-    inv_model: [[f32; 4]; 4],
-    tint: [f32; 4],
-    fade_pow: f32,
-    _p0: f32,
-    _p1: f32,
-    _p2: f32,
-}
+// `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
+// structs that live in concinnity-render; re-export them so
+// `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
+pub(in crate::directx) use crate::directx::uniforms::{DecalParams, DecalView};
 
 // Root-signature layout (binds 1:1 with the HLSL register declarations):
 //   [0] root CBV b0   DecalView    (per-frame)
@@ -755,35 +735,5 @@ impl DxContext {
         *slot = None;
         self.decal.free_slots.push(decal_id);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // DecalView must match the `DecalView` cbuffer (b0) in the decal shaders:
-    // two column-major float4x4 then viewport and a 2-float pad (144 B total).
-    #[test]
-    fn decal_view_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<DecalView>(), 144);
-        assert_eq!(std::mem::offset_of!(DecalView, vp), 0);
-        assert_eq!(std::mem::offset_of!(DecalView, inv_vp), 64);
-        assert_eq!(std::mem::offset_of!(DecalView, viewport), 128);
-        assert_eq!(std::mem::offset_of!(DecalView, _pad), 136);
-    }
-
-    // DecalParams must match the `DecalParams` cbuffer (b1): model and
-    // inv_model, the float4 tint, fade_pow, then three end pads (160 B total).
-    #[test]
-    fn decal_params_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<DecalParams>(), 160);
-        assert_eq!(std::mem::offset_of!(DecalParams, model), 0);
-        assert_eq!(std::mem::offset_of!(DecalParams, inv_model), 64);
-        assert_eq!(std::mem::offset_of!(DecalParams, tint), 128);
-        assert_eq!(std::mem::offset_of!(DecalParams, fade_pow), 144);
-        assert_eq!(std::mem::offset_of!(DecalParams, _p0), 148);
-        assert_eq!(std::mem::offset_of!(DecalParams, _p1), 152);
-        assert_eq!(std::mem::offset_of!(DecalParams, _p2), 156);
     }
 }

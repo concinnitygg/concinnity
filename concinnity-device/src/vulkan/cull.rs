@@ -25,19 +25,10 @@ use crate::gfx::frustum::Frustum;
 use super::context::VkContext;
 use super::hiz::CullHizParams;
 
-// Push constants for the GPU-cull compute kernel (112 bytes, std430).
-// Must match the `CullParams` push-constant block in CULL_COMPUTE_GLSL:
-// six already-normalised frustum planes (xyz = normal, w = d), the
-// camera position, and the build-time object count (`cam_pos` +
-// `object_count` share one std430 16-byte slot). Size pinned by
-// `CULL_PUSH_CONSTANT_BYTES`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct CullParams {
-    planes: [[f32; 4]; 6],
-    cam_pos: [f32; 3],
-    object_count: u32,
-}
+// `CullParams` (the GPU-cull push constant) is a GPU-free layout struct that
+// lives in concinnity-render; re-export it so `crate::vulkan::cull::CullParams`
+// is unchanged. Size pinned by `pipeline::CULL_PUSH_CONSTANT_BYTES`.
+pub(in crate::vulkan) use crate::vulkan::uniforms::CullParams;
 
 impl VkContext {
     // Total records the GPU-driven cull + bindless main pass processes: the
@@ -430,20 +421,14 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // CullParams must match the `CullParams` push-constant block in cull.comp
-    // (std430): six frustum planes, then cam_pos sharing its 16-byte slot with
-    // object_count (112 B total). Pinned by CULL_PUSH_CONSTANT_BYTES.
+    // The `CullParams` layout test lives with the struct in
+    // `concinnity_render::vulkan::uniforms`. The struct-size == push-range
+    // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
     #[test]
-    fn cull_params_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<CullParams>(), 112);
+    fn cull_params_size_matches_push_range() {
         assert_eq!(
-            std::mem::size_of::<CullParams>() as u32,
+            std::mem::size_of::<super::CullParams>() as u32,
             super::super::pipeline::CULL_PUSH_CONSTANT_BYTES
         );
-        assert_eq!(std::mem::offset_of!(CullParams, planes), 0);
-        assert_eq!(std::mem::offset_of!(CullParams, cam_pos), 96);
-        assert_eq!(std::mem::offset_of!(CullParams, object_count), 108);
     }
 }

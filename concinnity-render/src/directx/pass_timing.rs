@@ -21,14 +21,11 @@
 // the top six non-zero entries by descending microseconds, so zero
 // slots are naturally filtered out of the on-screen chip.
 //
-// Cost. PASS_COUNT = 21, so per frame the heap holds 2 * (21 + 1) = 44
-// slots; with FRAMES = 3 in flight that's 132 u64s on the GPU side and
-// the same 1056 bytes in the READBACK buffer. The per-pass EndQuery
-// pairs add 2 * 21 = 42 extra command-list ops per frame on top of the
-// existing 2 whole-frame ops, all of which are coalesced by the driver
-// into a single `ResolveQueryData` blit at the end of the list.
+// This is GPU-free slot-index arithmetic (no D3D12 types), so it lives in
+// concinnity-render and its layout tests count toward coverage; the DirectX
+// backend re-exports it under `crate::directx::pass_timing`.
 
-use crate::gfx::render_graph::{PASS_COUNT, PassId};
+use crate::render_graph::{PASS_COUNT, PassId};
 
 // Per-frame block: [whole_frame_start, whole_frame_end, pass0_start,
 // pass0_end, ..., pass(PASS_COUNT-1)_start, pass(PASS_COUNT-1)_end].

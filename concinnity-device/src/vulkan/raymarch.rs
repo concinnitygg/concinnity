@@ -28,7 +28,6 @@ use std::ffi::CString;
 use ash::{Device, vk};
 
 use crate::assets::SdfVolume;
-use crate::assets::sdf_volume::SDF_PARAMS_LEN;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{LightUniforms, ShadowUniforms};
 
@@ -62,36 +61,11 @@ const RAYMARCH_SHADOW_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_shado
 // inside the bounding box gets exactly one back-face fragment.
 const CUBE_INDEX_COUNT: u32 = 36;
 
-// Per-frame view UBO bound at set 0 binding 0. Layout matches the
-// `RaymarchViewBlock` std140 block in `shaders/raymarch_helpers.glsl` and the
-// DirectX / Metal `RaymarchView`. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::vulkan) struct RaymarchView {
-    pub(in crate::vulkan) vp: [[f32; 4]; 4],
-    pub(in crate::vulkan) inv_vp: [[f32; 4]; 4],
-    pub(in crate::vulkan) cam_pos: [f32; 3],
-    pub(in crate::vulkan) _pad0: f32,
-    pub(in crate::vulkan) viewport: [f32; 2],
-    pub(in crate::vulkan) time: f32,
-    pub(in crate::vulkan) prefilter_mip_count: f32,
-}
-
-// Per-volume UBO bound at set 1 binding 0. Layout matches the `SdfVolumeBlock`
-// std140 block + the DirectX `RaymarchVolumeUniforms`. 176 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::vulkan) struct RaymarchVolumeUniforms {
-    pub(in crate::vulkan) centre: [f32; 3],
-    pub(in crate::vulkan) _pad0: f32,
-    pub(in crate::vulkan) extent: [f32; 3],
-    pub(in crate::vulkan) _pad1: f32,
-    pub(in crate::vulkan) cone_ratio: f32,
-    pub(in crate::vulkan) max_distance: f32,
-    pub(in crate::vulkan) max_steps: i32,
-    pub(in crate::vulkan) receive_shadows: i32,
-    pub(in crate::vulkan) params: [f32; SDF_PARAMS_LEN],
-}
+// `RaymarchView` (per-frame view UBO) and `RaymarchVolumeUniforms` (per-volume
+// SDF UBO) are GPU-free layout structs that live in concinnity-render;
+// re-export them so `crate::vulkan::raymarch::{RaymarchView,RaymarchVolumeUniforms}`
+// are unchanged for the encode + `volume_uniforms_from` paths.
+pub(in crate::vulkan) use crate::vulkan::uniforms::{RaymarchView, RaymarchVolumeUniforms};
 
 pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -1896,9 +1870,6 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::mem::{offset_of, size_of};
-
     // Representative user shaders, inlined so the compile guards are
     // self-contained (no dependency on any file outside this crate). The
     // helpers prepended ahead of these (`sdSphere`, `sdTorus`, `sdfParamValue`,
@@ -1992,32 +1963,8 @@ VolumeSample sampleVolume(vec3 p, SdfParams params, float time) {
 }
 "#;
 
-    // The GLSL `RaymarchViewBlock` std140 layout is 160 bytes; pin both the
-    // size and every field offset so a Rust-side reorder fails the suite
-    // without a GPU (mirrors the render_types `*_layout_matches_*` tests).
-    #[test]
-    fn raymarch_view_layout_matches_glsl() {
-        assert_eq!(size_of::<RaymarchView>(), 160);
-        assert_eq!(offset_of!(RaymarchView, vp), 0);
-        assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
-        assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
-        assert_eq!(offset_of!(RaymarchView, viewport), 144);
-        assert_eq!(offset_of!(RaymarchView, time), 152);
-        assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
-    }
-
-    // The GLSL `SdfVolumeBlock` std140 layout is 176 bytes.
-    #[test]
-    fn sdf_volume_uniforms_layout_matches_glsl() {
-        assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, centre), 0);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, extent), 16);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_distance), 36);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
-    }
+    // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
+    // structs in `concinnity_render::vulkan::uniforms`.
 
     // Compile the proxy vertex + the assembled fragment (helpers + the demo
     // chrome-blob user shader + template) so a GLSL regression fails the suite

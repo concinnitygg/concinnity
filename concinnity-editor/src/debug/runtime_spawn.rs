@@ -764,10 +764,14 @@ fn resolve_texture_slot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn enqueue_drain_round_trip() {
-        // Drain any leftovers from earlier tests in this process.
+        // The command queue is a process-global static; serialize against the
+        // other queue tests so a concurrent drain cannot steal our commands.
+        let _guard = test_support::lock();
+        // Drain any leftovers from a panicked earlier test in this process.
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(RuntimeCommand::DecalRemove { id: 7, reply: tx });
@@ -783,6 +787,7 @@ mod tests {
 
     #[test]
     fn despawn_enqueue_drain_round_trip() {
+        let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(RuntimeCommand::Despawn {
@@ -800,6 +805,7 @@ mod tests {
 
     #[test]
     fn reparent_enqueue_drain_round_trip() {
+        let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(RuntimeCommand::Reparent {
@@ -846,6 +852,7 @@ mod tests {
 
     #[test]
     fn camera_set_enqueue_drain_round_trip() {
+        let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(RuntimeCommand::CameraSet {
@@ -1054,6 +1061,7 @@ mod tests {
 
     #[test]
     fn camera_move_enqueue_drain_round_trip() {
+        let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(RuntimeCommand::CameraMove {

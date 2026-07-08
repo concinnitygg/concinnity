@@ -49,7 +49,7 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::assets::sdf_volume::{SDF_PARAMS_LEN, SdfVolume};
+use crate::assets::sdf_volume::SdfVolume;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{
     compile_hlsl, main_input_layout, serialize_desc_and_create, shader_source,
@@ -67,36 +67,12 @@ const RAYMARCH_SHADOW_HLSL: &str = include_str!("shaders/raymarch_shadow.hlsl");
 const RAYMARCH_VOLUMETRIC_TEMPLATE_HLSL: &str =
     include_str!("shaders/raymarch_volumetric_template.hlsl");
 
-// Per-frame view cbuffer the raymarch pass binds at b0. Layout matches
-// `RaymarchView` in `shaders/raymarch_helpers.hlsl`. 160 bytes; aligned
-// to 256 for D3D12 cbuffer requirements.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(in crate::directx) struct RaymarchView {
-    pub(in crate::directx) vp: [[f32; 4]; 4],
-    pub(in crate::directx) inv_vp: [[f32; 4]; 4],
-    pub(in crate::directx) cam_pos: [f32; 3],
-    pub(in crate::directx) _pad0: f32,
-    pub(in crate::directx) viewport: [f32; 2],
-    pub(in crate::directx) time: f32,
-    pub(in crate::directx) prefilter_mip_count: f32,
-}
-
-// Per-volume uniforms at b1. Layout matches `SdfVolumeUniforms` in the
-// HLSL helpers. 176 bytes; aligned to 256 in the cbuffer allocation.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct RaymarchVolumeUniforms {
-    centre: [f32; 3],
-    _pad0: f32,
-    extent: [f32; 3],
-    _pad1: f32,
-    cone_ratio: f32,
-    max_distance: f32,
-    max_steps: i32,
-    receive_shadows: i32,
-    params: [f32; SDF_PARAMS_LEN],
-}
+// `RaymarchView` (per-frame view cbuffer) and `RaymarchVolumeUniforms`
+// (per-volume SDF cbuffer) are GPU-free layout structs that live in
+// concinnity-render; re-export them so
+// `crate::directx::raymarch::{RaymarchView,RaymarchVolumeUniforms}` are unchanged
+// for the encode + `volume_uniforms_from` paths.
+pub(in crate::directx) use crate::directx::uniforms::{RaymarchView, RaymarchVolumeUniforms};
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -1582,45 +1558,5 @@ impl DxContext {
 // contract surface for future readers.
 const _LIGHT_LAYOUT_REF: usize = std::mem::size_of::<LightUniforms>();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // RaymarchView must match the `RaymarchView` cbuffer (b0) in
-    // shaders/raymarch_helpers.hlsl: two column-major float4x4 then the
-    // packed cam_pos/pad/viewport/time/prefilter scalars (160 B total).
-    #[test]
-    fn raymarch_view_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<RaymarchView>(), 160);
-        assert_eq!(std::mem::offset_of!(RaymarchView, vp), 0);
-        assert_eq!(std::mem::offset_of!(RaymarchView, inv_vp), 64);
-        assert_eq!(std::mem::offset_of!(RaymarchView, cam_pos), 128);
-        assert_eq!(std::mem::offset_of!(RaymarchView, _pad0), 140);
-        assert_eq!(std::mem::offset_of!(RaymarchView, viewport), 144);
-        assert_eq!(std::mem::offset_of!(RaymarchView, time), 152);
-        assert_eq!(std::mem::offset_of!(RaymarchView, prefilter_mip_count), 156);
-    }
-
-    // RaymarchVolumeUniforms must match the `SdfVolumeUniforms` cbuffer (b1):
-    // centre/pad, extent/pad, the four scalars, then 32 floats of params
-    // packed as 8 float4 rows (176 B total).
-    #[test]
-    fn raymarch_volume_uniforms_layout_matches_hlsl() {
-        assert_eq!(std::mem::size_of::<RaymarchVolumeUniforms>(), 176);
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, centre), 0);
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, _pad0), 12);
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, extent), 16);
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, _pad1), 28);
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
-        assert_eq!(
-            std::mem::offset_of!(RaymarchVolumeUniforms, max_distance),
-            36
-        );
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, max_steps), 40);
-        assert_eq!(
-            std::mem::offset_of!(RaymarchVolumeUniforms, receive_shadows),
-            44
-        );
-        assert_eq!(std::mem::offset_of!(RaymarchVolumeUniforms, params), 48);
-    }
-}
+// The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
+// structs in `concinnity_render::directx::uniforms`.

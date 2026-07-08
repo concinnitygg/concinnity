@@ -14,19 +14,11 @@
 use ash::vk;
 
 use crate::gfx::render_types::{PostProcessParams, TextDrawCall, TextVertex};
+use crate::vulkan::uniforms::TextPush;
 
 use super::context::VkContext;
 use super::draw::DeferredBuffer;
 use super::texture::create_buffer;
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct TextPush {
-    win_width: f32,
-    win_height: f32,
-    _pad0: f32,
-    _pad1: f32,
-}
 
 // Per-invocation binding context for the composite pass. `pub` because it is the
 // `Args` associated type of the (cross-crate) `render::fullscreen::CompositeEncoder`
@@ -269,21 +261,5 @@ impl VkContext {
             frame_idx,
         };
         crate::gfx::fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // TextPush must match the `TextPush` push constant in text.vert: the
-    // window dimensions then two pads rounding the block to 16 bytes.
-    #[test]
-    fn text_push_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<TextPush>(), 16);
-        assert_eq!(std::mem::offset_of!(TextPush, win_width), 0);
-        assert_eq!(std::mem::offset_of!(TextPush, win_height), 4);
-        assert_eq!(std::mem::offset_of!(TextPush, _pad0), 8);
-        assert_eq!(std::mem::offset_of!(TextPush, _pad1), 12);
     }
 }

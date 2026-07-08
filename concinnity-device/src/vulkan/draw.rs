@@ -13,30 +13,10 @@ use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
 use super::math::{mat4_mul, perspective};
 
-// ViewUniforms layout (160 bytes, std140) must match GLSL ViewBlock exactly.
-// `view_mat` is the camera view matrix used to compute view-space depth in
-// the vertex shader (for shadow cascade selection). cam_pos is stored as
-// three individual floats to avoid std140 vec3 alignment bumping subsequent
-// fields.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub(super) struct ViewUniforms {
-    pub vp: [[f32; 4]; 4],
-    pub view_mat: [[f32; 4]; 4],
-    pub elapsed: f32,
-    // 1.0 when an SSR / RT reflection composite owns the sharp specular this frame,
-    // so the forward bindless shader fades its glossy-dielectric probe specular to
-    // avoid double-counting; 0.0 keeps the full forward reflection (and at probe
-    // bakes, where no resolve runs). Repurposes the former offset-132 pad.
-    pub reflections_enabled: f32,
-    pub cam_x: f32,
-    pub cam_y: f32,
-    pub cam_z: f32,
-    // Number of mip levels in the bound IBL prefilter cubemap. 0 = IBL off.
-    pub prefilter_mip_count: f32,
-    pub _ep0: f32,
-    pub _ep1: f32,
-}
+// `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
+// struct that lives in concinnity-render; re-export it so
+// `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
+pub(in crate::vulkan) use crate::vulkan::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence, drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different
@@ -817,27 +797,4 @@ pub(super) fn upload_light_uniforms(
         device.unmap_memory(light_ubo_memory);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ViewUniforms must match the std140 `ViewBlock` UBO in the main-pass
-    // shaders: two mat4 then elapsed/pad and the camera position as three
-    // scalars, prefilter mip count, and two end pads (160 B total).
-    #[test]
-    fn view_uniforms_layout_matches_glsl() {
-        assert_eq!(std::mem::size_of::<ViewUniforms>(), 160);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, vp), 0);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, view_mat), 64);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, elapsed), 128);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, reflections_enabled), 132);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_x), 136);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_y), 140);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, cam_z), 144);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, _ep0), 152);
-        assert_eq!(std::mem::offset_of!(ViewUniforms, _ep1), 156);
-    }
 }
