@@ -26,8 +26,9 @@
 // the live render backend is transplanted out of the world and `apply_world_swap`
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
+use super::form::{self, FormField};
 use super::hud::{self, HudAction, HudState};
-use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
+use super::panel::{self, Combo, FormFocus, ListRow, PanelAction, PanelView};
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
@@ -65,6 +66,13 @@ pub(crate) struct EditorHook {
     // When the form is editing an existing entry, its `entries` index (else a new
     // asset is being added).
     editing: Option<usize>,
+    // The editable arg fields of the open form (derived from the type's default
+    // args). Empty outside AddForm.
+    form_fields: Vec<FormField>,
+    // Which form input has keyboard focus.
+    form_focus: FormFocus,
+    // A validation message from the last rejected Add, shown under the form.
+    form_error: Option<String>,
     // The `entries` index whose Edit / Delete menu is open, if any.
     row_menu: Option<usize>,
 }
@@ -85,6 +93,17 @@ fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
         (cur + 1).min(max)
     } else {
         cur.saturating_sub(1)
+    }
+}
+
+// The first line of a validation error, clipped to fit the panel's status line.
+fn short_error(e: &str) -> String {
+    let line = e.lines().next().unwrap_or(e);
+    let clipped: String = line.chars().take(44).collect();
+    if clipped.len() < line.len() {
+        format!("{clipped}...")
+    } else {
+        clipped
     }
 }
 
@@ -114,6 +133,9 @@ impl EditorHook {
             combo_scroll: 0,
             selected_type: None,
             editing: None,
+            form_fields: Vec::new(),
+            form_focus: FormFocus::Name,
+            form_error: None,
             row_menu: None,
         }
     }
@@ -363,7 +385,7 @@ impl EditorHook {
         }
     }
 
-    fn make_view<'a>(&self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
+    fn make_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
         PanelView {
             mode: self.mode,
             combo: self.combo,
@@ -375,6 +397,9 @@ impl EditorHook {
             list_scroll: self.list_scroll,
             row_menu: self.row_menu,
             form_title: &d.form_title,
+            form_fields: &self.form_fields,
+            form_focus: self.form_focus,
+            form_error: self.form_error.as_deref(),
             mouse,
         }
     }
@@ -421,6 +446,51 @@ impl EditorHook {
         panel::focus_field_with(world, panel::FILTER_INPUT, "");
     }
 
+    // Open the add / edit form for `ty`: derive its editable arg fields from the
+    // type's defaults (or the edited entry's current args), seed the name + each
+    // text field, and focus the name. `editing` is `Some(idx)` for a rename +
+    // arg-edit of an existing entry, `None` for a new asset.
+    fn open_form(&mut self, world: &mut World, ty: String, editing: Option<usize>) {
+        let seed = editing
+            .and_then(|idx| self.entries.get(idx))
+            .and_then(|e| e.get("args"))
+            .and_then(|v| v.as_object())
+            .cloned();
+        let name = match editing {
+            Some(idx) => self
+                .entries
+                .get(idx)
+                .and_then(entry_name)
+                .unwrap_or_default()
+                .to_string(),
+            None => self.unique_name(&ty),
+        };
+        self.form_fields = form::fields_for(&ty, seed.as_ref());
+        self.form_focus = FormFocus::Name;
+        self.form_error = None;
+        self.selected_type = Some(ty);
+        self.editing = editing;
+        self.mode = panel::Mode::AddForm;
+        self.combo = Combo::Closed;
+        self.row_menu = None;
+        panel::focus_field_with(world, panel::NAME_INPUT, &name);
+        for (j, field) in self.form_fields.iter().enumerate() {
+            if !matches!(field.kind, form::FieldKind::Bool) {
+                panel::seed_field(world, panel::form_input(j), &field.initial);
+            }
+        }
+    }
+
+    // Leave the form, discarding its transient state, back to the browse list.
+    fn close_form(&mut self) {
+        self.selected_type = None;
+        self.editing = None;
+        self.form_fields.clear();
+        self.form_focus = FormFocus::Name;
+        self.form_error = None;
+        self.mode = panel::Mode::List;
+    }
+
     // Route a resolved panel click. Field-focus transitions mutate the injected
     // `TextInput` components, so this needs the world.
     fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
@@ -453,12 +523,7 @@ impl EditorHook {
                 }
                 Combo::Picker => {
                     if let Some(ty) = self.combo_options(world).get(i).cloned() {
-                        let name = self.unique_name(&ty);
-                        self.selected_type = Some(ty);
-                        self.editing = None;
-                        self.mode = panel::Mode::AddForm;
-                        self.combo = Combo::Closed;
-                        panel::focus_field_with(world, panel::NAME_INPUT, &name);
+                        self.open_form(world, ty, None);
                     }
                 }
                 Combo::Closed => {}
@@ -466,14 +531,9 @@ impl EditorHook {
             PanelAction::OpenRowMenu(entry) => self.row_menu = Some(entry),
             PanelAction::RowEdit => {
                 if let Some(idx) = self.row_menu
-                    && let Some(e) = self.entries.get(idx)
+                    && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
                 {
-                    let name = entry_name(e).unwrap_or_default().to_string();
-                    let ty = entry_type(e).unwrap_or_default().to_string();
-                    self.editing = Some(idx);
-                    self.selected_type = Some(ty);
-                    self.mode = panel::Mode::AddForm;
-                    panel::focus_field_with(world, panel::NAME_INPUT, &name);
+                    self.open_form(world, ty, Some(idx));
                 }
                 self.row_menu = None;
             }
@@ -488,43 +548,75 @@ impl EditorHook {
                 let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
                 self.list_scroll = self.list_scroll.min(max);
             }
-            PanelAction::ConfirmAdd => {
-                if let Some(ty) = self.selected_type.clone() {
-                    let typed = panel::field_text(world, panel::NAME_INPUT);
-                    match self.editing {
-                        Some(idx) => {
-                            let name = self.finalize_rename(&typed, idx, &ty);
-                            if let Some(obj) =
-                                self.entries.get_mut(idx).and_then(|e| e.as_object_mut())
-                            {
-                                obj.insert("name".to_string(), serde_json::Value::String(name));
-                                self.dirty = true;
-                            }
-                        }
-                        None => {
-                            let name = self.finalize_name(&typed, &ty);
-                            self.entries.push(serde_json::json!({
-                                "name": name, "type": ty, "args": {},
-                            }));
-                            self.dirty = true;
-                        }
-                    }
+            PanelAction::FocusName => self.form_focus = FormFocus::Name,
+            PanelAction::FocusField(i) => self.form_focus = FormFocus::Field(i),
+            PanelAction::ToggleField(i) => {
+                if let Some(f) = self.form_fields.get_mut(i) {
+                    f.boolval = !f.boolval;
                 }
-                self.editing = None;
-                self.selected_type = None;
-                self.mode = panel::Mode::List;
+                self.form_error = None;
             }
-            PanelAction::CancelForm => {
-                self.editing = None;
-                self.selected_type = None;
-                self.mode = panel::Mode::List;
-            }
+            PanelAction::ConfirmAdd => self.confirm_form(world),
+            PanelAction::CancelForm => self.close_form(),
             PanelAction::CloseOverlays => {
                 self.combo = Combo::Closed;
                 self.row_menu = None;
             }
             PanelAction::Consume => {}
         }
+    }
+
+    // Read the form's controls, assemble + validate the args, and commit (add a
+    // new entry or update the edited one). On a validation error the form stays
+    // open with the message shown, so nothing invalid ever reaches world.jsonl.
+    fn confirm_form(&mut self, world: &mut World) {
+        self.form_error = None;
+        let Some(ty) = self.selected_type.clone() else {
+            self.close_form();
+            return;
+        };
+        let typed = panel::field_text(world, panel::NAME_INPUT);
+        let texts: Vec<String> = self
+            .form_fields
+            .iter()
+            .enumerate()
+            .map(|(j, f)| {
+                if matches!(f.kind, form::FieldKind::Bool) {
+                    String::new()
+                } else {
+                    panel::field_text(world, panel::form_input(j))
+                }
+            })
+            .collect();
+        let editing_args = self
+            .editing
+            .and_then(|idx| self.entries.get(idx))
+            .and_then(|e| e.get("args"))
+            .and_then(|v| v.as_object())
+            .cloned();
+        let args = form::assemble(&ty, editing_args.as_ref(), &self.form_fields, &texts);
+        if let Err(e) = form::validate(&ty, &args) {
+            self.form_error = Some(short_error(&e));
+            return;
+        }
+        let args_val = serde_json::Value::Object(args);
+        match self.editing {
+            Some(idx) => {
+                let name = self.finalize_rename(&typed, idx, &ty);
+                if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
+                    obj.insert("name".to_string(), serde_json::Value::String(name));
+                    obj.insert("args".to_string(), args_val);
+                }
+            }
+            None => {
+                let name = self.finalize_name(&typed, &ty);
+                self.entries.push(serde_json::json!({
+                    "name": name, "type": ty, "args": args_val,
+                }));
+            }
+        }
+        self.dirty = true;
+        self.close_form();
     }
 
     // Move the active body's scroll offset in the wheel direction.
@@ -584,9 +676,13 @@ impl DebugHook for EditorHook {
                     if self.apply_top(a) {
                         self.swap_requested = true;
                     }
-                    // Interacting with the top bar dismisses any panel overlay.
+                    // Interacting with the top bar dismisses any panel overlay and
+                    // the form: a SAVE swaps the world (re-injecting blank fields),
+                    // so a stale form left open would show empty inputs and could
+                    // commit lost values.
                     self.combo = Combo::Closed;
                     self.row_menu = None;
+                    self.close_form();
                 } else if self.panel_open && input.left_click {
                     let action = {
                         let data = self.panel_data(world);
@@ -680,17 +776,16 @@ mod tests {
         world
     }
 
-    // A world with the injected panel fields, for the add / edit flow.
+    // A world with the injected panel fields, for the add / edit flow (the combo
+    // filter, the name, and the form's arg-input pool).
     fn world_with_fields() -> World {
         let mut world = World::new_empty();
-        world.add_component(TextInput {
-            asset_id: panel::FILTER_INPUT,
-            ..Default::default()
-        });
-        world.add_component(TextInput {
-            asset_id: panel::NAME_INPUT,
-            ..Default::default()
-        });
+        for id in panel::all_field_ids() {
+            world.add_component(TextInput {
+                asset_id: id,
+                ..Default::default()
+            });
+        }
         world
     }
 
@@ -963,6 +1058,112 @@ mod tests {
         assert!(!h.hud_visible, "first F1 hides the HUD");
         h.tick(&mut world);
         assert!(h.hud_visible, "second F1 shows it again");
+    }
+
+    #[test]
+    fn add_form_writes_edited_arg_values() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.apply_top(HudAction::ToggleAssets);
+        h.apply_panel(PanelAction::TogglePicker, &mut world);
+        let ty = h.combo_options(&world)[0].clone();
+        h.apply_panel(PanelAction::PickOption(0), &mut world);
+        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(!h.form_fields.is_empty(), "the type exposes arg fields");
+        // Edit a float field via its input.
+        let (j, key) = h
+            .form_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| matches!(f.kind, form::FieldKind::Float))
+            .map(|(j, f)| (j, f.key.clone()))
+            .expect("a float arg field");
+        set_field(&mut world, panel::form_input(j), "3.5");
+        set_field(&mut world, panel::NAME_INPUT, "lamp");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.mode, panel::Mode::List);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["name"], "lamp");
+        assert_eq!(h.entries[0]["type"], ty.as_str());
+        assert_eq!(
+            h.entries[0]["args"][&key].as_f64(),
+            Some(3.5),
+            "the edited float persisted into args"
+        );
+    }
+
+    #[test]
+    fn invalid_arg_keeps_the_form_open_with_an_error() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        // TextInput has a u32 `max_len` field; a negative value cannot cook.
+        h.open_form(&mut world, "TextInput".to_string(), None);
+        let j = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "max_len")
+            .expect("max_len field present");
+        assert!(matches!(h.form_fields[j].kind, form::FieldKind::Int));
+        set_field(&mut world, panel::form_input(j), "-5");
+        set_field(&mut world, panel::NAME_INPUT, "field1");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(
+            h.mode,
+            panel::Mode::AddForm,
+            "the form stays open on invalid input"
+        );
+        assert!(h.form_error.is_some(), "an error message is shown");
+        assert!(h.entries.is_empty(), "nothing invalid was committed");
+    }
+
+    #[test]
+    fn a_top_bar_click_closes_an_open_form() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.open_form(&mut world, "PointLight".to_string(), None);
+        assert_eq!(h.mode, panel::Mode::AddForm);
+        // Click the capture checkbox (a top-bar control, no disk I/O) while the
+        // form is open.
+        let vw = 1280.0;
+        let chk = hud::checkbox_rect(vw);
+        world.add_component(FrameInput {
+            viewport: [vw, 720.0],
+            mouse_x: chk[0] + 10.0,
+            mouse_y: chk[1] + 10.0,
+            left_click: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert_eq!(h.mode, panel::Mode::List, "the form closed");
+        assert!(h.form_fields.is_empty() && h.selected_type.is_none());
+    }
+
+    #[test]
+    fn edit_form_seeds_and_updates_existing_args() {
+        let mut h = hook(vec![serde_json::json!({
+            "name": "lamp", "type": "PointLight", "args": {}
+        })]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+        h.apply_panel(PanelAction::RowEdit, &mut world);
+        assert_eq!(h.editing, Some(0));
+        assert!(!h.form_fields.is_empty());
+        // The name field was seeded from the entry.
+        assert_eq!(panel::field_text(&world, panel::NAME_INPUT), "lamp");
+        // Edit a float and confirm; the same entry gains a full args object.
+        let (j, key) = h
+            .form_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| matches!(f.kind, form::FieldKind::Float))
+            .map(|(j, f)| (j, f.key.clone()))
+            .expect("a float arg field");
+        set_field(&mut world, panel::form_input(j), "9.0");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.entries.len(), 1, "edited in place");
+        assert_eq!(h.entries[0]["args"][&key].as_f64(), Some(9.0));
     }
 
     // Drive `tick` against a fully injected HUD world in each panel body state,

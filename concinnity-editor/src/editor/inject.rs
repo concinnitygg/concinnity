@@ -123,10 +123,14 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
     for id in panel::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
-    // The two typed fields (hidden; the panel shows + focuses them by mode): the
-    // combo's filter field and the add / edit form's name field.
+    // The typed fields (hidden; the panel shows + focuses them by mode): the
+    // combo's filter field, the form's name field, and the add / edit form's
+    // fixed pool of arg text inputs.
     world.add_component(text_field(panel::FILTER_INPUT, "filter", font));
     world.add_component(text_field(panel::NAME_INPUT, "name", font));
+    for j in 0..super::form::MAX_FIELDS {
+        world.add_component(text_field(panel::form_input(j), "", font));
+    }
 }
 
 fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
