@@ -25,27 +25,34 @@
 // The two typed fields (`FILTER_INPUT`, `NAME_INPUT`) are real `TextInput` assets
 // edited by the engine's text-input system; the hook reads them back.
 
-use crate::assets::{Sprite, TextAlign, TextInput, TextLabel};
+use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::hud;
+use super::widget::{self, place_sprite, point_in};
 
 // The addable asset types the "+" picker offers. All are External
 // (user-declarable) and standalone (no required cross-references), so each
 // recompiles cleanly when added with default args to any rendering world -- the
 // property `add_types_cook_with_default_args` guards by running every entry
-// through the real cook pipeline. Most are naturally multi-instance; a few are
-// effectively singletons where a second instance is harmlessly ignored by the
-// renderer (e.g. only the first enabled VolumetricFog draws), which is fine
-// because the common action is adding the first one to a world that lacks it.
+// through the real cook pipeline. The mix spans lights / scene effects, procedural
+// geometry, a camera, referenced library assets (Material / Font), UI widgets, and
+// audio. Most are naturally multi-instance; a few are effectively singletons where
+// a second instance is harmlessly ignored (only the first enabled VolumetricFog
+// draws; the first Camera3D is the active one), which is fine because the common
+// action is adding the first one to a world that lacks it. World-config singletons
+// (GraphicsConfig, PostProcessConfig, PhysicsConfig, ...) are deliberately NOT
+// offered: they belong to a world already and want an edit-or-add flow, not a
+// blind append.
 // Broadening the list to every registry-addable type is a matter of adding
 // entries the guard accepts (types needing a source file or a required
 // cross-reference, e.g. Mesh / AudioClip / Joint, cannot be added blank and stay
 // off the list). The picker is deliberately curated (not silently capped):
 // unlisted types are simply not offered here yet.
 pub(crate) const ADD_TYPES: &[&str] = &[
+    // Lights + scene effects.
     "PointLight",
     "DirectionalLight",
     "ParticleEmitter",
@@ -54,8 +61,18 @@ pub(crate) const ADD_TYPES: &[&str] = &[
     "VolumetricFog",
     "GlassPanel",
     "WaterSurface",
+    // Geometry + camera.
+    "Room",
+    "Camera3D",
+    // Library assets (referenced by other assets).
+    "Material",
+    "Font",
+    // UI widgets.
     "Sprite",
     "TextLabel",
+    "TextInput",
+    // Audio.
+    "AudioEmitter",
 ];
 
 // The label of the "all assets" filter option (the default), shown first in the
@@ -347,10 +364,6 @@ fn outer_rect(view: &PanelView, vw: f32) -> [f32; 4] {
     } else {
         panel_rect(vw)
     }
-}
-
-fn point_in(x: f32, y: f32, r: [f32; 4]) -> bool {
-    x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
 }
 
 // A resolved panel click. Option picks carry an index into the hook's current
@@ -969,10 +982,10 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 // field cannot keep keyboard focus).
 pub(crate) fn hide_all(world: &mut World) {
     for id in all_sprite_ids() {
-        set_sprite_visible(world, id, false);
+        widget::set_sprite_visible(world, id, false);
     }
     for id in all_label_ids() {
-        set_label_visible(world, id, false);
+        widget::set_label_visible(world, id, false);
     }
     for id in all_field_ids() {
         hide_field(world, id);
@@ -980,20 +993,10 @@ pub(crate) fn hide_all(world: &mut World) {
 }
 
 // -- Element mutation helpers -------------------------------------------------
-
-fn place_sprite(world: &mut World, id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) {
-    for s in world.query_mut::<Sprite>() {
-        if s.asset_id == id {
-            s.x = rect[0];
-            s.y = rect[1];
-            s.width = rect[2];
-            s.height = rect[3];
-            s.tint = tint;
-            s.visible = visible;
-            break;
-        }
-    }
-}
+//
+// The reserved-id lookups (`widget::sprite_mut` / `label_mut` / `input_mut`) and
+// `place_sprite` / visibility setters live in `widget.rs`, shared with `hud.rs`.
+// These wrap them with the panel's label / field conventions.
 
 fn place_center_label(
     world: &mut World,
@@ -1003,16 +1006,13 @@ fn place_center_label(
     color: [f32; 3],
     visible: bool,
 ) {
-    for l in world.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.x = rect[0] + rect[2] * 0.5;
-            l.y = rect[1] + rect[3] * 0.5 - 10.0;
-            l.align = TextAlign::Center;
-            l.color = color;
-            l.visible = visible;
-            l.content = content.to_string();
-            break;
-        }
+    if let Some(l) = widget::label_mut(world, id) {
+        l.x = rect[0] + rect[2] * 0.5;
+        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.align = TextAlign::Center;
+        l.color = color;
+        l.visible = visible;
+        l.content = content.to_string();
     }
 }
 
@@ -1024,16 +1024,13 @@ fn place_left_label(
     color: [f32; 3],
     visible: bool,
 ) {
-    for l in world.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.x = pos[0];
-            l.y = pos[1];
-            l.align = TextAlign::Left;
-            l.color = color;
-            l.visible = visible;
-            l.content = content.to_string();
-            break;
-        }
+    if let Some(l) = widget::label_mut(world, id) {
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = TextAlign::Left;
+        l.color = color;
+        l.visible = visible;
+        l.content = content.to_string();
     }
 }
 
@@ -1048,23 +1045,6 @@ fn set_row_label(
     place_left_label(world, id, pos, content, color, visible);
 }
 
-fn set_sprite_visible(world: &mut World, id: AssetId, visible: bool) {
-    for s in world.query_mut::<Sprite>() {
-        if s.asset_id == id {
-            s.visible = visible;
-            break;
-        }
-    }
-}
-fn set_label_visible(world: &mut World, id: AssetId, visible: bool) {
-    for l in world.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.visible = visible;
-            break;
-        }
-    }
-}
-
 // Position + show a field, setting its focus explicitly. The focused field
 // re-asserts `focused = true` every frame: the click that opened the mode (on the
 // "+" button, say) lands outside the field, so the engine's text-input system
@@ -1073,61 +1053,47 @@ fn set_label_visible(world: &mut World, id: AssetId, visible: bool) {
 // fighting for the keyboard. The content is not touched here (only on a
 // transition), so what is typed stands.
 fn show_field(world: &mut World, id: AssetId, rect: [f32; 4], focused: bool) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == id {
-            t.x = rect[0];
-            t.y = rect[1];
-            t.width = rect[2];
-            t.height = rect[3];
-            t.visible = true;
-            t.focused = focused;
-            break;
-        }
+    if let Some(t) = widget::input_mut(world, id) {
+        t.x = rect[0];
+        t.y = rect[1];
+        t.width = rect[2];
+        t.height = rect[3];
+        t.visible = true;
+        t.focused = focused;
     }
 }
 
 // Hide + blur a typed field.
 fn hide_field(world: &mut World, id: AssetId) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == id {
-            t.visible = false;
-            t.focused = false;
-            break;
-        }
+    if let Some(t) = widget::input_mut(world, id) {
+        t.visible = false;
+        t.focused = false;
     }
 }
 
 // Set a field's text + caret and give it focus (a mode transition; the hook
 // calls this so the field is ready to type into immediately).
 pub(crate) fn focus_field_with(world: &mut World, id: AssetId, content: &str) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == id {
-            t.content = content.to_string();
-            t.caret = content.chars().count();
-            t.focused = true;
-            t.visible = true;
-            break;
-        }
+    if let Some(t) = widget::input_mut(world, id) {
+        t.content = content.to_string();
+        t.caret = content.chars().count();
+        t.focused = true;
+        t.visible = true;
     }
 }
 
 // Seed a field's text + caret without changing focus (the layout decides focus
 // from `FormFocus`). Used to pre-fill the form's arg inputs on open.
 pub(crate) fn seed_field(world: &mut World, id: AssetId, content: &str) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == id {
-            t.content = content.to_string();
-            t.caret = content.chars().count();
-            break;
-        }
+    if let Some(t) = widget::input_mut(world, id) {
+        t.content = content.to_string();
+        t.caret = content.chars().count();
     }
 }
 
 // Read a field's current text.
 pub(crate) fn field_text(world: &World, id: AssetId) -> String {
-    world
-        .query::<TextInput>()
-        .find(|t| t.asset_id == id)
+    widget::input(world, id)
         .map(|t| t.content.clone())
         .unwrap_or_default()
 }
@@ -1163,6 +1129,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, vw: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::{Sprite, TextInput, TextLabel};
 
     fn rows(items: &[(bool, &str, Option<usize>)]) -> Vec<ListRow> {
         items

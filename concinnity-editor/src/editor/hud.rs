@@ -15,7 +15,8 @@
 // the layout applies the same frame GraphicsSystem draws it. The whole HUD
 // toggles with F1 (see `hook.rs`).
 
-use crate::assets::{FrameInput, Sprite, TextAlign, TextLabel};
+use super::widget::{self, place_sprite, point_in};
+use crate::assets::{FrameInput, TextAlign};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -154,10 +155,6 @@ pub(crate) fn dropdown_row_rect(vw: f32, i: usize) -> [f32; 4] {
         DROP_W,
         ROW_H,
     ]
-}
-
-fn point_in(x: f32, y: f32, rect: [f32; 4]) -> bool {
-    x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3]
 }
 
 // The Templates dropdown row index under `(mx, my)`, bounded by the row count.
@@ -330,40 +327,15 @@ fn all_label_ids() -> Vec<AssetId> {
 
 fn hide_all(world: &mut World) {
     for id in all_sprite_ids() {
-        for s in world.query_mut::<Sprite>() {
-            if s.asset_id == id {
-                s.visible = false;
-                break;
-            }
-        }
+        widget::set_sprite_visible(world, id, false);
     }
     for id in all_label_ids() {
-        for l in world.query_mut::<TextLabel>() {
-            if l.asset_id == id {
-                l.visible = false;
-                break;
-            }
-        }
+        widget::set_label_visible(world, id, false);
     }
 }
 
 fn centered(rect: [f32; 4]) -> [f32; 2] {
     [rect[0] + rect[2] * 0.5, rect[1] + LABEL_TOP]
-}
-
-// Move + resize the Sprite with `id` to `rect`, set its tint + visibility.
-fn place_sprite(world: &mut World, id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) {
-    for s in world.query_mut::<Sprite>() {
-        if s.asset_id == id {
-            s.x = rect[0];
-            s.y = rect[1];
-            s.width = rect[2];
-            s.height = rect[3];
-            s.tint = tint;
-            s.visible = visible;
-            break;
-        }
-    }
 }
 
 // Position + colour + show/hide a fixed-content label (a button or the checkbox).
@@ -375,32 +347,26 @@ fn place_label(
     align: TextAlign,
     visible: bool,
 ) {
-    for l in world.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.x = pos[0];
-            l.y = pos[1];
-            l.align = align;
-            l.color = color;
-            l.visible = visible;
-            break;
-        }
+    if let Some(l) = widget::label_mut(world, id) {
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = align;
+        l.color = color;
+        l.visible = visible;
     }
 }
 
 // Position a dropdown row's label and set its content (written per frame from the
 // Templates list).
 fn set_row_label(world: &mut World, id: AssetId, pos: [f32; 2], content: &str, visible: bool) {
-    for l in world.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.x = pos[0];
-            l.y = pos[1];
-            l.align = TextAlign::Left;
-            l.color = ROW_LABEL;
-            l.visible = visible;
-            if visible {
-                l.content = content.to_string();
-            }
-            break;
+    if let Some(l) = widget::label_mut(world, id) {
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = TextAlign::Left;
+        l.color = ROW_LABEL;
+        l.visible = visible;
+        if visible {
+            l.content = content.to_string();
         }
     }
 }
@@ -408,6 +374,7 @@ fn set_row_label(world: &mut World, id: AssetId, pos: [f32; 2], content: &str, v
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::{Sprite, TextLabel};
 
     fn state(dirty: bool, templates: bool, panel: bool, capture: bool, visible: bool) -> HudState {
         HudState {
