@@ -8,9 +8,13 @@
 // click resolution, and the per-frame layout that shows / positions the elements;
 // the hook owns the state and the option lists.
 //
-// The panel opens below the top bar's capture row. Its header is a square "+"
-// (add) button and a combo area. The combo area is a dropdown that, when opened,
-// turns into a filter text field with an option list floating below it:
+// The panel is a floating column: a draggable title bar ("Assets") across its
+// top, defaulting to below the top bar's buttons; the hook owns its position and
+// clamps a drag so the panel stays fully on screen. Under the title bar the
+// header is a square "+" (add) button and a combo area. While the type picker or
+// the add / edit form is open, the "+" becomes a gray "X" that returns to the
+// browse list. The combo area is a dropdown that, when opened, turns into a
+// filter text field with an option list floating below it:
 //   * Filter  -- opened by clicking the combo: the list is the asset types
 //                present in the world; picking one filters the browse list.
 //   * Picker  -- opened by clicking "+": the list is the addable asset types;
@@ -114,7 +118,7 @@ pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
 
 // The label of the "all assets" filter option (the default), shown first in the
 // combo's filter list and as the combo's text when no type filter is active.
-pub(crate) const ALL_LABEL: &str = "Assets";
+pub(crate) const ALL_LABEL: &str = "All";
 
 // Visible rows in the body before it scrolls (shared by the grouped list and the
 // combo option list).
@@ -190,6 +194,9 @@ pub(crate) const FORM_THUMB: AssetId = AssetId(PANEL + 0x15);
 pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 0x58);
 pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 0x59);
 pub(crate) const COMBO_BG: AssetId = AssetId(PANEL + 0x5A);
+// The draggable title bar across the panel top.
+pub(crate) const TITLE_BG: AssetId = AssetId(PANEL + 0x5B);
+pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 0x5C);
 pub(crate) const DOT_BG: AssetId = AssetId(PANEL + 0xA0);
 pub(crate) const DOT1: AssetId = AssetId(PANEL + 0xA1);
 pub(crate) const DOT2: AssetId = AssetId(PANEL + 0xA2);
@@ -245,9 +252,10 @@ pub(crate) enum FormFocus {
     Field(usize),
 }
 
-// Geometry, in window pixels. The panel is a right-aligned column below the top
-// bar's capture row.
-const PANEL_W: f32 = 320.0;
+// Geometry, in window pixels. Every rect derives from the panel's origin `o`
+// (its title bar's top-left corner), so dragging the title bar moves the whole
+// panel; the hook owns the origin.
+pub(crate) const PANEL_W: f32 = 320.0;
 const HEADER_H: f32 = 40.0;
 const ROW_H: f32 = 34.0;
 const PAD: f32 = 8.0;
@@ -300,49 +308,70 @@ const HEADER_LABEL: [f32; 3] = [0.58, 0.66, 0.80];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 
-// The panel outer rect (header + body).
-pub(crate) fn panel_rect(vw: f32) -> [f32; 4] {
+// Where the panel sits until the user drags it: right-aligned below the top bar.
+pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
+    [vw - PANEL_W, hud::body_top()]
+}
+
+// The panel's current height (origin-independent): the fixed browse height, or
+// the form height grown up to the control-pool cap. The hook clamps a drag with
+// this so the whole panel hard-stops at the window edges.
+pub(crate) fn panel_height(mode: Mode, n_fields: usize) -> f32 {
+    let o = [0.0, 0.0];
+    match mode {
+        Mode::AddForm => form_panel_rect(o, n_fields.min(form::FIELD_POOL) + 1)[3],
+        Mode::List => panel_rect(o)[3],
+    }
+}
+
+// The panel outer rect (title bar + header + body) at origin `o`.
+pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
     [
-        vw - PANEL_W,
-        hud::body_top(),
+        o[0],
+        o[1],
         PANEL_W,
-        HEADER_H + MAX_ROWS as f32 * ROW_H,
+        widget::TITLE_H + HEADER_H + MAX_ROWS as f32 * ROW_H,
     ]
 }
 
-// The square "+" add button (panel header, left).
-pub(crate) fn plus_rect(vw: f32) -> [f32; 4] {
-    [vw - PANEL_W, hud::body_top(), HEADER_H, HEADER_H]
+// The draggable title bar across the panel top.
+pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1], PANEL_W, widget::TITLE_H]
+}
+
+// The square "+" add button (panel header below the title bar, left).
+pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1] + widget::TITLE_H, HEADER_H, HEADER_H]
 }
 
 // The combo area (panel header, filling the rest of the row): the browse-filter
 // label when closed, the filter text field when open.
-pub(crate) fn combo_rect(vw: f32) -> [f32; 4] {
+pub(crate) fn combo_rect(o: [f32; 2]) -> [f32; 4] {
     [
-        vw - PANEL_W + HEADER_H + GAP,
-        hud::body_top(),
+        o[0] + HEADER_H + GAP,
+        o[1] + widget::TITLE_H,
         PANEL_W - HEADER_H - GAP,
         HEADER_H,
     ]
 }
 
 // The filter text field, centred in the combo area.
-pub(crate) fn filter_input_rect(vw: f32) -> [f32; 4] {
-    let c = combo_rect(vw);
+pub(crate) fn filter_input_rect(o: [f32; 2]) -> [f32; 4] {
+    let c = combo_rect(o);
     [c[0], c[1] + (HEADER_H - ROW_H) * 0.5, c[2], ROW_H]
 }
 
 // Where the body (below the header) begins.
-fn body_y() -> f32 {
-    hud::body_top() + HEADER_H
+fn body_y(o: [f32; 2]) -> f32 {
+    o[1] + widget::TITLE_H + HEADER_H
 }
 
 // A body row `i` spanning the panel width (list or combo option).
-pub(crate) fn list_row_rect(vw: f32, i: usize) -> [f32; 4] {
-    [vw - PANEL_W, body_y() + i as f32 * ROW_H, PANEL_W, ROW_H]
+pub(crate) fn list_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    [o[0], body_y(o) + i as f32 * ROW_H, PANEL_W, ROW_H]
 }
-pub(crate) fn combo_option_rect(vw: f32, i: usize) -> [f32; 4] {
-    list_row_rect(vw, i)
+pub(crate) fn combo_option_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    list_row_rect(o, i)
 }
 
 // The triple-dot button rect at the right of a name row, left of the scrollbar.
@@ -357,9 +386,9 @@ fn dot_rect(row: [f32; 4]) -> [f32; 4] {
 
 // The Edit / Delete menu, floating just below a name row at visible index `vr`.
 // Returns (background, edit row, delete row).
-fn menu_rects(vw: f32, vr: usize) -> ([f32; 4], [f32; 4], [f32; 4]) {
-    let x = vw - MENU_W - SCROLLBAR_W - 2.0;
-    let top = body_y() + vr as f32 * ROW_H + ROW_H;
+fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4], [f32; 4]) {
+    let x = o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0;
+    let top = body_y(o) + vr as f32 * ROW_H + ROW_H;
     let edit = [x, top, MENU_W, MENU_ROW_H];
     let delete = [x, top + MENU_ROW_H, MENU_W, MENU_ROW_H];
     let bg = [x, top, MENU_W, 2.0 * MENU_ROW_H];
@@ -368,21 +397,21 @@ fn menu_rects(vw: f32, vr: usize) -> ([f32; 4], [f32; 4], [f32; 4]) {
 
 // AddForm layout: a heading, then stacked rows (row 0 = name, rows 1..=N = arg
 // fields), then the Add / Cancel buttons, then a status line.
-fn form_rows_top() -> f32 {
-    body_y() + PAD + LINE
+fn form_rows_top(o: [f32; 2]) -> f32 {
+    body_y(o) + PAD + LINE
 }
 // The full-width rect of form row `i` (0 = name).
-fn form_row_rect(vw: f32, i: usize) -> [f32; 4] {
+fn form_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
     [
-        vw - PANEL_W,
-        form_rows_top() + i as f32 * FIELD_H,
+        o[0],
+        form_rows_top(o) + i as f32 * FIELD_H,
         PANEL_W,
         FIELD_H,
     ]
 }
 // The control (text field / checkbox area) on the right of form row `i`.
-pub(crate) fn form_control_rect(vw: f32, i: usize) -> [f32; 4] {
-    let r = form_row_rect(vw, i);
+pub(crate) fn form_control_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    let r = form_row_rect(o, i);
     [
         r[0] + LABEL_COL,
         r[1] + 2.0,
@@ -391,32 +420,32 @@ pub(crate) fn form_control_rect(vw: f32, i: usize) -> [f32; 4] {
     ]
 }
 // The checkbox box for a bool field on form row `i`.
-pub(crate) fn form_toggle_rect(vw: f32, i: usize) -> [f32; 4] {
-    let c = form_control_rect(vw, i);
+pub(crate) fn form_toggle_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    let c = form_control_rect(o, i);
     let s = FIELD_H - 10.0;
     [c[0], c[1], s, s]
 }
 
 // The `[+]` add and `[-]` remove buttons of an array header on form row `row`,
 // squares at the right of the control area (add rightmost, remove to its left).
-fn array_add_rect(vw: f32, row: usize) -> [f32; 4] {
-    let c = form_control_rect(vw, row);
+fn array_add_rect(o: [f32; 2], row: usize) -> [f32; 4] {
+    let c = form_control_rect(o, row);
     let s = FIELD_H - 10.0;
     [c[0] + c[2] - s, c[1], s, s]
 }
-fn array_remove_rect(vw: f32, row: usize) -> [f32; 4] {
-    let a = array_add_rect(vw, row);
+fn array_remove_rect(o: [f32; 2], row: usize) -> [f32; 4] {
+    let a = array_add_rect(o, row);
     [a[0] - a[2] - 4.0, a[1], a[2], a[3]]
 }
 
 // An open value dropdown for the enum / ref field on form row `row`: it floats
 // directly below that field's control, aligned to it, `shown` options tall.
-fn field_option_rect(vw: f32, row: usize, r: usize) -> [f32; 4] {
-    let c = form_control_rect(vw, row);
+fn field_option_rect(o: [f32; 2], row: usize, r: usize) -> [f32; 4] {
+    let c = form_control_rect(o, row);
     [c[0], c[1] + c[3] + r as f32 * DROP_ROW_H, c[2], DROP_ROW_H]
 }
-fn field_dropdown_backing(vw: f32, row: usize, shown: usize) -> [f32; 4] {
-    let c = form_control_rect(vw, row);
+fn field_dropdown_backing(o: [f32; 2], row: usize, shown: usize) -> [f32; 4] {
+    let c = form_control_rect(o, row);
     [c[0], c[1] + c[3], c[2], shown as f32 * DROP_ROW_H + 4.0]
 }
 
@@ -424,27 +453,27 @@ fn field_dropdown_backing(vw: f32, row: usize, shown: usize) -> [f32; 4] {
 fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
-fn form_buttons_y(n_rows: usize) -> f32 {
-    form_rows_top() + n_rows as f32 * FIELD_H + GAP
+fn form_buttons_y(o: [f32; 2], n_rows: usize) -> f32 {
+    form_rows_top(o) + n_rows as f32 * FIELD_H + GAP
 }
-pub(crate) fn form_add_rect(vw: f32, n_rows: usize) -> [f32; 4] {
+pub(crate) fn form_add_rect(o: [f32; 2], n_rows: usize) -> [f32; 4] {
     let w = (PANEL_W - 2.0 * PAD - GAP) / 2.0;
-    [vw - PANEL_W + PAD, form_buttons_y(n_rows), w, ROW_H]
+    [o[0] + PAD, form_buttons_y(o, n_rows), w, ROW_H]
 }
-pub(crate) fn form_cancel_rect(vw: f32, n_rows: usize) -> [f32; 4] {
-    let a = form_add_rect(vw, n_rows);
+pub(crate) fn form_cancel_rect(o: [f32; 2], n_rows: usize) -> [f32; 4] {
+    let a = form_add_rect(o, n_rows);
     [a[0] + a[2] + GAP, a[1], a[2], ROW_H]
 }
 // The y just past the form's last element (buttons + a status line's worth of
 // room), so the panel background and the click bounds can grow to contain a tall
 // form instead of letting its lower rows fall outside the fixed panel.
-fn form_bottom(n_rows: usize) -> f32 {
-    form_buttons_y(n_rows) + ROW_H + GAP + FIELD_H
+fn form_bottom(o: [f32; 2], n_rows: usize) -> f32 {
+    form_buttons_y(o, n_rows) + ROW_H + GAP + FIELD_H
 }
 // The panel outer rect, grown when needed to contain the `n_rows`-row form.
-fn form_panel_rect(vw: f32, n_rows: usize) -> [f32; 4] {
-    let base = panel_rect(vw);
-    let bottom = form_bottom(n_rows).max(base[1] + base[3]);
+fn form_panel_rect(o: [f32; 2], n_rows: usize) -> [f32; 4] {
+    let base = panel_rect(o);
+    let bottom = form_bottom(o, n_rows).max(base[1] + base[3]);
     [base[0], base[1], base[2], bottom - base[1]]
 }
 // How many of the form's fields are on screen at once: the field count, capped at
@@ -463,11 +492,11 @@ fn field_row(view: &PanelView, j: usize) -> Option<usize> {
 
 // The panel's outer rect for `view` (grown for a tall form up to the pool cap),
 // used for the background sprite and the fall-through hit-test bounds.
-fn outer_rect(view: &PanelView, vw: f32) -> [f32; 4] {
+fn outer_rect(view: &PanelView, o: [f32; 2]) -> [f32; 4] {
     if view.mode == Mode::AddForm {
-        form_panel_rect(vw, visible_field_count(view) + 1)
+        form_panel_rect(o, visible_field_count(view) + 1)
     } else {
-        panel_rect(vw)
+        panel_rect(o)
     }
 }
 
@@ -531,6 +560,9 @@ pub(crate) struct PanelView<'a> {
     pub row_menu: Option<usize>,
     // Heading shown over the add form (e.g. "New PointLight" / "Edit lamp").
     pub form_title: &'a str,
+    // Whether the form edits an existing entry (its confirm button then says
+    // "Update" rather than "Add").
+    pub editing: bool,
     // The editable arg fields of the add / edit form (empty outside AddForm). The
     // form renders a window of `form::FIELD_POOL` of these at a time.
     pub form_fields: &'a [FormField],
@@ -564,20 +596,17 @@ fn visible_row_of(view: &PanelView, entry: usize) -> Option<usize> {
     None
 }
 
-// Resolve a click against the open panel. `None` means the click missed the
-// panel entirely (the caller lets it fall through). Text-field clicks resolve to
-// `Consume` (swallowed here; the engine's text-input system focuses the field
-// from the same input).
-pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<PanelAction> {
-    if vw <= 0.0 {
-        return None;
-    }
-
+// Resolve a click against the open panel at origin `o`. `None` means the click
+// missed the panel entirely (the caller lets it fall through). Text-field clicks
+// resolve to `Consume` (swallowed here; the engine's text-input system focuses
+// the field from the same input). Title-bar presses never reach this: the hook
+// intercepts them first to start a drag.
+pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
     // An open row menu is modal over the panel: its rows pick, anything else
     // dismisses it.
     if let Some(entry) = view.row_menu {
         if let Some(vr) = visible_row_of(view, entry) {
-            let (_, edit, delete) = menu_rects(vw, vr);
+            let (_, edit, delete) = menu_rects(o, vr);
             if point_in(mx, my, edit) {
                 return Some(PanelAction::RowEdit);
             }
@@ -590,10 +619,10 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
 
     // An open combo captures the header field + its floating options.
     if view.combo != Combo::Closed {
-        if point_in(mx, my, plus_rect(vw)) {
+        if point_in(mx, my, plus_rect(o)) {
             return Some(PanelAction::TogglePicker);
         }
-        if point_in(mx, my, combo_rect(vw)) {
+        if point_in(mx, my, combo_rect(o)) {
             return Some(PanelAction::Consume);
         }
         let scroll = view
@@ -604,7 +633,7 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
             if idx >= view.combo_options.len() {
                 break;
             }
-            if point_in(mx, my, combo_option_rect(vw, r)) {
+            if point_in(mx, my, combo_option_rect(o, r)) {
                 return Some(PanelAction::PickOption(idx));
             }
         }
@@ -625,23 +654,29 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
             if idx >= total {
                 break;
             }
-            if point_in(mx, my, field_option_rect(vw, row, r)) {
+            if point_in(mx, my, field_option_rect(o, row, r)) {
                 return Some(PanelAction::PickFieldOption(idx));
             }
         }
         return Some(PanelAction::CloseOverlays);
     }
 
-    // Combo closed: clicks outside the panel fall through (the top bar handles
-    // the region above `body_top`; the world gets the rest). A tall form grows the
-    // bounds so its lower rows / buttons stay clickable.
-    if !point_in(mx, my, outer_rect(view, vw)) {
+    // Combo closed: clicks outside the panel fall through (the hook's caller
+    // decides who else wants them). A tall form grows the bounds so its lower
+    // rows / buttons stay clickable.
+    if !point_in(mx, my, outer_rect(view, o)) {
         return None;
     }
-    if point_in(mx, my, plus_rect(vw)) {
-        return Some(PanelAction::TogglePicker);
+    if point_in(mx, my, plus_rect(o)) {
+        // In the form the button is the gray "X": it cancels back to the list
+        // rather than opening the picker.
+        return Some(if view.mode == Mode::AddForm {
+            PanelAction::CancelForm
+        } else {
+            PanelAction::TogglePicker
+        });
     }
-    if point_in(mx, my, combo_rect(vw)) {
+    if point_in(mx, my, combo_rect(o)) {
         return Some(PanelAction::ToggleFilter);
     }
 
@@ -656,7 +691,7 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
                 let Some(entry) = view.list_rows[idx].entry else {
                     continue;
                 };
-                let rect = list_row_rect(vw, r);
+                let rect = list_row_rect(o, r);
                 if point_in(mx, my, rect) {
                     if point_in(mx, my, dot_rect(rect)) {
                         return Some(PanelAction::OpenRowMenu(entry));
@@ -668,14 +703,14 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
         }
         Mode::AddForm => {
             let n_rows = visible_field_count(view) + 1;
-            if point_in(mx, my, form_add_rect(vw, n_rows)) {
+            if point_in(mx, my, form_add_rect(o, n_rows)) {
                 return Some(PanelAction::ConfirmAdd);
             }
-            if point_in(mx, my, form_cancel_rect(vw, n_rows)) {
+            if point_in(mx, my, form_cancel_rect(o, n_rows)) {
                 return Some(PanelAction::CancelForm);
             }
             // The name field (row 0, pinned above the scrolling fields).
-            if point_in(mx, my, form_control_rect(vw, 0)) {
+            if point_in(mx, my, form_control_rect(o, 0)) {
                 return Some(PanelAction::FocusName);
             }
             // Arg field controls, over the visible window: slot `r` (panel row
@@ -691,12 +726,12 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
                 };
                 match f.kind {
                     FieldKind::Bool => {
-                        if point_in(mx, my, form_toggle_rect(vw, row)) {
+                        if point_in(mx, my, form_toggle_rect(o, row)) {
                             return Some(PanelAction::ToggleField(j));
                         }
                     }
                     FieldKind::Enum | FieldKind::Ref { .. } => {
-                        if point_in(mx, my, form_control_rect(vw, row)) {
+                        if point_in(mx, my, form_control_rect(o, row)) {
                             // A small variant set cycles in place; a large one opens
                             // a floating dropdown instead of forcing many clicks.
                             if f.variants.len() > CYCLE_MAX {
@@ -706,15 +741,15 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
                         }
                     }
                     FieldKind::Array => {
-                        if point_in(mx, my, array_add_rect(vw, row)) {
+                        if point_in(mx, my, array_add_rect(o, row)) {
                             return Some(PanelAction::AddArrayElement(j));
                         }
-                        if point_in(mx, my, array_remove_rect(vw, row)) {
+                        if point_in(mx, my, array_remove_rect(o, row)) {
                             return Some(PanelAction::RemoveArrayElement(j));
                         }
                     }
                     _ => {
-                        if point_in(mx, my, form_control_rect(vw, row)) {
+                        if point_in(mx, my, form_control_rect(o, row)) {
                             return Some(PanelAction::FocusField(j));
                         }
                     }
@@ -726,28 +761,35 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
     }
 }
 
-// Position + show the panel's elements for this frame, or hide them all when the
-// panel is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, vw: f32) {
+// Position + show the panel's elements for this frame at origin `o`, or hide
+// them all when the panel is closed (`view` is `None`).
+pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
     };
-    if vw <= 0.0 {
-        return;
-    }
 
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    place_sprite(world, PANEL_BG, outer_rect(view, vw), PANEL_BG_TINT, true);
-    place_sprite(world, PLUS_BG, plus_rect(vw), PLUS_TINT, true);
-    place_center_label(world, PLUS_LABEL, plus_rect(vw), "+", LABEL_WHITE, true);
+    place_sprite(world, PANEL_BG, outer_rect(view, o), PANEL_BG_TINT, true);
+    widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Assets");
+
+    // The "+" add button. While the type picker or the form is open it becomes a
+    // gray "X" that returns to the browse list (the previous focus).
+    let closing = view.combo == Combo::Picker || view.mode == Mode::AddForm;
+    let (glyph, tint) = if closing {
+        ("X", CANCEL_TINT)
+    } else {
+        ("+", PLUS_TINT)
+    };
+    place_sprite(world, PLUS_BG, plus_rect(o), tint, true);
+    place_plus_glyph(world, plus_rect(o), glyph);
 
     // The combo area: the browse label when closed, the filter field when open.
     if view.combo == Combo::Closed {
-        place_sprite(world, TYPEDROP_BG, combo_rect(vw), TYPEDROP_TINT, true);
-        let td = combo_rect(vw);
+        place_sprite(world, TYPEDROP_BG, combo_rect(o), TYPEDROP_TINT, true);
+        let td = combo_rect(o);
         place_left_label(
             world,
             TYPEDROP_LABEL,
@@ -757,23 +799,38 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, vw: f32) {
             true,
         );
     } else {
-        show_field(world, FILTER_INPUT, filter_input_rect(vw), true);
+        show_field(world, FILTER_INPUT, filter_input_rect(o), true);
     }
 
     // The body.
     match (view.mode, view.combo) {
-        (Mode::AddForm, _) => layout_form(world, view, vw),
-        (Mode::List, Combo::Closed) => layout_list(world, view, vw),
-        (Mode::List, _) => layout_combo(world, view, vw),
+        (Mode::AddForm, _) => layout_form(world, view, o),
+        (Mode::List, Combo::Closed) => layout_list(world, view, o),
+        (Mode::List, _) => layout_combo(world, view, o),
     }
 }
 
-fn layout_list(world: &mut World, view: &PanelView, vw: f32) {
+// The "+" / "X" glyph, centered in the add button and drawn a step larger than
+// the body text (the box itself stays a HEADER_H square).
+const PLUS_SCALE: f32 = 1.3;
+fn place_plus_glyph(world: &mut World, rect: [f32; 4], glyph: &str) {
+    if let Some(l) = widget::label_mut(world, PLUS_LABEL) {
+        l.x = rect[0] + rect[2] * 0.5;
+        l.y = rect[1] + rect[3] * 0.5 - 10.0 * PLUS_SCALE;
+        l.align = TextAlign::Center;
+        l.color = LABEL_WHITE;
+        l.scale = PLUS_SCALE;
+        l.visible = true;
+        l.content = glyph.to_string();
+    }
+}
+
+fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
     if view.list_rows.is_empty() {
         place_left_label(
             world,
             EMPTY_LABEL,
-            [vw - PANEL_W + PAD, body_y() + PAD],
+            [o[0] + PAD, body_y(o) + PAD],
             "No matching assets",
             LABEL_DIM,
             true,
@@ -790,7 +847,7 @@ fn layout_list(world: &mut World, view: &PanelView, vw: f32) {
             break;
         }
         let row = &view.list_rows[idx];
-        let rect = list_row_rect(vw, r);
+        let rect = list_row_rect(o, r);
         if row.is_header {
             place_sprite(world, list_row_bg(r), rect, HEADER_ROW_TINT, true);
             set_row_label(
@@ -826,28 +883,28 @@ fn layout_list(world: &mut World, view: &PanelView, vw: f32) {
     // the menu is open on that row (a "clicked" state); a plain row-hover shows
     // the bare white dots.
     if let Some(r) = menu_row.or(hovered_row) {
-        let rect = list_row_rect(vw, r);
+        let rect = list_row_rect(o, r);
         let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(rect));
         let show_box = menu_row == Some(r) || over_dots;
         place_dot(world, rect, show_box);
     }
     if let Some(r) = menu_row {
-        layout_row_menu(world, view, vw, r);
+        layout_row_menu(world, view, o, r);
     }
-    layout_scrollbar(world, total, scroll, vw);
+    layout_scrollbar(world, total, scroll, o);
 }
 
-fn layout_combo(world: &mut World, view: &PanelView, vw: f32) {
+fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
     let total = view.combo_options.len();
     let scroll = view.combo_scroll.min(total.saturating_sub(1));
     let shown = total.saturating_sub(scroll).clamp(1, MAX_ROWS);
-    let backing = [vw - PANEL_W, body_y(), PANEL_W, shown as f32 * ROW_H + PAD];
+    let backing = [o[0], body_y(o), PANEL_W, shown as f32 * ROW_H + PAD];
     place_sprite(world, COMBO_BG, backing, COMBO_BG_TINT, true);
     if total == 0 {
         place_left_label(
             world,
             EMPTY_LABEL,
-            [vw - PANEL_W + PAD, body_y() + PAD],
+            [o[0] + PAD, body_y(o) + PAD],
             "No matching types",
             LABEL_DIM,
             true,
@@ -859,7 +916,7 @@ fn layout_combo(world: &mut World, view: &PanelView, vw: f32) {
         if idx >= total {
             break;
         }
-        let rect = combo_option_rect(vw, r);
+        let rect = combo_option_rect(o, r);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         let tint = if hovered {
             OPTION_TINT_HOVER
@@ -878,7 +935,7 @@ fn layout_combo(world: &mut World, view: &PanelView, vw: f32) {
             true,
         );
     }
-    layout_scrollbar(world, total, scroll, vw);
+    layout_scrollbar(world, total, scroll, o);
 }
 
 // The three stacked white dots of the triple-dot button. The background box is
@@ -899,8 +956,8 @@ fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
     }
 }
 
-fn layout_row_menu(world: &mut World, view: &PanelView, vw: f32, vr: usize) {
-    let (bg, edit, delete) = menu_rects(vw, vr);
+fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) {
+    let (bg, edit, delete) = menu_rects(o, vr);
     place_sprite(world, MENU_BG, bg, MENU_BG_TINT, true);
     let edit_hover = point_in(view.mouse[0], view.mouse[1], edit);
     place_sprite(
@@ -944,18 +1001,18 @@ fn layout_row_menu(world: &mut World, view: &PanelView, vw: f32, vr: usize) {
     );
 }
 
-fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
+fn layout_form(world: &mut World, view: &PanelView, o: [f32; 2]) {
     place_left_label(
         world,
         FORM_TITLE,
-        [vw - PANEL_W + PAD, body_y() + PAD],
+        [o[0] + PAD, body_y(o) + PAD],
         view.form_title,
         LABEL_WHITE,
         true,
     );
 
     // Row 0: the asset name.
-    let name_row = form_row_rect(vw, 0);
+    let name_row = form_row_rect(o, 0);
     place_left_label(
         world,
         form_row_label(0),
@@ -967,7 +1024,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
     show_field(
         world,
         NAME_INPUT,
-        form_control_rect(vw, 0),
+        form_control_rect(o, 0),
         view.form_focus == FormFocus::Name,
     );
 
@@ -983,7 +1040,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         let total = field.variants.len();
         let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
         let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-        Some(field_dropdown_backing(vw, row, shown))
+        Some(field_dropdown_backing(o, row, shown))
     });
 
     // The editable arg fields, over the visible window: slot `r` (panel row `r + 1`,
@@ -997,8 +1054,8 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         let Some(field) = view.form_fields.get(j) else {
             break;
         };
-        let rect = form_row_rect(vw, row);
-        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(vw, row), d)) {
+        let rect = form_row_rect(o, row);
+        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(o, row), d)) {
             continue;
         }
         // A nested (dotted-path) field shows its indented leaf name -- the full path
@@ -1018,7 +1075,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         );
         match field.kind {
             FieldKind::Bool => {
-                let t = form_toggle_rect(vw, row);
+                let t = form_toggle_rect(o, row);
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
                 place_sprite(world, form_toggle_bg(r), t, tint, true);
             }
@@ -1026,7 +1083,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 // A cycling button spanning the control: its background reuses the
                 // bool checkbox sprite, captioned with the current selection (an
                 // enum variant, or a referenced asset name / `(none)`).
-                let c = form_control_rect(vw, row);
+                let c = form_control_rect(o, row);
                 let hover = point_in(view.mouse[0], view.mouse[1], c);
                 let tint = if hover {
                     OPTION_TINT_HOVER
@@ -1045,7 +1102,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 // A header for a variable-length array: its element count and a red
                 // `[-]` remove + green `[+]` add button. The elements follow as their
                 // own indexed rows.
-                let c = form_control_rect(vw, row);
+                let c = form_control_rect(o, row);
                 place_left_label(
                     world,
                     form_enum_label(r),
@@ -1057,20 +1114,20 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 place_sprite(
                     world,
                     form_swatch(r),
-                    array_remove_rect(vw, row),
+                    array_remove_rect(o, row),
                     REMOVE_BTN_TINT,
                     true,
                 );
                 place_sprite(
                     world,
                     form_toggle_bg(r),
-                    array_add_rect(vw, row),
+                    array_add_rect(o, row),
                     ADD_BTN_TINT,
                     true,
                 );
             }
             kind => {
-                let control = form_control_rect(vw, row);
+                let control = form_control_rect(o, row);
                 // A colour vector reserves a right-hand strip for a live preview
                 // swatch and narrows its field to clear it. The swatch must sit
                 // OUTSIDE the field rect: a `TextInput`'s opaque background box is
@@ -1105,10 +1162,10 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
     }
 
     // Add / Cancel below the last visible row (the button strip stays put as the
-    // fields scroll under it).
+    // fields scroll under it). Editing an existing entry says "Update" instead.
     let n_rows = visible_field_count(view) + 1;
-    let add = form_add_rect(vw, n_rows);
-    let cancel = form_cancel_rect(vw, n_rows);
+    let add = form_add_rect(o, n_rows);
+    let cancel = form_cancel_rect(o, n_rows);
     let add_hover = point_in(view.mouse[0], view.mouse[1], add);
     place_sprite(
         world,
@@ -1121,7 +1178,8 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         },
         true,
     );
-    place_center_label(world, FORMADD_LABEL, add, "Add", LABEL_WHITE, true);
+    let confirm = if view.editing { "Update" } else { "Add" };
+    place_center_label(world, FORMADD_LABEL, add, confirm, LABEL_WHITE, true);
     place_sprite(world, FORMCANCEL_BG, cancel, CANCEL_TINT, true);
     place_center_label(world, FORMCANCEL_LABEL, cancel, "Cancel", LABEL, true);
 
@@ -1139,11 +1197,11 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
 
     // A scrollbar down the field region's right edge when the form overflows the
     // pool. It sits clear of the controls (they end a pad short of the panel edge).
-    layout_form_scrollbar(world, view.form_fields.len(), scroll, vw);
+    layout_form_scrollbar(world, view.form_fields.len(), scroll, o);
 
     // The open value dropdown draws last so it floats over the form below it.
     if let Some(open) = view.field_dropdown {
-        layout_field_dropdown(world, view, vw, open);
+        layout_field_dropdown(world, view, o, open);
     }
 }
 
@@ -1151,13 +1209,18 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
 // total field count. Shown only when the form overflows the pool, spanning the
 // field region below the pinned name row. Uses its own ids so it can coexist with
 // an open field-value dropdown (which reuses the list scrollbar).
-fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32) {
+fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
     if total <= form::FIELD_POOL {
         return;
     }
-    let region_top = form_rows_top() + FIELD_H;
+    let region_top = form_rows_top(o) + FIELD_H;
     let track_h = form::FIELD_POOL as f32 * FIELD_H;
-    let track = [vw - SCROLLBAR_W, region_top, SCROLLBAR_W, track_h];
+    let track = [
+        o[0] + PANEL_W - SCROLLBAR_W,
+        region_top,
+        SCROLLBAR_W,
+        track_h,
+    ];
     place_sprite(world, FORM_TRACK, track, TRACK_TINT, true);
     let frac_visible = form::FIELD_POOL as f32 / total as f32;
     let thumb_h = (track_h * frac_visible).max(20.0);
@@ -1180,7 +1243,7 @@ fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32
 // The floating value dropdown for an open enum / ref field: an opaque backing plus
 // its option rows (the current selection highlighted), reusing the combo option
 // pool (idle in AddForm) and, when it overflows, the list scrollbar.
-fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usize) {
+fn layout_field_dropdown(world: &mut World, view: &PanelView, o: [f32; 2], open: usize) {
     let Some(field) = view.form_fields.get(open) else {
         return;
     };
@@ -1193,7 +1256,7 @@ fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usi
     place_sprite(
         world,
         COMBO_BG,
-        field_dropdown_backing(vw, row, shown),
+        field_dropdown_backing(o, row, shown),
         COMBO_BG_TINT,
         true,
     );
@@ -1202,7 +1265,7 @@ fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usi
         if idx >= total {
             break;
         }
-        let rect = field_option_rect(vw, row, r);
+        let rect = field_option_rect(o, row, r);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         let tint = if hovered {
             OPTION_TINT_HOVER
@@ -1223,7 +1286,7 @@ fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usi
     }
     // A thin scrollbar down the dropdown's right edge when it overflows.
     if total > MAX_DROP_ROWS {
-        let back = field_dropdown_backing(vw, row, shown);
+        let back = field_dropdown_backing(o, row, shown);
         let track = [
             back[0] + back[2] - SCROLLBAR_W,
             back[1],
@@ -1252,12 +1315,13 @@ fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usi
 
 // A simple non-interactive scrollbar thumb sizing the visible window against the
 // total, shown only when the body overflows.
-fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32) {
+fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
     if total <= MAX_ROWS {
         return;
     }
+    let x = o[0] + PANEL_W - SCROLLBAR_W;
     let track_h = MAX_ROWS as f32 * ROW_H;
-    let track = [vw - SCROLLBAR_W, body_y(), SCROLLBAR_W, track_h];
+    let track = [x, body_y(o), SCROLLBAR_W, track_h];
     place_sprite(world, LIST_TRACK, track, TRACK_TINT, true);
     let frac_visible = MAX_ROWS as f32 / total as f32;
     let thumb_h = (track_h * frac_visible).max(20.0);
@@ -1267,11 +1331,11 @@ fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32) {
     } else {
         0.0
     };
-    let thumb_y = body_y() + t * (track_h - thumb_h);
+    let thumb_y = body_y(o) + t * (track_h - thumb_h);
     place_sprite(
         world,
         LIST_THUMB,
-        [vw - SCROLLBAR_W, thumb_y, SCROLLBAR_W, thumb_h],
+        [x, thumb_y, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
         true,
     );
@@ -1288,6 +1352,7 @@ fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32) {
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![
         PANEL_BG,
+        TITLE_BG,
         PLUS_BG,
         TYPEDROP_BG,
         FORMADD_BG,
@@ -1321,6 +1386,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 // row labels the menu floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![
+        TITLE_LABEL,
         PLUS_LABEL,
         TYPEDROP_LABEL,
         FORMADD_LABEL,
@@ -1491,9 +1557,9 @@ fn swatch_rgb(text: &str) -> [f32; 4] {
 }
 
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
-pub(crate) fn cursor_over_body(mx: f32, my: f32, vw: f32) -> bool {
-    let p = panel_rect(vw);
-    mx >= p[0] && mx < p[0] + p[2] && my >= body_y() && my < p[1] + p[3]
+pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2]) -> bool {
+    let p = panel_rect(o);
+    mx >= p[0] && mx < p[0] + p[2] && my >= body_y(o) && my < p[1] + p[3]
 }
 
 #[cfg(test)]
@@ -1513,6 +1579,12 @@ mod tests {
             let _ = std::fs::create_dir_all(&dir);
             concinnity_core::paths::set_root(dir);
         });
+    }
+
+    // The panel origin the tests lay out at: the default anchor in a 1280-wide
+    // window (matching the old fixed right-aligned position).
+    fn test_origin() -> [f32; 2] {
+        default_origin(1280.0)
     }
 
     fn rows(items: &[(bool, &str, Option<usize>)]) -> Vec<ListRow> {
@@ -1549,6 +1621,7 @@ mod tests {
             list_scroll: 0,
             row_menu,
             form_title: "New PointLight",
+            editing: false,
             form_fields: &[],
             form_scroll: 0,
             form_focus: FormFocus::Name,
@@ -1560,18 +1633,35 @@ mod tests {
     }
 
     #[test]
-    fn panel_sits_below_the_top_bar_and_is_right_aligned() {
-        let p = panel_rect(1280.0);
+    fn default_origin_sits_below_the_top_bar_right_aligned() {
+        let o = test_origin();
+        let p = panel_rect(o);
         assert_eq!(p[0] + p[2], 1280.0, "flush to the window right");
-        assert_eq!(p[1], hud::body_top(), "starts below the capture row");
+        assert_eq!(p[1], hud::body_top(), "starts below the top-bar buttons");
+        // The whole panel follows its origin: dragged elsewhere, every rect moves.
+        let moved = panel_rect([40.0, 60.0]);
+        assert_eq!((moved[0], moved[1]), (40.0, 60.0));
+        assert_eq!((moved[2], moved[3]), (p[2], p[3]));
     }
 
     #[test]
-    fn header_plus_and_combo_do_not_overlap() {
-        let plus = plus_rect(1280.0);
-        let combo = combo_rect(1280.0);
+    fn title_bar_spans_the_panel_top_and_header_sits_below_it() {
+        let o = test_origin();
+        let title = title_rect(o);
+        assert_eq!(title, [o[0], o[1], PANEL_W, widget::TITLE_H]);
+        let plus = plus_rect(o);
+        assert_eq!(
+            plus[1],
+            o[1] + widget::TITLE_H,
+            "the header row starts below the title bar"
+        );
+        let combo = combo_rect(o);
         assert!(plus[0] + plus[2] <= combo[0], "+ is left of the combo");
-        assert_eq!(combo[0] + combo[2], 1280.0, "combo reaches the panel right");
+        assert_eq!(
+            combo[0] + combo[2],
+            o[0] + PANEL_W,
+            "combo reaches the panel right"
+        );
     }
 
     #[test]
@@ -1581,10 +1671,117 @@ mod tests {
             list_rows: vec![],
         };
         let v = view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0]);
-        let plus = plus_rect(1280.0);
+        let plus = plus_rect(test_origin());
         assert_eq!(
-            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, 1280.0),
+            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, test_origin()),
             Some(PanelAction::TogglePicker)
+        );
+    }
+
+    // In the add / edit form the header button is the gray "X": clicking it
+    // cancels back to the browse list instead of opening the picker.
+    #[test]
+    fn plus_cancels_the_form_as_an_x() {
+        let fx = Fixture {
+            combo_options: vec![],
+            list_rows: vec![],
+        };
+        let v = view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0]);
+        let plus = plus_rect(test_origin());
+        assert_eq!(
+            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, test_origin()),
+            Some(PanelAction::CancelForm)
+        );
+    }
+
+    // The header button renders as a green "+" while browsing and as a gray "X"
+    // while the picker or the form is open.
+    #[test]
+    fn plus_renders_as_an_x_while_picker_or_form_is_open() {
+        let fx = Fixture {
+            combo_options: vec!["PointLight".to_string()],
+            list_rows: vec![],
+        };
+        let glyph = |world: &World| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == PLUS_LABEL)
+                .unwrap()
+                .clone()
+        };
+        let plus_tint = |world: &World| {
+            world
+                .query::<Sprite>()
+                .find(|s| s.asset_id == PLUS_BG)
+                .unwrap()
+                .tint
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0])),
+            o,
+        );
+        let l = glyph(&world);
+        assert_eq!(l.content, "+");
+        assert_eq!(plus_tint(&world), PLUS_TINT);
+        assert!(
+            l.scale > 1.0,
+            "the glyph draws larger than the body text (the box is unchanged)"
+        );
+        apply(
+            &mut world,
+            Some(&view(&fx, Mode::List, Combo::Picker, None, [0.0, 0.0])),
+            o,
+        );
+        assert_eq!(glyph(&world).content, "X");
+        assert_eq!(
+            plus_tint(&world),
+            CANCEL_TINT,
+            "gray while the picker is open"
+        );
+        apply(
+            &mut world,
+            Some(&view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0])),
+            o,
+        );
+        assert_eq!(glyph(&world).content, "X");
+        assert_eq!(
+            plus_tint(&world),
+            CANCEL_TINT,
+            "gray while the form is open"
+        );
+    }
+
+    // The title bar is drawn with the panel's heading; a click on it reaches no
+    // control (the hook intercepts it for a drag before this hit test, and the
+    // fall-through here just consumes it).
+    #[test]
+    fn title_bar_renders_heading_and_consumes_clicks() {
+        let fx = Fixture {
+            combo_options: vec![],
+            list_rows: vec![],
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0])),
+            o,
+        );
+        let title = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == TITLE_LABEL)
+            .unwrap();
+        assert!(title.visible);
+        assert_eq!(title.content, "Assets");
+        assert!(sprite_visible(&world, TITLE_BG));
+        let t = title_rect(o);
+        let v = view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0]);
+        assert_eq!(
+            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o),
+            Some(PanelAction::Consume)
         );
     }
 
@@ -1595,27 +1792,28 @@ mod tests {
             list_rows: vec![],
         };
         // Closed: clicking the combo opens the filter dropdown.
+        let o = test_origin();
         let v = view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0]);
-        let c = combo_rect(1280.0);
+        let c = combo_rect(o);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, 1280.0),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::ToggleFilter)
         );
         // Open: clicking option row 1 picks it.
         let vo = view(&fx, Mode::List, Combo::Filter, None, [0.0, 0.0]);
-        let r1 = combo_option_rect(1280.0, 1);
+        let r1 = combo_option_rect(o, 1);
         assert_eq!(
-            hit_test(&vo, r1[0] + 5.0, r1[1] + 5.0, 1280.0),
+            hit_test(&vo, r1[0] + 5.0, r1[1] + 5.0, o),
             Some(PanelAction::PickOption(1))
         );
         // Open: clicking the header field keeps focus (consumed).
         assert_eq!(
-            hit_test(&vo, c[0] + 5.0, c[1] + 5.0, 1280.0),
+            hit_test(&vo, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::Consume)
         );
         // Open: a click on empty body space closes it.
         assert_eq!(
-            hit_test(&vo, 640.0, 700.0, 1280.0),
+            hit_test(&vo, 640.0, 700.0, o),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -1629,9 +1827,9 @@ mod tests {
         };
         let mut v = view(&fx, Mode::List, Combo::Picker, None, [0.0, 0.0]);
         v.combo_scroll = 2;
-        let r0 = combo_option_rect(1280.0, 0);
+        let r0 = combo_option_rect(test_origin(), 0);
         assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, 1280.0),
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, test_origin()),
             Some(PanelAction::PickOption(2)),
             "row 0 maps to option `scroll + 0`"
         );
@@ -1643,17 +1841,18 @@ mod tests {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(7))]),
         };
+        let o = test_origin();
         let v = view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0]);
         // Row 1 (the name) triple-dot.
-        let dot = dot_rect(list_row_rect(1280.0, 1));
+        let dot = dot_rect(list_row_rect(o, 1));
         assert_eq!(
-            hit_test(&v, dot[0] + 5.0, dot[1] + 5.0, 1280.0),
+            hit_test(&v, dot[0] + 5.0, dot[1] + 5.0, o),
             Some(PanelAction::OpenRowMenu(7))
         );
         // The header row (row 0) is not interactive: a click consumes.
-        let hdr = list_row_rect(1280.0, 0);
+        let hdr = list_row_rect(o, 0);
         assert_eq!(
-            hit_test(&v, hdr[0] + 5.0, hdr[1] + 5.0, 1280.0),
+            hit_test(&v, hdr[0] + 5.0, hdr[1] + 5.0, o),
             Some(PanelAction::Consume)
         );
     }
@@ -1664,19 +1863,20 @@ mod tests {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(3))]),
         };
+        let o = test_origin();
         let v = view(&fx, Mode::List, Combo::Closed, Some(3), [0.0, 0.0]);
-        let (_, edit, delete) = menu_rects(1280.0, 1);
+        let (_, edit, delete) = menu_rects(o, 1);
         assert_eq!(
-            hit_test(&v, edit[0] + 5.0, edit[1] + 5.0, 1280.0),
+            hit_test(&v, edit[0] + 5.0, edit[1] + 5.0, o),
             Some(PanelAction::RowEdit)
         );
         assert_eq!(
-            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, 1280.0),
+            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
             Some(PanelAction::RowDelete)
         );
         // A click off the menu dismisses it.
         assert_eq!(
-            hit_test(&v, 640.0, 700.0, 1280.0),
+            hit_test(&v, 640.0, 700.0, o),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -1687,18 +1887,49 @@ mod tests {
             combo_options: vec![],
             list_rows: vec![],
         };
+        let o = test_origin();
         let v = view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0]);
         // No arg fields -> one row (the name).
-        let add = form_add_rect(1280.0, 1);
-        let cancel = form_cancel_rect(1280.0, 1);
+        let add = form_add_rect(o, 1);
+        let cancel = form_cancel_rect(o, 1);
         assert_eq!(
-            hit_test(&v, add[0] + 5.0, add[1] + 5.0, 1280.0),
+            hit_test(&v, add[0] + 5.0, add[1] + 5.0, o),
             Some(PanelAction::ConfirmAdd)
         );
         assert_eq!(
-            hit_test(&v, cancel[0] + 5.0, cancel[1] + 5.0, 1280.0),
+            hit_test(&v, cancel[0] + 5.0, cancel[1] + 5.0, o),
             Some(PanelAction::CancelForm)
         );
+    }
+
+    // The confirm button is captioned "Add" for a new asset and "Update" while
+    // editing an existing one.
+    #[test]
+    fn form_confirm_button_says_update_while_editing() {
+        let fx = Fixture {
+            combo_options: vec![],
+            list_rows: vec![],
+        };
+        let confirm_label = |world: &World| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == FORMADD_LABEL)
+                .unwrap()
+                .content
+                .clone()
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0])),
+            o,
+        );
+        assert_eq!(confirm_label(&world), "Add");
+        let mut editing = view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0]);
+        editing.editing = true;
+        apply(&mut world, Some(&editing), o);
+        assert_eq!(confirm_label(&world), "Update");
     }
 
     // A full form must not overflow the panel: its Add button stays clickable
@@ -1726,6 +1957,7 @@ mod tests {
             list_scroll: 0,
             row_menu: None,
             form_title: "New X",
+            editing: false,
             form_fields: &fields,
             form_scroll: 0,
             form_focus: FormFocus::Name,
@@ -1734,15 +1966,15 @@ mod tests {
             form_error: None,
             mouse: [0.0, 0.0],
         };
-        let vw = 1280.0;
+        let o = test_origin();
         let n_rows = fields.len() + 1;
-        let add = form_add_rect(vw, n_rows);
+        let add = form_add_rect(o, n_rows);
         assert_eq!(
-            hit_test(&v, add[0] + 5.0, add[1] + 5.0, vw),
+            hit_test(&v, add[0] + 5.0, add[1] + 5.0, o),
             Some(PanelAction::ConfirmAdd),
             "the Add button of a tall form still resolves (grown bounds)"
         );
-        let outer = outer_rect(&v, vw);
+        let outer = outer_rect(&v, o);
         assert!(
             add[1] + add[3] <= outer[1] + outer[3],
             "the Add button sits inside the grown panel background"
@@ -1754,7 +1986,7 @@ mod tests {
     // scroll maps a visible slot to the LOGICAL field it shows.
     #[test]
     fn a_form_past_the_pool_scrolls_a_window() {
-        let vw = 1280.0;
+        let o = test_origin();
         // FIELD_POOL + 4 float fields: four past the window.
         let fields: Vec<FormField> = (0..form::FIELD_POOL + 4)
             .map(|i| FormField {
@@ -1770,21 +2002,21 @@ mod tests {
 
         // At the top the window shows fields 0..FIELD_POOL and the scrollbar appears.
         let v = form_view(&fields);
-        apply(&mut world, Some(&v), vw);
+        apply(&mut world, Some(&v), o);
         assert!(
             sprite_visible(&world, FORM_THUMB),
             "the form scrollbar shows"
         );
         // Slot 0 (panel row 1) resolves to logical field 0.
-        let c0 = form_control_rect(vw, 1);
+        let c0 = form_control_rect(o, 1);
         assert_eq!(
-            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, vw),
+            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o),
             Some(PanelAction::FocusField(0))
         );
         // The buttons sit at the bounded (pool) height, not grown for all N fields.
-        let add = form_add_rect(vw, form::FIELD_POOL + 1);
+        let add = form_add_rect(o, form::FIELD_POOL + 1);
         assert_eq!(
-            hit_test(&v, add[0] + 5.0, add[1] + 5.0, vw),
+            hit_test(&v, add[0] + 5.0, add[1] + 5.0, o),
             Some(PanelAction::ConfirmAdd),
             "the Add button resolves at the bounded pool height"
         );
@@ -1794,13 +2026,13 @@ mod tests {
         let mut vs = form_view(&fields);
         vs.form_scroll = 3;
         assert_eq!(
-            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, vw),
+            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, o),
             Some(PanelAction::FocusField(3)),
             "a scrolled window maps slot 0 to field scroll + 0"
         );
-        let last = form_control_rect(vw, form::FIELD_POOL);
+        let last = form_control_rect(o, form::FIELD_POOL);
         assert_eq!(
-            hit_test(&vs, last[0] + 5.0, last[1] + 5.0, vw),
+            hit_test(&vs, last[0] + 5.0, last[1] + 5.0, o),
             Some(PanelAction::FocusField(3 + form::FIELD_POOL - 1)),
             "the last visible slot maps to the window's last field"
         );
@@ -1809,7 +2041,7 @@ mod tests {
     // A form within the pool shows no form scrollbar.
     #[test]
     fn a_form_within_the_pool_has_no_scrollbar() {
-        let vw = 1280.0;
+        let o = test_origin();
         let fields = [FormField {
             key: "intensity".into(),
             kind: FieldKind::Float,
@@ -1819,7 +2051,7 @@ mod tests {
             variant_idx: 0,
         }];
         let mut world = injected_world();
-        apply(&mut world, Some(&form_view(&fields)), vw);
+        apply(&mut world, Some(&form_view(&fields)), o);
         assert!(
             !sprite_visible(&world, FORM_THUMB),
             "no scrollbar for a form that fits the pool"
@@ -1833,7 +2065,7 @@ mod tests {
             list_rows: vec![],
         };
         let v = view(&fx, Mode::List, Combo::Closed, None, [0.0, 0.0]);
-        assert_eq!(hit_test(&v, 10.0, 400.0, 1280.0), None);
+        assert_eq!(hit_test(&v, 10.0, 400.0, test_origin()), None);
     }
 
     #[test]
@@ -1843,9 +2075,9 @@ mod tests {
             list_rows: vec![],
         };
         let v = view(&fx, Mode::AddForm, Combo::Closed, None, [0.0, 0.0]);
-        let f = form_control_rect(1280.0, 0);
+        let f = form_control_rect(test_origin(), 0);
         assert_eq!(
-            hit_test(&v, f[0] + 5.0, f[1] + 5.0, 1280.0),
+            hit_test(&v, f[0] + 5.0, f[1] + 5.0, test_origin()),
             Some(PanelAction::FocusName)
         );
     }
@@ -1940,6 +2172,7 @@ mod tests {
             list_scroll: 0,
             row_menu: None,
             form_title: "New asset",
+            editing: false,
             form_fields: fields,
             form_scroll: 0,
             form_focus: FormFocus::Name,
@@ -1969,7 +2202,7 @@ mod tests {
     // swatch tinted from the field's current text.
     #[test]
     fn colour_vector_field_shows_a_live_swatch() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         for t in world.query_mut::<TextInput>() {
             if t.asset_id == form_input(0) {
@@ -1987,7 +2220,7 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
         }];
-        apply(&mut world, Some(&form_view(&fields)), vw);
+        apply(&mut world, Some(&form_view(&fields)), o);
         let sw = world
             .query::<Sprite>()
             .find(|s| s.asset_id == form_swatch(0))
@@ -2011,7 +2244,7 @@ mod tests {
     // A plain (non-colour) vector shows its text field but no swatch.
     #[test]
     fn plain_vector_field_has_no_swatch() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [FormField {
             key: "position".into(),
@@ -2024,7 +2257,7 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
         }];
-        apply(&mut world, Some(&form_view(&fields)), vw);
+        apply(&mut world, Some(&form_view(&fields)), o);
         assert!(
             !world
                 .query::<Sprite>()
@@ -2047,7 +2280,7 @@ mod tests {
     // hit-tests to a cycle.
     #[test]
     fn enum_field_renders_a_cycling_button_and_hit_tests_to_cycle() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [FormField {
             key: "align".into(),
@@ -2058,7 +2291,7 @@ mod tests {
             variant_idx: 1,
         }];
         let v = form_view(&fields);
-        apply(&mut world, Some(&v), vw);
+        apply(&mut world, Some(&v), o);
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "cycling button shows"
@@ -2080,9 +2313,9 @@ mod tests {
             "an enum has no editable text field"
         );
         // A click on the control cycles rather than focusing.
-        let c = form_control_rect(vw, 1);
+        let c = form_control_rect(o, 1);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::CycleField(0))
         );
     }
@@ -2091,7 +2324,7 @@ mod tests {
     // showing the current selection and hit-testing to a cycle.
     #[test]
     fn ref_field_renders_a_cycling_button_and_hit_tests_to_cycle() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [FormField {
             key: "texture".into(),
@@ -2102,7 +2335,7 @@ mod tests {
             variant_idx: 1,
         }];
         let v = form_view(&fields);
-        apply(&mut world, Some(&v), vw);
+        apply(&mut world, Some(&v), o);
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "cycle button shows"
@@ -2115,9 +2348,9 @@ mod tests {
             cap.visible && cap.content == "grass",
             "shows the referenced name"
         );
-        let c = form_control_rect(vw, 1);
+        let c = form_control_rect(o, 1);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::CycleField(0))
         );
     }
@@ -2127,19 +2360,19 @@ mod tests {
     // cycles.
     #[test]
     fn large_choice_field_opens_a_dropdown_small_one_cycles() {
-        let vw = 1280.0;
+        let o = test_origin();
         let big = [ref_field(CYCLE_MAX + 1)]; // (none) + CYCLE_MAX+1 = over the cap
         let v = form_view(&big);
-        let c = form_control_rect(vw, 1);
+        let c = form_control_rect(o, 1);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::OpenFieldDropdown(0)),
             "a large variant set opens a dropdown"
         );
         let small = [ref_field(1)]; // (none) + 1 = 2 variants, within the cap
         let vs = form_view(&small);
         assert_eq!(
-            hit_test(&vs, c[0] + 5.0, c[1] + 5.0, vw),
+            hit_test(&vs, c[0] + 5.0, c[1] + 5.0, o),
             Some(PanelAction::CycleField(0)),
             "a small variant set still cycles"
         );
@@ -2148,20 +2381,20 @@ mod tests {
     // An open value dropdown is modal: its option rows pick, anything else closes.
     #[test]
     fn open_field_dropdown_picks_options_and_is_modal() {
-        let vw = 1280.0;
+        let o = test_origin();
         let fields = [ref_field(CYCLE_MAX + 3)];
         let mut v = form_view(&fields);
         v.field_dropdown = Some(0);
         // Option row 2 (index 2 into variants) picks that option.
-        let opt = field_option_rect(vw, 1, 2);
+        let opt = field_option_rect(o, 1, 2);
         assert_eq!(
-            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, vw),
+            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o),
             Some(PanelAction::PickFieldOption(2))
         );
         // A click off the option list dismisses it (e.g. up on the name row).
-        let name = form_control_rect(vw, 0);
+        let name = form_control_rect(o, 0);
         assert_eq!(
-            hit_test(&v, name[0] + 5.0, name[1] + 5.0, vw),
+            hit_test(&v, name[0] + 5.0, name[1] + 5.0, o),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -2169,14 +2402,14 @@ mod tests {
     // A scrolled dropdown maps a visible row to `scroll + row`.
     #[test]
     fn open_field_dropdown_maps_a_scrolled_row() {
-        let vw = 1280.0;
+        let o = test_origin();
         let fields = [ref_field(20)];
         let mut v = form_view(&fields);
         v.field_dropdown = Some(0);
         v.field_dropdown_scroll = 3;
-        let r0 = field_option_rect(vw, 1, 0);
+        let r0 = field_option_rect(o, 1, 0);
         assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, vw),
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o),
             Some(PanelAction::PickFieldOption(3)),
             "visible row 0 is option `scroll + 0`"
         );
@@ -2187,7 +2420,7 @@ mod tests {
     // while leaving the opening field's own button visible.
     #[test]
     fn open_dropdown_hides_covered_controls_and_shows_options() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [
             ref_field(CYCLE_MAX + 2),
@@ -2202,7 +2435,7 @@ mod tests {
         ];
         let mut v = form_view(&fields);
         v.field_dropdown = Some(0);
-        apply(&mut world, Some(&v), vw);
+        apply(&mut world, Some(&v), o);
 
         // The dropdown backing and its first option row (the current `(none)`)
         // show.
@@ -2240,7 +2473,7 @@ mod tests {
     // and the buttons hit-test to the add / remove actions.
     #[test]
     fn array_header_renders_count_and_buttons_and_hit_tests() {
-        let vw = 1280.0;
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [FormField {
             key: "waves".into(),
@@ -2251,7 +2484,7 @@ mod tests {
             variant_idx: 3,
         }];
         let v = form_view(&fields);
-        apply(&mut world, Some(&v), vw);
+        apply(&mut world, Some(&v), o);
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "add button shows"
@@ -2277,14 +2510,14 @@ mod tests {
                 .visible
         );
         // Buttons resolve to add / remove (row 1 = first arg field).
-        let add = array_add_rect(vw, 1);
-        let rem = array_remove_rect(vw, 1);
+        let add = array_add_rect(o, 1);
+        let rem = array_remove_rect(o, 1);
         assert_eq!(
-            hit_test(&v, add[0] + 3.0, add[1] + 3.0, vw),
+            hit_test(&v, add[0] + 3.0, add[1] + 3.0, o),
             Some(PanelAction::AddArrayElement(0))
         );
         assert_eq!(
-            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, vw),
+            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, o),
             Some(PanelAction::RemoveArrayElement(0))
         );
     }
@@ -2372,12 +2605,12 @@ mod tests {
     // only when the dots themselves are hovered, or the menu is open on that row.
     #[test]
     fn triple_dot_box_shows_only_over_dots_or_with_the_menu_open() {
-        let vw = 1280.0;
+        let o = test_origin();
         let fx = Fixture {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(0))]),
         };
-        let name = list_row_rect(vw, 1);
+        let name = list_row_rect(o, 1);
         let dot = dot_rect(name);
         let mut world = injected_world();
 
@@ -2386,7 +2619,7 @@ mod tests {
         apply(
             &mut world,
             Some(&view(&fx, Mode::List, Combo::Closed, None, over_body)),
-            vw,
+            o,
         );
         assert!(sprite_visible(&world, DOT1), "white dots show on row hover");
         assert!(
@@ -2399,7 +2632,7 @@ mod tests {
         apply(
             &mut world,
             Some(&view(&fx, Mode::List, Combo::Closed, None, over_dots)),
-            vw,
+            o,
         );
         assert!(
             sprite_visible(&world, DOT_BG),
@@ -2410,7 +2643,7 @@ mod tests {
         apply(
             &mut world,
             Some(&view(&fx, Mode::List, Combo::Closed, Some(0), [0.0, 0.0])),
-            vw,
+            o,
         );
         assert!(
             sprite_visible(&world, DOT_BG),

@@ -7,18 +7,20 @@
 // lives in the editor crate (never linked by the shipped runtime), so no editor
 // code is compiled into a shipped game.
 //
-// The top bar (`hud.rs`) owns SAVE, the Templates dropdown, and the capture
-// checkbox. The Assets button opens the browse-and-add panel (`panel.rs`): a
-// combo (dropdown) that filters the browse list by type, a "+" that opens a typed
-// autocomplete of the addable types, a browse list grouped by type with a
-// per-name Edit / Delete menu, and a name-first add / edit form. The combo's
-// single filter field and the form's name field are real `TextInput` assets
-// edited by the engine's text-input system; the hook reads them back.
+// The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
+// opens the browse-and-add panel (`panel.rs`): a combo (dropdown) that filters
+// the browse list by type, a "+" that opens a typed autocomplete of the addable
+// types, a browse list grouped by type with a per-name Edit / Delete menu, and a
+// name-first add / edit form. The combo's single filter field and the form's
+// name field are real `TextInput` assets edited by the engine's text-input
+// system; the hook reads them back. The Assets and Preview panels are floating:
+// holding their title bars drags them (the hook owns each origin, clamped so a
+// panel can never leave the screen).
 //
 // Cursor control: the editor holds the cursor by default (edit mode -- cursor
 // free, world frozen), publishing `MenuOverride(Some(true))`. Ticking the
-// capture checkbox hands the cursor to the world (`Some(false)`); Escape takes
-// it back. F1 hides / shows the whole HUD.
+// Preview panel's capture checkbox hands the cursor to the world (`Some(false)`);
+// Escape takes it back. F1 hides / shows the whole HUD.
 //
 // SAVE re-serializes the authored entry list to world.jsonl and recompiles the
 // blobs through the validated cook tail (`build_world_to_disk`). A successful
@@ -29,10 +31,27 @@
 use super::form::{self, FormField};
 use super::hud::{self, HudAction, HudState};
 use super::panel::{self, Combo, FormFocus, ListRow, PanelAction, PanelView};
+use super::preview::{self, PreviewAction};
+use super::widget::{self, point_in};
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
 use crate::ecs::{MenuOverride, PendingBackend, World};
+
+// Which floating panel a title-bar drag is moving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragTarget {
+    Assets,
+    Preview,
+}
+
+// An active title-bar drag: the grabbed panel and the cursor's offset from its
+// origin at the press, so the panel follows without snapping to the cursor.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    target: DragTarget,
+    grab: [f32; 2],
+}
 
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
@@ -87,6 +106,12 @@ pub(crate) struct EditorHook {
     // mutated by add / remove (structure) and, on capture, by the controls. Empty
     // outside AddForm.
     form_args: serde_json::Map<String, serde_json::Value>,
+    // The floating panels' dragged origins; `None` means the panel still sits at
+    // its default anchor. Always clamped fully on screen before use.
+    panel_pos: Option<[f32; 2]>,
+    preview_pos: Option<[f32; 2]>,
+    // The title-bar drag in progress, if any.
+    drag: Option<Drag>,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
@@ -170,7 +195,28 @@ impl EditorHook {
             field_dropdown: None,
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
+            panel_pos: None,
+            preview_pos: None,
+            drag: None,
         }
+    }
+
+    // The Assets panel's top-left for this frame: the dragged position (or the
+    // default anchor below the top bar), clamped so the whole panel -- at its
+    // current height -- stays on screen even after a window resize.
+    fn panel_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self.panel_pos.unwrap_or(panel::default_origin(vp[0]));
+        let size = [
+            panel::PANEL_W,
+            panel::panel_height(self.mode, self.form_fields.len()),
+        ];
+        widget::clamp_origin(pos, size, vp)
+    }
+
+    // The Preview panel's top-left for this frame, clamped like the Assets panel.
+    fn preview_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self.preview_pos.unwrap_or(preview::default_origin());
+        widget::clamp_origin(pos, preview::size(), vp)
     }
 
     // Whether an entry with this name already exists.
@@ -419,6 +465,7 @@ impl EditorHook {
             list_scroll: self.list_scroll,
             row_menu: self.row_menu,
             form_title: &d.form_title,
+            editing: self.editing.is_some(),
             form_fields: &self.form_fields,
             form_scroll: self.form_scroll,
             form_focus: self.form_focus,
@@ -456,7 +503,6 @@ impl EditorHook {
                 self.apply_template(i);
                 self.templates_open = false;
             }
-            HudAction::ToggleCapture => self.world_capture = !self.world_capture,
             HudAction::CloseTemplates => self.templates_open = false,
         }
         false
@@ -824,8 +870,85 @@ impl EditorHook {
             dirty: self.dirty,
             templates_open: self.templates_open,
             panel_open: self.panel_open,
-            world_capture: self.world_capture,
             visible: self.hud_visible,
+        }
+    }
+
+    // While a title-bar drag is active, follow the cursor (clamped fully on
+    // screen); releasing the button ends the drag.
+    fn drive_drag(&mut self, input: &FrameInput, vp: [f32; 2]) {
+        let Some(drag) = self.drag else {
+            return;
+        };
+        if !input.left_button_down {
+            self.drag = None;
+            return;
+        }
+        let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
+        match drag.target {
+            DragTarget::Assets => {
+                let size = [
+                    panel::PANEL_W,
+                    panel::panel_height(self.mode, self.form_fields.len()),
+                ];
+                self.panel_pos = Some(widget::clamp_origin(pos, size, vp));
+            }
+            DragTarget::Preview => {
+                self.preview_pos = Some(widget::clamp_origin(pos, preview::size(), vp));
+            }
+        }
+    }
+
+    // Route a press: the top bar first (it draws over the panels), then the
+    // Preview panel, then the open Assets panel. A press on a panel's title bar
+    // starts a drag instead of resolving to a control.
+    fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
+        let (mx, my) = (input.mouse_x, input.mouse_y);
+        if let Some(a) = hud::hit_test(mx, my, true, self.dirty, self.templates_open, vp[0]) {
+            if self.apply_top(a) {
+                self.swap_requested = true;
+            }
+            // Interacting with the top bar dismisses any panel overlay and
+            // the form: a SAVE swaps the world (re-injecting blank fields),
+            // so a stale form left open would show empty inputs and could
+            // commit lost values.
+            self.combo = Combo::Closed;
+            self.row_menu = None;
+            self.close_form();
+            return;
+        }
+        let pv = self.preview_origin(vp);
+        if point_in(mx, my, preview::title_rect(pv)) {
+            self.drag = Some(Drag {
+                target: DragTarget::Preview,
+                grab: [mx - pv[0], my - pv[1]],
+            });
+            return;
+        }
+        if let Some(a) = preview::hit_test(mx, my, pv) {
+            if a == PreviewAction::ToggleCapture {
+                self.world_capture = !self.world_capture;
+            }
+            return;
+        }
+        if !self.panel_open {
+            return;
+        }
+        let po = self.panel_origin(vp);
+        if point_in(mx, my, panel::title_rect(po)) {
+            self.drag = Some(Drag {
+                target: DragTarget::Assets,
+                grab: [mx - po[0], my - po[1]],
+            });
+            return;
+        }
+        let action = {
+            let data = self.panel_data(world);
+            let view = self.make_view(&data, [mx, my]);
+            panel::hit_test(&view, mx, my, po)
+        };
+        if let Some(pa) = action {
+            self.apply_panel(pa, world);
         }
     }
 }
@@ -842,37 +965,14 @@ impl DebugHook for EditorHook {
             if input.hud_toggle {
                 self.hud_visible = !self.hud_visible;
             }
-            if self.hud_visible {
-                let vw = input.viewport[0];
-                // Resolve a click against the top bar first; when it owns none of
-                // the click and the panel is open, offer it to the panel.
-                if let Some(a) = hud::hit_test(
-                    input.mouse_x,
-                    input.mouse_y,
-                    input.left_click,
-                    self.dirty,
-                    self.templates_open,
-                    vw,
-                ) {
-                    if self.apply_top(a) {
-                        self.swap_requested = true;
-                    }
-                    // Interacting with the top bar dismisses any panel overlay and
-                    // the form: a SAVE swaps the world (re-injecting blank fields),
-                    // so a stale form left open would show empty inputs and could
-                    // commit lost values.
-                    self.combo = Combo::Closed;
-                    self.row_menu = None;
-                    self.close_form();
-                } else if self.panel_open && input.left_click {
-                    let action = {
-                        let data = self.panel_data(world);
-                        let view = self.make_view(&data, [input.mouse_x, input.mouse_y]);
-                        panel::hit_test(&view, input.mouse_x, input.mouse_y, vw)
-                    };
-                    if let Some(pa) = action {
-                        self.apply_panel(pa, world);
-                    }
+            let vp = input.viewport;
+            if self.hud_visible && vp[0] > 0.0 {
+                // An active title-bar drag follows the cursor; a fresh press (only
+                // when no drag is running -- the press that starts one must not
+                // also resolve to a control) routes to the bar and the panels.
+                self.drive_drag(input, vp);
+                if input.left_click && self.drag.is_none() {
+                    self.route_click(input, vp, world);
                 }
                 // Wheel over the panel body scrolls the list / combo options. An
                 // open value dropdown is modal and can extend past the fixed body
@@ -880,7 +980,11 @@ impl DebugHook for EditorHook {
                 if self.panel_open
                     && input.scroll_delta.abs() > 0.5
                     && (self.field_dropdown.is_some()
-                        || panel::cursor_over_body(input.mouse_x, input.mouse_y, vw))
+                        || panel::cursor_over_body(
+                            input.mouse_x,
+                            input.mouse_y,
+                            self.panel_origin(vp),
+                        ))
                 {
                     self.scroll(input.scroll_delta, world);
                 }
@@ -891,18 +995,24 @@ impl DebugHook for EditorHook {
         // the cursor and freezes the world; play mode (`Some(false)`) runs it.
         world.insert_resource(MenuOverride(Some(!self.world_capture)));
 
-        // Re-anchor + recolour the top bar, then lay out (or hide) the panel.
+        // Re-anchor + recolour the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());
-        if self.hud_visible && self.panel_open {
-            let (mouse, vw) = input
+        let vp = input.as_ref().map(|i| i.viewport).unwrap_or([0.0, 0.0]);
+        if self.hud_visible && vp[0] > 0.0 {
+            preview::apply(world, self.preview_origin(vp), self.world_capture);
+        } else if !self.hud_visible {
+            preview::hide_all(world);
+        }
+        if self.hud_visible && self.panel_open && vp[0] > 0.0 {
+            let mouse = input
                 .as_ref()
-                .map(|i| ([i.mouse_x, i.mouse_y], i.viewport[0]))
-                .unwrap_or(([0.0, 0.0], 0.0));
+                .map(|i| [i.mouse_x, i.mouse_y])
+                .unwrap_or([0.0, 0.0]);
             let data = self.panel_data(world);
             let view = self.make_view(&data, mouse);
-            panel::apply(world, Some(&view), vw);
-        } else {
-            panel::apply(world, None, 0.0);
+            panel::apply(world, Some(&view), self.panel_origin(vp));
+        } else if !(self.hud_visible && self.panel_open) {
+            panel::apply(world, None, [0.0, 0.0]);
         }
     }
 
@@ -1023,7 +1133,7 @@ mod tests {
         let mut h = hook(Vec::new());
         assert!(!h.apply_top(HudAction::ToggleAssets));
         assert!(!h.apply_top(HudAction::ToggleTemplates));
-        assert!(!h.apply_top(HudAction::ToggleCapture));
+        assert!(!h.apply_top(HudAction::CloseTemplates));
     }
 
     #[test]
@@ -1306,6 +1416,183 @@ mod tests {
         assert!(!h.hud_visible, "first F1 hides the HUD");
         h.tick(&mut world);
         assert!(h.hud_visible, "second F1 shows it again");
+    }
+
+    // Overwrite the world's FrameInput in place (tick reads the live component).
+    fn set_input(world: &mut World, input: FrameInput) {
+        if let Some(i) = world.query_mut::<FrameInput>().last() {
+            *i = input;
+        } else {
+            world.add_component(input);
+        }
+    }
+
+    // Clicking the Preview panel's capture row hands the cursor to the world;
+    // clicking again takes it back.
+    #[test]
+    fn preview_capture_row_click_toggles_play_mode() {
+        let mut h = hook(Vec::new());
+        let vp = [1280.0, 720.0];
+        let o = h.preview_origin(vp);
+        let row_y = o[1] + preview::size()[1] - 5.0;
+        let mut world = world_with_input(FrameInput {
+            viewport: vp,
+            mouse_x: o[0] + 10.0,
+            mouse_y: row_y,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(h.world_capture, "the checkbox click enters play mode");
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: o[0] + 10.0,
+                mouse_y: row_y,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert!(!h.world_capture, "a second click leaves it");
+    }
+
+    // Holding a panel's title bar drags it; the origin follows the cursor by the
+    // grab offset and hard-stops at the window edges. Release ends the drag.
+    #[test]
+    fn title_bar_drag_moves_and_clamps_the_assets_panel() {
+        let mut h = hook(Vec::new());
+        h.panel_open = true;
+        let vp = [1280.0, 720.0];
+        let start = h.panel_origin(vp);
+        // Press on the title bar, 10 px in from its corner.
+        let mut world = world_with_input(FrameInput {
+            viewport: vp,
+            mouse_x: start[0] + 10.0,
+            mouse_y: start[1] + 10.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(h.drag.is_some(), "the title press starts a drag");
+
+        // Hold and move: the origin follows, preserving the grab offset.
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: 400.0,
+                mouse_y: 150.0,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert_eq!(h.panel_origin(vp), [390.0, 140.0]);
+
+        // Drag far past the top-left corner: the panel hard-stops at the edge.
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: -500.0,
+                mouse_y: -500.0,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert_eq!(h.panel_origin(vp), [0.0, 0.0], "never partially off screen");
+
+        // Release ends the drag; the panel stays where it was dropped.
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                left_button_down: false,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert!(h.drag.is_none(), "release ends the drag");
+        assert_eq!(h.panel_origin(vp), [0.0, 0.0]);
+    }
+
+    // The Preview panel drags by its own title bar, clamped to the window's far
+    // corner by its own (smaller) footprint.
+    #[test]
+    fn title_bar_drag_moves_and_clamps_the_preview_panel() {
+        let mut h = hook(Vec::new());
+        let vp = [1280.0, 720.0];
+        let start = h.preview_origin(vp);
+        let mut world = world_with_input(FrameInput {
+            viewport: vp,
+            mouse_x: start[0] + 5.0,
+            mouse_y: start[1] + 5.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(h.drag.is_some());
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: 5000.0,
+                mouse_y: 5000.0,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        let size = preview::size();
+        assert_eq!(
+            h.preview_origin(vp),
+            [vp[0] - size[0], vp[1] - size[1]],
+            "stops flush with the bottom-right corner"
+        );
+    }
+
+    // While a drag is in progress the press's click must not also resolve to a
+    // control underneath on later frames -- e.g. dragging the Assets panel across
+    // the Preview checkbox must not toggle play mode.
+    #[test]
+    fn dragging_does_not_trigger_controls_it_crosses() {
+        let mut h = hook(Vec::new());
+        h.panel_open = true;
+        let vp = [1280.0, 720.0];
+        let start = h.panel_origin(vp);
+        let mut world = world_with_input(FrameInput {
+            viewport: vp,
+            mouse_x: start[0] + 10.0,
+            mouse_y: start[1] + 10.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        // Cross the Preview panel's capture row with the button still held and a
+        // stray click edge (e.g. from event coalescing).
+        let pv = h.preview_origin(vp);
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: pv[0] + 10.0,
+                mouse_y: pv[1] + preview::size()[1] - 5.0,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert!(!h.world_capture, "the drag swallowed the click");
+        assert!(h.drag.is_some(), "still dragging");
     }
 
     #[test]
@@ -1756,14 +2043,14 @@ mod tests {
         h.panel_open = true;
         h.open_form(&mut world, "PointLight".to_string(), None);
         assert_eq!(h.mode, panel::Mode::AddForm);
-        // Click the capture checkbox (a top-bar control, no disk I/O) while the
+        // Click the Templates button (a top-bar control, no disk I/O) while the
         // form is open.
         let vw = 1280.0;
-        let chk = hud::checkbox_rect(vw);
+        let (_, _, tpl) = hud::layout(vw);
         world.add_component(FrameInput {
             viewport: [vw, 720.0],
-            mouse_x: chk[0] + 10.0,
-            mouse_y: chk[1] + 10.0,
+            mouse_x: tpl[0] + tpl[2] * 0.5,
+            mouse_y: tpl[1] + tpl[3] * 0.5,
             left_click: true,
             ..Default::default()
         });

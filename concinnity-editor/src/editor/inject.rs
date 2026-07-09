@@ -11,7 +11,7 @@
 // `TextInput` fields do bring in the engine's general text-input system, which
 // is real runtime code, not editor-only.)
 
-use super::{hud, panel};
+use super::{hud, panel, preview};
 use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -34,14 +34,17 @@ fn hud_font(world: &World) -> Option<AssetId> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
-// Inject the editor HUD: the top bar (SAVE / Assets / Templates + capture
-// checkbox + Templates dropdown rows) and the browse-and-add panel (its chrome,
-// row families, and the two typed fields), all view-less window-space overlays.
-// Injected once by the caller, before start.
+// Inject the editor HUD: the floating Assets and Preview panels and the top bar
+// (SAVE / Assets / Templates + Templates dropdown rows), all view-less
+// window-space overlays. Injected once by the caller, before start. The overlay
+// draws components in insertion order, so the panels go in FIRST and the top bar
+// LAST: a panel dragged under the bar slides behind it, matching the hook's
+// hit-test priority (top bar first).
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
-    inject_top_bar(world, font);
     inject_panel(world, font);
+    inject_preview(world, font);
+    inject_top_bar(world, font);
 }
 
 fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
@@ -76,28 +79,6 @@ fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
     ));
     world.add_component(centered_label(hud::TPL_LABEL, "Templates", tpl_rect, font));
 
-    // Capture checkbox: a row background, the box indicator, and its label.
-    let check = hud::checkbox_rect(REF_W);
-    world.add_component(button_sprite(
-        hud::CHECK_BG,
-        check,
-        [0.12, 0.12, 0.15, 0.92],
-        true,
-    ));
-    world.add_component(button_sprite(
-        hud::CHECK_BOX,
-        [check[0] + 8.0, check[1] + 7.0, 20.0, 20.0],
-        [0.30, 0.30, 0.34, 1.0],
-        true,
-    ));
-    world.add_component(row_label(
-        hud::CHECK_LABEL,
-        "Capture mouse",
-        [check[0] + 24.0, check[1], check[2], check[3]],
-        font,
-        true,
-    ));
-
     // Templates dropdown rows (hidden; the tick shows / labels them on open).
     for i in 0..hud::max_rows() {
         let rect = hud::dropdown_row_rect(REF_W, i);
@@ -131,6 +112,19 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
     world.add_component(text_field(panel::NAME_INPUT, "name", font));
     for j in 0..super::form::FIELD_POOL {
         world.add_component(text_field(panel::form_input(j), "", font));
+    }
+}
+
+// Inject the Preview panel's elements, hidden with placeholder geometry; the
+// tick's `preview::apply` positions and shows them from the first frame that has
+// a `FrameInput`.
+fn inject_preview(world: &mut World, font: Option<AssetId>) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for id in preview::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in preview::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
     }
 }
 
@@ -195,22 +189,16 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<AssetId>) -> TextInpu
 mod tests {
     use super::*;
 
-    // Injection adds the top-bar controls (visible) plus the panel chrome, row
-    // families, and the two typed fields (all hidden) -- every one a view-less
-    // overlay at a reserved id.
+    // Injection adds the top-bar controls (visible) plus the Assets and Preview
+    // panels' chrome, row families, and the typed fields (all hidden) -- every
+    // one a view-less overlay at a reserved id.
     #[test]
-    fn injects_top_bar_and_hidden_panel() {
+    fn injects_top_bar_and_hidden_panels() {
         let mut world = World::new_empty();
         editor_hud(&mut world);
 
-        // Top-bar buttons + checkbox are visible.
-        for id in [
-            hud::SAVE_BUTTON,
-            hud::ASSETS_BUTTON,
-            hud::TPL_BUTTON,
-            hud::CHECK_BG,
-            hud::CHECK_BOX,
-        ] {
+        // Top-bar buttons are visible.
+        for id in [hud::SAVE_BUTTON, hud::ASSETS_BUTTON, hud::TPL_BUTTON] {
             assert!(
                 world
                     .query::<Sprite>()
@@ -231,14 +219,19 @@ mod tests {
             "Assets"
         );
 
-        // Panel chrome + a representative row from each family start hidden.
+        // Panel chrome + a representative row from each family start hidden, as
+        // does the whole Preview panel (the tick shows it from frame 1).
         for id in [
             panel::PANEL_BG,
+            panel::TITLE_BG,
             panel::PLUS_BG,
             panel::COMBO_BG,
             panel::MENU_BG,
             panel::list_row_bg(0),
             panel::combo_row_bg(0),
+            preview::TITLE_BG,
+            preview::ROW_BG,
+            preview::CHECK_BOX,
         ] {
             assert!(
                 !world
@@ -249,6 +242,13 @@ mod tests {
                 "{id:?} starts hidden"
             );
         }
+
+        // Draw order is insertion order: the top bar goes in AFTER the panels so
+        // a dragged panel slides behind it (matching the hook's hit-test order).
+        let sprites: Vec<AssetId> = world.query::<Sprite>().map(|s| s.asset_id).collect();
+        let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
+        assert!(pos(panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(preview::TITLE_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();

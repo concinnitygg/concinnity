@@ -1,19 +1,18 @@
 // src/editor/hud.rs
 //
-// The editor HUD's top bar: the SAVE / Assets / Templates buttons and the
-// capture checkbox, plus the Templates dropdown. This lives in the editor crate
-// (not in a client ECS system) so no editor code is compiled into the shipped
-// runtime: the HUD is driven from the editor's `DebugHook` tick, which runs only
-// under `cn editor`.
+// The editor HUD's top bar: the SAVE / Assets / Templates buttons plus the
+// Templates dropdown. This lives in the editor crate (not in a client ECS
+// system) so no editor code is compiled into the shipped runtime: the HUD is
+// driven from the editor's `DebugHook` tick, which runs only under `cn editor`.
 //
 // These are plain `Sprite` + `TextLabel` components (injected by `inject.rs` at
 // reserved ids). Each frame the hook re-anchors the controls flush to the
 // window's top-right corner from the live viewport, shows / hides the Templates
-// dropdown, reflects the capture-checkbox state, and hit-tests clicks. The
-// Assets button opens the browse/add panel handled by `panel.rs` (a separate
-// body region below this bar). Running in the tick (before the world step) means
-// the layout applies the same frame GraphicsSystem draws it. The whole HUD
-// toggles with F1 (see `hook.rs`).
+// dropdown, and hit-tests clicks. The Assets button opens the browse/add panel
+// handled by `panel.rs` (a floating panel that defaults to sitting below this
+// bar); the capture checkbox lives on the floating Preview panel (`preview.rs`).
+// Running in the tick (before the world step) means the layout applies the same
+// frame GraphicsSystem draws it. The whole HUD toggles with F1 (see `hook.rs`).
 
 use super::widget::{self, place_sprite, point_in};
 use crate::assets::{FrameInput, TextAlign};
@@ -46,10 +45,6 @@ pub(crate) const ASSETS_BUTTON: AssetId = AssetId(ID_BASE + 2);
 pub(crate) const ASSETS_LABEL: AssetId = AssetId(ID_BASE + 3);
 pub(crate) const TPL_BUTTON: AssetId = AssetId(ID_BASE + 4);
 pub(crate) const TPL_LABEL: AssetId = AssetId(ID_BASE + 5);
-// The capture checkbox: a row background, the box indicator, and its label.
-pub(crate) const CHECK_BG: AssetId = AssetId(ID_BASE + 6);
-pub(crate) const CHECK_BOX: AssetId = AssetId(ID_BASE + 7);
-pub(crate) const CHECK_LABEL: AssetId = AssetId(ID_BASE + 8);
 
 // Templates dropdown row elements, in two contiguous sub-ranges.
 pub(crate) fn dropdown_bg(i: usize) -> AssetId {
@@ -61,8 +56,8 @@ pub(crate) fn dropdown_label(i: usize) -> AssetId {
 
 // Button geometry, in window pixels. SAVE is a flush-cornered square; Assets and
 // Templates sit to its left. Zero margin keeps SAVE hard against the window's
-// top-right corner. Below the buttons: the capture checkbox, then (when open)
-// the Templates dropdown, all right-aligned.
+// top-right corner. Below the buttons: the Templates dropdown (when open),
+// right-aligned.
 pub(crate) const BTN_H: f32 = 88.0;
 const SAVE_W: f32 = 88.0;
 const ASSETS_W: f32 = 132.0;
@@ -70,8 +65,6 @@ const TPL_W: f32 = 132.0;
 const GAP: f32 = 8.0;
 const DROP_W: f32 = 200.0;
 const ROW_H: f32 = 40.0;
-const CHECK_H: f32 = 34.0;
-const BOX_SIZE: f32 = 20.0;
 
 // Vertical offset of a button's label from the button top, chosen to sit the
 // ~20px HUD font roughly on the button's vertical center without measuring the
@@ -86,9 +79,6 @@ const ASSETS_TINT_OPEN: [f32; 4] = [0.30, 0.48, 0.68, 1.0];
 const TPL_TINT: [f32; 4] = [0.28, 0.24, 0.44, 1.0];
 const ROW_TINT: [f32; 4] = [0.14, 0.14, 0.17, 0.96];
 const ROW_TINT_HOVER: [f32; 4] = [0.24, 0.26, 0.34, 0.98];
-const CHECK_BG_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
-const BOX_TINT_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-const BOX_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const LABEL_ACTIVE: [f32; 3] = [1.0, 1.0, 1.0];
 const LABEL_INERT: [f32; 3] = [0.55, 0.55, 0.58];
 const ROW_LABEL: [f32; 3] = [0.90, 0.90, 0.92];
@@ -102,8 +92,6 @@ pub(crate) struct HudState {
     pub templates_open: bool,
     // Is the Assets panel open (brightens the Assets button)?
     pub panel_open: bool,
-    // Does the world currently hold the cursor (checkbox ticked / play mode)?
-    pub world_capture: bool,
     // Is the whole HUD shown (F1 toggle)?
     pub visible: bool,
 }
@@ -119,8 +107,6 @@ pub(crate) enum HudAction {
     ToggleTemplates,
     // A Templates dropdown row (index): apply that template and close.
     PickTemplate(usize),
-    // The capture checkbox: hand the cursor to / take it from the world.
-    ToggleCapture,
     // A click while the Templates dropdown is open that is not a row: close it.
     CloseTemplates,
 }
@@ -135,26 +121,15 @@ pub(crate) fn layout(vw: f32) -> ([f32; 4], [f32; 4], [f32; 4]) {
     (save, assets, tpl)
 }
 
-// The capture-checkbox row rect, directly below the buttons.
-pub(crate) fn checkbox_rect(vw: f32) -> [f32; 4] {
-    [vw - DROP_W, BTN_H, DROP_W, CHECK_H]
-}
-
-// The y where the body region (the Assets panel or the Templates dropdown)
-// begins: directly below the top buttons and the capture-checkbox row. The panel
-// module anchors to this so the top bar and the panel never overlap.
+// The y where the body region (the Assets panel's default anchor or the
+// Templates dropdown) begins: directly below the top buttons.
 pub(crate) fn body_top() -> f32 {
-    BTN_H + CHECK_H
+    BTN_H
 }
 
-// The rect of Templates dropdown row `i`, stacked below the checkbox.
+// The rect of Templates dropdown row `i`, stacked below the buttons.
 pub(crate) fn dropdown_row_rect(vw: f32, i: usize) -> [f32; 4] {
-    [
-        vw - DROP_W,
-        BTN_H + CHECK_H + i as f32 * ROW_H,
-        DROP_W,
-        ROW_H,
-    ]
+    [vw - DROP_W, BTN_H + i as f32 * ROW_H, DROP_W, ROW_H]
 }
 
 // The Templates dropdown row index under `(mx, my)`, bounded by the row count.
@@ -192,17 +167,15 @@ pub(crate) fn hit_test(
         Some(HudAction::ToggleAssets)
     } else if point_in(mx, my, tpl) {
         Some(HudAction::ToggleTemplates)
-    } else if point_in(mx, my, checkbox_rect(vw)) {
-        Some(HudAction::ToggleCapture)
     } else {
         None
     }
 }
 
 // Re-anchor the top bar to the top-right corner from the live viewport, colour
-// the SAVE button + capture box by state, and show the Templates dropdown rows
-// when open. Hides the entire HUD when `state.visible` is false (F1). A no-op
-// until a `FrameInput` exists (frame 0) or a zero-width window.
+// the SAVE button by state, and show the Templates dropdown rows when open.
+// Hides the entire HUD when `state.visible` is false (F1). A no-op until a
+// `FrameInput` exists (frame 0) or a zero-width window.
 pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     if !state.visible {
         hide_all(world);
@@ -260,40 +233,10 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
         true,
     );
 
-    // Capture checkbox: row background, box indicator (green when the world holds
-    // the cursor), and label.
-    let check = checkbox_rect(vw);
-    let box_tint = if state.world_capture {
-        BOX_TINT_ON
-    } else {
-        BOX_TINT_OFF
-    };
-    place_sprite(world, CHECK_BG, check, CHECK_BG_TINT, true);
-    place_sprite(
-        world,
-        CHECK_BOX,
-        [
-            check[0] + 8.0,
-            check[1] + (CHECK_H - BOX_SIZE) * 0.5,
-            BOX_SIZE,
-            BOX_SIZE,
-        ],
-        box_tint,
-        true,
-    );
-    place_label(
-        world,
-        CHECK_LABEL,
-        [check[0] + 36.0, check[1] + CHECK_H * 0.5 - 10.0],
-        ROW_LABEL,
-        TextAlign::Left,
-        true,
-    );
-
     // Templates dropdown rows: hide them all, then show them (with the hovered
     // row highlighted) when the dropdown is open.
     for i in 0..max_rows() {
-        place_sprite(world, dropdown_bg(i), check, ROW_TINT, false);
+        place_sprite(world, dropdown_bg(i), [0.0; 4], ROW_TINT, false);
         set_row_label(world, dropdown_label(i), [0.0, 0.0], "", false);
     }
     if state.templates_open {
@@ -315,12 +258,12 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
 
 // Every injected top-bar sprite / label id, so the F1-hidden pass can blank it.
 fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![SAVE_BUTTON, ASSETS_BUTTON, TPL_BUTTON, CHECK_BG, CHECK_BOX];
+    let mut ids = vec![SAVE_BUTTON, ASSETS_BUTTON, TPL_BUTTON];
     ids.extend((0..max_rows()).map(dropdown_bg));
     ids
 }
 fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![SAVE_LABEL, ASSETS_LABEL, TPL_LABEL, CHECK_LABEL];
+    let mut ids = vec![SAVE_LABEL, ASSETS_LABEL, TPL_LABEL];
     ids.extend((0..max_rows()).map(dropdown_label));
     ids
 }
@@ -376,12 +319,11 @@ mod tests {
     use super::*;
     use crate::assets::{Sprite, TextLabel};
 
-    fn state(dirty: bool, templates: bool, panel: bool, capture: bool, visible: bool) -> HudState {
+    fn state(dirty: bool, templates: bool, panel: bool, visible: bool) -> HudState {
         HudState {
             dirty,
             templates_open: templates,
             panel_open: panel,
-            world_capture: capture,
             visible,
         }
     }
@@ -435,10 +377,10 @@ mod tests {
     }
 
     #[test]
-    fn checkbox_and_dropdown_stack_below_buttons() {
-        assert_eq!(checkbox_rect(1280.0)[1], BTN_H);
-        assert_eq!(dropdown_row_rect(1280.0, 0)[1], BTN_H + CHECK_H);
-        assert_eq!(body_top(), BTN_H + CHECK_H);
+    fn dropdown_stacks_directly_below_buttons() {
+        assert_eq!(dropdown_row_rect(1280.0, 0)[1], BTN_H);
+        assert_eq!(dropdown_row_rect(1280.0, 1)[1], BTN_H + ROW_H);
+        assert_eq!(body_top(), BTN_H);
     }
 
     #[test]
@@ -465,10 +407,11 @@ mod tests {
             hit_test(tx, ty, true, false, false, 1280.0),
             Some(HudAction::ToggleTemplates)
         );
-        let chk = checkbox_rect(1280.0);
+        // Below the buttons is no longer top-bar territory (the capture checkbox
+        // moved to the Preview panel): the click falls through.
         assert_eq!(
-            hit_test(chk[0] + 10.0, chk[1] + 10.0, true, false, false, 1280.0),
-            Some(HudAction::ToggleCapture)
+            hit_test(1180.0, BTN_H + 10.0, true, false, false, 1280.0),
+            None
         );
     }
 
@@ -497,14 +440,13 @@ mod tests {
         assert_eq!(hit_test(0.0, 0.0, true, true, true, 0.0), None);
     }
 
-    // Closed: buttons + checkbox shown, SAVE coloured by dirty, all rows hidden.
+    // Closed: buttons shown, SAVE coloured by dirty, all rows hidden.
     #[test]
     fn apply_layout_closed_shows_buttons_hides_rows() {
         let mut world = hud_world(1024.0, (0.0, 0.0));
-        apply_layout(&mut world, state(true, false, false, false, true));
+        apply_layout(&mut world, state(true, false, false, true));
         assert_eq!(sprite(&world, SAVE_BUTTON).tint, SAVE_TINT_ACTIVE);
-        assert_eq!(sprite(&world, CHECK_BOX).tint, BOX_TINT_OFF);
-        for id in [SAVE_BUTTON, ASSETS_BUTTON, TPL_BUTTON, CHECK_BG] {
+        for id in [SAVE_BUTTON, ASSETS_BUTTON, TPL_BUTTON] {
             assert!(sprite(&world, id).visible, "{id:?} shown");
         }
         for i in 0..max_rows() {
@@ -516,7 +458,7 @@ mod tests {
     #[test]
     fn apply_layout_marks_open_panel() {
         let mut world = hud_world(1280.0, (0.0, 0.0));
-        apply_layout(&mut world, state(false, false, true, false, true));
+        apply_layout(&mut world, state(false, false, true, true));
         assert_eq!(sprite(&world, ASSETS_BUTTON).tint, ASSETS_TINT_OPEN);
     }
 
@@ -525,7 +467,7 @@ mod tests {
     fn apply_layout_templates_menu_shows_title_rows() {
         let r0 = dropdown_row_rect(1280.0, 0);
         let mut world = hud_world(1280.0, (r0[0] + 10.0, r0[1] + 10.0));
-        apply_layout(&mut world, state(false, true, false, false, true));
+        apply_layout(&mut world, state(false, true, false, true));
         for i in 0..templates_len() {
             assert!(sprite(&world, dropdown_bg(i)).visible, "tpl row {i} shown");
             assert_eq!(
@@ -544,8 +486,8 @@ mod tests {
     #[test]
     fn apply_layout_hidden_blanks_everything() {
         let mut world = hud_world(1280.0, (0.0, 0.0));
-        apply_layout(&mut world, state(true, true, true, true, true));
-        apply_layout(&mut world, state(true, true, true, true, false));
+        apply_layout(&mut world, state(true, true, true, true));
+        apply_layout(&mut world, state(true, true, true, false));
         for id in all_sprite_ids() {
             assert!(!sprite(&world, id).visible, "sprite {id:?} hidden");
         }

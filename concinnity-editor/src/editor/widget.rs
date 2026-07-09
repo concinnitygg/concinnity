@@ -7,9 +7,43 @@
 // reserved id and mutate it; these keep that lookup -- and the identical
 // place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
-use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::assets::{Sprite, TextAlign, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
+
+// Shared chrome for the floating editor panels (Assets, Preview): each has a
+// draggable title bar of this height across its top.
+pub(crate) const TITLE_H: f32 = 30.0;
+const TITLE_TINT: [f32; 4] = [0.15, 0.17, 0.23, 1.0];
+const TITLE_LABEL_COLOR: [f32; 3] = [0.92, 0.93, 0.96];
+
+// Draw a panel's title bar: the background strip and its left-aligned heading.
+pub(crate) fn place_title(
+    world: &mut World,
+    bg: AssetId,
+    label: AssetId,
+    rect: [f32; 4],
+    heading: &str,
+) {
+    place_sprite(world, bg, rect, TITLE_TINT, true);
+    if let Some(l) = label_mut(world, label) {
+        l.x = rect[0] + 8.0;
+        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.align = TextAlign::Left;
+        l.color = TITLE_LABEL_COLOR;
+        l.visible = true;
+        l.content = heading.to_string();
+    }
+}
+
+// Clamp a dragged panel origin so the whole `size` panel stays on screen: a hard
+// stop at every window edge. A panel larger than the window pins to the top-left.
+pub(crate) fn clamp_origin(pos: [f32; 2], size: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
+    [
+        pos[0].clamp(0.0, (viewport[0] - size[0]).max(0.0)),
+        pos[1].clamp(0.0, (viewport[1] - size[1]).max(0.0)),
+    ]
+}
 
 // Find the reserved-id Sprite / TextLabel / TextInput to mutate (or read), or
 // `None` if it was not injected -- a caller then simply no-ops, which is how a
@@ -126,5 +160,55 @@ mod tests {
         set_label_visible(&mut world, AssetId(1), false);
         assert!(!world.query::<Sprite>().next().unwrap().visible);
         assert!(!world.query::<TextLabel>().next().unwrap().visible);
+    }
+
+    #[test]
+    fn place_title_positions_the_strip_and_heading() {
+        let mut world = world_with(&[AssetId(1), AssetId(2)]);
+        place_title(
+            &mut world,
+            AssetId(1),
+            AssetId(2),
+            [40.0, 60.0, 320.0, TITLE_H],
+            "Assets",
+        );
+        let bg = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == AssetId(1))
+            .unwrap();
+        assert!(bg.visible);
+        assert_eq!(
+            (bg.x, bg.y, bg.width, bg.height),
+            (40.0, 60.0, 320.0, TITLE_H)
+        );
+        let l = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == AssetId(2))
+            .unwrap();
+        assert!(l.visible);
+        assert_eq!(l.content, "Assets");
+        assert_eq!(l.align, TextAlign::Left);
+        assert_eq!(l.x, 48.0, "heading is inset from the strip's left edge");
+    }
+
+    // The clamp hard-stops a panel at every window edge: it can never be dragged
+    // even partially off screen, and an oversized panel pins to the top-left.
+    #[test]
+    fn clamp_origin_keeps_the_whole_panel_on_screen() {
+        let size = [320.0, 400.0];
+        let vp = [1280.0, 720.0];
+        assert_eq!(
+            clamp_origin([100.0, 50.0], size, vp),
+            [100.0, 50.0],
+            "an in-bounds origin is untouched"
+        );
+        assert_eq!(clamp_origin([-40.0, -9000.0], size, vp), [0.0, 0.0]);
+        assert_eq!(
+            clamp_origin([2000.0, 700.0], size, vp),
+            [vp[0] - size[0], vp[1] - size[1]],
+            "stops with the panel's far edges on the window's"
+        );
+        // Taller than the window: pinned to the top rather than pushed off.
+        assert_eq!(clamp_origin([10.0, 300.0], [320.0, 900.0], vp), [10.0, 0.0]);
     }
 }

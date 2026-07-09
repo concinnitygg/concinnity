@@ -11,6 +11,7 @@ mod hook;
 mod hud;
 mod inject;
 mod panel;
+mod preview;
 mod widget;
 
 use crate::app::state::App;
