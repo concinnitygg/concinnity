@@ -111,74 +111,21 @@ fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
 }
 
 // Inject the Assets panel's elements, all starting hidden (the panel is closed
-// at launch). The tick's `panel::apply` positions + shows only what the active
-// mode needs. Content is set per frame, so inject rows / labels empty.
+// at launch). The tick's `panel::apply` positions, tints, and shows only what the
+// active mode needs each frame, so inject every element hidden with placeholder
+// geometry / tint / content. Sourcing the ids from the panel's own id lists keeps
+// this in lockstep with what the panel draws.
 fn inject_panel(world: &mut World, font: Option<AssetId>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
-    // Chrome + form controls.
-    for id in [
-        panel::PANEL_BG,
-        panel::PLUS_BG,
-        panel::TYPEDROP_BG,
-        panel::FORMADD_BG,
-        panel::FORMCANCEL_BG,
-        panel::LIST_TRACK,
-        panel::LIST_THUMB,
-    ] {
+    for id in panel::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
-    for id in [
-        panel::PLUS_LABEL,
-        panel::TYPEDROP_LABEL,
-        panel::FORMADD_LABEL,
-        panel::FORMCANCEL_LABEL,
-        panel::FORM_TITLE,
-        panel::EMPTY_LABEL,
-    ] {
+    for id in panel::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
-
-    // Row families (list, type-filter dropdown, picker autocomplete).
-    for i in 0..panel::MAX_ROWS {
-        world.add_component(button_sprite(
-            panel::list_row_bg(i),
-            hidden,
-            [0.13, 0.13, 0.16, 0.0],
-            false,
-        ));
-        world.add_component(row_label(panel::list_row_label(i), "", hidden, font, false));
-        world.add_component(button_sprite(
-            panel::filter_row_bg(i),
-            hidden,
-            [0.14, 0.14, 0.18, 0.99],
-            false,
-        ));
-        world.add_component(row_label(
-            panel::filter_row_label(i),
-            "",
-            hidden,
-            font,
-            false,
-        ));
-    }
-    for i in 0..panel::PICKER_ROWS {
-        world.add_component(button_sprite(
-            panel::picker_row_bg(i),
-            hidden,
-            [0.14, 0.14, 0.18, 0.99],
-            false,
-        ));
-        world.add_component(row_label(
-            panel::picker_row_label(i),
-            "",
-            hidden,
-            font,
-            false,
-        ));
-    }
-
-    // The two typed fields (hidden; the panel shows + focuses them by mode).
-    world.add_component(text_field(panel::FILTER_INPUT, "filter types", font));
+    // The two typed fields (hidden; the panel shows + focuses them by mode): the
+    // combo's filter field and the add / edit form's name field.
+    world.add_component(text_field(panel::FILTER_INPUT, "filter", font));
     world.add_component(text_field(panel::NAME_INPUT, "name", font));
 }
 
@@ -234,6 +181,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<AssetId>) -> TextInpu
         asset_id: id,
         font,
         placeholder: placeholder.to_string(),
+        background: [0.14, 0.15, 0.20, 1.0],
         max_len: 48,
         visible: false,
         ..Default::default()
@@ -284,9 +232,10 @@ mod tests {
         for id in [
             panel::PANEL_BG,
             panel::PLUS_BG,
+            panel::COMBO_BG,
+            panel::MENU_BG,
             panel::list_row_bg(0),
-            panel::filter_row_bg(0),
-            panel::picker_row_bg(0),
+            panel::combo_row_bg(0),
         ] {
             assert!(
                 !world

@@ -9,10 +9,11 @@
 //
 // The top bar (`hud.rs`) owns SAVE, the Templates dropdown, and the capture
 // checkbox. The Assets button opens the browse-and-add panel (`panel.rs`): a
-// type-filter dropdown over a scrollable list of the world's existing assets, a
-// "+" that opens a typed autocomplete of the addable types, and a name-first add
-// form. The panel's two typed fields are real `TextInput` assets edited by the
-// engine's text-input system; the hook reads them back.
+// combo (dropdown) that filters the browse list by type, a "+" that opens a typed
+// autocomplete of the addable types, a browse list grouped by type with a
+// per-name Edit / Delete menu, and a name-first add / edit form. The combo's
+// single filter field and the form's name field are real `TextInput` assets
+// edited by the engine's text-input system; the hook reads them back.
 //
 // Cursor control: the editor holds the cursor by default (edit mode -- cursor
 // free, world frozen), publishing `MenuOverride(Some(true))`. Ticking the
@@ -26,7 +27,7 @@
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
 use super::hud::{self, HudAction, HudState};
-use super::panel::{self, PanelAction, PanelView};
+use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
@@ -52,25 +53,29 @@ pub(crate) struct EditorHook {
     // Assets panel state.
     panel_open: bool,
     mode: panel::Mode,
-    // Whether the panel's type-filter dropdown is expanded.
-    type_dropdown_open: bool,
-    // Active type filter for the List mode, or `None` for "all".
+    // The header combo (dropdown) state: closed, filtering, or picking a type.
+    combo: Combo,
+    // Active type filter for the browse list, or `None` for "all".
     type_filter: Option<String>,
-    // First visible row of the (filtered) list / the picker autocomplete.
+    // First visible row of the (grouped) browse list / the combo option list.
     list_scroll: usize,
-    picker_scroll: usize,
-    // The type chosen in the picker, being named in the add form.
+    combo_scroll: usize,
+    // The type being named in the add / edit form.
     selected_type: Option<String>,
+    // When the form is editing an existing entry, its `entries` index (else a new
+    // asset is being added).
+    editing: Option<usize>,
+    // The `entries` index whose Edit / Delete menu is open, if any.
+    row_menu: Option<usize>,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
 // filter field, then borrowed for both hit-testing and layout).
 struct PanelData {
-    filter_options: Vec<String>,
-    filter_selected: usize,
     filter_label: String,
-    list_items: Vec<(String, String)>,
-    picker_options: Vec<String>,
+    combo_options: Vec<String>,
+    combo_selected: Option<usize>,
+    list_rows: Vec<ListRow>,
     form_title: String,
 }
 
@@ -81,6 +86,14 @@ fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
     } else {
         cur.saturating_sub(1)
     }
+}
+
+// The `name` string of an entry, if present.
+fn entry_name(e: &serde_json::Value) -> Option<&str> {
+    e.get("name").and_then(|v| v.as_str())
+}
+fn entry_type(e: &serde_json::Value) -> Option<&str> {
+    e.get("type").and_then(|v| v.as_str())
 }
 
 impl EditorHook {
@@ -95,19 +108,27 @@ impl EditorHook {
             templates_open: false,
             panel_open: false,
             mode: panel::Mode::List,
-            type_dropdown_open: false,
+            combo: Combo::Closed,
             type_filter: None,
             list_scroll: 0,
-            picker_scroll: 0,
+            combo_scroll: 0,
             selected_type: None,
+            editing: None,
+            row_menu: None,
         }
     }
 
     // Whether an entry with this name already exists.
     fn name_taken(&self, n: &str) -> bool {
+        self.entries.iter().any(|e| entry_name(e) == Some(n))
+    }
+
+    // Whether an entry other than `skip` already has this name (for renames).
+    fn name_taken_except(&self, n: &str, skip: usize) -> bool {
         self.entries
             .iter()
-            .any(|e| e.get("name").and_then(|v| v.as_str()) == Some(n))
+            .enumerate()
+            .any(|(i, e)| i != skip && entry_name(e) == Some(n))
     }
 
     // A world-unique name derived from the asset type: `editor_<kind>` plus a
@@ -132,14 +153,36 @@ impl EditorHook {
         }
     }
 
-    // The final name for a form submission: the typed name (trimmed) made unique,
-    // or a generated unique name when the field was left blank.
+    // The final name for a new-asset submission: the typed name (trimmed) made
+    // unique, or a generated unique name when the field was left blank.
     fn finalize_name(&self, typed: &str, kind: &str) -> String {
         let t = typed.trim();
         if t.is_empty() {
             self.unique_name(kind)
         } else {
             self.unique_from(t)
+        }
+    }
+
+    // The final name for a rename of entry `idx`: the typed name (trimmed), or a
+    // generated one when blank, made unique against the *other* entries.
+    fn finalize_rename(&self, typed: &str, idx: usize, kind: &str) -> String {
+        let t = typed.trim();
+        let base = if t.is_empty() {
+            format!("editor_{}", kind.to_ascii_lowercase())
+        } else {
+            t.to_string()
+        };
+        if !self.name_taken_except(&base, idx) {
+            return base;
+        }
+        let mut i = 1;
+        loop {
+            let candidate = format!("{base}_{i}");
+            if !self.name_taken_except(&candidate, idx) {
+                return candidate;
+            }
+            i += 1;
         }
     }
 
@@ -193,8 +236,7 @@ impl EditorHook {
         };
         let mut added = 0;
         for entry in entries {
-            let name = entry.get("name").and_then(|v| v.as_str());
-            if name.is_some_and(|n| self.name_taken(n)) {
+            if entry_name(&entry).is_some_and(|n| self.name_taken(n)) {
                 continue;
             }
             self.entries.push(entry);
@@ -212,7 +254,7 @@ impl EditorHook {
     fn distinct_types(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for e in &self.entries {
-            if let Some(ty) = e.get("type").and_then(|v| v.as_str())
+            if let Some(ty) = entry_type(e)
                 && !out.iter().any(|s| s == ty)
             {
                 out.push(ty.to_string());
@@ -222,82 +264,116 @@ impl EditorHook {
         out
     }
 
-    // The type-filter dropdown options: the "all" label plus the present types.
-    fn filter_options(&self) -> Vec<String> {
-        let mut opts = vec![panel::ALL_LABEL.to_string()];
-        opts.extend(self.distinct_types());
-        opts.truncate(panel::MAX_ROWS);
-        opts
-    }
-
-    // The existing entries matching the active type filter, as (name, type).
-    fn list_items(&self) -> Vec<(String, String)> {
-        self.entries
-            .iter()
-            .filter_map(|e| {
-                let name = e.get("name").and_then(|v| v.as_str())?;
-                let ty = e.get("type").and_then(|v| v.as_str())?;
-                if let Some(f) = &self.type_filter
-                    && ty != f
-                {
-                    return None;
-                }
-                Some((name.to_string(), ty.to_string()))
-            })
-            .collect()
-    }
-
-    // The addable types offered by the picker, filtered by the typed field, with
-    // the active type filter pinned to the top when it is offered.
-    fn picker_options(&self, world: &World) -> Vec<String> {
-        let filter = panel::field_text(world, panel::FILTER_INPUT).to_lowercase();
-        let mut opts: Vec<String> = panel::ADD_TYPES
-            .iter()
-            .filter(|t| filter.is_empty() || t.to_lowercase().contains(&filter))
-            .map(|t| t.to_string())
-            .collect();
-        if let Some(active) = &self.type_filter
-            && let Some(pos) = opts.iter().position(|o| o == active)
-        {
-            let pinned = opts.remove(pos);
-            opts.insert(0, pinned);
+    // The browse list, grouped by type: a sub-header row per type (matching the
+    // active filter), then an indented row per asset name carrying its entry
+    // index (for the Edit / Delete menu). Insertion order within a type.
+    fn list_rows(&self) -> Vec<ListRow> {
+        let mut rows = Vec::new();
+        for ty in self.distinct_types() {
+            if let Some(f) = &self.type_filter
+                && &ty != f
+            {
+                continue;
+            }
+            let names: Vec<(usize, String)> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    let name = entry_name(e)?;
+                    (entry_type(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
+                })
+                .collect();
+            if names.is_empty() {
+                continue;
+            }
+            rows.push(ListRow {
+                is_header: true,
+                text: ty.clone(),
+                entry: None,
+            });
+            for (i, name) in names {
+                rows.push(ListRow {
+                    is_header: false,
+                    text: name,
+                    entry: Some(i),
+                });
+            }
         }
-        opts
+        rows
+    }
+
+    // The floating combo option list for the open flavour, narrowed by the typed
+    // filter field. Empty when the combo is closed.
+    fn combo_options(&self, world: &World) -> Vec<String> {
+        let filter = panel::field_text(world, panel::FILTER_INPUT).to_lowercase();
+        let matches = |s: &str| filter.is_empty() || s.to_lowercase().contains(&filter);
+        match self.combo {
+            Combo::Filter => {
+                let mut all = vec![panel::ALL_LABEL.to_string()];
+                all.extend(self.distinct_types());
+                all.into_iter().filter(|o| matches(o)).collect()
+            }
+            Combo::Picker => {
+                let mut opts: Vec<String> = panel::ADD_TYPES
+                    .iter()
+                    .copied()
+                    .filter(|t| matches(t))
+                    .map(|t| t.to_string())
+                    .collect();
+                // Pin the active browse filter to the top when it is offered.
+                if let Some(active) = &self.type_filter
+                    && let Some(pos) = opts.iter().position(|o| o == active)
+                {
+                    let pinned = opts.remove(pos);
+                    opts.insert(0, pinned);
+                }
+                opts
+            }
+            Combo::Closed => Vec::new(),
+        }
     }
 
     fn panel_data(&self, world: &World) -> PanelData {
-        let filter_options = self.filter_options();
-        let filter_selected = match &self.type_filter {
-            None => 0,
-            Some(t) => filter_options.iter().position(|o| o == t).unwrap_or(0),
+        let combo_options = self.combo_options(world);
+        let combo_selected = match self.combo {
+            Combo::Filter => {
+                let target = self
+                    .type_filter
+                    .clone()
+                    .unwrap_or_else(|| panel::ALL_LABEL.to_string());
+                combo_options.iter().position(|o| o == &target)
+            }
+            _ => None,
+        };
+        let form_title = match (&self.editing, &self.selected_type) {
+            (Some(_), Some(t)) => format!("Edit {t}"),
+            (None, Some(t)) => format!("New {t}"),
+            _ => "New asset".to_string(),
         };
         PanelData {
             filter_label: self
                 .type_filter
                 .clone()
                 .unwrap_or_else(|| panel::ALL_LABEL.to_string()),
-            filter_selected,
-            filter_options,
-            list_items: self.list_items(),
-            picker_options: self.picker_options(world),
-            form_title: match &self.selected_type {
-                Some(t) => format!("New {t}"),
-                None => "New asset".to_string(),
-            },
+            combo_options,
+            combo_selected,
+            list_rows: self.list_rows(),
+            form_title,
         }
     }
 
     fn make_view<'a>(&self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
         PanelView {
             mode: self.mode,
-            type_dropdown_open: self.type_dropdown_open,
+            combo: self.combo,
             filter_label: &d.filter_label,
-            filter_options: &d.filter_options,
-            filter_selected: d.filter_selected,
-            list_items: &d.list_items,
+            combo_options: &d.combo_options,
+            combo_selected: d.combo_selected,
+            combo_scroll: self.combo_scroll,
+            list_rows: &d.list_rows,
             list_scroll: self.list_scroll,
-            picker_options: &d.picker_options,
-            picker_scroll: self.picker_scroll,
+            row_menu: self.row_menu,
             form_title: &d.form_title,
             mouse,
         }
@@ -315,7 +391,8 @@ impl EditorHook {
                 if self.panel_open {
                     self.templates_open = false;
                     self.mode = panel::Mode::List;
-                    self.type_dropdown_open = false;
+                    self.combo = Combo::Closed;
+                    self.row_menu = None;
                     self.list_scroll = 0;
                 }
             }
@@ -335,56 +412,116 @@ impl EditorHook {
         false
     }
 
+    // Open the combo in `flavour`, clearing and focusing the shared filter field.
+    fn open_combo(&mut self, flavour: Combo, world: &mut World) {
+        self.mode = panel::Mode::List;
+        self.combo = flavour;
+        self.combo_scroll = 0;
+        self.row_menu = None;
+        panel::focus_field_with(world, panel::FILTER_INPUT, "");
+    }
+
     // Route a resolved panel click. Field-focus transitions mutate the injected
     // `TextInput` components, so this needs the world.
     fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
         match action {
             PanelAction::TogglePicker => {
-                if self.mode == panel::Mode::List {
-                    self.mode = panel::Mode::TypePicker;
-                    self.picker_scroll = 0;
-                    self.type_dropdown_open = false;
-                    panel::focus_field_with(world, panel::FILTER_INPUT, "");
+                if self.combo == Combo::Picker {
+                    self.combo = Combo::Closed;
                 } else {
-                    self.mode = panel::Mode::List;
-                    self.selected_type = None;
+                    self.open_combo(Combo::Picker, world);
                 }
             }
-            PanelAction::ToggleTypeDropdown => self.type_dropdown_open = !self.type_dropdown_open,
-            PanelAction::PickFilter(i) => {
-                if let Some(o) = self.filter_options().get(i) {
-                    self.type_filter = if o == panel::ALL_LABEL {
-                        None
-                    } else {
-                        Some(o.clone())
-                    };
+            PanelAction::ToggleFilter => {
+                if self.combo == Combo::Filter {
+                    self.combo = Combo::Closed;
+                } else {
+                    self.open_combo(Combo::Filter, world);
                 }
-                self.list_scroll = 0;
-                self.type_dropdown_open = false;
             }
-            PanelAction::PickType(i) => {
-                if let Some(ty) = self.picker_options(world).get(i).cloned() {
-                    let name = self.unique_name(&ty);
+            PanelAction::PickOption(i) => match self.combo {
+                Combo::Filter => {
+                    if let Some(o) = self.combo_options(world).get(i) {
+                        self.type_filter = if o == panel::ALL_LABEL {
+                            None
+                        } else {
+                            Some(o.clone())
+                        };
+                    }
+                    self.list_scroll = 0;
+                    self.combo = Combo::Closed;
+                }
+                Combo::Picker => {
+                    if let Some(ty) = self.combo_options(world).get(i).cloned() {
+                        let name = self.unique_name(&ty);
+                        self.selected_type = Some(ty);
+                        self.editing = None;
+                        self.mode = panel::Mode::AddForm;
+                        self.combo = Combo::Closed;
+                        panel::focus_field_with(world, panel::NAME_INPUT, &name);
+                    }
+                }
+                Combo::Closed => {}
+            },
+            PanelAction::OpenRowMenu(entry) => self.row_menu = Some(entry),
+            PanelAction::RowEdit => {
+                if let Some(idx) = self.row_menu
+                    && let Some(e) = self.entries.get(idx)
+                {
+                    let name = entry_name(e).unwrap_or_default().to_string();
+                    let ty = entry_type(e).unwrap_or_default().to_string();
+                    self.editing = Some(idx);
                     self.selected_type = Some(ty);
                     self.mode = panel::Mode::AddForm;
                     panel::focus_field_with(world, panel::NAME_INPUT, &name);
                 }
+                self.row_menu = None;
+            }
+            PanelAction::RowDelete => {
+                if let Some(idx) = self.row_menu
+                    && idx < self.entries.len()
+                {
+                    self.entries.remove(idx);
+                    self.dirty = true;
+                }
+                self.row_menu = None;
+                let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
+                self.list_scroll = self.list_scroll.min(max);
             }
             PanelAction::ConfirmAdd => {
                 if let Some(ty) = self.selected_type.clone() {
                     let typed = panel::field_text(world, panel::NAME_INPUT);
-                    let name = self.finalize_name(&typed, &ty);
-                    self.entries.push(serde_json::json!({
-                        "name": name, "type": ty, "args": {},
-                    }));
-                    self.dirty = true;
+                    match self.editing {
+                        Some(idx) => {
+                            let name = self.finalize_rename(&typed, idx, &ty);
+                            if let Some(obj) =
+                                self.entries.get_mut(idx).and_then(|e| e.as_object_mut())
+                            {
+                                obj.insert("name".to_string(), serde_json::Value::String(name));
+                                self.dirty = true;
+                            }
+                        }
+                        None => {
+                            let name = self.finalize_name(&typed, &ty);
+                            self.entries.push(serde_json::json!({
+                                "name": name, "type": ty, "args": {},
+                            }));
+                            self.dirty = true;
+                        }
+                    }
                 }
+                self.editing = None;
                 self.selected_type = None;
                 self.mode = panel::Mode::List;
             }
             PanelAction::CancelForm => {
+                self.editing = None;
                 self.selected_type = None;
                 self.mode = panel::Mode::List;
+            }
+            PanelAction::CloseOverlays => {
+                self.combo = Combo::Closed;
+                self.row_menu = None;
             }
             PanelAction::Consume => {}
         }
@@ -393,16 +530,17 @@ impl EditorHook {
     // Move the active body's scroll offset in the wheel direction.
     fn scroll(&mut self, delta: f32, world: &World) {
         match self.mode {
-            panel::Mode::List => {
-                let max = self.list_items().len().saturating_sub(panel::MAX_ROWS);
+            panel::Mode::List if self.combo == Combo::Closed => {
+                let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
                 self.list_scroll = scroll_step(self.list_scroll, delta, max);
+                self.row_menu = None;
             }
-            panel::Mode::TypePicker => {
+            panel::Mode::List => {
                 let max = self
-                    .picker_options(world)
+                    .combo_options(world)
                     .len()
-                    .saturating_sub(panel::PICKER_ROWS);
-                self.picker_scroll = scroll_step(self.picker_scroll, delta, max);
+                    .saturating_sub(panel::MAX_ROWS);
+                self.combo_scroll = scroll_step(self.combo_scroll, delta, max);
             }
             panel::Mode::AddForm => {}
         }
@@ -446,6 +584,9 @@ impl DebugHook for EditorHook {
                     if self.apply_top(a) {
                         self.swap_requested = true;
                     }
+                    // Interacting with the top bar dismisses any panel overlay.
+                    self.combo = Combo::Closed;
+                    self.row_menu = None;
                 } else if self.panel_open && input.left_click {
                     let action = {
                         let data = self.panel_data(world);
@@ -456,7 +597,7 @@ impl DebugHook for EditorHook {
                         self.apply_panel(pa, world);
                     }
                 }
-                // Wheel over the panel body scrolls the list / picker.
+                // Wheel over the panel body scrolls the list / combo options.
                 if self.panel_open
                     && input.scroll_delta.abs() > 0.5
                     && panel::cursor_over_body(input.mouse_x, input.mouse_y, vw)
@@ -526,7 +667,7 @@ impl DebugHook for EditorHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::TextInput;
+    use crate::assets::{Sprite, TextInput, TextLabel};
 
     fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
         EditorHook::new("unused.jsonl".to_string(), entries)
@@ -539,7 +680,7 @@ mod tests {
         world
     }
 
-    // A world with the injected panel fields, for the add flow.
+    // A world with the injected panel fields, for the add / edit flow.
     fn world_with_fields() -> World {
         let mut world = World::new_empty();
         world.add_component(TextInput {
@@ -562,12 +703,17 @@ mod tests {
         }
     }
 
+    fn entry(name: &str, ty: &str) -> serde_json::Value {
+        serde_json::json!({"name": name, "type": ty, "args": {}})
+    }
+
     #[test]
     fn starts_in_edit_mode_with_hud_shown() {
         let h = hook(Vec::new());
         assert!(!h.world_capture, "editor holds the cursor at launch");
         assert!(h.hud_visible, "HUD shown at launch");
         assert!(!h.panel_open && !h.templates_open);
+        assert_eq!(h.combo, Combo::Closed);
     }
 
     #[test]
@@ -605,25 +751,45 @@ mod tests {
     }
 
     #[test]
-    fn picking_a_filter_narrows_the_list() {
-        let mut h = hook(vec![
-            serde_json::json!({"name":"a","type":"PointLight","args":{}}),
-            serde_json::json!({"name":"b","type":"Decal","args":{}}),
-            serde_json::json!({"name":"c","type":"PointLight","args":{}}),
+    fn list_rows_group_names_under_type_headers() {
+        let h = hook(vec![
+            entry("a", "PointLight"),
+            entry("b", "Decal"),
+            entry("c", "PointLight"),
         ]);
-        // Filter options: "Assets" + distinct types (sorted): Decal, PointLight.
-        let opts = h.filter_options();
-        assert_eq!(opts[0], panel::ALL_LABEL);
-        assert!(opts.contains(&"PointLight".to_string()));
-        // Pick "PointLight".
-        let pl = opts.iter().position(|o| o == "PointLight").unwrap();
+        let rows = h.list_rows();
+        // Types sorted: Decal (header, b), then PointLight (header, a, c).
+        assert!(rows[0].is_header && rows[0].text == "Decal");
+        assert_eq!(rows[1].text, "b");
+        assert!(rows[2].is_header && rows[2].text == "PointLight");
+        let names: Vec<&str> = rows[3..].iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(names, ["a", "c"]);
+        // Name rows carry their entry index; headers do not.
+        assert_eq!(rows[1].entry, Some(1));
+        assert_eq!(rows[0].entry, None);
+    }
+
+    #[test]
+    fn filter_narrows_the_grouped_list() {
+        let mut h = hook(vec![
+            entry("a", "PointLight"),
+            entry("b", "Decal"),
+            entry("c", "PointLight"),
+        ]);
         let mut world = world_with_fields();
         h.panel_open = true;
-        h.apply_panel(PanelAction::PickFilter(pl), &mut world);
+        // Open the filter combo, then pick "PointLight".
+        h.open_combo(Combo::Filter, &mut world);
+        let opts = h.combo_options(&world);
+        assert_eq!(opts[0], panel::ALL_LABEL);
+        let pl = opts.iter().position(|o| o == "PointLight").unwrap();
+        h.apply_panel(PanelAction::PickOption(pl), &mut world);
         assert_eq!(h.type_filter.as_deref(), Some("PointLight"));
-        let items = h.list_items();
-        assert_eq!(items.len(), 2, "only the PointLights match");
-        assert!(items.iter().all(|(_, t)| t == "PointLight"));
+        assert_eq!(h.combo, Combo::Closed);
+        let rows = h.list_rows();
+        // Only the PointLight group: one header + two names.
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].is_header && rows[0].text == "PointLight");
     }
 
     #[test]
@@ -633,7 +799,7 @@ mod tests {
         h.apply_top(HudAction::ToggleAssets);
         // "+" opens the picker; the filter field is focused.
         h.apply_panel(PanelAction::TogglePicker, &mut world);
-        assert_eq!(h.mode, panel::Mode::TypePicker);
+        assert_eq!(h.combo, Combo::Picker);
         assert!(
             world
                 .query::<TextInput>()
@@ -642,10 +808,12 @@ mod tests {
                 .focused
         );
         // Pick the first offered type -> AddForm, name field prefilled + focused.
-        let ty = h.picker_options(&world)[0].clone();
-        h.apply_panel(PanelAction::PickType(0), &mut world);
+        let ty = h.combo_options(&world)[0].clone();
+        h.apply_panel(PanelAction::PickOption(0), &mut world);
         assert_eq!(h.mode, panel::Mode::AddForm);
+        assert_eq!(h.combo, Combo::Closed);
         assert_eq!(h.selected_type.as_deref(), Some(ty.as_str()));
+        assert!(h.editing.is_none());
         let name_field = world
             .query::<TextInput>()
             .find(|t| t.asset_id == panel::NAME_INPUT)
@@ -662,6 +830,58 @@ mod tests {
     }
 
     #[test]
+    fn row_menu_edit_renames_the_existing_entry() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        // Open the row's menu, then Edit -> form prefilled for a rename.
+        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+        assert_eq!(h.row_menu, Some(0));
+        h.apply_panel(PanelAction::RowEdit, &mut world);
+        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert_eq!(h.editing, Some(0));
+        assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
+        assert!(h.row_menu.is_none());
+        let name_field = world
+            .query::<TextInput>()
+            .find(|t| t.asset_id == panel::NAME_INPUT)
+            .unwrap();
+        assert_eq!(name_field.content, "lamp", "name prefilled from the entry");
+        // Rename and confirm: same entry, no new one.
+        set_field(&mut world, panel::NAME_INPUT, "streetlamp");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.entries.len(), 1, "edited in place, not appended");
+        assert_eq!(h.entries[0]["name"], "streetlamp");
+        assert_eq!(h.entries[0]["type"], "PointLight");
+        assert!(h.dirty);
+    }
+
+    #[test]
+    fn row_menu_delete_removes_the_entry() {
+        let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+        h.apply_panel(PanelAction::RowDelete, &mut world);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["name"], "b");
+        assert!(h.dirty && h.row_menu.is_none());
+    }
+
+    #[test]
+    fn edit_rename_to_a_duplicate_is_suffixed() {
+        let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
+        let mut world = world_with_fields();
+        h.editing = Some(1);
+        h.selected_type = Some("Decal".to_string());
+        h.mode = panel::Mode::AddForm;
+        // Rename "b" to "a": collides with the other entry -> suffixed.
+        set_field(&mut world, panel::NAME_INPUT, "a");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.entries[1]["name"], "a_1");
+    }
+
+    #[test]
     fn confirm_add_with_blank_name_uses_a_generated_one() {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
@@ -675,9 +895,7 @@ mod tests {
 
     #[test]
     fn confirm_add_makes_a_duplicate_name_unique() {
-        let mut h = hook(vec![
-            serde_json::json!({"name":"lamp","type":"PointLight","args":{}}),
-        ]);
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
         let mut world = world_with_fields();
         h.selected_type = Some("PointLight".to_string());
         h.mode = panel::Mode::AddForm;
@@ -694,7 +912,7 @@ mod tests {
         h.mode = panel::Mode::AddForm;
         h.apply_panel(PanelAction::CancelForm, &mut world);
         assert_eq!(h.mode, panel::Mode::List);
-        assert!(h.selected_type.is_none());
+        assert!(h.selected_type.is_none() && h.editing.is_none());
         assert!(h.entries.is_empty() && !h.dirty);
     }
 
@@ -702,9 +920,21 @@ mod tests {
     fn picker_pins_the_active_type_filter_first() {
         let mut h = hook(Vec::new());
         let world = world_with_fields();
+        h.combo = Combo::Picker;
         h.type_filter = Some("Decal".to_string());
-        let opts = h.picker_options(&world);
+        let opts = h.combo_options(&world);
         assert_eq!(opts[0], "Decal", "the active filter is pinned to the top");
+    }
+
+    #[test]
+    fn close_overlays_dismisses_combo_and_menu() {
+        let mut h = hook(vec![entry("a", "Decal")]);
+        let mut world = world_with_fields();
+        h.combo = Combo::Filter;
+        h.row_menu = Some(0);
+        h.apply_panel(PanelAction::CloseOverlays, &mut world);
+        assert_eq!(h.combo, Combo::Closed);
+        assert!(h.row_menu.is_none());
     }
 
     #[test]
@@ -733,6 +963,87 @@ mod tests {
         assert!(!h.hud_visible, "first F1 hides the HUD");
         h.tick(&mut world);
         assert!(h.hud_visible, "second F1 shows it again");
+    }
+
+    // Drive `tick` against a fully injected HUD world in each panel body state,
+    // exercising the real `panel::apply` layout path (not just the pure hit-test /
+    // action logic the other tests cover).
+    #[test]
+    fn tick_lays_out_the_open_panel_in_every_state() {
+        let sprite_visible = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == id)
+                .unwrap()
+                .visible
+        };
+        let label = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            w.query::<TextLabel>()
+                .find(|l| l.asset_id == id)
+                .unwrap()
+                .clone()
+        };
+
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
+        world.add_component(FrameInput {
+            viewport: [1280.0, 720.0],
+            mouse_x: 1200.0,
+            mouse_y: 300.0,
+            ..Default::default()
+        });
+        let mut h = hook(vec![entry("a", "PointLight"), entry("b", "Decal")]);
+        h.panel_open = true;
+
+        // Grouped list: panel drawn, first row shows a type sub-header.
+        h.tick(&mut world);
+        assert!(sprite_visible(&world, panel::PANEL_BG), "panel bg shown");
+        let row0 = label(&world, panel::list_row_label(0));
+        assert!(
+            row0.visible && row0.content == "Decal",
+            "first row is a header"
+        );
+
+        // Picker combo: the solid backing and the filter field show.
+        h.combo = Combo::Picker;
+        h.tick(&mut world);
+        assert!(
+            sprite_visible(&world, panel::COMBO_BG),
+            "combo backing shown"
+        );
+        assert!(
+            world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == panel::FILTER_INPUT)
+                .unwrap()
+                .visible
+        );
+
+        // Row menu: the Edit / Delete popup shows over the "a" name row (entry 0).
+        h.combo = Combo::Closed;
+        h.row_menu = Some(0);
+        h.tick(&mut world);
+        assert!(sprite_visible(&world, panel::MENU_BG), "row menu shown");
+        assert_eq!(label(&world, panel::MENU_EDIT_LABEL).content, "Edit");
+        assert_eq!(label(&world, panel::MENU_DELETE_LABEL).content, "Delete");
+
+        // Add form: the name field + Add button show; the list rows are hidden.
+        h.row_menu = None;
+        h.mode = panel::Mode::AddForm;
+        h.selected_type = Some("PointLight".to_string());
+        h.tick(&mut world);
+        assert!(
+            sprite_visible(&world, panel::FORMADD_BG),
+            "Add button shown"
+        );
+        assert!(
+            !label(&world, panel::list_row_label(0)).visible,
+            "list rows hidden in the form"
+        );
+
+        // Closing the panel blanks the whole thing.
+        h.panel_open = false;
+        h.tick(&mut world);
+        assert!(!sprite_visible(&world, panel::PANEL_BG), "panel bg hidden");
     }
 
     #[test]
