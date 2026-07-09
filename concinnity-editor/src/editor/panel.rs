@@ -1422,6 +1422,20 @@ mod tests {
     use super::*;
     use crate::assets::{Sprite, TextInput, TextLabel};
 
+    // Point the cook's `.concinnity/` (its content-addressed cache) at a private
+    // temp dir for the whole test process, so the cook-based tests below never read
+    // or write the working directory (the shader compile itself already uses a unique
+    // temp path). Set once per process; the shared cache is race-tolerant.
+    fn isolate_state_dir() {
+        use std::sync::Once;
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            concinnity_core::paths::set_root(dir);
+        });
+    }
+
     fn rows(items: &[(bool, &str, Option<usize>)]) -> Vec<ListRow> {
         items
             .iter()
@@ -2122,6 +2136,7 @@ mod tests {
     // Joint, ...) fails here and must not be listed.
     #[test]
     fn add_types_cook_with_default_args() {
+        isolate_state_dir();
         for ty in picker_types() {
             let ct = crate::ecs::ComponentType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} is a real component type"));
@@ -2142,6 +2157,7 @@ mod tests {
     // addable-and-blank-useful type is a deliberate ADD_TYPES choice, not forgotten.
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
+        isolate_state_dir();
         use crate::ecs::ComponentType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.

@@ -14,6 +14,23 @@
 
 use concinnity_core::build::shader::builtin_shader_source;
 
+// A unique temp-file stem for a shader compile's transient artifacts (`.air` /
+// `.metallib` / `.spv`). Keying on the process id plus a per-process counter makes
+// it unique across concurrent compiles in the same process (parallel builds, the
+// test suite) and across separate processes, so they never collide on one path; and
+// rooting it in the OS temp dir keeps the working directory untouched.
+#[cfg(backend_metal)]
+fn transient_stem(asset_name: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "cn-shader-{}-{}-{}",
+        asset_name,
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 #[derive(Debug, Clone)]
 pub struct ShaderCompileArgs {
     pub source_path: String,
@@ -111,11 +128,14 @@ fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
     use std::io::Write;
     use std::process::Stdio;
 
-    let data_dir = crate::paths::data_dir();
-    let air_path = format!("{}/{}.air", data_dir.display(), args.asset_name);
-    let lib_path = format!("{}/{}.metallib", data_dir.display(), args.asset_name);
-
-    fs::create_dir_all(&data_dir)?;
+    // Transient intermediates go to a UNIQUE path in the OS temp dir (not a shared
+    // `.concinnity/data/<name>` under the working directory): parallel compiles of
+    // the same shader -- concurrent builds, or the test suite cooking several worlds
+    // at once -- must not race on one path (one removing the file mid-read of
+    // another), and a cook must not read or write the working directory.
+    let stem = transient_stem(&args.asset_name);
+    let air_path = format!("{}.air", stem.display());
+    let lib_path = format!("{}.metallib", stem.display());
 
     // Feed the source to `xcrun metal` over stdin (`-x metal` selects the
     // language since stdin has no extension, `-` is the stdin input) so no
@@ -356,9 +376,9 @@ fn compile_hlsl(_source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
 // macOS (Metal backend) compiles GLSL by shelling out to glslc.
 #[cfg(backend_metal)]
 fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    let data_dir = crate::paths::data_dir();
-    let out_path = format!("{}/{}.spv", data_dir.display(), args.asset_name);
-    std::fs::create_dir_all(&data_dir)?;
+    // A unique temp path (see `transient_stem`): keeps parallel compiles from racing
+    // on a shared file and leaves the working directory untouched.
+    let out_path = format!("{}.spv", transient_stem(&args.asset_name).display());
 
     let output = std::process::Command::new("glslc")
         .args([
