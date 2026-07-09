@@ -27,10 +27,11 @@
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
 
-// Cap on how many editable fields a form shows: the injected control pool is a
-// fixed size, so a type with more editable scalar fields shows the first `MAX`
-// and leaves the rest at their defaults (`fields_for` logs when it truncates).
-pub(crate) const MAX_FIELDS: usize = 12;
+// The number of physical form-control slots the panel injects (checkboxes, text
+// inputs, cycle buttons, swatches). A form derives ALL of a type's editable fields
+// and the panel renders a scrolling window this many rows tall over them, so a type
+// wider than the pool (or an array grown past it) scrolls rather than truncating.
+pub(crate) const FIELD_POOL: usize = 12;
 
 // The editable kinds. Everything else in an asset's args is left at its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,22 +174,17 @@ pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
 // controls). 2 covers the current cases (Camera3D's `controller`).
 const MAX_NEST_DEPTH: usize = 2;
 
-// The editable fields for a type, in declaration order, capped at `MAX_FIELDS`.
-// `seed` supplies current values (an existing entry's args when editing),
-// overriding the defaults for the initial text / bool state; the kind is always
-// taken from the default so it is stable. Nested plain objects are flattened into
-// dotted-path leaves (see `collect_fields`).
+// The editable fields for a type, in declaration order. `seed` supplies current
+// values (an existing entry's args when editing), overriding the defaults for the
+// initial text / bool state; the kind is always taken from the default so it is
+// stable. Nested plain objects are flattened into dotted-path leaves (see
+// `collect_fields`). All fields are returned; the panel renders a scrolling window
+// `FIELD_POOL` rows tall over them.
 pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<FormField> {
     let base = base_args(ty);
     let ct = ComponentType::parse(ty);
     let mut out = Vec::new();
-    let mut truncated = 0;
-    collect_fields(ct, "", &base, seed, 0, &mut out, &mut truncated);
-    if truncated > 0 {
-        tracing::warn!(
-            "editor: {ty} has {truncated} more editable field(s) than the form pool ({MAX_FIELDS}); the rest keep their defaults"
-        );
-    }
+    collect_fields(ct, "", &base, seed, 0, &mut out);
     out
 }
 
@@ -203,7 +199,6 @@ fn collect_fields(
     root_seed: Option<&Map<String, Value>>,
     depth: usize,
     out: &mut Vec<FormField>,
-    truncated: &mut usize,
 ) {
     for (key, def) in obj {
         let path = if prefix.is_empty() {
@@ -211,7 +206,7 @@ fn collect_fields(
         } else {
             format!("{prefix}.{key}")
         };
-        collect_value(ct, &path, def, root_seed, depth, out, truncated);
+        collect_value(ct, &path, def, root_seed, depth, out);
     }
 }
 
@@ -227,7 +222,6 @@ fn collect_value(
     root_seed: Option<&Map<String, Value>>,
     depth: usize,
     out: &mut Vec<FormField>,
-    truncated: &mut usize,
 ) {
     let is_root = !path.contains('.');
     let leaf = path.rsplit('.').next().unwrap_or(path);
@@ -248,7 +242,7 @@ fn collect_value(
         && !nested.is_empty()
         && !seed_overrides_with_non_object(root_seed, path)
     {
-        collect_fields(ct, path, nested, root_seed, depth + 1, out, truncated);
+        collect_fields(ct, path, nested, root_seed, depth + 1, out);
         return;
     }
 
@@ -258,10 +252,6 @@ fn collect_value(
         None => kind_of(leaf, def),
     };
     if let Some(mut kind) = kind {
-        if out.len() >= MAX_FIELDS {
-            *truncated += 1;
-            return;
-        }
         let cur = root_seed.and_then(|s| get_at_path(s, path)).unwrap_or(def);
         // A string field may be a string-enum: promote it to a cycling picker when
         // the type reports a variant set for it. Only at the root -- the probe names
@@ -322,10 +312,6 @@ fn collect_value(
         if template.is_none_or(Value::is_number) {
             return;
         }
-        if out.len() >= MAX_FIELDS {
-            *truncated += 1;
-            return;
-        }
         out.push(FormField {
             key: path.to_string(),
             kind: FieldKind::Array,
@@ -336,7 +322,7 @@ fn collect_value(
         });
         for (i, elem) in cur_arr.iter().enumerate() {
             let elem_path = format!("{path}.{i}");
-            collect_value(ct, &elem_path, elem, root_seed, depth + 1, out, truncated);
+            collect_value(ct, &elem_path, elem, root_seed, depth + 1, out);
         }
     }
 }
@@ -531,6 +517,14 @@ pub(crate) fn working_args(ty: &str, editing: Option<&Map<String, Value>>) -> Ma
         }
     }
     out
+}
+
+// The current value at `path` rendered as editable text (empty if absent). The
+// panel only has a physical text control for the fields inside its scrolling
+// window; capturing an off-window field feeds this back through `assemble` so its
+// stored value round-trips unchanged instead of being blanked.
+pub(crate) fn current_text(args: &Map<String, Value>, path: &str) -> String {
+    get_at_path(args, path).map(value_text).unwrap_or_default()
 }
 
 // The element template for the array at `path` in `args`: a clone of its first
@@ -1098,6 +1092,39 @@ mod tests {
                 .any(|f| f.key == "waves" && f.kind == FieldKind::Array),
             "an object array is still editable"
         );
+    }
+
+    // The form no longer caps the field list: a wide type (WaterSurface, whose
+    // per-wave array leaves push it past the pool) exposes more editable fields than
+    // the physical control pool. The panel scrolls a window over them, so nothing is
+    // silently dropped, and a field past the pool is still derived.
+    #[test]
+    fn fields_for_exposes_more_than_the_control_pool() {
+        let fields = fields_for("WaterSurface", None);
+        assert!(
+            fields.len() > FIELD_POOL,
+            "WaterSurface exposes {} fields, past the {FIELD_POOL}-slot pool",
+            fields.len()
+        );
+        assert!(
+            fields.iter().any(|f| f.key == "roughness"),
+            "a field past the pool is still derived, not truncated"
+        );
+    }
+
+    // `current_text` renders a stored value (scalar or nested array element) as its
+    // editable text, and an absent path as empty -- the round-trip used to preserve
+    // an off-window field's value on capture.
+    #[test]
+    fn current_text_renders_a_stored_value_or_empty() {
+        let mut args = base_args("WaterSurface");
+        assert_eq!(
+            current_text(&args, "roughness"),
+            value_text(&args["roughness"])
+        );
+        set_at_path(&mut args, "waves.0.amplitude", Value::from(2.5));
+        assert_eq!(current_text(&args, "waves.0.amplitude"), "2.5");
+        assert_eq!(current_text(&args, "no_such_field"), "");
     }
 
     #[test]

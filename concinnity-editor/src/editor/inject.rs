@@ -128,7 +128,7 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
     // fixed pool of arg text inputs.
     world.add_component(text_field(panel::FILTER_INPUT, "filter", font));
     world.add_component(text_field(panel::NAME_INPUT, "name", font));
-    for j in 0..super::form::MAX_FIELDS {
+    for j in 0..super::form::FIELD_POOL {
         world.add_component(text_field(panel::form_input(j), "", font));
     }
 }

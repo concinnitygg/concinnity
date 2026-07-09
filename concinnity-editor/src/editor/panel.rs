@@ -183,6 +183,10 @@ pub(crate) const FORMCANCEL_BG: AssetId = AssetId(PANEL + 10);
 pub(crate) const FORMCANCEL_LABEL: AssetId = AssetId(PANEL + 11);
 pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 12);
 pub(crate) const FORM_STATUS: AssetId = AssetId(PANEL + 13);
+// The scrolling form's own scrollbar (own ids so it can coexist with an open
+// field-value dropdown, which reuses the list scrollbar).
+pub(crate) const FORM_TRACK: AssetId = AssetId(PANEL + 0x14);
+pub(crate) const FORM_THUMB: AssetId = AssetId(PANEL + 0x15);
 pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 0x58);
 pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 0x59);
 pub(crate) const COMBO_BG: AssetId = AssetId(PANEL + 0x5A);
@@ -443,11 +447,25 @@ fn form_panel_rect(vw: f32, n_rows: usize) -> [f32; 4] {
     let bottom = form_bottom(n_rows).max(base[1] + base[3]);
     [base[0], base[1], base[2], bottom - base[1]]
 }
-// The panel's outer rect for `view` (grown for a tall form), used for the
-// background sprite and the fall-through hit-test bounds.
+// How many of the form's fields are on screen at once: the field count, capped at
+// the physical control pool. A wider form scrolls a window this size rather than
+// growing past the pool, so the panel height stays bounded.
+fn visible_field_count(view: &PanelView) -> usize {
+    view.form_fields.len().min(form::FIELD_POOL)
+}
+
+// The panel row showing logical field `j`, if it is inside the current scroll
+// window. Row 0 is the pinned name, so a visible field maps to `j - form_scroll + 1`.
+fn field_row(view: &PanelView, j: usize) -> Option<usize> {
+    let scroll = view.form_scroll;
+    (j >= scroll && j < scroll + form::FIELD_POOL).then(|| j - scroll + 1)
+}
+
+// The panel's outer rect for `view` (grown for a tall form up to the pool cap),
+// used for the background sprite and the fall-through hit-test bounds.
 fn outer_rect(view: &PanelView, vw: f32) -> [f32; 4] {
     if view.mode == Mode::AddForm {
-        form_panel_rect(vw, view.form_fields.len() + 1)
+        form_panel_rect(vw, visible_field_count(view) + 1)
     } else {
         panel_rect(vw)
     }
@@ -513,8 +531,12 @@ pub(crate) struct PanelView<'a> {
     pub row_menu: Option<usize>,
     // Heading shown over the add form (e.g. "New PointLight" / "Edit lamp").
     pub form_title: &'a str,
-    // The editable arg fields of the add / edit form (empty outside AddForm).
+    // The editable arg fields of the add / edit form (empty outside AddForm). The
+    // form renders a window of `form::FIELD_POOL` of these at a time.
     pub form_fields: &'a [FormField],
+    // First visible field of the form (the scroll window's top). Visible slot `r`
+    // shows `form_fields[form_scroll + r]`; the name row above the fields is pinned.
+    pub form_scroll: usize,
     // Which form input holds keyboard focus.
     pub form_focus: FormFocus,
     // The form arg field whose value dropdown is open, if any (enum / ref with a
@@ -594,8 +616,8 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
     if view.mode == Mode::AddForm
         && let Some(open) = view.field_dropdown
         && let Some(field) = view.form_fields.get(open)
+        && let Some(row) = field_row(view, open)
     {
-        let row = open + 1;
         let total = field.variants.len();
         let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
         for r in 0..MAX_DROP_ROWS {
@@ -645,21 +667,28 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
             Some(PanelAction::Consume)
         }
         Mode::AddForm => {
-            let n_rows = view.form_fields.len() + 1;
+            let n_rows = visible_field_count(view) + 1;
             if point_in(mx, my, form_add_rect(vw, n_rows)) {
                 return Some(PanelAction::ConfirmAdd);
             }
             if point_in(mx, my, form_cancel_rect(vw, n_rows)) {
                 return Some(PanelAction::CancelForm);
             }
-            // The name field (row 0).
+            // The name field (row 0, pinned above the scrolling fields).
             if point_in(mx, my, form_control_rect(vw, 0)) {
                 return Some(PanelAction::FocusName);
             }
-            // Arg field controls: a bool toggles, an enum cycles, a text field
-            // takes focus.
-            for (j, f) in view.form_fields.iter().enumerate() {
-                let row = j + 1;
+            // Arg field controls, over the visible window: slot `r` (panel row
+            // `r + 1`) is logical field `form_scroll + r`. A bool toggles, an enum
+            // cycles / opens a dropdown, an array grows / shrinks, a text field takes
+            // focus. The action carries the LOGICAL index the hook indexes by.
+            let scroll = view.form_scroll;
+            for r in 0..visible_field_count(view) {
+                let j = scroll + r;
+                let row = r + 1;
+                let Some(f) = view.form_fields.get(j) else {
+                    break;
+                };
                 match f.kind {
                     FieldKind::Bool => {
                         if point_in(mx, my, form_toggle_rect(vw, row)) {
@@ -950,15 +979,24 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
     // in this space, so nothing beneath it draws.
     let drop_backing = view.field_dropdown.and_then(|open| {
         let field = view.form_fields.get(open)?;
+        let row = field_row(view, open)?;
         let total = field.variants.len();
         let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
         let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-        Some(field_dropdown_backing(vw, open + 1, shown))
+        Some(field_dropdown_backing(vw, row, shown))
     });
 
-    // Rows 1..=N: the editable arg fields (a text field or a checkbox each).
-    for (j, field) in view.form_fields.iter().enumerate() {
-        let row = j + 1;
+    // The editable arg fields, over the visible window: slot `r` (panel row `r + 1`,
+    // below the pinned name) shows logical field `form_scroll + r`, drawn into the
+    // fixed control pool at index `r`. A text field, checkbox, cycle button, or array
+    // header each.
+    let scroll = view.form_scroll;
+    for r in 0..visible_field_count(view) {
+        let j = scroll + r;
+        let row = r + 1;
+        let Some(field) = view.form_fields.get(j) else {
+            break;
+        };
         let rect = form_row_rect(vw, row);
         if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(vw, row), d)) {
             continue;
@@ -982,7 +1020,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
             FieldKind::Bool => {
                 let t = form_toggle_rect(vw, row);
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
-                place_sprite(world, form_toggle_bg(j), t, tint, true);
+                place_sprite(world, form_toggle_bg(r), t, tint, true);
             }
             FieldKind::Enum | FieldKind::Ref { .. } => {
                 // A cycling button spanning the control: its background reuses the
@@ -995,13 +1033,13 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 } else {
                     TYPEDROP_TINT
                 };
-                place_sprite(world, form_toggle_bg(j), c, tint, true);
+                place_sprite(world, form_toggle_bg(r), c, tint, true);
                 let value = field
                     .variants
                     .get(field.variant_idx)
                     .map(String::as_str)
                     .unwrap_or("");
-                place_center_label(world, form_enum_label(j), c, value, LABEL, true);
+                place_center_label(world, form_enum_label(r), c, value, LABEL, true);
             }
             FieldKind::Array => {
                 // A header for a variable-length array: its element count and a red
@@ -1010,7 +1048,7 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 let c = form_control_rect(vw, row);
                 place_left_label(
                     world,
-                    form_enum_label(j),
+                    form_enum_label(r),
                     [c[0], c[1] + c[3] * 0.5 - 10.0],
                     &format!("({})", field.variant_idx),
                     LABEL_DIM,
@@ -1018,14 +1056,14 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 );
                 place_sprite(
                     world,
-                    form_swatch(j),
+                    form_swatch(r),
                     array_remove_rect(vw, row),
                     REMOVE_BTN_TINT,
                     true,
                 );
                 place_sprite(
                     world,
-                    form_toggle_bg(j),
+                    form_toggle_bg(r),
                     array_add_rect(vw, row),
                     ADD_BTN_TINT,
                     true,
@@ -1054,20 +1092,21 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 };
                 show_field(
                     world,
-                    form_input(j),
+                    form_input(r),
                     field,
                     view.form_focus == FormFocus::Field(j),
                 );
                 if let Some(sw) = swatch {
-                    let rgb = swatch_rgb(&field_text(world, form_input(j)));
-                    place_sprite(world, form_swatch(j), sw, rgb, true);
+                    let rgb = swatch_rgb(&field_text(world, form_input(r)));
+                    place_sprite(world, form_swatch(r), sw, rgb, true);
                 }
             }
         }
     }
 
-    // Add / Cancel below the last row.
-    let n_rows = view.form_fields.len() + 1;
+    // Add / Cancel below the last visible row (the button strip stays put as the
+    // fields scroll under it).
+    let n_rows = visible_field_count(view) + 1;
     let add = form_add_rect(vw, n_rows);
     let cancel = form_cancel_rect(vw, n_rows);
     let add_hover = point_in(view.mouse[0], view.mouse[1], add);
@@ -1098,10 +1137,44 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         );
     }
 
+    // A scrollbar down the field region's right edge when the form overflows the
+    // pool. It sits clear of the controls (they end a pad short of the panel edge).
+    layout_form_scrollbar(world, view.form_fields.len(), scroll, vw);
+
     // The open value dropdown draws last so it floats over the form below it.
     if let Some(open) = view.field_dropdown {
         layout_field_dropdown(world, view, vw, open);
     }
+}
+
+// The form's scrollbar thumb, sizing the visible window (`FIELD_POOL`) against the
+// total field count. Shown only when the form overflows the pool, spanning the
+// field region below the pinned name row. Uses its own ids so it can coexist with
+// an open field-value dropdown (which reuses the list scrollbar).
+fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, vw: f32) {
+    if total <= form::FIELD_POOL {
+        return;
+    }
+    let region_top = form_rows_top() + FIELD_H;
+    let track_h = form::FIELD_POOL as f32 * FIELD_H;
+    let track = [vw - SCROLLBAR_W, region_top, SCROLLBAR_W, track_h];
+    place_sprite(world, FORM_TRACK, track, TRACK_TINT, true);
+    let frac_visible = form::FIELD_POOL as f32 / total as f32;
+    let thumb_h = (track_h * frac_visible).max(20.0);
+    let max_scroll = (total - form::FIELD_POOL) as f32;
+    let t = if max_scroll > 0.0 {
+        scroll.min(total - form::FIELD_POOL) as f32 / max_scroll
+    } else {
+        0.0
+    };
+    let thumb_y = region_top + t * (track_h - thumb_h);
+    place_sprite(
+        world,
+        FORM_THUMB,
+        [track[0], thumb_y, SCROLLBAR_W, thumb_h],
+        THUMB_TINT,
+        true,
+    );
 }
 
 // The floating value dropdown for an open enum / ref field: an opaque backing plus
@@ -1111,7 +1184,9 @@ fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usi
     let Some(field) = view.form_fields.get(open) else {
         return;
     };
-    let row = open + 1;
+    let Some(row) = field_row(view, open) else {
+        return;
+    };
     let total = field.variants.len();
     let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
     let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
@@ -1221,12 +1296,15 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     ];
     ids.extend((0..MAX_ROWS).map(list_row_bg));
     ids.extend((0..MAX_ROWS).map(combo_row_bg));
-    // Form field checkboxes + colour swatches (AddForm only, no list overlap).
-    ids.extend((0..form::MAX_FIELDS).map(form_toggle_bg));
-    ids.extend((0..form::MAX_FIELDS).map(form_swatch));
+    // Form field checkboxes + colour swatches (AddForm only, no list overlap). One
+    // per physical control slot -- the form scrolls a window over its fields.
+    ids.extend((0..form::FIELD_POOL).map(form_toggle_bg));
+    ids.extend((0..form::FIELD_POOL).map(form_swatch));
     ids.extend([
         LIST_TRACK,
         LIST_THUMB,
+        FORM_TRACK,
+        FORM_THUMB,
         DOT_BG,
         DOT1,
         DOT2,
@@ -1252,10 +1330,11 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ];
     ids.extend((0..MAX_ROWS).map(list_row_label));
     ids.extend((0..MAX_ROWS).map(combo_row_label));
-    // Form row captions (name row 0 + one per arg field) and the status line.
-    ids.extend((0..=form::MAX_FIELDS).map(form_row_label));
+    // Form row captions (name row 0 + one per visible field slot) and the status
+    // line.
+    ids.extend((0..=form::FIELD_POOL).map(form_row_label));
     // Enum arg-field value captions (drawn over their cycling buttons).
-    ids.extend((0..form::MAX_FIELDS).map(form_enum_label));
+    ids.extend((0..form::FIELD_POOL).map(form_enum_label));
     ids.push(FORM_STATUS);
     ids.extend([MENU_EDIT_LABEL, MENU_DELETE_LABEL]);
     ids
@@ -1265,7 +1344,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 // form's arg-field text inputs.
 pub(crate) fn all_field_ids() -> Vec<AssetId> {
     let mut ids = vec![FILTER_INPUT, NAME_INPUT];
-    ids.extend((0..form::MAX_FIELDS).map(form_input));
+    ids.extend((0..form::FIELD_POOL).map(form_input));
     ids
 }
 
@@ -1471,6 +1550,7 @@ mod tests {
             row_menu,
             form_title: "New PointLight",
             form_fields: &[],
+            form_scroll: 0,
             form_focus: FormFocus::Name,
             field_dropdown: None,
             field_dropdown_scroll: 0,
@@ -1625,7 +1705,7 @@ mod tests {
     // (inside the grown bounds) and within the enlarged background.
     #[test]
     fn a_full_form_keeps_its_buttons_inside_the_panel() {
-        let fields: Vec<FormField> = (0..form::MAX_FIELDS)
+        let fields: Vec<FormField> = (0..form::FIELD_POOL)
             .map(|i| FormField {
                 key: format!("f{i}"),
                 kind: FieldKind::Float,
@@ -1647,6 +1727,7 @@ mod tests {
             row_menu: None,
             form_title: "New X",
             form_fields: &fields,
+            form_scroll: 0,
             form_focus: FormFocus::Name,
             field_dropdown: None,
             field_dropdown_scroll: 0,
@@ -1665,6 +1746,83 @@ mod tests {
         assert!(
             add[1] + add[3] <= outer[1] + outer[3],
             "the Add button sits inside the grown panel background"
+        );
+    }
+
+    // A form wider than the control pool renders a scrolling window: the form
+    // scrollbar shows, the buttons stay bounded at the pool height, and a nonzero
+    // scroll maps a visible slot to the LOGICAL field it shows.
+    #[test]
+    fn a_form_past_the_pool_scrolls_a_window() {
+        let vw = 1280.0;
+        // FIELD_POOL + 4 float fields: four past the window.
+        let fields: Vec<FormField> = (0..form::FIELD_POOL + 4)
+            .map(|i| FormField {
+                key: format!("f{i}"),
+                kind: FieldKind::Float,
+                initial: "0".into(),
+                boolval: false,
+                variants: Vec::new(),
+                variant_idx: 0,
+            })
+            .collect();
+        let mut world = injected_world();
+
+        // At the top the window shows fields 0..FIELD_POOL and the scrollbar appears.
+        let v = form_view(&fields);
+        apply(&mut world, Some(&v), vw);
+        assert!(
+            sprite_visible(&world, FORM_THUMB),
+            "the form scrollbar shows"
+        );
+        // Slot 0 (panel row 1) resolves to logical field 0.
+        let c0 = form_control_rect(vw, 1);
+        assert_eq!(
+            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, vw),
+            Some(PanelAction::FocusField(0))
+        );
+        // The buttons sit at the bounded (pool) height, not grown for all N fields.
+        let add = form_add_rect(vw, form::FIELD_POOL + 1);
+        assert_eq!(
+            hit_test(&v, add[0] + 5.0, add[1] + 5.0, vw),
+            Some(PanelAction::ConfirmAdd),
+            "the Add button resolves at the bounded pool height"
+        );
+
+        // Scrolled down by three: visible slot 0 now shows logical field 3, and the
+        // last visible slot shows field 3 + (FIELD_POOL - 1).
+        let mut vs = form_view(&fields);
+        vs.form_scroll = 3;
+        assert_eq!(
+            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, vw),
+            Some(PanelAction::FocusField(3)),
+            "a scrolled window maps slot 0 to field scroll + 0"
+        );
+        let last = form_control_rect(vw, form::FIELD_POOL);
+        assert_eq!(
+            hit_test(&vs, last[0] + 5.0, last[1] + 5.0, vw),
+            Some(PanelAction::FocusField(3 + form::FIELD_POOL - 1)),
+            "the last visible slot maps to the window's last field"
+        );
+    }
+
+    // A form within the pool shows no form scrollbar.
+    #[test]
+    fn a_form_within_the_pool_has_no_scrollbar() {
+        let vw = 1280.0;
+        let fields = [FormField {
+            key: "intensity".into(),
+            kind: FieldKind::Float,
+            initial: "1".into(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
+        }];
+        let mut world = injected_world();
+        apply(&mut world, Some(&form_view(&fields)), vw);
+        assert!(
+            !sprite_visible(&world, FORM_THUMB),
+            "no scrollbar for a form that fits the pool"
         );
     }
 
@@ -1783,6 +1941,7 @@ mod tests {
             row_menu: None,
             form_title: "New asset",
             form_fields: fields,
+            form_scroll: 0,
             form_focus: FormFocus::Name,
             field_dropdown: None,
             field_dropdown_scroll: 0,

@@ -69,6 +69,10 @@ pub(crate) struct EditorHook {
     // The editable arg fields of the open form (derived from the type's default
     // args). Empty outside AddForm.
     form_fields: Vec<FormField>,
+    // First visible field of the form's scroll window (its physical control pool is
+    // fixed size, so a form wider than `form::FIELD_POOL` scrolls). Reset on open /
+    // structural change.
+    form_scroll: usize,
     // Which form input has keyboard focus.
     form_focus: FormFocus,
     // A validation message from the last rejected Add, shown under the form.
@@ -102,6 +106,13 @@ fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
     } else {
         cur.saturating_sub(1)
     }
+}
+
+// The physical control slot showing logical form field `j` under scroll offset
+// `scroll`, or `None` when the field is outside the visible window. The panel's
+// control pool is slot-indexed, so seeding / reading a field goes through its slot.
+fn visible_slot(j: usize, scroll: usize) -> Option<usize> {
+    (j >= scroll && j < scroll + form::FIELD_POOL).then(|| j - scroll)
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.
@@ -152,6 +163,7 @@ impl EditorHook {
             selected_type: None,
             editing: None,
             form_fields: Vec::new(),
+            form_scroll: 0,
             form_focus: FormFocus::Name,
             form_error: None,
             row_menu: None,
@@ -412,6 +424,7 @@ impl EditorHook {
             row_menu: self.row_menu,
             form_title: &d.form_title,
             form_fields: &self.form_fields,
+            form_scroll: self.form_scroll,
             form_focus: self.form_focus,
             field_dropdown: self.field_dropdown,
             field_dropdown_scroll: self.field_dropdown_scroll,
@@ -494,6 +507,7 @@ impl EditorHook {
         self.row_menu = None;
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
+        self.form_scroll = 0;
         self.refresh_form(world);
         panel::focus_field_with(world, panel::NAME_INPUT, &name);
     }
@@ -506,6 +520,10 @@ impl EditorHook {
             return;
         };
         self.form_fields = form::fields_for(&ty, Some(&self.form_args));
+        // Clamp the scroll window to the (possibly changed) field count -- an array
+        // shrink can leave `form_scroll` past the new last page.
+        let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
+        self.form_scroll = self.form_scroll.min(max);
         // Reference fields pick from the world's existing assets of their target
         // type. Resolve the option lists up front (reads `entries`) so the fill loop
         // does not borrow `self` twice.
@@ -521,17 +539,22 @@ impl EditorHook {
         for (i, names) in ref_opts {
             form::set_ref_options(&mut self.form_fields[i], &names);
         }
+        // Seed only the text controls inside the visible window (their pool is
+        // slot-indexed). Bool (checkbox), Enum + Ref (cycle buttons), and Array (a
+        // header) have no text input to seed.
+        let scroll = self.form_scroll;
         for (j, field) in self.form_fields.iter().enumerate() {
-            // Bool (checkbox), Enum + Ref (cycle buttons), and Array (a header) have
-            // no text input to seed.
-            if !matches!(
+            if matches!(
                 field.kind,
                 form::FieldKind::Bool
                     | form::FieldKind::Enum
                     | form::FieldKind::Ref { .. }
                     | form::FieldKind::Array
             ) {
-                panel::seed_field(world, panel::form_input(j), &field.initial);
+                continue;
+            }
+            if let Some(r) = visible_slot(j, scroll) {
+                panel::seed_field(world, panel::form_input(r), &field.initial);
             }
         }
     }
@@ -543,6 +566,7 @@ impl EditorHook {
         let Some(ty) = self.selected_type.clone() else {
             return;
         };
+        let scroll = self.form_scroll;
         let texts: Vec<String> = self
             .form_fields
             .iter()
@@ -555,9 +579,16 @@ impl EditorHook {
                         | form::FieldKind::Ref { .. }
                         | form::FieldKind::Array
                 ) {
+                    // State lives in the field (boolval / variant_idx), not a control.
                     String::new()
+                } else if let Some(r) = visible_slot(j, scroll) {
+                    // In the window: read the live control.
+                    panel::field_text(world, panel::form_input(r))
                 } else {
-                    panel::field_text(world, panel::form_input(j))
+                    // Off-window: feed its stored value back so `assemble` round-trips
+                    // it unchanged rather than blanking it (an empty string would
+                    // overwrite a text field).
+                    form::current_text(&self.form_args, &f.key)
                 }
             })
             .collect();
@@ -570,6 +601,7 @@ impl EditorHook {
         self.editing = None;
         self.form_fields.clear();
         self.form_args = serde_json::Map::new();
+        self.form_scroll = 0;
         self.form_focus = FormFocus::Name;
         self.form_error = None;
         self.field_dropdown = None;
@@ -751,7 +783,7 @@ impl EditorHook {
     }
 
     // Move the active body's scroll offset in the wheel direction.
-    fn scroll(&mut self, delta: f32, world: &World) {
+    fn scroll(&mut self, delta: f32, world: &mut World) {
         match self.mode {
             panel::Mode::List if self.combo == Combo::Closed => {
                 let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
@@ -767,10 +799,25 @@ impl EditorHook {
             }
             panel::Mode::AddForm => {
                 if let Some(open) = self.field_dropdown {
+                    // An open value dropdown scrolls its own option list.
                     let total = self.form_fields.get(open).map_or(0, |f| f.variants.len());
                     let max = total.saturating_sub(panel::MAX_DROP_ROWS);
                     self.field_dropdown_scroll =
                         scroll_step(self.field_dropdown_scroll, delta, max);
+                } else {
+                    // Scroll the field window: fold the visible controls into the
+                    // working args, move the window, then re-seed the newly visible
+                    // slots. The same capture / refresh cycle an array add / remove
+                    // uses, so no in-progress edit is lost as the window moves.
+                    let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
+                    let next = scroll_step(self.form_scroll, delta, max);
+                    if next == self.form_scroll {
+                        return;
+                    }
+                    self.capture_controls(world);
+                    self.form_scroll = next;
+                    self.form_focus = FormFocus::Name;
+                    self.refresh_form(world);
                 }
             }
         }
@@ -1535,16 +1582,16 @@ mod tests {
             .expect("texture ref field");
         h.apply_panel(PanelAction::OpenFieldDropdown(idx), &mut world);
         assert_eq!(h.field_dropdown_scroll, 0);
-        h.scroll(1.0, &world);
+        h.scroll(1.0, &mut world);
         assert_eq!(
             h.field_dropdown_scroll, 1,
             "wheel down advances the dropdown"
         );
-        h.scroll(-1.0, &world);
+        h.scroll(-1.0, &mut world);
         assert_eq!(h.field_dropdown_scroll, 0, "wheel up rewinds it");
         // It cannot scroll past the last page.
         for _ in 0..50 {
-            h.scroll(1.0, &world);
+            h.scroll(1.0, &mut world);
         }
         let total = h.form_fields[idx].variants.len();
         assert_eq!(
@@ -1622,6 +1669,55 @@ mod tests {
         h.apply_panel(PanelAction::ConfirmAdd, &mut world);
         let ws = h.entries.iter().find(|e| e["name"] == "pond").unwrap();
         assert_eq!(ws["args"]["waves"].as_array().map(Vec::len), Some(1));
+    }
+
+    // A form wider than the control pool scrolls: a field past the window is edited
+    // by wheeling down to it. WaterSurface exposes more than a pool's worth of
+    // fields, so `roughness` is only reachable after scrolling; its edit must still
+    // persist (and the untouched off-window fields keep their defaults).
+    #[test]
+    fn add_form_scrolls_to_and_edits_an_off_window_field() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "WaterSurface".to_string(), None);
+        assert!(
+            h.form_fields.len() > form::FIELD_POOL,
+            "WaterSurface overflows the control pool"
+        );
+        let rj = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "roughness")
+            .expect("a roughness field");
+        assert!(
+            visible_slot(rj, h.form_scroll).is_none(),
+            "roughness starts past the visible window"
+        );
+        // Wheel to the bottom; roughness scrolls into the window.
+        for _ in 0..h.form_fields.len() {
+            h.scroll(1.0, &mut world);
+        }
+        let slot = visible_slot(rj, h.form_scroll).expect("roughness scrolled into view");
+        // Edit it through its now-visible control and confirm.
+        set_field(&mut world, panel::form_input(slot), "0.9");
+        set_field(&mut world, panel::NAME_INPUT, "sea");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let ws = h
+            .entries
+            .iter()
+            .find(|e| e["name"] == "sea")
+            .expect("the water surface was added");
+        assert_eq!(
+            ws["args"]["roughness"].as_f64(),
+            Some(0.9),
+            "the off-window field's edit persisted after scrolling to it"
+        );
+        // An untouched off-window top field kept its default (not blanked on capture).
+        assert_eq!(
+            ws["args"]["extent"],
+            form::base_args("WaterSurface")["extent"],
+            "a scrolled-away field kept its value"
+        );
     }
 
     // A reference left at (none) persists as null, not a dangling name.
