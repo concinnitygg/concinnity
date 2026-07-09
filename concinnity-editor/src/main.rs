@@ -482,6 +482,15 @@ fn main() -> std::io::Result<()> {
         },
         Commands::Editor(args) => {
             app::dev_flags::set_validation(args.validation);
+            // A debug port turns the editor into an inspectable dev session, so
+            // arm the same dev flags the `cn debug` host sets (above). This flips
+            // on the backend's frame-capture path (the retained drawable behind
+            // `cn debug screenshot`) and shader hot-reload, so the full probe
+            // surface -- not just `smoke` / `send` -- works against an editor.
+            // Left off for a plain `cn editor`, which keeps production defaults.
+            if args.debug_port.is_some() {
+                app::dev_flags::set_enabled(true);
+            }
             editor::run_editor(args.file.as_deref(), args.debug_port)
         }
         Commands::Add(args) => {
