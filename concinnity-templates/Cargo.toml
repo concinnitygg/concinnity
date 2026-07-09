@@ -10,7 +10,3 @@ name = "concinnity_templates"
 doctest = false
 
 [dependencies]
-
-[dev-dependencies]
-# Validates that every template's embedded JSONL parses; test-only.
-serde_json = { version = "1", features = ["preserve_order"] }

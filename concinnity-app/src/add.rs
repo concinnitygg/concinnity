@@ -229,11 +229,7 @@ fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_
         return Ok(None);
     };
     match concinnity_templates::by_name(name) {
-        Some(t) => {
-            let entries = crate::world::parse_world_jsonl(t.jsonl)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-            Ok(Some(entries))
-        }
+        Some(t) => Ok(Some(crate::template_spec::world_template_entries(t))),
         None => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -1165,11 +1161,10 @@ mod tests {
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("showcase"))
             .expect("showcase template should apply for renderer-less glb add");
-        let expected = crate::world::parse_world_jsonl(
-            concinnity_templates::by_name("showcase").unwrap().jsonl,
-        )
-        .unwrap()
-        .len();
+        let expected = concinnity_templates::by_name("showcase")
+            .unwrap()
+            .assets()
+            .len();
         assert_eq!(
             scaffold.len(),
             expected,
@@ -1181,13 +1176,13 @@ mod tests {
     // Every entry of every engine-owned template validates as a real, buildable
     // asset with its declared args. This is the typed round-trip the templates
     // crate (pure data) cannot do itself: it guards against a template naming a
-    // type that doesn't exist or shipping args the asset rejects.
+    // type that doesn't exist or shipping args the asset rejects, and against the
+    // spec builders drifting from the real asset schemas.
     #[test]
     fn every_template_entry_validates_as_a_real_asset() {
         let _guard = crate::test_support::lock();
         for t in concinnity_templates::TEMPLATES {
-            let entries = crate::world::parse_world_jsonl(t.jsonl)
-                .unwrap_or_else(|e| panic!("template '{}' JSONL parse failed: {e}", t.name));
+            let entries = crate::template_spec::world_template_entries(t);
             assert!(!entries.is_empty(), "template '{}' is empty", t.name);
             for entry in entries {
                 let ty = entry["type"].as_str().expect("entry has a type");

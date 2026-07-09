@@ -22,6 +22,7 @@ mod add;
 mod build;
 mod check;
 mod rm;
+mod template_spec;
 
 pub mod ffi;
 #[cfg(backend_metal)]
@@ -37,6 +38,8 @@ pub use add::add_to_path;
 pub use build::{build_world_from_path, build_world_from_str, build_world_to_disk};
 pub use check::{check_at_path, check_from_str};
 pub use rm::rm_at_path;
+// The templates bridge: turn a `concinnity-templates` spec into engine JSON.
+pub use template_spec::{arg_value_to_json, spec_args, spec_to_value, world_template_entries};
 
 // Build API (the published Rust build + validate surface).
 pub use concinnity_cook::{build_pipeline_from_str, validate_asset, validate_world_jsonl};

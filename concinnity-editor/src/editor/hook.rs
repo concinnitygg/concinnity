@@ -282,13 +282,9 @@ impl EditorHook {
         let Some(t) = concinnity_templates::TEMPLATES.get(i) else {
             return;
         };
-        let entries = match concinnity_core::world::parse_world_jsonl(t.jsonl) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!("editor: template '{}' failed to parse: {e}", t.name);
-                return;
-            }
-        };
+        // The template's typed specs become world-line entries via the app bridge;
+        // no JSON string is parsed here.
+        let entries = concinnity_app::world_template_entries(t);
         let mut added = 0;
         for entry in entries {
             if entry_name(&entry).is_some_and(|n| self.name_taken(n)) {
@@ -1016,10 +1012,7 @@ mod tests {
     fn templates_pick_applies_and_is_idempotent() {
         let mut h = hook(Vec::new());
         h.apply_top(HudAction::PickTemplate(0));
-        let first =
-            concinnity_core::world::parse_world_jsonl(concinnity_templates::TEMPLATES[0].jsonl)
-                .unwrap()
-                .len();
+        let first = concinnity_templates::TEMPLATES[0].assets().len();
         assert_eq!(h.entries.len(), first, "all template entries added");
         h.apply_top(HudAction::PickTemplate(0));
         assert_eq!(h.entries.len(), first, "re-apply is idempotent");

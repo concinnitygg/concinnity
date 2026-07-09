@@ -785,9 +785,6 @@ dependencies = [
 [[package]]
 name = "concinnity-templates"
 version = "0.10.0"
-dependencies = [
- "serde_json",
-]
 
 [[package]]
 name = "concinnity-toolchain"

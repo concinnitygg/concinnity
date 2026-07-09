@@ -12,9 +12,10 @@
 // is real runtime code, not editor-only.)
 
 use super::{hud, panel};
-use crate::assets::{Sprite, TextAlign, TextInput, TextLabel};
+use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
+use concinnity_templates::{AssetSpec, asset};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport. Sized to match the
@@ -133,31 +134,33 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
     }
 }
 
+// Materialize a templates asset spec into a live component through the engine's
+// own accept path (serde over the spec's args) -- the same conversion the cook
+// pipeline runs on a world line. The reserved `asset_id` and the reused font are
+// set by the caller afterward (neither is part of the spec's args).
+fn materialize<T: serde::de::DeserializeOwned>(spec: AssetSpec) -> T {
+    serde_json::from_value(concinnity_app::spec_args(&spec))
+        .expect("editor HUD spec deserializes into its component")
+}
+
 fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
-    Sprite {
-        asset_id: id,
-        x: rect[0],
-        y: rect[1],
-        width: rect[2],
-        height: rect[3],
-        tint,
-        visible,
-        ..Default::default()
-    }
+    let mut s: Sprite = materialize(asset::sprite("", rect, tint).set("visible", visible));
+    s.asset_id = id;
+    s
 }
 
 fn centered_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
-    TextLabel {
-        asset_id: id,
-        font,
-        content: content.to_string(),
-        x: rect[0] + rect[2] * 0.5,
-        y: rect[1] + hud::LABEL_TOP,
-        color: [1.0, 1.0, 1.0],
-        align: TextAlign::Center,
-        visible: true,
-        ..Default::default()
-    }
+    let pos = [rect[0] + rect[2] * 0.5, rect[1] + hud::LABEL_TOP];
+    let mut l: TextLabel = materialize(asset::text_label(
+        "",
+        content,
+        pos,
+        [1.0, 1.0, 1.0],
+        "center",
+    ));
+    l.asset_id = id;
+    l.font = font;
+    l
 }
 
 fn row_label(
@@ -167,29 +170,25 @@ fn row_label(
     font: Option<AssetId>,
     visible: bool,
 ) -> TextLabel {
-    TextLabel {
-        asset_id: id,
-        font,
-        content: content.to_string(),
-        x: rect[0] + 12.0,
-        y: rect[1] + 10.0,
-        color: [0.9, 0.9, 0.92],
-        align: TextAlign::Left,
-        visible,
-        ..Default::default()
-    }
+    let pos = [rect[0] + 12.0, rect[1] + 10.0];
+    let mut l: TextLabel = materialize(
+        asset::text_label("", content, pos, [0.9, 0.9, 0.92], "left").set("visible", visible),
+    );
+    l.asset_id = id;
+    l.font = font;
+    l
 }
 
 fn text_field(id: AssetId, placeholder: &str, font: Option<AssetId>) -> TextInput {
-    TextInput {
-        asset_id: id,
-        font,
-        placeholder: placeholder.to_string(),
-        background: [0.14, 0.15, 0.20, 1.0],
-        max_len: 48,
-        visible: false,
-        ..Default::default()
-    }
+    let mut t: TextInput = materialize(
+        asset::text_input("", placeholder)
+            .set("background", [0.14, 0.15, 0.20, 1.0])
+            .set("max_len", 48u32)
+            .set("visible", false),
+    );
+    t.asset_id = id;
+    t.font = font;
+    t
 }
 
 #[cfg(test)]
@@ -283,5 +282,43 @@ mod tests {
             .find(|t| t.asset_id == panel::NAME_INPUT)
             .unwrap();
         assert_eq!(field.font, Some(AssetId(42)));
+    }
+
+    // The templates-spec-driven constructors materialize the same components the
+    // hand-written struct literals used to, so routing them through templates did
+    // not shift any field. Pins the spec builders against drift.
+    #[test]
+    fn constructors_materialize_expected_components() {
+        use crate::assets::TextAlign;
+
+        let s = button_sprite(
+            AssetId(1),
+            [10.0, 20.0, 100.0, 40.0],
+            [1.0, 0.0, 0.0, 1.0],
+            true,
+        );
+        assert_eq!((s.x, s.y, s.width, s.height), (10.0, 20.0, 100.0, 40.0));
+        assert_eq!(s.tint, [1.0, 0.0, 0.0, 1.0]);
+        assert!(s.visible);
+        assert_eq!(s.asset_id, AssetId(1));
+
+        let t = text_field(AssetId(2), "name", Some(AssetId(9)));
+        assert_eq!(t.placeholder, "name");
+        assert_eq!(t.background, [0.14, 0.15, 0.20, 1.0]);
+        assert_eq!(t.max_len, 48);
+        assert!(!t.visible);
+        assert_eq!(t.font, Some(AssetId(9)));
+
+        let c = centered_label(AssetId(3), "SAVE", [0.0, 0.0, 88.0, 88.0], None);
+        assert_eq!(c.content, "SAVE");
+        assert_eq!(c.align, TextAlign::Center);
+        assert_eq!(c.x, 44.0, "centered on the button width");
+        assert_eq!(c.color, [1.0, 1.0, 1.0]);
+        assert!(c.visible);
+
+        let r = row_label(AssetId(4), "row", [0.0, 0.0, 100.0, 40.0], None, false);
+        assert_eq!(r.align, TextAlign::Left);
+        assert_eq!(r.color, [0.9, 0.9, 0.92]);
+        assert!(!r.visible);
     }
 }
