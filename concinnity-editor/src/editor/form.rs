@@ -531,6 +531,37 @@ mod tests {
         );
     }
 
+    // The types added to the picker this round derive sensible forms: View is a
+    // bool + a float; BlockType exposes its solid flag + UV vectors; FpsCounter's
+    // one field is its declared `label` reference (a picker, not free text).
+    #[test]
+    fn newly_offered_types_derive_expected_fields() {
+        let view = fields_for("View", None);
+        let vk = |k: &str| view.iter().find(|f| f.key == k).map(|f| f.kind);
+        assert_eq!(vk("initial"), Some(FieldKind::Bool));
+        assert_eq!(vk("fade_in_secs"), Some(FieldKind::Float));
+
+        let block = fields_for("BlockType", None);
+        let bk = |k: &str| block.iter().find(|f| f.key == k).map(|f| f.kind);
+        assert_eq!(bk("solid"), Some(FieldKind::Bool));
+        assert_eq!(
+            bk("uv_min"),
+            Some(FieldKind::Vec {
+                len: 2,
+                color: false
+            })
+        );
+
+        let fps = fields_for("FpsCounter", None);
+        assert_eq!(
+            fps.iter().find(|f| f.key == "label").map(|f| f.kind),
+            Some(FieldKind::Ref {
+                target: "TextLabel"
+            }),
+            "FpsCounter.label is a reference picker"
+        );
+    }
+
     #[test]
     fn unknown_type_has_no_fields_and_empty_base() {
         assert!(fields_for("NotARealType", None).is_empty());

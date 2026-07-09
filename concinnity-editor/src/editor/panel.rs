@@ -33,29 +33,27 @@ use super::form::{self, FieldKind, FormField};
 use super::hud;
 use super::widget::{self, place_sprite, point_in};
 
-// The addable asset types the "+" picker offers. All are External
-// (user-declarable) and standalone (no required cross-references), so each
-// recompiles cleanly when added with default args to any rendering world -- the
-// property `add_types_cook_with_default_args` guards by running every entry
-// through the real cook pipeline. The mix spans lights / scene effects, procedural
-// geometry, a camera, referenced library assets (Material / Font), UI widgets, UI
-// interaction (HitRegion) + input (KeyBinding), and audio. This roughly exhausts
-// the types that are useful with the current scalar / string / vector / colour /
-// bool form; the rest are defined by their asset references or nested arrays
-// (Prop's mesh, Scene's shot, LayoutContainer's rows, ...) and want the ref /
-// nested-array form controls before they earn a place here. Most entries are
-// naturally multi-instance; a few are effectively singletons where
-// a second instance is harmlessly ignored (only the first enabled VolumetricFog
-// draws; the first Camera3D is the active one), which is fine because the common
-// action is adding the first one to a world that lacks it. World-config singletons
-// (GraphicsConfig, PostProcessConfig, PhysicsConfig, ...) are deliberately NOT
-// offered: they belong to a world already and want an edit-or-add flow, not a
-// blind append.
-// Broadening the list to every registry-addable type is a matter of adding
-// entries the guard accepts (types needing a source file or a required
-// cross-reference, e.g. Mesh / AudioClip / Joint, cannot be added blank and stay
-// off the list). The picker is deliberately curated (not silently capped):
-// unlisted types are simply not offered here yet.
+// The addable asset types the "+" picker offers: every External (user-declarable)
+// type that (a) recompiles cleanly when added with default args and (b) is useful
+// when added blank. `add_types_cook_with_default_args` guards (a) by running every
+// entry through the real cook pipeline; `add_types_are_the_curated_blank_useful_addable_set`
+// guards the whole boundary -- every addable-and-cooks-blank type must be either
+// here or in that test's EXCLUDED list (with a reason), so a newly registered type
+// is a deliberate choice, never a silent omission. The mix spans lights / scene
+// effects, procedural geometry, a camera, referenced library assets (Material /
+// Font / BlockType), a UI layer (View), UI widgets, UI interaction (HitRegion) +
+// input (KeyBinding), a HUD element (FpsCounter), and audio. Most entries are
+// naturally multi-instance; a few are effectively singletons where a second
+// instance is harmlessly ignored (only the first enabled VolumetricFog draws; the
+// first Camera3D is the active one), which is fine because the common action is
+// adding the first one to a world that lacks it.
+// The types held back cook blank but are not useful blank: world-config singletons
+// (GraphicsConfig, PhysicsConfig, Window, Application, ...) want an edit-or-add flow
+// rather than a blind append; engine-injected HUDs (DebugHud / StatHud) are added by
+// `cn build`, not by hand; and types defined by a nested array or a source file
+// (Model, Scene, Story, LayoutContainer's rows, ...) are inert until the nested /
+// source form controls exist. Types that cannot even cook blank -- needing a source
+// or a required cross-reference (Mesh / AudioClip / Joint) -- can never be offered.
 pub(crate) const ADD_TYPES: &[&str] = &[
     // Lights + scene effects.
     "PointLight",
@@ -69,16 +67,20 @@ pub(crate) const ADD_TYPES: &[&str] = &[
     // Geometry + camera.
     "Room",
     "Camera3D",
-    // Library assets (referenced by other assets).
+    // Library assets (referenced by other assets, by name).
     "Material",
     "Font",
-    // UI widgets.
+    "BlockType",
+    // UI structure + widgets.
+    "View",
     "Sprite",
     "TextLabel",
     "TextInput",
     // UI interaction + input.
     "HitRegion",
     "KeyBinding",
+    // UI HUD.
+    "FpsCounter",
     // Audio.
     "AudioEmitter",
     "AudioCue",
@@ -91,6 +93,17 @@ pub(crate) const ALL_LABEL: &str = "Assets";
 // Visible rows in the body before it scrolls (shared by the grouped list and the
 // combo option list).
 pub(crate) const MAX_ROWS: usize = 12;
+
+// An enum / ref field with this many variants or fewer cycles in place on click
+// (fast for small sets); more than this opens a floating value dropdown anchored
+// below the field (a long list is tedious to cycle through). A reference field's
+// count includes its `(none)` option.
+pub(crate) const CYCLE_MAX: usize = 5;
+
+// Visible rows in an open field-value dropdown before it scrolls.
+pub(crate) const MAX_DROP_ROWS: usize = 8;
+// A field-value dropdown option row's height.
+const DROP_ROW_H: f32 = 28.0;
 
 // Which body the panel is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,6 +360,22 @@ pub(crate) fn form_toggle_rect(vw: f32, i: usize) -> [f32; 4] {
     let s = FIELD_H - 10.0;
     [c[0], c[1], s, s]
 }
+
+// An open value dropdown for the enum / ref field on form row `row`: it floats
+// directly below that field's control, aligned to it, `shown` options tall.
+fn field_option_rect(vw: f32, row: usize, r: usize) -> [f32; 4] {
+    let c = form_control_rect(vw, row);
+    [c[0], c[1] + c[3] + r as f32 * DROP_ROW_H, c[2], DROP_ROW_H]
+}
+fn field_dropdown_backing(vw: f32, row: usize, shown: usize) -> [f32; 4] {
+    let c = form_control_rect(vw, row);
+    [c[0], c[1] + c[3], c[2], shown as f32 * DROP_ROW_H + 4.0]
+}
+
+// Whether two rects overlap (touching edges do not count).
+fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
 fn form_buttons_y(n_rows: usize) -> f32 {
     form_rows_top() + n_rows as f32 * FIELD_H + GAP
 }
@@ -401,8 +430,13 @@ pub(crate) enum PanelAction {
     FocusField(usize),
     // Toggle the form's bool arg field `i`.
     ToggleField(usize),
-    // Advance the form's enum arg field `i` to its next variant.
+    // Advance the form's enum arg field `i` to its next variant (small sets).
     CycleField(usize),
+    // Open (or, if already open, close) the value dropdown for enum / ref arg
+    // field `i` (large sets, chosen over cycling).
+    OpenFieldDropdown(usize),
+    // Pick option `i` from the open field-value dropdown for the current field.
+    PickFieldOption(usize),
     // Confirm / cancel the add-or-edit form.
     ConfirmAdd,
     CancelForm,
@@ -436,6 +470,11 @@ pub(crate) struct PanelView<'a> {
     pub form_fields: &'a [FormField],
     // Which form input holds keyboard focus.
     pub form_focus: FormFocus,
+    // The form arg field whose value dropdown is open, if any (enum / ref with a
+    // large variant set). Its options float below the field.
+    pub field_dropdown: Option<usize>,
+    // First visible option of the open value dropdown.
+    pub field_dropdown_scroll: usize,
     // A validation error to surface under the form, if the last Add failed.
     pub form_error: Option<&'a str>,
     pub mouse: [f32; 2],
@@ -503,6 +542,27 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
         return Some(PanelAction::CloseOverlays);
     }
 
+    // An open field-value dropdown is modal over the panel, like the combo: its
+    // option rows pick, anything else dismisses it.
+    if view.mode == Mode::AddForm
+        && let Some(open) = view.field_dropdown
+        && let Some(field) = view.form_fields.get(open)
+    {
+        let row = open + 1;
+        let total = field.variants.len();
+        let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
+        for r in 0..MAX_DROP_ROWS {
+            let idx = scroll + r;
+            if idx >= total {
+                break;
+            }
+            if point_in(mx, my, field_option_rect(vw, row, r)) {
+                return Some(PanelAction::PickFieldOption(idx));
+            }
+        }
+        return Some(PanelAction::CloseOverlays);
+    }
+
     // Combo closed: clicks outside the panel fall through (the top bar handles
     // the region above `body_top`; the world gets the rest). A tall form grows the
     // bounds so its lower rows / buttons stay clickable.
@@ -561,6 +621,11 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
                     }
                     FieldKind::Enum | FieldKind::Ref { .. } => {
                         if point_in(mx, my, form_control_rect(vw, row)) {
+                            // A small variant set cycles in place; a large one opens
+                            // a floating dropdown instead of forcing many clicks.
+                            if f.variants.len() > CYCLE_MAX {
+                                return Some(PanelAction::OpenFieldDropdown(j));
+                            }
                             return Some(PanelAction::CycleField(j));
                         }
                     }
@@ -822,10 +887,27 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         view.form_focus == FormFocus::Name,
     );
 
+    // An open value dropdown floats over the rows below its field. Those rows are
+    // left fully hidden this frame (both the control and its caption): a covered
+    // VISIBLE `TextInput` would synth an opaque background box over the dropdown (it
+    // is synthesised only for visible inputs, see graphics_system/frame.rs), and a
+    // long caption could overflow across it. The dropdown paints its own opaque list
+    // in this space, so nothing beneath it draws.
+    let drop_backing = view.field_dropdown.and_then(|open| {
+        let field = view.form_fields.get(open)?;
+        let total = field.variants.len();
+        let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
+        let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
+        Some(field_dropdown_backing(vw, open + 1, shown))
+    });
+
     // Rows 1..=N: the editable arg fields (a text field or a checkbox each).
     for (j, field) in view.form_fields.iter().enumerate() {
         let row = j + 1;
         let rect = form_row_rect(vw, row);
+        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(vw, row), d)) {
+            continue;
+        }
         place_left_label(
             world,
             form_row_label(row),
@@ -922,6 +1004,82 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
             [add[0], add[1] + ROW_H + GAP],
             err,
             ERROR_LABEL,
+            true,
+        );
+    }
+
+    // The open value dropdown draws last so it floats over the form below it.
+    if let Some(open) = view.field_dropdown {
+        layout_field_dropdown(world, view, vw, open);
+    }
+}
+
+// The floating value dropdown for an open enum / ref field: an opaque backing plus
+// its option rows (the current selection highlighted), reusing the combo option
+// pool (idle in AddForm) and, when it overflows, the list scrollbar.
+fn layout_field_dropdown(world: &mut World, view: &PanelView, vw: f32, open: usize) {
+    let Some(field) = view.form_fields.get(open) else {
+        return;
+    };
+    let row = open + 1;
+    let total = field.variants.len();
+    let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
+    let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
+    place_sprite(
+        world,
+        COMBO_BG,
+        field_dropdown_backing(vw, row, shown),
+        COMBO_BG_TINT,
+        true,
+    );
+    for r in 0..MAX_DROP_ROWS {
+        let idx = scroll + r;
+        if idx >= total {
+            break;
+        }
+        let rect = field_option_rect(vw, row, r);
+        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
+        let tint = if hovered {
+            OPTION_TINT_HOVER
+        } else if idx == field.variant_idx {
+            OPTION_TINT_SELECTED
+        } else {
+            OPTION_TINT
+        };
+        place_sprite(world, combo_row_bg(r), rect, tint, true);
+        set_row_label(
+            world,
+            combo_row_label(r),
+            [rect[0] + PAD, rect[1] + DROP_ROW_H * 0.5 - 10.0],
+            &field.variants[idx],
+            LABEL,
+            true,
+        );
+    }
+    // A thin scrollbar down the dropdown's right edge when it overflows.
+    if total > MAX_DROP_ROWS {
+        let back = field_dropdown_backing(vw, row, shown);
+        let track = [
+            back[0] + back[2] - SCROLLBAR_W,
+            back[1],
+            SCROLLBAR_W,
+            back[3],
+        ];
+        place_sprite(world, LIST_TRACK, track, TRACK_TINT, true);
+        let frac = MAX_DROP_ROWS as f32 / total as f32;
+        let thumb_h = (back[3] * frac).max(20.0);
+        let max_scroll = (total - MAX_DROP_ROWS) as f32;
+        let t = if max_scroll > 0.0 {
+            scroll as f32 / max_scroll
+        } else {
+            0.0
+        };
+        let thumb_y = back[1] + t * (back[3] - thumb_h);
+        place_sprite(
+            world,
+            LIST_THUMB,
+            [track[0], thumb_y, SCROLLBAR_W, thumb_h],
+            THUMB_TINT,
             true,
         );
     }
@@ -1210,6 +1368,8 @@ mod tests {
             form_title: "New PointLight",
             form_fields: &[],
             form_focus: FormFocus::Name,
+            field_dropdown: None,
+            field_dropdown_scroll: 0,
             form_error: None,
             mouse,
         }
@@ -1384,6 +1544,8 @@ mod tests {
             form_title: "New X",
             form_fields: &fields,
             form_focus: FormFocus::Name,
+            field_dropdown: None,
+            field_dropdown_scroll: 0,
             form_error: None,
             mouse: [0.0, 0.0],
         };
@@ -1518,8 +1680,25 @@ mod tests {
             form_title: "New asset",
             form_fields: fields,
             form_focus: FormFocus::Name,
+            field_dropdown: None,
+            field_dropdown_scroll: 0,
             form_error: None,
             mouse: [0.0, 0.0],
+        }
+    }
+
+    // A ref field with `n` options past `(none)`, for the dropdown tests. With
+    // `n > CYCLE_MAX` it opens a dropdown rather than cycling.
+    fn ref_field(n: usize) -> FormField {
+        let mut variants = vec![form::NONE_LABEL.to_string()];
+        variants.extend((0..n).map(|i| format!("tex_{i}")));
+        FormField {
+            key: "texture".into(),
+            kind: FieldKind::Ref { target: "Texture" },
+            initial: String::new(),
+            boolval: false,
+            variants,
+            variant_idx: 0,
         }
     }
 
@@ -1680,6 +1859,120 @@ mod tests {
         );
     }
 
+    // A ref field with more than `CYCLE_MAX` options opens a dropdown on click
+    // rather than cycling (cycling a long list is tedious); a small one still
+    // cycles.
+    #[test]
+    fn large_choice_field_opens_a_dropdown_small_one_cycles() {
+        let vw = 1280.0;
+        let big = [ref_field(CYCLE_MAX + 1)]; // (none) + CYCLE_MAX+1 = over the cap
+        let v = form_view(&big);
+        let c = form_control_rect(vw, 1);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            Some(PanelAction::OpenFieldDropdown(0)),
+            "a large variant set opens a dropdown"
+        );
+        let small = [ref_field(1)]; // (none) + 1 = 2 variants, within the cap
+        let vs = form_view(&small);
+        assert_eq!(
+            hit_test(&vs, c[0] + 5.0, c[1] + 5.0, vw),
+            Some(PanelAction::CycleField(0)),
+            "a small variant set still cycles"
+        );
+    }
+
+    // An open value dropdown is modal: its option rows pick, anything else closes.
+    #[test]
+    fn open_field_dropdown_picks_options_and_is_modal() {
+        let vw = 1280.0;
+        let fields = [ref_field(CYCLE_MAX + 3)];
+        let mut v = form_view(&fields);
+        v.field_dropdown = Some(0);
+        // Option row 2 (index 2 into variants) picks that option.
+        let opt = field_option_rect(vw, 1, 2);
+        assert_eq!(
+            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, vw),
+            Some(PanelAction::PickFieldOption(2))
+        );
+        // A click off the option list dismisses it (e.g. up on the name row).
+        let name = form_control_rect(vw, 0);
+        assert_eq!(
+            hit_test(&v, name[0] + 5.0, name[1] + 5.0, vw),
+            Some(PanelAction::CloseOverlays)
+        );
+    }
+
+    // A scrolled dropdown maps a visible row to `scroll + row`.
+    #[test]
+    fn open_field_dropdown_maps_a_scrolled_row() {
+        let vw = 1280.0;
+        let fields = [ref_field(20)];
+        let mut v = form_view(&fields);
+        v.field_dropdown = Some(0);
+        v.field_dropdown_scroll = 3;
+        let r0 = field_option_rect(vw, 1, 0);
+        assert_eq!(
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, vw),
+            Some(PanelAction::PickFieldOption(3)),
+            "visible row 0 is option `scroll + 0`"
+        );
+    }
+
+    // Laying out an open dropdown shows its backing + option rows and hides the
+    // form controls it floats over (so their opaque boxes cannot paint over it),
+    // while leaving the opening field's own button visible.
+    #[test]
+    fn open_dropdown_hides_covered_controls_and_shows_options() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let fields = [
+            ref_field(CYCLE_MAX + 2),
+            FormField {
+                key: "intensity".into(),
+                kind: FieldKind::Float,
+                initial: "1".into(),
+                boolval: false,
+                variants: Vec::new(),
+                variant_idx: 0,
+            },
+        ];
+        let mut v = form_view(&fields);
+        v.field_dropdown = Some(0);
+        apply(&mut world, Some(&v), vw);
+
+        // The dropdown backing and its first option row (the current `(none)`)
+        // show.
+        assert!(sprite_visible(&world, COMBO_BG), "dropdown backing shows");
+        assert!(sprite_visible(&world, combo_row_bg(0)), "option row shows");
+        let opt0 = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == combo_row_label(0))
+            .unwrap();
+        assert!(opt0.visible && opt0.content == form::NONE_LABEL);
+        // The opening ref field's own button stays visible (dropdown is below it).
+        assert!(sprite_visible(&world, form_toggle_bg(0)));
+        // The following float field's whole row is hidden while covered: a visible
+        // input would synth an opaque box over the list, and a long caption could
+        // overflow across it, so both the text field and its caption are suppressed.
+        assert!(
+            !world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == form_input(1))
+                .unwrap()
+                .visible,
+            "the covered text field is hidden while the dropdown is open"
+        );
+        assert!(
+            !world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == form_row_label(2))
+                .unwrap()
+                .visible,
+            "the covered row's caption is hidden too (no overflow over the list)"
+        );
+    }
+
     // Every offered add-type is a real External type whose default args cook in a
     // minimal rendering world. This is the guard the curated list leans on: a type
     // that needs a source file or a required cross-reference (Mesh, AudioClip,
@@ -1696,6 +1989,69 @@ mod tests {
             );
             concinnity_app::build_pipeline_from_str(&world, None)
                 .unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
+        }
+    }
+
+    // The set of offered types is exactly the addable types that cook with default
+    // args AND are useful when added blank: no world-config singleton (those want an
+    // edit-or-add flow), no engine-injected HUD, and no type whose value is a nested
+    // array / source file it can't be given here. Enforced so a newly-registered
+    // addable-and-blank-useful type is a deliberate ADD_TYPES choice, not forgotten.
+    #[test]
+    fn add_types_are_the_curated_blank_useful_addable_set() {
+        use crate::ecs::ComponentType;
+        // Types that cook blank but are deliberately NOT offered, each for a reason
+        // above. Keeping this explicit means the assertion below flags anything new.
+        const EXCLUDED: &[&str] = &[
+            // World-config singletons (edit-or-add, not blind append).
+            "GraphicsConfig",
+            "PhysicsConfig",
+            "PostProcessConfig",
+            "StreamingConfig",
+            "Window",
+            "Application",
+            // Engine-injected HUDs (added by `cn build`, not by hand).
+            "DebugHud",
+            "StatHud",
+            // Defined by nested content / a source the scalar form can't supply, so
+            // a blank instance is inert.
+            "Animation",
+            "File",
+            "LayoutContainer",
+            "Model",
+            "PropBody",
+            "RigidBody",
+            "Scene",
+            "SceneReel",
+            "ScrollPanel",
+            "Spawner",
+            "Story",
+        ];
+        let offered: std::collections::HashSet<&str> = ADD_TYPES.iter().copied().collect();
+        let excluded: std::collections::HashSet<&str> = EXCLUDED.iter().copied().collect();
+        for (_t, reg) in ComponentType::addable_types() {
+            let ty = reg.type_name;
+            let cooks = concinnity_app::build_pipeline_from_str(
+                &format!(
+                    "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
+                     {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
+                ),
+                None,
+            )
+            .is_ok();
+            if !cooks {
+                // Needs a source / required reference: never offerable blank, and it
+                // does not belong in the EXCLUDED (cooks-but-curated-out) list.
+                assert!(
+                    !offered.contains(ty),
+                    "{ty} cannot cook blank yet is offered"
+                );
+                continue;
+            }
+            assert!(
+                offered.contains(ty) ^ excluded.contains(ty),
+                "{ty} cooks blank: add it to ADD_TYPES or to the EXCLUDED list (with a reason), not both/neither"
+            );
         }
     }
 

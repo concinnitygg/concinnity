@@ -75,6 +75,10 @@ pub(crate) struct EditorHook {
     form_error: Option<String>,
     // The `entries` index whose Edit / Delete menu is open, if any.
     row_menu: Option<usize>,
+    // The form arg field whose value dropdown is open (a large enum / ref set),
+    // and its scroll offset. `None` outside an open dropdown.
+    field_dropdown: Option<usize>,
+    field_dropdown_scroll: usize,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
@@ -147,6 +151,8 @@ impl EditorHook {
             form_focus: FormFocus::Name,
             form_error: None,
             row_menu: None,
+            field_dropdown: None,
+            field_dropdown_scroll: 0,
         }
     }
 
@@ -404,6 +410,8 @@ impl EditorHook {
             form_title: &d.form_title,
             form_fields: &self.form_fields,
             form_focus: self.form_focus,
+            field_dropdown: self.field_dropdown,
+            field_dropdown_scroll: self.field_dropdown_scroll,
             form_error: self.form_error.as_deref(),
             mouse,
         }
@@ -493,6 +501,8 @@ impl EditorHook {
         self.mode = panel::Mode::AddForm;
         self.combo = Combo::Closed;
         self.row_menu = None;
+        self.field_dropdown = None;
+        self.field_dropdown_scroll = 0;
         panel::focus_field_with(world, panel::NAME_INPUT, &name);
         for (j, field) in self.form_fields.iter().enumerate() {
             // Bool (checkbox), Enum + Ref (cycling buttons) have no text input.
@@ -512,6 +522,8 @@ impl EditorHook {
         self.form_fields.clear();
         self.form_focus = FormFocus::Name;
         self.form_error = None;
+        self.field_dropdown = None;
+        self.field_dropdown_scroll = 0;
         self.mode = panel::Mode::List;
     }
 
@@ -588,11 +600,32 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
+            PanelAction::OpenFieldDropdown(i) => {
+                // Toggle: a second click on the open field's control closes it.
+                self.field_dropdown = if self.field_dropdown == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.field_dropdown_scroll = 0;
+                self.form_error = None;
+            }
+            PanelAction::PickFieldOption(opt) => {
+                if let Some(open) = self.field_dropdown
+                    && let Some(f) = self.form_fields.get_mut(open)
+                    && opt < f.variants.len()
+                {
+                    f.variant_idx = opt;
+                }
+                self.field_dropdown = None;
+                self.form_error = None;
+            }
             PanelAction::ConfirmAdd => self.confirm_form(world),
             PanelAction::CancelForm => self.close_form(),
             PanelAction::CloseOverlays => {
                 self.combo = Combo::Closed;
                 self.row_menu = None;
+                self.field_dropdown = None;
             }
             PanelAction::Consume => {}
         }
@@ -670,7 +703,14 @@ impl EditorHook {
                     .saturating_sub(panel::MAX_ROWS);
                 self.combo_scroll = scroll_step(self.combo_scroll, delta, max);
             }
-            panel::Mode::AddForm => {}
+            panel::Mode::AddForm => {
+                if let Some(open) = self.field_dropdown {
+                    let total = self.form_fields.get(open).map_or(0, |f| f.variants.len());
+                    let max = total.saturating_sub(panel::MAX_DROP_ROWS);
+                    self.field_dropdown_scroll =
+                        scroll_step(self.field_dropdown_scroll, delta, max);
+                }
+            }
         }
     }
 
@@ -729,10 +769,13 @@ impl DebugHook for EditorHook {
                         self.apply_panel(pa, world);
                     }
                 }
-                // Wheel over the panel body scrolls the list / combo options.
+                // Wheel over the panel body scrolls the list / combo options. An
+                // open value dropdown is modal and can extend past the fixed body
+                // bounds, so the wheel scrolls it from anywhere while it is open.
                 if self.panel_open
                     && input.scroll_delta.abs() > 0.5
-                    && panel::cursor_over_body(input.mouse_x, input.mouse_y, vw)
+                    && (self.field_dropdown.is_some()
+                        || panel::cursor_over_body(input.mouse_x, input.mouse_y, vw))
                 {
                     self.scroll(input.scroll_delta, world);
                 }
@@ -1262,6 +1305,99 @@ mod tests {
         assert_eq!(
             decal["args"]["texture"], "grass_tex",
             "the reference persisted as the asset's name"
+        );
+    }
+
+    // A ref field with many candidate assets opens a value dropdown (not a cycle):
+    // the dropdown picks an option, which persists as that asset's name.
+    #[test]
+    fn add_form_ref_field_dropdown_picks_and_persists() {
+        // More Textures than the cycle cap, so the picker is a dropdown.
+        let mut entries = Vec::new();
+        for i in 0..(panel::CYCLE_MAX + 3) {
+            entries.push(entry(&format!("tex_{i}"), "Texture"));
+        }
+        let mut h = hook(entries);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.open_form(&mut world, "Decal".to_string(), None);
+        let idx = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "texture")
+            .expect("texture ref field");
+        // (none) + the textures exceeds CYCLE_MAX, so a click opens a dropdown.
+        assert!(h.form_fields[idx].variants.len() > panel::CYCLE_MAX);
+        h.apply_panel(PanelAction::OpenFieldDropdown(idx), &mut world);
+        assert_eq!(h.field_dropdown, Some(idx), "the dropdown opened");
+        // Pick option 3 (a real texture, past (none) at 0).
+        let picked = h.form_fields[idx].variants[3].clone();
+        h.apply_panel(PanelAction::PickFieldOption(3), &mut world);
+        assert!(h.field_dropdown.is_none(), "picking closes the dropdown");
+        assert_eq!(h.form_fields[idx].variant_idx, 3, "the option was selected");
+        set_field(&mut world, panel::NAME_INPUT, "splat");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let decal = h.entries.iter().find(|e| e["name"] == "splat").unwrap();
+        assert_eq!(
+            decal["args"]["texture"], picked,
+            "the dropdown-picked reference persisted as the asset's name"
+        );
+    }
+
+    // A second click on an open dropdown's field toggles it closed; CloseOverlays
+    // also dismisses it.
+    #[test]
+    fn field_dropdown_toggles_and_close_overlays_dismisses_it() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.selected_type = Some("Decal".to_string());
+        h.mode = panel::Mode::AddForm;
+        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
+        assert_eq!(h.field_dropdown, Some(0));
+        // Same field again -> closed.
+        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
+        assert!(h.field_dropdown.is_none(), "a second click closes it");
+        // Reopen, then CloseOverlays dismisses it.
+        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
+        h.apply_panel(PanelAction::CloseOverlays, &mut world);
+        assert!(h.field_dropdown.is_none(), "CloseOverlays dismisses it");
+    }
+
+    // Wheeling scrolls an open value dropdown (which can extend past the fixed
+    // panel body), independent of the cursor-over-body gate.
+    #[test]
+    fn scrolling_advances_an_open_field_dropdown() {
+        let mut entries = Vec::new();
+        for i in 0..(panel::MAX_DROP_ROWS + 4) {
+            entries.push(entry(&format!("tex_{i}"), "Texture"));
+        }
+        let mut h = hook(entries);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.open_form(&mut world, "Decal".to_string(), None);
+        let idx = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "texture")
+            .expect("texture ref field");
+        h.apply_panel(PanelAction::OpenFieldDropdown(idx), &mut world);
+        assert_eq!(h.field_dropdown_scroll, 0);
+        h.scroll(1.0, &world);
+        assert_eq!(
+            h.field_dropdown_scroll, 1,
+            "wheel down advances the dropdown"
+        );
+        h.scroll(-1.0, &world);
+        assert_eq!(h.field_dropdown_scroll, 0, "wheel up rewinds it");
+        // It cannot scroll past the last page.
+        for _ in 0..50 {
+            h.scroll(1.0, &world);
+        }
+        let total = h.form_fields[idx].variants.len();
+        assert_eq!(
+            h.field_dropdown_scroll,
+            total - panel::MAX_DROP_ROWS,
+            "scroll clamps to the last full page"
         );
     }
 
