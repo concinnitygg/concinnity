@@ -14,10 +14,12 @@
 // (discovered per field via `ComponentType::field_enum_variants`); and an
 // asset-reference field (`ComponentType::ref_fields`), cycled through `(none)` +
 // the world's assets of the target type (the hook fills the options via
-// `set_ref_options`). Every other kind (variable-length arrays, nested objects,
-// undeclared nulls) is left at its default and round-trips untouched. The
-// assembled object is validated by the caller via
-// `ComponentType::reserialize_args`.
+// `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
+// a dotted path (`controller.move_speed`), up to `MAX_NEST_DEPTH` levels; the leaf
+// edits like any scalar and `assemble` writes it back into the sub-object via
+// `set_at_path`. Every other kind (variable-length arrays, deeper objects,
+// undeclared nulls) is left at its default and round-trips untouched. The assembled
+// object is validated by the caller via `ComponentType::reserialize_args`.
 
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
@@ -155,19 +157,72 @@ pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-// The editable scalar fields for a type, in declaration order, capped at `MAX`.
+// How deep the form descends into nested objects. A field whose default value is
+// a plain object is flattened into its scalar leaves, keyed by a dotted path
+// (`controller.move_speed`), up to this many levels below the root. Arrays and
+// deeper objects are left at their defaults (they want the nested-array / deeper
+// controls). 2 covers the current cases (Camera3D's `controller`).
+const MAX_NEST_DEPTH: usize = 2;
+
+// The editable fields for a type, in declaration order, capped at `MAX_FIELDS`.
 // `seed` supplies current values (an existing entry's args when editing),
 // overriding the defaults for the initial text / bool state; the kind is always
-// taken from the default so it is stable.
+// taken from the default so it is stable. Nested plain objects are flattened into
+// dotted-path leaves (see `collect_fields`).
 pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<FormField> {
     let base = base_args(ty);
     let ct = ComponentType::parse(ty);
     let mut out = Vec::new();
     let mut truncated = 0;
-    for (key, def) in &base {
+    collect_fields(ct, "", &base, seed, 0, &mut out, &mut truncated);
+    if truncated > 0 {
+        tracing::warn!(
+            "editor: {ty} has {truncated} more editable field(s) than the form pool ({MAX_FIELDS}); the rest keep their defaults"
+        );
+    }
+    out
+}
+
+// Append the editable leaves of `obj` (the defaults at `prefix`, empty at the
+// root) to `out`, recursing into plain nested objects with dotted-path keys.
+// `root_seed` is always the top-level args (an existing entry's values when
+// editing); leaves read their current value from it by full path.
+fn collect_fields(
+    ct: Option<ComponentType>,
+    prefix: &str,
+    obj: &Map<String, Value>,
+    root_seed: Option<&Map<String, Value>>,
+    depth: usize,
+    out: &mut Vec<FormField>,
+    truncated: &mut usize,
+) {
+    for (key, def) in obj {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         // Asset-ref fields default to null (which `kind_of` skips), so detect them
-        // first from the type's declared references.
-        let mut kind = match ct.and_then(|c| ref_target_of(c, key)) {
+        // first from the type's declared references (matched by full path).
+        let ref_target = ct.and_then(|c| ref_target_of(c, &path));
+        // A plain nested object that is not itself a declared reference is flattened
+        // into its leaves one level deeper -- UNLESS the seed (an entry being edited)
+        // authored this path as a non-object. The load-bearing case is Camera3D's
+        // `controller: null` (an "uncontrolled cutscene camera" marker): flattening
+        // from the object-shaped DEFAULT would seed leaves from the default and, on
+        // `assemble`, rebuild a full default object over the authored null. Left
+        // unflattened, the object default is not an editable leaf kind, so the field
+        // is skipped and the merge preserves the authored value untouched.
+        if ref_target.is_none()
+            && depth < MAX_NEST_DEPTH
+            && let Value::Object(nested) = def
+            && !nested.is_empty()
+            && !seed_overrides_with_non_object(root_seed, &path)
+        {
+            collect_fields(ct, &path, nested, root_seed, depth + 1, out, truncated);
+            continue;
+        }
+        let mut kind = match ref_target {
             Some(target) => FieldKind::Ref { target },
             None => match kind_of(key, def) {
                 Some(k) => k,
@@ -175,15 +230,17 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
             },
         };
         if out.len() >= MAX_FIELDS {
-            truncated += 1;
+            *truncated += 1;
             continue;
         }
-        let cur = seed.and_then(|s| s.get(key)).unwrap_or(def);
+        let cur = root_seed.and_then(|s| get_at_path(s, &path)).unwrap_or(def);
         // A string field may be a string-enum: promote it to a cycling picker when
-        // the type reports a variant set for it.
+        // the type reports a variant set for it. Only at the root -- the probe names
+        // a top-level arg, so it cannot resolve a nested field's variants.
         let mut variants = Vec::new();
         let mut variant_idx = 0;
-        if matches!(kind, FieldKind::Str)
+        if prefix.is_empty()
+            && matches!(kind, FieldKind::Str)
             && let Some(v) = ct.and_then(|c| c.field_enum_variants(key))
         {
             variant_idx = cur
@@ -203,7 +260,7 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
             _ => value_text(cur),
         };
         out.push(FormField {
-            key: key.clone(),
+            key: path,
             kind,
             initial,
             boolval,
@@ -211,12 +268,44 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
             variant_idx,
         });
     }
-    if truncated > 0 {
-        tracing::warn!(
-            "editor: {ty} has {truncated} more editable field(s) than the form pool ({MAX_FIELDS}); the rest keep their defaults"
-        );
+}
+
+// Whether the seed (an entry being edited) authored `path` as a present non-object
+// value -- e.g. Camera3D's `controller: null`. Such a value must not be flattened
+// away, since the leaves would be rebuilt from the object-shaped default.
+fn seed_overrides_with_non_object(root_seed: Option<&Map<String, Value>>, path: &str) -> bool {
+    matches!(root_seed.and_then(|s| get_at_path(s, path)), Some(v) if !v.is_object())
+}
+
+// The value at a dotted `path` within an args object (`controller.move_speed`),
+// or `None` if any segment is missing / not an object. A single-segment path is a
+// plain key lookup.
+fn get_at_path<'a>(obj: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut parts = path.split('.');
+    let mut cur = obj.get(parts.next()?)?;
+    for p in parts {
+        cur = cur.as_object()?.get(p)?;
     }
-    out
+    Some(cur)
+}
+
+// Set the value at a dotted `path`, creating intermediate objects as needed (and
+// replacing a non-object segment with one). A single-segment path is a plain
+// insert.
+fn set_at_path(obj: &mut Map<String, Value>, path: &str, val: Value) {
+    let parts: Vec<&str> = path.split('.').collect();
+    let (leaf, parents) = parts.split_last().expect("a path has at least one segment");
+    let mut cur = obj;
+    for p in parents {
+        let entry = cur
+            .entry((*p).to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        cur = entry.as_object_mut().expect("just ensured an object");
+    }
+    cur.insert((*leaf).to_string(), val);
 }
 
 // Coerce one field's edited `text` (or its `boolval`) into a JSON value, falling
@@ -304,12 +393,15 @@ pub(crate) fn assemble(
         }
     }
     for (i, field) in fields.iter().enumerate() {
-        // Fall back to the value already in `out` (the entry's authored value when
-        // editing, else the type default), so a cleared / mistyped number keeps
-        // what was there rather than snapping back to the type default.
-        let fallback = out.get(&field.key).cloned().unwrap_or(Value::Null);
+        // Fall back to the value already in `out` at this (possibly nested) path
+        // (the entry's authored value when editing, else the type default), so a
+        // cleared / mistyped number keeps what was there rather than snapping back
+        // to the type default.
+        let fallback = get_at_path(&out, &field.key)
+            .cloned()
+            .unwrap_or(Value::Null);
         let text = texts.get(i).map(String::as_str).unwrap_or("");
-        out.insert(field.key.clone(), coerce(field, text, &fallback));
+        set_at_path(&mut out, &field.key, coerce(field, text, &fallback));
     }
     out
 }
@@ -562,6 +654,131 @@ mod tests {
         );
     }
 
+    // A nested plain object (Camera3D's `controller`) is flattened into dotted-path
+    // leaves, so its scalars / bools / vectors edit in the same flat form.
+    #[test]
+    fn fields_for_flattens_a_nested_object() {
+        let fields = fields_for("Camera3D", None);
+        let kind = |k: &str| fields.iter().find(|f| f.key == k).map(|f| f.kind);
+        // Top-level scalars are still present.
+        assert_eq!(kind("fov_y_degrees"), Some(FieldKind::Float));
+        // Nested `controller` leaves become dotted-path fields of the right kind.
+        assert_eq!(kind("controller.free_fly"), Some(FieldKind::Bool));
+        assert_eq!(kind("controller.move_speed"), Some(FieldKind::Float));
+        assert_eq!(
+            kind("controller.bounds_min"),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: false
+            })
+        );
+        // The nested bool's state is seeded from its default (free_fly defaults true).
+        let ff = fields
+            .iter()
+            .find(|f| f.key == "controller.free_fly")
+            .unwrap();
+        assert!(ff.boolval, "controller.free_fly default is true");
+        // A deeper null Option (`controller.follow`) is left at its default, not
+        // flattened.
+        assert!(
+            fields
+                .iter()
+                .all(|f| !f.key.starts_with("controller.follow")),
+            "a null nested Option is not descended into"
+        );
+    }
+
+    // Editing a nested (dotted-path) field writes back into its sub-object, and the
+    // assembled args still cook.
+    #[test]
+    fn assemble_writes_a_nested_field_back_into_its_object() {
+        let fields = fields_for("Camera3D", None);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "controller.move_speed")
+            .expect("controller.move_speed field");
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "7.5".into();
+        let args = assemble("Camera3D", None, &fields, &texts);
+        assert_eq!(
+            args["controller"]["move_speed"].as_f64(),
+            Some(7.5),
+            "the nested edit lands inside the sub-object"
+        );
+        assert!(validate("Camera3D", &args).is_ok(), "the nested edit cooks");
+    }
+
+    // Editing a nested field of an existing entry keeps the sub-object's other
+    // (unshown / untouched) values intact.
+    #[test]
+    fn assemble_preserves_sibling_nested_values() {
+        let seed = base_args("Camera3D");
+        let fields = fields_for("Camera3D", Some(&seed));
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "controller.move_speed")
+            .unwrap();
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "2.0".into();
+        let args = assemble("Camera3D", Some(&seed), &fields, &texts);
+        // move_speed changed; a sibling default (sprint_multiplier = 3.0) is intact.
+        assert_eq!(args["controller"]["move_speed"].as_f64(), Some(2.0));
+        assert_eq!(args["controller"]["sprint_multiplier"].as_f64(), Some(3.0));
+    }
+
+    // A nullable nested object the entry authored as `null` (Camera3D's
+    // `controller: null` cutscene marker) must NOT be flattened or rebuilt: the
+    // authored null has to survive an edit, else a cutscene camera silently becomes
+    // a free-fly one.
+    #[test]
+    fn editing_a_null_nested_object_preserves_the_null() {
+        let mut seed = base_args("Camera3D");
+        seed.insert("controller".into(), Value::Null);
+        let fields = fields_for("Camera3D", Some(&seed));
+        // No controller.* leaves are offered (the authored null is not descended into).
+        assert!(
+            fields.iter().all(|f| !f.key.starts_with("controller")),
+            "a null nested object is not flattened into leaves"
+        );
+        // Assembling after (e.g.) a top-level edit keeps controller null.
+        let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        let args = assemble("Camera3D", Some(&seed), &fields, &texts);
+        assert_eq!(
+            args["controller"],
+            Value::Null,
+            "the authored null controller survives the edit"
+        );
+        assert!(
+            validate("Camera3D", &args).is_ok(),
+            "a null controller cooks"
+        );
+    }
+
+    #[test]
+    fn path_helpers_get_and_set_nested_values() {
+        let mut m = base_args("Camera3D");
+        assert!(
+            get_at_path(&m, "controller.free_fly")
+                .and_then(Value::as_bool)
+                .is_some()
+        );
+        set_at_path(&mut m, "controller.move_speed", Value::from(9.0));
+        assert_eq!(
+            get_at_path(&m, "controller.move_speed").and_then(Value::as_f64),
+            Some(9.0)
+        );
+        // Missing intermediates are created; single-segment paths are plain ops.
+        let mut empty = Map::new();
+        set_at_path(&mut empty, "a.b.c", Value::from(1));
+        assert_eq!(
+            get_at_path(&empty, "a.b.c").and_then(Value::as_i64),
+            Some(1)
+        );
+        set_at_path(&mut empty, "x", Value::from(2));
+        assert_eq!(get_at_path(&empty, "x").and_then(Value::as_i64), Some(2));
+        assert!(get_at_path(&empty, "a.b.missing").is_none());
+    }
+
     #[test]
     fn unknown_type_has_no_fields_and_empty_base() {
         assert!(fields_for("NotARealType", None).is_empty());
@@ -688,7 +905,7 @@ mod tests {
     // the cook side), so adding a type whose form mis-derives is caught here.
     #[test]
     fn every_add_type_form_round_trips_its_defaults() {
-        for &ty in crate::editor::panel::ADD_TYPES {
+        for ty in crate::editor::panel::picker_types() {
             let fields = fields_for(ty, None);
             let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
             let args = assemble(ty, None, &fields, &texts);

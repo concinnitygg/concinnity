@@ -86,6 +86,32 @@ pub(crate) const ADD_TYPES: &[&str] = &[
     "AudioCue",
 ];
 
+// World-config singletons: exactly one instance belongs to a world. They are
+// offered in the "+" picker alongside `ADD_TYPES`, but picking one EDITS the
+// world's existing instance when it has one and only ADDS when it does not (the
+// hook's `open_form` is handed the existing entry's index) -- an edit-or-add flow,
+// never a blind second append. Held out of `ADD_TYPES` so the plain add path can
+// keep assuming multi-instance. Like the addables, each must cook blank (guarded).
+pub(crate) const CONFIG_TYPES: &[&str] = &[
+    "GraphicsConfig",
+    "PhysicsConfig",
+    "PostProcessConfig",
+    "StreamingConfig",
+    "Window",
+    "Application",
+];
+
+// Whether `ty` is a world-config singleton (edit-or-add rather than blind append).
+pub(crate) fn is_singleton(ty: &str) -> bool {
+    CONFIG_TYPES.contains(&ty)
+}
+
+// Every type the "+" picker offers: the multi-instance addables plus the config
+// singletons.
+pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
+    ADD_TYPES.iter().chain(CONFIG_TYPES.iter()).copied()
+}
+
 // The label of the "all assets" filter option (the default), shown first in the
 // combo's filter list and as the combo's text when no type filter is active.
 pub(crate) const ALL_LABEL: &str = "Assets";
@@ -235,6 +261,9 @@ const MENU_ROW_H: f32 = 30.0;
 // Add / edit form rows: a compact row per field, a label column on the left.
 const FIELD_H: f32 = 30.0;
 const LABEL_COL: f32 = 108.0;
+// Left inset per nesting level for a flattened nested (dotted-path) field's leaf
+// caption, so sub-object fields read as indented under their parent.
+const NEST_INDENT: f32 = 8.0;
 
 const PANEL_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const PLUS_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
@@ -908,11 +937,18 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
         if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(vw, row), d)) {
             continue;
         }
+        // A nested (dotted-path) field shows its indented leaf name -- the full path
+        // would overflow the label column.
+        let depth = field.key.matches('.').count();
+        let leaf = field.key.rsplit('.').next().unwrap_or(field.key.as_str());
         place_left_label(
             world,
             form_row_label(row),
-            [rect[0] + PAD, rect[1] + FIELD_H * 0.5 - 10.0],
-            &field.key,
+            [
+                rect[0] + PAD + depth as f32 * NEST_INDENT,
+                rect[1] + FIELD_H * 0.5 - 10.0,
+            ],
+            leaf,
             LABEL,
             true,
         );
@@ -1979,7 +2015,7 @@ mod tests {
     // Joint, ...) fails here and must not be listed.
     #[test]
     fn add_types_cook_with_default_args() {
-        for &ty in ADD_TYPES {
+        for ty in picker_types() {
             let ct = crate::ecs::ComponentType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} is a real component type"));
             assert!(ct.addable(), "{ty} must be External / addable");
@@ -2003,13 +2039,6 @@ mod tests {
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[
-            // World-config singletons (edit-or-add, not blind append).
-            "GraphicsConfig",
-            "PhysicsConfig",
-            "PostProcessConfig",
-            "StreamingConfig",
-            "Window",
-            "Application",
             // Engine-injected HUDs (added by `cn build`, not by hand).
             "DebugHud",
             "StatHud",
@@ -2027,7 +2056,9 @@ mod tests {
             "Spawner",
             "Story",
         ];
-        let offered: std::collections::HashSet<&str> = ADD_TYPES.iter().copied().collect();
+        // The config singletons are offered too (edit-or-add), so "offered" spans
+        // both lists.
+        let offered: std::collections::HashSet<&str> = picker_types().collect();
         let excluded: std::collections::HashSet<&str> = EXCLUDED.iter().copied().collect();
         for (_t, reg) in ComponentType::addable_types() {
             let ty = reg.type_name;

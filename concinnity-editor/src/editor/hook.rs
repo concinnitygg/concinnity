@@ -353,13 +353,11 @@ impl EditorHook {
                 all.into_iter().filter(|o| matches(o)).collect()
             }
             Combo::Picker => {
-                let mut opts: Vec<String> = panel::ADD_TYPES
-                    .iter()
-                    .copied()
+                let mut opts: Vec<String> = panel::picker_types()
                     .filter(|t| matches(t))
                     .map(|t| t.to_string())
                     .collect();
-                // The picker lists the addable types alphabetically (ascending).
+                // The picker lists the offered types alphabetically (ascending).
                 opts.sort();
                 opts
             }
@@ -559,7 +557,17 @@ impl EditorHook {
                 }
                 Combo::Picker => {
                     if let Some(ty) = self.combo_options(world).get(i).cloned() {
-                        self.open_form(world, ty, None);
+                        // A config singleton edits the world's existing instance if
+                        // it has one, else adds it (edit-or-add); a multi-instance
+                        // asset always adds a new one.
+                        let existing = panel::is_singleton(&ty)
+                            .then(|| {
+                                self.entries
+                                    .iter()
+                                    .position(|e| entry_type(e) == Some(ty.as_str()))
+                            })
+                            .flatten();
+                        self.open_form(world, ty, existing);
                     }
                 }
                 Combo::Closed => {}
@@ -1078,6 +1086,60 @@ mod tests {
         assert_eq!(h.entries[1]["name"], "lamp_1", "collision is suffixed");
     }
 
+    // Picking a config singleton from the "+" picker edits the world's existing
+    // instance if it has one (no second append), and adds one if it does not.
+    #[test]
+    fn config_singleton_picker_edits_existing_else_adds() {
+        // A world that already has a GraphicsConfig: picking it opens an EDIT.
+        let mut h = hook(vec![serde_json::json!({
+            "name": "gfx", "type": "GraphicsConfig", "args": {}
+        })]);
+        let mut world = world_with_fields();
+        h.apply_top(HudAction::ToggleAssets);
+        h.apply_panel(PanelAction::TogglePicker, &mut world);
+        let gi = h
+            .combo_options(&world)
+            .iter()
+            .position(|o| o == "GraphicsConfig")
+            .expect("GraphicsConfig is offered in the picker");
+        h.apply_panel(PanelAction::PickOption(gi), &mut world);
+        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert_eq!(
+            h.editing,
+            Some(0),
+            "picking a present singleton edits it, not a new add"
+        );
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(
+            h.entries
+                .iter()
+                .filter(|e| e["type"] == "GraphicsConfig")
+                .count(),
+            1,
+            "the singleton was edited in place, never duplicated"
+        );
+
+        // A world WITHOUT the singleton: picking it opens a fresh add.
+        let mut h2 = hook(Vec::new());
+        let mut world2 = world_with_fields();
+        h2.apply_top(HudAction::ToggleAssets);
+        h2.apply_panel(PanelAction::TogglePicker, &mut world2);
+        let wi = h2
+            .combo_options(&world2)
+            .iter()
+            .position(|o| o == "Window")
+            .expect("Window is offered in the picker");
+        h2.apply_panel(PanelAction::PickOption(wi), &mut world2);
+        assert_eq!(h2.mode, panel::Mode::AddForm);
+        assert!(h2.editing.is_none(), "no existing Window -> an add form");
+        h2.apply_panel(PanelAction::ConfirmAdd, &mut world2);
+        assert_eq!(
+            h2.entries.iter().filter(|e| e["type"] == "Window").count(),
+            1,
+            "the missing singleton was added"
+        );
+    }
+
     #[test]
     fn cancel_form_returns_to_the_list_without_adding() {
         let mut h = hook(Vec::new());
@@ -1103,12 +1165,14 @@ mod tests {
         assert_eq!(opts, sorted, "the picker is alphabetized ascending");
         assert_eq!(
             opts.len(),
-            panel::ADD_TYPES.len(),
-            "every addable type shown"
+            panel::picker_types().count(),
+            "every offered type shown (addables + config singletons)"
         );
-        // Concretely: AudioCue sorts before Sprite.
+        // Concretely: AudioCue sorts before Sprite, and a config singleton is mixed
+        // in alphabetically (Application sorts before AudioCue).
         let pos = |t: &str| opts.iter().position(|o| o == t).unwrap();
         assert!(pos("AudioCue") < pos("Sprite"));
+        assert!(pos("Application") < pos("AudioCue"));
     }
 
     #[test]
@@ -1156,8 +1220,14 @@ mod tests {
         let mut world = world_with_fields();
         h.apply_top(HudAction::ToggleAssets);
         h.apply_panel(PanelAction::TogglePicker, &mut world);
-        let ty = h.combo_options(&world)[0].clone();
-        h.apply_panel(PanelAction::PickOption(0), &mut world);
+        // Pick a type with a float arg through the real picker->pick path.
+        let ty = "PointLight".to_string();
+        let idx = h
+            .combo_options(&world)
+            .iter()
+            .position(|o| o == &ty)
+            .expect("PointLight is offered");
+        h.apply_panel(PanelAction::PickOption(idx), &mut world);
         assert_eq!(h.mode, panel::Mode::AddForm);
         assert!(!h.form_fields.is_empty(), "the type exposes arg fields");
         // Edit a float field via its input.
@@ -1205,6 +1275,35 @@ mod tests {
             h.entries[0]["args"][&key],
             serde_json::json!([0.1, 0.2, 0.3]),
             "the edited colour persisted as a numeric array"
+        );
+    }
+
+    // Editing a nested (dotted-path) field through the form persists into the
+    // sub-object: Camera3D's `controller.move_speed`.
+    #[test]
+    fn add_form_writes_a_nested_object_field() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "Camera3D".to_string(), None);
+        let j = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "controller.move_speed")
+            .expect("the nested controller.move_speed field is offered");
+        assert!(matches!(h.form_fields[j].kind, form::FieldKind::Float));
+        set_field(&mut world, panel::form_input(j), "12.5");
+        set_field(&mut world, panel::NAME_INPUT, "cam");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let cam = h
+            .entries
+            .iter()
+            .find(|e| e["name"] == "cam")
+            .expect("the camera was added");
+        assert_eq!(cam["type"], "Camera3D");
+        assert_eq!(
+            cam["args"]["controller"]["move_speed"].as_f64(),
+            Some(12.5),
+            "the nested edit persisted into args.controller.move_speed"
         );
     }
 
