@@ -1093,19 +1093,45 @@ mod tests {
     }
 
     #[test]
+    fn add_form_writes_an_edited_colour_vector() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        // VolumetricFog (a newly offered type) has a `color` RGB vector field.
+        h.open_form(&mut world, "VolumetricFog".to_string(), None);
+        let (j, key) = h
+            .form_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| matches!(f.kind, form::FieldKind::Vec { color: true, .. }))
+            .map(|(j, f)| (j, f.key.clone()))
+            .expect("a colour vector field");
+        set_field(&mut world, panel::form_input(j), "0.1, 0.2, 0.3");
+        set_field(&mut world, panel::NAME_INPUT, "fog");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.mode, panel::Mode::List);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["type"], "VolumetricFog");
+        assert_eq!(
+            h.entries[0]["args"][&key],
+            serde_json::json!([0.1, 0.2, 0.3]),
+            "the edited colour persisted as a numeric array"
+        );
+    }
+
+    #[test]
     fn invalid_arg_keeps_the_form_open_with_an_error() {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
-        // TextInput has a u32 `max_len` field; a negative value cannot cook.
-        h.open_form(&mut world, "TextInput".to_string(), None);
+        // Font has a u32 `size_px` field; a negative value cannot re-serialize.
+        h.open_form(&mut world, "Font".to_string(), None);
         let j = h
             .form_fields
             .iter()
-            .position(|f| f.key == "max_len")
-            .expect("max_len field present");
+            .position(|f| f.key == "size_px")
+            .expect("size_px field present");
         assert!(matches!(h.form_fields[j].kind, form::FieldKind::Int));
         set_field(&mut world, panel::form_input(j), "-5");
-        set_field(&mut world, panel::NAME_INPUT, "field1");
+        set_field(&mut world, panel::NAME_INPUT, "myfont");
         h.apply_panel(PanelAction::ConfirmAdd, &mut world);
         assert_eq!(
             h.mode,

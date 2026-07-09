@@ -8,10 +8,14 @@
 //
 // The field list is the type's `default_args` object (which is
 // `serde_json::to_value(Args::default())`, keys in declaration order) -- no
-// per-type descriptor to maintain. Scalar-first: string / integer / float / bool
-// are editable; every other kind (arrays, nested objects, nulls -- i.e. colours,
-// vectors, asset refs) is left at its default and round-trips untouched. The
-// assembled object is validated by the caller via `ComponentType::reserialize_args`.
+// per-type descriptor to maintain. String / integer / float / bool are editable,
+// and so is a fixed-length numeric array of 2..=4 elements (a vector or a colour),
+// edited as comma-separated numbers. Every other kind (variable-length arrays,
+// nested objects, asset-ref nulls) is left at its default and round-trips
+// untouched. The array shape is read straight from the default value, so no
+// schema is needed; enum-variant dropdowns (which need the variant set, not just a
+// value) remain a per-type follow-up. The assembled object is validated by the
+// caller via `ComponentType::reserialize_args`.
 
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
@@ -28,6 +32,10 @@ pub(crate) enum FieldKind {
     Int,
     Float,
     Bool,
+    // A fixed-length numeric array of `len` (2..=4) elements, edited as
+    // comma-separated numbers -- a vector (position / direction / size) or, when
+    // `color` is set, an RGB / RGBA colour (rendered with a preview swatch).
+    Vec { len: usize, color: bool },
 }
 
 // One editable field of the form.
@@ -43,8 +51,11 @@ pub(crate) struct FormField {
     pub boolval: bool,
 }
 
-// The editable kind of a default value, or `None` for a kind left at default.
-fn kind_of(v: &Value) -> Option<FieldKind> {
+// The editable kind of a field, from its `key` and default value `v`, or `None`
+// for a kind left at its default. A 2..=4-element all-numeric array is a vector;
+// it is a colour when the key names one (so the layout can add a swatch), which no
+// vector key ever does.
+fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
     match v {
         Value::String(_) => Some(FieldKind::Str),
         Value::Bool(_) => Some(FieldKind::Bool),
@@ -53,16 +64,35 @@ fn kind_of(v: &Value) -> Option<FieldKind> {
         } else {
             FieldKind::Float
         }),
+        Value::Array(a) if (2..=4).contains(&a.len()) && a.iter().all(Value::is_number) => {
+            Some(FieldKind::Vec {
+                len: a.len(),
+                color: is_color_key(key),
+            })
+        }
         _ => None,
     }
 }
 
-// A number / string value rendered as editable text.
+// Whether a field name denotes a colour (gets a preview swatch). Only decides the
+// swatch among already-numeric-array fields, so it cannot turn a scalar into a
+// colour; and no vector field name (position, direction, size, extent, normal,
+// ...) contains any of these, so it never mis-flags a geometric vector as a colour.
+fn is_color_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["color", "colour", "tint", "background", "emissive"]
+        .iter()
+        .any(|needle| k.contains(needle))
+}
+
+// A value rendered as editable text: a scalar as itself, a numeric array as its
+// comma-separated elements (`1, 1, 1`).
 fn value_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
+        Value::Array(a) => a.iter().map(value_text).collect::<Vec<_>>().join(", "),
         _ => String::new(),
     }
 }
@@ -88,7 +118,7 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
     let mut out = Vec::new();
     let mut truncated = 0;
     for (key, def) in &base {
-        let Some(kind) = kind_of(def) else {
+        let Some(kind) = kind_of(key, def) else {
             continue;
         };
         if out.len() >= MAX_FIELDS {
@@ -137,7 +167,42 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
             .map(Value::Number)
             .unwrap_or_else(|| default.clone()),
         FieldKind::Bool => Value::Bool(field.boolval),
+        FieldKind::Vec { len, .. } => coerce_array(text, len, default),
     }
+}
+
+// Parse comma / whitespace separated numbers into a JSON array of exactly `len`
+// elements, preserving each element's default integer-vs-float type. Any wrong
+// count or unparseable element falls back to `default` whole, so a half-typed
+// vector keeps the prior value rather than committing a truncated one.
+fn coerce_array(text: &str, len: usize, default: &Value) -> Value {
+    let parts: Vec<&str> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() != len {
+        return default.clone();
+    }
+    let default_elems = default.as_array();
+    let mut out = Vec::with_capacity(len);
+    for (i, p) in parts.iter().enumerate() {
+        let want_int = default_elems
+            .and_then(|a| a.get(i))
+            .map(|e| e.is_i64() || e.is_u64())
+            .unwrap_or(false);
+        if want_int {
+            match p.parse::<i64>() {
+                Ok(n) => out.push(Value::from(n)),
+                Err(_) => return default.clone(),
+            }
+        } else {
+            match p.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+                Some(n) => out.push(Value::Number(n)),
+                None => return default.clone(),
+            }
+        }
+    }
+    Value::Array(out)
 }
 
 // Assemble the full args object: start from the type's defaults, merge an existing
@@ -183,35 +248,131 @@ pub(crate) fn validate(ty: &str, args: &Map<String, Value>) -> Result<(), String
 mod tests {
     use super::*;
 
-    // PointLight is a representative flat asset: floats + a bool, plus a colour
-    // array (left at default) and a skipped id.
+    // PointLight is a representative flat asset: scalar floats plus a 3-element
+    // position (a vector) and a 3-element colour (a colour vector).
     #[test]
-    fn fields_for_pointlight_yields_editable_scalars_only() {
+    fn fields_for_pointlight_exposes_scalars_and_vectors() {
         let fields = fields_for("PointLight", None);
         assert!(!fields.is_empty(), "PointLight exposes editable fields");
-        // Every derived field is a scalar kind; no array / object key leaks in.
-        for f in &fields {
-            assert!(matches!(
-                f.kind,
-                FieldKind::Str | FieldKind::Int | FieldKind::Float | FieldKind::Bool
-            ));
-        }
-        // The colour array is present in the defaults but NOT offered as a field.
-        let base = base_args("PointLight");
-        assert!(
-            base.contains_key("color"),
-            "PointLight has a color array default"
+        let field = |k: &str| fields.iter().find(|f| f.key == k).cloned();
+        // The colour is offered as a colour-flagged 3-vector.
+        assert_eq!(
+            field("color").map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: true
+            }),
+            "color is an editable RGB vector with a swatch"
         );
-        assert!(
-            !fields.iter().any(|f| f.key == "color"),
-            "the color array is left at its default, not shown"
+        // The position is a plain (non-colour) 3-vector.
+        assert_eq!(
+            field("position").map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: false
+            }),
+            "position is an editable vector, not a colour"
         );
+        // A scalar float is still a Float.
+        assert_eq!(field("intensity").map(|f| f.kind), Some(FieldKind::Float));
+        // The colour field's initial text is its default, comma-joined.
+        assert_eq!(field("color").unwrap().initial, "1.0, 1.0, 1.0");
+    }
+
+    // Only 2..=4-element all-numeric arrays become vectors; longer arrays, empty
+    // arrays, and arrays of non-numbers are left at their defaults.
+    #[test]
+    fn kind_of_only_accepts_small_numeric_arrays() {
+        use serde_json::json;
+        assert_eq!(
+            kind_of("position", &json!([1.0, 2.0, 3.0])),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: false
+            })
+        );
+        assert_eq!(
+            kind_of("half_size", &json!([1.0, 1.0])),
+            Some(FieldKind::Vec {
+                len: 2,
+                color: false
+            })
+        );
+        assert_eq!(
+            kind_of("tint", &json!([1.0, 1.0, 1.0, 1.0])),
+            Some(FieldKind::Vec {
+                len: 4,
+                color: true
+            })
+        );
+        // A `background` RGBA box is a colour too (so TextLabel/TextInput get a swatch).
+        assert_eq!(
+            kind_of("background", &json!([0.0, 0.0, 0.0, 0.0])),
+            Some(FieldKind::Vec {
+                len: 4,
+                color: true
+            })
+        );
+        // A geometric vector is never mis-flagged as a colour.
+        assert_eq!(
+            kind_of("half_extents", &json!([10.0, 5.0, 10.0])),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: false
+            })
+        );
+        // A 32-element SdfVolume `params` array is too long for a vector.
+        assert_eq!(kind_of("params", &json!(vec![0.0_f64; 32])), None);
+        // Empty and single-element arrays are not vectors.
+        assert_eq!(kind_of("lod_distances", &json!([])), None);
+        assert_eq!(kind_of("x", &json!([1.0])), None);
+        // An array of objects (e.g. `waves`) is left at its default.
+        assert_eq!(kind_of("waves", &json!([{"a": 1}])), None);
+    }
+
+    #[test]
+    fn coerce_array_parses_round_trips_and_falls_back() {
+        use serde_json::json;
+        let def = json!([1.0, 1.0, 1.0]);
+        // Comma and whitespace separators both work.
+        assert_eq!(
+            coerce_array("0.2, 0.4, 0.6", 3, &def),
+            json!([0.2, 0.4, 0.6])
+        );
+        assert_eq!(coerce_array("0.2 0.4 0.6", 3, &def), json!([0.2, 0.4, 0.6]));
+        // Wrong element count keeps the prior value whole.
+        assert_eq!(coerce_array("0.2, 0.4", 3, &def), def);
+        // A non-numeric element falls back rather than committing garbage.
+        assert_eq!(coerce_array("0.2, x, 0.6", 3, &def), def);
+        // Integer element types are preserved from the default.
+        let idef = json!([0, 0, 0]);
+        assert_eq!(coerce_array("16, 24, 16", 3, &idef), json!([16, 24, 16]));
     }
 
     #[test]
     fn unknown_type_has_no_fields_and_empty_base() {
         assert!(fields_for("NotARealType", None).is_empty());
         assert!(base_args("NotARealType").is_empty());
+    }
+
+    // A colour edit assembles and re-serializes cleanly through the real type.
+    #[test]
+    fn assemble_persists_an_edited_colour_vector() {
+        let fields = fields_for("PointLight", None);
+        let (idx, key) = fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.key == "color")
+            .map(|(i, f)| (i, f.key.clone()))
+            .expect("a color field");
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "0.5, 0.25, 0.75".into();
+        let args = assemble("PointLight", None, &fields, &texts);
+        assert_eq!(args[&key], serde_json::json!([0.5, 0.25, 0.75]));
+        assert!(
+            validate("PointLight", &args).is_ok(),
+            "the edit still cooks"
+        );
     }
 
     #[test]

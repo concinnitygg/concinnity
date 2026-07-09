@@ -33,17 +33,29 @@ use super::form::{self, FieldKind, FormField};
 use super::hud;
 
 // The addable asset types the "+" picker offers. All are External
-// (user-declarable), standalone (no required cross-references), and naturally
-// multi-instance, so each recompiles cleanly when added with default args to any
-// rendering world. Broadening this to every registry-addable type awaits
-// per-type add validation, so the picker is deliberately curated (not silently
-// capped): unlisted types are simply not offered here yet.
+// (user-declarable) and standalone (no required cross-references), so each
+// recompiles cleanly when added with default args to any rendering world -- the
+// property `add_types_cook_with_default_args` guards by running every entry
+// through the real cook pipeline. Most are naturally multi-instance; a few are
+// effectively singletons where a second instance is harmlessly ignored by the
+// renderer (e.g. only the first enabled VolumetricFog draws), which is fine
+// because the common action is adding the first one to a world that lacks it.
+// Broadening the list to every registry-addable type is a matter of adding
+// entries the guard accepts (types needing a source file or a required
+// cross-reference, e.g. Mesh / AudioClip / Joint, cannot be added blank and stay
+// off the list). The picker is deliberately curated (not silently capped):
+// unlisted types are simply not offered here yet.
 pub(crate) const ADD_TYPES: &[&str] = &[
     "PointLight",
     "DirectionalLight",
     "ParticleEmitter",
     "Decal",
     "ReflectionProbe",
+    "VolumetricFog",
+    "GlassPanel",
+    "WaterSurface",
+    "Sprite",
+    "TextLabel",
 ];
 
 // The label of the "all assets" filter option (the default), shown first in the
@@ -143,6 +155,11 @@ pub(crate) fn form_input(j: usize) -> AssetId {
 }
 pub(crate) fn form_toggle_bg(j: usize) -> AssetId {
     AssetId(PANEL + 0x140 + j as u32)
+}
+// Colour preview swatch for a colour-vector arg field `j` (drawn over the right
+// end of its text control, AddForm only).
+pub(crate) fn form_swatch(j: usize) -> AssetId {
+    AssetId(PANEL + 0x160 + j as u32)
 }
 
 // Which of the form's inputs holds keyboard focus (re-asserted each frame so the
@@ -788,12 +805,38 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
                 place_sprite(world, form_toggle_bg(j), t, tint, true);
             }
-            _ => show_field(
-                world,
-                form_input(j),
-                form_control_rect(vw, row),
-                view.form_focus == FormFocus::Field(j),
-            ),
+            kind => {
+                let control = form_control_rect(vw, row);
+                // A colour vector reserves a right-hand strip for a live preview
+                // swatch and narrows its field to clear it. The swatch must sit
+                // OUTSIDE the field rect: a `TextInput`'s opaque background box is
+                // synthesised after every authored sprite (the swatch included, see
+                // graphics_system/frame.rs), so a swatch drawn under the field would
+                // be painted over.
+                let swatch = matches!(kind, FieldKind::Vec { color: true, .. }).then(|| {
+                    let s = FIELD_H - 12.0;
+                    [
+                        control[0] + control[2] - s,
+                        control[1] + (control[3] - s) * 0.5,
+                        s,
+                        s,
+                    ]
+                });
+                let field = match swatch {
+                    Some(sw) => [control[0], control[1], sw[0] - control[0] - 4.0, control[3]],
+                    None => control,
+                };
+                show_field(
+                    world,
+                    form_input(j),
+                    field,
+                    view.form_focus == FormFocus::Field(j),
+                );
+                if let Some(sw) = swatch {
+                    let rgb = swatch_rgb(&field_text(world, form_input(j)));
+                    place_sprite(world, form_swatch(j), sw, rgb, true);
+                }
+            }
         }
     }
 
@@ -876,8 +919,9 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     ];
     ids.extend((0..MAX_ROWS).map(list_row_bg));
     ids.extend((0..MAX_ROWS).map(combo_row_bg));
-    // Form field checkboxes (only shown in AddForm, so no list overlap concern).
+    // Form field checkboxes + colour swatches (AddForm only, no list overlap).
     ids.extend((0..form::MAX_FIELDS).map(form_toggle_bg));
+    ids.extend((0..form::MAX_FIELDS).map(form_swatch));
     ids.extend([
         LIST_TRACK,
         LIST_THUMB,
@@ -1086,6 +1130,28 @@ pub(crate) fn field_text(world: &World, id: AssetId) -> String {
         .find(|t| t.asset_id == id)
         .map(|t| t.content.clone())
         .unwrap_or_default()
+}
+
+// Parse a colour field's live text ("r, g, b" / "r, g, b, a") into an opaque RGB
+// tint for its preview swatch, clamped to the displayable 0..=1 range. Falls back
+// to a neutral dark swatch until three components parse, so the swatch is always
+// visible while typing.
+fn swatch_rgb(text: &str) -> [f32; 4] {
+    let nums: Vec<f32> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<f32>().ok())
+        .take(3)
+        .collect();
+    if nums.len() < 3 {
+        return [0.15, 0.15, 0.18, 1.0];
+    }
+    [
+        nums[0].clamp(0.0, 1.0),
+        nums[1].clamp(0.0, 1.0),
+        nums[2].clamp(0.0, 1.0),
+        1.0,
+    ]
 }
 
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
@@ -1408,7 +1474,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        for id in [FILTER_INPUT, NAME_INPUT] {
+        for id in all_field_ids() {
             world.add_component(TextInput {
                 asset_id: id,
                 ..Default::default()
@@ -1423,6 +1489,118 @@ mod tests {
             .find(|s| s.asset_id == id)
             .unwrap()
             .visible
+    }
+
+    // Build an AddForm view over a single arg field, for the swatch tests.
+    fn form_view<'a>(fields: &'a [FormField]) -> PanelView<'a> {
+        PanelView {
+            mode: Mode::AddForm,
+            combo: Combo::Closed,
+            filter_label: ALL_LABEL,
+            combo_options: &[],
+            combo_selected: None,
+            combo_scroll: 0,
+            list_rows: &[],
+            list_scroll: 0,
+            row_menu: None,
+            form_title: "New asset",
+            form_fields: fields,
+            form_focus: FormFocus::Name,
+            form_error: None,
+            mouse: [0.0, 0.0],
+        }
+    }
+
+    // A colour-vector arg field renders its text control plus a live preview
+    // swatch tinted from the field's current text.
+    #[test]
+    fn colour_vector_field_shows_a_live_swatch() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        for t in world.query_mut::<TextInput>() {
+            if t.asset_id == form_input(0) {
+                t.content = "1, 0, 0".into();
+            }
+        }
+        let fields = [FormField {
+            key: "color".into(),
+            kind: FieldKind::Vec {
+                len: 3,
+                color: true,
+            },
+            initial: "1, 0, 0".into(),
+            boolval: false,
+        }];
+        apply(&mut world, Some(&form_view(&fields)), vw);
+        let sw = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == form_swatch(0))
+            .unwrap();
+        assert!(sw.visible, "the colour field draws a swatch");
+        assert_eq!(sw.tint, [1.0, 0.0, 0.0, 1.0], "swatch tint is the RGB text");
+        let ti = world
+            .query::<TextInput>()
+            .find(|t| t.asset_id == form_input(0))
+            .unwrap();
+        assert!(ti.visible, "the editable text field still shows");
+        // The field's opaque background box is drawn after every authored sprite
+        // (including the swatch), so the swatch must sit clear of the field rect or
+        // it would be painted over and never seen.
+        assert!(
+            sw.x >= ti.x + ti.width,
+            "the swatch sits outside the field's opaque background box"
+        );
+    }
+
+    // A plain (non-colour) vector shows its text field but no swatch.
+    #[test]
+    fn plain_vector_field_has_no_swatch() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let fields = [FormField {
+            key: "position".into(),
+            kind: FieldKind::Vec {
+                len: 3,
+                color: false,
+            },
+            initial: "0, 0, 0".into(),
+            boolval: false,
+        }];
+        apply(&mut world, Some(&form_view(&fields)), vw);
+        assert!(
+            !world
+                .query::<Sprite>()
+                .find(|s| s.asset_id == form_swatch(0))
+                .unwrap()
+                .visible,
+            "a non-colour vector has no swatch"
+        );
+        assert!(
+            world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == form_input(0))
+                .unwrap()
+                .visible
+        );
+    }
+
+    // Every offered add-type is a real External type whose default args cook in a
+    // minimal rendering world. This is the guard the curated list leans on: a type
+    // that needs a source file or a required cross-reference (Mesh, AudioClip,
+    // Joint, ...) fails here and must not be listed.
+    #[test]
+    fn add_types_cook_with_default_args() {
+        for &ty in ADD_TYPES {
+            let ct = crate::ecs::ComponentType::parse(ty)
+                .unwrap_or_else(|| panic!("{ty} is a real component type"));
+            assert!(ct.addable(), "{ty} must be External / addable");
+            let world = format!(
+                "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
+                 {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
+            );
+            concinnity_app::build_pipeline_from_str(&world, None)
+                .unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
+        }
     }
 
     // The white dots show whenever the row is hovered; the background box shows
