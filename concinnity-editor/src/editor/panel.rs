@@ -286,6 +286,9 @@ const MENU_ROW_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const MENU_ROW_HOVER: [f32; 4] = [0.26, 0.30, 0.42, 1.0];
 const CHECK_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
 const CHECK_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+// Array header `[+]` add (green) and `[-]` remove (red) buttons.
+const ADD_BTN_TINT: [f32; 4] = [0.24, 0.52, 0.32, 1.0];
+const REMOVE_BTN_TINT: [f32; 4] = [0.52, 0.26, 0.26, 1.0];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
@@ -390,6 +393,18 @@ pub(crate) fn form_toggle_rect(vw: f32, i: usize) -> [f32; 4] {
     [c[0], c[1], s, s]
 }
 
+// The `[+]` add and `[-]` remove buttons of an array header on form row `row`,
+// squares at the right of the control area (add rightmost, remove to its left).
+fn array_add_rect(vw: f32, row: usize) -> [f32; 4] {
+    let c = form_control_rect(vw, row);
+    let s = FIELD_H - 10.0;
+    [c[0] + c[2] - s, c[1], s, s]
+}
+fn array_remove_rect(vw: f32, row: usize) -> [f32; 4] {
+    let a = array_add_rect(vw, row);
+    [a[0] - a[2] - 4.0, a[1], a[2], a[3]]
+}
+
 // An open value dropdown for the enum / ref field on form row `row`: it floats
 // directly below that field's control, aligned to it, `shown` options tall.
 fn field_option_rect(vw: f32, row: usize, r: usize) -> [f32; 4] {
@@ -466,6 +481,9 @@ pub(crate) enum PanelAction {
     OpenFieldDropdown(usize),
     // Pick option `i` from the open field-value dropdown for the current field.
     PickFieldOption(usize),
+    // Append / drop the last element of array arg field `i` (its `[+]` / `[-]`).
+    AddArrayElement(usize),
+    RemoveArrayElement(usize),
     // Confirm / cancel the add-or-edit form.
     ConfirmAdd,
     CancelForm,
@@ -656,6 +674,14 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
                                 return Some(PanelAction::OpenFieldDropdown(j));
                             }
                             return Some(PanelAction::CycleField(j));
+                        }
+                    }
+                    FieldKind::Array => {
+                        if point_in(mx, my, array_add_rect(vw, row)) {
+                            return Some(PanelAction::AddArrayElement(j));
+                        }
+                        if point_in(mx, my, array_remove_rect(vw, row)) {
+                            return Some(PanelAction::RemoveArrayElement(j));
                         }
                     }
                     _ => {
@@ -976,6 +1002,34 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                     .map(String::as_str)
                     .unwrap_or("");
                 place_center_label(world, form_enum_label(j), c, value, LABEL, true);
+            }
+            FieldKind::Array => {
+                // A header for a variable-length array: its element count and a red
+                // `[-]` remove + green `[+]` add button. The elements follow as their
+                // own indexed rows.
+                let c = form_control_rect(vw, row);
+                place_left_label(
+                    world,
+                    form_enum_label(j),
+                    [c[0], c[1] + c[3] * 0.5 - 10.0],
+                    &format!("({})", field.variant_idx),
+                    LABEL_DIM,
+                    true,
+                );
+                place_sprite(
+                    world,
+                    form_swatch(j),
+                    array_remove_rect(vw, row),
+                    REMOVE_BTN_TINT,
+                    true,
+                );
+                place_sprite(
+                    world,
+                    form_toggle_bg(j),
+                    array_add_rect(vw, row),
+                    ADD_BTN_TINT,
+                    true,
+                );
             }
             kind => {
                 let control = form_control_rect(vw, row);
@@ -2006,6 +2060,59 @@ mod tests {
                 .unwrap()
                 .visible,
             "the covered row's caption is hidden too (no overflow over the list)"
+        );
+    }
+
+    // An array header renders its element count + red remove / green add buttons,
+    // and the buttons hit-test to the add / remove actions.
+    #[test]
+    fn array_header_renders_count_and_buttons_and_hit_tests() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let fields = [FormField {
+            key: "waves".into(),
+            kind: FieldKind::Array,
+            initial: String::new(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 3,
+        }];
+        let v = form_view(&fields);
+        apply(&mut world, Some(&v), vw);
+        assert!(
+            sprite_visible(&world, form_toggle_bg(0)),
+            "add button shows"
+        );
+        assert!(
+            sprite_visible(&world, form_swatch(0)),
+            "remove button shows"
+        );
+        let cap = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == form_enum_label(0))
+            .unwrap();
+        assert!(
+            cap.visible && cap.content == "(3)",
+            "shows the element count"
+        );
+        // The array field has no editable text box.
+        assert!(
+            !world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == form_input(0))
+                .unwrap()
+                .visible
+        );
+        // Buttons resolve to add / remove (row 1 = first arg field).
+        let add = array_add_rect(vw, 1);
+        let rem = array_remove_rect(vw, 1);
+        assert_eq!(
+            hit_test(&v, add[0] + 3.0, add[1] + 3.0, vw),
+            Some(PanelAction::AddArrayElement(0))
+        );
+        assert_eq!(
+            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, vw),
+            Some(PanelAction::RemoveArrayElement(0))
         );
     }
 

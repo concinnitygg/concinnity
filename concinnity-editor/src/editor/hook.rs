@@ -79,6 +79,10 @@ pub(crate) struct EditorHook {
     // and its scroll offset. `None` outside an open dropdown.
     field_dropdown: Option<usize>,
     field_dropdown_scroll: usize,
+    // The open form's working args tree: the fields are derived from it, and it is
+    // mutated by add / remove (structure) and, on capture, by the controls. Empty
+    // outside AddForm.
+    form_args: serde_json::Map<String, serde_json::Value>,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
@@ -153,6 +157,7 @@ impl EditorHook {
             row_menu: None,
             field_dropdown: None,
             field_dropdown_scroll: 0,
+            form_args: serde_json::Map::new(),
         }
     }
 
@@ -476,10 +481,34 @@ impl EditorHook {
                 .to_string(),
             None => self.unique_name(&ty),
         };
-        self.form_fields = form::fields_for(&ty, seed.as_ref());
+        // The working args tree: type defaults with the edited entry merged over
+        // them. Add / remove and the controls mutate it; the fields are derived from
+        // it so a structural change (a grown / shrunk array) re-derives cleanly.
+        self.form_args = form::working_args(&ty, seed.as_ref());
+        self.form_focus = FormFocus::Name;
+        self.form_error = None;
+        self.selected_type = Some(ty);
+        self.editing = editing;
+        self.mode = panel::Mode::AddForm;
+        self.combo = Combo::Closed;
+        self.row_menu = None;
+        self.field_dropdown = None;
+        self.field_dropdown_scroll = 0;
+        self.refresh_form(world);
+        panel::focus_field_with(world, panel::NAME_INPUT, &name);
+    }
+
+    // Derive the form's fields from the current working args, fill each reference
+    // field's options, and (re-)seed the text controls. Called on open and after a
+    // structural change (array add / remove) re-shapes the field list.
+    fn refresh_form(&mut self, world: &mut World) {
+        let Some(ty) = self.selected_type.clone() else {
+            return;
+        };
+        self.form_fields = form::fields_for(&ty, Some(&self.form_args));
         // Reference fields pick from the world's existing assets of their target
-        // type. Resolve the option lists up front (reads `entries`) so the fill
-        // loop does not borrow `self` twice.
+        // type. Resolve the option lists up front (reads `entries`) so the fill loop
+        // does not borrow `self` twice.
         let ref_opts: Vec<(usize, Vec<String>)> = self
             .form_fields
             .iter()
@@ -492,25 +521,47 @@ impl EditorHook {
         for (i, names) in ref_opts {
             form::set_ref_options(&mut self.form_fields[i], &names);
         }
-        self.form_focus = FormFocus::Name;
-        self.form_error = None;
-        self.selected_type = Some(ty);
-        self.editing = editing;
-        self.mode = panel::Mode::AddForm;
-        self.combo = Combo::Closed;
-        self.row_menu = None;
-        self.field_dropdown = None;
-        self.field_dropdown_scroll = 0;
-        panel::focus_field_with(world, panel::NAME_INPUT, &name);
         for (j, field) in self.form_fields.iter().enumerate() {
-            // Bool (checkbox), Enum + Ref (cycling buttons) have no text input.
+            // Bool (checkbox), Enum + Ref (cycle buttons), and Array (a header) have
+            // no text input to seed.
             if !matches!(
                 field.kind,
-                form::FieldKind::Bool | form::FieldKind::Enum | form::FieldKind::Ref { .. }
+                form::FieldKind::Bool
+                    | form::FieldKind::Enum
+                    | form::FieldKind::Ref { .. }
+                    | form::FieldKind::Array
             ) {
                 panel::seed_field(world, panel::form_input(j), &field.initial);
             }
         }
+    }
+
+    // Capture the current control values into the working args, preserving its
+    // structure (array lengths). Run before a structural change or commit so edits
+    // are not lost when the fields re-derive.
+    fn capture_controls(&mut self, world: &World) {
+        let Some(ty) = self.selected_type.clone() else {
+            return;
+        };
+        let texts: Vec<String> = self
+            .form_fields
+            .iter()
+            .enumerate()
+            .map(|(j, f)| {
+                if matches!(
+                    f.kind,
+                    form::FieldKind::Bool
+                        | form::FieldKind::Enum
+                        | form::FieldKind::Ref { .. }
+                        | form::FieldKind::Array
+                ) {
+                    String::new()
+                } else {
+                    panel::field_text(world, panel::form_input(j))
+                }
+            })
+            .collect();
+        self.form_args = form::assemble(&ty, Some(&self.form_args), &self.form_fields, &texts);
     }
 
     // Leave the form, discarding its transient state, back to the browse list.
@@ -518,6 +569,7 @@ impl EditorHook {
         self.selected_type = None;
         self.editing = None;
         self.form_fields.clear();
+        self.form_args = serde_json::Map::new();
         self.form_focus = FormFocus::Name;
         self.form_error = None;
         self.field_dropdown = None;
@@ -628,6 +680,27 @@ impl EditorHook {
                 self.field_dropdown = None;
                 self.form_error = None;
             }
+            PanelAction::AddArrayElement(j) => {
+                self.capture_controls(world);
+                if let (Some(ty), Some(path)) = (
+                    self.selected_type.clone(),
+                    self.form_fields.get(j).map(|f| f.key.clone()),
+                ) {
+                    form::add_array_elem(&ty, &mut self.form_args, &path);
+                    self.form_focus = FormFocus::Name;
+                    self.refresh_form(world);
+                }
+                self.form_error = None;
+            }
+            PanelAction::RemoveArrayElement(j) => {
+                self.capture_controls(world);
+                if let Some(path) = self.form_fields.get(j).map(|f| f.key.clone()) {
+                    form::remove_array_elem(&mut self.form_args, &path);
+                    self.form_focus = FormFocus::Name;
+                    self.refresh_form(world);
+                }
+                self.form_error = None;
+            }
             PanelAction::ConfirmAdd => self.confirm_form(world),
             PanelAction::CancelForm => self.close_form(),
             PanelAction::CloseOverlays => {
@@ -639,8 +712,8 @@ impl EditorHook {
         }
     }
 
-    // Read the form's controls, assemble + validate the args, and commit (add a
-    // new entry or update the edited one). On a validation error the form stays
+    // Capture the form's controls into the working args, validate, and commit (add
+    // a new entry or update the edited one). On a validation error the form stays
     // open with the message shown, so nothing invalid ever reaches world.jsonl.
     fn confirm_form(&mut self, world: &mut World) {
         self.form_error = None;
@@ -649,29 +722,10 @@ impl EditorHook {
             return;
         };
         let typed = panel::field_text(world, panel::NAME_INPUT);
-        let texts: Vec<String> = self
-            .form_fields
-            .iter()
-            .enumerate()
-            .map(|(j, f)| {
-                // Bool + Enum + Ref carry their value in the field state, not a box.
-                if matches!(
-                    f.kind,
-                    form::FieldKind::Bool | form::FieldKind::Enum | form::FieldKind::Ref { .. }
-                ) {
-                    String::new()
-                } else {
-                    panel::field_text(world, panel::form_input(j))
-                }
-            })
-            .collect();
-        let editing_args = self
-            .editing
-            .and_then(|idx| self.entries.get(idx))
-            .and_then(|e| e.get("args"))
-            .and_then(|v| v.as_object())
-            .cloned();
-        let args = form::assemble(&ty, editing_args.as_ref(), &self.form_fields, &texts);
+        // Fold the live control values into the working args (which already holds the
+        // structure: nested objects, array lengths), then validate the whole thing.
+        self.capture_controls(world);
+        let args = self.form_args.clone();
         if let Err(e) = form::validate(&ty, &args) {
             self.form_error = Some(short_error(&e));
             return;
@@ -1498,6 +1552,76 @@ mod tests {
             total - panel::MAX_DROP_ROWS,
             "scroll clamps to the last full page"
         );
+    }
+
+    // Growing an array through the form's [+] and editing the new element persists:
+    // WaterSurface starts with one wave; add a second and set its amplitude.
+    #[test]
+    fn add_form_grows_an_array_and_edits_the_new_element() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "WaterSurface".to_string(), None);
+        let header = |h: &EditorHook| {
+            h.form_fields
+                .iter()
+                .position(|f| f.key == "waves")
+                .expect("waves array header")
+        };
+        let hj = header(&h);
+        assert!(matches!(h.form_fields[hj].kind, form::FieldKind::Array));
+        assert_eq!(h.form_fields[hj].variant_idx, 1, "one default wave");
+        // [+] grows the array to two waves (fields re-derive).
+        h.apply_panel(PanelAction::AddArrayElement(hj), &mut world);
+        assert_eq!(
+            h.form_fields[header(&h)].variant_idx,
+            2,
+            "grew to two waves"
+        );
+        // Edit the second wave's amplitude, then confirm.
+        let ej = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "waves.1.amplitude")
+            .expect("the second wave's amplitude field");
+        set_field(&mut world, panel::form_input(ej), "4.5");
+        set_field(&mut world, panel::NAME_INPUT, "sea");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let ws = h
+            .entries
+            .iter()
+            .find(|e| e["name"] == "sea")
+            .expect("the water surface was added");
+        assert_eq!(ws["type"], "WaterSurface");
+        assert_eq!(
+            ws["args"]["waves"].as_array().map(Vec::len),
+            Some(2),
+            "the grown array persisted with two waves"
+        );
+        assert_eq!(
+            ws["args"]["waves"][1]["amplitude"].as_f64(),
+            Some(4.5),
+            "the edited new-element value persisted"
+        );
+    }
+
+    // Removing an array element through the form's [-] shrinks it and persists.
+    #[test]
+    fn add_form_removes_an_array_element() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "WaterSurface".to_string(), None);
+        let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
+        // Grow to two, then remove one back to one.
+        h.apply_panel(PanelAction::AddArrayElement(hj), &mut world);
+        let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
+        assert_eq!(h.form_fields[hj].variant_idx, 2);
+        h.apply_panel(PanelAction::RemoveArrayElement(hj), &mut world);
+        let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
+        assert_eq!(h.form_fields[hj].variant_idx, 1, "shrank back to one wave");
+        set_field(&mut world, panel::NAME_INPUT, "pond");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let ws = h.entries.iter().find(|e| e["name"] == "pond").unwrap();
+        assert_eq!(ws["args"]["waves"].as_array().map(Vec::len), Some(1));
     }
 
     // A reference left at (none) persists as null, not a dangling name.

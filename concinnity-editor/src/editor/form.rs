@@ -17,9 +17,12 @@
 // `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
 // a dotted path (`controller.move_speed`), up to `MAX_NEST_DEPTH` levels; the leaf
 // edits like any scalar and `assemble` writes it back into the sub-object via
-// `set_at_path`. Every other kind (variable-length arrays, deeper objects,
-// undeclared nulls) is left at its default and round-trips untouched. The assembled
-// object is validated by the caller via `ComponentType::reserialize_args`.
+// `set_at_path`. A variable-length (non-vector) ARRAY becomes an `Array` header
+// field (add / remove elements) followed by each element's fields keyed by index
+// (`waves.0.amplitude`); `set_at_path` / `get_at_path` navigate the numeric index
+// segments. Every other kind (deeper objects / arrays past the depth cap, undeclared
+// nulls) is left at its default and round-trips untouched. The assembled object is
+// validated by the caller via `ComponentType::reserialize_args`.
 
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
@@ -47,6 +50,12 @@ pub(crate) enum FieldKind {
     // enum (cycle button) over `FormField::variants` = `(none)` + the world's
     // assets of `target`, which the hook fills in (`set_ref_options`).
     Ref { target: &'static str },
+    // A variable-length array (non-vector) at `FormField::key`, rendered as a header
+    // row with add / remove buttons; its element count is carried in
+    // `FormField::variant_idx`. The elements' own leaves follow it as indexed
+    // dotted-path fields (`waves.0.amplitude`). This is NOT the fixed 2..=4 numeric
+    // vector (that stays a `Vec` leaf) -- only longer / object / reference arrays.
+    Array,
 }
 
 // The `(none)` option of a reference field, mapping to a null (unset) reference.
@@ -183,10 +192,10 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
     out
 }
 
-// Append the editable leaves of `obj` (the defaults at `prefix`, empty at the
-// root) to `out`, recursing into plain nested objects with dotted-path keys.
-// `root_seed` is always the top-level args (an existing entry's values when
-// editing); leaves read their current value from it by full path.
+// Append the editable fields of `obj` (the defaults at `prefix`, empty at the
+// root) to `out`, dispatching each key's value through `collect_value`. `root_seed`
+// is always the top-level args (an existing entry's values when editing); every
+// leaf reads its current value from it by full path.
 fn collect_fields(
     ct: Option<ComponentType>,
     prefix: &str,
@@ -202,46 +211,66 @@ fn collect_fields(
         } else {
             format!("{prefix}.{key}")
         };
-        // Asset-ref fields default to null (which `kind_of` skips), so detect them
-        // first from the type's declared references (matched by full path).
-        let ref_target = ct.and_then(|c| ref_target_of(c, &path));
-        // A plain nested object that is not itself a declared reference is flattened
-        // into its leaves one level deeper -- UNLESS the seed (an entry being edited)
-        // authored this path as a non-object. The load-bearing case is Camera3D's
-        // `controller: null` (an "uncontrolled cutscene camera" marker): flattening
-        // from the object-shaped DEFAULT would seed leaves from the default and, on
-        // `assemble`, rebuild a full default object over the authored null. Left
-        // unflattened, the object default is not an editable leaf kind, so the field
-        // is skipped and the merge preserves the authored value untouched.
-        if ref_target.is_none()
-            && depth < MAX_NEST_DEPTH
-            && let Value::Object(nested) = def
-            && !nested.is_empty()
-            && !seed_overrides_with_non_object(root_seed, &path)
-        {
-            collect_fields(ct, &path, nested, root_seed, depth + 1, out, truncated);
-            continue;
-        }
-        let mut kind = match ref_target {
-            Some(target) => FieldKind::Ref { target },
-            None => match kind_of(key, def) {
-                Some(k) => k,
-                None => continue,
-            },
-        };
+        collect_value(ct, &path, def, root_seed, depth, out, truncated);
+    }
+}
+
+// Append the field(s) for one value at `path` (its default shape `def`, current
+// value read from `root_seed`): a declared reference; a flattened nested object; a
+// scalar / vector leaf; or an array (an `Array` header row followed by each
+// element's fields, keyed by index). `prefix.is_empty()`-style root detection uses
+// whether `path` contains a `.`.
+fn collect_value(
+    ct: Option<ComponentType>,
+    path: &str,
+    def: &Value,
+    root_seed: Option<&Map<String, Value>>,
+    depth: usize,
+    out: &mut Vec<FormField>,
+    truncated: &mut usize,
+) {
+    let is_root = !path.contains('.');
+    let leaf = path.rsplit('.').next().unwrap_or(path);
+    // Asset-ref fields default to null (which `kind_of` skips), so detect them first
+    // from the type's declared references (matched by full path).
+    let ref_target = ct.and_then(|c| ref_target_of(c, path));
+
+    // A plain nested object that is not itself a declared reference is flattened into
+    // its leaves one level deeper -- UNLESS the seed (an entry being edited) authored
+    // this path as a non-object (e.g. Camera3D's `controller: null`, a load-bearing
+    // "uncontrolled cutscene camera" marker): flattening from the object-shaped
+    // DEFAULT would rebuild a default object over the authored null on `assemble`.
+    // Left unflattened, the object default is not an editable leaf kind, so it is
+    // skipped and the merge preserves the authored value.
+    if ref_target.is_none()
+        && depth < MAX_NEST_DEPTH
+        && let Value::Object(nested) = def
+        && !nested.is_empty()
+        && !seed_overrides_with_non_object(root_seed, path)
+    {
+        collect_fields(ct, path, nested, root_seed, depth + 1, out, truncated);
+        return;
+    }
+
+    // A scalar / fixed 2..=4 numeric vector leaf (or a declared reference).
+    let kind = match ref_target {
+        Some(target) => Some(FieldKind::Ref { target }),
+        None => kind_of(leaf, def),
+    };
+    if let Some(mut kind) = kind {
         if out.len() >= MAX_FIELDS {
             *truncated += 1;
-            continue;
+            return;
         }
-        let cur = root_seed.and_then(|s| get_at_path(s, &path)).unwrap_or(def);
+        let cur = root_seed.and_then(|s| get_at_path(s, path)).unwrap_or(def);
         // A string field may be a string-enum: promote it to a cycling picker when
         // the type reports a variant set for it. Only at the root -- the probe names
         // a top-level arg, so it cannot resolve a nested field's variants.
         let mut variants = Vec::new();
         let mut variant_idx = 0;
-        if prefix.is_empty()
+        if is_root
             && matches!(kind, FieldKind::Str)
-            && let Some(v) = ct.and_then(|c| c.field_enum_variants(key))
+            && let Some(v) = ct.and_then(|c| c.field_enum_variants(leaf))
         {
             variant_idx = cur
                 .as_str()
@@ -260,13 +289,55 @@ fn collect_fields(
             _ => value_text(cur),
         };
         out.push(FormField {
-            key: path,
+            key: path.to_string(),
             kind,
             initial,
             boolval,
             variants,
             variant_idx,
         });
+        return;
+    }
+
+    // A variable-length (non-vector) array: an `Array` header carrying the element
+    // count, then each element's field(s) keyed by index. The header lets the panel
+    // offer add / remove; the elements read their shape from the CURRENT array (the
+    // seed's when editing, else the default), so add / remove re-derives cleanly.
+    if ref_target.is_none()
+        && depth < MAX_NEST_DEPTH
+        && let Value::Array(def_arr) = def
+    {
+        let cur_arr = root_seed
+            .and_then(|s| get_at_path(s, path))
+            .and_then(Value::as_array)
+            .unwrap_or(def_arr);
+        // Only offer add / remove for a genuinely variable-length LIST. A pure
+        // numeric array is indistinguishable from a fixed `[T; N]` once serialized
+        // (SdfVolume's `[f32; 32]` params, index / matrix buffers), and growing one
+        // is rejected at cook -- so treat only object / string / reference element
+        // arrays (never a plain number) as editable, and only when a template element
+        // exists (a non-empty current or default array) to clone for `[+]`. Others
+        // are left at their default (round-tripped untouched), as before.
+        let template = cur_arr.first().or_else(|| def_arr.first());
+        if template.is_none_or(Value::is_number) {
+            return;
+        }
+        if out.len() >= MAX_FIELDS {
+            *truncated += 1;
+            return;
+        }
+        out.push(FormField {
+            key: path.to_string(),
+            kind: FieldKind::Array,
+            initial: String::new(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: cur_arr.len(),
+        });
+        for (i, elem) in cur_arr.iter().enumerate() {
+            let elem_path = format!("{path}.{i}");
+            collect_value(ct, &elem_path, elem, root_seed, depth + 1, out, truncated);
+        }
     }
 }
 
@@ -277,35 +348,71 @@ fn seed_overrides_with_non_object(root_seed: Option<&Map<String, Value>>, path: 
     matches!(root_seed.and_then(|s| get_at_path(s, path)), Some(v) if !v.is_object())
 }
 
-// The value at a dotted `path` within an args object (`controller.move_speed`),
-// or `None` if any segment is missing / not an object. A single-segment path is a
-// plain key lookup.
+// The value at a dotted `path`, where each segment indexes an object by key or an
+// array by numeric index (`waves.0.amplitude`). `None` if any segment is missing.
 fn get_at_path<'a>(obj: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
     let mut parts = path.split('.');
     let mut cur = obj.get(parts.next()?)?;
     for p in parts {
-        cur = cur.as_object()?.get(p)?;
+        cur = match cur {
+            Value::Object(m) => m.get(p)?,
+            Value::Array(a) => a.get(p.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
     }
     Some(cur)
 }
 
-// Set the value at a dotted `path`, creating intermediate objects as needed (and
-// replacing a non-object segment with one). A single-segment path is a plain
-// insert.
+// Set the value at a dotted `path`. Object segments are created as needed; array
+// index segments must already exist (fields only ever address present elements), so
+// an out-of-range index is a no-op. A single-segment path is a plain insert.
 fn set_at_path(obj: &mut Map<String, Value>, path: &str, val: Value) {
     let parts: Vec<&str> = path.split('.').collect();
     let (leaf, parents) = parts.split_last().expect("a path has at least one segment");
-    let mut cur = obj;
-    for p in parents {
-        let entry = cur
-            .entry((*p).to_string())
-            .or_insert_with(|| Value::Object(Map::new()));
-        if !entry.is_object() {
-            *entry = Value::Object(Map::new());
-        }
-        cur = entry.as_object_mut().expect("just ensured an object");
+    if parents.is_empty() {
+        obj.insert(leaf.to_string(), val);
+        return;
     }
-    cur.insert((*leaf).to_string(), val);
+    // The first segment is always a top-level arg name (an object key).
+    let mut cur = obj
+        .entry(parents[0].to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    for seg in &parents[1..] {
+        cur = match cur {
+            Value::Array(a) => {
+                let Some(v) = seg.parse::<usize>().ok().and_then(|i| a.get_mut(i)) else {
+                    return;
+                };
+                v
+            }
+            other => {
+                if !other.is_object() {
+                    *other = Value::Object(Map::new());
+                }
+                other
+                    .as_object_mut()
+                    .expect("just ensured an object")
+                    .entry((*seg).to_string())
+                    .or_insert_with(|| Value::Object(Map::new()))
+            }
+        };
+    }
+    match cur {
+        Value::Array(a) => {
+            if let Some(slot) = leaf.parse::<usize>().ok().and_then(|i| a.get_mut(i)) {
+                *slot = val;
+            }
+        }
+        other => {
+            if !other.is_object() {
+                *other = Value::Object(Map::new());
+            }
+            other
+                .as_object_mut()
+                .expect("just ensured an object")
+                .insert(leaf.to_string(), val);
+        }
+    }
 }
 
 // Coerce one field's edited `text` (or its `boolval`) into a JSON value, falling
@@ -338,6 +445,9 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
             Some(v) if v != NONE_LABEL => Value::String(v.clone()),
             _ => Value::Null,
         },
+        // An array header carries no editable value of its own (the array's contents
+        // come from its element leaves + the working structure); `assemble` skips it.
+        FieldKind::Array => default.clone(),
     }
 }
 
@@ -393,6 +503,11 @@ pub(crate) fn assemble(
         }
     }
     for (i, field) in fields.iter().enumerate() {
+        // An array header is structural, not a value; its array lives in `out`
+        // already (carried in via `editing_args`, grown / shrunk by add / remove).
+        if field.kind == FieldKind::Array {
+            continue;
+        }
         // Fall back to the value already in `out` at this (possibly nested) path
         // (the entry's authored value when editing, else the type default), so a
         // cleared / mistyped number keeps what was there rather than snapping back
@@ -404,6 +519,73 @@ pub(crate) fn assemble(
         set_at_path(&mut out, &field.key, coerce(field, text, &fallback));
     }
     out
+}
+
+// The initial working args for a form: the type defaults with an edited entry's
+// args merged over them (the structure add / remove and the controls then mutate).
+pub(crate) fn working_args(ty: &str, editing: Option<&Map<String, Value>>) -> Map<String, Value> {
+    let mut out = base_args(ty);
+    if let Some(e) = editing {
+        for (k, v) in e {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
+// The element template for the array at `path` in `args`: a clone of its first
+// element when non-empty, else the type default's first element (so a new,
+// still-empty array can grow from the schema's shape). `None` when neither is
+// available (an empty array whose element type is unknowable), which disables add.
+pub(crate) fn array_elem_template(
+    ty: &str,
+    args: &Map<String, Value>,
+    path: &str,
+) -> Option<Value> {
+    let first_of = |m: &Map<String, Value>| {
+        get_at_path(m, path)
+            .and_then(Value::as_array)
+            .and_then(|a| a.first().cloned())
+    };
+    first_of(args).or_else(|| first_of(&base_args(ty)))
+}
+
+// Append a fresh element (a clone of the template) to the array at `path`, or do
+// nothing if there is no template. Returns whether it grew.
+pub(crate) fn add_array_elem(ty: &str, args: &mut Map<String, Value>, path: &str) -> bool {
+    let Some(template) = array_elem_template(ty, args, path) else {
+        return false;
+    };
+    if let Some(Value::Array(a)) = get_at_path_mut(args, path) {
+        a.push(template);
+        return true;
+    }
+    false
+}
+
+// Remove the last element of the array at `path` (nothing if it is empty / absent).
+pub(crate) fn remove_array_elem(args: &mut Map<String, Value>, path: &str) -> bool {
+    if let Some(Value::Array(a)) = get_at_path_mut(args, path)
+        && !a.is_empty()
+    {
+        a.pop();
+        return true;
+    }
+    false
+}
+
+// Mutable sibling of `get_at_path`.
+fn get_at_path_mut<'a>(obj: &'a mut Map<String, Value>, path: &str) -> Option<&'a mut Value> {
+    let mut parts = path.split('.');
+    let mut cur = obj.get_mut(parts.next()?)?;
+    for p in parts {
+        cur = match cur {
+            Value::Object(m) => m.get_mut(p)?,
+            Value::Array(a) => a.get_mut(p.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(cur)
 }
 
 // Validate an assembled args object by round-tripping it through the type's typed
@@ -777,6 +959,145 @@ mod tests {
         set_at_path(&mut empty, "x", Value::from(2));
         assert_eq!(get_at_path(&empty, "x").and_then(Value::as_i64), Some(2));
         assert!(get_at_path(&empty, "a.b.missing").is_none());
+    }
+
+    // A variable-length array (WaterSurface's `waves`, default 1 element) becomes an
+    // Array header field carrying the element count, followed by each element's
+    // leaves keyed by index.
+    #[test]
+    fn fields_for_exposes_an_array_header_and_element_leaves() {
+        let fields = fields_for("WaterSurface", None);
+        let waves = fields
+            .iter()
+            .find(|f| f.key == "waves")
+            .expect("a waves array header");
+        assert_eq!(waves.kind, FieldKind::Array);
+        assert_eq!(waves.variant_idx, 1, "the default has one wave");
+        // The element's fields are indexed dotted-path leaves.
+        assert_eq!(
+            fields
+                .iter()
+                .find(|f| f.key == "waves.0.amplitude")
+                .map(|f| f.kind),
+            Some(FieldKind::Float)
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|f| f.key == "waves.0.direction")
+                .map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 2,
+                color: false
+            })
+        );
+        // A fixed 2..=4 numeric vector is NOT treated as an Array (stays a Vec leaf).
+        assert_eq!(
+            fields.iter().find(|f| f.key == "extent").map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 2,
+                color: false
+            })
+        );
+    }
+
+    #[test]
+    fn add_and_remove_array_elem_grow_and_shrink_from_a_template() {
+        let mut args = base_args("WaterSurface");
+        let len =
+            |a: &Map<String, Value>| get_at_path(a, "waves").unwrap().as_array().unwrap().len();
+        assert_eq!(len(&args), 1);
+        assert!(add_array_elem("WaterSurface", &mut args, "waves"));
+        assert_eq!(len(&args), 2, "grew by a cloned template element");
+        assert!(
+            get_at_path(&args, "waves.1.amplitude").is_some(),
+            "the appended element has the template's shape"
+        );
+        assert!(remove_array_elem(&mut args, "waves"));
+        assert_eq!(len(&args), 1, "shrank");
+        // Removing down to empty then adding still works (template falls back to the
+        // type default's element).
+        assert!(remove_array_elem(&mut args, "waves"));
+        assert_eq!(len(&args), 0);
+        assert!(
+            add_array_elem("WaterSurface", &mut args, "waves"),
+            "an emptied array regrows from the default template"
+        );
+        assert_eq!(len(&args), 1);
+    }
+
+    #[test]
+    fn add_array_elem_without_a_template_is_a_no_op() {
+        // An empty array whose element type is unknowable cannot be grown.
+        let mut m = Map::new();
+        m.insert("xs".into(), Value::Array(vec![]));
+        assert!(!add_array_elem("PointLight", &mut m, "xs"));
+        assert!(
+            get_at_path(&m, "xs")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn path_helpers_navigate_array_indices() {
+        let mut args = base_args("WaterSurface");
+        assert!(
+            get_at_path(&args, "waves.0.amplitude")
+                .and_then(Value::as_f64)
+                .is_some()
+        );
+        set_at_path(&mut args, "waves.0.amplitude", Value::from(9.5));
+        assert_eq!(
+            get_at_path(&args, "waves.0.amplitude").and_then(Value::as_f64),
+            Some(9.5)
+        );
+        // An out-of-range index set is a no-op (no panic, no growth).
+        set_at_path(&mut args, "waves.5.amplitude", Value::from(1.0));
+        assert!(get_at_path(&args, "waves.5.amplitude").is_none());
+    }
+
+    // Editing an array element's leaf writes back into that element and cooks.
+    #[test]
+    fn assemble_writes_an_array_element_value() {
+        let fields = fields_for("WaterSurface", None);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "waves.0.amplitude")
+            .expect("a waves.0.amplitude field");
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "3.25".into();
+        let args = assemble("WaterSurface", None, &fields, &texts);
+        assert_eq!(
+            get_at_path(&args, "waves.0.amplitude").and_then(Value::as_f64),
+            Some(3.25)
+        );
+        assert!(
+            validate("WaterSurface", &args).is_ok(),
+            "the element edit cooks"
+        );
+    }
+
+    // A fixed-length numeric array (SdfVolume's `[f32; 32]` params) is NOT offered as
+    // a growable Array -- it is indistinguishable from a `Vec<f32>` once serialized,
+    // and a resize is rejected at cook, so it stays at its default like before. Only
+    // object / string / reference element arrays get add / remove.
+    #[test]
+    fn fixed_numeric_array_is_not_a_growable_array() {
+        let fields = fields_for("SdfVolume", None);
+        assert!(
+            fields.iter().all(|f| !f.key.starts_with("params")),
+            "a fixed [f32; N] numeric array is neither an Array header nor element leaves"
+        );
+        // Sanity: an object-element array (WaterSurface.waves) still IS growable.
+        assert!(
+            fields_for("WaterSurface", None)
+                .iter()
+                .any(|f| f.key == "waves" && f.kind == FieldKind::Array),
+            "an object array is still editable"
+        );
     }
 
     #[test]
