@@ -12,7 +12,7 @@
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{font_sizes, label_value, sprite};
 use crate::assets::Slider;
-use concinnity_core::template_spec::spec_to_value;
+use crate::template_spec::spec_to_value;
 use concinnity_templates::asset;
 
 // Where the control group (track + value) starts, as a fraction of the row

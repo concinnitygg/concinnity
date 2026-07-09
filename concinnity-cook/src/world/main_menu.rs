@@ -13,7 +13,7 @@ use super::expand::{asset_name, type_norm};
 use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
 use crate::assets::{MainMenu, SettingsProfile};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
-use concinnity_core::template_spec::spec_to_value;
+use crate::template_spec::spec_to_value;
 use concinnity_templates::asset;
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate

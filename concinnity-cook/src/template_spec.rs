@@ -3,10 +3,11 @@
 // The templates crate is `#![no_std]` and describes assets as typed `AssetSpec`
 // / `ArgValue` data. This turns that data into the engine's `serde_json::Value`
 // so a std consumer never parses a JSON string: the cook pipeline builds UI
-// assets from the shared `asset::` builders, and authoring consumers turn a
-// spec into a world-line value. Core is the natural home because it owns
-// `serde_json` and every std crate (the cook pipeline, the app authoring layer)
-// depends on it.
+// assets from the shared `asset::` builders, and authoring consumers turn a spec
+// into a world-line value. The cook crate is the natural home: it owns the
+// build-time asset construction that needs this, and (unlike concinnity-core) it
+// is excluded from the shipped runtime, so a game never links this authoring
+// code. The app authoring layer re-exports these; the editor reaches them there.
 
 use concinnity_templates::{ArgValue, AssetSpec};
 use serde_json::{Map, Number, Value};

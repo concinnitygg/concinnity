@@ -16,7 +16,7 @@
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{font_sizes, label_value};
 use crate::assets::OptionSelect;
-use concinnity_core::template_spec::spec_to_value;
+use crate::template_spec::spec_to_value;
 use concinnity_templates::asset;
 
 // Whether a setting row expands to a dropdown (more than two options, or a

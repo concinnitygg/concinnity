@@ -17,7 +17,6 @@ pub mod geometry;
 pub mod gfx;
 pub mod paths;
 pub mod result;
-pub mod template_spec;
 pub mod world;
 
 // World API

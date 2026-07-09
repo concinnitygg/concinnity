@@ -1,15 +1,15 @@
-// World-template bridging on top of the core spec bridge.
+// World-template bridging on top of the cook spec bridge.
 //
 // The generic `AssetSpec` -> `serde_json::Value` conversion lives in
-// `concinnity_core::template_spec` (core owns `serde_json` and every std
-// consumer depends on it). This module re-exports those primitives so the app's
-// public API (`concinnity_app::spec_to_value`, ...) stays stable, and adds the
+// `concinnity_cook::template_spec` (a build-time crate, kept out of the shipped
+// runtime). This module re-exports those primitives so the app's public API
+// (`concinnity_app::spec_to_value`, ...) stays stable, and adds the
 // world-template convenience the authoring layer uses.
 
 use concinnity_templates::WorldTemplate;
 use serde_json::Value;
 
-pub use concinnity_core::template_spec::{arg_value_to_json, spec_args, spec_to_value};
+pub use concinnity_cook::template_spec::{arg_value_to_json, spec_args, spec_to_value};
 
 // A world template's assets as world-line entries, in application order.
 pub fn world_template_entries(t: &WorldTemplate) -> Vec<Value> {

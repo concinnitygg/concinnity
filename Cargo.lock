@@ -664,7 +664,6 @@ name = "concinnity-core"
 version = "0.10.0"
 dependencies = [
  "concinnity-eas",
- "concinnity-templates",
  "postcard",
  "rayon",
  "serde",

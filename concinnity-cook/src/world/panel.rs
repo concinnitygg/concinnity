@@ -7,7 +7,7 @@
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::label_value;
 use crate::assets::Panel;
-use concinnity_core::template_spec::spec_to_value;
+use crate::template_spec::spec_to_value;
 use concinnity_templates::asset;
 
 // Replace every Panel asset with the concrete UI assets it expands to.

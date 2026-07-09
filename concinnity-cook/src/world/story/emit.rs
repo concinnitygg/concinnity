@@ -1,6 +1,6 @@
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use crate::template_spec::spec_to_value;
 use crate::world::ui_spec::sprite;
-use concinnity_core::template_spec::spec_to_value;
 use concinnity_templates::AssetSpec;
 use concinnity_templates::asset;
 
