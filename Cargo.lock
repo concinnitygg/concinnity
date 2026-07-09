@@ -638,6 +638,7 @@ name = "concinnity-cook"
 version = "0.10.0"
 dependencies = [
  "concinnity-core",
+ "concinnity-templates",
  "fbxcel",
  "fontdue",
  "gltf",
@@ -663,6 +664,7 @@ name = "concinnity-core"
 version = "0.10.0"
 dependencies = [
  "concinnity-eas",
+ "concinnity-templates",
  "postcard",
  "rayon",
  "serde",

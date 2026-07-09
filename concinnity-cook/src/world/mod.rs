@@ -22,6 +22,7 @@ pub(crate) mod scene_import;
 pub(crate) mod shader;
 pub(crate) mod slider;
 pub(crate) mod story;
+pub(crate) mod ui_spec;
 
 pub(crate) mod expand;
 

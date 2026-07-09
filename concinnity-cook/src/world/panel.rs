@@ -5,7 +5,10 @@
 // pipeline's `<view>_*` rule and never collide with hand-authored assets.
 
 use super::expand::{asset_name, type_norm};
+use super::ui_spec::label_value;
 use crate::assets::Panel;
+use concinnity_core::template_spec::spec_to_value;
+use concinnity_templates::asset;
 
 // Replace every Panel asset with the concrete UI assets it expands to.
 pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
@@ -39,32 +42,24 @@ pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), S
 }
 
 fn expand_one(name: &str, p: &Panel) -> Vec<serde_json::Value> {
-    let mut out = vec![serde_json::json!({
-        "name": format!("{}_bg", name),
-        "type": "Sprite",
-        "args": {
-            "x": p.x,
-            "y": p.y,
-            "width": p.width,
-            "height": p.height,
-            "tint": p.color,
-            "corner_radius": p.corner_radius,
-        }
-    })];
+    let mut out = vec![spec_to_value(
+        &asset::sprite(
+            format!("{}_bg", name),
+            [p.x, p.y, p.width, p.height],
+            p.color,
+        )
+        .set("corner_radius", p.corner_radius),
+    )];
     if !p.title.is_empty() {
-        out.push(serde_json::json!({
-            "name": format!("{}_title", name),
-            "type": "TextLabel",
-            "args": {
-                "content": p.title,
-                "font": p.title_font,
-                "x": p.x + p.padding,
-                "y": p.y + p.padding,
-                "color": p.title_color,
-                "scale": p.title_scale,
-                "centered": false,
-            }
-        }));
+        out.push(label_value(
+            &format!("{}_title", name),
+            &p.title,
+            &p.title_font,
+            p.x + p.padding,
+            p.y + p.padding,
+            p.title_color,
+            p.title_scale,
+        ));
     }
     out
 }

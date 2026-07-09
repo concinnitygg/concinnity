@@ -23,6 +23,11 @@ vulkan = []
 # Generic closed-world ECS mechanism (entities, columns, ticks). Domain-free,
 # so the dependency runs one way: concinnity-eas <- concinnity-core.
 concinnity-eas = { path = "../concinnity-eas" }
+# Typed asset/world spec data (no_std, zero-dep). Core hosts the std bridge that
+# turns an `AssetSpec` into a `serde_json::Value`, so the cook pipeline can build
+# UI assets from the shared builders. The dependency runs one way:
+# concinnity-templates <- concinnity-core.
+concinnity-templates = { path = "../concinnity-templates" }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = { version = "1", features = ["preserve_order"] }

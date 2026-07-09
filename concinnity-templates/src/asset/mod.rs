@@ -18,4 +18,4 @@ pub use scene::{
     directional_light, environment_map_sky, point_light, post_process, volumetric_fog,
 };
 pub use sprite::sprite;
-pub use text::{text_input, text_label};
+pub use text::{font, menu_label, text_input, text_label};
