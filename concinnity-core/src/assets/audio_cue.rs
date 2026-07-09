@@ -70,6 +70,10 @@ impl Component for AudioCue {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("clip", "AudioClip"), ("view", "View")]
+    }
+
     fn from_args(args: Self) -> Self {
         args
     }

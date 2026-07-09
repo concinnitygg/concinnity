@@ -8,14 +8,16 @@
 //
 // The field list is the type's `default_args` object (which is
 // `serde_json::to_value(Args::default())`, keys in declaration order) -- no
-// per-type descriptor to maintain. String / integer / float / bool are editable,
-// and so is a fixed-length numeric array of 2..=4 elements (a vector or a colour),
-// edited as comma-separated numbers. Every other kind (variable-length arrays,
-// nested objects, asset-ref nulls) is left at its default and round-trips
-// untouched. The array shape is read straight from the default value, so no
-// schema is needed; enum-variant dropdowns (which need the variant set, not just a
-// value) remain a per-type follow-up. The assembled object is validated by the
-// caller via `ComponentType::reserialize_args`.
+// per-type descriptor to maintain. Editable kinds: string / integer / float /
+// bool; a fixed-length numeric array of 2..=4 elements (a vector or a colour),
+// edited as comma-separated numbers; a string-enum, cycled through its variants
+// (discovered per field via `ComponentType::field_enum_variants`); and an
+// asset-reference field (`ComponentType::ref_fields`), cycled through `(none)` +
+// the world's assets of the target type (the hook fills the options via
+// `set_ref_options`). Every other kind (variable-length arrays, nested objects,
+// undeclared nulls) is left at its default and round-trips untouched. The
+// assembled object is validated by the caller via
+// `ComponentType::reserialize_args`.
 
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
@@ -36,7 +38,17 @@ pub(crate) enum FieldKind {
     // comma-separated numbers -- a vector (position / direction / size) or, when
     // `color` is set, an RGB / RGBA colour (rendered with a preview swatch).
     Vec { len: usize, color: bool },
+    // A string enum with a known variant set (`FormField::variants`), cycled
+    // through by clicking rather than typed.
+    Enum,
+    // An asset reference to an existing asset of type `target`. Rendered like an
+    // enum (cycle button) over `FormField::variants` = `(none)` + the world's
+    // assets of `target`, which the hook fills in (`set_ref_options`).
+    Ref { target: &'static str },
 }
+
+// The `(none)` option of a reference field, mapping to a null (unset) reference.
+pub(crate) const NONE_LABEL: &str = "(none)";
 
 // One editable field of the form.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,10 +57,14 @@ pub(crate) struct FormField {
     pub key: String,
     pub kind: FieldKind,
     // Initial text for a text field (string / number rendered editable); empty
-    // for a bool.
+    // for a bool / enum.
     pub initial: String,
     // Current value of a bool field (the checkbox); unused for text kinds.
     pub boolval: bool,
+    // For `FieldKind::Enum`: the allowed variants and the current selection index
+    // into them (cycled on click). Empty for every other kind.
+    pub variants: Vec<String>,
+    pub variant_idx: usize,
 }
 
 // The editable kind of a field, from its `key` and default value `v`, or `None`
@@ -72,6 +88,36 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
         }
         _ => None,
     }
+}
+
+// The target asset type of `key` if the component declares it as a reference.
+fn ref_target_of(ct: ComponentType, key: &str) -> Option<&'static str> {
+    ct.ref_fields()
+        .iter()
+        .find(|(field, _)| *field == key)
+        .map(|(_, target)| *target)
+}
+
+// Fill a reference field's options: `(none)` followed by `names` (the world's
+// existing assets of the target type), selecting whichever matches the field's
+// current target (stashed in `initial`), else `(none)`. The hook calls this after
+// `fields_for` because the option list depends on the working entry list, which
+// this world-free module does not see.
+pub(crate) fn set_ref_options(field: &mut FormField, names: &[String]) {
+    let mut variants = Vec::with_capacity(names.len() + 2);
+    variants.push(NONE_LABEL.to_string());
+    variants.extend(names.iter().cloned());
+    // Preserve a current target that is not among the offered assets (e.g. one
+    // injected by the engine or expanded from a SceneImport, which the authored
+    // entry list does not contain), so editing an entry never silently drops it.
+    if !field.initial.is_empty() && !variants.iter().any(|v| v == &field.initial) {
+        variants.push(field.initial.clone());
+    }
+    field.variant_idx = variants
+        .iter()
+        .position(|v| v == &field.initial)
+        .unwrap_or(0);
+    field.variants = variants;
 }
 
 // Whether a field name denotes a colour (gets a preview swatch). Only decides the
@@ -115,29 +161,54 @@ pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
 // taken from the default so it is stable.
 pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<FormField> {
     let base = base_args(ty);
+    let ct = ComponentType::parse(ty);
     let mut out = Vec::new();
     let mut truncated = 0;
     for (key, def) in &base {
-        let Some(kind) = kind_of(key, def) else {
-            continue;
+        // Asset-ref fields default to null (which `kind_of` skips), so detect them
+        // first from the type's declared references.
+        let mut kind = match ct.and_then(|c| ref_target_of(c, key)) {
+            Some(target) => FieldKind::Ref { target },
+            None => match kind_of(key, def) {
+                Some(k) => k,
+                None => continue,
+            },
         };
         if out.len() >= MAX_FIELDS {
             truncated += 1;
             continue;
         }
         let cur = seed.and_then(|s| s.get(key)).unwrap_or(def);
+        // A string field may be a string-enum: promote it to a cycling picker when
+        // the type reports a variant set for it.
+        let mut variants = Vec::new();
+        let mut variant_idx = 0;
+        if matches!(kind, FieldKind::Str)
+            && let Some(v) = ct.and_then(|c| c.field_enum_variants(key))
+        {
+            variant_idx = cur
+                .as_str()
+                .and_then(|s| v.iter().position(|x| x == s))
+                .unwrap_or(0);
+            variants = v;
+            kind = FieldKind::Enum;
+        }
         let boolval = matches!(kind, FieldKind::Bool)
             && cur.as_bool().or_else(|| def.as_bool()).unwrap_or(false);
-        let initial = if matches!(kind, FieldKind::Bool) {
-            String::new()
-        } else {
-            value_text(cur)
+        let initial = match kind {
+            // No text box; a bool/enum carries its state in the field, and a ref
+            // stashes its current target name here for `set_ref_options` to select.
+            FieldKind::Bool | FieldKind::Enum => String::new(),
+            FieldKind::Ref { .. } => cur.as_str().unwrap_or_default().to_string(),
+            _ => value_text(cur),
         };
         out.push(FormField {
             key: key.clone(),
             kind,
             initial,
             boolval,
+            variants,
+            variant_idx,
         });
     }
     if truncated > 0 {
@@ -168,6 +239,16 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
             .unwrap_or_else(|| default.clone()),
         FieldKind::Bool => Value::Bool(field.boolval),
         FieldKind::Vec { len, .. } => coerce_array(text, len, default),
+        FieldKind::Enum => field
+            .variants
+            .get(field.variant_idx)
+            .map(|v| Value::String(v.clone()))
+            .unwrap_or_else(|| default.clone()),
+        // A reference emits the selected asset's name, or null for `(none)`.
+        FieldKind::Ref { .. } => match field.variants.get(field.variant_idx) {
+            Some(v) if v != NONE_LABEL => Value::String(v.clone()),
+            _ => Value::Null,
+        },
     }
 }
 
@@ -349,6 +430,107 @@ mod tests {
         assert_eq!(coerce_array("16, 24, 16", 3, &idef), json!([16, 24, 16]));
     }
 
+    // A string field the type reports variants for becomes a cycling Enum; a
+    // free-form string field stays Str.
+    #[test]
+    fn fields_for_detects_a_string_enum_as_a_cycling_field() {
+        let fields = fields_for("Sprite", None);
+        let fit = fields.iter().find(|f| f.key == "fit").expect("fit field");
+        assert_eq!(fit.kind, FieldKind::Enum);
+        assert_eq!(fit.variants, vec!["fit", "cover", "bottom"]);
+        assert_eq!(fit.variant_idx, 0, "Sprite's default fit selects variant 0");
+        // A free-form string field is left as an editable text field.
+        let hr = fields_for("HitRegion", None);
+        assert_eq!(
+            hr.iter().find(|f| f.key == "action").unwrap().kind,
+            FieldKind::Str
+        );
+    }
+
+    // An enum field emits its currently-selected variant, and the result cooks.
+    #[test]
+    fn enum_field_coerces_to_its_selected_variant() {
+        let mut fields = fields_for("TextLabel", None);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "align")
+            .expect("align field");
+        assert_eq!(fields[idx].kind, FieldKind::Enum);
+        let center = fields[idx]
+            .variants
+            .iter()
+            .position(|v| v == "center")
+            .expect("a center variant");
+        fields[idx].variant_idx = center;
+        let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        let args = assemble("TextLabel", None, &fields, &texts);
+        assert_eq!(args["align"], "center");
+        assert!(
+            validate("TextLabel", &args).is_ok(),
+            "the picked variant cooks"
+        );
+    }
+
+    // A declared reference field becomes a Ref picker; its options are `(none)` +
+    // supplied names, and it coerces to the selected name or null.
+    #[test]
+    fn ref_field_detects_target_options_and_coerces() {
+        let fields = fields_for("Decal", None);
+        let tex = fields
+            .iter()
+            .find(|f| f.key == "texture")
+            .expect("texture ref field");
+        assert_eq!(tex.kind, FieldKind::Ref { target: "Texture" });
+        assert_eq!(tex.initial, "", "an unset ref stashes no target name");
+
+        let mut f = tex.clone();
+        set_ref_options(&mut f, &["grass".into(), "stone".into()]);
+        assert_eq!(f.variants, vec![NONE_LABEL, "grass", "stone"]);
+        assert_eq!(f.variant_idx, 0, "no current target -> (none)");
+        // (none) coerces to null; a chosen asset to its name string.
+        assert_eq!(coerce(&f, "", &Value::Null), Value::Null);
+        f.variant_idx = 2;
+        assert_eq!(coerce(&f, "", &Value::Null), Value::String("stone".into()));
+    }
+
+    // Editing an entry whose ref is already set selects that asset in the options.
+    #[test]
+    fn set_ref_options_selects_the_current_target_when_editing() {
+        let mut seed = base_args("Decal");
+        seed.insert("texture".into(), Value::String("grass".into()));
+        let fields = fields_for("Decal", Some(&seed));
+        let mut tex = fields
+            .into_iter()
+            .find(|f| f.key == "texture")
+            .expect("texture ref field");
+        assert_eq!(tex.initial, "grass", "the current ref name is carried");
+        set_ref_options(&mut tex, &["stone".into(), "grass".into()]);
+        // (none), stone, grass -> "grass" is index 2.
+        assert_eq!(tex.variants[tex.variant_idx], "grass");
+    }
+
+    // A current target absent from the offered assets (engine-injected / imported)
+    // is preserved as an option so editing never drops it.
+    #[test]
+    fn set_ref_options_preserves_an_unlisted_current_target() {
+        let mut field = FormField {
+            key: "texture".into(),
+            kind: FieldKind::Ref { target: "Texture" },
+            initial: "imported_tex".into(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
+        };
+        set_ref_options(&mut field, &["grass".into()]);
+        assert!(field.variants.contains(&"imported_tex".to_string()));
+        assert_eq!(field.variants[field.variant_idx], "imported_tex");
+        // It still coerces back to that name (not lost).
+        assert_eq!(
+            coerce(&field, "", &Value::Null),
+            Value::String("imported_tex".into())
+        );
+    }
+
     #[test]
     fn unknown_type_has_no_fields_and_empty_base() {
         assert!(fields_for("NotARealType", None).is_empty());
@@ -384,12 +566,16 @@ mod tests {
                 kind: FieldKind::Float,
                 initial: "1".into(),
                 boolval: false,
+                variants: Vec::new(),
+                variant_idx: 0,
             },
             FormField {
                 key: "on".into(),
                 kind: FieldKind::Bool,
                 initial: String::new(),
                 boolval: true,
+                variants: Vec::new(),
+                variant_idx: 0,
             },
         ];
         let mut base = Map::new();
@@ -447,6 +633,8 @@ mod tests {
             kind: FieldKind::Int,
             initial: String::new(),
             boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
         };
         assert_eq!(coerce(&f, "abc", &Value::from(7)), Value::from(7));
         assert_eq!(coerce(&f, "42", &Value::from(7)), Value::from(42));
@@ -461,6 +649,52 @@ mod tests {
             validate("PointLight", &args).is_ok(),
             "the default-derived args re-serialize cleanly"
         );
+    }
+
+    // Every type the picker offers must have a well-formed derived form: its
+    // fields build without panic and its default-derived args re-validate. This is
+    // the form-side counterpart to `add_types_cook_with_default_args` (which guards
+    // the cook side), so adding a type whose form mis-derives is caught here.
+    #[test]
+    fn every_add_type_form_round_trips_its_defaults() {
+        for &ty in crate::editor::panel::ADD_TYPES {
+            let fields = fields_for(ty, None);
+            let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+            let args = assemble(ty, None, &fields, &texts);
+            assert!(
+                validate(ty, &args).is_ok(),
+                "{ty}: the default-derived form must re-validate"
+            );
+        }
+    }
+
+    // HitRegion is the richest mixed-kind form: scalars + a string + a bool, its
+    // declared references (label -> TextLabel, view -> View) as Ref pickers, and its
+    // undeclared null Option fields left at their defaults.
+    #[test]
+    fn hitregion_form_offers_scalars_refs_and_skips_undeclared_nulls() {
+        let fields = fields_for("HitRegion", None);
+        let field = |k: &str| fields.iter().find(|f| f.key == k).map(|f| f.kind);
+        assert_eq!(field("x"), Some(FieldKind::Float));
+        assert_eq!(field("width"), Some(FieldKind::Float));
+        assert_eq!(field("action"), Some(FieldKind::Str));
+        assert_eq!(field("disabled"), Some(FieldKind::Bool));
+        // Declared references become Ref pickers targeting their asset type.
+        assert_eq!(
+            field("label"),
+            Some(FieldKind::Ref {
+                target: "TextLabel"
+            })
+        );
+        assert_eq!(field("view"), Some(FieldKind::Ref { target: "View" }));
+        // Null Option fields the type does NOT declare as references are still left
+        // at their defaults, not offered.
+        for skipped in ["hover_color", "hover_scale", "drag_handle"] {
+            assert!(
+                field(skipped).is_none(),
+                "{skipped} (an undeclared null Option) is not an editable field"
+            );
+        }
     }
 
     #[test]

@@ -85,6 +85,25 @@ impl Registration {
     }
 }
 
+// Extract the allowed enum variants from a serde "unknown variant" error message,
+// coping with the count-dependent phrasing: "expected one of `a`, `b`, `c`" (3+),
+// "expected `a` or `b`" (2), and "expected `a`" (1). Collects every backtick-quoted
+// token that appears after the `expected` keyword (so the offending value, quoted
+// before it, is skipped). Returns `None` for any other error (a type mismatch, a
+// non-enum field), so callers fall back to treating the field as free text.
+pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
+    let after = msg.split_once("expected")?.1;
+    let mut out = Vec::new();
+    let mut rest = after;
+    while let Some(open) = rest.find('`') {
+        let tail = &rest[open + 1..];
+        let close = tail.find('`')?;
+        out.push(tail[..close].to_string());
+        rest = &tail[close + 1..];
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 // Component -- pure serializable data, no behavior.
 pub trait Component: Sized + Send + std::fmt::Debug + 'static {
     const NAME: &'static str;
@@ -125,6 +144,16 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
     // when no ShaderStage of any kind already exists).
     fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
         Vec::new()
+    }
+
+    // Fields of this asset's `Args` that are asset references, as
+    // `(field_name, target_type_name)`. These are `Option<AssetId>` fields authored
+    // in world.jsonl as the referenced asset's name; the target type is not in the
+    // type system (`AssetId` is type-erased), so an asset that has references
+    // declares them here. Authoring tools use this to offer a picker of existing
+    // assets of the target type instead of a free text box. Default: none.
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[]
     }
 }
 
@@ -421,6 +450,49 @@ macro_rules! __define_asset_kind {
                             >(args.clone())?;
                             Ok(serde_json::to_vec(&typed)?)
                         }
+                    ),+
+                }
+            }
+            // The allowed values of a string-enum `Args` field (in declaration
+            // order), or `None` if `field` is a free-form string / absent / not a
+            // string-enum. Probes the typed `Args` by deserializing the defaults
+            // with `field` set to a sentinel: a string-enum yields serde's "unknown
+            // variant ..., expected ..." which `parse_expected_variants` reads; a
+            // free string accepts the sentinel and yields `None`. Used by authoring
+            // tools to offer a picker instead of a free text box; it degrades to
+            // `None` (free text) if serde's phrasing ever changes.
+            pub fn field_enum_variants(self, field: &str) -> Option<Vec<String>> {
+                const SENTINEL: &str = "\u{0}__cn_enum_probe_sentinel__";
+                match self {
+                    $(
+                        Self::$variant => {
+                            let mut probe = match serde_json::to_value(
+                                <<$ty as $trait_name>::Args as Default>::default(),
+                            ) {
+                                Ok(serde_json::Value::Object(m)) => m,
+                                _ => return None,
+                            };
+                            probe.get(field)?;
+                            probe.insert(
+                                field.to_string(),
+                                serde_json::Value::String(SENTINEL.to_string()),
+                            );
+                            match serde_json::from_value::<<$ty as $trait_name>::Args>(
+                                serde_json::Value::Object(probe),
+                            ) {
+                                Ok(_) => None,
+                                Err(e) => $crate::ecs::parse_expected_variants(&e.to_string()),
+                            }
+                        }
+                    ),+
+                }
+            }
+            // The asset-reference fields of this type, as (field, target_type).
+            // See `Component::ref_fields`.
+            pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
+                match self {
+                    $(
+                        Self::$variant => <$ty as $trait_name>::ref_fields()
                     ),+
                 }
             }

@@ -115,6 +115,16 @@ fn entry_type(e: &serde_json::Value) -> Option<&str> {
     e.get("type").and_then(|v| v.as_str())
 }
 
+// The names of the working entries whose type is `ty` (the reference options a
+// field targeting that type can pick from).
+fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| entry_type(e) == Some(ty))
+        .filter_map(|e| entry_name(e).map(String::from))
+        .collect()
+}
+
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
         Self {
@@ -343,13 +353,8 @@ impl EditorHook {
                     .filter(|t| matches(t))
                     .map(|t| t.to_string())
                     .collect();
-                // Pin the active browse filter to the top when it is offered.
-                if let Some(active) = &self.type_filter
-                    && let Some(pos) = opts.iter().position(|o| o == active)
-                {
-                    let pinned = opts.remove(pos);
-                    opts.insert(0, pinned);
-                }
+                // The picker lists the addable types alphabetically (ascending).
+                opts.sort();
                 opts
             }
             Combo::Closed => Vec::new(),
@@ -466,6 +471,21 @@ impl EditorHook {
             None => self.unique_name(&ty),
         };
         self.form_fields = form::fields_for(&ty, seed.as_ref());
+        // Reference fields pick from the world's existing assets of their target
+        // type. Resolve the option lists up front (reads `entries`) so the fill
+        // loop does not borrow `self` twice.
+        let ref_opts: Vec<(usize, Vec<String>)> = self
+            .form_fields
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| match f.kind {
+                form::FieldKind::Ref { target } => Some((i, names_of_type(&self.entries, target))),
+                _ => None,
+            })
+            .collect();
+        for (i, names) in ref_opts {
+            form::set_ref_options(&mut self.form_fields[i], &names);
+        }
         self.form_focus = FormFocus::Name;
         self.form_error = None;
         self.selected_type = Some(ty);
@@ -475,7 +495,11 @@ impl EditorHook {
         self.row_menu = None;
         panel::focus_field_with(world, panel::NAME_INPUT, &name);
         for (j, field) in self.form_fields.iter().enumerate() {
-            if !matches!(field.kind, form::FieldKind::Bool) {
+            // Bool (checkbox), Enum + Ref (cycling buttons) have no text input.
+            if !matches!(
+                field.kind,
+                form::FieldKind::Bool | form::FieldKind::Enum | form::FieldKind::Ref { .. }
+            ) {
                 panel::seed_field(world, panel::form_input(j), &field.initial);
             }
         }
@@ -556,6 +580,14 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
+            PanelAction::CycleField(i) => {
+                if let Some(f) = self.form_fields.get_mut(i)
+                    && !f.variants.is_empty()
+                {
+                    f.variant_idx = (f.variant_idx + 1) % f.variants.len();
+                }
+                self.form_error = None;
+            }
             PanelAction::ConfirmAdd => self.confirm_form(world),
             PanelAction::CancelForm => self.close_form(),
             PanelAction::CloseOverlays => {
@@ -581,7 +613,11 @@ impl EditorHook {
             .iter()
             .enumerate()
             .map(|(j, f)| {
-                if matches!(f.kind, form::FieldKind::Bool) {
+                // Bool + Enum + Ref carry their value in the field state, not a box.
+                if matches!(
+                    f.kind,
+                    form::FieldKind::Bool | form::FieldKind::Enum | form::FieldKind::Ref { .. }
+                ) {
                     String::new()
                 } else {
                     panel::field_text(world, panel::form_input(j))
@@ -1012,13 +1048,24 @@ mod tests {
     }
 
     #[test]
-    fn picker_pins_the_active_type_filter_first() {
+    fn picker_lists_types_alphabetically() {
         let mut h = hook(Vec::new());
         let world = world_with_fields();
         h.combo = Combo::Picker;
+        // A prior browse filter does not reorder the picker: it stays A->Z.
         h.type_filter = Some("Decal".to_string());
         let opts = h.combo_options(&world);
-        assert_eq!(opts[0], "Decal", "the active filter is pinned to the top");
+        let mut sorted = opts.clone();
+        sorted.sort();
+        assert_eq!(opts, sorted, "the picker is alphabetized ascending");
+        assert_eq!(
+            opts.len(),
+            panel::ADD_TYPES.len(),
+            "every addable type shown"
+        );
+        // Concretely: AudioCue sorts before Sprite.
+        let pos = |t: &str| opts.iter().position(|o| o == t).unwrap();
+        assert!(pos("AudioCue") < pos("Sprite"));
     }
 
     #[test]
@@ -1116,6 +1163,118 @@ mod tests {
             serde_json::json!([0.1, 0.2, 0.3]),
             "the edited colour persisted as a numeric array"
         );
+    }
+
+    #[test]
+    fn add_form_writes_string_fields_for_a_new_type() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        // KeyBinding (a newly offered type) is a pair of string fields.
+        h.open_form(&mut world, "KeyBinding".to_string(), None);
+        let field_pos = |k: &str| {
+            h.form_fields
+                .iter()
+                .position(|f| f.key == k)
+                .unwrap_or_else(|| panic!("{k} field present"))
+        };
+        let (key_j, action_j) = (field_pos("key"), field_pos("action"));
+        assert!(matches!(h.form_fields[key_j].kind, form::FieldKind::Str));
+        set_field(&mut world, panel::form_input(key_j), "Space");
+        set_field(&mut world, panel::form_input(action_j), "jump");
+        set_field(&mut world, panel::NAME_INPUT, "jump_key");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.mode, panel::Mode::List);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["type"], "KeyBinding");
+        assert_eq!(h.entries[0]["args"]["key"], "Space");
+        assert_eq!(h.entries[0]["args"]["action"], "jump");
+    }
+
+    #[test]
+    fn add_form_cycles_and_persists_an_enum_field() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        // Sprite's `fit` is a string enum -> a cycling picker.
+        h.open_form(&mut world, "Sprite".to_string(), None);
+        let idx = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "fit")
+            .expect("fit enum field");
+        assert!(matches!(h.form_fields[idx].kind, form::FieldKind::Enum));
+        let n = h.form_fields[idx].variants.len();
+        let start = h.form_fields[idx].variant_idx;
+        // Cycle once, then confirm.
+        h.apply_panel(PanelAction::CycleField(idx), &mut world);
+        let picked = h.form_fields[idx].variants[(start + 1) % n].clone();
+        assert_ne!(
+            picked, h.form_fields[idx].variants[start],
+            "cycled to a new value"
+        );
+        set_field(&mut world, panel::NAME_INPUT, "spr");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["type"], "Sprite");
+        assert_eq!(
+            h.entries[0]["args"]["fit"], picked,
+            "the cycled enum variant persisted into args"
+        );
+    }
+
+    #[test]
+    fn add_form_ref_field_offers_and_persists_an_existing_asset() {
+        let mut h = hook(vec![
+            entry("grass_tex", "Texture"),
+            entry("stone_tex", "Texture"),
+        ]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        // Add a Decal: its `texture` reference offers the two existing Textures.
+        h.open_form(&mut world, "Decal".to_string(), None);
+        let idx = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "texture")
+            .expect("texture ref field");
+        assert!(
+            matches!(h.form_fields[idx].kind, form::FieldKind::Ref { target } if target == "Texture")
+        );
+        assert_eq!(
+            h.form_fields[idx].variants,
+            vec![form::NONE_LABEL, "grass_tex", "stone_tex"],
+            "options are (none) + the world's Textures"
+        );
+        assert_eq!(h.form_fields[idx].variant_idx, 0, "starts at (none)");
+        // Cycle to the first Texture and confirm.
+        h.apply_panel(PanelAction::CycleField(idx), &mut world);
+        assert_eq!(
+            h.form_fields[idx].variants[h.form_fields[idx].variant_idx],
+            "grass_tex"
+        );
+        set_field(&mut world, panel::NAME_INPUT, "splat");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let decal = h
+            .entries
+            .iter()
+            .find(|e| e["name"] == "splat")
+            .expect("the decal was added");
+        assert_eq!(decal["type"], "Decal");
+        assert_eq!(
+            decal["args"]["texture"], "grass_tex",
+            "the reference persisted as the asset's name"
+        );
+    }
+
+    // A reference left at (none) persists as null, not a dangling name.
+    #[test]
+    fn add_form_ref_field_defaults_to_none() {
+        let mut h = hook(vec![entry("grass_tex", "Texture")]);
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "Decal".to_string(), None);
+        set_field(&mut world, panel::NAME_INPUT, "bare");
+        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        let decal = h.entries.iter().find(|e| e["name"] == "bare").unwrap();
+        assert_eq!(decal["args"]["texture"], serde_json::Value::Null);
     }
 
     #[test]

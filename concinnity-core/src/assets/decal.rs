@@ -71,6 +71,10 @@ impl Component for Decal {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("texture", "Texture")]
+    }
+
     fn from_args(mut args: Self) -> Self {
         // Clamp the alpha to [0, 1] so a stray > 1 doesn't blow out the
         // composite. The size components are left as-authored: a non-positive

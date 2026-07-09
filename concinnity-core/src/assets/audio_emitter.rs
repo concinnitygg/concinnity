@@ -48,6 +48,10 @@ impl Component for AudioEmitter {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("clip", "AudioClip"), ("prop", "Prop")]
+    }
+
     fn to_args(&self) -> Self {
         self.clone()
     }

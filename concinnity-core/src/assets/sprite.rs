@@ -115,6 +115,10 @@ impl Component for Sprite {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("texture", "Texture"), ("view", "View")]
+    }
+
     fn to_args(&self) -> Self {
         self.clone()
     }

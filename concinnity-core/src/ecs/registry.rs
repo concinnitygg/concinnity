@@ -144,6 +144,86 @@ mod tests {
         }
     }
 
+    // `field_enum_variants` returns a string-enum field's allowed values (in
+    // declaration order) and `None` for a free-form string or a non-enum field.
+    #[test]
+    fn field_enum_variants_reports_string_enum_values() {
+        assert_eq!(
+            ComponentType::Sprite.field_enum_variants("fit"),
+            Some(vec!["fit".into(), "cover".into(), "bottom".into()])
+        );
+        assert_eq!(
+            ComponentType::TextLabel.field_enum_variants("align"),
+            Some(vec!["left".into(), "center".into(), "right".into()])
+        );
+        // A two-variant enum uses serde's "expected `a` or `b`" phrasing.
+        assert_eq!(
+            ComponentType::AudioCue.field_enum_variants("kind"),
+            Some(vec!["music".into(), "sound".into()])
+        );
+        // A free-form string field is not an enum.
+        assert_eq!(ComponentType::HitRegion.field_enum_variants("action"), None);
+        assert_eq!(ComponentType::KeyBinding.field_enum_variants("key"), None);
+        // An absent field yields None (not a panic).
+        assert_eq!(ComponentType::Sprite.field_enum_variants("nope"), None);
+        // A non-string field (probing it errors on type, not "unknown variant").
+        assert_eq!(ComponentType::Sprite.field_enum_variants("x"), None);
+    }
+
+    // `ref_fields` reports each type's asset-reference fields and their targets;
+    // every referenced target must itself be a real component type.
+    #[test]
+    fn ref_fields_name_real_target_types() {
+        assert_eq!(ComponentType::Decal.ref_fields(), &[("texture", "Texture")]);
+        assert_eq!(
+            ComponentType::AudioEmitter.ref_fields(),
+            &[("clip", "AudioClip"), ("prop", "Prop")]
+        );
+        // A type without references reports none.
+        assert!(ComponentType::PointLight.ref_fields().is_empty());
+        // Every declared ref field names an existing arg key and a real target type.
+        for &(ty, reg_fn) in ComponentType::all() {
+            let default_args = reg_fn().default_args;
+            for &(field, target) in ty.ref_fields() {
+                assert!(
+                    ComponentType::parse(target).is_some(),
+                    "{}.{field} targets unknown type {target}",
+                    ty.as_str()
+                );
+                if let Some(serde_json::Value::Object(m)) = &default_args {
+                    assert!(
+                        m.contains_key(field),
+                        "{}.{field} is not an arg of {}",
+                        ty.as_str(),
+                        ty.as_str()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_expected_variants_handles_serde_phrasings() {
+        use crate::ecs::parse_expected_variants;
+        assert_eq!(
+            parse_expected_variants("unknown variant `z`, expected one of `a`, `b`, `c`"),
+            Some(vec!["a".into(), "b".into(), "c".into()])
+        );
+        assert_eq!(
+            parse_expected_variants("unknown variant `z`, expected `a` or `b`"),
+            Some(vec!["a".into(), "b".into()])
+        );
+        assert_eq!(
+            parse_expected_variants("unknown variant `z`, expected `only`"),
+            Some(vec!["only".into()])
+        );
+        // A type-mismatch error has no backtick list after `expected`.
+        assert_eq!(
+            parse_expected_variants("invalid type: string \"z\", expected u32"),
+            None
+        );
+    }
+
     // The per-instance components an entity is composed from are RuntimeOnly:
     // never authored in a world, never in the asset reference, and exempt from
     // the declarable-args contract above. Guard that they stay that way so a

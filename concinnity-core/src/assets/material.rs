@@ -138,6 +138,17 @@ impl Component for Material {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("albedo", "Texture"),
+            ("normal_map", "Texture"),
+            ("emissive_map", "Texture"),
+            ("orm_map", "Texture"),
+            ("albedo_secondary", "Texture"),
+            ("normal_secondary", "Texture"),
+        ]
+    }
+
     fn from_args(mut args: Self) -> Self {
         args.roughness = args.roughness.clamp(0.0, 1.0);
         args.metallic = args.metallic.clamp(0.0, 1.0);

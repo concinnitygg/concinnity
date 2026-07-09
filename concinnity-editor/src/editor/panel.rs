@@ -38,8 +38,13 @@ use super::widget::{self, place_sprite, point_in};
 // recompiles cleanly when added with default args to any rendering world -- the
 // property `add_types_cook_with_default_args` guards by running every entry
 // through the real cook pipeline. The mix spans lights / scene effects, procedural
-// geometry, a camera, referenced library assets (Material / Font), UI widgets, and
-// audio. Most are naturally multi-instance; a few are effectively singletons where
+// geometry, a camera, referenced library assets (Material / Font), UI widgets, UI
+// interaction (HitRegion) + input (KeyBinding), and audio. This roughly exhausts
+// the types that are useful with the current scalar / string / vector / colour /
+// bool form; the rest are defined by their asset references or nested arrays
+// (Prop's mesh, Scene's shot, LayoutContainer's rows, ...) and want the ref /
+// nested-array form controls before they earn a place here. Most entries are
+// naturally multi-instance; a few are effectively singletons where
 // a second instance is harmlessly ignored (only the first enabled VolumetricFog
 // draws; the first Camera3D is the active one), which is fine because the common
 // action is adding the first one to a world that lacks it. World-config singletons
@@ -71,8 +76,12 @@ pub(crate) const ADD_TYPES: &[&str] = &[
     "Sprite",
     "TextLabel",
     "TextInput",
+    // UI interaction + input.
+    "HitRegion",
+    "KeyBinding",
     // Audio.
     "AudioEmitter",
+    "AudioCue",
 ];
 
 // The label of the "all assets" filter option (the default), shown first in the
@@ -177,6 +186,11 @@ pub(crate) fn form_toggle_bg(j: usize) -> AssetId {
 // end of its text control, AddForm only).
 pub(crate) fn form_swatch(j: usize) -> AssetId {
     AssetId(PANEL + 0x160 + j as u32)
+}
+// The current-variant caption of an enum arg field `j` (drawn over its cycling
+// button, which reuses `form_toggle_bg(j)`; AddForm only).
+pub(crate) fn form_enum_label(j: usize) -> AssetId {
+    AssetId(PANEL + 0x180 + j as u32)
 }
 
 // Which of the form's inputs holds keyboard focus (re-asserted each frame so the
@@ -387,6 +401,8 @@ pub(crate) enum PanelAction {
     FocusField(usize),
     // Toggle the form's bool arg field `i`.
     ToggleField(usize),
+    // Advance the form's enum arg field `i` to its next variant.
+    CycleField(usize),
     // Confirm / cancel the add-or-edit form.
     ConfirmAdd,
     CancelForm,
@@ -533,13 +549,19 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, vw: f32) -> Option<Pa
             if point_in(mx, my, form_control_rect(vw, 0)) {
                 return Some(PanelAction::FocusName);
             }
-            // Arg field controls: a bool toggles, a text field takes focus.
+            // Arg field controls: a bool toggles, an enum cycles, a text field
+            // takes focus.
             for (j, f) in view.form_fields.iter().enumerate() {
                 let row = j + 1;
                 match f.kind {
                     FieldKind::Bool => {
                         if point_in(mx, my, form_toggle_rect(vw, row)) {
                             return Some(PanelAction::ToggleField(j));
+                        }
+                    }
+                    FieldKind::Enum | FieldKind::Ref { .. } => {
+                        if point_in(mx, my, form_control_rect(vw, row)) {
+                            return Some(PanelAction::CycleField(j));
                         }
                     }
                     _ => {
@@ -818,6 +840,25 @@ fn layout_form(world: &mut World, view: &PanelView, vw: f32) {
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
                 place_sprite(world, form_toggle_bg(j), t, tint, true);
             }
+            FieldKind::Enum | FieldKind::Ref { .. } => {
+                // A cycling button spanning the control: its background reuses the
+                // bool checkbox sprite, captioned with the current selection (an
+                // enum variant, or a referenced asset name / `(none)`).
+                let c = form_control_rect(vw, row);
+                let hover = point_in(view.mouse[0], view.mouse[1], c);
+                let tint = if hover {
+                    OPTION_TINT_HOVER
+                } else {
+                    TYPEDROP_TINT
+                };
+                place_sprite(world, form_toggle_bg(j), c, tint, true);
+                let value = field
+                    .variants
+                    .get(field.variant_idx)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                place_center_label(world, form_enum_label(j), c, value, LABEL, true);
+            }
             kind => {
                 let control = form_control_rect(vw, row);
                 // A colour vector reserves a right-hand strip for a live preview
@@ -965,6 +1006,8 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..MAX_ROWS).map(combo_row_label));
     // Form row captions (name row 0 + one per arg field) and the status line.
     ids.extend((0..=form::MAX_FIELDS).map(form_row_label));
+    // Enum arg-field value captions (drawn over their cycling buttons).
+    ids.extend((0..form::MAX_FIELDS).map(form_enum_label));
     ids.push(FORM_STATUS);
     ids.extend([MENU_EDIT_LABEL, MENU_DELETE_LABEL]);
     ids
@@ -1324,6 +1367,8 @@ mod tests {
                 kind: FieldKind::Float,
                 initial: "0".into(),
                 boolval: false,
+                variants: Vec::new(),
+                variant_idx: 0,
             })
             .collect();
         let v = PanelView {
@@ -1497,6 +1542,8 @@ mod tests {
             },
             initial: "1, 0, 0".into(),
             boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
         }];
         apply(&mut world, Some(&form_view(&fields)), vw);
         let sw = world
@@ -1532,6 +1579,8 @@ mod tests {
             },
             initial: "0, 0, 0".into(),
             boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
         }];
         apply(&mut world, Some(&form_view(&fields)), vw);
         assert!(
@@ -1548,6 +1597,86 @@ mod tests {
                 .find(|t| t.asset_id == form_input(0))
                 .unwrap()
                 .visible
+        );
+    }
+
+    // An enum arg field renders as a cycling button (reusing the toggle sprite)
+    // captioned with the current variant, keeps its text input hidden, and
+    // hit-tests to a cycle.
+    #[test]
+    fn enum_field_renders_a_cycling_button_and_hit_tests_to_cycle() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let fields = [FormField {
+            key: "align".into(),
+            kind: FieldKind::Enum,
+            initial: String::new(),
+            boolval: false,
+            variants: vec!["left".into(), "center".into(), "right".into()],
+            variant_idx: 1,
+        }];
+        let v = form_view(&fields);
+        apply(&mut world, Some(&v), vw);
+        assert!(
+            sprite_visible(&world, form_toggle_bg(0)),
+            "cycling button shows"
+        );
+        let cap = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == form_enum_label(0))
+            .unwrap();
+        assert!(
+            cap.visible && cap.content == "center",
+            "shows the current variant"
+        );
+        assert!(
+            !world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == form_input(0))
+                .unwrap()
+                .visible,
+            "an enum has no editable text field"
+        );
+        // A click on the control cycles rather than focusing.
+        let c = form_control_rect(vw, 1);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            Some(PanelAction::CycleField(0))
+        );
+    }
+
+    // A reference field renders through the same cycle-button path as an enum,
+    // showing the current selection and hit-testing to a cycle.
+    #[test]
+    fn ref_field_renders_a_cycling_button_and_hit_tests_to_cycle() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let fields = [FormField {
+            key: "texture".into(),
+            kind: FieldKind::Ref { target: "Texture" },
+            initial: String::new(),
+            boolval: false,
+            variants: vec!["(none)".into(), "grass".into()],
+            variant_idx: 1,
+        }];
+        let v = form_view(&fields);
+        apply(&mut world, Some(&v), vw);
+        assert!(
+            sprite_visible(&world, form_toggle_bg(0)),
+            "cycle button shows"
+        );
+        let cap = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == form_enum_label(0))
+            .unwrap();
+        assert!(
+            cap.visible && cap.content == "grass",
+            "shows the referenced name"
+        );
+        let c = form_control_rect(vw, 1);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, vw),
+            Some(PanelAction::CycleField(0))
         );
     }
 
