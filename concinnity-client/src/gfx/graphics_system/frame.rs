@@ -418,11 +418,74 @@ fn build_dropdown_overlay(
     (sprites, labels)
 }
 
+// The visible slice of a single-line field's text, fit to its box width. `avail`
+// is the drawable text width; `advance` measures the rendered width of a prefix
+// with the real font metrics. Returns the substring to draw, the x offset to add
+// to the field's left text edge (always >= 0, so nothing bleeds left), and the
+// caret's x offset from that same edge. A field that fits is returned untouched;
+// one that overflows is truncated from the head with an ellipsis while unfocused,
+// or horizontally scrolled to keep the caret in view while focused.
+fn fit_line(
+    content: &str,
+    caret_byte: usize,
+    avail: f32,
+    focused: bool,
+    advance: impl Fn(&str) -> f32,
+) -> (String, f32, f32) {
+    const ELLIPSIS: &str = "...";
+    let caret_byte = caret_byte.min(content.len());
+    let full = advance(content);
+    if avail <= 0.0 || full <= avail {
+        return (content.to_string(), 0.0, advance(&content[..caret_byte]));
+    }
+    if focused {
+        // Pin the caret to the right edge once the text runs past the box, easing
+        // back to the left as the caret returns.
+        let caret_w = advance(&content[..caret_byte]);
+        let scroll = (caret_w - avail).max(0.0);
+        // Byte boundaries: the start, then the end of each char.
+        let mut bounds = vec![0usize];
+        bounds.extend(content.char_indices().map(|(b, c)| b + c.len_utf8()));
+        // Drop chars fully scrolled off the left so nothing bleeds past that edge.
+        let start = *bounds
+            .iter()
+            .find(|&&b| advance(&content[..b]) >= scroll)
+            .unwrap_or(&0);
+        // Keep chars up to the last boundary still inside the box.
+        let end = bounds
+            .iter()
+            .rev()
+            .find(|&&b| advance(&content[..b]) - scroll <= avail)
+            .copied()
+            .unwrap_or(content.len())
+            .max(start);
+        let visible = content.get(start..end).unwrap_or("").to_string();
+        (
+            visible,
+            advance(&content[..start]) - scroll,
+            caret_w - scroll,
+        )
+    } else {
+        // Truncate from the head, leaving room for an ellipsis.
+        let ell = advance(ELLIPSIS);
+        let mut end = 0usize;
+        for (b, c) in content.char_indices() {
+            let nb = b + c.len_utf8();
+            if advance(&content[..nb]) + ell > avail {
+                break;
+            }
+            end = nb;
+        }
+        (format!("{}{ELLIPSIS}", &content[..end]), 0.0, 0.0)
+    }
+}
+
 // Synthesise the transient Sprites + TextLabels that draw a TextInput field: a
 // background box, the typed content (or the dimmer placeholder while empty and
 // unfocused), and a caret bar while focused. Fed through the same shapers as the
 // authored overlay elements, carrying the field's `view` / `fit` so view mapping
-// and visibility apply. Mirrors `build_dropdown_overlay`.
+// and visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
+// box (`fit_line`) so a long value never bleeds past the field's edges.
 fn build_text_input_overlay(
     ti: &TextInput,
     loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
@@ -454,16 +517,36 @@ fn build_text_input_overlay(
 
     // Placeholder only while empty and unfocused; otherwise the live content.
     let showing_placeholder = ti.content.is_empty() && !ti.focused;
-    let (content, color) = if showing_placeholder {
-        (ti.placeholder.clone(), ti.placeholder_color)
+    let (raw, color) = if showing_placeholder {
+        (ti.placeholder.as_str(), ti.placeholder_color)
     } else {
-        (ti.content.clone(), ti.text_color)
+        (ti.content.as_str(), ti.text_color)
     };
+    // The byte offset of the caret within the live content (only consulted for the
+    // focused, content-showing case; harmless otherwise).
+    let caret_byte = {
+        let caret = ti.caret.min(ti.content.chars().count());
+        ti.content
+            .char_indices()
+            .nth(caret)
+            .map(|(b, _)| b)
+            .unwrap_or(ti.content.len())
+    };
+    // Fit the text to the box. Without a loaded font we cannot measure, so pass it
+    // through (it will not be rendered until a font loads).
+    let avail = (ti.width - 2.0 * ti.padding - CARET_W).max(0.0);
+    let (content, x_offset, caret_off) = match font {
+        Some(f) => fit_line(raw, caret_byte, avail, ti.focused, |s| {
+            text::text_advance_width(s, f, ti.scale)
+        }),
+        None => (raw.to_string(), 0.0, 0.0),
+    };
+
     let label = TextLabel {
         asset_id: AssetId::default(),
         font: ti.font,
         content,
-        x: ti.x + ti.padding,
+        x: ti.x + ti.padding + x_offset,
         y: text_y,
         color,
         scale: ti.scale,
@@ -476,20 +559,10 @@ fn build_text_input_overlay(
         view: ti.view,
     };
 
-    // Caret: a thin bar at the caret's character position (measured with the
-    // real font metrics), only while the field holds focus and the font loaded.
-    if ti.focused
-        && let Some(font) = font
-    {
-        let caret = ti.caret.min(ti.content.chars().count());
-        let byte = ti
-            .content
-            .char_indices()
-            .nth(caret)
-            .map(|(b, _)| b)
-            .unwrap_or(ti.content.len());
-        let caret_x =
-            ti.x + ti.padding + text::text_advance_width(&ti.content[..byte], font, ti.scale);
+    // Caret: a thin bar at the caret's fit position, only while the field holds
+    // focus and the font loaded.
+    if ti.focused && font.is_some() {
+        let caret_x = ti.x + ti.padding + caret_off;
         sprites.push(Sprite {
             asset_id: AssetId::default(),
             x: caret_x,
@@ -2483,5 +2556,51 @@ mod tests {
     fn dim_set_without_rows_falls_back_to_the_value_label() {
         let gated: HashSet<AssetId> = [AssetId(7)].into_iter().collect();
         assert_eq!(expand_dim_set(&gated, &[]), gated);
+    }
+
+    // A fixed-width mock metric (every char 10px) makes `fit_line` widths exact.
+    fn mock_advance(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    // Text that fits the box is returned untouched, with the caret at its measured
+    // position.
+    #[test]
+    fn fit_line_passes_through_text_that_fits() {
+        let (text, xoff, caret) = fit_line("abc", 3, 100.0, false, mock_advance);
+        assert_eq!(text, "abc");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 30.0);
+    }
+
+    // An unfocused overflow is truncated from the head with an ellipsis that fits
+    // inside the box.
+    #[test]
+    fn fit_line_truncates_unfocused_overflow_with_ellipsis() {
+        // avail 65, ellipsis "..." = 30px: keep chars while width + 30 <= 65 (3 chars).
+        let (text, xoff, _) = fit_line("abcdefghij", 0, 65.0, false, mock_advance);
+        assert_eq!(text, "abc...");
+        assert_eq!(xoff, 0.0);
+    }
+
+    // A focused overflow scrolls so the caret (at the end here) stays at the box's
+    // right edge, dropping the head that ran off the left.
+    #[test]
+    fn fit_line_scrolls_focused_overflow_to_keep_the_caret_visible() {
+        // 100px of text, 50px box, caret at end: scroll 50 -> show the last 5 chars.
+        let (text, xoff, caret) = fit_line("abcdefghij", 10, 50.0, true, mock_advance);
+        assert_eq!(text, "fghij");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 50.0, "caret pinned to the right edge");
+        assert!(caret <= 50.0, "caret never past the box");
+    }
+
+    // With the caret at the start, a focused overflow shows the head (no scroll).
+    #[test]
+    fn fit_line_focused_caret_at_start_shows_the_head() {
+        let (text, xoff, caret) = fit_line("abcdefghij", 0, 50.0, true, mock_advance);
+        assert_eq!(text, "abcde");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 0.0);
     }
 }

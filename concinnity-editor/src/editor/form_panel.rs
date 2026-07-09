@@ -250,6 +250,59 @@ fn field_slot(view: &FormView, j: usize) -> Option<usize> {
     (j >= scroll && j < scroll + form::FIELD_POOL).then(|| j - scroll)
 }
 
+// The element count of a vector field (0 for any other kind).
+fn vec_len(kind: FieldKind) -> usize {
+    match kind {
+        FieldKind::Vec { len, .. } => len,
+        _ => 0,
+    }
+}
+
+// Whether the non-colour vector at logical field `j` is currently disclosed: its
+// element leaves (`key.0` ..) follow it directly in the field list, so the next
+// field carrying that prefix means it is expanded.
+fn vec_expanded(fields: &[FormField], j: usize) -> bool {
+    let Some(field) = fields.get(j) else {
+        return false;
+    };
+    let prefix = format!("{}.", field.key);
+    fields
+        .get(j + 1)
+        .is_some_and(|next| next.key.starts_with(&prefix))
+}
+
+// The display caption for a field: a disclosed vector element (`position.0`) reads
+// as its axis (x / y / z / w); every other field keeps its leaf name.
+fn field_caption(fields: &[FormField], field: &FormField) -> String {
+    element_axis_label(fields, &field.key).unwrap_or_else(|| {
+        field
+            .key
+            .rsplit('.')
+            .next()
+            .unwrap_or(&field.key)
+            .to_string()
+    })
+}
+
+// The axis label for `key` when it is an element leaf of a non-colour vector
+// (`parent.<idx>` with `parent` a non-colour vector field), else `None`.
+fn element_axis_label(fields: &[FormField], key: &str) -> Option<String> {
+    let (parent, last) = key.rsplit_once('.')?;
+    let idx: usize = last.parse().ok()?;
+    let is_vec_parent = fields
+        .iter()
+        .any(|f| f.key == parent && matches!(f.kind, FieldKind::Vec { color: false, .. }));
+    is_vec_parent.then(|| axis_letter(idx))
+}
+
+// A vector element's axis label: x / y / z / w for the first four, else `[i]`.
+fn axis_letter(i: usize) -> String {
+    ["x", "y", "z", "w"]
+        .get(i)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("[{i}]"))
+}
+
 // A resolved form-panel click. Field actions carry the LOGICAL field index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FormAction {
@@ -267,6 +320,9 @@ pub(crate) enum FormAction {
     // Append / drop the last element of array arg field `i`.
     AddArrayElement(usize),
     RemoveArrayElement(usize),
+    // Expand / collapse the disclosure of non-colour vector arg field `i` (its
+    // per-element leaves).
+    ToggleVecExpand(usize),
     // The Apply / Add button: validate + commit.
     Confirm,
     // The Cancel button: close the panel, discarding the form.
@@ -373,6 +429,12 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
                     return Some(FormAction::RemoveArrayElement(j));
                 }
             }
+            FieldKind::Vec { color: false, .. } => {
+                // The disclosure button toggles the per-element leaves.
+                if point_in(mx, my, form_control_rect(o, r)) {
+                    return Some(FormAction::ToggleVecExpand(j));
+                }
+            }
             _ => {
                 if point_in(mx, my, form_control_rect(o, r)) {
                     return Some(FormAction::FocusField(j));
@@ -454,9 +516,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
         if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(o, r), d)) {
             continue;
         }
-        // A nested (dotted-path) field shows its indented leaf name.
+        // A nested (dotted-path) field shows its indented caption; a disclosed
+        // vector element reads as its axis (x / y / z / w).
         let depth = field.key.matches('.').count();
-        let leaf = field.key.rsplit('.').next().unwrap_or(field.key.as_str());
+        let caption = field_caption(view.form_fields, field);
         place_left_label(
             world,
             form_row_label(r),
@@ -464,7 +527,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 row[0] + PAD + depth as f32 * NEST_INDENT,
                 row[1] + FIELD_H * 0.5 - 10.0,
             ],
-            leaf,
+            &caption,
             LABEL,
             true,
         );
@@ -512,6 +575,25 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                     form_toggle_bg(r),
                     array_add_rect(o, r),
                     ADD_BTN_TINT,
+                    true,
+                );
+            }
+            FieldKind::Vec { color: false, .. } => {
+                // A disclosure button spanning the control, captioned with the
+                // element count and a caret (`>` collapsed, `v` expanded). Clicking
+                // it toggles the per-element leaves below.
+                let c = form_control_rect(o, r);
+                let hover = point_in(view.mouse[0], view.mouse[1], c);
+                let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
+                place_sprite(world, form_toggle_bg(r), c, tint, true);
+                let open = vec_expanded(view.form_fields, j);
+                let caption = format!("[{}] {}", vec_len(field.kind), if open { "v" } else { ">" });
+                place_left_label(
+                    world,
+                    form_enum_label(r),
+                    [c[0] + 8.0, c[1] + c[3] * 0.5 - 10.0],
+                    &caption,
+                    LABEL_DIM,
                     true,
                 );
             }
@@ -1060,8 +1142,11 @@ mod tests {
         );
     }
 
+    // A plain (non-colour) vector renders as a collapsed disclosure button, not an
+    // editable text field or a swatch; clicking it toggles its per-element leaves.
     #[test]
-    fn plain_vector_field_has_no_swatch() {
+    fn plain_vector_field_is_a_disclosure() {
+        let o = test_origin();
         let mut world = injected_world();
         let fields = [FormField {
             key: "position".into(),
@@ -1074,9 +1159,82 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
         }];
-        apply(&mut world, Some(&view(&fields)), test_origin());
-        assert!(!sprite_visible(&world, form_swatch(0)));
-        assert!(input(&world, form_input(0)).visible);
+        let v = view(&fields);
+        apply(&mut world, Some(&v), o);
+        assert!(!sprite_visible(&world, form_swatch(0)), "no colour swatch");
+        assert!(
+            !input(&world, form_input(0)).visible,
+            "a collapsed vector has no editable comma field"
+        );
+        assert!(
+            sprite_visible(&world, form_toggle_bg(0)),
+            "the disclosure button shows"
+        );
+        let cap = label(&world, form_enum_label(0));
+        assert!(
+            cap.visible && cap.content == "[3] >",
+            "collapsed count + caret"
+        );
+        let c = form_control_rect(o, 0);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            Some(FormAction::ToggleVecExpand(0))
+        );
+    }
+
+    // An expanded vector shows its element leaves labelled by axis (x / y / z), each
+    // an editable field, and the header caret flips to `v`.
+    #[test]
+    fn expanded_vector_shows_axis_labelled_element_fields() {
+        let o = test_origin();
+        let mut world = injected_world();
+        let elem = |axis: &str| FormField {
+            key: format!("position.{axis}"),
+            kind: FieldKind::Float,
+            initial: "0".into(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
+        };
+        let fields = [
+            FormField {
+                key: "position".into(),
+                kind: FieldKind::Vec {
+                    len: 3,
+                    color: false,
+                },
+                initial: String::new(),
+                boolval: false,
+                variants: Vec::new(),
+                variant_idx: 0,
+            },
+            elem("0"),
+            elem("1"),
+            elem("2"),
+        ];
+        let v = view(&fields);
+        apply(&mut world, Some(&v), o);
+        // The header caret is now `v` (its element leaves follow it).
+        assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
+        // Slots 1..=3 are the axis-labelled element fields.
+        assert_eq!(label(&world, form_row_label(1)).content, "x");
+        assert_eq!(label(&world, form_row_label(2)).content, "y");
+        assert_eq!(label(&world, form_row_label(3)).content, "z");
+        assert!(
+            input(&world, form_input(1)).visible,
+            "an element leaf is an editable field"
+        );
+        // Clicking an element focuses it; clicking the header collapses again.
+        let c1 = form_control_rect(o, 1);
+        assert_eq!(
+            hit_test(&v, c1[0] + 5.0, c1[1] + 5.0, o),
+            Some(FormAction::FocusField(1))
+        );
+        let c0 = form_control_rect(o, 0);
+        assert_eq!(
+            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o),
+            Some(FormAction::ToggleVecExpand(0))
+        );
     }
 
     // An enum / ref field renders as a cycling button captioned with the current

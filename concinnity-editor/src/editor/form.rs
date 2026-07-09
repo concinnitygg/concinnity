@@ -60,6 +60,23 @@ pub(crate) enum FieldKind {
     Array,
 }
 
+impl FieldKind {
+    // Whether a field of this kind is edited through a text input (so the panel
+    // seeds / reads a control for it). Bools (checkbox), enums / refs (cycle
+    // button), arrays (header), and non-colour vectors (a disclosure of per-element
+    // leaves) carry their state elsewhere, not in a text box.
+    pub(crate) fn has_text_input(self) -> bool {
+        !matches!(
+            self,
+            FieldKind::Bool
+                | FieldKind::Enum
+                | FieldKind::Ref { .. }
+                | FieldKind::Array
+                | FieldKind::Vec { color: false, .. }
+        )
+    }
+}
+
 // The `(none)` option of a reference field, mapping to a null (unset) reference.
 pub(crate) const NONE_LABEL: &str = "(none)";
 
@@ -149,10 +166,28 @@ fn is_color_key(key: &str) -> bool {
 fn value_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => number_text(n),
         Value::Bool(b) => b.to_string(),
         Value::Array(a) => a.iter().map(value_text).collect::<Vec<_>>().join(", "),
         _ => String::new(),
+    }
+}
+
+// A JSON number as display text. A float that originated from an `f32` (as the
+// engine's args almost always are) is printed at f32's shortest round-tripping
+// form rather than the full f64 expansion serde emits (`0.05`, not
+// `0.05000000074505806`); a genuine f64 that does not round-trip through f32 keeps
+// full precision. Integers print as-is. Re-parsing the shortened text yields the
+// same f32, so the displayed value round-trips unchanged through cook.
+fn number_text(n: &serde_json::Number) -> String {
+    if n.is_i64() || n.is_u64() {
+        return n.to_string();
+    }
+    match n.as_f64() {
+        // `{:?}` on an f32 is the shortest decimal that round-trips, keeping a
+        // decimal point (`1.0`, not `1`) so a float still reads as a float.
+        Some(v) if (v as f32) as f64 == v => format!("{:?}", v as f32),
+        _ => n.to_string(),
     }
 }
 
@@ -181,11 +216,24 @@ const MAX_NEST_DEPTH: usize = 2;
 // stable. Nested plain objects are flattened into dotted-path leaves (see
 // `collect_fields`). All fields are returned; the panel renders a scrolling window
 // `FIELD_POOL` rows tall over them.
+// A convenience for the collapsed form (no disclosed vectors), used by the tests.
+#[cfg(test)]
 pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<FormField> {
+    fields_for_with(ty, seed, &std::collections::HashSet::new())
+}
+
+// `fields_for` with a set of expanded (disclosed) non-colour vector paths: each
+// expanded vector is followed by an editable leaf per element (`position.0` ..)
+// so its components edit one at a time; a collapsed vector is just its header row.
+pub(crate) fn fields_for_with(
+    ty: &str,
+    seed: Option<&Map<String, Value>>,
+    expanded: &std::collections::HashSet<String>,
+) -> Vec<FormField> {
     let base = base_args(ty);
     let ct = ComponentType::parse(ty);
     let mut out = Vec::new();
-    collect_fields(ct, "", &base, seed, 0, &mut out);
+    collect_fields(ct, "", &base, seed, expanded, 0, &mut out);
     out
 }
 
@@ -198,6 +246,7 @@ fn collect_fields(
     prefix: &str,
     obj: &Map<String, Value>,
     root_seed: Option<&Map<String, Value>>,
+    expanded: &std::collections::HashSet<String>,
     depth: usize,
     out: &mut Vec<FormField>,
 ) {
@@ -207,7 +256,7 @@ fn collect_fields(
         } else {
             format!("{prefix}.{key}")
         };
-        collect_value(ct, &path, def, root_seed, depth, out);
+        collect_value(ct, &path, def, root_seed, expanded, depth, out);
     }
 }
 
@@ -221,6 +270,7 @@ fn collect_value(
     path: &str,
     def: &Value,
     root_seed: Option<&Map<String, Value>>,
+    expanded: &std::collections::HashSet<String>,
     depth: usize,
     out: &mut Vec<FormField>,
 ) {
@@ -243,7 +293,7 @@ fn collect_value(
         && !nested.is_empty()
         && !seed_overrides_with_non_object(root_seed, path)
     {
-        collect_fields(ct, path, nested, root_seed, depth + 1, out);
+        collect_fields(ct, path, nested, root_seed, expanded, depth + 1, out);
         return;
     }
 
@@ -287,6 +337,29 @@ fn collect_value(
             variants,
             variant_idx,
         });
+        // A non-colour vector can be disclosed into an editable leaf per element
+        // (edited one component at a time); collapsed it is only the header row. A
+        // colour vector keeps its single field + preview swatch instead.
+        if let FieldKind::Vec { len, color: false } = kind
+            && expanded.contains(path)
+        {
+            let cur = root_seed.and_then(|s| get_at_path(s, path)).unwrap_or(def);
+            let arr = cur.as_array();
+            for i in 0..len {
+                let elem = arr.and_then(|a| a.get(i));
+                let ekind = elem
+                    .and_then(|e| kind_of("", e))
+                    .unwrap_or(FieldKind::Float);
+                out.push(FormField {
+                    key: format!("{path}.{i}"),
+                    kind: ekind,
+                    initial: elem.map(value_text).unwrap_or_default(),
+                    boolval: false,
+                    variants: Vec::new(),
+                    variant_idx: 0,
+                });
+            }
+        }
         return;
     }
 
@@ -323,7 +396,7 @@ fn collect_value(
         });
         for (i, elem) in cur_arr.iter().enumerate() {
             let elem_path = format!("{path}.{i}");
-            collect_value(ct, &elem_path, elem, root_seed, depth + 1, out);
+            collect_value(ct, &elem_path, elem, root_seed, expanded, depth + 1, out);
         }
     }
 }
@@ -490,9 +563,13 @@ pub(crate) fn assemble(
         }
     }
     for (i, field) in fields.iter().enumerate() {
-        // An array header is structural, not a value; its array lives in `out`
-        // already (carried in via `editing_args`, grown / shrunk by add / remove).
-        if field.kind == FieldKind::Array {
+        // A structural row carries no value of its own: an array header's array
+        // lives in `out` already (carried via `editing_args`, grown / shrunk by add
+        // / remove), and a disclosed non-colour vector's value is written by its
+        // per-element leaves (or, collapsed, left untouched in `out`).
+        if field.kind == FieldKind::Array
+            || matches!(field.kind, FieldKind::Vec { color: false, .. })
+        {
             continue;
         }
         // Fall back to the value already in `out` at this (possibly nested) path
@@ -1052,6 +1129,106 @@ mod tests {
         // An out-of-range index set is a no-op (no panic, no growth).
         set_at_path(&mut args, "waves.5.amplitude", Value::from(1.0));
         assert!(get_at_path(&args, "waves.5.amplitude").is_none());
+    }
+
+    // A non-colour vector is one collapsed header by default; listing its path as
+    // expanded discloses an editable Float leaf per element, seeded from the value.
+    #[test]
+    fn expanding_a_vector_discloses_per_element_leaves() {
+        use std::collections::HashSet;
+        let collapsed = fields_for("PointLight", None);
+        assert_eq!(
+            collapsed
+                .iter()
+                .find(|f| f.key == "position")
+                .map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: false
+            })
+        );
+        assert!(
+            collapsed.iter().all(|f| !f.key.starts_with("position.")),
+            "a collapsed vector emits no element leaves"
+        );
+
+        let expanded = HashSet::from(["position".to_string()]);
+        let fields = fields_for_with("PointLight", None, &expanded);
+        // The header stays, followed by one Float leaf per element.
+        assert!(fields.iter().any(|f| f.key == "position"));
+        for axis in ["position.0", "position.1", "position.2"] {
+            let leaf = fields
+                .iter()
+                .find(|f| f.key == axis)
+                .unwrap_or_else(|| panic!("missing element leaf {axis}"));
+            assert_eq!(leaf.kind, FieldKind::Float);
+        }
+        assert!(
+            fields.iter().all(|f| f.key != "position.3"),
+            "a 3-vector discloses exactly 3 leaves"
+        );
+    }
+
+    // A colour vector never discloses element leaves even when its path is listed
+    // as expanded (it keeps its single field + preview swatch).
+    #[test]
+    fn expanding_never_touches_a_colour_vector() {
+        use std::collections::HashSet;
+        let expanded = HashSet::from(["color".to_string()]);
+        let fields = fields_for_with("PointLight", None, &expanded);
+        assert!(fields.iter().all(|f| !f.key.starts_with("color.")));
+        assert_eq!(
+            fields.iter().find(|f| f.key == "color").map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 3,
+                color: true
+            })
+        );
+    }
+
+    // Editing a disclosed vector element writes back into the vector (keeping its
+    // length + untouched siblings) and cooks.
+    #[test]
+    fn assemble_writes_a_disclosed_vector_element() {
+        use std::collections::HashSet;
+        let expanded = HashSet::from(["position".to_string()]);
+        let fields = fields_for_with("PointLight", None, &expanded);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "position.1")
+            .expect("a position.1 element leaf");
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "4.5".into();
+        let args = assemble("PointLight", None, &fields, &texts);
+        assert_eq!(
+            get_at_path(&args, "position")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
+            Some(3),
+            "the vector keeps its length"
+        );
+        assert_eq!(
+            get_at_path(&args, "position.1").and_then(Value::as_f64),
+            Some(4.5)
+        );
+        assert!(validate("PointLight", &args).is_ok());
+    }
+
+    // f32-origin floats display at their shortest round-tripping form, not serde's
+    // full f64 expansion; integers and genuine f64s are untouched.
+    #[test]
+    fn floats_display_shortened_but_round_trip() {
+        let num = |v: f64| serde_json::Number::from_f64(v).unwrap();
+        // 0.05_f32 widened to f64 prints long via serde; number_text shortens it.
+        let long = num(0.05_f32 as f64).to_string();
+        assert!(long.len() > 6, "serde prints the long expansion: {long}");
+        assert_eq!(number_text(&num(0.05_f32 as f64)), "0.05");
+        // A whole float keeps its decimal point so it still reads as a float.
+        assert_eq!(number_text(&num(1.0_f32 as f64)), "1.0");
+        // An integer prints as itself.
+        assert_eq!(number_text(&serde_json::Number::from(42)), "42");
+        // A genuine f64 that does not round-trip through f32 keeps full precision.
+        assert_eq!(number_text(&num(0.1)), num(0.1).to_string());
     }
 
     // Editing an array element's leaf writes back into that element and cooks.

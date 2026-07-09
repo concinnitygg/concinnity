@@ -120,6 +120,9 @@ pub(crate) struct EditorHook {
     // mutated by add / remove (structure) and, on capture, by the controls. Empty
     // outside AddForm.
     form_args: serde_json::Map<String, serde_json::Value>,
+    // The paths of the form's non-colour vector fields currently disclosed into
+    // per-element leaves. Cleared when the form opens / closes.
+    vec_expanded: std::collections::HashSet<String>,
     // The floating panels' dragged origins; `None` means the panel still sits at
     // its default anchor. Always clamped fully on screen before use.
     panel_pos: Option<[f32; 2]>,
@@ -209,6 +212,7 @@ impl EditorHook {
             field_dropdown: None,
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
+            vec_expanded: std::collections::HashSet::new(),
             panel_pos: None,
             edit_pos: None,
             preview_pos: None,
@@ -577,6 +581,7 @@ impl EditorHook {
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
         self.form_scroll = 0;
+        self.vec_expanded.clear();
         self.refresh_form(world);
         widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
     }
@@ -588,7 +593,7 @@ impl EditorHook {
         let Some(ty) = self.selected_type.clone() else {
             return;
         };
-        self.form_fields = form::fields_for(&ty, Some(&self.form_args));
+        self.form_fields = form::fields_for_with(&ty, Some(&self.form_args), &self.vec_expanded);
         // Clamp the scroll window to the (possibly changed) field count -- an array
         // shrink can leave `form_scroll` past the new last page.
         let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
@@ -613,13 +618,7 @@ impl EditorHook {
         // header) have no text input to seed.
         let scroll = self.form_scroll;
         for (j, field) in self.form_fields.iter().enumerate() {
-            if matches!(
-                field.kind,
-                form::FieldKind::Bool
-                    | form::FieldKind::Enum
-                    | form::FieldKind::Ref { .. }
-                    | form::FieldKind::Array
-            ) {
+            if !field.kind.has_text_input() {
                 continue;
             }
             if let Some(r) = visible_slot(j, scroll) {
@@ -641,14 +640,9 @@ impl EditorHook {
             .iter()
             .enumerate()
             .map(|(j, f)| {
-                if matches!(
-                    f.kind,
-                    form::FieldKind::Bool
-                        | form::FieldKind::Enum
-                        | form::FieldKind::Ref { .. }
-                        | form::FieldKind::Array
-                ) {
-                    // State lives in the field (boolval / variant_idx), not a control.
+                if !f.kind.has_text_input() {
+                    // State lives in the field (boolval / variant_idx) or its child
+                    // leaves (a disclosed vector), not a control of its own.
                     String::new()
                 } else if let Some(r) = visible_slot(j, scroll) {
                     // In the window: read the live control.
@@ -671,6 +665,7 @@ impl EditorHook {
         self.editing = None;
         self.form_fields.clear();
         self.form_args = serde_json::Map::new();
+        self.vec_expanded.clear();
         self.form_scroll = 0;
         self.form_focus = FormFocus::Name;
         self.form_error = None;
@@ -821,6 +816,19 @@ impl EditorHook {
                 self.capture_controls(world);
                 if let Some(path) = self.form_fields.get(j).map(|f| f.key.clone()) {
                     form::remove_array_elem(&mut self.form_args, &path);
+                    self.form_focus = FormFocus::Name;
+                    self.refresh_form(world);
+                }
+                self.form_error = None;
+            }
+            FormAction::ToggleVecExpand(j) => {
+                // Fold the live controls in first so an in-progress edit survives the
+                // field list re-deriving with / without this vector's element leaves.
+                self.capture_controls(world);
+                if let Some(path) = self.form_fields.get(j).map(|f| f.key.clone()) {
+                    if !self.vec_expanded.remove(&path) {
+                        self.vec_expanded.insert(path);
+                    }
                     self.form_focus = FormFocus::Name;
                     self.refresh_form(world);
                 }
@@ -2127,6 +2135,86 @@ mod tests {
         h.apply_form(FormAction::Confirm, &mut world);
         let ws = h.entries.iter().find(|e| e["name"] == "pond").unwrap();
         assert_eq!(ws["args"]["waves"].as_array().map(Vec::len), Some(1));
+    }
+
+    // A plain vector opens collapsed; disclosing it exposes per-element leaves whose
+    // edits write back into the vector (keeping its length) and persist.
+    #[test]
+    fn form_discloses_a_vector_and_edits_one_element() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "PointLight".to_string(), None);
+        let pos = |h: &EditorHook| {
+            h.form_fields
+                .iter()
+                .position(|f| f.key == "position")
+                .expect("a position vector field")
+        };
+        // Collapsed: no element leaves yet.
+        assert!(
+            h.form_fields
+                .iter()
+                .all(|f| !f.key.starts_with("position."))
+        );
+        // Disclose it: the element leaves appear and the path is tracked expanded.
+        h.apply_form(FormAction::ToggleVecExpand(pos(&h)), &mut world);
+        assert!(h.vec_expanded.contains("position"));
+        let yj = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "position.1")
+            .expect("the y element leaf");
+        // Edit y through its control, then confirm.
+        let slot = visible_slot(yj, h.form_scroll).expect("y leaf visible");
+        set_field(&mut world, form_panel::form_input(slot), "4.5");
+        set_field(&mut world, form_panel::NAME_INPUT, "lamp");
+        h.apply_form(FormAction::Confirm, &mut world);
+        let lamp = h.entries.iter().find(|e| e["name"] == "lamp").unwrap();
+        assert_eq!(
+            lamp["args"]["position"].as_array().map(Vec::len),
+            Some(3),
+            "the vector kept its length"
+        );
+        assert_eq!(lamp["args"]["position"][1].as_f64(), Some(4.5));
+    }
+
+    // Collapsing a disclosed vector after editing an element keeps the edit (capture
+    // runs before the field list re-derives).
+    #[test]
+    fn collapsing_a_vector_keeps_its_element_edits() {
+        let mut h = hook(Vec::new());
+        let mut world = world_with_fields();
+        h.open_form(&mut world, "PointLight".to_string(), None);
+        let pj = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "position")
+            .unwrap();
+        h.apply_form(FormAction::ToggleVecExpand(pj), &mut world);
+        let xj = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "position.0")
+            .unwrap();
+        let slot = visible_slot(xj, h.form_scroll).unwrap();
+        set_field(&mut world, form_panel::form_input(slot), "2.0");
+        // Collapse again: the element leaves go away but the edit is folded in.
+        let pj = h
+            .form_fields
+            .iter()
+            .position(|f| f.key == "position")
+            .unwrap();
+        h.apply_form(FormAction::ToggleVecExpand(pj), &mut world);
+        assert!(!h.vec_expanded.contains("position"));
+        assert!(
+            h.form_fields
+                .iter()
+                .all(|f| !f.key.starts_with("position."))
+        );
+        set_field(&mut world, form_panel::NAME_INPUT, "lamp");
+        h.apply_form(FormAction::Confirm, &mut world);
+        let lamp = h.entries.iter().find(|e| e["name"] == "lamp").unwrap();
+        assert_eq!(lamp["args"]["position"][0].as_f64(), Some(2.0));
     }
 
     // A form wider than the control pool scrolls: a field past the window is edited
