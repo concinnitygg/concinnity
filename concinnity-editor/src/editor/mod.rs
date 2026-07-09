@@ -7,6 +7,7 @@
 // existing debug server so `cn debug smoke` / `screenshot` can verify a session.
 
 mod form;
+mod form_panel;
 mod hook;
 mod hud;
 mod inject;

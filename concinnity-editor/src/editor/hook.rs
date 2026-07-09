@@ -8,14 +8,16 @@
 // code is compiled into a shipped game.
 //
 // The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
-// opens the browse-and-add panel (`panel.rs`): a combo (dropdown) that filters
-// the browse list by type, a "+" that opens a typed autocomplete of the addable
-// types, a browse list grouped by type with a per-name Edit / Delete menu, and a
-// name-first add / edit form. The combo's single filter field and the form's
-// name field are real `TextInput` assets edited by the engine's text-input
-// system; the hook reads them back. The Assets and Preview panels are floating:
-// holding their title bars drags them (the hook owns each origin, clamped so a
-// panel can never leave the screen).
+// opens the browse panel (`panel.rs`): a combo (dropdown) that filters the
+// browse list by type, a "+" that opens a typed autocomplete of the addable
+// types, and a browse list grouped by type. Clicking a name (or picking a type
+// from the "+" picker) opens the add / edit form in its own floating panel
+// (`form_panel.rs`); the browse row of the edited entry stays highlighted. The
+// combo's filter field and the form's name heading are real `TextInput` assets
+// edited by the engine's text-input system; the hook reads them back. All three
+// panels (Assets, edit form, Preview) are floating: holding their title bars
+// drags them (the hook owns each origin, clamped so a panel can never leave the
+// screen).
 //
 // Cursor control: the editor holds the cursor by default (edit mode -- cursor
 // free, world frozen), publishing `MenuOverride(Some(true))`. Ticking the
@@ -29,8 +31,9 @@
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
 use super::form::{self, FormField};
+use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
-use super::panel::{self, Combo, FormFocus, ListRow, PanelAction, PanelView};
+use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::widget::{self, point_in};
 use crate::app::state::App;
@@ -42,7 +45,18 @@ use crate::ecs::{MenuOverride, PendingBackend, World};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
     Assets,
+    Edit,
     Preview,
+}
+
+// Which scroll region a wheel event lands in (decided by the tick from the
+// cursor position, since the browse and form panels can be open at once).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollTarget {
+    // The edit form's field window (or its open value dropdown).
+    Form,
+    // The Assets panel's browse list / combo options.
+    List,
 }
 
 // An active title-bar drag: the grabbed panel and the cursor's offset from its
@@ -72,7 +86,6 @@ pub(crate) struct EditorHook {
     templates_open: bool,
     // Assets panel state.
     panel_open: bool,
-    mode: panel::Mode,
     // The header combo (dropdown) state: closed, filtering, or picking a type.
     combo: Combo,
     // Active type filter for the browse list, or `None` for "all".
@@ -80,13 +93,14 @@ pub(crate) struct EditorHook {
     // First visible row of the (grouped) browse list / the combo option list.
     list_scroll: usize,
     combo_scroll: usize,
-    // The type being named in the add / edit form.
+    // The type of the open add / edit form; `None` means the form panel is
+    // closed.
     selected_type: Option<String>,
     // When the form is editing an existing entry, its `entries` index (else a new
     // asset is being added).
     editing: Option<usize>,
     // The editable arg fields of the open form (derived from the type's default
-    // args). Empty outside AddForm.
+    // args). Empty while the form is closed.
     form_fields: Vec<FormField>,
     // First visible field of the form's scroll window (its physical control pool is
     // fixed size, so a form wider than `form::FIELD_POOL` scrolls). Reset on open /
@@ -109,6 +123,7 @@ pub(crate) struct EditorHook {
     // The floating panels' dragged origins; `None` means the panel still sits at
     // its default anchor. Always clamped fully on screen before use.
     panel_pos: Option<[f32; 2]>,
+    edit_pos: Option<[f32; 2]>,
     preview_pos: Option<[f32; 2]>,
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
@@ -180,7 +195,6 @@ impl EditorHook {
             swap_requested: false,
             templates_open: false,
             panel_open: false,
-            mode: panel::Mode::List,
             combo: Combo::Closed,
             type_filter: None,
             list_scroll: 0,
@@ -196,24 +210,33 @@ impl EditorHook {
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
             panel_pos: None,
+            edit_pos: None,
             preview_pos: None,
             drag: None,
         }
     }
 
-    // The Assets panel's top-left for this frame: the dragged position (or the
-    // default anchor below the top bar), clamped so the whole panel -- at its
-    // current height -- stays on screen even after a window resize.
-    fn panel_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        let pos = self.panel_pos.unwrap_or(panel::default_origin(vp[0]));
-        let size = [
-            panel::PANEL_W,
-            panel::panel_height(self.mode, self.form_fields.len()),
-        ];
-        widget::clamp_origin(pos, size, vp)
+    // Whether the add / edit form panel is open.
+    fn form_open(&self) -> bool {
+        self.selected_type.is_some()
     }
 
-    // The Preview panel's top-left for this frame, clamped like the Assets panel.
+    // The Assets panel's top-left for this frame: the dragged position (or the
+    // default anchor below the top bar), clamped so the whole panel stays on
+    // screen even after a window resize.
+    fn panel_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self.panel_pos.unwrap_or(panel::default_origin(vp[0]));
+        widget::clamp_origin(pos, panel::size(), vp)
+    }
+
+    // The edit-form panel's top-left for this frame, clamped at its current
+    // height (the field area tracks the open type's field count).
+    fn edit_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self.edit_pos.unwrap_or(form_panel::default_origin(vp[0]));
+        widget::clamp_origin(pos, form_panel::size(self.form_fields.len()), vp)
+    }
+
+    // The Preview panel's top-left for this frame, clamped like the others.
     fn preview_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         let pos = self.preview_pos.unwrap_or(preview::default_origin());
         widget::clamp_origin(pos, preview::size(), vp)
@@ -403,7 +426,7 @@ impl EditorHook {
     // The floating combo option list for the open flavour, narrowed by the typed
     // filter field. Empty when the combo is closed.
     fn combo_options(&self, world: &World) -> Vec<String> {
-        let filter = panel::field_text(world, panel::FILTER_INPUT).to_lowercase();
+        let filter = widget::field_text(world, panel::FILTER_INPUT).to_lowercase();
         let matches = |s: &str| filter.is_empty() || s.to_lowercase().contains(&filter);
         match self.combo {
             Combo::Filter => {
@@ -455,7 +478,6 @@ impl EditorHook {
 
     fn make_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
         PanelView {
-            mode: self.mode,
             combo: self.combo,
             filter_label: &d.filter_label,
             combo_options: &d.combo_options,
@@ -464,7 +486,15 @@ impl EditorHook {
             list_rows: &d.list_rows,
             list_scroll: self.list_scroll,
             row_menu: self.row_menu,
-            form_title: &d.form_title,
+            // The entry whose form is open keeps its browse row highlighted.
+            selected: self.editing,
+            mouse,
+        }
+    }
+
+    fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
+        FormView {
+            title: &d.form_title,
             editing: self.editing.is_some(),
             form_fields: &self.form_fields,
             form_scroll: self.form_scroll,
@@ -487,7 +517,6 @@ impl EditorHook {
                 self.panel_open = !self.panel_open;
                 if self.panel_open {
                     self.templates_open = false;
-                    self.mode = panel::Mode::List;
                     self.combo = Combo::Closed;
                     self.row_menu = None;
                     self.list_scroll = 0;
@@ -510,11 +539,10 @@ impl EditorHook {
 
     // Open the combo in `flavour`, clearing and focusing the shared filter field.
     fn open_combo(&mut self, flavour: Combo, world: &mut World) {
-        self.mode = panel::Mode::List;
         self.combo = flavour;
         self.combo_scroll = 0;
         self.row_menu = None;
-        panel::focus_field_with(world, panel::FILTER_INPUT, "");
+        widget::focus_field_with(world, panel::FILTER_INPUT, "");
     }
 
     // Open the add / edit form for `ty`: derive its editable arg fields from the
@@ -544,14 +572,13 @@ impl EditorHook {
         self.form_error = None;
         self.selected_type = Some(ty);
         self.editing = editing;
-        self.mode = panel::Mode::AddForm;
         self.combo = Combo::Closed;
         self.row_menu = None;
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
         self.form_scroll = 0;
         self.refresh_form(world);
-        panel::focus_field_with(world, panel::NAME_INPUT, &name);
+        widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
     }
 
     // Derive the form's fields from the current working args, fill each reference
@@ -596,7 +623,7 @@ impl EditorHook {
                 continue;
             }
             if let Some(r) = visible_slot(j, scroll) {
-                panel::seed_field(world, panel::form_input(r), &field.initial);
+                widget::seed_field(world, form_panel::form_input(r), &field.initial);
             }
         }
     }
@@ -625,7 +652,7 @@ impl EditorHook {
                     String::new()
                 } else if let Some(r) = visible_slot(j, scroll) {
                     // In the window: read the live control.
-                    panel::field_text(world, panel::form_input(r))
+                    widget::field_text(world, form_panel::form_input(r))
                 } else {
                     // Off-window: feed its stored value back so `assemble` round-trips
                     // it unchanged rather than blanking it (an empty string would
@@ -637,7 +664,8 @@ impl EditorHook {
         self.form_args = form::assemble(&ty, Some(&self.form_args), &self.form_fields, &texts);
     }
 
-    // Leave the form, discarding its transient state, back to the browse list.
+    // Close the form panel, discarding its transient state (the browse row's
+    // highlight clears with `editing`).
     fn close_form(&mut self) {
         self.selected_type = None;
         self.editing = None;
@@ -648,7 +676,6 @@ impl EditorHook {
         self.form_error = None;
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
-        self.mode = panel::Mode::List;
     }
 
     // Route a resolved panel click. Field-focus transitions mutate the injected
@@ -698,6 +725,11 @@ impl EditorHook {
                 }
                 Combo::Closed => {}
             },
+            PanelAction::OpenEntry(idx) => {
+                if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
+                    self.open_form(world, ty, Some(idx));
+                }
+            }
             PanelAction::OpenRowMenu(entry) => self.row_menu = Some(entry),
             PanelAction::RowEdit => {
                 if let Some(idx) = self.row_menu
@@ -713,20 +745,39 @@ impl EditorHook {
                 {
                     self.entries.remove(idx);
                     self.dirty = true;
+                    // The open form indexes into `entries`: deleting the edited
+                    // entry closes it, and deleting an earlier one shifts it.
+                    match self.editing {
+                        Some(e) if e == idx => self.close_form(),
+                        Some(e) if e > idx => self.editing = Some(e - 1),
+                        _ => {}
+                    }
                 }
                 self.row_menu = None;
                 let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
                 self.list_scroll = self.list_scroll.min(max);
             }
-            PanelAction::FocusName => self.form_focus = FormFocus::Name,
-            PanelAction::FocusField(i) => self.form_focus = FormFocus::Field(i),
-            PanelAction::ToggleField(i) => {
+            PanelAction::CloseOverlays => {
+                self.combo = Combo::Closed;
+                self.row_menu = None;
+            }
+            PanelAction::Consume => {}
+        }
+    }
+
+    // Route a resolved form-panel click. Field-focus transitions mutate the
+    // injected `TextInput` components, so this needs the world.
+    fn apply_form(&mut self, action: FormAction, world: &mut World) {
+        match action {
+            FormAction::FocusName => self.form_focus = FormFocus::Name,
+            FormAction::FocusField(i) => self.form_focus = FormFocus::Field(i),
+            FormAction::ToggleField(i) => {
                 if let Some(f) = self.form_fields.get_mut(i) {
                     f.boolval = !f.boolval;
                 }
                 self.form_error = None;
             }
-            PanelAction::CycleField(i) => {
+            FormAction::CycleField(i) => {
                 if let Some(f) = self.form_fields.get_mut(i)
                     && !f.variants.is_empty()
                 {
@@ -734,7 +785,7 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
-            PanelAction::OpenFieldDropdown(i) => {
+            FormAction::OpenFieldDropdown(i) => {
                 // Toggle: a second click on the open field's control closes it.
                 self.field_dropdown = if self.field_dropdown == Some(i) {
                     None
@@ -744,7 +795,7 @@ impl EditorHook {
                 self.field_dropdown_scroll = 0;
                 self.form_error = None;
             }
-            PanelAction::PickFieldOption(opt) => {
+            FormAction::PickFieldOption(opt) => {
                 if let Some(open) = self.field_dropdown
                     && let Some(f) = self.form_fields.get_mut(open)
                     && opt < f.variants.len()
@@ -754,7 +805,7 @@ impl EditorHook {
                 self.field_dropdown = None;
                 self.form_error = None;
             }
-            PanelAction::AddArrayElement(j) => {
+            FormAction::AddArrayElement(j) => {
                 self.capture_controls(world);
                 if let (Some(ty), Some(path)) = (
                     self.selected_type.clone(),
@@ -766,7 +817,7 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
-            PanelAction::RemoveArrayElement(j) => {
+            FormAction::RemoveArrayElement(j) => {
                 self.capture_controls(world);
                 if let Some(path) = self.form_fields.get(j).map(|f| f.key.clone()) {
                     form::remove_array_elem(&mut self.form_args, &path);
@@ -775,14 +826,10 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
-            PanelAction::ConfirmAdd => self.confirm_form(world),
-            PanelAction::CancelForm => self.close_form(),
-            PanelAction::CloseOverlays => {
-                self.combo = Combo::Closed;
-                self.row_menu = None;
-                self.field_dropdown = None;
-            }
-            PanelAction::Consume => {}
+            FormAction::Confirm => self.confirm_form(world),
+            FormAction::Close => self.close_form(),
+            FormAction::CloseOverlays => self.field_dropdown = None,
+            FormAction::Consume => {}
         }
     }
 
@@ -795,7 +842,7 @@ impl EditorHook {
             self.close_form();
             return;
         };
-        let typed = panel::field_text(world, panel::NAME_INPUT);
+        let typed = widget::field_text(world, form_panel::NAME_INPUT);
         // Fold the live control values into the working args (which already holds the
         // structure: nested objects, array lengths), then validate the whole thing.
         self.capture_controls(world);
@@ -824,26 +871,27 @@ impl EditorHook {
         self.close_form();
     }
 
-    // Move the active body's scroll offset in the wheel direction.
-    fn scroll(&mut self, delta: f32, world: &mut World) {
-        match self.mode {
-            panel::Mode::List if self.combo == Combo::Closed => {
+    // Move the targeted region's scroll offset in the wheel direction. The tick
+    // picks the target from the cursor position (both panels can be open).
+    fn scroll(&mut self, delta: f32, target: ScrollTarget, world: &mut World) {
+        match target {
+            ScrollTarget::List if self.combo == Combo::Closed => {
                 let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
                 self.list_scroll = scroll_step(self.list_scroll, delta, max);
                 self.row_menu = None;
             }
-            panel::Mode::List => {
+            ScrollTarget::List => {
                 let max = self
                     .combo_options(world)
                     .len()
                     .saturating_sub(panel::MAX_ROWS);
                 self.combo_scroll = scroll_step(self.combo_scroll, delta, max);
             }
-            panel::Mode::AddForm => {
+            ScrollTarget::Form => {
                 if let Some(open) = self.field_dropdown {
                     // An open value dropdown scrolls its own option list.
                     let total = self.form_fields.get(open).map_or(0, |f| f.variants.len());
-                    let max = total.saturating_sub(panel::MAX_DROP_ROWS);
+                    let max = total.saturating_sub(form_panel::MAX_DROP_ROWS);
                     self.field_dropdown_scroll =
                         scroll_step(self.field_dropdown_scroll, delta, max);
                 } else {
@@ -887,11 +935,11 @@ impl EditorHook {
         let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
         match drag.target {
             DragTarget::Assets => {
-                let size = [
-                    panel::PANEL_W,
-                    panel::panel_height(self.mode, self.form_fields.len()),
-                ];
-                self.panel_pos = Some(widget::clamp_origin(pos, size, vp));
+                self.panel_pos = Some(widget::clamp_origin(pos, panel::size(), vp));
+            }
+            DragTarget::Edit => {
+                let size = form_panel::size(self.form_fields.len());
+                self.edit_pos = Some(widget::clamp_origin(pos, size, vp));
             }
             DragTarget::Preview => {
                 self.preview_pos = Some(widget::clamp_origin(pos, preview::size(), vp));
@@ -900,8 +948,8 @@ impl EditorHook {
     }
 
     // Route a press: the top bar first (it draws over the panels), then the
-    // Preview panel, then the open Assets panel. A press on a panel's title bar
-    // starts a drag instead of resolving to a control.
+    // Preview panel, the open edit-form panel, and the open Assets panel. A press
+    // on a panel's title bar starts a drag instead of resolving to a control.
     fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
         if let Some(a) = hud::hit_test(mx, my, true, self.dirty, self.templates_open, vp[0]) {
@@ -930,6 +978,25 @@ impl EditorHook {
                 self.world_capture = !self.world_capture;
             }
             return;
+        }
+        if self.form_open() {
+            let fo = self.edit_origin(vp);
+            if point_in(mx, my, form_panel::title_rect(fo)) {
+                self.drag = Some(Drag {
+                    target: DragTarget::Edit,
+                    grab: [mx - fo[0], my - fo[1]],
+                });
+                return;
+            }
+            let action = {
+                let data = self.panel_data(world);
+                let view = self.make_form_view(&data, [mx, my]);
+                form_panel::hit_test(&view, mx, my, fo)
+            };
+            if let Some(fa) = action {
+                self.apply_form(fa, world);
+                return;
+            }
         }
         if !self.panel_open {
             return;
@@ -974,19 +1041,25 @@ impl DebugHook for EditorHook {
                 if input.left_click && self.drag.is_none() {
                     self.route_click(input, vp, world);
                 }
-                // Wheel over the panel body scrolls the list / combo options. An
-                // open value dropdown is modal and can extend past the fixed body
-                // bounds, so the wheel scrolls it from anywhere while it is open.
-                if self.panel_open
-                    && input.scroll_delta.abs() > 0.5
-                    && (self.field_dropdown.is_some()
-                        || panel::cursor_over_body(
-                            input.mouse_x,
-                            input.mouse_y,
-                            self.panel_origin(vp),
-                        ))
-                {
-                    self.scroll(input.scroll_delta, world);
+                // Wheel routing by cursor: over the form panel it scrolls the
+                // field window; over the Assets panel body, the list / combo
+                // options. An open value dropdown is modal and can extend past
+                // the panel bounds, so it scrolls from anywhere while open.
+                if input.scroll_delta.abs() > 0.5 {
+                    let (mx, my) = (input.mouse_x, input.mouse_y);
+                    let over_form = self.form_open() && {
+                        let data = self.panel_data(world);
+                        let view = self.make_form_view(&data, [mx, my]);
+                        self.field_dropdown.is_some()
+                            || form_panel::cursor_over(&view, mx, my, self.edit_origin(vp))
+                    };
+                    if over_form {
+                        self.scroll(input.scroll_delta, ScrollTarget::Form, world);
+                    } else if self.panel_open
+                        && panel::cursor_over_body(mx, my, self.panel_origin(vp))
+                    {
+                        self.scroll(input.scroll_delta, ScrollTarget::List, world);
+                    }
                 }
             }
         }
@@ -998,21 +1071,28 @@ impl DebugHook for EditorHook {
         // Re-anchor + recolour the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());
         let vp = input.as_ref().map(|i| i.viewport).unwrap_or([0.0, 0.0]);
+        let mouse = input
+            .as_ref()
+            .map(|i| [i.mouse_x, i.mouse_y])
+            .unwrap_or([0.0, 0.0]);
         if self.hud_visible && vp[0] > 0.0 {
             preview::apply(world, self.preview_origin(vp), self.world_capture);
         } else if !self.hud_visible {
             preview::hide_all(world);
         }
         if self.hud_visible && self.panel_open && vp[0] > 0.0 {
-            let mouse = input
-                .as_ref()
-                .map(|i| [i.mouse_x, i.mouse_y])
-                .unwrap_or([0.0, 0.0]);
             let data = self.panel_data(world);
             let view = self.make_view(&data, mouse);
             panel::apply(world, Some(&view), self.panel_origin(vp));
         } else if !(self.hud_visible && self.panel_open) {
             panel::apply(world, None, [0.0, 0.0]);
+        }
+        if self.hud_visible && self.form_open() && vp[0] > 0.0 {
+            let data = self.panel_data(world);
+            let view = self.make_form_view(&data, mouse);
+            form_panel::apply(world, Some(&view), self.edit_origin(vp));
+        } else if !(self.hud_visible && self.form_open()) {
+            form_panel::apply(world, None, [0.0, 0.0]);
         }
     }
 
@@ -1070,11 +1150,14 @@ mod tests {
         world
     }
 
-    // A world with the injected panel fields, for the add / edit flow (the combo
-    // filter, the name, and the form's arg-input pool).
+    // A world with the injected typed fields, for the add / edit flow (the
+    // combo filter, the form's name heading, and its arg-input pool).
     fn world_with_fields() -> World {
         let mut world = World::new_empty();
-        for id in panel::all_field_ids() {
+        for id in panel::all_field_ids()
+            .into_iter()
+            .chain(form_panel::all_field_ids())
+        {
             world.add_component(TextInput {
                 asset_id: id,
                 ..Default::default()
@@ -1109,7 +1192,7 @@ mod tests {
     fn assets_button_toggles_panel_and_excludes_templates() {
         let mut h = hook(Vec::new());
         h.apply_top(HudAction::ToggleAssets);
-        assert!(h.panel_open && h.mode == panel::Mode::List);
+        assert!(h.panel_open);
         // Opening Templates closes the panel.
         h.apply_top(HudAction::ToggleTemplates);
         assert!(h.templates_open && !h.panel_open);
@@ -1196,19 +1279,19 @@ mod tests {
         // Pick the first offered type -> AddForm, name field prefilled + focused.
         let ty = h.combo_options(&world)[0].clone();
         h.apply_panel(PanelAction::PickOption(0), &mut world);
-        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(h.form_open());
         assert_eq!(h.combo, Combo::Closed);
         assert_eq!(h.selected_type.as_deref(), Some(ty.as_str()));
         assert!(h.editing.is_none());
         let name_field = world
             .query::<TextInput>()
-            .find(|t| t.asset_id == panel::NAME_INPUT)
+            .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
         assert!(name_field.focused && !name_field.content.is_empty());
         // Edit the name, then confirm.
-        set_field(&mut world, panel::NAME_INPUT, "my_light");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
-        assert_eq!(h.mode, panel::Mode::List);
+        set_field(&mut world, form_panel::NAME_INPUT, "my_light");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert!(!h.form_open());
         assert!(h.dirty);
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["name"], "my_light");
@@ -1224,18 +1307,18 @@ mod tests {
         h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
         assert_eq!(h.row_menu, Some(0));
         h.apply_panel(PanelAction::RowEdit, &mut world);
-        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(h.form_open());
         assert_eq!(h.editing, Some(0));
         assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
         assert!(h.row_menu.is_none());
         let name_field = world
             .query::<TextInput>()
-            .find(|t| t.asset_id == panel::NAME_INPUT)
+            .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
         assert_eq!(name_field.content, "lamp", "name prefilled from the entry");
         // Rename and confirm: same entry, no new one.
-        set_field(&mut world, panel::NAME_INPUT, "streetlamp");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "streetlamp");
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries.len(), 1, "edited in place, not appended");
         assert_eq!(h.entries[0]["name"], "streetlamp");
         assert_eq!(h.entries[0]["type"], "PointLight");
@@ -1260,10 +1343,9 @@ mod tests {
         let mut world = world_with_fields();
         h.editing = Some(1);
         h.selected_type = Some("Decal".to_string());
-        h.mode = panel::Mode::AddForm;
         // Rename "b" to "a": collides with the other entry -> suffixed.
-        set_field(&mut world, panel::NAME_INPUT, "a");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "a");
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries[1]["name"], "a_1");
     }
 
@@ -1272,9 +1354,8 @@ mod tests {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
         h.selected_type = Some("PointLight".to_string());
-        h.mode = panel::Mode::AddForm;
         // Field left blank.
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["name"], "editor_pointlight");
     }
@@ -1284,9 +1365,8 @@ mod tests {
         let mut h = hook(vec![entry("lamp", "PointLight")]);
         let mut world = world_with_fields();
         h.selected_type = Some("PointLight".to_string());
-        h.mode = panel::Mode::AddForm;
-        set_field(&mut world, panel::NAME_INPUT, "lamp");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "lamp");
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries[1]["name"], "lamp_1", "collision is suffixed");
     }
 
@@ -1307,13 +1387,13 @@ mod tests {
             .position(|o| o == "GraphicsConfig")
             .expect("GraphicsConfig is offered in the picker");
         h.apply_panel(PanelAction::PickOption(gi), &mut world);
-        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(h.form_open());
         assert_eq!(
             h.editing,
             Some(0),
             "picking a present singleton edits it, not a new add"
         );
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(
             h.entries
                 .iter()
@@ -1334,9 +1414,9 @@ mod tests {
             .position(|o| o == "Window")
             .expect("Window is offered in the picker");
         h2.apply_panel(PanelAction::PickOption(wi), &mut world2);
-        assert_eq!(h2.mode, panel::Mode::AddForm);
+        assert!(h2.form_open());
         assert!(h2.editing.is_none(), "no existing Window -> an add form");
-        h2.apply_panel(PanelAction::ConfirmAdd, &mut world2);
+        h2.apply_form(FormAction::Confirm, &mut world2);
         assert_eq!(
             h2.entries.iter().filter(|e| e["type"] == "Window").count(),
             1,
@@ -1349,9 +1429,8 @@ mod tests {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
         h.selected_type = Some("Decal".to_string());
-        h.mode = panel::Mode::AddForm;
-        h.apply_panel(PanelAction::CancelForm, &mut world);
-        assert_eq!(h.mode, panel::Mode::List);
+        h.apply_form(FormAction::Close, &mut world);
+        assert!(!h.form_open());
         assert!(h.selected_type.is_none() && h.editing.is_none());
         assert!(h.entries.is_empty() && !h.dirty);
     }
@@ -1595,6 +1674,106 @@ mod tests {
         assert!(h.drag.is_some(), "still dragging");
     }
 
+    // Clicking an asset's name row in the browse list (not just its row menu)
+    // opens the edit-form panel for that entry, and the row stays selected.
+    #[test]
+    fn clicking_a_list_row_opens_its_edit_form() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        h.panel_open = true;
+        let vp = [1280.0, 720.0];
+        let po = h.panel_origin(vp);
+        // Row 0 is the type header; row 1 is the name.
+        let row = panel::list_row_rect(po, 1);
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
+        world.add_component(FrameInput {
+            viewport: vp,
+            mouse_x: row[0] + 20.0,
+            mouse_y: row[1] + 10.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(h.form_open(), "the row click opened the form");
+        assert_eq!(h.editing, Some(0));
+        assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
+        assert_eq!(
+            widget::field_text(&world, form_panel::NAME_INPUT),
+            "lamp",
+            "the name heading is seeded from the entry"
+        );
+    }
+
+    // Deleting an entry while a form is open keeps the form's entry index valid:
+    // deleting the edited entry closes it; deleting an earlier one shifts it.
+    #[test]
+    fn deleting_entries_fixes_up_the_open_form_index() {
+        let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        // Edit "b" (index 1), then delete "a" (index 0): the form now edits 0.
+        h.open_form(&mut world, "Decal".to_string(), Some(1));
+        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+        h.apply_panel(PanelAction::RowDelete, &mut world);
+        assert!(h.form_open(), "the form survives an unrelated delete");
+        assert_eq!(h.editing, Some(0), "the edited index shifted down");
+        // Confirm still updates the right (renamed-index) entry.
+        set_field(&mut world, form_panel::NAME_INPUT, "b2");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0]["name"], "b2");
+
+        // Deleting the edited entry itself closes the form.
+        let mut h2 = hook(vec![entry("a", "Decal")]);
+        let mut world2 = world_with_fields();
+        h2.panel_open = true;
+        h2.open_form(&mut world2, "Decal".to_string(), Some(0));
+        h2.apply_panel(PanelAction::OpenRowMenu(0), &mut world2);
+        h2.apply_panel(PanelAction::RowDelete, &mut world2);
+        assert!(!h2.form_open(), "deleting the edited entry closes its form");
+    }
+
+    // The edit-form panel drags by its own title bar, independent of the Assets
+    // panel.
+    #[test]
+    fn edit_panel_drags_by_its_title_bar() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
+        h.panel_open = true;
+        h.open_form(&mut world, "PointLight".to_string(), Some(0));
+        let vp = [1280.0, 720.0];
+        let fo = h.edit_origin(vp);
+        world.add_component(FrameInput {
+            viewport: vp,
+            mouse_x: fo[0] + 12.0,
+            mouse_y: fo[1] + 8.0,
+            left_click: true,
+            left_button_down: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(h.drag.is_some(), "the form title press starts a drag");
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: 112.0,
+                mouse_y: 208.0,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert_eq!(h.edit_origin(vp), [100.0, 200.0]);
+        assert_eq!(
+            h.panel_origin(vp),
+            panel::default_origin(vp[0]),
+            "the Assets panel did not move"
+        );
+    }
+
     #[test]
     fn add_form_writes_edited_arg_values() {
         let mut h = hook(Vec::new());
@@ -1609,7 +1788,7 @@ mod tests {
             .position(|o| o == &ty)
             .expect("PointLight is offered");
         h.apply_panel(PanelAction::PickOption(idx), &mut world);
-        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(h.form_open());
         assert!(!h.form_fields.is_empty(), "the type exposes arg fields");
         // Edit a float field via its input.
         let (j, key) = h
@@ -1619,10 +1798,10 @@ mod tests {
             .find(|(_, f)| matches!(f.kind, form::FieldKind::Float))
             .map(|(j, f)| (j, f.key.clone()))
             .expect("a float arg field");
-        set_field(&mut world, panel::form_input(j), "3.5");
-        set_field(&mut world, panel::NAME_INPUT, "lamp");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
-        assert_eq!(h.mode, panel::Mode::List);
+        set_field(&mut world, form_panel::form_input(j), "3.5");
+        set_field(&mut world, form_panel::NAME_INPUT, "lamp");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert!(!h.form_open());
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["name"], "lamp");
         assert_eq!(h.entries[0]["type"], ty.as_str());
@@ -1646,10 +1825,10 @@ mod tests {
             .find(|(_, f)| matches!(f.kind, form::FieldKind::Vec { color: true, .. }))
             .map(|(j, f)| (j, f.key.clone()))
             .expect("a colour vector field");
-        set_field(&mut world, panel::form_input(j), "0.1, 0.2, 0.3");
-        set_field(&mut world, panel::NAME_INPUT, "fog");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
-        assert_eq!(h.mode, panel::Mode::List);
+        set_field(&mut world, form_panel::form_input(j), "0.1, 0.2, 0.3");
+        set_field(&mut world, form_panel::NAME_INPUT, "fog");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert!(!h.form_open());
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["type"], "VolumetricFog");
         assert_eq!(
@@ -1672,9 +1851,9 @@ mod tests {
             .position(|f| f.key == "controller.move_speed")
             .expect("the nested controller.move_speed field is offered");
         assert!(matches!(h.form_fields[j].kind, form::FieldKind::Float));
-        set_field(&mut world, panel::form_input(j), "12.5");
-        set_field(&mut world, panel::NAME_INPUT, "cam");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::form_input(j), "12.5");
+        set_field(&mut world, form_panel::NAME_INPUT, "cam");
+        h.apply_form(FormAction::Confirm, &mut world);
         let cam = h
             .entries
             .iter()
@@ -1702,11 +1881,11 @@ mod tests {
         };
         let (key_j, action_j) = (field_pos("key"), field_pos("action"));
         assert!(matches!(h.form_fields[key_j].kind, form::FieldKind::Str));
-        set_field(&mut world, panel::form_input(key_j), "Space");
-        set_field(&mut world, panel::form_input(action_j), "jump");
-        set_field(&mut world, panel::NAME_INPUT, "jump_key");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
-        assert_eq!(h.mode, panel::Mode::List);
+        set_field(&mut world, form_panel::form_input(key_j), "Space");
+        set_field(&mut world, form_panel::form_input(action_j), "jump");
+        set_field(&mut world, form_panel::NAME_INPUT, "jump_key");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert!(!h.form_open());
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["type"], "KeyBinding");
         assert_eq!(h.entries[0]["args"]["key"], "Space");
@@ -1728,14 +1907,14 @@ mod tests {
         let n = h.form_fields[idx].variants.len();
         let start = h.form_fields[idx].variant_idx;
         // Cycle once, then confirm.
-        h.apply_panel(PanelAction::CycleField(idx), &mut world);
+        h.apply_form(FormAction::CycleField(idx), &mut world);
         let picked = h.form_fields[idx].variants[(start + 1) % n].clone();
         assert_ne!(
             picked, h.form_fields[idx].variants[start],
             "cycled to a new value"
         );
-        set_field(&mut world, panel::NAME_INPUT, "spr");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "spr");
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0]["type"], "Sprite");
         assert_eq!(
@@ -1769,13 +1948,13 @@ mod tests {
         );
         assert_eq!(h.form_fields[idx].variant_idx, 0, "starts at (none)");
         // Cycle to the first Texture and confirm.
-        h.apply_panel(PanelAction::CycleField(idx), &mut world);
+        h.apply_form(FormAction::CycleField(idx), &mut world);
         assert_eq!(
             h.form_fields[idx].variants[h.form_fields[idx].variant_idx],
             "grass_tex"
         );
-        set_field(&mut world, panel::NAME_INPUT, "splat");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "splat");
+        h.apply_form(FormAction::Confirm, &mut world);
         let decal = h
             .entries
             .iter()
@@ -1794,7 +1973,7 @@ mod tests {
     fn add_form_ref_field_dropdown_picks_and_persists() {
         // More Textures than the cycle cap, so the picker is a dropdown.
         let mut entries = Vec::new();
-        for i in 0..(panel::CYCLE_MAX + 3) {
+        for i in 0..(form_panel::CYCLE_MAX + 3) {
             entries.push(entry(&format!("tex_{i}"), "Texture"));
         }
         let mut h = hook(entries);
@@ -1807,16 +1986,16 @@ mod tests {
             .position(|f| f.key == "texture")
             .expect("texture ref field");
         // (none) + the textures exceeds CYCLE_MAX, so a click opens a dropdown.
-        assert!(h.form_fields[idx].variants.len() > panel::CYCLE_MAX);
-        h.apply_panel(PanelAction::OpenFieldDropdown(idx), &mut world);
+        assert!(h.form_fields[idx].variants.len() > form_panel::CYCLE_MAX);
+        h.apply_form(FormAction::OpenFieldDropdown(idx), &mut world);
         assert_eq!(h.field_dropdown, Some(idx), "the dropdown opened");
         // Pick option 3 (a real texture, past (none) at 0).
         let picked = h.form_fields[idx].variants[3].clone();
-        h.apply_panel(PanelAction::PickFieldOption(3), &mut world);
+        h.apply_form(FormAction::PickFieldOption(3), &mut world);
         assert!(h.field_dropdown.is_none(), "picking closes the dropdown");
         assert_eq!(h.form_fields[idx].variant_idx, 3, "the option was selected");
-        set_field(&mut world, panel::NAME_INPUT, "splat");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "splat");
+        h.apply_form(FormAction::Confirm, &mut world);
         let decal = h.entries.iter().find(|e| e["name"] == "splat").unwrap();
         assert_eq!(
             decal["args"]["texture"], picked,
@@ -1831,15 +2010,14 @@ mod tests {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
         h.selected_type = Some("Decal".to_string());
-        h.mode = panel::Mode::AddForm;
-        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
+        h.apply_form(FormAction::OpenFieldDropdown(0), &mut world);
         assert_eq!(h.field_dropdown, Some(0));
         // Same field again -> closed.
-        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
+        h.apply_form(FormAction::OpenFieldDropdown(0), &mut world);
         assert!(h.field_dropdown.is_none(), "a second click closes it");
-        // Reopen, then CloseOverlays dismisses it.
-        h.apply_panel(PanelAction::OpenFieldDropdown(0), &mut world);
-        h.apply_panel(PanelAction::CloseOverlays, &mut world);
+        // Reopen, then the form's CloseOverlays dismisses it.
+        h.apply_form(FormAction::OpenFieldDropdown(0), &mut world);
+        h.apply_form(FormAction::CloseOverlays, &mut world);
         assert!(h.field_dropdown.is_none(), "CloseOverlays dismisses it");
     }
 
@@ -1848,7 +2026,7 @@ mod tests {
     #[test]
     fn scrolling_advances_an_open_field_dropdown() {
         let mut entries = Vec::new();
-        for i in 0..(panel::MAX_DROP_ROWS + 4) {
+        for i in 0..(form_panel::MAX_DROP_ROWS + 4) {
             entries.push(entry(&format!("tex_{i}"), "Texture"));
         }
         let mut h = hook(entries);
@@ -1860,23 +2038,23 @@ mod tests {
             .iter()
             .position(|f| f.key == "texture")
             .expect("texture ref field");
-        h.apply_panel(PanelAction::OpenFieldDropdown(idx), &mut world);
+        h.apply_form(FormAction::OpenFieldDropdown(idx), &mut world);
         assert_eq!(h.field_dropdown_scroll, 0);
-        h.scroll(1.0, &mut world);
+        h.scroll(1.0, ScrollTarget::Form, &mut world);
         assert_eq!(
             h.field_dropdown_scroll, 1,
             "wheel down advances the dropdown"
         );
-        h.scroll(-1.0, &mut world);
+        h.scroll(-1.0, ScrollTarget::Form, &mut world);
         assert_eq!(h.field_dropdown_scroll, 0, "wheel up rewinds it");
         // It cannot scroll past the last page.
         for _ in 0..50 {
-            h.scroll(1.0, &mut world);
+            h.scroll(1.0, ScrollTarget::Form, &mut world);
         }
         let total = h.form_fields[idx].variants.len();
         assert_eq!(
             h.field_dropdown_scroll,
-            total - panel::MAX_DROP_ROWS,
+            total - form_panel::MAX_DROP_ROWS,
             "scroll clamps to the last full page"
         );
     }
@@ -1898,7 +2076,7 @@ mod tests {
         assert!(matches!(h.form_fields[hj].kind, form::FieldKind::Array));
         assert_eq!(h.form_fields[hj].variant_idx, 1, "one default wave");
         // [+] grows the array to two waves (fields re-derive).
-        h.apply_panel(PanelAction::AddArrayElement(hj), &mut world);
+        h.apply_form(FormAction::AddArrayElement(hj), &mut world);
         assert_eq!(
             h.form_fields[header(&h)].variant_idx,
             2,
@@ -1910,9 +2088,9 @@ mod tests {
             .iter()
             .position(|f| f.key == "waves.1.amplitude")
             .expect("the second wave's amplitude field");
-        set_field(&mut world, panel::form_input(ej), "4.5");
-        set_field(&mut world, panel::NAME_INPUT, "sea");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::form_input(ej), "4.5");
+        set_field(&mut world, form_panel::NAME_INPUT, "sea");
+        h.apply_form(FormAction::Confirm, &mut world);
         let ws = h
             .entries
             .iter()
@@ -1939,14 +2117,14 @@ mod tests {
         h.open_form(&mut world, "WaterSurface".to_string(), None);
         let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
         // Grow to two, then remove one back to one.
-        h.apply_panel(PanelAction::AddArrayElement(hj), &mut world);
+        h.apply_form(FormAction::AddArrayElement(hj), &mut world);
         let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
         assert_eq!(h.form_fields[hj].variant_idx, 2);
-        h.apply_panel(PanelAction::RemoveArrayElement(hj), &mut world);
+        h.apply_form(FormAction::RemoveArrayElement(hj), &mut world);
         let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
         assert_eq!(h.form_fields[hj].variant_idx, 1, "shrank back to one wave");
-        set_field(&mut world, panel::NAME_INPUT, "pond");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "pond");
+        h.apply_form(FormAction::Confirm, &mut world);
         let ws = h.entries.iter().find(|e| e["name"] == "pond").unwrap();
         assert_eq!(ws["args"]["waves"].as_array().map(Vec::len), Some(1));
     }
@@ -1975,13 +2153,13 @@ mod tests {
         );
         // Wheel to the bottom; roughness scrolls into the window.
         for _ in 0..h.form_fields.len() {
-            h.scroll(1.0, &mut world);
+            h.scroll(1.0, ScrollTarget::Form, &mut world);
         }
         let slot = visible_slot(rj, h.form_scroll).expect("roughness scrolled into view");
         // Edit it through its now-visible control and confirm.
-        set_field(&mut world, panel::form_input(slot), "0.9");
-        set_field(&mut world, panel::NAME_INPUT, "sea");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::form_input(slot), "0.9");
+        set_field(&mut world, form_panel::NAME_INPUT, "sea");
+        h.apply_form(FormAction::Confirm, &mut world);
         let ws = h
             .entries
             .iter()
@@ -2006,8 +2184,8 @@ mod tests {
         let mut h = hook(vec![entry("grass_tex", "Texture")]);
         let mut world = world_with_fields();
         h.open_form(&mut world, "Decal".to_string(), None);
-        set_field(&mut world, panel::NAME_INPUT, "bare");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "bare");
+        h.apply_form(FormAction::Confirm, &mut world);
         let decal = h.entries.iter().find(|e| e["name"] == "bare").unwrap();
         assert_eq!(decal["args"]["texture"], serde_json::Value::Null);
     }
@@ -2024,14 +2202,10 @@ mod tests {
             .position(|f| f.key == "size_px")
             .expect("size_px field present");
         assert!(matches!(h.form_fields[j].kind, form::FieldKind::Int));
-        set_field(&mut world, panel::form_input(j), "-5");
-        set_field(&mut world, panel::NAME_INPUT, "myfont");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
-        assert_eq!(
-            h.mode,
-            panel::Mode::AddForm,
-            "the form stays open on invalid input"
-        );
+        set_field(&mut world, form_panel::form_input(j), "-5");
+        set_field(&mut world, form_panel::NAME_INPUT, "myfont");
+        h.apply_form(FormAction::Confirm, &mut world);
+        assert!(h.form_open(), "the form stays open on invalid input");
         assert!(h.form_error.is_some(), "an error message is shown");
         assert!(h.entries.is_empty(), "nothing invalid was committed");
     }
@@ -2042,7 +2216,7 @@ mod tests {
         let mut world = world_with_fields();
         h.panel_open = true;
         h.open_form(&mut world, "PointLight".to_string(), None);
-        assert_eq!(h.mode, panel::Mode::AddForm);
+        assert!(h.form_open());
         // Click the Templates button (a top-bar control, no disk I/O) while the
         // form is open.
         let vw = 1280.0;
@@ -2055,7 +2229,7 @@ mod tests {
             ..Default::default()
         });
         h.tick(&mut world);
-        assert_eq!(h.mode, panel::Mode::List, "the form closed");
+        assert!(!h.form_open(), "the form closed");
         assert!(h.form_fields.is_empty() && h.selected_type.is_none());
     }
 
@@ -2071,7 +2245,7 @@ mod tests {
         assert_eq!(h.editing, Some(0));
         assert!(!h.form_fields.is_empty());
         // The name field was seeded from the entry.
-        assert_eq!(panel::field_text(&world, panel::NAME_INPUT), "lamp");
+        assert_eq!(widget::field_text(&world, form_panel::NAME_INPUT), "lamp");
         // Edit a float and confirm; the same entry gains a full args object.
         let (j, key) = h
             .form_fields
@@ -2080,8 +2254,8 @@ mod tests {
             .find(|(_, f)| matches!(f.kind, form::FieldKind::Float))
             .map(|(j, f)| (j, f.key.clone()))
             .expect("a float arg field");
-        set_field(&mut world, panel::form_input(j), "9.0");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::form_input(j), "9.0");
+        h.apply_form(FormAction::Confirm, &mut world);
         assert_eq!(h.entries.len(), 1, "edited in place");
         assert_eq!(h.entries[0]["args"][&key].as_f64(), Some(9.0));
     }
@@ -2147,24 +2321,42 @@ mod tests {
         assert_eq!(label(&world, panel::MENU_EDIT_LABEL).content, "Edit");
         assert_eq!(label(&world, panel::MENU_DELETE_LABEL).content, "Delete");
 
-        // Add form: the name field + Add button show; the list rows are hidden.
+        // Form open: the edit panel shows alongside the browse list, with its
+        // title bar, name heading, and confirm button.
         h.row_menu = None;
-        h.mode = panel::Mode::AddForm;
-        h.selected_type = Some("PointLight".to_string());
+        h.open_form(&mut world, "PointLight".to_string(), None);
         h.tick(&mut world);
         assert!(
-            sprite_visible(&world, panel::FORMADD_BG),
-            "Add button shown"
+            sprite_visible(&world, form_panel::APPLY_BG),
+            "confirm button shown"
+        );
+        assert_eq!(
+            label(&world, form_panel::TITLE_LABEL).content,
+            "New PointLight"
+        );
+        assert_eq!(label(&world, form_panel::APPLY_LABEL).content, "Add");
+        assert!(
+            world
+                .query::<TextInput>()
+                .find(|t| t.asset_id == form_panel::NAME_INPUT)
+                .unwrap()
+                .visible,
+            "the name heading shows"
         );
         assert!(
-            !label(&world, panel::list_row_label(0)).visible,
-            "list rows hidden in the form"
+            label(&world, panel::list_row_label(0)).visible,
+            "the browse list stays visible beside the form"
         );
 
-        // Closing the panel blanks the whole thing.
+        // Closing the panel + form blanks both.
         h.panel_open = false;
+        h.close_form();
         h.tick(&mut world);
         assert!(!sprite_visible(&world, panel::PANEL_BG), "panel bg hidden");
+        assert!(
+            !sprite_visible(&world, form_panel::EDIT_BG),
+            "form panel hidden"
+        );
     }
 
     #[test]
@@ -2179,9 +2371,8 @@ mod tests {
         h.world_path = path_str.clone();
         let mut world = world_with_fields();
         h.selected_type = Some("PointLight".to_string());
-        h.mode = panel::Mode::AddForm;
-        set_field(&mut world, panel::NAME_INPUT, "lamp");
-        h.apply_panel(PanelAction::ConfirmAdd, &mut world);
+        set_field(&mut world, form_panel::NAME_INPUT, "lamp");
+        h.apply_form(FormAction::Confirm, &mut world);
         h.write_jsonl().unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();

@@ -11,7 +11,7 @@
 // `TextInput` fields do bring in the engine's general text-input system, which
 // is real runtime code, not editor-only.)
 
-use super::{hud, panel, preview};
+use super::{form_panel, hud, panel, preview};
 use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -34,15 +34,17 @@ fn hud_font(world: &World) -> Option<AssetId> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
-// Inject the editor HUD: the floating Assets and Preview panels and the top bar
-// (SAVE / Assets / Templates + Templates dropdown rows), all view-less
-// window-space overlays. Injected once by the caller, before start. The overlay
-// draws components in insertion order, so the panels go in FIRST and the top bar
-// LAST: a panel dragged under the bar slides behind it, matching the hook's
-// hit-test priority (top bar first).
+// Inject the editor HUD: the floating Assets, edit-form, and Preview panels and
+// the top bar (SAVE / Assets / Templates + Templates dropdown rows), all
+// view-less window-space overlays. Injected once by the caller, before start.
+// The overlay draws components in insertion order, so the panels go in FIRST and
+// the top bar LAST: a panel dragged under the bar slides behind it, matching the
+// hook's hit-test priority (top bar first). The edit form goes in after the
+// Assets panel so it floats over the browse list it was opened from.
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
     inject_panel(world, font);
+    inject_form_panel(world, font);
     inject_preview(world, font);
     inject_top_bar(world, font);
 }
@@ -105,13 +107,25 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
     for id in panel::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
-    // The typed fields (hidden; the panel shows + focuses them by mode): the
-    // combo's filter field, the form's name field, and the add / edit form's
-    // fixed pool of arg text inputs.
+    // The combo's typed filter field (hidden; the panel shows + focuses it while
+    // the combo is open).
     world.add_component(text_field(panel::FILTER_INPUT, "filter", font));
-    world.add_component(text_field(panel::NAME_INPUT, "name", font));
+}
+
+// Inject the edit-form panel's elements, all starting hidden (the form opens
+// from a browse-list click or the "+" picker): its chrome + slot pools from its
+// id lists, plus the name heading and the fixed pool of arg text inputs.
+fn inject_form_panel(world: &mut World, font: Option<AssetId>) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for id in form_panel::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in form_panel::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
+    world.add_component(text_field(form_panel::NAME_INPUT, "name", font));
     for j in 0..super::form::FIELD_POOL {
-        world.add_component(text_field(panel::form_input(j), "", font));
+        world.add_component(text_field(form_panel::form_input(j), "", font));
     }
 }
 
@@ -253,7 +267,7 @@ mod tests {
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();
         assert!(fields.contains(&panel::FILTER_INPUT));
-        assert!(fields.contains(&panel::NAME_INPUT));
+        assert!(fields.contains(&form_panel::NAME_INPUT));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
 
         // View-less: window space, never overlay-scaled.
@@ -279,7 +293,7 @@ mod tests {
         assert_eq!(save.font, Some(AssetId(42)));
         let field = world
             .query::<TextInput>()
-            .find(|t| t.asset_id == panel::NAME_INPUT)
+            .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
         assert_eq!(field.font, Some(AssetId(42)));
     }

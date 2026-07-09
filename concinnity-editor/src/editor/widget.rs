@@ -91,6 +91,59 @@ pub(crate) fn set_label_visible(world: &mut World, id: AssetId, visible: bool) {
     }
 }
 
+// Position + show a typed field, setting its focus explicitly. The focused field
+// re-asserts `focused = true` every frame: the click that opened the mode (on a
+// button, say) lands outside the field, so the engine's text-input system would
+// otherwise blur it that frame; re-asserting keeps it typable. Non-focused
+// fields are shown with `focused = false` so several fields can coexist without
+// fighting for the keyboard. The content is not touched here (only on a
+// transition), so what is typed stands.
+pub(crate) fn show_field(world: &mut World, id: AssetId, rect: [f32; 4], focused: bool) {
+    if let Some(t) = input_mut(world, id) {
+        t.x = rect[0];
+        t.y = rect[1];
+        t.width = rect[2];
+        t.height = rect[3];
+        t.visible = true;
+        t.focused = focused;
+    }
+}
+
+// Hide + blur a typed field.
+pub(crate) fn hide_field(world: &mut World, id: AssetId) {
+    if let Some(t) = input_mut(world, id) {
+        t.visible = false;
+        t.focused = false;
+    }
+}
+
+// Set a field's text + caret and give it focus (a mode transition; the hook
+// calls this so the field is ready to type into immediately).
+pub(crate) fn focus_field_with(world: &mut World, id: AssetId, content: &str) {
+    if let Some(t) = input_mut(world, id) {
+        t.content = content.to_string();
+        t.caret = content.chars().count();
+        t.focused = true;
+        t.visible = true;
+    }
+}
+
+// Seed a field's text + caret without changing focus (the layout decides focus
+// each frame). Used to pre-fill form inputs on open / window scroll.
+pub(crate) fn seed_field(world: &mut World, id: AssetId, content: &str) {
+    if let Some(t) = input_mut(world, id) {
+        t.content = content.to_string();
+        t.caret = content.chars().count();
+    }
+}
+
+// Read a field's current text.
+pub(crate) fn field_text(world: &World, id: AssetId) -> String {
+    input(world, id)
+        .map(|t| t.content.clone())
+        .unwrap_or_default()
+}
+
 // Whether `(x, y)` lies inside `rect` ([x, y, w, h], top-left origin). The pure
 // geometry lives in the shared templates crate; re-exported here so the HUD and
 // panel keep using `widget::point_in`.

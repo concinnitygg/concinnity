@@ -27,11 +27,12 @@
 use crate::ecs::ComponentType;
 use serde_json::{Map, Value};
 
-// The number of physical form-control slots the panel injects (checkboxes, text
-// inputs, cycle buttons, swatches). A form derives ALL of a type's editable fields
-// and the panel renders a scrolling window this many rows tall over them, so a type
-// wider than the pool (or an array grown past it) scrolls rather than truncating.
-pub(crate) const FIELD_POOL: usize = 12;
+// The number of physical form-control slots the edit panel injects (checkboxes,
+// text inputs, cycle buttons, swatches). A form derives ALL of a type's editable
+// fields and the panel renders a scrolling window this many rows tall over them,
+// so a type wider than the pool (or an array grown past it) scrolls rather than
+// truncating.
+pub(crate) const FIELD_POOL: usize = 14;
 
 // The editable kinds. Everything else in an asset's args is left at its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
