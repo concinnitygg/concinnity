@@ -195,6 +195,7 @@ mod tests {
 
     #[test]
     fn deserializes_with_texture_reference() {
+        crate::ecs::asset_id::reset_interner();
         // The interner is global and not reset here; we just check the field
         // is populated when a string name is supplied (it interns lazily).
         let json = r#"{"texture":"tex_intro","tint":[1,1,1,1]}"#;

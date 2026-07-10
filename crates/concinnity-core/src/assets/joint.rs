@@ -216,6 +216,7 @@ mod tests {
 
     #[test]
     fn deserialises_all_fields() {
+        crate::ecs::asset_id::reset_interner();
         let json = r#"{
             "kind":"revolute",
             "body_a":"door",

@@ -1,112 +1,23 @@
 // src/ecs/asset_id.rs
 //
-// Dense u32 asset identity. Asset names declared in world.jsonl are interned
-// to an AssetId at build time; the blob and the runtime carry only the
-// integer. Cross-references between assets (Prop -> Mesh, Material -> Texture,
-// ...) are likewise resolved to AssetId during the build, so every runtime
-// lookup is an integer compare instead of a string compare.
+// Build-time name -> dense id interner. Asset names declared in world.jsonl are
+// interned to an `AssetId` in declaration order; the blob and the runtime carry
+// only the integer, so every cross-reference lookup is an integer compare.
+//
+// The identity (`AssetId`) and typed reference (`AssetRef`) types themselves
+// live in the dependency-light `concinnity-asset` schema crate and are
+// re-exported here under the historical `crate::ecs::asset_id` paths. This
+// module owns the interner those types resolve a name through, and installs it
+// into the schema crate's resolver seam (`concinnity_asset::set_name_resolver`)
+// so a name-string reference deserializes to a dense id during a build. At
+// runtime references are already integers, so the seam is never consulted.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Once;
 
-// A dense integer handle for one asset. Assigned by the build-time interner
-// in world.jsonl declaration order. Equality and hashing are integer ops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct AssetId(pub u32);
-
-impl std::fmt::Display for AssetId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{}", self.0)
-    }
-}
-
-// AssetId serializes as a plain u32 in every format. It deserializes from a
-// u32 in non-self-describing formats (bincode, used for the blob defs table)
-// and from either an integer or a name string in human-readable formats
-// (JSON, used for `args_bytes`). A name string is resolved through the
-// thread-local interner -- this is the build-time path that turns a
-// world.jsonl reference into an id.
-impl Serialize for AssetId {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_u32(self.0)
-    }
-}
-
-struct AssetIdVisitor;
-
-impl serde::de::Visitor<'_> for AssetIdVisitor {
-    type Value = AssetId;
-
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("an asset id integer or a name string")
-    }
-
-    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<AssetId, E> {
-        Ok(AssetId(v as u32))
-    }
-    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<AssetId, E> {
-        Ok(AssetId(v as u32))
-    }
-    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AssetId, E> {
-        Ok(intern(v))
-    }
-    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<AssetId, E> {
-        Ok(intern(&v))
-    }
-}
-
-impl<'de> Deserialize<'de> for AssetId {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        if d.is_human_readable() {
-            d.deserialize_any(AssetIdVisitor)
-        } else {
-            Ok(AssetId(u32::deserialize(d)?))
-        }
-    }
-}
-
-// `serde` `deserialize_with` helper for an optional cross-reference field.
-//
-// Accepts a name string (interned), an integer id, an empty string, or null;
-// the latter two resolve to `None`. Apply with
-// `#[serde(default, deserialize_with = "...")]` so a missing field is `None`.
-pub fn de_opt_asset_ref<'de, D>(d: D) -> Result<Option<AssetId>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct OptVisitor;
-
-    impl serde::de::Visitor<'_> for OptVisitor {
-        type Value = Option<AssetId>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("an asset reference name string, id integer, or null")
-        }
-
-        fn visit_unit<E: serde::de::Error>(self) -> Result<Option<AssetId>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Option<AssetId>, E> {
-            Ok(Some(AssetId(v as u32)))
-        }
-        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Option<AssetId>, E> {
-            Ok(Some(AssetId(v as u32)))
-        }
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Option<AssetId>, E> {
-            if v.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(intern(v)))
-            }
-        }
-        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Option<AssetId>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
+// The asset identity + typed reference primitives, defined in the schema crate.
+pub use concinnity_asset::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
 
 // Maps asset name strings to dense ids. Build-time only.
 #[derive(Default)]
@@ -116,14 +27,14 @@ struct Interner {
 }
 
 impl Interner {
-    fn intern(&mut self, name: &str) -> AssetId {
+    fn intern(&mut self, name: &str) -> u32 {
         if let Some(&id) = self.map.get(name) {
-            return AssetId(id);
+            return id;
         }
         let id = self.names.len() as u32;
         self.names.push(name.to_string());
         self.map.insert(name.to_string(), id);
-        AssetId(id)
+        id
     }
 }
 
@@ -131,15 +42,29 @@ thread_local! {
     static INTERNER: RefCell<Interner> = RefCell::new(Interner::default());
 }
 
+// Install the schema crate's resolver seam so a name-string reference
+// deserializes through this interner. The closure is non-capturing (the
+// interner is a thread-local static), so it coerces to the plain `fn` pointer
+// the seam holds; per-thread interner state stays isolated. Idempotent and cheap
+// after the first call.
+pub fn ensure_name_resolver() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        concinnity_asset::set_name_resolver(|name| INTERNER.with(|i| i.borrow_mut().intern(name)));
+    });
+}
+
 // Intern a name into the current thread's interner, returning its id. If the
 // name was already interned the existing id is returned (idempotent).
 pub fn intern(name: &str) -> AssetId {
-    INTERNER.with(|i| i.borrow_mut().intern(name))
+    ensure_name_resolver();
+    AssetId(INTERNER.with(|i| i.borrow_mut().intern(name)))
 }
 
 // Clear the thread-local interner. Call once at the start of a build so ids
 // are dense and declaration-ordered for that build.
 pub fn reset_interner() {
+    ensure_name_resolver();
     INTERNER.with(|i| *i.borrow_mut() = Interner::default());
 }
 
@@ -147,7 +72,7 @@ pub fn reset_interner() {
 // Because ids are assigned in world.jsonl declaration order, `table[id]` is
 // the declared name for that id. Used by the binary-only `crate::debug`
 // module to remap runtime `AssetId`s back to their declared names.
-#[allow(dead_code)] // consumed by the binary-only crate::debug module
+#[allow(dead_code)] // consumed by the binary-only debug module in concinnity-editor
 pub fn name_table() -> Vec<String> {
     INTERNER.with(|i| i.borrow().names.clone())
 }
@@ -155,6 +80,7 @@ pub fn name_table() -> Vec<String> {
 // Pre-intern a batch of names in order so identity ids are dense and follow
 // world.jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
+    ensure_name_resolver();
     INTERNER.with(|i| {
         let mut interner = i.borrow_mut();
         for n in names {
@@ -186,17 +112,10 @@ mod tests {
         assert_eq!(name_table(), vec!["a", "b", "c"]);
     }
 
+    // Integration: a name string deserializes to a dense id through the resolver
+    // seam this module installs, backed by the real interner.
     #[test]
-    fn asset_id_round_trips_through_json_as_integer() {
-        let id = AssetId(7);
-        let bytes = serde_json::to_vec(&id).unwrap();
-        assert_eq!(bytes, b"7");
-        let back: AssetId = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back, id);
-    }
-
-    #[test]
-    fn asset_id_deserializes_from_name_string_via_interner() {
+    fn asset_id_deserializes_from_name_string_via_the_seam() {
         reset_interner();
         intern_all(&["floor", "wall"]);
         let id: AssetId = serde_json::from_str("\"wall\"").unwrap();
@@ -204,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn opt_ref_treats_empty_and_null_as_none() {
+    fn opt_ref_resolves_a_name_and_treats_empty_as_none() {
         reset_interner();
         intern_all(&["mesh_a"]);
 
@@ -214,47 +133,11 @@ mod tests {
             r: Option<AssetId>,
         }
 
-        let empty: Holder = serde_json::from_str("{\"r\":\"\"}").unwrap();
-        assert_eq!(empty.r, None);
-        let null: Holder = serde_json::from_str("{\"r\":null}").unwrap();
-        assert_eq!(null.r, None);
-        let missing: Holder = serde_json::from_str("{}").unwrap();
-        assert_eq!(missing.r, None);
         let named: Holder = serde_json::from_str("{\"r\":\"mesh_a\"}").unwrap();
         assert_eq!(named.r, Some(AssetId(0)));
+        let empty: Holder = serde_json::from_str("{\"r\":\"\"}").unwrap();
+        assert_eq!(empty.r, None);
         let by_id: Holder = serde_json::from_str("{\"r\":5}").unwrap();
         assert_eq!(by_id.r, Some(AssetId(5)));
-    }
-
-    #[test]
-    fn display_formats_with_a_hash_prefix() {
-        assert_eq!(AssetId(42).to_string(), "#42");
-    }
-
-    #[test]
-    fn deserializes_from_a_negative_integer_via_visit_i64() {
-        // serde_json routes a negative literal through visit_i64, which wraps
-        // to u32. Covers the AssetId visitor's signed arm.
-        let id: AssetId = serde_json::from_str("-1").unwrap();
-        assert_eq!(id, AssetId(u32::MAX));
-
-        // The optional-reference visitor has its own visit_i64 arm.
-        #[derive(serde::Deserialize)]
-        struct Holder {
-            #[serde(default, deserialize_with = "de_opt_asset_ref")]
-            r: Option<AssetId>,
-        }
-        let neg: Holder = serde_json::from_str("{\"r\":-2}").unwrap();
-        assert_eq!(neg.r, Some(AssetId((-2i64) as u32)));
-    }
-
-    #[test]
-    fn round_trips_through_a_non_human_readable_format() {
-        // postcard is not self-describing, so this drives the plain-u32 branch
-        // of Deserialize (the blob defs-table path), not the visitor.
-        let id = AssetId(1234);
-        let bytes = postcard::to_allocvec(&id).unwrap();
-        let back: AssetId = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back, id);
     }
 }

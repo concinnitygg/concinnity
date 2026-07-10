@@ -173,6 +173,7 @@ mod tests {
 
     #[test]
     fn deserialises_with_all_fields() {
+        crate::ecs::asset_id::reset_interner();
         let json = r#"{
             "texture":"tex_spark","position":[1,2,3],"direction":[0,1,0],
             "spread_deg":30,"speed_min":1.5,"speed_max":4.0,

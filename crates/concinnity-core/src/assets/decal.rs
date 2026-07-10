@@ -130,6 +130,7 @@ mod tests {
 
     #[test]
     fn deserialises_with_all_fields() {
+        crate::ecs::asset_id::reset_interner();
         let json = r#"{
             "texture":"tex_bullet",
             "position":[1.0,2.0,3.0],

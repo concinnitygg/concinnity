@@ -219,6 +219,7 @@ mod tests {
 
     #[test]
     fn deserialises_glb_source_fields() {
+        crate::ecs::asset_id::reset_interner();
         let json = r#"{
             "target":"hero",
             "source":"models/hero.glb",
@@ -235,6 +236,7 @@ mod tests {
 
     #[test]
     fn deserialises_inline_tracks() {
+        crate::ecs::asset_id::reset_interner();
         let json = r#"{
             "target":"flag",
             "duration":2.0,
@@ -271,6 +273,7 @@ mod tests {
 
     // A 1s clip whose root (joint 0) walks +2 X while bobbing 1.0 -> 1.2 Y.
     fn walking_clip() -> Animation {
+        crate::ecs::asset_id::reset_interner();
         serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": 1.0,

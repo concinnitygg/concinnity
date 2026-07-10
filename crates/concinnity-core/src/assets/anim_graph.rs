@@ -582,6 +582,7 @@ mod tests {
 
     #[test]
     fn deserialises_full_graph() {
+        crate::ecs::asset_id::reset_interner();
         let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
         assert!(g.target.is_some());
         assert_eq!(g.parameters.len(), 1);
@@ -603,6 +604,7 @@ mod tests {
 
     #[test]
     fn compiles_names_to_indices() {
+        crate::ecs::asset_id::reset_interner();
         let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         assert_eq!(compiled.initial, 0);
@@ -617,6 +619,7 @@ mod tests {
 
     #[test]
     fn compile_empty_initial_defaults_to_first_state() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = graph_json();
         v["initial"] = serde_json::json!("");
         let g: AnimGraph = serde_json::from_value(v).unwrap();
@@ -625,6 +628,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_unknown_names() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = graph_json();
         v["transitions"][0]["to"] = serde_json::json!("ghost");
         let g: AnimGraph = serde_json::from_value(v).unwrap();
@@ -643,6 +647,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_unresolvable_clip_and_bad_rate() {
+        crate::ecs::asset_id::reset_interner();
         let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
         assert!(g.compile(|_| None).unwrap_err().contains("clip"));
 
@@ -712,6 +717,7 @@ mod tests {
 
     #[test]
     fn compiles_blend1d_state() {
+        crate::ecs::asset_id::reset_interner();
         let g: AnimGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         let StatePlay::Blend1D(b) = &compiled.states[0].play else {
@@ -726,6 +732,7 @@ mod tests {
 
     #[test]
     fn compiles_blend2d_state() {
+        crate::ecs::asset_id::reset_interner();
         let g: AnimGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         let StatePlay::Blend2D(b) = &compiled.states[0].play else {
@@ -738,6 +745,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_clip_and_blend_together_or_neither() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["clip"] = serde_json::json!("idle");
         let g: AnimGraph = serde_json::from_value(v).unwrap();
@@ -754,6 +762,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_unsorted_blend_points() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["blend"]["points"][2]["value"] = serde_json::json!(1.0);
         let g: AnimGraph = serde_json::from_value(v).unwrap();
@@ -762,6 +771,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_undeclared_blend_parameter() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["blend"]["parameter"] = serde_json::json!("nope");
         let g: AnimGraph = serde_json::from_value(v).unwrap();
@@ -770,6 +780,7 @@ mod tests {
 
     #[test]
     fn compile_rejects_mismatched_grid_rows() {
+        crate::ecs::asset_id::reset_interner();
         let mut v = blend2d_graph_json();
         v["states"][0]["blend"]["rows"] = serde_json::json!([["a", "b"]]);
         let g: AnimGraph = serde_json::from_value(v).unwrap();

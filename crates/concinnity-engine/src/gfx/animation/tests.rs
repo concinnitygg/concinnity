@@ -62,6 +62,9 @@ fn anim_graph_component_spawns_internal_system() {
 
 // A clip targeting `hero`, named so graph states can reference it.
 fn clip(name: &str, duration: f32) -> Animation {
+    // Install the name resolver so the `"target":"hero"` reference deserializes.
+    // Must not reset the interner: `intern` below accumulates ids across calls.
+    crate::ecs::asset_id::ensure_name_resolver();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero",
         "duration": duration,

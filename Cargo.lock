@@ -635,6 +635,7 @@ dependencies = [
 name = "concinnity-core"
 version = "0.10.0"
 dependencies = [
+ "concinnity-asset",
  "concinnity-eas",
  "postcard",
  "rayon",
