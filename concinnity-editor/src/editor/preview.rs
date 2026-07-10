@@ -5,35 +5,29 @@
 // capture-mouse checkbox (hand the cursor to the world / play mode; Escape hands
 // it back). Like the rest of the editor HUD it is plain `Sprite` / `TextLabel`
 // components at reserved ids (injected by `inject.rs`), driven each frame by the
-// editor hook. It shares the Assets panel's title-bar style (`widget.rs`);
-// dragging the title bar moves it, and the hook owns the position.
+// editor hook. The title bar, close button, and row draw come from the shared
+// `list_panel`; this module only names the ids, width, and its single action.
 
-use super::widget::{self, place_sprite, point_in};
-use crate::assets::TextAlign;
+use super::list_panel::{self, Row};
+use super::widget::point_in;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
-// Reserved ids, past the Assets panel's families (see `hud.rs` / `panel.rs`;
+// Reserved id base, past the Assets panel's families (see `hud.rs` / `panel.rs`;
 // the panel's ids stay below `ID_BASE + 0x400`).
-const PREVIEW: u32 = 0x3000_0000 + 0x400;
-pub(crate) const TITLE_BG: AssetId = AssetId(PREVIEW);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(PREVIEW + 1);
-pub(crate) const ROW_BG: AssetId = AssetId(PREVIEW + 2);
-pub(crate) const CHECK_BOX: AssetId = AssetId(PREVIEW + 3);
-pub(crate) const CHECK_LABEL: AssetId = AssetId(PREVIEW + 4);
-pub(crate) const CLOSE_BG: AssetId = AssetId(PREVIEW + 5);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(PREVIEW + 6);
+const BASE: u32 = 0x3000_0000 + 0x400;
+// Named ids the cross-module tests reference (injection ordering / visibility);
+// the shipping paths derive every id from `BASE` through `list_panel`.
+#[cfg(test)]
+pub(crate) const TITLE_BG: AssetId = list_panel::title_bg(BASE);
+#[cfg(test)]
+pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
+#[cfg(test)]
+pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
 
-// Geometry, in window pixels. Every rect derives from the panel origin `o` (the
-// title bar's top-left), like the Assets panel.
 const PREVIEW_W: f32 = 200.0;
-const ROW_H: f32 = 34.0;
-const BOX_SIZE: f32 = 20.0;
-
-const ROW_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
-const BOX_TINT_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-const BOX_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
+// The panel's single capture row.
+const ROWS: usize = 1;
 
 // Where the panel sits until the user drags it: the window's top-left corner
 // (clear of the top-right button bar and the Assets panel's default anchor).
@@ -43,28 +37,22 @@ pub(crate) fn default_origin() -> [f32; 2] {
 
 // The panel's fixed footprint, for the hook's drag clamp.
 pub(crate) fn size() -> [f32; 2] {
-    [PREVIEW_W, widget::TITLE_H + ROW_H]
+    list_panel::size(PREVIEW_W, ROWS)
 }
 
 // The panel outer rect (title bar + the capture row).
 pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    let s = size();
-    [o[0], o[1], s[0], s[1]]
+    list_panel::panel_rect(o, PREVIEW_W, ROWS)
 }
 
 // The draggable title bar across the panel top.
 pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], PREVIEW_W, widget::TITLE_H]
+    list_panel::title_rect(o, PREVIEW_W)
 }
 
 // The "X" close button in the title bar's top-right corner.
 pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    widget::close_rect(title_rect(o))
-}
-
-// The capture-checkbox row below the title bar.
-fn capture_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1] + widget::TITLE_H, PREVIEW_W, ROW_H]
+    list_panel::close_rect(o, PREVIEW_W)
 }
 
 // A resolved Preview-panel click.
@@ -76,68 +64,39 @@ pub(crate) enum PreviewAction {
     Consume,
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
-// the click missed the panel. Title-bar presses never reach this: the hook
-// intercepts them first to start a drag.
+// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means the
+// click missed the panel. Title-bar presses never reach this: the hook intercepts
+// them first to start a drag.
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
-    if point_in(mx, my, capture_rect(o)) {
+    if list_panel::hit_row(mx, my, o, PREVIEW_W, ROWS).is_some() {
         return Some(PreviewAction::ToggleCapture);
     }
     point_in(mx, my, panel_rect(o)).then_some(PreviewAction::Consume)
 }
 
 // Position + show the panel at origin `o`, colouring the capture box by state
-// (green while the world holds the cursor) and its close button by hover.
+// (green while the world holds the cursor).
 pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool, mouse: [f32; 2]) {
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Preview");
-    let close_hover = point_in(mouse[0], mouse[1], close_rect(o));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
-    let row = capture_rect(o);
-    place_sprite(world, ROW_BG, row, ROW_TINT, true);
-    let box_tint = if capture { BOX_TINT_ON } else { BOX_TINT_OFF };
-    place_sprite(
-        world,
-        CHECK_BOX,
-        [
-            row[0] + 8.0,
-            row[1] + (ROW_H - BOX_SIZE) * 0.5,
-            BOX_SIZE,
-            BOX_SIZE,
-        ],
-        box_tint,
-        true,
-    );
-    if let Some(l) = widget::label_mut(world, CHECK_LABEL) {
-        l.x = row[0] + 36.0;
-        l.y = row[1] + ROW_H * 0.5 - 10.0;
-        l.align = TextAlign::Left;
-        l.color = LABEL;
-        l.visible = true;
-        l.content = "Capture mouse".to_string();
-    }
+    let rows = [Row::checkbox("Capture mouse", capture)];
+    list_panel::apply(world, BASE, o, PREVIEW_W, "Preview", &rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass).
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
+    list_panel::hide_all(world, &all_sprite_ids(), &all_label_ids());
 }
 
-// Every panel sprite / label id, for injection and the hidden pass (same
-// draw-order contract as the Assets panel's lists).
+// Every panel sprite / label id, for injection and the hidden pass.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    vec![TITLE_BG, CLOSE_BG, ROW_BG, CHECK_BOX]
+    list_panel::all_sprite_ids(BASE, ROWS, true)
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    vec![TITLE_LABEL, CLOSE_LABEL, CHECK_LABEL]
+    list_panel::all_label_ids(BASE, ROWS)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::list_panel::title_label;
     use super::*;
     use crate::assets::{Sprite, TextLabel};
 
@@ -158,31 +117,10 @@ mod tests {
         world
     }
 
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
-    }
-
     #[test]
-    fn rects_stack_title_over_the_capture_row() {
-        let o = [40.0, 60.0];
-        assert_eq!(title_rect(o), [40.0, 60.0, PREVIEW_W, widget::TITLE_H]);
-        assert_eq!(
-            capture_rect(o)[1],
-            60.0 + widget::TITLE_H,
-            "the capture row sits under the title bar"
-        );
-        let p = panel_rect(o);
-        assert_eq!(p[3], widget::TITLE_H + ROW_H, "panel is exactly both rows");
-    }
-
-    #[test]
-    fn hit_test_resolves_capture_row_and_swallows_the_rest() {
+    fn hit_test_resolves_the_capture_row_and_swallows_the_rest() {
         let o = default_origin();
-        let row = capture_rect(o);
+        let row = list_panel::row_rect(o, PREVIEW_W, 0);
         assert_eq!(
             hit_test(row[0] + 10.0, row[1] + 10.0, o),
             Some(PreviewAction::ToggleCapture)
@@ -197,34 +135,26 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_heading_checkbox_and_capture_state() {
+    fn apply_shows_heading_and_capture_state() {
         let mut world = injected_world();
         let o = default_origin();
         apply(&mut world, o, false, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
-            .find(|l| l.asset_id == TITLE_LABEL)
+            .find(|l| l.asset_id == title_label(BASE))
             .unwrap();
-        assert!(title.visible);
-        assert_eq!(title.content, "Preview");
-        // The close button shows its "X" glyph.
-        let close = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == CLOSE_LABEL)
+        assert!(title.visible && title.content == "Preview");
+        let off = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == CHECK_BOX)
+            .cloned()
             .unwrap();
-        assert!(close.visible && close.content == "X");
-        let label = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == CHECK_LABEL)
-            .unwrap();
-        assert_eq!(label.content, "Capture mouse");
-        assert_eq!(sprite(&world, CHECK_BOX).tint, BOX_TINT_OFF);
         apply(&mut world, o, true, [0.0, 0.0]);
-        assert_eq!(
-            sprite(&world, CHECK_BOX).tint,
-            BOX_TINT_ON,
-            "green while the world holds the cursor"
-        );
+        let on = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == CHECK_BOX)
+            .unwrap();
+        assert_ne!(off.tint, on.tint, "the checkbox greens while capturing");
     }
 
     #[test]

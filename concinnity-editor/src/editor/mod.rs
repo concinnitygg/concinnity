@@ -12,6 +12,7 @@ mod form_panel;
 mod hook;
 mod hud;
 mod inject;
+mod list_panel;
 mod panel;
 mod preview;
 mod template_panel;
