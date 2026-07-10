@@ -94,8 +94,10 @@ pub(crate) struct EditorHook {
     world_capture: bool,
     // Whether the whole HUD is shown (F1 toggle). Starts shown.
     hud_visible: bool,
-    // Set by a successful SAVE (in `tick`), consumed by `apply_world_swap`.
-    swap_requested: bool,
+    // Set whenever the authored entries change (add / edit / delete / template);
+    // consumed by `apply_world_swap` to rebuild the live preview world from the
+    // in-memory entries. SAVE does not set this -- the preview is already current.
+    rebuild_preview: bool,
     // Whether the Templates panel is shown (toggled from the View panel).
     templates_open: bool,
     // The template whose detail panel is open (index into the templates
@@ -236,7 +238,7 @@ impl EditorHook {
             dirty: false,
             world_capture: false,
             hud_visible: true,
-            swap_requested: false,
+            rebuild_preview: false,
             templates_open: false,
             open_template: None,
             template_list_scroll: 0,
@@ -481,20 +483,26 @@ impl EditorHook {
         }
     }
 
-    // Persist the working entries: write world.jsonl, then recompile the blobs.
-    // On success the world is clean again and `true` is returned so the caller
-    // triggers the live world swap; on failure it stays dirty and `false`.
-    fn save(&mut self) -> bool {
+    // Record an authored-entry change: the live preview needs a rebuild this frame
+    // (`apply_world_swap` reloads the running world from the in-memory entries), and
+    // the change is not yet on disk (SAVE clears `dirty`).
+    fn mark_changed(&mut self) {
+        self.dirty = true;
+        self.rebuild_preview = true;
+    }
+
+    // SAVE: persist the working entries to disk (world.jsonl + recompiled blobs).
+    // The live preview is already up to date (every edit swaps it in), so SAVE is
+    // purely persistence -- it does not rebuild or swap the running world. On
+    // success the world is clean again; on failure it stays dirty and the next
+    // SAVE retries.
+    fn save(&mut self) {
         match self.persist() {
             Ok(()) => {
                 self.dirty = false;
                 tracing::info!("editor: saved {}", self.world_path);
-                true
             }
-            Err(e) => {
-                tracing::error!("editor: save failed: {e}");
-                false
-            }
+            Err(e) => tracing::error!("editor: save failed: {e}"),
         }
     }
 
@@ -502,6 +510,36 @@ impl EditorHook {
         self.write_jsonl()?;
         concinnity_app::build_world_to_disk(&self.world_path)?;
         Ok(())
+    }
+
+    // Build a ready-to-run world from the in-memory entries, without touching disk
+    // (SAVE owns persistence). A GraphicsConfig is seeded when the authored entries
+    // alone would not render, so the preview window never goes blank.
+    fn build_preview_world(&self) -> std::io::Result<World> {
+        let jsonl = concinnity_core::world::write_world_jsonl(&self.entries)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        match concinnity_app::build_world_from_str(&jsonl) {
+            Ok(world) if world.renders() => Ok(world),
+            _ => concinnity_app::build_world_from_str(&super::seeded_content(&jsonl)),
+        }
+    }
+
+    // Snapshot the editor's text-field contents (the combo filter + the form's name
+    // heading and arg inputs) by reserved id, so a live rebuild's fresh HUD
+    // injection does not blank an open form.
+    fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
+        panel::all_field_ids()
+            .into_iter()
+            .chain(form_panel::all_field_ids())
+            .map(|id| (id, widget::field_text(world, id)))
+            .collect()
+    }
+
+    // Restore a `field_snapshot` into a freshly injected HUD.
+    fn restore_fields(world: &mut World, snapshot: &[(AssetId, String)]) {
+        for (id, content) in snapshot {
+            widget::seed_field(world, *id, content);
+        }
     }
 
     // Write the working entries to world.jsonl atomically (temp file + rename),
@@ -534,7 +572,7 @@ impl EditorHook {
             added += 1;
         }
         if added > 0 {
-            self.dirty = true;
+            self.mark_changed();
             tracing::info!("editor: applied template '{}' ({added} asset(s))", t.name);
         }
     }
@@ -648,14 +686,13 @@ impl EditorHook {
 
     // -- Action handling --------------------------------------------------------
 
-    // Route a resolved top-bar click. Returns `true` only when a SAVE succeeded,
-    // signalling the caller to transplant the backend and request a world swap.
-    fn apply_top(&mut self, action: HudAction) -> bool {
+    // Route a resolved top-bar click: SAVE persists to disk (the live preview is
+    // already current), the View button toggles the View panel.
+    fn apply_top(&mut self, action: HudAction) {
         match action {
-            HudAction::Save => return self.save(),
+            HudAction::Save => self.save(),
             HudAction::ToggleView => self.view_open = !self.view_open,
         }
-        false
     }
 
     // Toggle the whole assets UI (browse panel + any open edit form + the browse
@@ -944,7 +981,7 @@ impl EditorHook {
                     && idx < self.entries.len()
                 {
                     self.entries.remove(idx);
-                    self.dirty = true;
+                    self.mark_changed();
                     // The open form indexes into `entries`: deleting the edited
                     // entry closes it, and deleting an earlier one shifts it.
                     match self.editing {
@@ -1080,7 +1117,7 @@ impl EditorHook {
                 }));
             }
         }
-        self.dirty = true;
+        self.mark_changed();
         self.close_form();
     }
 
@@ -1187,14 +1224,9 @@ impl EditorHook {
     fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
         if let Some(a) = hud::hit_test(mx, my, true, self.dirty, vp[0]) {
-            if self.apply_top(a) {
-                self.swap_requested = true;
-                // A SAVE recompiles + re-injects blank HUD fields, so a form left
-                // open would show empty inputs and could commit lost values; close
-                // it. Toggling the panel off (below) instead KEEPS the form so a
-                // later toggle-on restores it.
-                self.close_form();
-            }
+            // SAVE only writes to disk now; it neither rebuilds nor re-injects the
+            // world, so an open form is left intact (no blank-field risk).
+            self.apply_top(a);
             self.combo = Combo::Closed;
             self.row_menu = None;
             return;
@@ -1535,28 +1567,37 @@ impl DebugHook for EditorHook {
         }
     }
 
-    // Apply a pending live world swap: rebuild the recompiled world off disk,
-    // transplant the running render backend into it, and re-`start` it, so the
-    // edit renders without recreating the OS window. Run once per frame by the run
-    // loop right after `tick`.
+    // Rebuild the live preview world from the in-memory entries and swap it under
+    // the running render backend, so any authored change (add / edit / delete /
+    // template apply) shows immediately without recreating the OS window or
+    // touching disk (SAVE owns persistence). Run once per frame by the run loop
+    // right after `tick`, whenever an edit flagged `rebuild_preview`.
     //
     // The recompiled world is built FIRST, in a throwaway App; only once that
     // succeeds is the backend transplanted out of the live world. So a rebuild
     // failure leaves the live world -- and its window -- fully intact; the next
-    // SAVE retries. The backend is never dropped on an error path.
+    // edit retries. The backend is never dropped on an error path.
     fn apply_world_swap(&mut self, app: &mut App) {
-        if !self.swap_requested {
+        if !self.rebuild_preview {
             return;
         }
-        self.swap_requested = false;
+        self.rebuild_preview = false;
 
+        let world = match self.build_preview_world() {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
+                return;
+            }
+        };
         let mut staged = App::new();
-        if let Err(e) = super::boot_world(&mut staged, &self.world_path, true) {
-            tracing::error!("editor: live swap rebuild failed, keeping current world: {e}");
-            return;
-        }
+        staged.load_world(world);
         staged.world_mut().remove_all::<crate::assets::DebugHud>();
+        // Carry the editor's typed text (an open form's name + fields, the combo
+        // filter) across the fresh HUD injection so it is not blanked.
+        let fields = Self::field_snapshot(app.world());
         super::inject::editor_hud(staged.world_mut());
+        Self::restore_fields(staged.world_mut(), &fields);
         staged
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.world_capture)));
@@ -1568,7 +1609,7 @@ impl DebugHook for EditorHook {
         let new_world = std::mem::replace(staged.world_mut(), World::new_empty());
         app.load_world(new_world);
         if let Err(e) = app.start() {
-            tracing::error!("editor: live swap start failed: {e:?}");
+            tracing::error!("editor: live preview start failed: {e:?}");
         }
     }
 }
@@ -1580,6 +1621,18 @@ mod tests {
 
     fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
         EditorHook::new("unused.jsonl".to_string(), entries)
+    }
+
+    // Point the cook's content-addressed cache at a private temp dir for the test
+    // process, so the in-memory rebuild tests never touch the working directory.
+    fn isolate_state_dir() {
+        use std::sync::Once;
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            concinnity_core::paths::set_root(dir);
+        });
     }
 
     // A world holding just a FrameInput, for driving `tick` directly.
@@ -1634,7 +1687,7 @@ mod tests {
     #[test]
     fn view_button_and_view_rows_toggle_the_panels() {
         let mut h = hook(Vec::new());
-        assert!(!h.apply_top(HudAction::ToggleView));
+        h.apply_top(HudAction::ToggleView);
         assert!(h.view_open, "the View button shows the View panel");
         h.apply_top(HudAction::ToggleView);
         assert!(!h.view_open, "a second click hides it");
@@ -1697,10 +1750,72 @@ mod tests {
         assert!(h.entries.is_empty(), "closing adds nothing");
     }
 
+    // Entry changes drive the live preview: a mutation flags a rebuild AND marks
+    // the world dirty (unsaved); a plain View toggle does neither.
     #[test]
-    fn only_save_signals_a_world_swap() {
+    fn entry_changes_request_a_preview_rebuild() {
         let mut h = hook(Vec::new());
-        assert!(!h.apply_top(HudAction::ToggleView));
+        h.apply_top(HudAction::ToggleView);
+        assert!(
+            !h.rebuild_preview && !h.dirty,
+            "a view toggle is not an entry change"
+        );
+        // Applying a template layers assets: preview rebuild requested + dirty.
+        h.open_template_detail(0);
+        h.apply_template_detail(TemplateAction::Apply);
+        assert!(
+            h.rebuild_preview && h.dirty,
+            "applying a template updates the live preview and marks unsaved"
+        );
+    }
+
+    // A live rebuild re-injects a fresh (blank) HUD; the field snapshot carries the
+    // editor's typed text (an open form's name, the combo filter) across it so a
+    // form open during the swap is not blanked.
+    #[test]
+    fn field_snapshot_carries_typed_text_across_a_reinjection() {
+        let mut old = World::new_empty();
+        super::super::inject::editor_hud(&mut old);
+        widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
+        widget::seed_field(&mut old, panel::FILTER_INPUT, "Point");
+        let snapshot = EditorHook::field_snapshot(&old);
+
+        // A fresh HUD injection starts every field blank.
+        let mut new = World::new_empty();
+        super::super::inject::editor_hud(&mut new);
+        assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "");
+
+        EditorHook::restore_fields(&mut new, &snapshot);
+        assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "my_light");
+        assert_eq!(widget::field_text(&new, panel::FILTER_INPUT), "Point");
+    }
+
+    // The live preview is rebuilt from the in-memory entries with no disk access:
+    // authored renderable entries build a rendering world directly, and an empty
+    // world is seeded so a window still shows. This is the swap's source of truth
+    // now that SAVE only persists.
+    #[test]
+    fn build_preview_world_renders_from_in_memory_entries() {
+        isolate_state_dir();
+        // Authored renderable entries (a Room + camera) build a rendering world.
+        let h = hook(vec![
+            serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
+            serde_json::json!({"name":"room","type":"Room","args":{}}),
+        ]);
+        assert!(
+            h.build_preview_world()
+                .expect("authored entries build")
+                .renders(),
+            "authored renderable entries render without disk"
+        );
+        // Empty entries: the seed keeps the preview window from going blank.
+        let h = hook(Vec::new());
+        assert!(
+            h.build_preview_world()
+                .expect("empty world seeds")
+                .renders(),
+            "an empty world is seeded so it still renders"
+        );
     }
 
     #[test]
