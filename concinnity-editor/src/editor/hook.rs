@@ -35,6 +35,7 @@ use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
+use super::template_panel::{self, TemplateAction, TemplateView};
 use super::templates::{self, TemplatesAction};
 use super::view::{self, ViewAction, ViewState};
 use super::widget::{self, point_in};
@@ -56,6 +57,8 @@ enum DragTarget {
     Preview,
     View,
     Templates,
+    // The Template detail panel spawned by picking a Templates-list row.
+    TemplateDetail,
 }
 
 // Which scroll region a wheel event lands in (decided by the tick from the
@@ -66,6 +69,8 @@ enum ScrollTarget {
     Form,
     // The Assets panel's browse list / combo options.
     List,
+    // The Template detail panel's asset list.
+    TemplateList,
 }
 
 // An active title-bar drag: the grabbed panel and the cursor's offset from its
@@ -93,6 +98,11 @@ pub(crate) struct EditorHook {
     swap_requested: bool,
     // Whether the Templates panel is shown (toggled from the View panel).
     templates_open: bool,
+    // The template whose detail panel is open (index into the templates
+    // registry); `None` means the detail panel is closed.
+    open_template: Option<usize>,
+    // First visible row of the Template detail panel's asset list.
+    template_list_scroll: usize,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // Whether the Preview panel is shown (starts shown; toggled from the View
@@ -144,6 +154,7 @@ pub(crate) struct EditorHook {
     preview_pos: Option<[f32; 2]>,
     view_pos: Option<[f32; 2]>,
     templates_pos: Option<[f32; 2]>,
+    template_detail_pos: Option<[f32; 2]>,
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
@@ -161,6 +172,15 @@ struct PanelData {
     combo_selected: Option<usize>,
     list_rows: Vec<ListRow>,
     form_title: String,
+}
+
+// Owned per-tick data backing a `TemplateView` (the open template's title,
+// description, and grouped asset rows).
+#[derive(Default)]
+struct TemplateDetailData {
+    title: String,
+    description: String,
+    rows: Vec<ListRow>,
 }
 
 // Move a scroll offset one row toward the wheel direction, clamped to `max`.
@@ -218,6 +238,8 @@ impl EditorHook {
             hud_visible: true,
             swap_requested: false,
             templates_open: false,
+            open_template: None,
+            template_list_scroll: 0,
             panel_open: false,
             preview_open: true,
             view_open: false,
@@ -241,14 +263,17 @@ impl EditorHook {
             preview_pos: None,
             view_pos: None,
             templates_pos: None,
+            template_detail_pos: None,
             drag: None,
-            // Back-to-front, matching the injected draw order (Templates frontmost).
+            // Back-to-front, matching the injected draw order (the Template detail
+            // panel frontmost, over the Templates list it spawns from).
             panel_order: vec![
                 DragTarget::Assets,
                 DragTarget::Edit,
                 DragTarget::Preview,
                 DragTarget::View,
                 DragTarget::Templates,
+                DragTarget::TemplateDetail,
             ],
         }
     }
@@ -284,6 +309,10 @@ impl EditorHook {
             DragTarget::Templates => templates::all_sprite_ids()
                 .into_iter()
                 .chain(templates::all_label_ids())
+                .collect(),
+            DragTarget::TemplateDetail => template_panel::all_sprite_ids()
+                .into_iter()
+                .chain(template_panel::all_label_ids())
                 .collect(),
         }
     }
@@ -349,6 +378,30 @@ impl EditorHook {
             .templates_pos
             .unwrap_or(templates::default_origin(vp[0]));
         widget::clamp_origin(pos, templates::size(), vp)
+    }
+
+    // The Template detail panel's top-left for this frame, clamped at its current
+    // height (the list area tracks the open template's asset-row count).
+    fn template_detail_origin(&self, i: usize, vp: [f32; 2]) -> [f32; 2] {
+        let n = self.template_rows(i).len();
+        let pos = self
+            .template_detail_pos
+            .unwrap_or(template_panel::default_origin(vp[0]));
+        widget::clamp_origin(pos, template_panel::size(n), vp)
+    }
+
+    // The world-line entries of template `i` (its typed specs via the app bridge).
+    fn template_entries(&self, i: usize) -> Vec<serde_json::Value> {
+        concinnity_templates::TEMPLATES
+            .get(i)
+            .map(concinnity_app::world_template_entries)
+            .unwrap_or_default()
+    }
+
+    // Template `i`'s assets as the shared grouped rows (types + names alphabetical,
+    // identical to the Assets panel's list).
+    fn template_rows(&self, i: usize) -> Vec<ListRow> {
+        super::asset_list::grouped_rows(&self.template_entries(i), None)
     }
 
     // Which panels are currently shown, so the View panel's checkboxes reflect it.
@@ -502,43 +555,12 @@ impl EditorHook {
         out
     }
 
-    // The browse list, grouped by type: a sub-header row per type (matching the
-    // active filter), then an indented row per asset name carrying its entry
-    // index (for the Delete menu). Insertion order within a type.
+    // The browse list, grouped by type (the shared model): a sub-header row per
+    // type matching the active filter, then an indented row per asset name
+    // carrying its entry index (for the Delete / edit menu). Types + names sorted
+    // alphabetically, identical to the Template panel's list.
     fn list_rows(&self) -> Vec<ListRow> {
-        let mut rows = Vec::new();
-        for ty in self.distinct_types() {
-            if let Some(f) = &self.type_filter
-                && &ty != f
-            {
-                continue;
-            }
-            let names: Vec<(usize, String)> = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter_map(|(i, e)| {
-                    let name = entry_name(e)?;
-                    (entry_type(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
-                })
-                .collect();
-            if names.is_empty() {
-                continue;
-            }
-            rows.push(ListRow {
-                is_header: true,
-                text: ty.clone(),
-                entry: None,
-            });
-            for (i, name) in names {
-                rows.push(ListRow {
-                    is_header: false,
-                    text: name,
-                    entry: Some(i),
-                });
-            }
-        }
-        rows
+        super::asset_list::grouped_rows(&self.entries, self.type_filter.as_deref())
     }
 
     // The floating combo option list for the open flavour, narrowed by the typed
@@ -658,12 +680,74 @@ impl EditorHook {
         }
     }
 
-    // Route a resolved Templates-panel click: applying a template layers its
-    // assets (idempotently); the panel stays open so several can be applied.
+    // Route a resolved Templates-panel click: picking a template opens its detail
+    // panel (a preview of the assets it would add, with an Apply button); the
+    // Templates list stays open so another can be picked.
     fn apply_templates(&mut self, action: TemplatesAction) {
         match action {
-            TemplatesAction::Pick(i) => self.apply_template(i),
+            TemplatesAction::Pick(i) => self.open_template_detail(i),
             TemplatesAction::Consume => {}
+        }
+    }
+
+    // Open (or re-target) the Template detail panel on template `i`, bringing it to
+    // the front of the focus stack.
+    fn open_template_detail(&mut self, i: usize) {
+        if i >= concinnity_templates::TEMPLATES.len() {
+            return;
+        }
+        self.open_template = Some(i);
+        self.template_list_scroll = 0;
+        self.focus_panel(DragTarget::TemplateDetail);
+    }
+
+    // Close the Template detail panel (its state is transient; the Templates list
+    // stays as it was).
+    fn close_template_detail(&mut self) {
+        self.open_template = None;
+        self.template_list_scroll = 0;
+    }
+
+    // Route a resolved Template-detail click: Apply layers the template's assets
+    // (idempotently) then closes the panel; the "X" just closes it.
+    fn apply_template_detail(&mut self, action: TemplateAction) {
+        match action {
+            TemplateAction::Apply => {
+                if let Some(i) = self.open_template {
+                    self.apply_template(i);
+                }
+                self.close_template_detail();
+            }
+            TemplateAction::Close => self.close_template_detail(),
+            TemplateAction::Consume => {}
+        }
+    }
+
+    // The per-frame Template detail view data (title, description, grouped rows),
+    // borrowed for both hit-testing and layout.
+    fn template_detail_data(&self, i: usize) -> TemplateDetailData {
+        let (title, description) = concinnity_templates::TEMPLATES
+            .get(i)
+            .map(|t| (format!("Template {}", t.title), t.description.to_string()))
+            .unwrap_or_default();
+        TemplateDetailData {
+            title,
+            description,
+            rows: self.template_rows(i),
+        }
+    }
+
+    fn make_template_view<'a>(
+        &self,
+        d: &'a TemplateDetailData,
+        mouse: [f32; 2],
+    ) -> TemplateView<'a> {
+        TemplateView {
+            title: &d.title,
+            description: &d.description,
+            rows: &d.rows,
+            scroll: self.template_list_scroll,
+            mouse,
         }
     }
 
@@ -1039,6 +1123,15 @@ impl EditorHook {
                     self.refresh_form(world);
                 }
             }
+            ScrollTarget::TemplateList => {
+                if let Some(i) = self.open_template {
+                    let max = self
+                        .template_rows(i)
+                        .len()
+                        .saturating_sub(super::asset_list::MAX_ROWS);
+                    self.template_list_scroll = scroll_step(self.template_list_scroll, delta, max);
+                }
+            }
         }
     }
 
@@ -1077,6 +1170,13 @@ impl EditorHook {
             }
             DragTarget::Templates => {
                 self.templates_pos = Some(widget::clamp_origin(pos, templates::size(), vp));
+            }
+            DragTarget::TemplateDetail => {
+                let n = self
+                    .open_template
+                    .map_or(1, |i| self.template_rows(i).len());
+                let size = template_panel::size(n);
+                self.template_detail_pos = Some(widget::clamp_origin(pos, size, vp));
             }
         }
     }
@@ -1254,6 +1354,40 @@ impl EditorHook {
                 }
                 true
             }
+            DragTarget::TemplateDetail => {
+                // The detail panel is part of the Templates UI: interactive only
+                // while the Templates list is open and a template is picked.
+                let Some(i) = self.open_template.filter(|_| self.templates_open) else {
+                    return false;
+                };
+                let to = self.template_detail_origin(i, vp);
+                // The X in the title bar closes the detail; checked before the
+                // title-bar drag so it never starts a drag instead.
+                if point_in(mx, my, template_panel::close_rect(to)) {
+                    self.focus_panel(DragTarget::TemplateDetail);
+                    self.close_template_detail();
+                    return true;
+                }
+                if point_in(mx, my, template_panel::title_rect(to)) {
+                    self.focus_panel(DragTarget::TemplateDetail);
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - to[0], my - to[1]],
+                    });
+                    return true;
+                }
+                let action = {
+                    let data = self.template_detail_data(i);
+                    let view = self.make_template_view(&data, [mx, my]);
+                    template_panel::hit_test(&view, mx, my, to)
+                };
+                if let Some(a) = action {
+                    self.focus_panel(DragTarget::TemplateDetail);
+                    self.apply_template_detail(a);
+                    return true;
+                }
+                false
+            }
         }
     }
 }
@@ -1303,6 +1437,20 @@ impl DebugHook for EditorHook {
                                     panel::cursor_over_body(mx, my, self.panel_origin(vp))
                                         .then_some(ScrollTarget::List)
                                 }
+                                DragTarget::TemplateDetail => self
+                                    .open_template
+                                    .filter(|_| self.templates_open)
+                                    .and_then(|i| {
+                                        let data = self.template_detail_data(i);
+                                        let view = self.make_template_view(&data, [mx, my]);
+                                        template_panel::cursor_over(
+                                            &view,
+                                            mx,
+                                            my,
+                                            self.template_detail_origin(i, vp),
+                                        )
+                                        .then_some(ScrollTarget::TemplateList)
+                                    }),
                                 _ => None,
                             };
                             if let Some(t) = hit {
@@ -1349,11 +1497,23 @@ impl DebugHook for EditorHook {
         } else {
             view::hide_all(world);
         }
-        // Templates panel (toggled from the View panel).
+        // Templates panel (toggled from the View panel); the picked template's row
+        // stays highlighted while its detail panel is open.
         if shown && self.templates_open {
-            templates::apply(world, self.templates_origin(vp), mouse);
+            templates::apply(world, self.templates_origin(vp), self.open_template, mouse);
         } else {
             templates::hide_all(world);
+        }
+        // Template detail panel: shown only while the Templates list is open and a
+        // template is picked; hiding it keeps `open_template` so a later toggle-on
+        // restores it.
+        let detail = self.open_template.filter(|_| shown && self.templates_open);
+        if let Some(i) = detail {
+            let data = self.template_detail_data(i);
+            let view = self.make_template_view(&data, mouse);
+            template_panel::apply(world, Some(&view), self.template_detail_origin(i, vp));
+        } else {
+            template_panel::apply(world, None, [0.0, 0.0]);
         }
         // Assets panel (toggled from the View panel).
         if shown && self.panel_open {
@@ -1494,14 +1654,47 @@ mod tests {
         );
     }
 
+    // Picking a template opens its detail panel (nothing is added yet); Apply from
+    // the detail layers the assets and closes it; re-applying is idempotent.
     #[test]
-    fn templates_pick_applies_and_is_idempotent() {
+    fn template_pick_opens_detail_then_apply_adds_idempotently() {
         let mut h = hook(Vec::new());
         h.apply_templates(TemplatesAction::Pick(0));
+        assert_eq!(h.open_template, Some(0), "the detail panel opens on pick");
+        assert!(h.entries.is_empty(), "picking adds nothing on its own");
+
+        h.apply_template_detail(TemplateAction::Apply);
         let first = concinnity_templates::TEMPLATES[0].assets().len();
-        assert_eq!(h.entries.len(), first, "all template entries added");
+        assert_eq!(h.entries.len(), first, "Apply adds all template entries");
+        assert_eq!(h.open_template, None, "Apply closes the detail panel");
+
+        // Re-open and Apply again: no duplicate entries.
         h.apply_templates(TemplatesAction::Pick(0));
+        h.apply_template_detail(TemplateAction::Apply);
         assert_eq!(h.entries.len(), first, "re-apply is idempotent");
+    }
+
+    // The detail panel's grouped rows come from the shared list model, so they
+    // match what the template would add (one row per asset plus a type header
+    // each), and the "X" closes the panel without adding anything.
+    #[test]
+    fn template_detail_rows_and_close() {
+        let mut h = hook(Vec::new());
+        h.open_template_detail(0);
+        let rows = h.template_rows(0);
+        let names = rows.iter().filter(|r| !r.is_header).count();
+        assert_eq!(
+            names,
+            concinnity_templates::TEMPLATES[0].assets().len(),
+            "one name row per template asset"
+        );
+        assert!(
+            rows.iter().any(|r| r.is_header),
+            "grouped under type headers"
+        );
+        h.apply_template_detail(TemplateAction::Close);
+        assert_eq!(h.open_template, None);
+        assert!(h.entries.is_empty(), "closing adds nothing");
     }
 
     #[test]
@@ -2068,15 +2261,20 @@ mod tests {
     #[test]
     fn focusing_a_panel_moves_it_to_the_front() {
         let mut h = hook(Vec::new());
-        // Default order matches the injected draw order: Templates frontmost.
-        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Templates));
+        let panels = h.panel_order.len();
+        // Default order matches the injected draw order: the Template detail panel
+        // frontmost (over the Templates list it spawns from).
+        assert_eq!(
+            h.panel_order.last().copied(),
+            Some(DragTarget::TemplateDetail)
+        );
         h.focus_panel(DragTarget::Assets);
         assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
-        assert_eq!(h.panel_order.len(), 5, "no duplicates");
+        assert_eq!(h.panel_order.len(), panels, "no duplicates");
         // Re-focusing the frontmost is a no-op.
         h.focus_panel(DragTarget::Assets);
         assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
-        assert_eq!(h.panel_order.len(), 5);
+        assert_eq!(h.panel_order.len(), panels);
     }
 
     // The published HUD layers rank the panels by focus (frontmost highest) and pin
@@ -2311,6 +2509,91 @@ mod tests {
         h.tick(&mut world);
         assert!(h.templates_open, "the Templates row toggled the panel on");
         assert!(vis(&world, templates::TITLE_BG), "Templates panel shown");
+    }
+
+    // Picking a template row spawns the detail panel (title "Template <name>",
+    // hidden until then); its Apply button layers the template's assets and closes
+    // the detail. Drives the whole flow through `tick` end to end.
+    #[test]
+    fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
+        let vis = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == id)
+                .map(|s| s.visible)
+                .unwrap_or(false)
+        };
+        let rect = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
+            [s.x, s.y, s.width, s.height]
+        };
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
+        let vp = [1280.0, 720.0];
+        let mut h = hook(Vec::new());
+        // Start with the Templates list already open.
+        h.templates_open = true;
+        world.add_component(FrameInput {
+            viewport: vp,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(
+            vis(&world, templates::TITLE_BG) && !vis(&world, template_panel::PANEL_BG),
+            "Templates list shown; detail panel still hidden"
+        );
+
+        // Click the first template row -> the detail panel spawns.
+        let row = rect(&world, templates::row_bg(0));
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: row[0] + row[2] * 0.5,
+                mouse_y: row[1] + row[3] * 0.5,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert_eq!(h.open_template, Some(0), "the detail panel opened on pick");
+        assert!(vis(&world, template_panel::PANEL_BG), "detail panel shown");
+        let title = world
+            .query::<crate::assets::TextLabel>()
+            .find(|l| l.asset_id == template_panel::TITLE_LABEL)
+            .unwrap();
+        assert!(
+            title.content.starts_with("Template "),
+            "title bar reads 'Template <name>': {}",
+            title.content
+        );
+        assert!(h.entries.is_empty(), "picking adds nothing yet");
+
+        // Click the detail's Apply button -> the template's assets are added and
+        // the detail closes.
+        let apply = template_panel::apply_rect(h.template_detail_origin(0, vp));
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: apply[0] + apply[2] * 0.5,
+                mouse_y: apply[1] + apply[3] * 0.5,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert_eq!(h.open_template, None, "Apply closed the detail panel");
+        assert!(
+            !vis(&world, template_panel::PANEL_BG),
+            "detail panel hidden"
+        );
+        assert_eq!(
+            h.entries.len(),
+            concinnity_templates::TEMPLATES[0].assets().len(),
+            "Apply layered the template's assets"
+        );
     }
 
     #[test]

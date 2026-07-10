@@ -6,6 +6,7 @@
 // persists edits by recompiling on SAVE. An optional debug port reuses the
 // existing debug server so `cn debug smoke` / `screenshot` can verify a session.
 
+mod asset_list;
 mod form;
 mod form_panel;
 mod hook;
@@ -13,6 +14,7 @@ mod hud;
 mod inject;
 mod panel;
 mod preview;
+mod template_panel;
 mod templates;
 mod view;
 mod widget;

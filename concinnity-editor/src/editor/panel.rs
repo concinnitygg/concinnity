@@ -33,6 +33,16 @@ use crate::ecs::asset_id::AssetId;
 use super::hud;
 use super::widget::{self, place_sprite, point_in};
 
+// The grouped browse list (row model, grouping, geometry, base style, and the
+// per-row + scrollbar draw) is shared with the Template detail panel; only the
+// interactive chrome below (hover / selected tints, triple-dot, Delete) is
+// Assets-panel-specific. `MAX_ROWS` + `ListRow` are re-exported so the hook keeps
+// referring to them as `panel::MAX_ROWS` / `panel::ListRow`.
+use super::asset_list::{
+    self, HEADER_ROW_TINT, LABEL, PAD, ROW_H, ROW_LABEL_TOP, ROW_TINT, SCROLLBAR_W,
+};
+pub(crate) use super::asset_list::{ListRow, MAX_ROWS};
+
 // The addable asset types the "+" picker offers: every External (user-declarable)
 // type that (a) recompiles cleanly when added with default args and (b) is useful
 // when added blank. `add_types_cook_with_default_args` guards (a) by running every
@@ -116,10 +126,6 @@ pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
 // combo's filter list and as the combo's text when no type filter is active.
 pub(crate) const ALL_LABEL: &str = "All";
 
-// Visible rows in the body before it scrolls (shared by the grouped list and the
-// combo option list).
-pub(crate) const MAX_ROWS: usize = 12;
-
 // The combo (header dropdown) state: closed, or open in one of two flavours that
 // share the header filter field and the floating option list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,16 +136,6 @@ pub(crate) enum Combo {
     Filter,
     // Picking a type to add (opened from the "+" button).
     Picker,
-}
-
-// One rendered browse-list row: a type sub-header, or an indented asset name that
-// carries the index of its entry (for the Delete menu).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ListRow {
-    pub is_header: bool,
-    pub text: String,
-    // The `entries` index for a name row; `None` for a header.
-    pub entry: Option<usize>,
 }
 
 // Reserved asset-id families for the panel, offset past the top-bar HUD's ids
@@ -191,13 +187,7 @@ pub(crate) fn combo_row_label(i: usize) -> AssetId {
 // panel; the hook owns the origin.
 pub(crate) const PANEL_W: f32 = 320.0;
 const HEADER_H: f32 = 40.0;
-const ROW_H: f32 = 34.0;
-const PAD: f32 = 8.0;
 const GAP: f32 = 6.0;
-const SCROLLBAR_W: f32 = 5.0;
-const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - 10.0;
-// Extra left inset for an asset name under its type sub-header.
-const INDENT: f32 = 16.0;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 24.0;
 // The floating Delete menu.
@@ -207,26 +197,21 @@ const MENU_ROW_H: f32 = 30.0;
 const PANEL_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const PLUS_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
 const TYPEDROP_TINT: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
-const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
+// Interactive name-row tints, layered over the shared base `ROW_TINT`.
 const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
 const ROW_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
-const HEADER_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const OPTION_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
 const OPTION_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
 const COMBO_BG_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
 const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
-const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const DOT_BG_TINT: [f32; 4] = [0.30, 0.34, 0.46, 0.95];
 const DOT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
 const MENU_BG_TINT: [f32; 4] = [0.14, 0.14, 0.18, 1.0];
 const MENU_ROW_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const MENU_ROW_HOVER: [f32; 4] = [0.26, 0.30, 0.42, 1.0];
-const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
-const HEADER_LABEL: [f32; 3] = [0.58, 0.66, 0.80];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 
 // Where the panel sits until the user drags it: right-aligned below the top bar.
@@ -535,14 +520,13 @@ fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
         let row = &view.list_rows[idx];
         let rect = list_row_rect(o, r);
         if row.is_header {
-            place_sprite(world, list_row_bg(r), rect, HEADER_ROW_TINT, true);
-            set_row_label(
+            asset_list::place_row(
                 world,
+                list_row_bg(r),
                 list_row_label(r),
-                [rect[0] + PAD, rect[1] + ROW_LABEL_TOP],
-                &row.text,
-                HEADER_LABEL,
-                true,
+                row,
+                rect,
+                HEADER_ROW_TINT,
             );
             continue;
         }
@@ -563,15 +547,7 @@ fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
         } else {
             ROW_TINT
         };
-        place_sprite(world, list_row_bg(r), rect, tint, true);
-        set_row_label(
-            world,
-            list_row_label(r),
-            [rect[0] + PAD + INDENT, rect[1] + ROW_LABEL_TOP],
-            &row.text,
-            LABEL,
-            true,
-        );
+        asset_list::place_row(world, list_row_bg(r), list_row_label(r), row, rect, tint);
     }
     // The triple-dot follows the row whose menu is open, else the hovered row.
     // Its background box shows only when the dots themselves are hovered, or when
@@ -586,7 +562,15 @@ fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
     if let Some(r) = menu_row {
         layout_row_menu(world, view, o, r);
     }
-    layout_scrollbar(world, total, scroll, o);
+    asset_list::layout_scrollbar(
+        world,
+        LIST_TRACK,
+        LIST_THUMB,
+        total,
+        scroll,
+        o[0] + PANEL_W,
+        body_y(o),
+    );
 }
 
 fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
@@ -630,7 +614,15 @@ fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
             true,
         );
     }
-    layout_scrollbar(world, total, scroll, o);
+    asset_list::layout_scrollbar(
+        world,
+        LIST_TRACK,
+        LIST_THUMB,
+        total,
+        scroll,
+        o[0] + PANEL_W,
+        body_y(o),
+    );
 }
 
 // The three stacked white dots of the triple-dot button. The background box is
@@ -672,34 +664,6 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) 
         [delete[0] + PAD, delete[1] + MENU_ROW_H * 0.5 - 10.0],
         "Delete",
         DELETE_LABEL,
-        true,
-    );
-}
-
-// A simple non-interactive scrollbar thumb sizing the visible window against the
-// total, shown only when the body overflows.
-fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
-    if total <= MAX_ROWS {
-        return;
-    }
-    let x = o[0] + PANEL_W - SCROLLBAR_W;
-    let track_h = MAX_ROWS as f32 * ROW_H;
-    let track = [x, body_y(o), SCROLLBAR_W, track_h];
-    place_sprite(world, LIST_TRACK, track, TRACK_TINT, true);
-    let frac_visible = MAX_ROWS as f32 / total as f32;
-    let thumb_h = (track_h * frac_visible).max(20.0);
-    let max_scroll = (total - MAX_ROWS) as f32;
-    let t = if max_scroll > 0.0 {
-        scroll as f32 / max_scroll
-    } else {
-        0.0
-    };
-    let thumb_y = body_y(o) + t * (track_h - thumb_h);
-    place_sprite(
-        world,
-        LIST_THUMB,
-        [x, thumb_y, SCROLLBAR_W, thumb_h],
-        THUMB_TINT,
         true,
     );
 }
@@ -1212,7 +1176,7 @@ mod tests {
         let mut world = injected_world();
 
         // Hover the row body (left of the dots): bare dots, no box.
-        let over_body = [name[0] + PAD + INDENT, name[1] + 5.0];
+        let over_body = [name[0] + PAD + asset_list::INDENT, name[1] + 5.0];
         apply(
             &mut world,
             Some(&view(&fx, Combo::Closed, None, over_body)),

@@ -4,9 +4,7 @@
 // Every asset stays standalone (no required cross-references) and free of source-file
 // dependencies, so a template applies cleanly to any fresh world.
 
-mod atmosphere;
-mod lit_stage;
-mod showcase;
+mod minimal_world;
 
 use crate::spec::AssetSpec;
 use alloc::vec::Vec;
@@ -33,26 +31,12 @@ impl WorldTemplate {
 }
 
 /// Every engine-owned world template, in display order.
-pub const TEMPLATES: &[WorldTemplate] = &[
-    WorldTemplate {
-        name: "showcase",
-        title: "Showcase polish",
-        description: "Warm key light, bloom + tonemap, sky IBL, and volumetric fog.",
-        build: showcase::assets,
-    },
-    WorldTemplate {
-        name: "lit-stage",
-        title: "Lit stage",
-        description: "A key directional plus two fill point lights.",
-        build: lit_stage::assets,
-    },
-    WorldTemplate {
-        name: "atmosphere",
-        title: "Atmosphere",
-        description: "Procedural-sky environment and volumetric fog.",
-        build: atmosphere::assets,
-    },
-];
+pub const TEMPLATES: &[WorldTemplate] = &[WorldTemplate {
+    name: "minimal-3d-world",
+    title: "Minimal 3D World",
+    description: "A lit room with a camera and sky.",
+    build: minimal_world::assets,
+}];
 
 /// Look up a world template by its machine `name`.
 pub fn by_name(name: &str) -> Option<&'static WorldTemplate> {

@@ -11,7 +11,7 @@
 // `TextInput` fields do bring in the engine's general text-input system, which
 // is real runtime code, not editor-only.)
 
-use super::{form_panel, hud, panel, preview, templates, view};
+use super::{form_panel, hud, panel, preview, template_panel, templates, view};
 use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -49,6 +49,7 @@ pub(crate) fn editor_hud(world: &mut World) {
     inject_preview(world, font);
     inject_view(world, font);
     inject_templates(world, font);
+    inject_template_panel(world, font);
     inject_top_bar(world, font);
 }
 
@@ -92,6 +93,19 @@ fn inject_templates(world: &mut World, font: Option<AssetId>) {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in templates::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
+}
+
+// Inject the Template detail panel's elements, hidden with placeholder geometry;
+// the tick's `template_panel::apply` positions and shows them once a template row
+// is picked from the Templates list.
+fn inject_template_panel(world: &mut World, font: Option<AssetId>) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for id in template_panel::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in template_panel::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
 }
@@ -254,6 +268,9 @@ mod tests {
             view::check_box(0),
             templates::TITLE_BG,
             templates::row_bg(0),
+            template_panel::PANEL_BG,
+            template_panel::APPLY_BG,
+            template_panel::row_bg(0),
         ] {
             assert!(
                 !world
@@ -273,6 +290,7 @@ mod tests {
         assert!(pos(preview::TITLE_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(view::TITLE_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(templates::TITLE_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(template_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();

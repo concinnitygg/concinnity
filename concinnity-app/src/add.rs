@@ -6,8 +6,8 @@
 //     text target becomes a `TextLabel` whose content is the file body); the
 //     renderer stack itself is injected at build time from the entries'
 //     companions, so no scaffold lines are written,
-//   - appends a named content template's entries (`--template showcase`) when
-//     one is requested for a `.glb` landing in a renderer-less world,
+//   - appends a named content template's entries (`--template minimal-3d-world`)
+//     when one is requested for a `.glb` landing in a renderer-less world,
 //   - resolves `target` as a file path, a known asset type name, or inline
 //     JSON, building one or more asset entries,
 //   - patches the world JSONL atomically (via a tmp file) and reruns the
@@ -24,8 +24,8 @@ use concinnity_cook::build_from_path;
 //
 // `template` selects a named scaffold preset when scaffolding fires
 // (target is `.glb`, world has no renderer trigger). `None` uses the
-// default scaffold; `Some("showcase")` uses the polished showcase template.
-// Unknown names error out before touching the world file.
+// default scaffold; `Some("minimal-3d-world")` layers that template's
+// entries. Unknown names error out before touching the world file.
 pub fn add_to_path(
     world_path: &str,
     name: Option<&str>,
@@ -1153,23 +1153,17 @@ mod tests {
     // template dispatch
 
     #[test]
-    fn scaffold_to_inject_uses_showcase_template_when_named() {
+    fn scaffold_to_inject_uses_named_template() {
         let dir =
             std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&dir);
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("showcase"))
-            .expect("showcase template should apply for renderer-less glb add");
-        let expected = concinnity_templates::by_name("showcase")
-            .unwrap()
-            .assets()
-            .len();
-        assert_eq!(
-            scaffold.len(),
-            expected,
-            "expected the showcase template entries"
-        );
+        let name = concinnity_templates::TEMPLATES[0].name;
+        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
+            .expect("a named template should apply for a renderer-less glb add");
+        let expected = concinnity_templates::by_name(name).unwrap().assets().len();
+        assert_eq!(scaffold.len(), expected, "expected the template's entries");
         assert!(!scaffold.is_empty());
     }
 
@@ -1485,7 +1479,8 @@ mod tests {
         let dir = text_test_dir(line!());
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some("showcase"))
+        let name = concinnity_templates::TEMPLATES[0].name;
+        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 

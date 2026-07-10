@@ -22,7 +22,9 @@ mod tests {
 
     #[test]
     fn world_template_entries_yields_world_lines() {
-        let template = concinnity_templates::by_name("showcase").expect("showcase template");
+        let template = concinnity_templates::TEMPLATES
+            .first()
+            .expect("at least one template");
         let entries = world_template_entries(template);
         assert!(!entries.is_empty());
         for entry in &entries {

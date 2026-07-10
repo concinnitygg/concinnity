@@ -302,8 +302,8 @@ pub struct AddArgs {
     pub name: Option<String>,
 
     /// Named scaffold preset used when bootstrapping a new world
-    // Currently only "showcase" (adds bloom/IBL/fog on top of the base scaffold).
-    // Ignored when scaffolding doesn't fire.
+    // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
+    // the base scaffold). Ignored when scaffolding doesn't fire.
     #[arg(short = 't', long)]
     pub template: Option<String>,
 }

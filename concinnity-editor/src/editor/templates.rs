@@ -45,6 +45,9 @@ const PAD: f32 = 8.0;
 
 const ROW_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
 const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
+// The row whose detail panel is open stays highlighted (matches the Assets
+// panel's selected-row tint).
+const ROW_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 
 // A resolved Templates-panel click.
@@ -105,15 +108,22 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<TemplatesAction>
     point_in(mx, my, panel_rect(o)).then_some(TemplatesAction::Consume)
 }
 
-// Position + show the panel at origin `o`, highlighting the hovered row.
-pub(crate) fn apply(world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+// Position + show the panel at origin `o`, highlighting the hovered row and the
+// `selected` row (the one whose detail panel is open).
+pub(crate) fn apply(world: &mut World, o: [f32; 2], selected: Option<usize>, mouse: [f32; 2]) {
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Templates");
     let close_hover = point_in(mouse[0], mouse[1], close_rect(o));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
     for i in 0..count() {
         let row = row_rect(o, i);
         let hovered = point_in(mouse[0], mouse[1], row);
-        let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
+        let tint = if hovered {
+            ROW_TINT_HOVER
+        } else if selected == Some(i) {
+            ROW_TINT_SELECTED
+        } else {
+            ROW_TINT
+        };
         place_sprite(world, row_bg(i), row, tint, true);
         if let Some(l) = widget::label_mut(world, row_label(i)) {
             l.x = row[0] + PAD;
@@ -198,7 +208,7 @@ mod tests {
     #[test]
     fn apply_labels_rows_from_the_templates_crate() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(1280.0), [0.0, 0.0]);
+        apply(&mut world, default_origin(1280.0), None, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == TITLE_LABEL)
@@ -218,7 +228,7 @@ mod tests {
         let mut world = injected_world();
         let o = default_origin(1280.0);
         let r0 = row_rect(o, 0);
-        apply(&mut world, o, [r0[0] + 10.0, r0[1] + 10.0]);
+        apply(&mut world, o, None, [r0[0] + 10.0, r0[1] + 10.0]);
         let bg = world
             .query::<Sprite>()
             .find(|s| s.asset_id == row_bg(0))
@@ -226,10 +236,23 @@ mod tests {
         assert_eq!(bg.tint, ROW_TINT_HOVER);
     }
 
+    // The row whose detail panel is open stays highlighted even without a hover.
+    #[test]
+    fn selected_row_is_highlighted() {
+        let mut world = injected_world();
+        let o = default_origin(1280.0);
+        apply(&mut world, o, Some(0), [0.0, 0.0]);
+        let bg = world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == row_bg(0))
+            .unwrap();
+        assert_eq!(bg.tint, ROW_TINT_SELECTED);
+    }
+
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(1280.0), [0.0, 0.0]);
+        apply(&mut world, default_origin(1280.0), None, [0.0, 0.0]);
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
