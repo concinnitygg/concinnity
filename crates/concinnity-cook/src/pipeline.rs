@@ -9,8 +9,8 @@
 use crate::assets::FileKind;
 use crate::world::{WorldConfig, WorldJsonlAsset, normalize_single_shader_type};
 
+use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
-use crate::ecs::asset_api::{self, AssetRequest};
 use crate::ecs::asset_id;
 use crate::ecs::{AssetKind, BlobAssetDef, ComponentType};
 

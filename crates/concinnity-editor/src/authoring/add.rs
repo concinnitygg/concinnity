@@ -16,8 +16,8 @@
 //     stay build-time only (see world-lock.json).
 
 use crate::ecs::ComponentType;
-use crate::ecs::asset_api::{AssetRequest, create_asset_def};
 use crate::world::{WORLD_JSONL, patch_world_jsonl_to};
+use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::build_from_path;
 
 // Add an asset to `world_path` and rebuild. See module docs.

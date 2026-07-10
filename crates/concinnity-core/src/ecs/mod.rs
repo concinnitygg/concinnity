@@ -10,7 +10,6 @@
 // the value enums (`ComponentAsset` / `SystemAsset`), and the registry macros)
 // lives in the client crate's `ecs` module, which re-exports everything here
 // under the historical `crate::ecs::*` paths.
-pub mod asset_api;
 pub mod asset_id;
 mod registry;
 

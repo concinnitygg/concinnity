@@ -13,6 +13,7 @@
 pub use concinnity_core::{assets, ecs, geometry, gfx, paths, result};
 
 pub mod asset;
+pub mod asset_api;
 pub mod asset_impls;
 pub mod audio_clip;
 pub mod blob;
