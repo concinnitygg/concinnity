@@ -3,7 +3,8 @@
 
 use crate::assets::{
     Camera3D, DespawnRequest, FrameInput, HitRegion, LabelBox, LayoutContainer, ReparentRequest,
-    SceneCommand, SettingCommand, SettingOp, SpawnRequest, Sprite, TextLabel, WindowMode,
+    SceneCommand, SettingCommand, SettingOp, SpawnRequest, Sprite, TextInput, TextLabel,
+    WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
@@ -417,6 +418,171 @@ fn build_dropdown_overlay(
     (sprites, labels)
 }
 
+// The visible slice of a single-line field's text, fit to its box width. `avail`
+// is the drawable text width; `advance` measures the rendered width of a prefix
+// with the real font metrics. Returns the substring to draw, the x offset to add
+// to the field's left text edge (always >= 0, so nothing bleeds left), and the
+// caret's x offset from that same edge. A field that fits is returned untouched;
+// one that overflows is truncated from the head with an ellipsis while unfocused,
+// or horizontally scrolled to keep the caret in view while focused.
+fn fit_line(
+    content: &str,
+    caret_byte: usize,
+    avail: f32,
+    focused: bool,
+    advance: impl Fn(&str) -> f32,
+) -> (String, f32, f32) {
+    const ELLIPSIS: &str = "...";
+    let caret_byte = caret_byte.min(content.len());
+    let full = advance(content);
+    if avail <= 0.0 || full <= avail {
+        return (content.to_string(), 0.0, advance(&content[..caret_byte]));
+    }
+    if focused {
+        // Pin the caret to the right edge once the text runs past the box, easing
+        // back to the left as the caret returns.
+        let caret_w = advance(&content[..caret_byte]);
+        let scroll = (caret_w - avail).max(0.0);
+        // Byte boundaries: the start, then the end of each char.
+        let mut bounds = vec![0usize];
+        bounds.extend(content.char_indices().map(|(b, c)| b + c.len_utf8()));
+        // Drop chars fully scrolled off the left so nothing bleeds past that edge.
+        let start = *bounds
+            .iter()
+            .find(|&&b| advance(&content[..b]) >= scroll)
+            .unwrap_or(&0);
+        // Keep chars up to the last boundary still inside the box.
+        let end = bounds
+            .iter()
+            .rev()
+            .find(|&&b| advance(&content[..b]) - scroll <= avail)
+            .copied()
+            .unwrap_or(content.len())
+            .max(start);
+        let visible = content.get(start..end).unwrap_or("").to_string();
+        (
+            visible,
+            advance(&content[..start]) - scroll,
+            caret_w - scroll,
+        )
+    } else {
+        // Truncate from the head, leaving room for an ellipsis.
+        let ell = advance(ELLIPSIS);
+        let mut end = 0usize;
+        for (b, c) in content.char_indices() {
+            let nb = b + c.len_utf8();
+            if advance(&content[..nb]) + ell > avail {
+                break;
+            }
+            end = nb;
+        }
+        (format!("{}{ELLIPSIS}", &content[..end]), 0.0, 0.0)
+    }
+}
+
+// Synthesise the transient Sprites + TextLabels that draw a TextInput field: a
+// background box, the typed content (or the dimmer placeholder while empty and
+// unfocused), and a caret bar while focused. Fed through the same shapers as the
+// authored overlay elements, carrying the field's `view` / `fit` so view mapping
+// and visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
+// box (`fit_line`) so a long value never bleeds past the field's edges.
+fn build_text_input_overlay(
+    ti: &TextInput,
+    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    caret_visible: bool,
+) -> (Vec<Sprite>, Vec<TextLabel>) {
+    const CARET_W: f32 = 2.0;
+    let font = ti.font.and_then(|f| loaded_fonts.get(&f));
+    let line_h = font
+        .map(|f| f.size_px * ti.scale)
+        .unwrap_or(ti.height * 0.6);
+    // Text baseline math centres the cap band in `[y, y + line_h]`, so placing
+    // the line box's top here vertically centres the text in the field.
+    let text_y = ti.y + (ti.height - line_h) / 2.0;
+
+    let bg = Sprite {
+        asset_id: AssetId::default(),
+        x: ti.x,
+        y: ti.y,
+        width: ti.width,
+        height: ti.height,
+        texture: None,
+        tint: ti.background,
+        follow_cursor: false,
+        visible: true,
+        view: ti.view,
+        fit: ti.fit,
+        corner_radius: ti.corner_radius,
+    };
+    let mut sprites = vec![bg];
+
+    // Placeholder only while empty and unfocused; otherwise the live content.
+    let showing_placeholder = ti.content.is_empty() && !ti.focused;
+    let (raw, color) = if showing_placeholder {
+        (ti.placeholder.as_str(), ti.placeholder_color)
+    } else {
+        (ti.content.as_str(), ti.text_color)
+    };
+    // The byte offset of the caret within the live content (only consulted for the
+    // focused, content-showing case; harmless otherwise).
+    let caret_byte = {
+        let caret = ti.caret.min(ti.content.chars().count());
+        ti.content
+            .char_indices()
+            .nth(caret)
+            .map(|(b, _)| b)
+            .unwrap_or(ti.content.len())
+    };
+    // Fit the text to the box. Without a loaded font we cannot measure, so pass it
+    // through (it will not be rendered until a font loads).
+    let avail = (ti.width - 2.0 * ti.padding - CARET_W).max(0.0);
+    let (content, x_offset, caret_off) = match font {
+        Some(f) => fit_line(raw, caret_byte, avail, ti.focused, |s| {
+            text::text_advance_width(s, f, ti.scale)
+        }),
+        None => (raw.to_string(), 0.0, 0.0),
+    };
+
+    let label = TextLabel {
+        asset_id: AssetId::default(),
+        font: ti.font,
+        content,
+        x: ti.x + ti.padding + x_offset,
+        y: text_y,
+        color,
+        scale: ti.scale,
+        centered: false,
+        align: crate::assets::TextAlign::Left,
+        fit: ti.fit,
+        background: [0.0, 0.0, 0.0, 0.0],
+        padding: 0.0,
+        visible: true,
+        view: ti.view,
+    };
+
+    // Caret: a thin bar at the caret's fit position, only while the field holds
+    // focus and the font loaded, and only on the visible half of the blink cycle.
+    if ti.focused && font.is_some() && caret_visible {
+        let caret_x = ti.x + ti.padding + caret_off;
+        sprites.push(Sprite {
+            asset_id: AssetId::default(),
+            x: caret_x,
+            y: text_y,
+            width: CARET_W,
+            height: line_h,
+            texture: None,
+            tint: [ti.caret_color[0], ti.caret_color[1], ti.caret_color[2], 1.0],
+            follow_cursor: false,
+            visible: true,
+            view: ti.view,
+            fit: ti.fit,
+            corner_radius: 0.0,
+        });
+    }
+
+    (sprites, vec![label])
+}
+
 impl GraphicsSystem {
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if self.failed {
@@ -515,12 +681,23 @@ impl GraphicsSystem {
             let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
                 sprites.into_iter().partition(|s| s.follow_cursor);
 
+            // Draw-layer overrides for HUD occlusion (the `cn editor` panels): an
+            // id maps to a layer, and the overlay calls are stable-sorted by it
+            // below. Absent (a shipped game) leaves everything at layer 0, so the
+            // sort is skipped and draw order is unchanged.
+            let empty_layers = std::collections::HashMap::new();
+            let hud_layers = ctx
+                .resource::<crate::ecs::HudLayers>()
+                .map(|h| &h.0)
+                .unwrap_or(&empty_layers);
+
             let mut calls = gfx_sprite::build_sprite_calls(
                 &scene_sprites,
                 default_atlas_slot,
                 &self.sprite_texture_slots,
                 [win_w, win_h],
                 &self.clip_rects,
+                hud_layers,
             );
             let labels: Vec<&TextLabel> = ctx.query::<TextLabel>().collect();
             calls.extend(text::build_text_calls(
@@ -529,6 +706,7 @@ impl GraphicsSystem {
                 win_w,
                 win_h,
                 &self.clip_rects,
+                hud_layers,
             ));
 
             // A settings dropdown's open list draws on top of the menu (after the
@@ -548,6 +726,7 @@ impl GraphicsSystem {
                     &self.sprite_texture_slots,
                     [win_w, win_h],
                     &no_clips,
+                    &empty_layers,
                 ));
                 let label_refs: Vec<&TextLabel> = dl_labels.iter().collect();
                 calls.extend(text::build_text_calls(
@@ -556,7 +735,49 @@ impl GraphicsSystem {
                     win_w,
                     win_h,
                     &no_clips,
+                    &empty_layers,
                 ));
+            }
+
+            // Text-input fields draw as a background box + their text + a caret,
+            // synthesised the same way as the dropdown overlay and fed through the
+            // shapers (clipped like the rest, so a field inside a scroll band
+            // scissors correctly).
+            let text_inputs: Vec<&TextInput> = ctx.query::<TextInput>().collect();
+            // Caret blink: visible for the first half of each period so a focused
+            // field's caret pulses rather than sitting solid.
+            const CARET_BLINK_PERIOD: f32 = 1.06;
+            let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
+            for ti in text_inputs.iter().filter(|t| t.visible) {
+                let (ti_sprites, ti_labels) =
+                    build_text_input_overlay(ti, &self.loaded_fonts, caret_visible);
+                // The synthesised overlay carries no asset id, so its calls take the
+                // field's own layer (from the field's id) rather than looking up the
+                // default id -- otherwise a focused panel's text fields would sink
+                // below it.
+                let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
+                let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
+                let mut ti_calls = gfx_sprite::build_sprite_calls(
+                    &sprite_refs,
+                    default_atlas_slot,
+                    &self.sprite_texture_slots,
+                    [win_w, win_h],
+                    &self.clip_rects,
+                    &empty_layers,
+                );
+                let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
+                ti_calls.extend(text::build_text_calls(
+                    &label_refs,
+                    &self.loaded_fonts,
+                    win_w,
+                    win_h,
+                    &self.clip_rects,
+                    &empty_layers,
+                ));
+                for c in &mut ti_calls {
+                    c.layer = ti_layer;
+                }
+                calls.extend(ti_calls);
             }
 
             // A menu cursor is present when any visible follow_cursor sprite is
@@ -579,7 +800,8 @@ impl GraphicsSystem {
             // to drive cursor capture and to freeze gameplay input below.
             let menu_active = labels.iter().any(|l| l.visible && l.view.is_some())
                 || scene_sprites.iter().any(|s| s.visible && s.view.is_some())
-                || cursor_sprites.iter().any(|s| s.visible && s.view.is_some());
+                || cursor_sprites.iter().any(|s| s.visible && s.view.is_some())
+                || text_inputs.iter().any(|t| t.visible && t.view.is_some());
             // The whole world render can be skipped when an opaque full-canvas
             // backdrop covers the scene (a menu authored with its dim alpha at
             // 1.0): nothing of the scene is visible, so every world pass is
@@ -589,8 +811,25 @@ impl GraphicsSystem {
                 && scene_sprites
                     .iter()
                     .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
+            // Reorder the overlay by layer when a HUD-layer override is active (the
+            // editor's focus stack): a stable sort keeps same-layer order (so the
+            // sprites-then-text order within a panel is intact) while lifting the
+            // focused panel's whole content above the others'. Skipped entirely when
+            // no override is set, so a shipped game's draw order is untouched.
+            if !hud_layers.is_empty() {
+                calls.sort_by_key(|c| c.layer);
+            }
             (calls, want_cursor, menu_active, world_hidden)
         };
+        // An external per-frame driver (the `cn editor` HUD) can force the
+        // menu-active state through the `MenuOverride` resource, so it frees the
+        // cursor + freezes the world regardless of the world's own menu UI.
+        // `None` leaves the world's own logic in charge. This shadows
+        // `menu_active` for every use below (capture, the freeze resource, the
+        // gameplay-input gate), but not `world_hidden` above: the editor keeps
+        // the world visible.
+        let menu_override = ctx.resource::<crate::ecs::MenuOverride>().and_then(|m| m.0);
+        let menu_active = menu_override.unwrap_or(menu_active);
         // The pacer (above, next frame) clamps the frame rate while a menu is
         // open; record this frame's state for it to read.
         self.menu_active_prev = menu_active;
@@ -608,10 +847,17 @@ impl GraphicsSystem {
         // (edge-triggered in the backend, so this is cheap every frame).
         backend.set_ui_cursor_hidden(want_ui_cursor);
 
-        // In menu mode (a MainMenu over a controlled camera), capture the cursor
-        // for the camera unless a menu view is open. Edge-triggered in the
-        // backend, so this is cheap every frame and a no-op in other worlds.
-        if self.menu_mode {
+        // The `MenuOverride` driver also needs the backend in menu mode so a
+        // click with a freed cursor fires a UI action instead of re-capturing the
+        // camera; a genuine menu-mode world already had this set at init.
+        if menu_override.is_some() {
+            backend.set_menu_mode(true);
+        }
+        // In menu mode (a MainMenu over a controlled camera, or an editor
+        // override), capture the cursor for the camera unless a menu is active.
+        // Edge-triggered in the backend, so this is cheap every frame and a no-op
+        // in a plain first-person world.
+        if self.menu_mode || menu_override.is_some() {
             backend.set_camera_capture(!menu_active);
         }
 
@@ -2038,6 +2284,9 @@ impl GraphicsSystem {
                     // Not gated by `gameplay`: the rebind capture works while the
                     // settings menu is open (the camera is what freezes behind it).
                     captured_key: raw.captured_key,
+                    // Not gated by `gameplay`: text-input fields type while a menu
+                    // (or the in-engine editor) is up, like the rebind capture.
+                    typed_char: raw.typed_char,
                 };
                 // Publish the same snapshot two ways: the resource readers can
                 // fetch by type, and the component column the camera and UI
@@ -2346,5 +2595,51 @@ mod tests {
     fn dim_set_without_rows_falls_back_to_the_value_label() {
         let gated: HashSet<AssetId> = [AssetId(7)].into_iter().collect();
         assert_eq!(expand_dim_set(&gated, &[]), gated);
+    }
+
+    // A fixed-width mock metric (every char 10px) makes `fit_line` widths exact.
+    fn mock_advance(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    // Text that fits the box is returned untouched, with the caret at its measured
+    // position.
+    #[test]
+    fn fit_line_passes_through_text_that_fits() {
+        let (text, xoff, caret) = fit_line("abc", 3, 100.0, false, mock_advance);
+        assert_eq!(text, "abc");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 30.0);
+    }
+
+    // An unfocused overflow is truncated from the head with an ellipsis that fits
+    // inside the box.
+    #[test]
+    fn fit_line_truncates_unfocused_overflow_with_ellipsis() {
+        // avail 65, ellipsis "..." = 30px: keep chars while width + 30 <= 65 (3 chars).
+        let (text, xoff, _) = fit_line("abcdefghij", 0, 65.0, false, mock_advance);
+        assert_eq!(text, "abc...");
+        assert_eq!(xoff, 0.0);
+    }
+
+    // A focused overflow scrolls so the caret (at the end here) stays at the box's
+    // right edge, dropping the head that ran off the left.
+    #[test]
+    fn fit_line_scrolls_focused_overflow_to_keep_the_caret_visible() {
+        // 100px of text, 50px box, caret at end: scroll 50 -> show the last 5 chars.
+        let (text, xoff, caret) = fit_line("abcdefghij", 10, 50.0, true, mock_advance);
+        assert_eq!(text, "fghij");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 50.0, "caret pinned to the right edge");
+        assert!(caret <= 50.0, "caret never past the box");
+    }
+
+    // With the caret at the start, a focused overflow shows the head (no scroll).
+    #[test]
+    fn fit_line_focused_caret_at_start_shows_the_head() {
+        let (text, xoff, caret) = fit_line("abcdefghij", 0, 50.0, true, mock_advance);
+        assert_eq!(text, "abcde");
+        assert_eq!(xoff, 0.0);
+        assert_eq!(caret, 0.0);
     }
 }

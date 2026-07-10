@@ -1419,4 +1419,25 @@ mod tests {
         assert_eq!(name, "app.icns");
         assert!(resources.join("app.icns").exists());
     }
+
+    #[test]
+    fn runtime_binary_path_errors_when_the_player_is_absent() {
+        // The test harness binary lives in `target/<profile>/deps/`, and the
+        // `concinnity-runtime` player is built one level up in `target/<profile>/`,
+        // so it never sits beside the test executable: the lookup must report a
+        // clear NotFound rather than pointing at a nonexistent path.
+        let err = runtime_binary_path().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("runtime player not found"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn backend_label_passes_through_an_unknown_key() {
+        // A platform key the label table does not recognise is echoed back
+        // verbatim rather than dropped, so an odd stamp still reads sensibly.
+        assert_eq!(backend_label("wgpu"), "wgpu");
+    }
 }

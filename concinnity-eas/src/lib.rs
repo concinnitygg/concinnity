@@ -18,6 +18,7 @@ mod column;
 mod command;
 mod entity;
 mod event;
+mod event_store;
 mod join;
 #[cfg(test)]
 mod join_bench;
@@ -32,6 +33,7 @@ pub use column::{Column, StorageKind};
 pub use command::{Command, CommandQueue, CommandTarget, Commands};
 pub use entity::{Entities, Entity};
 pub use event::{EventCursor, Events};
+pub use event_store::EventStore;
 pub use join::JoinIndex;
 pub use mask::{ComponentId, ComponentMask};
 pub use resource::Resources;

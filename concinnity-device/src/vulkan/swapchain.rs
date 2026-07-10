@@ -64,10 +64,17 @@ impl VkContext {
         for iv in &self.swapchain_image_views {
             unsafe { device.destroy_image_view(*iv, None) };
         }
-        unsafe {
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None)
-        };
+        // On a `reload_world` the successor context inherits this swapchain
+        // (Vulkan handles are not refcounted), so the outgoing context frees only
+        // its own image views / attachments above and leaves the swapchain
+        // itself alive. Always false during a normal resize rebuild (the only
+        // other caller), so a resize still recreates the swapchain as before.
+        if !self.reused_by_successor {
+            unsafe {
+                self.swapchain_loader
+                    .destroy_swapchain(self.swapchain, None)
+            };
+        }
         self.framebuffers.clear();
         self.composite_framebuffers.clear();
         self.bloom_write_framebuffers.clear();
@@ -87,7 +94,7 @@ impl VkContext {
         self.last_present_index = None;
         self.destroy_swapchain_resources();
 
-        let (width, height) = self.window.framebuffer_size();
+        let (width, height) = self.window().framebuffer_size();
         // re-query present family
         let present_family = {
             let (_, pf) = query_queue_families(

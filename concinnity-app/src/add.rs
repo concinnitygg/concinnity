@@ -6,8 +6,8 @@
 //     text target becomes a `TextLabel` whose content is the file body); the
 //     renderer stack itself is injected at build time from the entries'
 //     companions, so no scaffold lines are written,
-//   - appends a named content template's entries (`--template showcase`) when
-//     one is requested for a `.glb` landing in a renderer-less world,
+//   - appends a named content template's entries (`--template minimal-3d-world`)
+//     when one is requested for a `.glb` landing in a renderer-less world,
 //   - resolves `target` as a file path, a known asset type name, or inline
 //     JSON, building one or more asset entries,
 //   - patches the world JSONL atomically (via a tmp file) and reruns the
@@ -24,8 +24,8 @@ use concinnity_cook::build_from_path;
 //
 // `template` selects a named scaffold preset when scaffolding fires
 // (target is `.glb`, world has no renderer trigger). `None` uses the
-// default scaffold; `Some("showcase")` uses the polished showcase template.
-// Unknown names error out before touching the world file.
+// default scaffold; `Some("minimal-3d-world")` layers that template's
+// entries. Unknown names error out before touching the world file.
 pub fn add_to_path(
     world_path: &str,
     name: Option<&str>,
@@ -219,19 +219,34 @@ fn scaffold_to_inject(
     }
 }
 
-// Map a `--template <name>` value to its scaffold entries. Returns:
+// Map a `--template <name>` value to its entries, looked up in the engine-owned
+// `concinnity-templates` registry and parsed from its JSONL. Returns:
 //   - `Ok(None)`              when no template was requested (use default scaffold)
 //   - `Ok(Some(entries))`     when the named template is known
 //   - `Err(InvalidInput)`     when the name is unrecognised (typo → fail fast)
 fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_json::Value>>> {
-    match template {
-        None => Ok(None),
-        Some("showcase") => Ok(Some(super::sources::glb::template_showcase())),
-        Some(other) => Err(std::io::Error::new(
+    let Some(name) = template else {
+        return Ok(None);
+    };
+    match concinnity_templates::by_name(name) {
+        Some(t) => Ok(Some(crate::template_spec::world_template_entries(t))),
+        None => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("unknown template '{other}'; available: showcase"),
+            format!(
+                "unknown template '{name}'; available: {}",
+                available_templates()
+            ),
         )),
     }
+}
+
+// Comma-separated list of known template names, for the "unknown template" error.
+fn available_templates() -> String {
+    concinnity_templates::TEMPLATES
+        .iter()
+        .map(|t| t.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // Asset types that either declare the renderer or trigger its companion
@@ -1138,20 +1153,46 @@ mod tests {
     // template dispatch
 
     #[test]
-    fn scaffold_to_inject_uses_showcase_template_when_named() {
+    fn scaffold_to_inject_uses_named_template() {
         let dir =
             std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&dir);
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("showcase"))
-            .expect("showcase template should apply for renderer-less glb add");
-        assert_eq!(
-            scaffold.len(),
-            super::super::sources::glb::template_showcase().len(),
-            "expected the showcase template entries"
-        );
+        let name = concinnity_templates::TEMPLATES[0].name;
+        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
+            .expect("a named template should apply for a renderer-less glb add");
+        let expected = concinnity_templates::by_name(name).unwrap().assets().len();
+        assert_eq!(scaffold.len(), expected, "expected the template's entries");
         assert!(!scaffold.is_empty());
+    }
+
+    // Every entry of every engine-owned template validates as a real, buildable
+    // asset with its declared args. This is the typed round-trip the templates
+    // crate (pure data) cannot do itself: it guards against a template naming a
+    // type that doesn't exist or shipping args the asset rejects, and against the
+    // spec builders drifting from the real asset schemas.
+    #[test]
+    fn every_template_entry_validates_as_a_real_asset() {
+        let _guard = crate::test_support::lock();
+        for t in concinnity_templates::TEMPLATES {
+            let entries = crate::template_spec::world_template_entries(t);
+            assert!(!entries.is_empty(), "template '{}' is empty", t.name);
+            for entry in entries {
+                let ty = entry["type"].as_str().expect("entry has a type");
+                let name = entry["name"].as_str().expect("entry has a name");
+                let args = entry
+                    .get("args")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                concinnity_cook::validate_asset(ty, name, &args).unwrap_or_else(|e| {
+                    panic!(
+                        "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
+                        t.name
+                    )
+                });
+            }
+        }
     }
 
     #[test]
@@ -1438,7 +1479,8 @@ mod tests {
         let dir = text_test_dir(line!());
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some("showcase"))
+        let name = concinnity_templates::TEMPLATES[0].name;
+        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 

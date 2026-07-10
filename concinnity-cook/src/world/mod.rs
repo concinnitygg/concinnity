@@ -15,12 +15,14 @@ pub(crate) mod light_rig;
 pub(crate) mod main_menu;
 pub(crate) mod material_palette;
 pub(crate) mod option_select;
+pub(crate) mod panel;
 pub(crate) mod prefab;
 pub(crate) mod room;
 pub(crate) mod scene_import;
 pub(crate) mod shader;
 pub(crate) mod slider;
 pub(crate) mod story;
+pub(crate) mod ui_spec;
 
 pub(crate) mod expand;
 

@@ -117,6 +117,10 @@ impl Component for TextLabel {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("font", "Font"), ("view", "View")]
+    }
+
     fn to_args(&self) -> Self {
         self.clone()
     }

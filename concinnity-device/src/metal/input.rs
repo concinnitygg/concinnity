@@ -56,6 +56,12 @@ pub(super) struct KeyState {
     // (and on the Shift rising edge); cleared by take_input(). Not gated by
     // capture / menu state so a rebind row can read it while a menu is open.
     pub(super) captured_key: Option<Key>,
+    // Pulse: the printable character produced by the last key press, taken from
+    // the NSEvent's `characters` (so shift / option / dead keys resolve to the
+    // right glyph), for text-input fields; cleared by take_input(). Control
+    // glyphs (Backspace, Enter, Escape, arrows) are filtered out -- those travel
+    // as `captured_key`.
+    pub(super) typed_char: Option<char>,
     // Whether Shift is currently held, tracked from FlagsChanged so the rising
     // edge can fire `captured_key` and drive any action bound to Shift (Shift is
     // a pure modifier on macOS: it generates FlagsChanged, not KeyDown/KeyUp).
@@ -483,6 +489,7 @@ impl MtlContext {
             escape: self.keys.escape_pulse,
             ctrl: self.keys.control_down,
             captured_key: self.keys.captured_key,
+            typed_char: self.keys.typed_char,
         };
         self.keys.interact_pulse = false;
         self.keys.jump_pulse = false;
@@ -493,6 +500,7 @@ impl MtlContext {
         self.keys.hud_toggle_pulse = false;
         self.keys.escape_pulse = false;
         self.keys.captured_key = None;
+        self.keys.typed_char = None;
         snapshot
     }
 
@@ -711,7 +719,30 @@ impl MtlContext {
             }
             self.apply_binding(key, pressed, pressed);
         }
+        // Printable text input: the OS-resolved glyph for this press (correct
+        // casing / shifted symbols / dead keys), for text-input fields. Editing
+        // and navigation keys resolve to control glyphs and are filtered out.
+        if pressed && let Some(c) = printable_char(event) {
+            self.keys.typed_char = Some(c);
+        }
     }
+}
+
+// Whether a character is a printable glyph suitable for a text field, i.e. not a
+// control character and not in the NSFunctionKey private-use range
+// (0xF700-0xF8FF: arrows, F-keys, Home/End, and the like).
+fn is_printable_glyph(c: char) -> bool {
+    !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c)
+}
+
+// The printable glyph a key event produces, or None for a control / navigation
+// key (Backspace, Enter, Escape, arrows, etc.). macOS puts the layout- and
+// modifier-resolved characters on the event, so casing and shifted symbols are
+// already correct.
+fn printable_char(event: &objc2_app_kit::NSEvent) -> Option<char> {
+    let text = event.characters()?.to_string();
+    let c = text.chars().next()?;
+    is_printable_glyph(c).then_some(c)
 }
 
 // Map a macOS virtual key code to a canonical `Key`, or `None` for a key the
@@ -759,6 +790,8 @@ fn key_from_mac(kc: u16) -> Option<Key> {
         49 => Key::Space,
         48 => Key::Tab,
         36 => Key::Enter,
+        51 => Key::Backspace,
+        117 => Key::Delete,
         123 => Key::Left,
         124 => Key::Right,
         125 => Key::Down,
@@ -794,5 +827,26 @@ mod tests {
         // Escape / F1 stay fixed (no canonical mapping).
         assert_eq!(key_from_mac(53), None);
         assert_eq!(key_from_mac(122), None);
+    }
+
+    #[test]
+    fn editing_keys_decode() {
+        // Backspace and forward-delete decode so text fields can edit; they ride
+        // `captured_key`, not `typed_char`.
+        assert_eq!(key_from_mac(51), Some(Key::Backspace));
+        assert_eq!(key_from_mac(117), Some(Key::Delete));
+    }
+
+    #[test]
+    fn printable_glyph_filter() {
+        // Real glyphs (including space) type; control and function keys don't.
+        assert!(is_printable_glyph('a'));
+        assert!(is_printable_glyph('Z'));
+        assert!(is_printable_glyph(' '));
+        assert!(is_printable_glyph('/'));
+        assert!(!is_printable_glyph('\u{8}')); // Backspace
+        assert!(!is_printable_glyph('\r')); // Enter
+        assert!(!is_printable_glyph('\u{7f}')); // Delete
+        assert!(!is_printable_glyph('\u{F702}')); // Left arrow (NSFunctionKey range)
     }
 }

@@ -90,6 +90,7 @@ pub fn build_cursor_calls(
             atlas_slot,
             // The cursor is never clipped: it draws on top of everything.
             clip_rect: None,
+            layer: 0,
         };
         // Outline first so the fill, appended after, composites on top of it
         // (the overlay draws indexed triangles in order, with no depth test).

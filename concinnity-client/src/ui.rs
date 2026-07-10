@@ -211,6 +211,7 @@ pub struct UiInputSystem {
     // Built at init() from `<view_name>_*` name prefixes.
     sprites_by_view: HashMap<AssetId, Vec<AssetId>>,
     labels_by_view: HashMap<AssetId, Vec<AssetId>>,
+    text_inputs_by_view: HashMap<AssetId, Vec<AssetId>>,
     // Index (into `regions`) of the slider currently being dragged, or `None`.
     // Set on the press edge over a slider track, cleared on button release.
     dragging: Option<usize>,
@@ -244,6 +245,7 @@ impl UiInputSystem {
             views: ViewRegistry::default(),
             sprites_by_view: HashMap::new(),
             labels_by_view: HashMap::new(),
+            text_inputs_by_view: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
             thumb_drag: None,
@@ -341,6 +343,14 @@ impl System for UiInputSystem {
                     .push(l.asset_id);
             }
         }
+        for t in ctx.query::<crate::assets::TextInput>() {
+            if let Some(view_id) = t.view {
+                self.text_inputs_by_view
+                    .entry(view_id)
+                    .or_default()
+                    .push(t.asset_id);
+            }
+        }
 
         // Drain ScrollPanels into runtime state and bucket the regions into
         // their rows (uses the regions drained just above).
@@ -363,6 +373,16 @@ impl System for UiInputSystem {
                 for lbl in ctx.query_mut::<TextLabel>() {
                     if lbl.asset_id == id {
                         lbl.visible = false;
+                        break;
+                    }
+                }
+            }
+        }
+        for ids in self.text_inputs_by_view.values() {
+            for &id in ids {
+                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                    if ti.asset_id == id {
+                        ti.visible = false;
                         break;
                     }
                 }
@@ -1002,6 +1022,16 @@ impl UiInputSystem {
                 for l in ctx.query_mut::<TextLabel>() {
                     if l.asset_id == id {
                         l.visible = visible;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(ids) = self.text_inputs_by_view.get(&view_id) {
+            for &id in ids {
+                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                    if ti.asset_id == id {
+                        ti.visible = visible;
                         break;
                     }
                 }
@@ -2937,12 +2967,13 @@ mod tests {
         assert!(produced_setting_commands(&world).is_empty());
     }
 
-    // Every ViewShown announcement so far, read with a fresh cursor.
-    fn shown_views(world: &World) -> Vec<AssetId> {
-        let mut cursor = crate::ecs::EventCursor::default();
+    // The ViewShown announcements the cursor has not yet consumed, read the
+    // way a real consumer (AudioCue) does: incrementally, before the queue's
+    // two-frame retention retires them.
+    fn shown_views(world: &World, cursor: &mut crate::ecs::EventCursor) -> Vec<AssetId> {
         world
             .events::<ViewShown>()
-            .map(|e| e.read(&mut cursor).into_iter().map(|s| s.view).collect())
+            .map(|e| e.read(cursor).into_iter().map(|s| s.view).collect())
             .unwrap_or_default()
     }
 
@@ -2961,20 +2992,21 @@ mod tests {
             });
         }
         world.start().unwrap();
-        assert_eq!(shown_views(&world), vec![first]);
+        let mut cursor = crate::ecs::EventCursor::default();
+        assert_eq!(shown_views(&world, &mut cursor), vec![first]);
 
         world
             .events_mut::<ViewCommand>()
             .send(ViewCommand::Show(second));
         world.step();
-        assert_eq!(shown_views(&world), vec![first, second]);
+        assert_eq!(shown_views(&world, &mut cursor), vec![second]);
 
         // Showing the already-active view is a no-op: no repeat announcement.
         world
             .events_mut::<ViewCommand>()
             .send(ViewCommand::Show(second));
         world.step();
-        assert_eq!(shown_views(&world), vec![first, second]);
+        assert!(shown_views(&world, &mut cursor).is_empty());
     }
 
     #[test]

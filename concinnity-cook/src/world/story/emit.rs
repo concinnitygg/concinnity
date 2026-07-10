@@ -1,4 +1,8 @@
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use crate::template_spec::spec_to_value;
+use crate::world::ui_spec::sprite;
+use concinnity_templates::AssetSpec;
+use concinnity_templates::asset;
 
 use super::helpers::wrap_text;
 use super::model::{FlagOp, Gate, ImageDims, Stage, Story};
@@ -391,21 +395,14 @@ pub(crate) fn emit_story(
     for (i, (key, action)) in quick.iter().enumerate() {
         let x = quick_x0 + i as f32 * 90.0;
         let lbl = format!("{}_{}_lbl", stage_view, key);
-        out.push(serde_json::json!({
-            "name": lbl,
-            "type": "TextLabel",
-            "args": {
-                "font": font_dialog,
-                "content": "",
-                "x": x + quick_w / 2.0,
-                "y": quick_y + 2.0,
-                "color": [0.75, 0.75, 0.75],
-                "scale": 1.0,
-                "align": "center",
-                "fit": "bottom",
-                "visible": false,
-            }
-        }));
+        out.push(hidden_label(
+            &lbl,
+            &font_dialog,
+            x + quick_w / 2.0,
+            quick_y + 2.0,
+            [0.75, 0.75, 0.75],
+            Some("bottom"),
+        ));
         out.push(hit_region_fit(
             &format!("{}_{}_btn", stage_view, key),
             (x, quick_y, quick_w, 30.0),
@@ -437,34 +434,24 @@ pub(crate) fn emit_story(
                 ],
                 CHOICE_BOX_RADIUS,
             ));
-            out.push(serde_json::json!({
-                "name": lbl,
-                "type": "TextLabel",
-                "args": {
-                    "font": font_menu,
-                    "content": "",
-                    "x": win_w / 2.0,
-                    "y": y + 8.0,
-                    "color": [0.92, 0.92, 0.92],
-                    "scale": 1.0,
-                    "align": "center",
-                    "visible": false,
-                }
-            }));
-            out.push(serde_json::json!({
-                "name": format!("{}_opt{}_btn", stage_view, ci),
-                "type": "HitRegion",
-                "args": {
-                    "x": 280.0,
-                    "y": y,
-                    "width": win_w - 560.0,
-                    "height": 44.0,
-                    "label": lbl,
-                    "hover_color": [1.0, 0.85, 0.3],
-                    "hover_scale": 1.06,
-                    "action": format!("story:choose:{}", ci),
-                }
-            }));
+            out.push(hidden_label(
+                &lbl,
+                &font_menu,
+                win_w / 2.0,
+                y + 8.0,
+                [0.92, 0.92, 0.92],
+                None,
+            ));
+            out.push(spec_to_value(
+                &asset::hit_region(
+                    format!("{}_opt{}_btn", stage_view, ci),
+                    [280.0, y, win_w - 560.0, 44.0],
+                    format!("story:choose:{}", ci),
+                )
+                .set("label", lbl)
+                .set("hover_color", [1.0f32, 0.85, 0.3])
+                .set("hover_scale", 1.06f32),
+            ));
         }
     }
 
@@ -517,20 +504,14 @@ pub(crate) fn emit_story(
             ],
             CHOICE_BOX_RADIUS,
         ));
-        out.push(serde_json::json!({
-            "name": lbl,
-            "type": "TextLabel",
-            "args": {
-                "font": font_menu,
-                "content": "",
-                "x": win_w / 2.0,
-                "y": y + 14.0,
-                "color": [0.92, 0.92, 0.92],
-                "scale": 1.0,
-                "align": "center",
-                "visible": false,
-            }
-        }));
+        out.push(hidden_label(
+            &lbl,
+            &font_menu,
+            win_w / 2.0,
+            y + 14.0,
+            [0.92, 0.92, 0.92],
+            None,
+        ));
         out.push(hit_region(
             &format!("{}_slot{}_btn", stage_view, i),
             (280.0, y, win_w - 560.0, 56.0),
@@ -676,16 +657,11 @@ fn gate_entries(gates: &[Gate], node_index: &dyn Fn(&str) -> u32) -> Vec<serde_j
 // imagery reaches the window edges without distorting) with an explicit
 // initial visibility.
 fn stage_sprite(name: &str, rect: [f32; 4], tint: [f32; 4], visible: bool) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Sprite",
-        "args": {
-            "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
-            "tint": tint,
-            "fit": "cover",
-            "visible": visible,
-        }
-    })
+    spec_to_value(
+        &asset::sprite(name, rect, tint)
+            .set("fit", "cover")
+            .set("visible", visible),
+    )
 }
 
 // The Texture asset name for a backdrop image path, allocating one on the
@@ -711,27 +687,11 @@ fn clip_asset(prefix: &str, clips: &mut Vec<(String, String)>, path: &str) -> St
 }
 
 fn font(name: &str, size_px: u32) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Font",
-        "args": { "size_px": size_px }
-    })
+    spec_to_value(&asset::font(name, size_px))
 }
 
 fn view(name: &str, initial: bool) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "View",
-        "args": { "initial": initial }
-    })
-}
-
-fn sprite(name: &str, x: f32, y: f32, w: f32, h: f32, tint: [f32; 4]) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Sprite",
-        "args": { "x": x, "y": y, "width": w, "height": h, "tint": tint }
-    })
+    spec_to_value(&asset::view(name, initial))
 }
 
 fn rounded_sprite(
@@ -752,15 +712,12 @@ fn rounded_sprite_fit(
     radius: f32,
     fit: Option<&'static str>,
 ) -> serde_json::Value {
-    let mut args = serde_json::json!({
-        "x": rect.0, "y": rect.1, "width": rect.2, "height": rect.3,
-        "tint": tint,
-        "corner_radius": radius,
-    });
+    let mut spec =
+        asset::sprite(name, [rect.0, rect.1, rect.2, rect.3], tint).set("corner_radius", radius);
     if let Some(fit) = fit {
-        args["fit"] = serde_json::json!(fit);
+        spec = spec.set("fit", fit);
     }
-    serde_json::json!({ "name": name, "type": "Sprite", "args": args })
+    spec_to_value(&spec)
 }
 
 // A full-bleed textured sprite (cover fit) for a menu backdrop image. `tint`
@@ -772,16 +729,11 @@ fn textured_cover_sprite(
     texture: &str,
     tint: [f32; 4],
 ) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Sprite",
-        "args": {
-            "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
-            "texture": texture,
-            "tint": tint,
-            "fit": "cover",
-        }
-    })
+    spec_to_value(
+        &asset::sprite(name, rect, tint)
+            .set("texture", texture)
+            .set("fit", "cover"),
+    )
 }
 
 #[derive(Default)]
@@ -799,25 +751,23 @@ struct LabelStyle {
 }
 
 fn label(name: &str, font: &str, content: &str, style: LabelStyle) -> serde_json::Value {
-    let mut args = serde_json::json!({
-        "font": font,
-        "content": content,
-        "x": style.x,
-        "y": style.y,
-        "color": style.color,
-        "scale": 1.0,
-    });
+    let mut spec = AssetSpec::new(name, "TextLabel")
+        .set("font", font)
+        .set("content", content)
+        .set("x", style.x)
+        .set("y", style.y)
+        .set("color", style.color)
+        .set("scale", 1.0f32);
     if let Some(bg) = style.background {
-        args["background"] = serde_json::json!(bg);
-        args["padding"] = serde_json::json!(20.0);
+        spec = spec.set("background", bg).set("padding", 20.0f32);
     }
     if let Some(align) = style.align {
-        args["align"] = serde_json::json!(align);
+        spec = spec.set("align", align);
     }
     if let Some(fit) = style.fit {
-        args["fit"] = serde_json::json!(fit);
+        spec = spec.set("fit", fit);
     }
-    serde_json::json!({ "name": name, "type": "TextLabel", "args": args })
+    spec_to_value(&spec)
 }
 
 fn hit_region(
@@ -831,6 +781,33 @@ fn hit_region(
 
 // A hit region with an explicit `fit` (reference-to-window mapping). `Some`
 // keeps a region aligned with bottom-anchored furniture it covers.
+// A runtime-filled overlay label: empty and hidden at build time (centered,
+// native scale), shown and filled by the story system per page (the quick-row
+// controls, choice options, and save slots). `fit` bottom-anchors the quick row
+// to the window bottom like the dialog box it sits on.
+fn hidden_label(
+    name: &str,
+    font: &str,
+    x: f32,
+    y: f32,
+    color: [f32; 3],
+    fit: Option<&'static str>,
+) -> serde_json::Value {
+    let mut spec = AssetSpec::new(name, "TextLabel")
+        .set("font", font)
+        .set("content", "")
+        .set("x", x)
+        .set("y", y)
+        .set("color", color)
+        .set("scale", 1.0f32)
+        .set("align", "center")
+        .set("visible", false);
+    if let Some(fit) = fit {
+        spec = spec.set("fit", fit);
+    }
+    spec_to_value(&spec)
+}
+
 fn hit_region_fit(
     name: &str,
     rect: (f32, f32, f32, f32),
@@ -838,22 +815,17 @@ fn hit_region_fit(
     action: &str,
     fit: Option<&'static str>,
 ) -> serde_json::Value {
-    let mut args = serde_json::json!({
-        "x": rect.0,
-        "y": rect.1,
-        "width": rect.2,
-        "height": rect.3,
-        "action": action,
-    });
+    let mut spec = asset::hit_region(name, [rect.0, rect.1, rect.2, rect.3], action);
     if let Some(l) = label {
-        args["label"] = serde_json::json!(l);
-        args["hover_color"] = serde_json::json!([1.0, 0.85, 0.3]);
-        args["hover_scale"] = serde_json::json!(1.06);
+        spec = spec
+            .set("label", l)
+            .set("hover_color", [1.0f32, 0.85, 0.3])
+            .set("hover_scale", 1.06f32);
     }
     if let Some(fit) = fit {
-        args["fit"] = serde_json::json!(fit);
+        spec = spec.set("fit", fit);
     }
-    serde_json::json!({ "name": name, "type": "HitRegion", "args": args })
+    spec_to_value(&spec)
 }
 
 // A clickable menu row: a TextLabel and the HitRegion that styles and fires

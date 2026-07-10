@@ -152,10 +152,10 @@ pub extern "C" fn cn_add(
     )
 }
 
-// Variant of `cn_add` that selects a named scaffold preset (e.g. "showcase")
-// when bootstrapping a fresh GLB world. `template` may be NULL to use the
-// default scaffold. Kept as a separate symbol so existing `cn_add` callers
-// don't need to change.
+// Variant of `cn_add` that selects a named scaffold preset (e.g.
+// "minimal-3d-world") when bootstrapping a fresh GLB world. `template` may be
+// NULL to use the default scaffold. Kept as a separate symbol so existing
+// `cn_add` callers don't need to change.
 // Returns 1 on success, 0 on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_add_with_template(

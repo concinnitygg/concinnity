@@ -39,6 +39,8 @@ concinnity-cook = { path = "../concinnity-cook" }
 # Direct core access for the world/geometry/ecs types the CLI/debug code names
 # (concinnity_core::{world,build,geometry,ecs}).
 concinnity-core = { path = "../concinnity-core" }
+# Engine-owned content templates the editor's Templates dropdown applies.
+concinnity-templates = { path = "../concinnity-templates" }
 argon2 = "0.5"
 async-stream = "0.3.6"
 ciborium = "0.2"

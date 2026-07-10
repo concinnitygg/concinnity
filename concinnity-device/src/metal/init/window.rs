@@ -63,11 +63,26 @@ pub(crate) struct HdrRequest {
     pub pq_requested: bool,
 }
 
+// The already-created window + view handed back for a live world reload
+// (`cn editor` SAVE). When present, `setup_window_and_view` reuses these instead
+// of creating a fresh NSWindow / MTKView, so a save does not spawn a new window.
+// The swapchain-level config is guaranteed unchanged by the caller's
+// `hot_swap_config` gate, so the layer stays configured as-is; only the
+// drawable-derived target sizes are recomputed.
+pub(crate) struct ExistingWindow {
+    pub window: Option<Retained<NSWindow>>,
+    pub mtk_view: Retained<MTKView>,
+    pub pump_events: bool,
+    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub window_delegate: Option<Retained<crate::metal::window_delegate::WindowDelegate>>,
+}
+
 pub(crate) fn setup_window_and_view(
     mtm: objc2::MainThreadMarker,
     device: &ProtocolObject<dyn MTLDevice>,
     config: WindowConfig,
     hdr: HdrRequest,
+    reuse: Option<ExistingWindow>,
 ) -> Result<WindowSetup, String> {
     let WindowConfig {
         title,
@@ -80,6 +95,48 @@ pub(crate) fn setup_window_and_view(
         display_requested: hdr_display_requested,
         pq_requested: hdr_pq_requested,
     } = hdr;
+
+    // Live reload: reuse the existing window/view without creating a new NSWindow
+    // (no activation, no delegate re-attach -- so a save does not raise a new
+    // window or steal focus). The reload is only chosen when the swapchain REQUEST
+    // is unchanged, but the display's actual EDR headroom can still have changed
+    // since the original build (a monitor plugged/unplugged, HDR toggled), which
+    // flips the resolved `hdr_mode` and therefore the drawable pixel format. So
+    // re-run `configure_mtk_view` to keep the CAMetalLayer's format in sync with
+    // the pipelines `build` rebuilds from this `hdr_mode`; without it the reused
+    // layer would keep its old format and the next draw would bind a
+    // format-mismatched pipeline. Then recompute the drawable-derived target sizes.
+    if let Some(ex) = reuse {
+        let max_edr = measure_max_edr(mtm);
+        let hdr_mode = HdrOutputMode::resolve(hdr_display_requested, hdr_pq_requested, max_edr);
+        configure_mtk_view(&ex.mtk_view, hdr_mode, capture_enabled);
+        let drawable = ex.mtk_view.drawableSize();
+        let initial_w = if geometry_less {
+            1
+        } else if drawable.width > 0.0 {
+            drawable.width as u32
+        } else {
+            width.max(1)
+        };
+        let initial_h = if geometry_less {
+            1
+        } else if drawable.height > 0.0 {
+            drawable.height as u32
+        } else {
+            height.max(1)
+        };
+        return Ok(WindowSetup {
+            window: ex.window,
+            mtk_view: ex.mtk_view,
+            pump_events: ex.pump_events,
+            initial_w,
+            initial_h,
+            fullscreen: ex.fullscreen,
+            window_delegate: ex.window_delegate,
+            hdr_mode,
+        });
+    }
+
     // Resolve the swapchain colour-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded

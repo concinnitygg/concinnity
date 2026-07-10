@@ -38,6 +38,8 @@ concinnity-device = { path = "../concinnity-device" }
 concinnity-cook = { path = "../concinnity-cook" }
 # Direct core access for the world/geometry/ecs types the authoring code names.
 concinnity-core = { path = "../concinnity-core" }
+# Engine-owned content templates (`cn add --template`); pure static world data.
+concinnity-templates = { path = "../concinnity-templates" }
 serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1.44"
 

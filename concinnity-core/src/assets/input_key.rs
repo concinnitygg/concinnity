@@ -47,6 +47,8 @@ pub enum Key {
     Space,
     Tab,
     Enter,
+    Backspace,
+    Delete,
     Shift,
     Control,
     Alt,
@@ -113,6 +115,8 @@ impl Key {
             Key::Space => "Space",
             Key::Tab => "Tab",
             Key::Enter => "Enter",
+            Key::Backspace => "Backspace",
+            Key::Delete => "Delete",
             Key::Shift => "Shift",
             Key::Control => "Control",
             Key::Alt => "Alt",
@@ -176,6 +180,8 @@ impl Key {
             Key::Space => "Space",
             Key::Tab => "Tab",
             Key::Enter => "Enter",
+            Key::Backspace => "Bksp",
+            Key::Delete => "Del",
             Key::Shift => "Shift",
             Key::Control => "Ctrl",
             Key::Alt => "Alt",
@@ -245,7 +251,7 @@ mod tests {
     }
 
     // Every declared key, so both match tables are exercised end to end.
-    const ALL_KEYS: [Key; 57] = [
+    const ALL_KEYS: [Key; 59] = [
         Key::A,
         Key::B,
         Key::C,
@@ -285,6 +291,8 @@ mod tests {
         Key::Space,
         Key::Tab,
         Key::Enter,
+        Key::Backspace,
+        Key::Delete,
         Key::Shift,
         Key::Control,
         Key::Alt,

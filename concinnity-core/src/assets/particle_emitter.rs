@@ -94,6 +94,10 @@ impl Component for ParticleEmitter {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("texture", "Texture")]
+    }
+
     fn from_args(mut args: Self) -> Self {
         // Asset-side floor: keep every authored field in a self-consistent
         // range. The gfx-side `build_particle_records` adds its own clamps

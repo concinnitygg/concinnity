@@ -40,7 +40,10 @@ pub(crate) fn run_interpreted(
 // loop itself (and the platform event-pump + window activation) is the shared
 // `concinnity_client::app::runloop` driver; the interpreted path's only
 // addition is ticking the debug hook each frame.
-fn start_app(mut app: App, mut debug: Option<Box<dyn DebugHook>>) -> std::io::Result<()> {
+pub(crate) fn start_app(
+    mut app: App,
+    mut debug: Option<Box<dyn DebugHook>>,
+) -> std::io::Result<()> {
     use crate::app::runloop;
 
     let shutdown = app.shutdown_token();
@@ -71,9 +74,12 @@ fn start_app(mut app: App, mut debug: Option<Box<dyn DebugHook>>) -> std::io::Re
     }
 
     // The interpreted path ticks its debug hook each frame before the world step.
+    // After the tick (which sees only `&mut World`), the hook is given the whole
+    // App so it can apply a pending world swap (the `cn editor` live SAVE).
     let on_tick = |app: &mut App| {
         if let Some(hook) = debug.as_deref_mut() {
             hook.tick(app.world_mut());
+            hook.apply_world_swap(app);
         }
     };
 

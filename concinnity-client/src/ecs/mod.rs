@@ -21,7 +21,8 @@ mod registry;
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
     BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage, ComponentType,
-    Entity, EventCursor, Events, PayloadLocator, PipelineContext, Resources, asset_api, asset_id,
+    Entity, EventCursor, EventStore, Events, PayloadLocator, PipelineContext, Resources, asset_api,
+    asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's
@@ -52,6 +53,38 @@ pub enum StepResult {
 // burst, no pose jump.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuActive(pub bool);
+
+// An external per-frame driver (the `cn editor` HUD) can force the world's
+// "menu active" state through this resource: `Some(true)` frees the cursor and
+// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
+// cursor and lets the world run (play mode), both regardless of whether the
+// world has its own menu UI. GraphicsSystem also puts the backend in menu mode
+// while it is set, so a click frees to a UI action instead of re-capturing the
+// camera. `None` (the default absence) leaves the world's own menu logic in
+// charge; a shipped runtime never publishes it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MenuOverride(pub Option<bool>);
+
+// Per-frame draw-layer overrides for HUD Sprites / TextLabels / TextInputs, keyed
+// by asset id and published by the `cn editor` HUD so its floating panels occlude
+// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
+// so two overlapping panels' contents merge -- one panel's text draws over the
+// other's background. GraphicsSystem stable-sorts the overlay calls by this layer
+// (higher draws on top) when the map is non-empty, so the focused panel's whole
+// content sits above the others'. An id absent from the map is layer 0; an empty /
+// absent resource (the shipped runtime) leaves draw order at insertion order,
+// unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct HudLayers(pub std::collections::HashMap<asset_id::AssetId, i32>);
+
+// A render backend transplanted out of a previous world, carried into a freshly
+// built world so its GraphicsSystem reuses the live GPU device + window instead
+// of constructing a new one. Published by the `cn editor` live SAVE swap between
+// building the post-edit world and starting it; GraphicsSystem `run_init` takes
+// it and calls `RenderBackend::reload_world` (reusing the window) instead of
+// `init_backend`, so a save applies without recreating the OS window. A shipped
+// runtime never publishes it; it exists only on the editor's live-update path.
+pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
 
 // Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
 // (which runs first) and read by `StatHudSystem` the same tick. Each field is
@@ -213,6 +246,14 @@ impl World {
         self.components.push(c.into());
     }
 
+    // Remove and drop every component of type C. Used by `cn editor` to suppress
+    // the world's baked-in `DebugHud` before start, since the editor HUD's own
+    // F1 toggle replaces it. Cross-crate caller, so unused from the client itself.
+    #[allow(dead_code)]
+    pub fn remove_all<C: ComponentSlot>(&mut self) {
+        let _ = self.components.drain::<C>();
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.components.is_empty() && self.systems.is_empty()
@@ -292,7 +333,7 @@ impl World {
     // `PipelineContext::events`, for code holding a `World` directly (tests).
     #[allow(dead_code)]
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
-        self.resources.get::<Events<E>>()
+        self.resources.get::<EventStore>()?.get::<E>()
     }
 
     // Mutably borrow (creating if absent) the event queue for event type E.
@@ -300,17 +341,32 @@ impl World {
     // directly: tests, and the editor's debug-driven command injection.
     #[allow(dead_code)]
     pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
-        if !self.resources.contains::<Events<E>>() {
-            self.resources.insert(Events::<E>::new());
+        if !self.resources.contains::<EventStore>() {
+            self.resources.insert(EventStore::new());
         }
         self.resources
-            .get_mut::<Events<E>>()
-            .expect("Events<E> was just inserted")
+            .get_mut::<EventStore>()
+            .expect("EventStore was just inserted")
+            .get_mut_or_create::<E>()
     }
 
     #[allow(dead_code)]
     pub fn systems(&self) -> &[SystemAsset] {
         &self.systems
+    }
+
+    // Take the live render backend out of this world's GraphicsSystem, leaving
+    // the system backend-less. The `cn editor` live SAVE swap transplants it into
+    // the rebuilt world (via a `PendingBackend` resource) so the edit applies
+    // without recreating the OS window / re-initialising the GPU device. `None`
+    // when the world has no started GraphicsSystem (or it already yielded its
+    // backend). Cross-crate caller (the editor), so unused from the client itself.
+    #[allow(dead_code)]
+    pub fn take_render_backend(&mut self) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
+        self.systems.iter_mut().find_map(|s| match s {
+            SystemAsset::GraphicsSystem(gs) => gs.take_backend(),
+            _ => None,
+        })
     }
 
     // Despawn an entity (all its components, recycling its id). Stands in for the
@@ -321,10 +377,11 @@ impl World {
         self.components.despawn(entity);
     }
 
-    // Seed a singleton resource that persists across steps. Stands in for the
-    // GraphicsSystem-published resources (e.g. `MenuActive`) in system tests
-    // that drive a later system directly without a GraphicsSystem in the world.
-    #[cfg(test)]
+    // Seed (or replace) a singleton resource that persists across steps. The
+    // `cn editor` drive publishes `MenuOverride` through this each frame; it also
+    // stands in for the GraphicsSystem-published resources (e.g. `MenuActive`) in
+    // system tests that drive a later system directly without a GraphicsSystem.
+    #[allow(dead_code)]
     pub fn insert_resource<T: std::any::Any>(&mut self, value: T) {
         self.resources.insert(value);
     }
@@ -406,6 +463,7 @@ impl World {
             World::build_story,
             World::build_audio,
             World::build_ui_input,
+            World::build_text_input,
         ];
         for build in SCHEDULE {
             if let Some(system) = build(&*self) {
@@ -550,6 +608,15 @@ impl World {
         needs.then(|| crate::ui::UiInputSystem::new().into())
     }
 
+    // TextInputSystem: present whenever the world declares any `TextInput`. It
+    // edits the focused field in place from the frame's typed character and
+    // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
+    fn build_text_input(&self) -> Option<SystemAsset> {
+        self.query::<crate::assets::TextInput>()
+            .next()
+            .map(|_| crate::text_input_system::TextInputSystem::new().into())
+    }
+
     // Per-frame profiling data: system CPU timings and render-backend stats
     // from the most recently completed frame.
     #[allow(dead_code)]
@@ -557,25 +624,15 @@ impl World {
         &self.profile
     }
 
-    // Advance one event queue a frame so its two-frame retention holds for
-    // readers that run after the writer.
-    fn update_event_queue<E: 'static>(&mut self) {
-        if let Some(events) = self.resources.get_mut::<Events<E>>() {
-            events.update();
-        }
-    }
-
-    // Advance every migrated event queue once per frame, before systems run.
-    // Each migrated event type is listed here explicitly.
+    // Advance every event queue once per frame, before systems run, so each
+    // queue's two-frame retention holds for readers that run after the writer.
+    // The `EventStore` owns every queue `events_mut` ever created (on `World`
+    // or `PipelineContext`), so no per-type rotation list exists to fall out
+    // of sync.
     fn update_events(&mut self) {
-        self.update_event_queue::<crate::assets::SceneCommand>();
-        self.update_event_queue::<crate::assets::ViewCommand>();
-        self.update_event_queue::<crate::assets::SettingCommand>();
-        self.update_event_queue::<crate::assets::ControlsCommand>();
-        self.update_event_queue::<crate::assets::AudioCommand>();
-        self.update_event_queue::<crate::assets::DespawnRequest>();
-        self.update_event_queue::<crate::assets::ReparentRequest>();
-        self.update_event_queue::<crate::assets::SpawnRequest>();
+        if let Some(store) = self.resources.get_mut::<EventStore>() {
+            store.update_all();
+        }
     }
 
     // Tick -- systems run in order, Done systems are removed.
@@ -660,6 +717,29 @@ mod tests {
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["StorySystem"]);
+    }
+
+    // Every event queue rotates each step, whatever its type: an event sent
+    // once retires after two steps, so a queue written every frame stays
+    // bounded at two frames of events instead of growing for the session.
+    #[test]
+    fn event_queues_rotate_every_step() {
+        struct Ping;
+        struct Pong;
+
+        let mut world = World::new_empty();
+        world.start().unwrap();
+        for _ in 0..5 {
+            world.events_mut::<Ping>().send(Ping);
+            world.events_mut::<Pong>().send(Pong);
+            world.step();
+        }
+        for len in [
+            world.events::<Ping>().expect("Ping queue exists").len(),
+            world.events::<Pong>().expect("Pong queue exists").len(),
+        ] {
+            assert!(len <= 2, "queue holds at most two frames of events: {len}");
+        }
     }
 
     // The World Debug impl reports component and system counts rather than

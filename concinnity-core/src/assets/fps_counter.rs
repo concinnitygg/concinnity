@@ -35,6 +35,10 @@ impl Component for FpsCounter {
     const ORIGIN: AssetOrigin = AssetOrigin::External;
     type Args = Self;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[("label", "TextLabel")]
+    }
+
     fn to_args(&self) -> Self {
         self.clone()
     }

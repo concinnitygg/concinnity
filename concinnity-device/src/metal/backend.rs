@@ -172,4 +172,26 @@ impl RenderBackend for MtlContext {
             .get(draw_idx)
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }
+
+    // The swapchain config this live context can hot-swap a new world onto: the
+    // ring depth plus the HDR-output request it was built with. A live `cn editor`
+    // reload reuses this backend (via `reload_world`) only when the new world's
+    // `swapchain_config` matches; otherwise the swap does a full rebuild.
+    fn hot_swap_config(&self) -> Option<crate::gfx::backend_init::SwapchainConfig> {
+        Some(crate::gfx::backend_init::SwapchainConfig {
+            frames_in_flight: self.frames_in_flight,
+            hdr_display: self.hdr_display_requested,
+            hdr_pq: self.hdr_pq_requested,
+        })
+    }
+
+    // Inherent method is named `apply_world_reload` so this forwarder does not
+    // shadow-and-recurse (mirrors `screenshot` / `capture_screenshot`).
+    fn reload_world(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        debug_assert_main_thread("reload_world");
+        self.apply_world_reload(init)
+    }
 }

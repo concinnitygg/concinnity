@@ -9,10 +9,11 @@
 // its View via the build pipeline's `<view>_*` rule and never collide with
 // hand-authored assets.
 
-use std::collections::HashMap;
-
 use super::expand::{asset_name, type_norm};
-use crate::assets::{Font, Slider};
+use super::ui_spec::{font_sizes, label_value, sprite};
+use crate::assets::Slider;
+use crate::template_spec::spec_to_value;
+use concinnity_templates::asset;
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches
@@ -119,7 +120,7 @@ fn expand_one(name: &str, s: &Slider, font_px: f32) -> Vec<serde_json::Value> {
             s.text_scale,
         ),
         // Track bar (static background).
-        sprite_value(
+        sprite(
             &format!("{}_track", name),
             track_x,
             track_y,
@@ -129,7 +130,7 @@ fn expand_one(name: &str, s: &Slider, font_px: f32) -> Vec<serde_json::Value> {
         ),
         // Handle (placed at the left here; the runtime moves it to the live
         // value's fraction on the first frame and while dragging).
-        sprite_value(
+        sprite(
             &handle_name,
             track_x,
             handle_y,
@@ -150,84 +151,16 @@ fn expand_one(name: &str, s: &Slider, font_px: f32) -> Vec<serde_json::Value> {
         // Drag region spanning the track over the full row height. `label`
         // points at the value text (the runtime updates it); `drag_handle`
         // points at the handle sprite (the runtime moves it).
-        serde_json::json!({
-            "name": format!("{}_drag", name),
-            "type": "HitRegion",
-            "args": {
-                "x": track_x,
-                "y": s.y,
-                "width": track_w,
-                "height": s.height,
-                "label": value_name,
-                "drag_handle": handle_name,
-                "action": format!("setting:{}:drag", s.setting),
-            }
-        }),
+        spec_to_value(
+            &asset::hit_region(
+                format!("{}_drag", name),
+                [track_x, s.y, track_w, s.height],
+                format!("setting:{}:drag", s.setting),
+            )
+            .set("label", value_name)
+            .set("drag_handle", handle_name),
+        ),
     ]
-}
-
-// Build a Sprite value (a solid-coloured rectangle).
-fn sprite_value(
-    name: &str,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    tint: [f32; 4],
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Sprite",
-        "args": { "x": x, "y": y, "width": width, "height": height, "tint": tint }
-    })
-}
-
-// Build a TextLabel value with `centered` pinned to false, matching the other
-// settings expansions (the post-companion patch would otherwise force centered
-// labels to the viewport center).
-fn label_value(
-    name: &str,
-    content: &str,
-    font: &str,
-    x: f32,
-    y: f32,
-    color: [f32; 3],
-    scale: f32,
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "TextLabel",
-        "args": {
-            "content": content,
-            "font": font,
-            "x": x,
-            "y": y,
-            "color": color,
-            "scale": scale,
-            "centered": false,
-        }
-    })
-}
-
-// Map of declared Font name to its pixel size, for vertical centering.
-fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
-    let mut out = HashMap::new();
-    for v in assets {
-        if type_norm(v) != "font" {
-            continue;
-        }
-        let name = asset_name(v);
-        if name.is_empty() {
-            continue;
-        }
-        let px = v
-            .get("args")
-            .and_then(|a| a.get("size_px"))
-            .and_then(|x| x.as_u64())
-            .unwrap_or_else(|| Font::default().size_px as u64) as f32;
-        out.insert(name, px);
-    }
-    out
 }
 
 #[cfg(test)]

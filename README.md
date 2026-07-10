@@ -46,6 +46,23 @@ with `cargo`:
 cargo run -p bistro --release
 ```
 
+## Crates
+
+| Crate                                         |      no_std?       | Description                                               |
+| --------------------------------------------- | :----------------: | --------------------------------------------------------- |
+| [concinnity-app](concinnity-app/)             |                    | C-ABI cdylib for the Swift app + world authoring API      |
+| [concinnity-client](concinnity-client/)       |                    | Runtime engine: world loop, ECS, renderer, audio, physics |
+| [concinnity-cook](concinnity-cook/)           |                    | Asset compile pipeline: world.jsonl + sources -> blobs    |
+| [concinnity-core](concinnity-core/)           |                    | Renderer-free foundation: assets, GPU layouts, math       |
+| [concinnity-device](concinnity-device/)       |                    | GPU backends: Metal / DirectX 12 / Vulkan (+ Win32)       |
+| [concinnity-docs](concinnity-docs/)           |                    | Asset + API reference documentation generator             |
+| [concinnity-eas](concinnity-eas/)             |                    | Entity-Asset-System: the engine's generic ECS             |
+| [concinnity-editor](concinnity-editor/)       |                    | The `concinnity` dev CLI + in-engine world editor         |
+| [concinnity-render](concinnity-render/)       |                    | Backend-agnostic, GPU-free render preparation             |
+| [concinnity-runtime](concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs        |
+| [concinnity-templates](concinnity-templates/) | :white_check_mark: | Engine-owned world/asset templates (static data)          |
+| [concinnity-toolchain](concinnity-toolchain/) |                    | Shared build-script support (backend + SDK cfgs)          |
+
 ## License
 
 See [LICENSE](LICENSE).

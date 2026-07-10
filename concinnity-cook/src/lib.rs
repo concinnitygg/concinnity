@@ -31,6 +31,7 @@ pub mod mesh_compile;
 pub mod mesh_reimport;
 pub mod pipeline;
 pub mod shader;
+pub mod template_spec;
 pub mod texture;
 pub mod wavefront;
 pub mod world;

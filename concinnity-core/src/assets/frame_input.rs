@@ -66,6 +66,12 @@ pub struct FrameInput {
     /// menu is open) so the settings menu can capture a key for rebinding and
     /// scrollable menu lists can react to the arrow keys.
     pub captured_key: Option<crate::assets::Key>,
+    /// The printable character typed this frame (Unicode, with shift / layout
+    /// applied by the OS), for text-input fields, or `None`. A one-frame pulse
+    /// surfaced regardless of menu state, like
+    /// [captured_key](#structfield.captured_key). Editing keys (Backspace,
+    /// Delete, arrows) arrive via `captured_key`, not here.
+    pub typed_char: Option<char>,
 }
 
 impl Component for FrameInput {

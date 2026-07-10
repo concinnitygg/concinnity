@@ -7,11 +7,14 @@
 // shows/hides at runtime purely as a View visibility flip; this pass adds no
 // runtime behaviour, only the assets the existing UI systems already drive.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::expand::{asset_name, type_norm};
-use crate::assets::{Font, MainMenu, SettingsProfile};
+use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
+use crate::assets::{MainMenu, SettingsProfile};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use crate::template_spec::spec_to_value;
+use concinnity_templates::asset;
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
 // a label's width when laying out the settings tab bar (the menu items and
@@ -292,11 +295,7 @@ fn expand_one(
     // leave the menu labels with no font and no rendered text.
     let font_name = if menu.font.is_empty() {
         let name = format!("{}_font", menu_name);
-        out.push(serde_json::json!({
-            "name": name,
-            "type": "Font",
-            "args": { "size_px": font_px as u32 }
-        }));
+        out.push(spec_to_value(&asset::font(&name, font_px as u32)));
         name
     } else {
         menu.font.clone()
@@ -371,18 +370,17 @@ fn emit_settings_tab(
     let view = format!("{}_settings_{}", menu_name, active);
     let mut out = Vec::new();
 
-    out.push(serde_json::json!({
-        "name": view,
-        "type": "View",
-        "args": { "initial": false }
-    }));
+    out.push(spec_to_value(&asset::view(&view, false)));
 
     if style.dim[3] > 0.0 {
-        out.push(serde_json::json!({
-            "name": format!("{}_dim", view),
-            "type": "Sprite",
-            "args": { "x": 0.0, "y": 0.0, "width": win_w, "height": win_h, "tint": style.dim }
-        }));
+        out.push(sprite(
+            &format!("{}_dim", view),
+            0.0,
+            0.0,
+            win_w,
+            win_h,
+            style.dim,
+        ));
     }
 
     // Stacked from a fixed top margin: the tab bar, a scrollable body band, then
@@ -456,32 +454,25 @@ fn emit_settings_tab(
         if is_active {
             // Underline marker just below the active tab's text.
             let mark_h = (font_px * tab_scale * 0.08).max(2.0);
-            out.push(serde_json::json!({
-                "name": format!("{}_tabmark", view),
-                "type": "Sprite",
-                "args": {
-                    "x": tab_x,
-                    "y": tab_text_y + font_px * tab_scale + mark_h,
-                    "width": *w,
-                    "height": mark_h,
-                    "tint": [style.hover_color[0], style.hover_color[1], style.hover_color[2], 1.0],
-                }
-            }));
+            out.push(sprite(
+                &format!("{}_tabmark", view),
+                tab_x,
+                tab_text_y + font_px * tab_scale + mark_h,
+                *w,
+                mark_h,
+                opaque(style.hover_color),
+            ));
         } else {
-            out.push(serde_json::json!({
-                "name": format!("{}_tabbtn_{}", view, suffix),
-                "type": "HitRegion",
-                "args": {
-                    "x": tab_x,
-                    "y": row_y(0),
-                    "width": *w,
-                    "height": style.button_height,
-                    "label": label_name,
-                    "hover_color": style.hover_color,
-                    "hover_scale": tab_scale * style.hover_scale,
-                    "action": format!("view:show:{}_settings_{}", menu_name, suffix),
-                }
-            }));
+            out.push(spec_to_value(
+                &asset::hit_region(
+                    format!("{}_tabbtn_{}", view, suffix),
+                    [tab_x, row_y(0), *w, style.button_height],
+                    format!("view:show:{}_settings_{}", menu_name, suffix),
+                )
+                .set("label", label_name)
+                .set("hover_color", style.hover_color)
+                .set("hover_scale", tab_scale * style.hover_scale),
+            ));
         }
         tab_x += w + tab_gap;
     }
@@ -506,7 +497,7 @@ fn emit_settings_tab(
         // the row and reflows / clips / hides with it when scrolled or collapsed.
         let is_header = matches!(*row, BodyRow::GroupHeader(..));
         let bg_name = format!("{}_bg_{}", view, j);
-        out.push(row_background(
+        out.push(sprite(
             &bg_name,
             row_x,
             base_y,
@@ -600,20 +591,16 @@ fn emit_settings_tab(
                 // refresh it; the `setting:<key>:rebind` action is a scroll
                 // content region, so it reflows / clips / gates with its row.
                 let ctrl_w = (content_x + content_w - control_x).max(0.0);
-                out.push(serde_json::json!({
-                    "name": format!("{}_rebind_btn_{}", view, idx),
-                    "type": "HitRegion",
-                    "args": {
-                        "x": control_x,
-                        "y": base_y,
-                        "width": ctrl_w,
-                        "height": style.button_height,
-                        "label": val,
-                        "hover_color": style.hover_color,
-                        "hover_scale": row_scale * style.hover_scale,
-                        "action": format!("setting:{}:rebind", setting),
-                    }
-                }));
+                out.push(spec_to_value(
+                    &asset::hit_region(
+                        format!("{}_rebind_btn_{}", view, idx),
+                        [control_x, base_y, ctrl_w, style.button_height],
+                        format!("setting:{}:rebind", setting),
+                    )
+                    .set("label", val.clone())
+                    .set("hover_color", style.hover_color)
+                    .set("hover_scale", row_scale * style.hover_scale),
+                ));
                 (vec![name, val], group)
             }
             BodyRow::GroupHeader(gid, title) => {
@@ -629,20 +616,16 @@ fn emit_settings_tab(
                     style.hover_color,
                     header_scale,
                 ));
-                out.push(serde_json::json!({
-                    "name": format!("{}_grpbtn_{}", view, gid),
-                    "type": "HitRegion",
-                    "args": {
-                        "x": row_x,
-                        "y": base_y,
-                        "width": row_width,
-                        "height": style.button_height,
-                        "label": header,
-                        "hover_color": style.hover_color,
-                        "hover_scale": header_scale * style.hover_scale,
-                        "action": format!("group:toggle:{}", gid),
-                    }
-                }));
+                out.push(spec_to_value(
+                    &asset::hit_region(
+                        format!("{}_grpbtn_{}", view, gid),
+                        [row_x, base_y, row_width, style.button_height],
+                        format!("group:toggle:{}", gid),
+                    )
+                    .set("label", header.clone())
+                    .set("hover_color", style.hover_color)
+                    .set("hover_scale", header_scale * style.hover_scale),
+                ));
                 (vec![header], -1)
             }
         };
@@ -665,19 +648,22 @@ fn emit_settings_tab(
         style.text_color[2],
         0.25,
     ];
-    out.push(serde_json::json!({
-        "name": format!("{}_scrolltrack", view),
-        "type": "Sprite",
-        "args": { "x": track_x, "y": band_top, "width": SCROLLBAR_WIDTH, "height": band_h, "tint": track_tint }
-    }));
-    out.push(serde_json::json!({
-        "name": format!("{}_scrollthumb", view),
-        "type": "Sprite",
-        "args": {
-            "x": track_x, "y": band_top, "width": SCROLLBAR_WIDTH, "height": band_h * 0.4,
-            "tint": [style.hover_color[0], style.hover_color[1], style.hover_color[2], 1.0],
-        }
-    }));
+    out.push(sprite(
+        &format!("{}_scrolltrack", view),
+        track_x,
+        band_top,
+        SCROLLBAR_WIDTH,
+        band_h,
+        track_tint,
+    ));
+    out.push(sprite(
+        &format!("{}_scrollthumb", view),
+        track_x,
+        band_top,
+        SCROLLBAR_WIDTH,
+        band_h * 0.4,
+        opaque(style.hover_color),
+    ));
 
     let scroll_groups: Vec<serde_json::Value> = groups
         .iter()
@@ -722,35 +708,40 @@ fn emit_settings_tab(
         style.text_color,
         style.text_scale,
     ));
-    out.push(serde_json::json!({
-        "name": format!("{}_btn_back", view),
-        "type": "HitRegion",
-        "args": {
-            "x": center_x - style.button_width / 2.0,
-            "y": back_y,
-            "width": style.button_width,
-            "height": style.button_height,
-            "label": back_label,
-            "hover_color": style.hover_color,
-            "hover_scale": style.text_scale * style.hover_scale,
-            "action": back_action,
-        }
-    }));
+    out.push(spec_to_value(
+        &asset::hit_region(
+            format!("{}_btn_back", view),
+            [
+                center_x - style.button_width / 2.0,
+                back_y,
+                style.button_width,
+                style.button_height,
+            ],
+            back_action,
+        )
+        .set("label", back_label)
+        .set("hover_color", style.hover_color)
+        .set("hover_scale", style.text_scale * style.hover_scale),
+    ));
 
     if style.cursor {
-        out.push(serde_json::json!({
-            "name": format!("{}_cursor", view),
-            "type": "Sprite",
-            "args": {
-                "x": 0.0, "y": 0.0,
-                "width": style.cursor_size, "height": style.cursor_size,
-                "tint": style.cursor_color,
-                "follow_cursor": true,
-            }
-        }));
+        out.push(cursor_sprite(&format!("{}_cursor", view), style));
     }
 
     out
+}
+
+// The in-engine cursor Sprite: a `follow_cursor` square the runtime tracks to
+// the pointer while the menu is open.
+fn cursor_sprite(name: &str, style: &MainMenu) -> serde_json::Value {
+    spec_to_value(
+        &asset::sprite(
+            name,
+            [0.0, 0.0, style.cursor_size, style.cursor_size],
+            style.cursor_color,
+        )
+        .set("follow_cursor", true),
+    )
 }
 
 // One row of a settings tab's scrollable body.
@@ -948,22 +939,6 @@ fn slider_row(row: &SettingsRow) -> serde_json::Value {
     })
 }
 
-// Build a card-background Sprite for one settings row.
-fn row_background(
-    name: &str,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    tint: [f32; 4],
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "Sprite",
-        "args": { "x": x, "y": y, "width": width, "height": height, "tint": tint }
-    })
-}
-
 // Window dimensions and font pixel size used to lay out a menu view.
 #[derive(Clone, Copy)]
 struct MenuMetrics {
@@ -990,18 +965,17 @@ fn emit_menu_view(
     } = metrics;
     let mut out = Vec::new();
 
-    out.push(serde_json::json!({
-        "name": view,
-        "type": "View",
-        "args": { "initial": initial }
-    }));
+    out.push(spec_to_value(&asset::view(view, initial)));
 
     if style.dim[3] > 0.0 {
-        out.push(serde_json::json!({
-            "name": format!("{}_dim", view),
-            "type": "Sprite",
-            "args": { "x": 0.0, "y": 0.0, "width": win_w, "height": win_h, "tint": style.dim }
-        }));
+        out.push(sprite(
+            &format!("{}_dim", view),
+            0.0,
+            0.0,
+            win_w,
+            win_h,
+            style.dim,
+        ));
     }
 
     let line_h = font_px * style.text_scale;
@@ -1046,82 +1020,29 @@ fn emit_menu_view(
             style.text_scale,
         ));
 
-        out.push(serde_json::json!({
-            "name": format!("{}_btn_{}", view, i),
-            "type": "HitRegion",
-            "args": {
-                "x": center_x - style.button_width / 2.0,
-                "y": row_y,
-                "width": style.button_width,
-                "height": style.button_height,
-                "label": label_name,
-                "hover_color": style.hover_color,
-                "hover_scale": style.text_scale * style.hover_scale,
-                "action": action,
-            }
-        }));
+        out.push(spec_to_value(
+            &asset::hit_region(
+                format!("{}_btn_{}", view, i),
+                [
+                    center_x - style.button_width / 2.0,
+                    row_y,
+                    style.button_width,
+                    style.button_height,
+                ],
+                action.clone(),
+            )
+            .set("label", label_name)
+            .set("hover_color", style.hover_color)
+            .set("hover_scale", style.text_scale * style.hover_scale),
+        ));
         row += 1;
     }
 
     if style.cursor {
-        out.push(serde_json::json!({
-            "name": format!("{}_cursor", view),
-            "type": "Sprite",
-            "args": {
-                "x": 0.0, "y": 0.0,
-                "width": style.cursor_size, "height": style.cursor_size,
-                "tint": style.cursor_color,
-                "follow_cursor": true,
-            }
-        }));
+        out.push(cursor_sprite(&format!("{}_cursor", view), style));
     }
 
     out
-}
-
-// Build a TextLabel value with `centered` pinned to false: the post-companion
-// patch sets `centered: true` for default-font labels otherwise, which would
-// stack every menu label on the viewport center.
-fn label_value(
-    name: &str,
-    content: &str,
-    font: &str,
-    x: f32,
-    y: f32,
-    color: [f32; 3],
-    scale: f32,
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "TextLabel",
-        "args": {
-            "content": content,
-            "font": font,
-            "x": x,
-            "y": y,
-            "color": color,
-            "scale": scale,
-            "centered": false,
-        }
-    })
-}
-
-// A label horizontally centered on `x` with the real font metrics (`align`
-// center), used for the vertically-stacked menu items, heading, and Back
-// button so differing label widths share one exact center rather than the old
-// glyph-width estimate.
-fn centered_label(
-    name: &str,
-    content: &str,
-    font: &str,
-    x: f32,
-    y: f32,
-    color: [f32; 3],
-    scale: f32,
-) -> serde_json::Value {
-    let mut value = label_value(name, content, font, x, y, color, scale);
-    value["args"]["align"] = serde_json::json!("center");
-    value
 }
 
 // Estimated rendered width of `text`, from the average glyph advance. The
@@ -1131,25 +1052,10 @@ fn text_width(text: &str, font_px: f32, scale: f32) -> f32 {
     text.chars().count() as f32 * font_px * AVG_ADVANCE_RATIO * scale
 }
 
-// Map of declared Font name to its pixel size, for the centering estimate.
-fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
-    let mut out = HashMap::new();
-    for v in assets {
-        if type_norm(v) != "font" {
-            continue;
-        }
-        let name = asset_name(v);
-        if name.is_empty() {
-            continue;
-        }
-        let px = v
-            .get("args")
-            .and_then(|a| a.get("size_px"))
-            .and_then(|x| x.as_u64())
-            .unwrap_or_else(|| Font::default().size_px as u64) as f32;
-        out.insert(name, px);
-    }
-    out
+// An RGB accent lifted to an opaque RGBA fill: the active-tab underline marker
+// and the scrollbar thumb draw the hover colour at full alpha.
+fn opaque(rgb: [f32; 3]) -> [f32; 4] {
+    [rgb[0], rgb[1], rgb[2], 1.0]
 }
 
 #[cfg(test)]

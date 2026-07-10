@@ -107,6 +107,15 @@ impl Component for Room {
     const PAYLOAD: AssetPayload = AssetPayload::Compiled;
     type Args = RoomArgs;
 
+    fn ref_fields() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("texture", "Texture"),
+            ("wall_texture", "Texture"),
+            ("floor_texture", "Texture"),
+            ("ceiling_texture", "Texture"),
+        ]
+    }
+
     fn to_args(&self) -> RoomArgs {
         RoomArgs {
             half_width: self.half_width,

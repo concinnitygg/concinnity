@@ -290,7 +290,7 @@ fn root_motion_clip_publishes_displacement_events() {
     world.step();
 
     let events = world
-        .resource::<crate::ecs::Events<crate::assets::RootMotion>>()
+        .events::<crate::assets::RootMotion>()
         .expect("RootMotion queue exists");
     let mut cursor = crate::ecs::EventCursor::default();
     let motions = events.read(&mut cursor);

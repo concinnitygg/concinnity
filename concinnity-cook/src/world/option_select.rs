@@ -13,10 +13,11 @@
 // so generated elements stay scoped to its View via the build pipeline's
 // `<view>_*` rule and never collide with hand-authored assets.
 
-use std::collections::HashMap;
-
 use super::expand::{asset_name, type_norm};
-use crate::assets::{Font, OptionSelect};
+use super::ui_spec::{font_sizes, label_value};
+use crate::assets::OptionSelect;
+use crate::template_spec::spec_to_value;
+use concinnity_templates::asset;
 
 // Whether a setting row expands to a dropdown (more than two options, or a
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`
@@ -266,68 +267,12 @@ fn region(
     s: &OptionSelect,
     action: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "HitRegion",
-        "args": {
-            "x": rect.x,
-            "y": rect.y,
-            "width": rect.width,
-            "height": rect.height,
-            "label": value_label,
-            "hover_color": s.hover_color,
-            "hover_scale": s.hover_scale,
-            "action": action,
-        }
-    })
-}
-
-// Build a TextLabel value with `centered` pinned to false, matching the menu
-// expansion (the post-companion patch would otherwise force centered labels to
-// the viewport center).
-fn label_value(
-    name: &str,
-    content: &str,
-    font: &str,
-    x: f32,
-    y: f32,
-    color: [f32; 3],
-    scale: f32,
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": name,
-        "type": "TextLabel",
-        "args": {
-            "content": content,
-            "font": font,
-            "x": x,
-            "y": y,
-            "color": color,
-            "scale": scale,
-            "centered": false,
-        }
-    })
-}
-
-// Map of declared Font name to its pixel size, for vertical centering.
-fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
-    let mut out = HashMap::new();
-    for v in assets {
-        if type_norm(v) != "font" {
-            continue;
-        }
-        let name = asset_name(v);
-        if name.is_empty() {
-            continue;
-        }
-        let px = v
-            .get("args")
-            .and_then(|a| a.get("size_px"))
-            .and_then(|x| x.as_u64())
-            .unwrap_or_else(|| Font::default().size_px as u64) as f32;
-        out.insert(name, px);
-    }
-    out
+    spec_to_value(
+        &asset::hit_region(name, [rect.x, rect.y, rect.width, rect.height], action)
+            .set("label", value_label)
+            .set("hover_color", s.hover_color)
+            .set("hover_scale", s.hover_scale),
+    )
 }
 
 #[cfg(test)]

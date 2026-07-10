@@ -197,6 +197,8 @@ fn key_from_glfw(key: glfw::Key) -> Option<Key> {
         G::Space => Key::Space,
         G::Tab => Key::Tab,
         G::Enter => Key::Enter,
+        G::Backspace => Key::Backspace,
+        G::Delete => Key::Delete,
         G::LeftShift | G::RightShift => Key::Shift,
         G::Up => Key::Up,
         G::Down => Key::Down,
@@ -271,6 +273,11 @@ impl GlfwWindow {
 
         window.set_close_polling(true);
         window.set_key_polling(true);
+        // Char events deliver the layout- / modifier-resolved printable glyph for
+        // text-input fields (the editor's name / filter / arg fields). Without
+        // this GLFW never queues Char events, so the `Char` arm in `poll()` never
+        // runs and text fields cannot be typed into.
+        window.set_char_polling(true);
         window.set_cursor_pos_polling(true);
         // Mouse-button events drive UI clicks (e.g. a MainMenu HitRegion).
         // Without this GLFW never queues Button events, so the `MouseButton`
@@ -599,6 +606,17 @@ impl GlfwWindow {
                         apply_binding(&mut self.input, self.keymap, canon, pressed);
                     }
                 }
+                glfw::WindowEvent::Char(c) => {
+                    // The layout- / modifier-resolved printable glyph for
+                    // text-input fields, one codepoint per event (matching
+                    // `captured_key`). GLFW reports only text input here (no
+                    // control / navigation keys), but filter defensively so the
+                    // contract matches the Win32 / Metal paths. Editing keys
+                    // (Backspace / Delete / Left / Right) ride `captured_key`.
+                    if !c.is_control() {
+                        self.input.typed_char = Some(c);
+                    }
+                }
                 glfw::WindowEvent::CursorPos(x, y) => {
                     if self.cursor_captured {
                         if let Some((lx, ly)) = self.last_cursor {
@@ -681,6 +699,8 @@ impl GlfwWindow {
         self.input.hud_toggle = false;
         self.input.escape = false;
         self.input.captured_key = None;
+        // One-shot like `captured_key`: the printable glyph is consumed once.
+        self.input.typed_char = None;
         self.input.mouse_dx = 0.0;
         self.input.mouse_dy = 0.0;
         // Accumulated like the mouse delta; the held-button flag persists until
@@ -766,5 +786,17 @@ mod tests {
         // zero; fall back to a 1.0 scale on that axis.
         let p = scale_cursor_to_framebuffer(10.0, 20.0, (0, 0), (1280, 720));
         assert_eq!(p, (10.0, 20.0));
+    }
+
+    #[test]
+    fn editing_keys_decode_for_captured_key() {
+        // Backspace and forward-delete decode so text fields can edit; they ride
+        // `captured_key`, not `typed_char` (mirrors metal / win32). Printable
+        // glyphs arrive separately via WindowEvent::Char.
+        use glfw::Key as G;
+        assert_eq!(key_from_glfw(G::Backspace), Some(Key::Backspace));
+        assert_eq!(key_from_glfw(G::Delete), Some(Key::Delete));
+        assert_eq!(key_from_glfw(G::Left), Some(Key::Left));
+        assert_eq!(key_from_glfw(G::Right), Some(Key::Right));
     }
 }

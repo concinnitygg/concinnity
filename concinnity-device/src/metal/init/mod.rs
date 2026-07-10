@@ -29,8 +29,9 @@ pub(crate) use window::set_display_sync;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _, MTLResourceOptions,
-    MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLTexture,
+    MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _,
+    MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLTexture,
 };
 
 use crate::gfx::mesh_payload::Vertex;
@@ -46,6 +47,17 @@ use super::texture::{
     create_shadow_map_fallback, upload_color_lut, upload_environment_map, upload_texture,
 };
 
+// The reusable hardware handles a live world reload (`cn editor` SAVE) hands
+// back so `MtlContext::build` rebuilds a world's GPU content on the *existing*
+// device + command queue + window instead of creating new ones. Cloned (the
+// Metal / AppKit handles are reference counted), so the underlying objects stay
+// alive while the old context is dropped. See `MtlContext::apply_world_reload`.
+pub(super) struct ReuseHandles {
+    pub device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
+    pub command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    pub existing: window::ExistingWindow,
+}
+
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
     // inputs (see `crate::gfx::backend_init::BackendInit` for per-field docs).
@@ -54,6 +66,19 @@ impl MtlContext {
     // "fragment_main"; the shadow pass is engine-internal (compiled from
     // `shadow_map.metal`) and enabled whenever `shadows.map_size > 0`.
     pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+        Self::build(init, None)
+    }
+
+    // The shared constructor. `reuse == None` creates a fresh device + command
+    // queue + window (the normal `new` path); `reuse == Some` rebuilds the
+    // world's content on the retained hardware for a live `cn editor` reload,
+    // reusing the same window so a save does not recreate it. Everything between
+    // the two is identical: the same pipelines, buffers, textures, and targets
+    // are built from `init` either way.
+    fn build(
+        init: crate::gfx::backend_init::BackendInit<'_>,
+        reuse: Option<ReuseHandles>,
+    ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
@@ -143,11 +168,19 @@ impl MtlContext {
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("MtlContext::new must be called from the main thread")?;
 
-        let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
-
-        let command_queue = device
-            .newCommandQueue()
-            .ok_or("failed to create Metal command queue")?;
+        // A live reload reuses the existing device + command queue + window; a
+        // fresh build creates them. `existing_window` (when reusing) is forwarded
+        // to `setup_window_and_view` so it skips NSWindow / MTKView creation.
+        let (device, command_queue, existing_window) = match reuse {
+            Some(r) => (r.device, r.command_queue, Some(r.existing)),
+            None => {
+                let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
+                let command_queue = device
+                    .newCommandQueue()
+                    .ok_or("failed to create Metal command queue")?;
+                (device, command_queue, None)
+            }
+        };
 
         // Main + cull + bindless argument encoder. The bundle's `bindless`
         // flag drives the texture-pool overflow warning below. A world with no
@@ -460,6 +493,7 @@ impl MtlContext {
                 display_requested: hdr_display_requested,
                 pq_requested: hdr_pq_requested,
             },
+            existing_window,
         )?;
         // Honor the requested vsync on the backing CAMetalLayer (default
         // CAMetalLayer presentation is display-synced).
@@ -1000,6 +1034,8 @@ impl MtlContext {
             swap_pixel_format,
             max_edr,
             hdr_encoding,
+            hdr_display_requested,
+            hdr_pq_requested,
             last_present_texture: None,
             pipeline_state,
             bindless,
@@ -1172,6 +1208,9 @@ impl MtlContext {
             skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             window,
             mtk_view,
+            // A freshly built context owns its window; a live reload flips the
+            // outgoing context's flag off before handing this one the window.
+            owns_window: true,
             window_closed: false,
             pump_events,
             was_visible: false,
@@ -1230,5 +1269,55 @@ impl MtlContext {
             raymarch_cube_vertex_buffer,
             raymarch_cube_index_buffer,
         })
+    }
+
+    // Re-upload a new world's GPU content onto this live context, reusing the
+    // retained device + command queue + window instead of recreating them.
+    // Drives the `cn editor` live SAVE: after a structural edit recompiles the
+    // blobs, GraphicsSystem transplants the running backend into the rebuilt
+    // world and calls this so the edit applies with no window recreation.
+    //
+    // The GPU is idled so no in-flight command buffer still references the old
+    // content, then a fresh context is `build`t on cloned hardware handles (the
+    // Metal / AppKit objects are reference counted, so cloning keeps the same
+    // window / device alive) and moved into `*self`. Assigning `*self` drops the
+    // old content resources; the window survives because the new context holds a
+    // clone of it. Only ever called when the swapchain config is unchanged (the
+    // caller's `hot_swap_config` gate), so the layer's pixel format /
+    // frames-in-flight are guaranteed to still match.
+    pub(super) fn apply_world_reload(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        debug_assert_main_thread("apply_world_reload");
+        self.wait_idle();
+        let reuse = ReuseHandles {
+            device: self.device.clone(),
+            command_queue: self.command_queue.clone(),
+            existing: window::ExistingWindow {
+                window: self.window.clone(),
+                mtk_view: self.mtk_view.clone(),
+                pump_events: self.pump_events,
+                fullscreen: self.fullscreen.clone(),
+                window_delegate: self.window_delegate.clone(),
+            },
+        };
+        // Carry over live state the fresh build resets that GraphicsSystem does
+        // not re-push after a reload. The keymap is re-pushed by GraphicsSystem
+        // immediately, but the fullscreen display-mode bookkeeping is not, so a
+        // fullscreen editor would otherwise lose its mode-restore state.
+        let fullscreen_display = std::mem::replace(
+            &mut self.fullscreen_display,
+            super::display_mode::FullscreenDisplayMode::new(),
+        );
+        let keymap = self.keymap;
+        let mut rebuilt = MtlContext::build(init, Some(reuse))?;
+        rebuilt.fullscreen_display = fullscreen_display;
+        rebuilt.keymap = keymap;
+        // Hand the window over: the outgoing context (dropped by the assignment
+        // below) must not close the shared window -- `rebuilt` owns it now.
+        self.owns_window = false;
+        *self = rebuilt;
+        Ok(())
     }
 }

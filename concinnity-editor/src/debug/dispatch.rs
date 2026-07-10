@@ -524,4 +524,93 @@ mod tests {
         assert_eq!(r["ok"], false);
         assert!(r["error"].is_string());
     }
+
+    #[test]
+    fn shutdown_cancels_the_attached_token() {
+        use tokio_util::sync::CancellationToken;
+        let token = CancellationToken::new();
+        let st = DebugState {
+            shutdown_token: Some(token.clone()),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"shutdown"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["shutdown"], true);
+        assert!(
+            token.is_cancelled(),
+            "the run loop's token must be cancelled"
+        );
+    }
+
+    // Each runtime-mutation command forwards to a handler in `super::commands`.
+    // A payload that fails the handler's own parse / validation returns an
+    // error reply before anything is enqueued, so these exercise the dispatch
+    // forwarding arm (and the handler's rejection path) without a live engine
+    // or the process-global command queue.
+    #[test]
+    fn runtime_mutation_commands_forward_and_reject_bad_input() {
+        let cases = [
+            (r#"{"cmd":"decal-add","position":"x"}"#, "decal-add"),
+            (r#"{"cmd":"decal-remove"}"#, "decal-remove"),
+            (r#"{"cmd":"emitter-add","position":"x"}"#, "emitter-add"),
+            (r#"{"cmd":"emitter-remove"}"#, "emitter-remove"),
+            (
+                r#"{"cmd":"anim-crossfade","target":"ghost"}"#,
+                "anim-crossfade",
+            ),
+            (r#"{"cmd":"anim-param"}"#, "anim-param"),
+            (r#"{"cmd":"anim-state"}"#, "anim-state"),
+            (r#"{"cmd":"screenshot"}"#, "screenshot"),
+            (r#"{"cmd":"camera-set","yaw":"x"}"#, "camera-set"),
+            (r#"{"cmd":"camera-move","frames":"x"}"#, "camera-move"),
+            (r#"{"cmd":"quality-set"}"#, "quality-set"),
+            (r#"{"cmd":"rebind"}"#, "rebind"),
+            (r#"{"cmd":"despawn"}"#, "despawn"),
+            (r#"{"cmd":"reparent"}"#, "reparent"),
+            (r#"{"cmd":"spawn"}"#, "spawn"),
+            (r#"{"cmd":"story","action":"twirl"}"#, "story"),
+        ];
+        for (payload, needle) in cases {
+            let r = reply(payload, DebugState::default());
+            assert_eq!(r["ok"], false, "payload {payload} should be rejected");
+            assert!(
+                r["error"].as_str().unwrap_or_default().contains(needle),
+                "reply for {payload} should name '{needle}': {r}"
+            );
+        }
+    }
+
+    // `camera-stop` carries no payload to fail on, so it always forwards to the
+    // engine. Drive the process-global queue in a worker while the dispatcher
+    // blocks so the forwarding arm's reply lands without the engine timeout.
+    #[test]
+    fn camera_stop_forwards_and_reports_stopped() {
+        use crate::debug::runtime_spawn::{self, RuntimeCommand};
+        let _guard = crate::test_support::lock();
+        let worker = std::thread::spawn(|| {
+            let shared = Arc::new(Mutex::new(DebugState::default()));
+            handle_request(r#"{"cmd":"camera-stop"}"#, &shared)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            for cmd in runtime_spawn::drain() {
+                match cmd {
+                    RuntimeCommand::CameraStop { reply } => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    other => runtime_spawn::enqueue(other),
+                }
+            }
+            if worker.is_finished() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "camera-stop dispatch never returned"
+            );
+            std::thread::yield_now();
+        }
+        let reply = worker.join().expect("dispatch thread panicked");
+        assert!(reply.contains(r#""stopped":true"#), "got: {reply}");
+    }
 }

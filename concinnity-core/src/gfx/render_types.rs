@@ -654,6 +654,10 @@ pub struct TextDrawCall {
     // set, the backend scissors this call to the rect so a scrollable UI panel's
     // off-band rows do not bleed over its chrome. `None` draws unclipped.
     pub clip_rect: Option<[f32; 4]>,
+    // Draw layer for overlay ordering: calls are stable-sorted by this (ascending,
+    // so higher draws on top) before submission when a `HudLayers` override is
+    // active. `0` for everything by default, which leaves insertion order intact.
+    pub layer: i32,
 }
 
 // One LOD level past LOD0 for a `DrawObject`. Holds the rebased shared-index
