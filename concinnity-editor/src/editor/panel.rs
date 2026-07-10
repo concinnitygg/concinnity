@@ -1022,6 +1022,95 @@ mod tests {
     }
 
     #[test]
+    fn combo_open_plus_returns_to_the_list() {
+        // With the picker open, the header "+" turns into an "X" that toggles
+        // back to the browse list.
+        let fx = Fixture {
+            combo_options: vec!["PointLight".to_string()],
+            list_rows: vec![],
+        };
+        let o = test_origin();
+        let vo = view(&fx, Combo::Filter, None, [0.0, 0.0]);
+        let plus = plus_rect(o);
+        assert_eq!(
+            hit_test(&vo, plus[0] + 5.0, plus[1] + 5.0, o),
+            Some(PanelAction::TogglePicker)
+        );
+    }
+
+    #[test]
+    fn row_menu_dismisses_when_its_entry_is_off_window() {
+        // An open row menu whose entry scrolled out of the visible window has no
+        // hittable Delete row, so any click just closes the overlay.
+        let fx = Fixture {
+            combo_options: vec![],
+            list_rows: vec![ListRow {
+                is_header: false,
+                text: "only".to_string(),
+                entry: Some(0),
+            }],
+        };
+        let o = test_origin();
+        let v = view(&fx, Combo::Closed, Some(9), [0.0, 0.0]);
+        assert_eq!(
+            hit_test(&v, 640.0, 700.0, o),
+            Some(PanelAction::CloseOverlays)
+        );
+    }
+
+    #[test]
+    fn combo_shows_an_empty_state_with_no_matching_options() {
+        let fx = Fixture {
+            combo_options: vec![],
+            list_rows: vec![],
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view(&fx, Combo::Filter, None, [0.0, 0.0])),
+            o,
+        );
+        let empty = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == EMPTY_LABEL)
+            .unwrap();
+        assert!(empty.visible);
+        assert_eq!(empty.content, "No matching types");
+    }
+
+    #[test]
+    fn combo_marks_the_selected_option() {
+        let fx = Fixture {
+            combo_options: vec!["All".to_string(), "PointLight".to_string()],
+            list_rows: vec![],
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        // The active filter is option 1; the mouse rests far from the options so
+        // the selected (not hovered) branch renders it.
+        let v = PanelView {
+            combo: Combo::Filter,
+            filter_label: ALL_LABEL,
+            combo_options: &fx.combo_options,
+            combo_selected: Some(1),
+            combo_scroll: 0,
+            list_rows: &fx.list_rows,
+            list_scroll: 0,
+            row_menu: None,
+            selected: None,
+            mouse: [0.0, 0.0],
+        };
+        apply(&mut world, Some(&v), o);
+        let label = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == combo_row_label(1))
+            .unwrap();
+        assert!(label.visible);
+        assert_eq!(label.content, "PointLight");
+    }
+
+    #[test]
     fn picker_option_maps_to_a_scrolled_index() {
         let opts: Vec<String> = ADD_TYPES.iter().map(|s| s.to_string()).collect();
         let fx = Fixture {

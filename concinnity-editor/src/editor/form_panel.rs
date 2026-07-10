@@ -1435,4 +1435,140 @@ mod tests {
             assert!(lpos(drop_row_label(r)) > last_slot_label);
         }
     }
+
+    // A FormView with the value dropdown for logical field `open` disclosed.
+    fn view_with_dropdown<'a>(
+        fields: &'a [FormField],
+        open: usize,
+        mouse: [f32; 2],
+    ) -> FormView<'a> {
+        FormView {
+            field_dropdown: Some(open),
+            mouse,
+            ..view(fields)
+        }
+    }
+
+    // An enum field with a small (cycle-in-place) variant set.
+    fn enum_field(key: &str, variants: &[&str]) -> FormField {
+        FormField {
+            key: key.into(),
+            kind: FieldKind::Enum,
+            initial: String::new(),
+            boolval: false,
+            variants: variants.iter().map(|s| s.to_string()).collect(),
+            variant_idx: 0,
+        }
+    }
+
+    #[test]
+    fn open_dropdown_renders_its_options_and_a_scrollbar() {
+        // 11 variants ((none) + tex_0..tex_9) overflow the 8-row window, so the
+        // dropdown draws its scrollbar too.
+        let fields = vec![ref_field(10)];
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view_with_dropdown(&fields, 0, [0.0, 0.0])),
+            o,
+        );
+        assert!(sprite_visible(&world, DROP_BG));
+        assert_eq!(label(&world, drop_row_label(0)).content, form::NONE_LABEL);
+        assert!(sprite_visible(&world, DROP_TRACK), "scrollbar track shows");
+        assert!(sprite_visible(&world, DROP_THUMB), "scrollbar thumb shows");
+    }
+
+    #[test]
+    fn open_dropdown_hit_test_picks_or_dismisses() {
+        // A short (non-scrolling) dropdown so the option scan reaches its end.
+        let fields = vec![ref_field(2)];
+        let o = test_origin();
+        let v = view_with_dropdown(&fields, 0, [0.0, 0.0]);
+        // Clicking an option row picks that variant.
+        let opt = field_option_rect(o, 0, 1);
+        assert_eq!(
+            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o),
+            Some(FormAction::PickFieldOption(1))
+        );
+        // Clicking off every option dismisses the dropdown.
+        assert_eq!(hit_test(&v, 0.0, 0.0, o), Some(FormAction::CloseOverlays));
+    }
+
+    #[test]
+    fn control_click_opens_a_large_variant_dropdown() {
+        // A ref field with more than CYCLE_MAX options opens a dropdown rather
+        // than cycling in place.
+        let fields = vec![ref_field(10)];
+        let o = test_origin();
+        let v = view(&fields);
+        let c = form_control_rect(o, 0);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            Some(FormAction::OpenFieldDropdown(0))
+        );
+    }
+
+    #[test]
+    fn bool_enum_and_array_controls_hit_test() {
+        let o = test_origin();
+
+        // A bool field toggles from its checkbox rect.
+        let bools = vec![field("flag", FieldKind::Bool)];
+        let vb = view(&bools);
+        let t = form_toggle_rect(o, 0);
+        assert_eq!(
+            hit_test(&vb, t[0] + 3.0, t[1] + 3.0, o),
+            Some(FormAction::ToggleField(0))
+        );
+
+        // A small enum cycles in place from its control rect.
+        let enums = vec![enum_field("mode", &["a", "b"])];
+        let ve = view(&enums);
+        let c = form_control_rect(o, 0);
+        assert_eq!(
+            hit_test(&ve, c[0] + 5.0, c[1] + 5.0, o),
+            Some(FormAction::CycleField(0))
+        );
+
+        // An array header grows / shrinks from its + / - buttons.
+        let arrays = vec![field("waves", FieldKind::Array)];
+        let va = view(&arrays);
+        let add = array_add_rect(o, 0);
+        assert_eq!(
+            hit_test(&va, add[0] + 3.0, add[1] + 3.0, o),
+            Some(FormAction::AddArrayElement(0))
+        );
+        let rem = array_remove_rect(o, 0);
+        assert_eq!(
+            hit_test(&va, rem[0] + 3.0, rem[1] + 3.0, o),
+            Some(FormAction::RemoveArrayElement(0))
+        );
+    }
+
+    #[test]
+    fn hit_test_consumes_a_click_past_the_scrolled_field_window() {
+        // A scroll offset past the only field leaves the visible slot empty, so a
+        // click there is swallowed rather than resolving to a control.
+        let fields = float_fields(1);
+        let v = FormView {
+            form_scroll: 1,
+            ..view(&fields)
+        };
+        let o = test_origin();
+        let c = form_control_rect(o, 0);
+        assert_eq!(
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            Some(FormAction::Consume)
+        );
+    }
+
+    #[test]
+    fn swatch_rgb_falls_back_and_clamps() {
+        // Fewer than three parsed components yields the neutral placeholder.
+        assert_eq!(swatch_rgb("1"), [0.15, 0.15, 0.18, 1.0]);
+        assert_eq!(swatch_rgb("nope"), [0.15, 0.15, 0.18, 1.0]);
+        // Three components clamp into the displayable range.
+        assert_eq!(swatch_rgb("2, -1, 0.5"), [1.0, 0.0, 0.5, 1.0]);
+    }
 }

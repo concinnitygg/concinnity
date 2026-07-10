@@ -3431,4 +3431,153 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn scroll_moves_each_regions_offset() {
+        let mut world = world_with_fields();
+        // A long browse list so the closed-combo list scroll can advance.
+        let mut h = hook(
+            (0..20)
+                .map(|i| entry(&format!("log{i}"), "Logger"))
+                .collect(),
+        );
+        h.row_menu = Some(0);
+        h.scroll(1.0, ScrollTarget::List, &mut world);
+        assert!(h.list_scroll > 0, "a closed combo scrolls the browse list");
+        assert!(h.row_menu.is_none(), "scrolling dismisses an open row menu");
+        h.scroll(-1.0, ScrollTarget::List, &mut world);
+        assert_eq!(h.list_scroll, 0, "scrolling back up clamps at the top");
+
+        // An open filter combo scrolls its own option list instead of the browse list.
+        h.combo = Combo::Filter;
+        let before = h.list_scroll;
+        h.scroll(1.0, ScrollTarget::List, &mut world);
+        assert_eq!(
+            h.list_scroll, before,
+            "the browse list stays put with a combo open"
+        );
+
+        // A picked template detail scrolls its own asset list.
+        h.open_template = Some(0);
+        h.scroll(1.0, ScrollTarget::TemplateList, &mut world);
+    }
+
+    #[test]
+    fn drive_drag_parks_each_secondary_panel() {
+        let vp = [1280.0, 720.0];
+        let held = FrameInput {
+            left_button_down: true,
+            mouse_x: 220.0,
+            mouse_y: 160.0,
+            ..Default::default()
+        };
+
+        let mut h = hook(Vec::new());
+        h.drag = Some(Drag {
+            target: DragTarget::View,
+            grab: [10.0, 10.0],
+        });
+        h.drive_drag(&held, vp);
+        assert!(h.view_pos.is_some(), "the View panel follows the cursor");
+
+        let mut h = hook(Vec::new());
+        h.drag = Some(Drag {
+            target: DragTarget::Templates,
+            grab: [10.0, 10.0],
+        });
+        h.drive_drag(&held, vp);
+        assert!(h.templates_pos.is_some(), "the Templates panel follows");
+
+        let mut h = hook(Vec::new());
+        h.open_template = Some(0);
+        h.drag = Some(Drag {
+            target: DragTarget::TemplateDetail,
+            grab: [10.0, 10.0],
+        });
+        h.drive_drag(&held, vp);
+        assert!(
+            h.template_detail_pos.is_some(),
+            "the Template detail panel follows"
+        );
+    }
+
+    #[test]
+    fn apply_form_focus_toggle_and_consume() {
+        let mut world = world_with_fields();
+        let mut h = hook(Vec::new());
+        h.form_fields = vec![FormField {
+            key: "on".into(),
+            kind: form::FieldKind::Bool,
+            initial: String::new(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
+        }];
+        h.apply_form(FormAction::FocusField(0), &mut world);
+        assert!(matches!(h.form_focus, FormFocus::Field(0)));
+        h.apply_form(FormAction::FocusName, &mut world);
+        assert!(matches!(h.form_focus, FormFocus::Name));
+        h.apply_form(FormAction::ToggleField(0), &mut world);
+        assert!(h.form_fields[0].boolval, "the bool field flipped");
+        // A click that hits no control is swallowed without side effects.
+        h.apply_form(FormAction::Consume, &mut world);
+        assert!(h.form_fields[0].boolval);
+    }
+
+    #[test]
+    fn apply_panel_toggles_combos_and_consumes() {
+        let mut world = world_with_fields();
+        let mut h = hook(Vec::new());
+        h.apply_panel(PanelAction::TogglePicker, &mut world);
+        assert_eq!(h.combo, Combo::Picker);
+        h.apply_panel(PanelAction::TogglePicker, &mut world);
+        assert_eq!(h.combo, Combo::Closed, "a second toggle closes the picker");
+        h.apply_panel(PanelAction::ToggleFilter, &mut world);
+        assert_eq!(h.combo, Combo::Filter);
+        h.apply_panel(PanelAction::ToggleFilter, &mut world);
+        assert_eq!(h.combo, Combo::Closed, "a second toggle closes the filter");
+        h.apply_panel(PanelAction::Consume, &mut world);
+    }
+
+    #[test]
+    fn apply_panel_pick_option_by_combo_flavour() {
+        let mut world = world_with_fields();
+        let mut h = hook(vec![entry("log", "Logger")]);
+
+        // Filter: picking "All" clears the type filter.
+        h.type_filter = Some("Logger".to_string());
+        h.combo = Combo::Filter;
+        let opts = h.combo_options(&world);
+        let all_idx = opts.iter().position(|o| o == panel::ALL_LABEL).unwrap();
+        h.apply_panel(PanelAction::PickOption(all_idx), &mut world);
+        assert!(h.type_filter.is_none());
+        assert_eq!(h.combo, Combo::Closed);
+
+        // Filter: picking a concrete type sets the filter.
+        h.combo = Combo::Filter;
+        let opts = h.combo_options(&world);
+        let logger_idx = opts.iter().position(|o| o == "Logger").unwrap();
+        h.apply_panel(PanelAction::PickOption(logger_idx), &mut world);
+        assert_eq!(h.type_filter.as_deref(), Some("Logger"));
+
+        // Picker: picking a type opens the add form.
+        h.combo = Combo::Picker;
+        h.apply_panel(PanelAction::PickOption(0), &mut world);
+        assert!(h.form_open(), "a picker pick opens the add form");
+
+        // A pick with the combo already closed is a no-op.
+        h.close_form();
+        h.combo = Combo::Closed;
+        h.apply_panel(PanelAction::PickOption(0), &mut world);
+        assert!(!h.form_open());
+    }
+
+    #[test]
+    fn confirm_form_without_a_selected_type_just_closes() {
+        let mut world = world_with_fields();
+        let mut h = hook(Vec::new());
+        h.selected_type = None;
+        h.confirm_form(&mut world);
+        assert!(!h.form_open());
+    }
 }

@@ -1202,6 +1202,141 @@ mod tests {
         assert_err_reply(&reply, "no free decal slot");
     }
 
+    // Answer any runtime-spawn command with an engine-side failure, so the
+    // handler under test takes its `Ok(Err(e))` reply branch.
+    fn reply_engine_error(cmd: RuntimeCommand) -> Option<RuntimeCommand> {
+        match cmd {
+            RuntimeCommand::DecalAdd { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::DecalRemove { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::EmitterAdd { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::EmitterRemove { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Screenshot { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::CameraSet { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::CameraMove { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::CameraStop { reply } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::QualitySet { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Rebind { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Despawn { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Reparent { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Spawn { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Story { reply, .. } => drop(reply.send(Err("boom".into()))),
+        }
+        None
+    }
+
+    // Every runtime-spawn handler surfaces an engine-side rejection as an error
+    // reply. Drives each handler with a valid payload and answers `Err`.
+    // A named handler invocation: its label plus a boxed thunk that runs it.
+    type NamedHandler = (&'static str, Box<dyn Fn() -> String + Send + Sync>);
+
+    #[test]
+    fn runtime_handlers_surface_engine_errors() {
+        let _guard = test_support::lock();
+        let handlers: Vec<NamedHandler> = vec![
+            (
+                "decal-remove",
+                Box::new(|| handle_decal_remove(r#"{"id":0}"#)),
+            ),
+            ("emitter-add", Box::new(|| handle_emitter_add("{}"))),
+            (
+                "emitter-remove",
+                Box::new(|| handle_emitter_remove(r#"{"id":0}"#)),
+            ),
+            (
+                "screenshot",
+                Box::new(|| handle_screenshot(r#"{"path":"x.png"}"#)),
+            ),
+            ("camera-set", Box::new(|| handle_camera_set("{}"))),
+            ("camera-move", Box::new(|| handle_camera_move("{}"))),
+            ("camera-stop", Box::new(handle_camera_stop)),
+            (
+                "quality-set",
+                Box::new(|| handle_quality_set(r#"{"setting":"taa"}"#)),
+            ),
+            (
+                "rebind",
+                Box::new(|| handle_rebind(r#"{"setting":"key_forward","key":"W"}"#)),
+            ),
+            ("despawn", Box::new(|| handle_despawn(r#"{"name":"x"}"#))),
+            ("reparent", Box::new(|| handle_reparent(r#"{"child":"x"}"#))),
+            (
+                "spawn",
+                Box::new(|| handle_spawn(r#"{"template":"t","name":"n"}"#)),
+            ),
+            ("story", Box::new(|| handle_story(r#"{"action":"start"}"#))),
+        ];
+        for (name, h) in handlers {
+            let reply = drive_runtime_handler(h, reply_engine_error);
+            assert!(
+                reply.contains(r#""ok":false"#) && reply.contains("boom"),
+                "{name} should surface the engine error: {reply}"
+            );
+        }
+    }
+
+    // When nothing drains the queue, each handler's `recv_timeout` elapses and
+    // it reports a timeout. Running them concurrently bounds the test to about
+    // one timeout interval; the leaked commands are drained at the end.
+    #[test]
+    fn runtime_handlers_report_a_timeout_when_the_engine_never_replies() {
+        let _guard = test_support::lock();
+        let workers: Vec<(&str, std::thread::JoinHandle<String>)> = vec![
+            ("decal-add", std::thread::spawn(|| handle_decal_add("{}"))),
+            (
+                "decal-remove",
+                std::thread::spawn(|| handle_decal_remove(r#"{"id":0}"#)),
+            ),
+            (
+                "emitter-add",
+                std::thread::spawn(|| handle_emitter_add("{}")),
+            ),
+            (
+                "emitter-remove",
+                std::thread::spawn(|| handle_emitter_remove(r#"{"id":0}"#)),
+            ),
+            ("camera-set", std::thread::spawn(|| handle_camera_set("{}"))),
+            (
+                "camera-move",
+                std::thread::spawn(|| handle_camera_move("{}")),
+            ),
+            ("camera-stop", std::thread::spawn(handle_camera_stop)),
+            (
+                "quality-set",
+                std::thread::spawn(|| handle_quality_set(r#"{"setting":"taa"}"#)),
+            ),
+            (
+                "rebind",
+                std::thread::spawn(|| handle_rebind(r#"{"setting":"key_forward","key":"W"}"#)),
+            ),
+            (
+                "despawn",
+                std::thread::spawn(|| handle_despawn(r#"{"name":"x"}"#)),
+            ),
+            (
+                "reparent",
+                std::thread::spawn(|| handle_reparent(r#"{"child":"x"}"#)),
+            ),
+            (
+                "spawn",
+                std::thread::spawn(|| handle_spawn(r#"{"template":"t","name":"n"}"#)),
+            ),
+            (
+                "story",
+                std::thread::spawn(|| handle_story(r#"{"action":"start"}"#)),
+            ),
+        ];
+        for (name, w) in workers {
+            let reply = w.join().expect("handler thread panicked");
+            assert!(
+                reply.contains("timed out waiting for engine"),
+                "{name}: {reply}"
+            );
+        }
+        // The timed-out handlers left their commands in the process-global
+        // queue with their receivers gone; drain so nothing leaks.
+        let _ = runtime_spawn::drain();
+    }
+
     #[test]
     fn decal_remove_reports_removed() {
         let _guard = test_support::lock();

@@ -16,3 +16,34 @@ pub fn check(json_path: &str) -> std::io::Result<()> {
     };
     check_at_path(json_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An explicit, existing path is validated in place -- the discovery branch
+    // (and its process-global path anchors) is never touched.
+    #[test]
+    fn check_validates_an_explicit_existing_world() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &path,
+            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+        )
+        .unwrap();
+        check(path.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn check_reports_an_invalid_explicit_world() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &path,
+            "{\"name\":\"x\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+        )
+        .unwrap();
+        assert!(check(path.to_str().unwrap()).is_err());
+    }
+}

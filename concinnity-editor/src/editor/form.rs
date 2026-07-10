@@ -774,6 +774,96 @@ mod tests {
         // Integer element types are preserved from the default.
         let idef = json!([0, 0, 0]);
         assert_eq!(coerce_array("16, 24, 16", 3, &idef), json!([16, 24, 16]));
+        // A non-integer element in an integer vector falls back whole rather
+        // than committing a truncated array.
+        assert_eq!(coerce_array("16, x, 16", 3, &idef), idef);
+    }
+
+    #[test]
+    fn value_text_renders_bools_and_blanks_unhandled_values() {
+        use serde_json::json;
+        assert_eq!(value_text(&Value::Bool(true)), "true");
+        assert_eq!(value_text(&json!([1.0, 2.0, 3.0])), "1.0, 2.0, 3.0");
+        // A null / object has no editable text form.
+        assert_eq!(value_text(&Value::Null), "");
+        assert_eq!(value_text(&json!({"a": 1})), "");
+    }
+
+    #[test]
+    fn get_at_path_stops_at_a_scalar_segment() {
+        use serde_json::json;
+        let mut obj = Map::new();
+        obj.insert("scalar".to_string(), json!(3));
+        obj.insert("nested".to_string(), json!({"leaf": 7}));
+        // Descending past a scalar segment finds nothing.
+        assert!(get_at_path(&obj, "scalar.deeper").is_none());
+        assert_eq!(get_at_path(&obj, "nested.leaf"), Some(&json!(7)));
+        assert!(get_at_path(&obj, "missing").is_none());
+    }
+
+    #[test]
+    fn set_at_path_rebuilds_scalar_parents_and_leaves_as_objects() {
+        use serde_json::json;
+        let mut obj = Map::new();
+        obj.insert("a".to_string(), json!(1));
+        obj.insert("x".to_string(), json!(2));
+        // A scalar leaf's holder is replaced with an object.
+        set_at_path(&mut obj, "a.b", json!(5));
+        assert_eq!(get_at_path(&obj, "a.b"), Some(&json!(5)));
+        // A scalar mid-path parent is likewise rebuilt into nested objects.
+        set_at_path(&mut obj, "x.y.z", json!(9));
+        assert_eq!(get_at_path(&obj, "x.y.z"), Some(&json!(9)));
+    }
+
+    #[test]
+    fn coerce_leaves_an_array_header_at_its_default() {
+        use serde_json::json;
+        let field = FormField {
+            key: "waves".to_string(),
+            kind: FieldKind::Array,
+            initial: String::new(),
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 2,
+        };
+        let default = json!([{"amplitude": 1.0}]);
+        // An array header carries no editable value of its own.
+        assert_eq!(coerce(&field, "ignored", &default), default);
+    }
+
+    #[test]
+    fn working_args_merges_an_edited_entry_over_defaults() {
+        use serde_json::json;
+        let mut editing = Map::new();
+        editing.insert("intensity".to_string(), json!(42.0));
+        let out = working_args("PointLight", Some(&editing));
+        // The edited value overrides the type default while other defaults remain.
+        assert_eq!(out.get("intensity"), Some(&json!(42.0)));
+        assert!(out.contains_key("color"));
+    }
+
+    #[test]
+    fn array_mutators_ignore_absent_or_scalar_paths() {
+        use serde_json::json;
+        let mut obj = Map::new();
+        obj.insert("scalar".to_string(), json!(1));
+        obj.insert("empty".to_string(), json!([]));
+        // Removing from a scalar path (descends through a non-container) and an
+        // empty array both report no change.
+        assert!(!remove_array_elem(&mut obj, "scalar.inner"));
+        assert!(!remove_array_elem(&mut obj, "empty"));
+        assert!(!remove_array_elem(&mut obj, "missing"));
+        // Adding onto a path that resolves to a scalar (with a template from the
+        // type default) also does nothing.
+        let mut point = Map::new();
+        point.insert("position".to_string(), json!(3));
+        assert!(!add_array_elem("PointLight", &mut point, "position"));
+    }
+
+    #[test]
+    fn validate_rejects_an_unknown_type() {
+        let err = validate("NotARealAssetType", &Map::new()).unwrap_err();
+        assert!(err.contains("unknown asset type"), "got: {err}");
     }
 
     // A string field the type reports variants for becomes a cycling Enum; a

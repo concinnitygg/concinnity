@@ -767,14 +767,20 @@ struct RecordingBackend {
     // Overrides for `draw_geometry_size`; absent draws report `None` like the
     // trait default.
     geometry_sizes: std::collections::HashMap<usize, (usize, usize)>,
+    // Overrides for `draw_lod_index_counts`; absent draws report `None` like
+    // the trait default.
+    lod_counts: std::collections::HashMap<usize, Vec<usize>>,
     // Layouts `rebuild_skinned_geometry` hands back on success, stored as
     // (skinned_index, vertex_base, vertex_count, index_count).
     skinned_layouts: Vec<(usize, u16, usize, usize)>,
     fail_texture_updates: bool,
+    fail_lut_updates: bool,
     fail_mesh_updates: bool,
     fail_static_rebuild: bool,
+    fail_skinned_updates: bool,
     fail_skinned_rebuild: bool,
     fail_skeleton_update: bool,
+    fail_env_updates: bool,
 }
 
 impl crate::gfx::scene_reel::SceneControl for RecordingBackend {
@@ -865,10 +871,16 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
 
     fn update_color_lut(&mut self, size: u32, _: &[u8]) -> Result<(), String> {
         self.lut_updates.push(size);
+        if self.fail_lut_updates {
+            return Err("lut update rejected".to_string());
+        }
         Ok(())
     }
     fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
         self.geometry_sizes.get(&draw_idx).copied()
+    }
+    fn draw_lod_index_counts(&self, draw_idx: usize) -> Option<Vec<usize>> {
+        self.lod_counts.get(&draw_idx).cloned()
     }
     fn update_mesh_geometry(
         &mut self,
@@ -901,6 +913,9 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         _: &[u16],
     ) -> Result<(), String> {
         self.skinned_updates.push(skinned_index);
+        if self.fail_skinned_updates {
+            return Err("skinned update rejected".to_string());
+        }
         Ok(())
     }
     fn rebuild_skinned_geometry(
@@ -937,6 +952,9 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     }
     fn update_environment_map(&mut self, _: &[u8]) -> Result<(), String> {
         self.env_updates += 1;
+        if self.fail_env_updates {
+            return Err("environment map update rejected".to_string());
+        }
         Ok(())
     }
     fn update_fog_settings(&mut self, _: Option<crate::gfx::volumetric_fog::FogSettings>) {
@@ -1590,6 +1608,130 @@ fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
     assert!(poll_pending_envmap(&state, &mut backend));
     assert_eq!(backend.env_updates, 0);
     assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn poll_pending_envmap_survives_a_backend_rejection() {
+    let state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Ok(vec![9u8; 4])).unwrap();
+    *state.env_map_inflight.lock().unwrap() = Some(rx);
+    let mut backend = RecordingBackend {
+        fail_env_updates: true,
+        ..Default::default()
+    };
+    // The backend rejected the payload; the poll still reports consumption and
+    // clears the slot rather than retrying the same failed convolution.
+    assert!(poll_pending_envmap(&state, &mut backend));
+    assert_eq!(backend.env_updates, 1);
+    assert!(state.env_map_inflight.lock().unwrap().is_none());
+}
+
+#[test]
+fn reload_assets_spawns_an_envmap_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    // A path that does not resolve to a valid HDR: the worker still spawns and
+    // parks a receiver, then reports a decode failure on its own thread.
+    let hdr = dir.path().join("sky.hdr");
+    let state = AssetHotReloadState::from_sources(HotReloadSources {
+        environment_map: Some(EnvironmentMapSource {
+            resolved_path: hdr.to_string_lossy().into_owned(),
+            prefilter_face_size: 8,
+            irradiance_face_size: 8,
+            prefilter_samples: 4,
+            prefilter_clamp: 4.0,
+        }),
+        ..Default::default()
+    });
+    reload_assets(&state);
+    // The convolution worker was scheduled onto its own slot. Drain the parked
+    // receiver so the worker thread completes before the test ends.
+    let rx = state
+        .env_map_inflight
+        .lock()
+        .unwrap()
+        .take()
+        .expect("envmap worker scheduled");
+    let _ = rx.recv();
+}
+
+// poll_pending_assets: remaining apply branches
+
+#[test]
+fn poll_pending_assets_survives_a_color_lut_rejection() {
+    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    let batch = DecodedAssetBatch {
+        color_lut: Some(DecodedColorLut {
+            size: 2,
+            data: vec![0; 32],
+            source: "grade.cube".to_string(),
+        }),
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_lut_updates: true,
+        ..Default::default()
+    };
+    // The failure is tallied and logged; the poll still reports consumption.
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.lut_updates, vec![2]);
+}
+
+#[test]
+fn poll_pending_assets_rebuilds_on_a_changed_lod_breakdown() {
+    let mut state = one_mesh_state(vec![0]);
+    let batch = DecodedAssetBatch {
+        meshes: vec![DecodedMesh {
+            entry_idx: 0,
+            vertices: vec![zero_vertex(); 3],
+            indices: vec![0; 9],
+            lod_alternates: vec![(10.0, vec![0u16; 6])],
+        }],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    // The slot's live LOD1 carries 3 indices; the reload's carries 6, so the
+    // entry is queued for a rebuild rather than an in-place update even though
+    // the base geometry size is unchanged.
+    backend.lod_counts.insert(0, vec![3]);
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.mesh_updates.is_empty());
+    assert_eq!(backend.static_rebuild_change_counts, vec![1]);
+}
+
+#[test]
+fn poll_pending_assets_skips_an_out_of_range_skinned_entry() {
+    let mut state = one_skinned_state(skinned_entry());
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(9, 2, 2)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend::default();
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert!(backend.skinned_updates.is_empty());
+    assert!(backend.skinned_rebuild_change_counts.is_empty());
+}
+
+#[test]
+fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
+    let mut state = one_skinned_state(skinned_entry());
+    // Same vertex / index / joint counts as the entry: the in-place update path
+    // fires, and the backend rejects it.
+    let batch = DecodedAssetBatch {
+        skinned_meshes: vec![decoded_skinned(0, 2, 2)],
+        ..Default::default()
+    };
+    inject_batch(&state, batch);
+    let mut backend = RecordingBackend {
+        fail_skinned_updates: true,
+        ..Default::default()
+    };
+    assert!(poll_pending_assets(&mut state, &mut backend));
+    assert_eq!(backend.skinned_updates, vec![4]);
+    assert!(backend.skinned_rebuild_change_counts.is_empty());
 }
 
 // reload_volumetric_fog
