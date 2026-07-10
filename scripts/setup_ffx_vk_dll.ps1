@@ -10,7 +10,7 @@ format-mismatch warning every FSR dispatch (upstream issue #161, still open).
 
 This script applies the one-line fix (`rgba8` -> `rgba16f`), rebuilds the
 ffx-api Vulkan DLL from SDK source (which recompiles the shader permutations),
-and copies the result to concinnity-client/third_party/ffx/, where build.rs
+and copies the result to crates/concinnity-engine/third_party/ffx/, where build.rs
 prefers it over the stock SDK copy.
 
 It is idempotent: re-running re-applies the patch only if needed and rebuilds.
@@ -41,7 +41,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$VendorDir = Join-Path $RepoRoot 'concinnity-client\third_party\ffx'
+$VendorDir = Join-Path $RepoRoot 'crates\concinnity-engine\third_party\ffx'
 $VendorDll = Join-Path $VendorDir 'amd_fidelityfx_vk.dll'
 $ShaderHeader = Join-Path $SdkRoot 'sdk\include\FidelityFX\gpu\fsr3upscaler\ffx_fsr3upscaler_callbacks_glsl.h'
 $FfxApiDir = Join-Path $SdkRoot 'ffx-api'

@@ -1,35 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "concinnity-eas",
-    "concinnity-templates",
-    "concinnity-core",
-    "concinnity-cook",
-    "concinnity-toolchain",
-    "concinnity-render",
-    "concinnity-device",
-    "concinnity-client",
-    "concinnity-runtime",
-    "concinnity-app",
-    "concinnity-editor",
-    "concinnity-docs",
+    "crates/*",
     "examples/common",
     "examples/bistro",
 ]
 
 default-members = [
-    "concinnity-eas",
-    "concinnity-templates",
-    "concinnity-core",
-    "concinnity-cook",
-    "concinnity-toolchain",
-    "concinnity-render",
-    "concinnity-device",
-    "concinnity-client",
-    "concinnity-runtime",
-    "concinnity-app",
-    "concinnity-editor",
-    "concinnity-docs",
+    "crates/*",
 ]
 
 [workspace.package]

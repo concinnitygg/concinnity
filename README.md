@@ -1,9 +1,15 @@
 # Concinnity
 
-[![Concinnity GitHub Actions][gh-image]][gh-checks]
+![DirectX 12][dx-img]
+![Metal][ml-img]
+![Vulkan][vk-img]
+[![Concinnity GitHub Actions][gh-img]][gh-checks]
 [![codecov.io][codecov-img]][codecov-link]
 
-[gh-image]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml/badge.svg?branch=main
+[dx-img]: https://img.shields.io/badge/DirectX%2012-107C10
+[ml-img]: https://img.shields.io/badge/Metal-1A1A1A
+[vk-img]: https://img.shields.io/badge/Vulkan-A41E22?logo=vulkan&logoColor=white
+[gh-img]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml/badge.svg?branch=main
 [gh-checks]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml?query=branch%3Amain
 [codecov-img]: https://img.shields.io/codecov/c/github/concinnitygg/concinnity?logo=codecov
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
@@ -25,7 +31,7 @@ For now, you'll need to [build it manually](concinnity-docs/public/development/b
 After a successful build, you may optionally install the `concinnity` executable:
 
 ```sh
-cargo install --path concinnity-editor
+cargo install --path crates/concinnity-cli
 concinnity help
 ```
 
@@ -48,20 +54,21 @@ cargo run -p bistro --release
 
 ## Crates
 
-| Crate                                         |      no_std?       | Description                                               |
-| --------------------------------------------- | :----------------: | --------------------------------------------------------- |
-| [concinnity-app](concinnity-app/)             |                    | C-ABI cdylib for the Swift app + world authoring API      |
-| [concinnity-client](concinnity-client/)       |                    | Runtime engine: world loop, ECS, renderer, audio, physics |
-| [concinnity-cook](concinnity-cook/)           |                    | Asset compile pipeline: world.jsonl + sources -> blobs    |
-| [concinnity-core](concinnity-core/)           |                    | Renderer-free foundation: assets, GPU layouts, math       |
-| [concinnity-device](concinnity-device/)       |                    | GPU backends: Metal / DirectX 12 / Vulkan (+ Win32)       |
-| [concinnity-docs](concinnity-docs/)           |                    | Asset + API reference documentation generator             |
-| [concinnity-eas](concinnity-eas/)             |                    | Entity-Asset-System: the engine's generic ECS             |
-| [concinnity-editor](concinnity-editor/)       |                    | The `concinnity` dev CLI + in-engine world editor         |
-| [concinnity-render](concinnity-render/)       |                    | Backend-agnostic, GPU-free render preparation             |
-| [concinnity-runtime](concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs        |
-| [concinnity-templates](concinnity-templates/) | :white_check_mark: | Engine-owned world/asset templates (static data)          |
-| [concinnity-toolchain](concinnity-toolchain/) |                    | Shared build-script support (backend + SDK cfgs)          |
+| Crate                                                |      no_std?       | Description                                                          |
+| ---------------------------------------------------- | :----------------: | -------------------------------------------------------------------- |
+| [concinnity-cli](crates/concinnity-cli/)             |                    | The `concinnity` CLI binary (thin frontend)                          |
+| [concinnity-editor](crates/concinnity-editor/)       |                    | Dev tooling library: world authoring, in-engine editor, debug server |
+| [concinnity-ffi](crates/concinnity-ffi/)             |                    | General-purpose C-ABI cdylib for embedding in a host app             |
+| [concinnity-runtime](crates/concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs                   |
+| [concinnity-engine](crates/concinnity-engine/)       |                    | Runtime engine: world loop, ECS, renderer, audio, physics            |
+| [concinnity-cook](crates/concinnity-cook/)           |                    | Asset compile pipeline: world.jsonl + sources -> blobs               |
+| [concinnity-render](crates/concinnity-render/)       |                    | Backend-agnostic, GPU-free render preparation                        |
+| [concinnity-device](crates/concinnity-device/)       |                    | GPU backends: Metal / DirectX 12 / Vulkan (+ Win32)                  |
+| [concinnity-core](crates/concinnity-core/)           |                    | Renderer-free foundation: assets, GPU layouts, math                  |
+| [concinnity-eas](crates/concinnity-eas/)             |                    | Entity-Asset-System: the engine's generic ECS                        |
+| [concinnity-templates](crates/concinnity-templates/) | :white_check_mark: | Engine-owned world/asset templates (static data)                     |
+| [concinnity-docs](crates/concinnity-docs/)           |                    | Asset + API reference documentation generator                        |
+| [concinnity-toolchain](crates/concinnity-toolchain/) |                    | Shared build-script support (backend + SDK cfgs)                     |
 
 ## License
 

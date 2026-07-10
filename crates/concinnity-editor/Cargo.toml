@@ -1,0 +1,79 @@
+[package]
+name = "concinnity-editor"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The dev tooling library: world authoring/build, the in-engine editor HUD, the
+# localhost debug server, and the `concinnity` CLI dispatch. The thin CLI binary
+# (concinnity-cli) and the C-ABI cdylib (concinnity-ffi) both build on this.
+[lib]
+name = "concinnity_editor"
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Mirror the runtime's Vulkan feature so an editor build can target the Vulkan
+# backend; forwards to the runtime, the device backends, the compile pipeline,
+# and core. The ash/shaderc dep activation lives on the final-binary crates
+# (concinnity-cli, concinnity-ffi).
+vulkan = [
+    "concinnity-engine/vulkan",
+    "concinnity-device/vulkan",
+    "concinnity-cook/vulkan",
+    "concinnity-core/vulkan",
+]
+
+[dependencies]
+# The runtime crate (rlib): the editor drives a live App and the renderer
+# through the runtime's public API.
+concinnity-engine = { path = "../concinnity-engine" }
+# The device backends: the Metal shader-layout contract (shader_reflect) the
+# authoring build installs before compiling shaders.
+concinnity-device = { path = "../concinnity-device" }
+# The asset compile pipeline: cn build / cn add / cn debug + the authoring API.
+# Carries the gltf/png/jpeg decoders; the CLI calls them through
+# concinnity_cook::{glb,texture,color_lut,mesh_reimport}.
+concinnity-cook = { path = "../concinnity-cook" }
+# Direct core access for the world/geometry/ecs types the CLI/debug code names
+# (concinnity_core::{world,build,geometry,ecs}).
+concinnity-core = { path = "../concinnity-core" }
+# Engine-owned content templates the editor's Templates dropdown applies.
+concinnity-templates = { path = "../concinnity-templates" }
+argon2 = "0.5"
+async-stream = "0.3.6"
+ciborium = "0.2"
+bitflags = "2.0"
+chrono = "0.4.44"
+clap = { version = "4", features = ["derive"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ctrlc = "3.5.2"
+directories = "6.0.0"
+gltf = { version = "1", default-features = false, features = ["utils", "names"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+ignore = "0.4.25"
+jsonwebtoken = "9"
+libloading = "0.9.0"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+rand = "0.8"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json = { version = "1", features = ["preserve_order"] }
+slotmap = "1.1.1"
+thiserror = "2.0.18"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+ureq = { version = "3.2.0", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3.25.0"
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }

@@ -585,52 +585,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-app"
+name = "concinnity-cli"
 version = "0.10.0"
 dependencies = [
- "cbindgen",
- "concinnity-client",
- "concinnity-cook",
- "concinnity-core",
- "concinnity-device",
- "concinnity-templates",
+ "ash",
+ "concinnity-editor",
  "concinnity-toolchain",
- "core-foundation",
- "serde_json",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "concinnity-client"
-version = "0.10.0"
-dependencies = [
- "bitflags 2.11.1",
- "ciborium",
- "concinnity-core",
- "concinnity-device",
- "concinnity-render",
- "concinnity-toolchain",
- "core-foundation",
- "ctrlc",
- "directories",
- "kira",
- "mint",
- "objc2 0.6.4",
- "objc2-app-kit",
- "rand 0.8.6",
- "rapier3d",
- "serde",
- "serde_bytes",
- "serde_json",
- "slotmap",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
+ "glfw",
+ "shaderc",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -721,21 +684,19 @@ name = "concinnity-editor"
 version = "0.10.0"
 dependencies = [
  "argon2",
- "ash",
  "async-stream",
  "bitflags 2.11.1",
  "chrono",
  "ciborium",
  "clap",
- "concinnity-app",
- "concinnity-client",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-device",
+ "concinnity-engine",
  "concinnity-templates",
  "concinnity-toolchain",
  "ctrlc",
  "directories",
- "glfw",
  "gltf",
  "hex",
  "hmac",
@@ -748,7 +709,6 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "shaderc",
  "slotmap",
  "tempfile",
  "thiserror 2.0.18",
@@ -758,8 +718,55 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
- "windows 0.61.3",
  "zip",
+]
+
+[[package]]
+name = "concinnity-engine"
+version = "0.10.0"
+dependencies = [
+ "bitflags 2.11.1",
+ "ciborium",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-render",
+ "concinnity-toolchain",
+ "core-foundation",
+ "ctrlc",
+ "directories",
+ "kira",
+ "mint",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "rand 0.8.6",
+ "rapier3d",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "slotmap",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "concinnity-ffi"
+version = "0.10.0"
+dependencies = [
+ "cbindgen",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-editor",
+ "concinnity-engine",
+ "concinnity-toolchain",
+ "core-foundation",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -777,8 +784,8 @@ dependencies = [
 name = "concinnity-runtime"
 version = "0.10.0"
 dependencies = [
- "concinnity-client",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-toolchain",
  "tempfile",
 ]
@@ -1131,8 +1138,8 @@ dependencies = [
 name = "example-common"
 version = "0.10.0"
 dependencies = [
- "concinnity-client",
  "concinnity-cook",
+ "concinnity-engine",
 ]
 
 [[package]]

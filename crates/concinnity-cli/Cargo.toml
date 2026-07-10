@@ -1,0 +1,60 @@
+[package]
+name = "concinnity-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The `concinnity` dev CLI binary: a thin frontend that dispatches through
+# `concinnity_editor::run`. All command logic lives in the concinnity-editor
+# library; this crate owns only the executable entry point, the Windows Agility
+# SDK export statics the final binary must carry (src/main.rs), and the
+# graphics-SDK DLL bundling its build script performs.
+[[bin]]
+name = "concinnity"
+path = "src/main.rs"
+
+[features]
+# Target the Vulkan backend. Activates this crate's optional ash/shaderc so the
+# final binary links them, and forwards to the editor library (and, through it,
+# the runtime / device / compile pipeline / core).
+vulkan = [
+    "dep:ash",
+    "dep:shaderc",
+    "concinnity-editor/vulkan",
+]
+
+[dependencies]
+# The dev tooling library the CLI dispatches into.
+concinnity-editor = { path = "../concinnity-editor" }
+
+# Linux (and any non-macOS/non-Windows target) always builds the Vulkan backend:
+# the final binary links its runtime crates directly.
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+ash = "0.38"
+glfw = "0.61.0"
+shaderc = "0.10.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Direct3D_Dxc",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+ash = { version = "0.38", optional = true }
+shaderc = { version = "0.10.1", optional = true }
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }

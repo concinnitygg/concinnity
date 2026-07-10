@@ -2,7 +2,7 @@
 //
 // Shared host glue for the runnable examples. An example reads a world.jsonl,
 // compiles it in memory with the asset pipeline (concinnity-cook), and plays
-// it through the runtime renderer (concinnity-client). This crate owns that
+// it through the runtime renderer (concinnity-engine). This crate owns that
 // compile-and-run path so each example's main.rs is just its own preflight
 // (locating the world, fetching assets) plus a call into here.
 //
@@ -11,15 +11,15 @@
 // macros, rasterize fonts, decode source files) lives in concinnity-cook. The
 // editor crate (CLI, debug server, FFI) is deliberately not a dependency.
 
-use concinnity_client::app::state::App;
-use concinnity_client::blob::BlobData;
-use concinnity_client::ecs::{ComponentAsset, World};
 use concinnity_cook::world::LoadedWorld;
 use concinnity_cook::{build_compiled, check::report_validation_errors, prepare_world};
+use concinnity_engine::app::state::App;
+use concinnity_engine::blob::BlobData;
+use concinnity_engine::ecs::{ComponentAsset, World};
 
 // Install the runtime's tracing subscriber. Call once at the top of main so the
 // compile step's logs are formatted. Re-exported from the runtime crate.
-pub use concinnity_client::app::run::init_logging;
+pub use concinnity_engine::app::run::init_logging;
 
 // Project state-root anchor. An example that chdirs so its world's relative
 // asset paths resolve calls `paths::set_root(invocation_dir)` first, so the
@@ -62,5 +62,5 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
 pub fn run(world: World) -> std::io::Result<()> {
     let mut app = App::new();
     *app.world_mut() = world;
-    concinnity_client::app::run::start_runtime(app)
+    concinnity_engine::app::run::start_runtime(app)
 }

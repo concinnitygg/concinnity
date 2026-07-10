@@ -1,0 +1,74 @@
+[package]
+name = "concinnity-engine"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "concinnity_engine"
+crate-type = ["rlib"]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Build the Windows client against the Vulkan backend instead of the default
+# DirectX one. Linux always uses Vulkan and macOS always uses Metal regardless
+# of this feature; build.rs resolves the backend cfg from the target and this
+# feature. On non-Windows targets the feature is inert (the deps it activates
+# are Windows-only optional deps). Windows Vulkan uses the shared native Win32
+# window layer (no glfw; GLFW is the Linux windowing layer only).
+vulkan = [
+    "concinnity-device/vulkan",
+    "concinnity-core/vulkan",
+    "concinnity-render/vulkan",
+]
+
+[dependencies]
+# Renderer-free shared foundation: the crate-wide result type and the
+# backend-agnostic GPU data layouts, re-exported under crate::result and
+# crate::gfx so existing internal paths keep resolving.
+# Runtime foundation only: the runtime reads pre-compiled blobs and links no
+# image/glTF decoder. Those decoders live in concinnity-cook, which the
+# build/edit/debug paths reach through the concinnity-editor crate, not here.
+concinnity-core = { path = "../concinnity-core" }
+# The GPU-free render-prep layer: the RenderBackend/SceneControl trait seam plus
+# the record builders, render graph, and CPU-side render math the backends
+# consume. Re-exported under crate::gfx so existing internal paths keep resolving.
+concinnity-render = { path = "../concinnity-render" }
+# The hardware backends (Metal/DirectX/Vulkan/Win32) + the init_backend factory.
+# GraphicsSystem drives them through a Box<dyn RenderBackend>; the concrete
+# context types never cross into this crate.
+concinnity-device = { path = "../concinnity-device" }
+ciborium = "0.2"
+bitflags = "2.0"
+ctrlc = "3.5.2"
+directories = "6.0.0"
+kira = "0.12"
+mint = "0.5"
+rand = "0.8"
+rapier3d = "0.32"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json = { version = "1", features = ["preserve_order"] }
+slotmap = "1.1.1"
+thiserror = "2.0.18"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS run loop for `cn run` (app/run.rs drives NSApplication + the
+# CFRunLoop directly, and needs a MainThreadMarker). The Metal backend's wider
+# objc2 stack lives in concinnity-device.
+core-foundation = "0.10.1"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+
+[dev-dependencies]
+tempfile = "3.25.0"
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }
