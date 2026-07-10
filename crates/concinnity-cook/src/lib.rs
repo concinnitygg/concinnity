@@ -31,6 +31,7 @@ pub mod import;
 pub mod mesh_compile;
 pub mod mesh_reimport;
 pub mod pipeline;
+pub mod registry;
 pub mod shader;
 pub mod template_spec;
 pub mod texture;
@@ -44,4 +45,5 @@ pub use pipeline::{
     PipelineResult, build_compiled, build_from_path, build_pipeline_from_str, validate_asset,
     validate_world_jsonl, write_build_outputs,
 };
+pub use registry::ComponentType;
 pub use world::prepare_world;

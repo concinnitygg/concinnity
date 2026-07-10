@@ -12,7 +12,8 @@ use crate::world::{WorldConfig, WorldJsonlAsset, normalize_single_shader_type};
 use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
 use crate::ecs::asset_id;
-use crate::ecs::{AssetKind, BlobAssetDef, ComponentType};
+use crate::ecs::{AssetKind, BlobAssetDef};
+use crate::registry::ComponentType;
 
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;

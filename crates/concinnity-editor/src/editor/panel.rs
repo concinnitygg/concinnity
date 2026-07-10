@@ -1311,7 +1311,7 @@ mod tests {
     fn add_types_cook_with_default_args() {
         isolate_state_dir();
         for ty in picker_types() {
-            let ct = crate::ecs::ComponentType::parse(ty)
+            let ct = concinnity_cook::ComponentType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} is a real component type"));
             assert!(ct.addable(), "{ty} must be External / addable");
             let world = format!(
@@ -1331,7 +1331,7 @@ mod tests {
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         isolate_state_dir();
-        use crate::ecs::ComponentType;
+        use concinnity_cook::ComponentType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[

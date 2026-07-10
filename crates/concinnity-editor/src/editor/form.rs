@@ -24,7 +24,7 @@
 // nulls) is left at its default and round-trips untouched. The assembled object is
 // validated by the caller via `ComponentType::reserialize_args`.
 
-use crate::ecs::ComponentType;
+use concinnity_cook::ComponentType;
 use serde_json::{Map, Value};
 
 // The number of physical form-control slots the edit panel injects (checkboxes,

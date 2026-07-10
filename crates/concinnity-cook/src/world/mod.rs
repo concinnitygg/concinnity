@@ -32,7 +32,8 @@ pub use config::{DEFAULT_MAX_BLOB_BYTES, WorldConfig};
 pub use expand::{ExpandReport, InjectedAsset, expand_world, expand_world_from_str};
 pub use shader::normalize_single_shader_type;
 
-use crate::ecs::{AssetOrigin, ComponentType};
+use crate::ecs::AssetOrigin;
+use crate::registry::ComponentType;
 
 // Asset name derived from a file path: the file stem with dots replaced by
 // underscores. Companion injection and `cn add` share this so a generated asset
