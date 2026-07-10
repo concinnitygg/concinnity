@@ -169,4 +169,23 @@ impl RenderBackend for VkContext {
             .get(draw_idx)
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }
+
+    // The swapchain config this live backend can hot-swap a world onto. A live
+    // editor reload reuses this backend in place (via `reload_world`) only when
+    // the new world's `swapchain_config` matches; otherwise the swap does a full
+    // rebuild (recreating the window). Mirrors `DxContext`.
+    fn hot_swap_config(&self) -> Option<crate::gfx::backend_init::SwapchainConfig> {
+        Some(self.swapchain_config)
+    }
+
+    // Rebuild a new world's GPU content on this already-constructed backend,
+    // reusing the window + Vulkan device + swapchain. Inherent method named
+    // `apply_world_reload` so this forwarder does not shadow-and-recurse.
+    fn reload_world(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        debug_assert_main_thread("reload_world");
+        self.apply_world_reload(init)
+    }
 }

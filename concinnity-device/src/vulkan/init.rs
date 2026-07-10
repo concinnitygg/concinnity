@@ -27,10 +27,26 @@ use super::texture::{self, *};
 //  Construction
 
 impl VkContext {
+    // Construct a fresh context, acquiring its own OS window + Vulkan
+    // instance / device / surface / swapchain.
+    pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+        Self::build(init, None)
+    }
+
     // Construct from the assembled backend inputs (see
     // `crate::gfx::backend_init::BackendInit` for per-field docs); the
     // Vulkan-specific behaviour of each input is documented inline below.
-    pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    //
+    // `reuse` is `Some` only on a live editor `reload_world` (see
+    // `apply_world_reload`): the shared hardware (window / instance / device /
+    // surface / swapchain / queues / capabilities / debug messenger / timestamp
+    // pool) is inherited from the outgoing context instead of acquired fresh,
+    // and every per-world resource below is rebuilt on it. `None` acquires it
+    // all fresh, the normal launch path.
+    fn build(
+        init: crate::gfx::backend_init::BackendInit<'_>,
+        reuse: Option<VkReuse>,
+    ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
@@ -130,333 +146,410 @@ impl VkContext {
         let taa_enabled = taa_enabled || temporal_upscaling;
         let frames = frames_in_flight.max(1);
 
-        //  Platform window (native Win32 on Windows, GLFW on Linux)
-        let mut window = super::PlatformWindow::new(
-            title,
-            width,
-            height,
-            &crate::assets::WindowMode::Windowed,
-            true,
-        )?;
-
-        //  Vulkan entry
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| format!("load vulkan: {e}"))?;
-
-        // Resolve which (if any) upscaler SDK needs Vulkan instance / device
-        // extensions enabled at creation time (DLSS / XeSS). Queried before
-        // instance creation (it needs at most the loaded SDK), then threaded
-        // into `create_logical_device` for the device extensions / features.
-        // Inert (`choice == Native`) when upscaling is off or the backend needs
-        // nothing; held in scope until after device creation so its
-        // instance-ext pointers + XeSS feature chain stay valid. Resolved before
-        // `app_info` so its `min_api_version` can raise the instance apiVersion.
-        let upscale_sdk = super::post::UpscaleSdk::prepare(temporal_upscaling, upscale_backend);
-
-        //  Instance
-        let app_name = CString::new(title).unwrap_or_default();
-        let engine_name = CString::new("Concinnity").unwrap();
-        // Vulkan 1.2 baseline: FidelityFX FSR's precompiled shaders are SPIR-V
-        // 1.5, valid only under a 1.2+ instance. XeSS 3.x raises the floor to
-        // 1.3 (its shaders use SPV_KHR_integer_dot_product, a 1.3 capability),
-        // reported via `min_api_version`. Take the max, clamped to what the
-        // loader actually supports so an unsupported request can't fail instance
-        // creation (the backend then falls back). The engine's own shaders are
-        // unaffected by the bump.
-        let loader_version = unsafe { entry.try_enumerate_instance_version() }
-            .ok()
-            .flatten()
-            .unwrap_or(vk::API_VERSION_1_2);
-        let api_version = vk::API_VERSION_1_2
-            .max(upscale_sdk.min_api_version())
-            .min(loader_version);
-        let app_info = vk::ApplicationInfo::default()
-            .application_name(&app_name)
-            .application_version(vk::make_api_version(0, 0, 1, 0))
-            .engine_name(&engine_name)
-            .engine_version(vk::make_api_version(0, 0, 1, 0))
-            .api_version(api_version);
-
-        // Hold the windowing extension name CStrings in scope so their pointers
-        // stay valid through instance creation, then drop with the rest of init
-        // (mirrors `device.rs`'s `enabled`/`ext_names` pairing). The later
-        // pushes are all `'static` NAME pointers, so they need no backing store.
-        let instance_ext_cstrings: Vec<CString> = window
-            .required_instance_extensions()
-            .iter()
-            .map(|s| CString::new(s.as_str()).unwrap())
-            .collect();
-        let mut ext_names_raw: Vec<*const c_char> =
-            instance_ext_cstrings.iter().map(|c| c.as_ptr()).collect();
-
-        let debug_ext = ash::ext::debug_utils::NAME.as_ptr();
-        if validation {
-            ext_names_raw.push(debug_ext);
-        }
-
-        // HDR display: enable `VK_EXT_swapchain_colorspace` (instance
-        // extension) when the world asked for HDR and the loader exposes
-        // it. With the extension enabled, the surface formats query
-        // includes the extended-range colour spaces; without it, the
-        // scRGB-linear pair we look for is unreachable. The extension
-        // landed pre-Vulkan-1.0.43 and is supported on every recent
-        // desktop driver; the availability check makes a missing-loader
-        // case (older Linux distros, headless CI) degrade to SDR rather
-        // than failing instance creation.
-        let swapchain_colorspace_ext_available = hdr_display
-            && unsafe { entry.enumerate_instance_extension_properties(None) }
-                .map(|exts| {
-                    exts.iter().any(|p| {
-                        let name = unsafe { std::ffi::CStr::from_ptr(p.extension_name.as_ptr()) };
-                        name == ash::ext::swapchain_colorspace::NAME
-                    })
-                })
-                .unwrap_or(false);
-        if swapchain_colorspace_ext_available {
-            ext_names_raw.push(ash::ext::swapchain_colorspace::NAME.as_ptr());
-        } else if hdr_display {
-            tracing::warn!(
-                "HDR display requested but VK_EXT_swapchain_colorspace is not exposed by the \
-                 Vulkan loader; falling back to SDR (BGRA8 sRGB) output"
-            );
-        }
-
-        // Instance extensions the chosen upscaler SDK requires (DLSS / XeSS).
-        // The pointers borrow from `upscale_sdk`, which outlives this scope.
-        for ptr in upscale_sdk.instance_extension_ptrs() {
-            ext_names_raw.push(ptr);
-        }
-
-        let layer_names_raw: Vec<*const c_char> = if validation {
-            let layer = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-            let ptr = layer.as_ptr();
-            std::mem::forget(layer);
-            vec![ptr]
-        } else {
-            vec![]
-        };
-
-        let instance_info = vk::InstanceCreateInfo::default()
-            .application_info(&app_info)
-            .enabled_extension_names(&ext_names_raw)
-            .enabled_layer_names(&layer_names_raw);
-
-        let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err(|e| format!("create instance: {e}"))?;
-
-        //  Debug messenger
-        // Budget the messenger callback consumes to drop benign DLSS first-frame
-        // layout errors; set after `build_upscaler` resolves to DLSS. Heap-boxed
-        // so its address stays stable when this `VkContext` is returned by value,
-        // and kept as a context field that outlives the messenger (destroyed in
-        // `Drop` before fields). `None` when validation (the messenger) is off.
-        let debug_filter: Option<Box<std::sync::atomic::AtomicU32>> =
-            validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
-        let (debug_utils, debug_messenger) = if validation {
-            let du = ash::ext::debug_utils::Instance::new(&entry, &instance);
-            let user_data = debug_filter
-                .as_ref()
-                .map(|b| &**b as *const std::sync::atomic::AtomicU32 as *mut std::ffi::c_void)
-                .unwrap_or(std::ptr::null_mut());
-            let info = vk::DebugUtilsMessengerCreateInfoEXT::default()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                )
-                .pfn_user_callback(Some(debug_callback))
-                .user_data(user_data);
-            let messenger = unsafe { du.create_debug_utils_messenger(&info, None) }
-                .map_err(|e| format!("debug messenger: {e}"))?;
-            (Some(du), Some(messenger))
-        } else {
-            (None, None)
-        };
-
-        //  Surface
-        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
-        let surface = window.create_surface(&entry, &instance)?;
-
-        //  Physical device
-        let (physical_device, graphics_family, present_family) =
-            pick_physical_device(&instance, &surface_loader, surface)?;
-
-        //  Logical device. `rt_capable` comes back true when the device exposes
-        //  the ray-query extension set (and XeSS is not the active backend); the
-        //  RT extensions are enabled whenever capable so a live RT toggle works,
-        //  independent of whether the world wants RT at launch. The
-        //  acceleration-structure build + RT pass below are gated on
-        //  `rt_settings.is_some() && rt_capable` (everything falls back to SSR
-        //  when RT is off or the device is incapable).
-        let (device, memory_budget_supported, rt_capable) = create_logical_device(
-            &instance,
+        // Acquire the shared hardware (fresh launch), or inherit it from the
+        // outgoing context on a live editor reload. Every per-world resource
+        // further below is built on it regardless of which path produced it.
+        let SharedHardware {
+            window,
+            entry,
+            instance,
+            device,
             physical_device,
+            surface,
+            surface_loader,
+            graphics_queue,
+            present_queue,
             graphics_family,
-            present_family,
-            validation,
-            &upscale_sdk,
-        )?;
-
-        let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
-        let present_queue = unsafe { device.get_device_queue(present_family, 0) };
-
-        //  Timestamp support: the per-frame GPU-time chip uses a query pool
-        //  with `2 * frames` slots, a pair per in-flight frame. `timestamp_period`
-        //  is nanoseconds-per-tick; `timestamp_valid_bits` on the graphics queue
-        //  family must be non-zero for `cmd_write_timestamp` to be valid. Without
-        //  either the renderer leaves `gpu_frame_us` at zero. Mirrors
-        //  `directx::build_timestamp_resources`.
-        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let queue_family_props =
-            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-        let timestamp_period = device_props.limits.timestamp_period;
-        let timestamp_valid_bits = queue_family_props
-            .get(graphics_family as usize)
-            .map(|f| f.timestamp_valid_bits)
-            .unwrap_or(0);
-        let timestamps_supported = timestamp_period > 0.0 && timestamp_valid_bits > 0;
-        let timestamp_query_pool = if timestamps_supported {
-            // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
-            // one pair per render pass) per frame in flight.
-            let info = vk::QueryPoolCreateInfo::default()
-                .query_type(vk::QueryType::TIMESTAMP)
-                .query_count((super::pass_timing::SLOTS_PER_FRAME * frames) as u32);
-            match unsafe { device.create_query_pool(&info, None) } {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    tracing::warn!("timestamp query pool create failed: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        //  Device-local heap indices for the VRAM-residency chip. Sums
-        //  `heap_usage` on every DEVICE_LOCAL heap when `VK_EXT_memory_budget`
-        //  is supported; otherwise the field stays empty and the chip reports
-        //  zero (matching DirectX's adapter-without-QueryVideoMemoryInfo
-        //  fallback).
-        let memory_props =
-            unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        let device_local_heaps: Vec<u32> = if memory_budget_supported {
-            (0..memory_props.memory_heap_count as usize)
-                .filter(|i| {
-                    memory_props.memory_heaps[*i]
-                        .flags
-                        .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-                })
-                .map(|i| i as u32)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        //  MSAA sample count
-        let msaa_samples = get_max_usable_sample_count(&instance, physical_device);
-
-        // HDR-output resolve. The world's `hdr_display` toggle is the
-        // gate; even on a capable display, no HDR unless the asset opts
-        // in. The reverse (`hdr_display = true` on an SDR-only surface,
-        // or with the colour-space loader extension missing) falls back
-        // to SDR with a logged warning. Vulkan has no portable max-EDR
-        // query: when the surface advertises the scRGB-linear colour
-        // space we synthesise a placeholder `max_edr = 2.0` (the
-        // HDR400-class minimum) so the shared `HdrOutputMode::resolve`
-        // logic stays uniform across backends.
-        // Probe which HDR colour-space pairs the surface advertises. An
-        // advertised HDR colour space is Vulkan's "HDR available" signal (there
-        // is no portable max-EDR query), so we synthesise the placeholder
-        // `max_edr` from it. scRGB-linear drives the extended-linear path; an
-        // `HDR10_ST2084_EXT` pair (float or 10-bit packed) drives the PQ path.
-        let surface_formats =
-            unsafe { surface_loader.get_physical_device_surface_formats(physical_device, surface) }
-                .unwrap_or_default();
-        let advertises = |fmt: vk::Format, cs: vk::ColorSpaceKHR| {
-            surface_formats
-                .iter()
-                .any(|f| f.format == fmt && f.color_space == cs)
-        };
-        let scrgb_advertises = swapchain_colorspace_ext_available
-            && advertises(
-                vk::Format::R16G16B16A16_SFLOAT,
-                vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
-            );
-        let pq_advertises = swapchain_colorspace_ext_available
-            && (advertises(
-                vk::Format::R16G16B16A16_SFLOAT,
-                vk::ColorSpaceKHR::HDR10_ST2084_EXT,
-            ) || advertises(
-                vk::Format::A2B10G10R10_UNORM_PACK32,
-                vk::ColorSpaceKHR::HDR10_ST2084_EXT,
-            ));
-        // PQ needs the HDR10 colour space. When `hdr_pq` is requested but only
-        // scRGB is advertised, fall back to the extended-linear path so the
-        // shader encode and the swapchain colour space never diverge (sending
-        // PQ-encoded values to an scRGB-linear swapchain would look wrong).
-        let pq_capable = hdr_pq && pq_advertises;
-        if hdr_display && hdr_pq && !pq_advertises {
-            tracing::warn!(
-                "HDR display + hdr_pq:true requested but no surface format advertises HDR10 PQ \
-                 (RGBA16F / A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT); falling back to \
-                 scRGB-linear extended-range output"
-            );
-        }
-        let max_edr = if scrgb_advertises || pq_advertises {
-            2.0
-        } else {
-            1.0
-        };
-        let hdr_mode =
-            crate::gfx::hdr_output::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
-        if hdr_display && !hdr_mode.is_hdr() {
-            tracing::warn!(
-                "HDR display requested but no surface format advertises an HDR colour space \
-                 (scRGB linear or HDR10 PQ): falling back to SDR (BGRA8 sRGB) output"
-            );
-        } else if hdr_mode.pq_flag() > 0.5 {
-            tracing::info!("HDR display output enabled: HDR10 PQ swapchain (SMPTE ST 2084)");
-        } else if hdr_mode.is_hdr() {
-            tracing::info!(
-                "HDR display output enabled: scRGB-linear swapchain (RGBA16F + \
-                 EXTENDED_SRGB_LINEAR_EXT)"
-            );
-        }
-        // Drive the composite shader's `hdr_output > 0.5` branch and its
-        // in-branch `pq_output` encode flag from the resolved mode. Mirrors
-        // `DxContext::new`.
-        post_process.hdr_output = hdr_mode.shader_flag();
-        post_process.pq_output = hdr_mode.pq_flag();
-
-        //  Swapchain
-        let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
-        let (swapchain, swapchain_images, swapchain_format, swapchain_extent) =
-            create_swapchain_inner(
-                &SwapchainSurface {
-                    instance: &instance,
-                    device: &device,
-                    pd: physical_device,
-                    surface_loader: &surface_loader,
-                    surface,
-                    swapchain_loader: &swapchain_loader,
-                },
-                SwapchainQueueFamilies {
-                    graphics_family,
-                    present_family,
-                },
-                SwapchainConfig {
+            swapchain_loader,
+            swapchain,
+            swapchain_images,
+            swapchain_format,
+            swapchain_extent,
+            swapchain_image_views,
+            msaa_samples,
+            hdr_mode,
+            memory_budget_supported,
+            rt_capable,
+            device_local_heaps,
+            debug_utils,
+            debug_messenger,
+            debug_filter,
+            timestamp_query_pool,
+            timestamp_period,
+        } = match reuse {
+            Some(r) => r.into_shared()?,
+            None => {
+                //  Platform window (native Win32 on Windows, GLFW on Linux)
+                let mut window = super::PlatformWindow::new(
+                    title,
                     width,
                     height,
-                    old_swapchain: vk::SwapchainKHR::null(),
+                    &crate::assets::WindowMode::Windowed,
+                    true,
+                )?;
+
+                //  Vulkan entry
+                let entry =
+                    unsafe { ash::Entry::load() }.map_err(|e| format!("load vulkan: {e}"))?;
+
+                // Resolve which (if any) upscaler SDK needs Vulkan instance / device
+                // extensions enabled at creation time (DLSS / XeSS). Queried before
+                // instance creation (it needs at most the loaded SDK), then threaded
+                // into `create_logical_device` for the device extensions / features.
+                // Inert (`choice == Native`) when upscaling is off or the backend needs
+                // nothing; held in scope until after device creation so its
+                // instance-ext pointers + XeSS feature chain stay valid. Resolved before
+                // `app_info` so its `min_api_version` can raise the instance apiVersion.
+                let upscale_sdk =
+                    super::post::UpscaleSdk::prepare(temporal_upscaling, upscale_backend);
+
+                //  Instance
+                let app_name = CString::new(title).unwrap_or_default();
+                let engine_name = CString::new("Concinnity").unwrap();
+                // Vulkan 1.2 baseline: FidelityFX FSR's precompiled shaders are SPIR-V
+                // 1.5, valid only under a 1.2+ instance. XeSS 3.x raises the floor to
+                // 1.3 (its shaders use SPV_KHR_integer_dot_product, a 1.3 capability),
+                // reported via `min_api_version`. Take the max, clamped to what the
+                // loader actually supports so an unsupported request can't fail instance
+                // creation (the backend then falls back). The engine's own shaders are
+                // unaffected by the bump.
+                let loader_version = unsafe { entry.try_enumerate_instance_version() }
+                    .ok()
+                    .flatten()
+                    .unwrap_or(vk::API_VERSION_1_2);
+                let api_version = vk::API_VERSION_1_2
+                    .max(upscale_sdk.min_api_version())
+                    .min(loader_version);
+                let app_info = vk::ApplicationInfo::default()
+                    .application_name(&app_name)
+                    .application_version(vk::make_api_version(0, 0, 1, 0))
+                    .engine_name(&engine_name)
+                    .engine_version(vk::make_api_version(0, 0, 1, 0))
+                    .api_version(api_version);
+
+                // Hold the windowing extension name CStrings in scope so their pointers
+                // stay valid through instance creation, then drop with the rest of init
+                // (mirrors `device.rs`'s `enabled`/`ext_names` pairing). The later
+                // pushes are all `'static` NAME pointers, so they need no backing store.
+                let instance_ext_cstrings: Vec<CString> = window
+                    .required_instance_extensions()
+                    .iter()
+                    .map(|s| CString::new(s.as_str()).unwrap())
+                    .collect();
+                let mut ext_names_raw: Vec<*const c_char> =
+                    instance_ext_cstrings.iter().map(|c| c.as_ptr()).collect();
+
+                let debug_ext = ash::ext::debug_utils::NAME.as_ptr();
+                if validation {
+                    ext_names_raw.push(debug_ext);
+                }
+
+                // HDR display: enable `VK_EXT_swapchain_colorspace` (instance
+                // extension) when the world asked for HDR and the loader exposes
+                // it. With the extension enabled, the surface formats query
+                // includes the extended-range colour spaces; without it, the
+                // scRGB-linear pair we look for is unreachable. The extension
+                // landed pre-Vulkan-1.0.43 and is supported on every recent
+                // desktop driver; the availability check makes a missing-loader
+                // case (older Linux distros, headless CI) degrade to SDR rather
+                // than failing instance creation.
+                let swapchain_colorspace_ext_available = hdr_display
+                    && unsafe { entry.enumerate_instance_extension_properties(None) }
+                        .map(|exts| {
+                            exts.iter().any(|p| {
+                                let name =
+                                    unsafe { std::ffi::CStr::from_ptr(p.extension_name.as_ptr()) };
+                                name == ash::ext::swapchain_colorspace::NAME
+                            })
+                        })
+                        .unwrap_or(false);
+                if swapchain_colorspace_ext_available {
+                    ext_names_raw.push(ash::ext::swapchain_colorspace::NAME.as_ptr());
+                } else if hdr_display {
+                    tracing::warn!(
+                        "HDR display requested but VK_EXT_swapchain_colorspace is not exposed by the \
+                 Vulkan loader; falling back to SDR (BGRA8 sRGB) output"
+                    );
+                }
+
+                // Instance extensions the chosen upscaler SDK requires (DLSS / XeSS).
+                // The pointers borrow from `upscale_sdk`, which outlives this scope.
+                for ptr in upscale_sdk.instance_extension_ptrs() {
+                    ext_names_raw.push(ptr);
+                }
+
+                let layer_names_raw: Vec<*const c_char> = if validation {
+                    let layer = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
+                    let ptr = layer.as_ptr();
+                    std::mem::forget(layer);
+                    vec![ptr]
+                } else {
+                    vec![]
+                };
+
+                let instance_info = vk::InstanceCreateInfo::default()
+                    .application_info(&app_info)
+                    .enabled_extension_names(&ext_names_raw)
+                    .enabled_layer_names(&layer_names_raw);
+
+                let instance = unsafe { entry.create_instance(&instance_info, None) }
+                    .map_err(|e| format!("create instance: {e}"))?;
+
+                //  Debug messenger
+                // Budget the messenger callback consumes to drop benign DLSS first-frame
+                // layout errors; set after `build_upscaler` resolves to DLSS. Heap-boxed
+                // so its address stays stable when this `VkContext` is returned by value,
+                // and kept as a context field that outlives the messenger (destroyed in
+                // `Drop` before fields). `None` when validation (the messenger) is off.
+                let debug_filter: Option<Box<std::sync::atomic::AtomicU32>> =
+                    validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
+                let (debug_utils, debug_messenger) = if validation {
+                    let du = ash::ext::debug_utils::Instance::new(&entry, &instance);
+                    let user_data = debug_filter
+                        .as_ref()
+                        .map(|b| {
+                            &**b as *const std::sync::atomic::AtomicU32 as *mut std::ffi::c_void
+                        })
+                        .unwrap_or(std::ptr::null_mut());
+                    let info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                        .message_severity(
+                            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
+                        )
+                        .message_type(
+                            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                        )
+                        .pfn_user_callback(Some(debug_callback))
+                        .user_data(user_data);
+                    let messenger = unsafe { du.create_debug_utils_messenger(&info, None) }
+                        .map_err(|e| format!("debug messenger: {e}"))?;
+                    (Some(du), Some(messenger))
+                } else {
+                    (None, None)
+                };
+
+                //  Surface
+                let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
+                let surface = window.create_surface(&entry, &instance)?;
+
+                //  Physical device
+                let (physical_device, graphics_family, present_family) =
+                    pick_physical_device(&instance, &surface_loader, surface)?;
+
+                //  Logical device. `rt_capable` comes back true when the device exposes
+                //  the ray-query extension set (and XeSS is not the active backend); the
+                //  RT extensions are enabled whenever capable so a live RT toggle works,
+                //  independent of whether the world wants RT at launch. The
+                //  acceleration-structure build + RT pass below are gated on
+                //  `rt_settings.is_some() && rt_capable` (everything falls back to SSR
+                //  when RT is off or the device is incapable).
+                let (device, memory_budget_supported, rt_capable) = create_logical_device(
+                    &instance,
+                    physical_device,
+                    graphics_family,
+                    present_family,
+                    validation,
+                    &upscale_sdk,
+                )?;
+
+                let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
+                let present_queue = unsafe { device.get_device_queue(present_family, 0) };
+
+                //  Timestamp support: the per-frame GPU-time chip uses a query pool
+                //  with `2 * frames` slots, a pair per in-flight frame. `timestamp_period`
+                //  is nanoseconds-per-tick; `timestamp_valid_bits` on the graphics queue
+                //  family must be non-zero for `cmd_write_timestamp` to be valid. Without
+                //  either the renderer leaves `gpu_frame_us` at zero. Mirrors
+                //  `directx::build_timestamp_resources`.
+                let device_props =
+                    unsafe { instance.get_physical_device_properties(physical_device) };
+                let queue_family_props = unsafe {
+                    instance.get_physical_device_queue_family_properties(physical_device)
+                };
+                let timestamp_period = device_props.limits.timestamp_period;
+                let timestamp_valid_bits = queue_family_props
+                    .get(graphics_family as usize)
+                    .map(|f| f.timestamp_valid_bits)
+                    .unwrap_or(0);
+                let timestamps_supported = timestamp_period > 0.0 && timestamp_valid_bits > 0;
+                let timestamp_query_pool = if timestamps_supported {
+                    // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
+                    // one pair per render pass) per frame in flight.
+                    let info = vk::QueryPoolCreateInfo::default()
+                        .query_type(vk::QueryType::TIMESTAMP)
+                        .query_count((super::pass_timing::SLOTS_PER_FRAME * frames) as u32);
+                    match unsafe { device.create_query_pool(&info, None) } {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            tracing::warn!("timestamp query pool create failed: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                //  Device-local heap indices for the VRAM-residency chip. Sums
+                //  `heap_usage` on every DEVICE_LOCAL heap when `VK_EXT_memory_budget`
+                //  is supported; otherwise the field stays empty and the chip reports
+                //  zero (matching DirectX's adapter-without-QueryVideoMemoryInfo
+                //  fallback).
+                let memory_props =
+                    unsafe { instance.get_physical_device_memory_properties(physical_device) };
+                let device_local_heaps: Vec<u32> = if memory_budget_supported {
+                    (0..memory_props.memory_heap_count as usize)
+                        .filter(|i| {
+                            memory_props.memory_heaps[*i]
+                                .flags
+                                .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+                        })
+                        .map(|i| i as u32)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                //  MSAA sample count
+                let msaa_samples = get_max_usable_sample_count(&instance, physical_device);
+
+                // HDR-output resolve. The world's `hdr_display` toggle is the
+                // gate; even on a capable display, no HDR unless the asset opts
+                // in. The reverse (`hdr_display = true` on an SDR-only surface,
+                // or with the colour-space loader extension missing) falls back
+                // to SDR with a logged warning. Vulkan has no portable max-EDR
+                // query: when the surface advertises the scRGB-linear colour
+                // space we synthesise a placeholder `max_edr = 2.0` (the
+                // HDR400-class minimum) so the shared `HdrOutputMode::resolve`
+                // logic stays uniform across backends.
+                // Probe which HDR colour-space pairs the surface advertises. An
+                // advertised HDR colour space is Vulkan's "HDR available" signal (there
+                // is no portable max-EDR query), so we synthesise the placeholder
+                // `max_edr` from it. scRGB-linear drives the extended-linear path; an
+                // `HDR10_ST2084_EXT` pair (float or 10-bit packed) drives the PQ path.
+                let surface_formats = unsafe {
+                    surface_loader.get_physical_device_surface_formats(physical_device, surface)
+                }
+                .unwrap_or_default();
+                let advertises = |fmt: vk::Format, cs: vk::ColorSpaceKHR| {
+                    surface_formats
+                        .iter()
+                        .any(|f| f.format == fmt && f.color_space == cs)
+                };
+                let scrgb_advertises = swapchain_colorspace_ext_available
+                    && advertises(
+                        vk::Format::R16G16B16A16_SFLOAT,
+                        vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+                    );
+                let pq_advertises = swapchain_colorspace_ext_available
+                    && (advertises(
+                        vk::Format::R16G16B16A16_SFLOAT,
+                        vk::ColorSpaceKHR::HDR10_ST2084_EXT,
+                    ) || advertises(
+                        vk::Format::A2B10G10R10_UNORM_PACK32,
+                        vk::ColorSpaceKHR::HDR10_ST2084_EXT,
+                    ));
+                // PQ needs the HDR10 colour space. When `hdr_pq` is requested but only
+                // scRGB is advertised, fall back to the extended-linear path so the
+                // shader encode and the swapchain colour space never diverge (sending
+                // PQ-encoded values to an scRGB-linear swapchain would look wrong).
+                let pq_capable = hdr_pq && pq_advertises;
+                if hdr_display && hdr_pq && !pq_advertises {
+                    tracing::warn!(
+                        "HDR display + hdr_pq:true requested but no surface format advertises HDR10 PQ \
+                 (RGBA16F / A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT); falling back to \
+                 scRGB-linear extended-range output"
+                    );
+                }
+                let max_edr = if scrgb_advertises || pq_advertises {
+                    2.0
+                } else {
+                    1.0
+                };
+                let hdr_mode = crate::gfx::hdr_output::HdrOutputMode::resolve(
+                    hdr_display,
+                    pq_capable,
+                    max_edr,
+                );
+                if hdr_display && !hdr_mode.is_hdr() {
+                    tracing::warn!(
+                        "HDR display requested but no surface format advertises an HDR colour space \
+                 (scRGB linear or HDR10 PQ): falling back to SDR (BGRA8 sRGB) output"
+                    );
+                } else if hdr_mode.pq_flag() > 0.5 {
+                    tracing::info!(
+                        "HDR display output enabled: HDR10 PQ swapchain (SMPTE ST 2084)"
+                    );
+                } else if hdr_mode.is_hdr() {
+                    tracing::info!(
+                        "HDR display output enabled: scRGB-linear swapchain (RGBA16F + \
+                 EXTENDED_SRGB_LINEAR_EXT)"
+                    );
+                }
+                //  Swapchain
+                let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
+                let (swapchain, swapchain_images, swapchain_format, swapchain_extent) =
+                    create_swapchain_inner(
+                        &SwapchainSurface {
+                            instance: &instance,
+                            device: &device,
+                            pd: physical_device,
+                            surface_loader: &surface_loader,
+                            surface,
+                            swapchain_loader: &swapchain_loader,
+                        },
+                        SwapchainQueueFamilies {
+                            graphics_family,
+                            present_family,
+                        },
+                        SwapchainConfig {
+                            width,
+                            height,
+                            old_swapchain: vk::SwapchainKHR::null(),
+                            hdr_mode,
+                            vsync,
+                        },
+                    )?;
+                let swapchain_image_views =
+                    create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
+
+                SharedHardware {
+                    window,
+                    entry,
+                    instance,
+                    device,
+                    physical_device,
+                    surface,
+                    surface_loader,
+                    graphics_queue,
+                    present_queue,
+                    graphics_family,
+                    swapchain_loader,
+                    swapchain,
+                    swapchain_images,
+                    swapchain_format,
+                    swapchain_extent,
+                    swapchain_image_views,
+                    msaa_samples,
                     hdr_mode,
-                    vsync,
-                },
-            )?;
-        let swapchain_image_views =
-            create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
+                    memory_budget_supported,
+                    rt_capable,
+                    device_local_heaps,
+                    debug_utils,
+                    debug_messenger,
+                    debug_filter,
+                    timestamp_query_pool,
+                    timestamp_period,
+                }
+            }
+        };
+
+        // Drive the composite shader's `hdr_output > 0.5` branch and its
+        // in-branch `pq_output` encode flag from the resolved HDR mode (freshly
+        // negotiated or inherited on a reload). Mirrors `DxContext::new`.
+        post_process.hdr_output = hdr_mode.shader_flag();
+        post_process.pq_output = hdr_mode.pq_flag();
 
         //  Command pool
         let command_pool = {
@@ -3608,11 +3701,22 @@ impl VkContext {
             probe_rendering: None,
             probe_converting: None,
             deferred_destroy: RefCell::new(Vec::new()),
-            window,
+            window: Some(window),
             debug_utils,
             debug_messenger,
             debug_filter,
             _entry: entry,
+            // The swap-decision key for a future live reload of this context
+            // (see `hot_swap_config` / `reload_world`). Normalised `frames` (>=1)
+            // matches how `BackendInit::swapchain_config` clamps it.
+            swapchain_config: crate::gfx::backend_init::SwapchainConfig {
+                frames_in_flight: frames,
+                hdr_display,
+                hdr_pq,
+            },
+            // A freshly built context owns its hardware outright; only
+            // `apply_world_reload` flips this on the outgoing context.
+            reused_by_successor: false,
         };
         // Push every world-authored `DecalRecord` through `add_decal` so
         // its albedo descriptor lands in the reserved slot before the
@@ -3623,6 +3727,180 @@ impl VkContext {
         // descriptor sets land before the first frame.
         me.upload_initial_particles(particles)?;
         Ok(me)
+    }
+
+    // Rebuild this backend's world content in place on its existing hardware for
+    // a live editor edit: wait for the GPU to idle, hand the shared instance /
+    // device / surface / swapchain / window (+ debug messenger + timestamp pool)
+    // to a successor context built from `init`, then replace `self` with it. The
+    // outgoing `self` is dropped by the `*self = rebuilt` assignment;
+    // `reused_by_successor` (set just before it) makes that Drop free only this
+    // world's content and leave the shared hardware to the successor. Only ever
+    // called when `hot_swap_config` reported a config matching
+    // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
+    // EDR) is guaranteed unchanged. Mirrors `DxContext::apply_world_reload`.
+    //
+    // On a content-build failure (essentially impossible for a pre-validated
+    // editor edit built from the engine's built-in shaders) the moved window is
+    // closed with the dropped reuse bundle; `self` still owns the shared
+    // hardware (the flag was not yet set) and tears it down in a normal Drop, so
+    // the caller can drop this backend and mark the session failed without a
+    // leak.
+    pub(in crate::vulkan) fn apply_world_reload(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        self.wait_idle();
+        // The loaders + `ash::{Entry,Instance,Device}` are dispatch-table clones
+        // over the same underlying objects; the raw `vk::*` handles are `Copy`;
+        // the window + (already-`Option`) debug messenger + timestamp pool are
+        // MOVED out so this context's Drop leaves them for the successor.
+        let reuse = VkReuse {
+            window: self
+                .window
+                .take()
+                .ok_or("apply_world_reload: window already taken")?,
+            entry: self._entry.clone(),
+            instance: self.instance.clone(),
+            device: self.device.clone(),
+            physical_device: self.physical_device,
+            surface: self.surface,
+            surface_loader: self.surface_loader.clone(),
+            graphics_queue: self.graphics_queue,
+            present_queue: self.present_queue,
+            graphics_family: self.graphics_family,
+            swapchain_loader: self.swapchain_loader.clone(),
+            swapchain: self.swapchain,
+            swapchain_images: self.swapchain_images.clone(),
+            swapchain_format: self.swapchain_format,
+            swapchain_extent: self.swapchain_extent,
+            msaa_samples: self.msaa_samples,
+            hdr_mode: self.hdr_mode,
+            memory_budget_supported: self.memory_budget_supported,
+            rt_capable: self.rt_capable,
+            device_local_heaps: self.device_local_heaps.clone(),
+            debug_utils: self.debug_utils.take(),
+            debug_messenger: self.debug_messenger.take(),
+            debug_filter: self.debug_filter.take(),
+            timestamp_query_pool: self.timestamp_query_pool.take(),
+            timestamp_period: self.timestamp_period_ns,
+        };
+        let rebuilt = VkContext::build(init, Some(reuse))?;
+        // Build succeeded: the successor owns the shared hardware now. Mark the
+        // outgoing self so its Drop (triggered by the assignment below) skips the
+        // shared instance / device / surface / swapchain.
+        self.reused_by_successor = true;
+        *self = rebuilt;
+        Ok(())
+    }
+}
+
+// The shared hardware `VkContext::build` acquires (fresh launch) or inherits
+// (live editor reload) before it builds any per-world resource. Destructured
+// right after so the rest of `build` is identical on both paths.
+struct SharedHardware {
+    window: super::PlatformWindow,
+    entry: ash::Entry,
+    instance: ash::Instance,
+    device: ash::Device,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+    surface_loader: ash::khr::surface::Instance,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
+    graphics_family: u32,
+    swapchain_loader: ash::khr::swapchain::Device,
+    swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_format: vk::Format,
+    swapchain_extent: vk::Extent2D,
+    swapchain_image_views: Vec<vk::ImageView>,
+    msaa_samples: vk::SampleCountFlags,
+    hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    memory_budget_supported: bool,
+    rt_capable: bool,
+    device_local_heaps: Vec<u32>,
+    debug_utils: Option<ash::ext::debug_utils::Instance>,
+    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
+    debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
+    timestamp_query_pool: Option<vk::QueryPool>,
+    timestamp_period: f32,
+}
+
+// The shared hardware an outgoing context hands to its successor on a live
+// editor `reload_world` (see `VkContext::apply_world_reload`). The loaders and
+// `ash::{Entry,Instance,Device}` are cheap dispatch-table clones over the same
+// underlying objects; the raw `vk::*` handles are `Copy`; the window and the
+// (already-`Option`) debug + timestamp handles are moved out of the outgoing
+// context so its `Drop` leaves them alone. Vulkan handles are not refcounted, so
+// the outgoing `Drop` also skips destroying the shared instance / device /
+// surface / swapchain (gated on `reused_by_successor`).
+pub(in crate::vulkan) struct VkReuse {
+    window: super::PlatformWindow,
+    entry: ash::Entry,
+    instance: ash::Instance,
+    device: ash::Device,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+    surface_loader: ash::khr::surface::Instance,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
+    graphics_family: u32,
+    swapchain_loader: ash::khr::swapchain::Device,
+    swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_format: vk::Format,
+    swapchain_extent: vk::Extent2D,
+    msaa_samples: vk::SampleCountFlags,
+    hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    memory_budget_supported: bool,
+    rt_capable: bool,
+    device_local_heaps: Vec<u32>,
+    debug_utils: Option<ash::ext::debug_utils::Instance>,
+    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
+    debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
+    timestamp_query_pool: Option<vk::QueryPool>,
+    timestamp_period: f32,
+}
+
+impl VkReuse {
+    // Turn the inherited hardware into a `SharedHardware`, recreating the only
+    // per-context object among it: fresh swapchain image views over the reused
+    // swapchain's images (the outgoing context frees its own views in Drop).
+    fn into_shared(self) -> Result<SharedHardware, String> {
+        let swapchain_image_views = create_swapchain_image_views(
+            &self.device,
+            &self.swapchain_images,
+            self.swapchain_format,
+        )?;
+        Ok(SharedHardware {
+            window: self.window,
+            entry: self.entry,
+            instance: self.instance,
+            device: self.device,
+            physical_device: self.physical_device,
+            surface: self.surface,
+            surface_loader: self.surface_loader,
+            graphics_queue: self.graphics_queue,
+            present_queue: self.present_queue,
+            graphics_family: self.graphics_family,
+            swapchain_loader: self.swapchain_loader,
+            swapchain: self.swapchain,
+            swapchain_images: self.swapchain_images,
+            swapchain_format: self.swapchain_format,
+            swapchain_extent: self.swapchain_extent,
+            swapchain_image_views,
+            msaa_samples: self.msaa_samples,
+            hdr_mode: self.hdr_mode,
+            memory_budget_supported: self.memory_budget_supported,
+            rt_capable: self.rt_capable,
+            device_local_heaps: self.device_local_heaps,
+            debug_utils: self.debug_utils,
+            debug_messenger: self.debug_messenger,
+            debug_filter: self.debug_filter,
+            timestamp_query_pool: self.timestamp_query_pool,
+            timestamp_period: self.timestamp_period,
+        })
     }
 }
 

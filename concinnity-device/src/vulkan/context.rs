@@ -1292,8 +1292,12 @@ pub struct VkContext {
     // Deferred buffer destruction (text transient buffers)
     pub(super) deferred_destroy: RefCell<Vec<DeferredBuffer>>,
 
-    // Window + input (native Win32 on Windows, GLFW on Linux)
-    pub(super) window: super::PlatformWindow,
+    // Window + input (native Win32 on Windows, GLFW on Linux). `Option` so a
+    // `reload_world` can MOVE the live window (with its cursor / menu / keymap
+    // state) into the successor context instead of opening a new OS window;
+    // `None` only transiently on the outgoing context, which is dropped
+    // immediately after (see `window` / `window_mut` accessors + `Drop`).
+    pub(super) window: Option<super::PlatformWindow>,
 
     // Optional validation debug messenger
     pub(super) debug_utils: Option<ash::ext::debug_utils::Instance>,
@@ -1305,6 +1309,23 @@ pub struct VkContext {
 
     // Keep Entry alive for the lifetime of the instance
     pub(super) _entry: ash::Entry,
+
+    // The swapchain-level config (frames-in-flight / HDR mode) this context was
+    // built with, reported by `hot_swap_config` so a live editor reload
+    // (`reload_world`) reuses this backend in place only when the new world's
+    // `swapchain_config` still matches; a mismatch routes to a full rebuild.
+    // Mirrors `DxContext::swapchain_config`.
+    pub(super) swapchain_config: crate::gfx::backend_init::SwapchainConfig,
+    // Set on the OUTGOING context of a `reload_world` right before its successor
+    // replaces it: the successor inherits (shares) this context's instance,
+    // device, surface, and swapchain, so this context's `Drop` must free only
+    // this world's content and leave those four shared objects (and the moved
+    // window / debug messenger / timestamp pool) alone. False for every normally
+    // constructed context, so a plain shutdown still tears everything down.
+    // Vulkan needs this because its handles are not refcounted (unlike DirectX's
+    // COM device / swapchain, where the outgoing context's release just drops a
+    // reference). See `apply_world_reload` + `destroy_swapchain_resources`.
+    pub(super) reused_by_successor: bool,
 }
 
 // GpuImage raw pointers (uniforms.view_ubo_ptrs) are host-mapped and used only
@@ -1702,10 +1723,27 @@ impl VkContext {
         self.clear_color = color;
     }
 
+    // The live platform window. Present for every constructed context; `None`
+    // only on the outgoing context of a `reload_world` (its window was moved
+    // into the successor), which is dropped without any further window access.
+    #[inline]
+    pub(super) fn window(&self) -> &super::PlatformWindow {
+        self.window
+            .as_ref()
+            .expect("VkContext window taken by reload_world")
+    }
+
+    #[inline]
+    pub(super) fn window_mut(&mut self) -> &mut super::PlatformWindow {
+        self.window
+            .as_mut()
+            .expect("VkContext window taken by reload_world")
+    }
+
     // Re-point the combined-image-sampler at `binding` of `set` to `view`.
     // Shared by the texture-streaming descriptor rewrites below.
     pub fn window_closed(&mut self) -> bool {
-        self.window.poll()
+        self.window_mut().poll()
     }
 
     pub fn wait_idle(&self) {
@@ -1757,20 +1795,20 @@ impl VkContext {
     }
 
     pub fn capture_cursor(&mut self) {
-        self.window.capture_cursor();
+        self.window_mut().capture_cursor();
     }
 
     // Symmetric with `capture_cursor`; reached only through `set_camera_capture`
     // today, kept public so the cursor API stays complete.
     #[allow(dead_code)]
     pub fn release_cursor(&mut self) {
-        self.window.release_cursor();
+        self.window_mut().release_cursor();
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the window helper.
     pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        self.window.set_ui_cursor_hidden(hidden);
+        self.window_mut().set_ui_cursor_hidden(hidden);
     }
 
     // Whether the real cursor has left the window so the renderer should stop
@@ -1778,19 +1816,19 @@ impl VkContext {
     // `poll` (in `window_closed`); false while captured or in fullscreen (which
     // confines the cursor instead).
     pub fn cursor_outside_window(&self) -> bool {
-        self.window.cursor_outside_window()
+        self.window().cursor_outside_window()
     }
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`.
     pub fn set_menu_mode(&mut self, on: bool) {
-        self.window.set_menu_mode(on);
+        self.window_mut().set_menu_mode(on);
     }
 
     // Drive cursor capture from the menu state each frame: capture for camera
     // control, release while a menu is open. Edge-triggered in the window.
     pub fn set_camera_capture(&mut self, capture: bool) {
-        self.window.set_camera_capture(capture);
+        self.window_mut().set_camera_capture(capture);
     }
 
     // Turn display sync (vsync) on or off at runtime. The present mode is fixed
@@ -1812,26 +1850,26 @@ impl VkContext {
     // the framebuffer-size change drives a swapchain rebuild via the present
     // path's OUT_OF_DATE handling. Code-only on macOS; verify on Linux/Windows.
     pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
-        self.window.set_window_mode(mode);
+        self.window_mut().set_window_mode(mode);
     }
 
     pub fn set_window_size(&mut self, width: u32, height: u32) {
-        self.window.set_window_size(width, height);
+        self.window_mut().set_window_size(width, height);
     }
 
     // The display modes feeding the Resolution settings row; enumeration,
     // the fullscreen mode hold, and the desktop-mode restore all live in
     // window.rs (GLFW owns the video-mode switching).
     pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
-        self.window.display_modes()
+        self.window().display_modes()
     }
 
     pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
-        self.window.current_display_mode()
+        self.window().current_display_mode()
     }
 
     pub fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
-        self.window.set_display_mode(mode);
+        self.window_mut().set_display_mode(mode);
     }
 
     // Replace the live post-process parameters, pushed to the bloom + composite
@@ -1924,13 +1962,13 @@ impl VkContext {
 
     pub fn take_input(&mut self) -> InputState {
         // Both platform windows snapshot straight into the shared RenderInput.
-        self.window.take_input()
+        self.window_mut().take_input()
     }
 
     // Replace the runtime movement key map. The window's key decode routes
     // through it, so a settings-menu rebind takes effect immediately.
     pub fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
-        self.window.set_keymap(keymap);
+        self.window_mut().set_keymap(keymap);
     }
 
     // Live window size for overlay (view-owned UI) scaling and cursor
@@ -2242,15 +2280,26 @@ impl Drop for VkContext {
             t.destroy(device);
         }
 
-        // Surface.
-        unsafe { self.surface_loader.destroy_surface(self.surface, None) };
+        // Surface / device / instance are the shared hardware. On a
+        // `reload_world` the successor context inherited them (Vulkan handles are
+        // not refcounted), so the outgoing context skips destroying them here;
+        // its window / debug messenger were already moved out (both `None`
+        // below). A normal shutdown has `reused_by_successor == false` and tears
+        // everything down. The swapchain is likewise skipped inside
+        // `destroy_swapchain_resources` (called above) when reused.
+        if !self.reused_by_successor {
+            unsafe { self.surface_loader.destroy_surface(self.surface, None) };
+        }
 
-        // Debug.
+        // Debug. `None` on the outgoing context of a reload (moved to the
+        // successor), so this is naturally skipped there.
         if let (Some(du), Some(dm)) = (&self.debug_utils, self.debug_messenger) {
             unsafe { du.destroy_debug_utils_messenger(dm, None) };
         }
 
-        unsafe { self.device.destroy_device(None) };
-        unsafe { self.instance.destroy_instance(None) };
+        if !self.reused_by_successor {
+            unsafe { self.device.destroy_device(None) };
+            unsafe { self.instance.destroy_instance(None) };
+        }
     }
 }

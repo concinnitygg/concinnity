@@ -116,6 +116,23 @@ impl RenderBackend for DxContext {
 
     // Non-1:1 forwarders kept explicit.
 
+    // The swapchain config this live context was built with. A live `cn editor`
+    // reload reuses this backend (via `reload_world`) only when the new world's
+    // `swapchain_config` matches; otherwise the swap does a full rebuild.
+    fn hot_swap_config(&self) -> Option<crate::gfx::backend_init::SwapchainConfig> {
+        Some(self.swapchain_config)
+    }
+
+    // Rebuild the world's content on the retained device + window + swapchain.
+    // Inherent method named `apply_world_reload` so this forwarder does not
+    // shadow-and-recurse (mirrors the Metal backend).
+    fn reload_world(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        self.apply_world_reload(init)
+    }
+
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],

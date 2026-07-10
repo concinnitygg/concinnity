@@ -36,8 +36,8 @@ impl DxContext {
     // resize cycle and leave the targets at their previous size; the next
     // non-zero size restores them).
     pub(super) fn maybe_handle_resize(&mut self) -> Result<(), String> {
-        let new_w = self.win_state.width.max(0) as u32;
-        let new_h = self.win_state.height.max(0) as u32;
+        let new_w = self.win().width.max(0) as u32;
+        let new_h = self.win().height.max(0) as u32;
         if new_w == 0 || new_h == 0 {
             return Ok(());
         }

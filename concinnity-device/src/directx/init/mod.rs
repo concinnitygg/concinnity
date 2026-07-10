@@ -51,18 +51,32 @@ mod window;
 pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
 
 impl DxContext {
-    // Construct from the assembled backend inputs (see
-    // `crate::gfx::backend_init::BackendInit` for per-field docs); the
-    // DirectX-specific behaviour of each input is documented inline below.
+    // Construct a fresh context (new device + window + swapchain) from the
+    // assembled backend inputs (see `crate::gfx::backend_init::BackendInit`).
     pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+        Self::build(init, None)
+    }
+
+    // The shared constructor. `reuse == None` acquires fresh hardware (the
+    // normal `new` path); `reuse == Some` rebuilds only the world's content on
+    // the retained device + window + swapchain for a live `cn editor` world
+    // reload (see `reload_world`). Everything after the device/window
+    // acquisition is identical -- the same pipelines, buffers, textures, and
+    // targets are built from `init` either way; the DirectX-specific behaviour
+    // of each input is documented inline below.
+    fn build(
+        init: crate::gfx::backend_init::BackendInit<'_>,
+        reuse: Option<window::DeviceAndWindow>,
+    ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
         let BackendInit {
             window,
             validation,
-            // We always use FRAMES=3 for D3D12.
-            frames_in_flight: _,
+            // D3D12 always renders FRAMES=3 in flight; this is retained only so
+            // `hot_swap_config` can report the world's request for the reload gate.
+            frames_in_flight,
             vsync,
             clear_color,
             hot_reload,
@@ -169,7 +183,19 @@ impl DxContext {
             msaa_samples,
             adapter,
             hdr_mode,
-        } = window::setup(title, width, height, validation, vsync, hdr_display, hdr_pq)?;
+        } = match reuse {
+            // Live editor reload: reuse the retained device + window + swapchain
+            // (HDR was already negotiated on the unchanged swapchain, so `setup`
+            // is skipped). Only the world content below is rebuilt.
+            Some(dw) => dw,
+            None => window::setup(title, width, height, validation, vsync, hdr_display, hdr_pq)?,
+        };
+        // The swapchain config the caller's reload gate compares against.
+        let swapchain_config = crate::gfx::backend_init::SwapchainConfig {
+            frames_in_flight: frames_in_flight.max(1),
+            hdr_display,
+            hdr_pq,
+        };
         // Presentation pacing derived from the vsync request + tearing support.
         // vsync on -> sync interval 1 (lock to refresh). vsync off + tearing ->
         // sync interval 0 with the tearing present flag (true uncapped). vsync
@@ -1903,10 +1929,12 @@ impl DxContext {
         };
 
         Ok(Self {
-            win_state,
+            win_state: Some(win_state),
             fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode::new(),
             device,
             command_queue,
+            swapchain_config,
+            hdr_mode,
             swapchain,
             back_buffers,
             rtv_heap,
@@ -2196,6 +2224,58 @@ impl DxContext {
             probe_set_cbv_ptrs,
             probe_set_empty_cbv,
         })
+    }
+}
+
+impl DxContext {
+    // Rebuild the world's GPU content in place for a live `cn editor` reload,
+    // reusing the retained device + command queue + window + swapchain so the
+    // save applies without recreating the OS window or re-initialising the GPU.
+    //
+    // The GPU is idled, then a fresh context is `build`t on the reused hardware
+    // (the D3D12 / DXGI objects are COM ref-counted, so cloning them keeps the
+    // same device + swapchain alive; the window `Box` is moved, carrying its live
+    // cursor / menu / keymap state) and moved into `*self`. Assigning `*self`
+    // drops the old content resources; the device + swapchain survive because the
+    // rebuilt context holds a clone, and the window because it was moved out
+    // first. Only ever called when the swapchain config is unchanged (the
+    // caller's `hot_swap_config` gate).
+    //
+    // On a content-build failure (essentially impossible for a pre-validated
+    // editor edit built from the engine's built-in shaders) `self.win_state`
+    // is left `None`; the caller drops this backend and marks the session failed.
+    pub(in crate::directx) fn apply_world_reload(
+        &mut self,
+        init: crate::gfx::backend_init::BackendInit<'_>,
+    ) -> Result<(), String> {
+        self.wait_idle();
+        let reuse = window::DeviceAndWindow {
+            win_state: self
+                .win_state
+                .take()
+                .ok_or("apply_world_reload: window already taken")?,
+            device: self.device.clone(),
+            info_queue: self.info_queue.clone(),
+            command_queue: self.command_queue.clone(),
+            swapchain: self.swapchain.clone(),
+            swapchain_format: self.swap_format,
+            allow_tearing: self.allow_tearing,
+            msaa_samples: self.hdr.msaa_samples,
+            adapter: self.adapter.clone(),
+            hdr_mode: self.hdr_mode,
+        };
+        // The fresh build resets the fullscreen display-mode bookkeeping (its
+        // mode-restore state), which GraphicsSystem does not re-push after a
+        // reload; carry it over so a fullscreen editor keeps its restore state.
+        // (The keymap rides along inside the moved `win_state`.)
+        let fullscreen_display = std::mem::replace(
+            &mut self.fullscreen_display,
+            crate::win32::display_mode::FullscreenDisplayMode::new(),
+        );
+        let mut rebuilt = DxContext::build(init, Some(reuse))?;
+        rebuilt.fullscreen_display = fullscreen_display;
+        *self = rebuilt;
+        Ok(())
     }
 }
 

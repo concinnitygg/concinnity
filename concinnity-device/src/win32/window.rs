@@ -14,6 +14,30 @@ use crate::assets::WindowMode;
 
 use super::input::*;
 
+//  Parked window for editor live-swap reuse
+//
+// The `cn editor` live world-swap drops the old render backend and builds a new
+// one on the same thread (see the client `run_init` `PendingBackend` fallback).
+// A full rebuild would otherwise call `create_window` again and pop a brand-new
+// OS window every edit, leaking the old one (nothing ever `DestroyWindow`s it).
+// Instead the outgoing `WindowState` parks its HWND here on drop, and the next
+// `create_window` adopts it -- so the reload keeps the exact same window (no
+// flash, no reposition), matching the Metal backend's window-preserving reload.
+//
+// Thread-local because the whole swap runs on the render/main thread; a shipped
+// game never drops its backend mid-run, so this is inert outside the editor.
+thread_local! {
+    static PARKED_WINDOW: std::cell::Cell<Option<HWND>> = const { std::cell::Cell::new(None) };
+}
+
+fn park_window(hwnd: HWND) {
+    PARKED_WINDOW.with(|p| p.set(Some(hwnd)));
+}
+
+fn take_parked_window() -> Option<HWND> {
+    PARKED_WINDOW.with(|p| p.take())
+}
+
 //  Window proc state (thread-local)
 
 // Because Win32 window procs are global C callbacks, we stash the mutable input
@@ -71,6 +95,22 @@ pub(crate) struct WindowState {
     pub(crate) closed: bool,
     pub(crate) width: i32,
     pub(crate) height: i32,
+}
+
+impl Drop for WindowState {
+    fn drop(&mut self) {
+        // Park this HWND for the next `create_window` to adopt instead of
+        // destroying it, so the editor's live world-swap keeps the same OS
+        // window (see the module note on `PARKED_WINDOW`). Clear the userdata
+        // pointer first so a stray message dispatched between park and adopt
+        // cannot dereference this `WindowState` after it frees; the whole swap is
+        // synchronous, so in practice no message runs in that gap. If nothing
+        // adopts it (e.g. the process is exiting, or a rebuild failed), the HWND
+        // stays parked until the next `create_window` or is reclaimed by the OS
+        // at process exit -- never presented to, so it is harmless.
+        unsafe { SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0) };
+        park_window(self.hwnd);
+    }
 }
 
 // Cursor capture/release helpers shared by the wnd_proc and the backends'
@@ -387,6 +427,19 @@ unsafe extern "system" fn wnd_proc(
                 state.key.on_key_up(vk_from_wparam(wparam.0));
                 LRESULT(0)
             }
+            WM_CHAR => {
+                // `TranslateMessage` (in `pump_messages`) synthesises WM_CHAR
+                // from WM_KEYDOWN with the layout / Shift / dead-key resolution
+                // already applied, so wParam is the final UTF-16 code unit. Feed
+                // printable glyphs to text-input fields; `on_char` filters out the
+                // control codes (Backspace, Enter, Escape, ...). Lone surrogate
+                // halves (non-BMP input) yield `None` and are dropped, matching
+                // the one-codepoint-per-frame contract.
+                if let Some(c) = char::from_u32(wparam.0 as u32) {
+                    state.key.on_char(c);
+                }
+                LRESULT(0)
+            }
             WM_KILLFOCUS => {
                 // Free the cursor when the window loses focus so Alt+Tab works.
                 // Arm click-to-recapture so an explicit click back into the
@@ -491,11 +544,89 @@ unsafe extern "system" fn wnd_proc(
 
 //  Win32 helpers
 
+// Build a fresh `WindowState` for `hwnd` at its default (uncaptured, windowed)
+// state. Shared by fresh window creation and parked-window adoption.
+fn fresh_window_state(hwnd: HWND, width: i32, height: i32) -> Box<WindowState> {
+    Box::new(WindowState {
+        hwnd,
+        key: KeyState::default(),
+        mouse_dx: 0.0,
+        mouse_dy: 0.0,
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+        left_click_pending: false,
+        left_button_down: false,
+        scroll_delta: 0.0,
+        cursor_captured: false,
+        recapture_on_click: false,
+        ui_cursor_hidden: false,
+        menu_mode: false,
+        // The window is (re)adopted as a standard titled window; a persisted
+        // Borderless / Fullscreen choice is applied later via set_window_mode.
+        window_mode: WindowMode::Windowed,
+        cursor_outside_window: false,
+        menu_clip_active: false,
+        closed: false,
+        width,
+        height,
+    })
+}
+
+// Register raw mouse input for `hwnd` and point the wnd_proc at `win_state` via
+// GWLP_USERDATA. The Box's heap allocation is stable across moves of the Box
+// itself, so the stashed pointer stays valid for the window's lifetime. Shared
+// by fresh creation and parked-window adoption (re-registering raw input on an
+// already-registered HWND just re-sets the target, which is harmless).
+fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
+    let rid = windows::Win32::UI::Input::RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x02, // mouse
+        dwFlags: windows::Win32::UI::Input::RIDEV_INPUTSINK,
+        hwndTarget: hwnd,
+    };
+    let _ = unsafe {
+        windows::Win32::UI::Input::RegisterRawInputDevices(
+            &[rid],
+            std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>() as u32,
+        )
+    };
+    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, win_state as *mut WindowState as isize) };
+}
+
+// Adopt a window parked by a prior `WindowState::drop` (the editor live-swap
+// path): reuse the existing HWND with a fresh `WindowState` instead of creating
+// a new OS window. Its actual client size is queried so the rebuilt swapchain
+// matches a window the user may have resized. The window is already shown +
+// focused, so no ShowWindow / SetForegroundWindow is needed (and skipping them
+// avoids a flicker).
+fn adopt_parked_window(hwnd: HWND) -> (HWND, Box<WindowState>) {
+    let (width, height) = {
+        let mut rect = RECT::default();
+        if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() {
+            (
+                (rect.right - rect.left).max(1),
+                (rect.bottom - rect.top).max(1),
+            )
+        } else {
+            (1, 1)
+        }
+    };
+    let mut win_state = fresh_window_state(hwnd, width, height);
+    install_window_state(hwnd, &mut win_state);
+    (hwnd, win_state)
+}
+
 pub(crate) fn create_window(
     title: &str,
     width: u32,
     height: u32,
 ) -> Result<(HWND, Box<WindowState>), String> {
+    // Reuse a window parked by a prior backend's drop (editor live-swap) rather
+    // than popping a new one, so a world reload keeps the same OS window.
+    if let Some(hwnd) = take_parked_window() {
+        return Ok(adopt_parked_window(hwnd));
+    }
+
     let class_name: Vec<u16> = "ConcinnityWindow\0".encode_utf16().collect();
     let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -552,55 +683,11 @@ pub(crate) fn create_window(
         let _ = SetFocus(Some(hwnd));
     };
 
-    let mut win_state = Box::new(WindowState {
-        hwnd,
-        key: KeyState::default(),
-        mouse_dx: 0.0,
-        mouse_dy: 0.0,
-        mouse_x: 0.0,
-        mouse_y: 0.0,
-        left_click_pending: false,
-        left_button_down: false,
-        scroll_delta: 0.0,
-        cursor_captured: false,
-        recapture_on_click: false,
-        ui_cursor_hidden: false,
-        menu_mode: false,
-        // The window is created as a standard titled window; a persisted
-        // Borderless / Fullscreen choice is applied later via set_window_mode.
-        window_mode: WindowMode::Windowed,
-        cursor_outside_window: false,
-        menu_clip_active: false,
-        closed: false,
-        width: width as i32,
-        height: height as i32,
-    });
+    let mut win_state = fresh_window_state(hwnd, width as i32, height as i32);
 
     // Register for raw mouse input (the captured-cursor camera delta arrives
-    // via WM_INPUT, not WM_MOUSEMOVE).
-    let rid = windows::Win32::UI::Input::RAWINPUTDEVICE {
-        usUsagePage: 0x01,
-        usUsage: 0x02, // mouse
-        dwFlags: windows::Win32::UI::Input::RIDEV_INPUTSINK,
-        hwndTarget: hwnd,
-    };
-    let _ = unsafe {
-        windows::Win32::UI::Input::RegisterRawInputDevices(
-            &[rid],
-            std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>() as u32,
-        )
-    };
-
-    // Stash the state pointer in GWLP_USERDATA so the wnd_proc can reach it.
-    // The Box's heap allocation is stable across moves of the Box itself, so
-    // the pointer stays valid for the window's lifetime.
-    unsafe {
-        SetWindowLongPtrW(
-            hwnd,
-            GWLP_USERDATA,
-            &mut *win_state as *mut WindowState as isize,
-        )
-    };
+    // via WM_INPUT, not WM_MOUSEMOVE) and point the wnd_proc at the state.
+    install_window_state(hwnd, &mut win_state);
 
     Ok((hwnd, win_state))
 }
@@ -662,5 +749,46 @@ pub(crate) fn pump_messages() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The parked-window handoff (`WindowState::drop` parks; the next
+    // `create_window` adopts) is what keeps the editor live-swap on one OS
+    // window instead of popping a new one each edit. Exercise the pure slot
+    // logic; the HWND is a fake handle since no real window is created here.
+    #[test]
+    fn park_then_take_round_trips_and_is_consumed_once() {
+        // Clear any residue from a reused test thread first.
+        let _ = take_parked_window();
+        assert!(take_parked_window().is_none(), "empty when nothing parked");
+
+        let fake = HWND(0x1234 as *mut core::ffi::c_void);
+        park_window(fake);
+        let taken = take_parked_window();
+        assert_eq!(
+            taken.map(|h| h.0 as usize),
+            Some(0x1234),
+            "the parked HWND is handed back to the next create_window"
+        );
+        assert!(
+            take_parked_window().is_none(),
+            "take consumes the parked window (a second create_window builds fresh)"
+        );
+    }
+
+    #[test]
+    fn parking_overwrites_the_previous_slot() {
+        let _ = take_parked_window();
+        park_window(HWND(0xAAAA as *mut core::ffi::c_void));
+        park_window(HWND(0xBBBB as *mut core::ffi::c_void));
+        assert_eq!(
+            take_parked_window().map(|h| h.0 as usize),
+            Some(0xBBBB),
+            "only the most-recently parked window is adopted"
+        );
     }
 }

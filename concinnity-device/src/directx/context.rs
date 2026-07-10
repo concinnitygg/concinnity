@@ -665,8 +665,10 @@ pub(super) struct DxDescriptors {
 }
 
 pub struct DxContext {
-    // Win32 window
-    pub(super) win_state: Box<WindowState>,
+    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
+    // window (and its live cursor / menu / keymap state) into the rebuilt
+    // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
+    pub(super) win_state: Option<Box<WindowState>>,
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
@@ -675,6 +677,17 @@ pub struct DxContext {
     // D3D12 core
     pub(super) device: ID3D12Device,
     pub(super) command_queue: ID3D12CommandQueue,
+
+    // The swapchain config (ring depth + HDR request) this context was built
+    // with, reported by `hot_swap_config` so a live editor reload reuses this
+    // backend (rebuilding only world content on the retained device + window +
+    // swapchain) instead of a full rebuild -- but only when the new world's
+    // `swapchain_config` still matches. See `reload_world`.
+    pub(super) swapchain_config: crate::gfx::backend_init::SwapchainConfig,
+    // The resolved HDR-output mode, retained so a reload can reconstruct the
+    // `DeviceAndWindow` reuse bundle without re-negotiating HDR on the
+    // (unchanged) swapchain. (The DXGI format is already in `swap_format`.)
+    pub(super) hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
 
     // Swapchain
     pub(super) swapchain: IDXGISwapChain3,
@@ -1722,10 +1735,34 @@ impl DxContext {
 }
 
 impl DxContext {
+    // The window state. Always `Some` on a live context; `None` only on the
+    // outgoing context of a `reload_world` (which has moved the window into its
+    // successor and calls no window method afterward), so the unwrap never fires.
+    #[inline]
+    pub(super) fn win(&self) -> &WindowState {
+        self.win_state
+            .as_ref()
+            .expect("DxContext window state present")
+    }
+
+    #[inline]
+    pub(super) fn win_mut(&mut self) -> &mut WindowState {
+        self.win_state
+            .as_mut()
+            .expect("DxContext window state present")
+    }
+
     pub fn window_closed(&mut self) -> bool {
         // Message pump + cursor window-exit / fullscreen-confinement refresh +
         // the Resolution-mode reconcile, shared with the Vulkan Windows window.
-        frame_tick(&mut self.win_state, &mut self.fullscreen_display)
+        // Partial field borrow (not `win_mut`) so `fullscreen_display` can be
+        // borrowed disjointly in the same call.
+        frame_tick(
+            self.win_state
+                .as_mut()
+                .expect("DxContext window state present"),
+            &mut self.fullscreen_display,
+        )
     }
 
     pub fn wait_idle(&self) {
@@ -1753,19 +1790,19 @@ impl DxContext {
         // left-click in the content area grabs the cursor, the same as
         // recapturing after Escape or a focus loss (see `wnd_proc`'s
         // `WM_LBUTTONDOWN` arm).
-        self.win_state.recapture_on_click = true;
+        self.win_mut().recapture_on_click = true;
     }
 
     #[allow(dead_code)]
     pub fn release_cursor(&mut self) {
-        do_release_cursor(&mut self.win_state);
+        do_release_cursor(self.win_mut());
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the helper, so calling
     // it every frame with the same value is cheap.
     pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        do_set_ui_cursor_hidden(&mut self.win_state, hidden);
+        do_set_ui_cursor_hidden(self.win_mut(), hidden);
     }
 
     // Whether the real cursor has left the window so the renderer should stop
@@ -1773,14 +1810,14 @@ impl DxContext {
     // frame by `update_ui_cursor_confinement` in `window_closed`; false while
     // captured or in fullscreen (which confines the cursor instead).
     pub fn cursor_outside_window(&self) -> bool {
-        self.win_state.cursor_outside_window
+        self.win().cursor_outside_window
     }
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
     pub fn set_menu_mode(&mut self, on: bool) {
-        self.win_state.menu_mode = on;
+        self.win_mut().menu_mode = on;
     }
 
     // Edge-triggered capture: capture for camera control, release while a menu
@@ -1788,14 +1825,14 @@ impl DxContext {
     // startup `capture_cursor` (which arms click-to-capture), closing the menu
     // recaptures immediately so the camera resumes without an extra click.
     pub fn set_camera_capture(&mut self, capture: bool) {
-        if capture == self.win_state.cursor_captured {
+        if capture == self.win().cursor_captured {
             return;
         }
         if capture {
-            let hwnd = self.win_state.hwnd;
-            do_capture_cursor(hwnd, &mut self.win_state);
+            let hwnd = self.win().hwnd;
+            do_capture_cursor(hwnd, self.win_mut());
         } else {
-            do_release_cursor(&mut self.win_state);
+            do_release_cursor(self.win_mut());
         }
     }
 
@@ -1814,23 +1851,23 @@ impl DxContext {
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
     // path picks up the resulting WM_SIZE. Code-only on macOS; verify on Windows.
     pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
-        do_set_window_mode(&mut self.win_state, mode);
+        do_set_window_mode(self.win_mut(), mode);
     }
 
     pub fn set_window_size(&mut self, width: u32, height: u32) {
-        do_set_window_size(&mut self.win_state, width, height);
+        do_set_window_size(self.win_mut(), width, height);
     }
 
     // The display modes (resolution + refresh rate) of the monitor the window
     // sits on, feeding the Resolution settings row (the caller dedups + sorts).
     pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
-        crate::win32::display_mode::enumerate(self.win_state.hwnd)
+        crate::win32::display_mode::enumerate(self.win().hwnd)
     }
 
     // The mode the window's monitor is currently running (what the Resolution
     // row shows before the user ever picks one).
     pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
-        crate::win32::display_mode::current(self.win_state.hwnd)
+        crate::win32::display_mode::current(self.win().hwnd)
     }
 
     // Remember the display mode to hold while the window is in fullscreen.
@@ -1925,11 +1962,11 @@ impl DxContext {
     // Replace the runtime movement key map. The window message loop decodes
     // key events through it, so a settings-menu rebind takes effect immediately.
     pub fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
-        self.win_state.key.set_keymap(keymap);
+        self.win_mut().key.set_keymap(keymap);
     }
 
     pub fn take_input(&mut self) -> InputState {
-        take_input_snapshot(&mut self.win_state)
+        take_input_snapshot(self.win_mut())
     }
 
     // Live window size for overlay (view-owned UI) scaling and cursor
@@ -2041,8 +2078,11 @@ impl Drop for DxContext {
     fn drop(&mut self) {
         self.wait_idle();
         // Restore cursor clip + visibility so the OS isn't left in a bad state
-        // if the caller didn't release explicitly.
-        do_release_cursor(&mut self.win_state);
+        // if the caller didn't release explicitly. `None` on the outgoing context
+        // of a `reload_world` (the window moved to its successor), so guard it.
+        if let Some(ws) = self.win_state.as_mut() {
+            do_release_cursor(ws);
+        }
         // Unmap persistent CBV mappings (view + shadow).
         self.uniforms.unmap();
         unsafe { CloseHandle(self.frame_sync.fence_event) }.ok();
