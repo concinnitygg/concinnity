@@ -585,6 +585,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-asset"
+version = "0.10.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "concinnity-cli"
 version = "0.10.0"
 dependencies = [
