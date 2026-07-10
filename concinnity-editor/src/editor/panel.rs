@@ -24,7 +24,7 @@
 // Clicking a name opens that asset's add / edit form -- a separate floating
 // panel (`form_panel.rs`) -- and the name row stays highlighted while its form
 // is open. Hovering a name also reveals a triple-dot button opening a small
-// Edit / Delete menu.
+// Delete menu.
 
 use crate::assets::TextAlign;
 use crate::ecs::World;
@@ -133,7 +133,7 @@ pub(crate) enum Combo {
 }
 
 // One rendered browse-list row: a type sub-header, or an indented asset name that
-// carries the index of its entry (for the Edit / Delete menu).
+// carries the index of its entry (for the Delete menu).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ListRow {
     pub is_header: bool,
@@ -167,8 +167,6 @@ pub(crate) const DOT1: AssetId = AssetId(PANEL + 0xA1);
 pub(crate) const DOT2: AssetId = AssetId(PANEL + 0xA2);
 pub(crate) const DOT3: AssetId = AssetId(PANEL + 0xA3);
 pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 0xB0);
-pub(crate) const MENU_EDIT_BG: AssetId = AssetId(PANEL + 0xB1);
-pub(crate) const MENU_EDIT_LABEL: AssetId = AssetId(PANEL + 0xB2);
 pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 0xB3);
 pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 0xB4);
 
@@ -199,7 +197,7 @@ const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - 10.0;
 const INDENT: f32 = 16.0;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 24.0;
-// The floating Edit / Delete menu.
+// The floating Delete menu.
 const MENU_W: f32 = 132.0;
 const MENU_ROW_H: f32 = 30.0;
 
@@ -299,15 +297,15 @@ fn dot_rect(row: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-// The Edit / Delete menu, floating just below a name row at visible index `vr`.
-// Returns (background, edit row, delete row).
-fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4], [f32; 4]) {
+// The row menu, floating just below a name row at visible index `vr`. A single
+// Delete row (a name-row click opens the edit form, so Edit is redundant here).
+// Returns (background, delete row).
+fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4]) {
     let x = o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0;
     let top = body_y(o) + vr as f32 * ROW_H + ROW_H;
-    let edit = [x, top, MENU_W, MENU_ROW_H];
-    let delete = [x, top + MENU_ROW_H, MENU_W, MENU_ROW_H];
-    let bg = [x, top, MENU_W, 2.0 * MENU_ROW_H];
-    (bg, edit, delete)
+    let delete = [x, top, MENU_W, MENU_ROW_H];
+    let bg = [x, top, MENU_W, MENU_ROW_H];
+    (bg, delete)
 }
 
 // A resolved panel click. Option picks carry an index into the hook's current
@@ -323,10 +321,9 @@ pub(crate) enum PanelAction {
     PickOption(usize),
     // A name row's body: open that entry's edit form (carries the entry index).
     OpenEntry(usize),
-    // A name row's triple-dot: open its Edit / Delete menu (carries the entry).
+    // A name row's triple-dot: open its Delete menu (carries the entry).
     OpenRowMenu(usize),
-    // The open row menu's Edit / Delete rows.
-    RowEdit,
+    // The open row menu's Delete row.
     RowDelete,
     // Dismiss any open overlay (combo / row menu) without picking.
     CloseOverlays,
@@ -349,7 +346,7 @@ pub(crate) struct PanelView<'a> {
     // The grouped browse rows (type sub-headers + indented names).
     pub list_rows: &'a [ListRow],
     pub list_scroll: usize,
-    // The entry index whose Edit / Delete menu is open, if any.
+    // The entry index whose Delete menu is open, if any.
     pub row_menu: Option<usize>,
     // The entry whose edit form is open, if any: its name row stays highlighted.
     pub selected: Option<usize>,
@@ -381,10 +378,7 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
     // dismisses it.
     if let Some(entry) = view.row_menu {
         if let Some(vr) = visible_row_of(view, entry) {
-            let (_, edit, delete) = menu_rects(o, vr);
-            if point_in(mx, my, edit) {
-                return Some(PanelAction::RowEdit);
-            }
+            let (_, delete) = menu_rects(o, vr);
             if point_in(mx, my, delete) {
                 return Some(PanelAction::RowDelete);
             }
@@ -648,28 +642,8 @@ fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
 }
 
 fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) {
-    let (bg, edit, delete) = menu_rects(o, vr);
+    let (bg, delete) = menu_rects(o, vr);
     place_sprite(world, MENU_BG, bg, MENU_BG_TINT, true);
-    let edit_hover = point_in(view.mouse[0], view.mouse[1], edit);
-    place_sprite(
-        world,
-        MENU_EDIT_BG,
-        edit,
-        if edit_hover {
-            MENU_ROW_HOVER
-        } else {
-            MENU_ROW_TINT
-        },
-        true,
-    );
-    place_left_label(
-        world,
-        MENU_EDIT_LABEL,
-        [edit[0] + PAD, edit[1] + MENU_ROW_H * 0.5 - 10.0],
-        "Edit",
-        LABEL,
-        true,
-    );
     let del_hover = point_in(view.mouse[0], view.mouse[1], delete);
     place_sprite(
         world,
@@ -740,7 +714,6 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
         DOT2,
         DOT3,
         MENU_BG,
-        MENU_EDIT_BG,
         MENU_DELETE_BG,
     ]);
     ids
@@ -753,7 +726,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![TITLE_LABEL, PLUS_LABEL, TYPEDROP_LABEL, EMPTY_LABEL];
     ids.extend((0..MAX_ROWS).map(list_row_label));
     ids.extend((0..MAX_ROWS).map(combo_row_label));
-    ids.extend([MENU_EDIT_LABEL, MENU_DELETE_LABEL]);
+    ids.extend([MENU_DELETE_LABEL]);
     ids
 }
 
@@ -1142,18 +1115,14 @@ mod tests {
     }
 
     #[test]
-    fn open_row_menu_resolves_edit_and_delete() {
+    fn open_row_menu_resolves_delete() {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(3))]),
         };
         let o = test_origin();
         let v = view(&fx, Combo::Closed, Some(3), [0.0, 0.0]);
-        let (_, edit, delete) = menu_rects(o, 1);
-        assert_eq!(
-            hit_test(&v, edit[0] + 5.0, edit[1] + 5.0, o),
-            Some(PanelAction::RowEdit)
-        );
+        let (_, delete) = menu_rects(o, 1);
         assert_eq!(
             hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
             Some(PanelAction::RowDelete)
@@ -1188,15 +1157,7 @@ mod tests {
             .map(spos)
             .max()
             .unwrap();
-        for overlay in [
-            DOT_BG,
-            DOT1,
-            DOT2,
-            DOT3,
-            MENU_BG,
-            MENU_EDIT_BG,
-            MENU_DELETE_BG,
-        ] {
+        for overlay in [DOT_BG, DOT1, DOT2, DOT3, MENU_BG, MENU_DELETE_BG] {
             assert!(
                 spos(overlay) > last_row_bg,
                 "{overlay:?} must draw above the row backgrounds"
@@ -1215,9 +1176,10 @@ mod tests {
             .map(lpos)
             .max()
             .unwrap();
-        for cap in [MENU_EDIT_LABEL, MENU_DELETE_LABEL] {
-            assert!(lpos(cap) > last_row_label, "{cap:?} above the row labels");
-        }
+        assert!(
+            lpos(MENU_DELETE_LABEL) > last_row_label,
+            "the Delete caption draws above the row labels"
+        );
     }
 
     // The white dots show whenever the row is hovered; the background box shows

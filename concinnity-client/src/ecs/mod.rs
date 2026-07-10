@@ -65,6 +65,18 @@ pub struct MenuActive(pub bool);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuOverride(pub Option<bool>);
 
+// Per-frame draw-layer overrides for HUD Sprites / TextLabels / TextInputs, keyed
+// by asset id and published by the `cn editor` HUD so its floating panels occlude
+// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
+// so two overlapping panels' contents merge -- one panel's text draws over the
+// other's background. GraphicsSystem stable-sorts the overlay calls by this layer
+// (higher draws on top) when the map is non-empty, so the focused panel's whole
+// content sits above the others'. An id absent from the map is layer 0; an empty /
+// absent resource (the shipped runtime) leaves draw order at insertion order,
+// unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct HudLayers(pub std::collections::HashMap<asset_id::AssetId, i32>);
+
 // A render backend transplanted out of a previous world, carried into a freshly
 // built world so its GraphicsSystem reuses the live GPU device + window instead
 // of constructing a new one. Published by the `cn editor` live SAVE swap between

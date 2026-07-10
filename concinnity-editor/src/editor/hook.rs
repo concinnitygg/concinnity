@@ -39,7 +39,12 @@ use super::widget::{self, point_in};
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
-use crate::ecs::{MenuOverride, PendingBackend, World};
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{HudLayers, MenuOverride, PendingBackend, World};
+
+// Draw layer for the top bar: far above the floating panels' layers (which are a
+// small 1..=3 rank), so the bar always sits on top even under a dragged panel.
+const TOP_BAR_LAYER: i32 = 1_000;
 
 // Which floating panel a title-bar drag is moving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +115,7 @@ pub(crate) struct EditorHook {
     form_focus: FormFocus,
     // A validation message from the last rejected Add, shown under the form.
     form_error: Option<String>,
-    // The `entries` index whose Edit / Delete menu is open, if any.
+    // The `entries` index whose Delete menu is open, if any.
     row_menu: Option<usize>,
     // The form arg field whose value dropdown is open (a large enum / ref set),
     // and its scroll offset. `None` outside an open dropdown.
@@ -130,6 +135,11 @@ pub(crate) struct EditorHook {
     preview_pos: Option<[f32; 2]>,
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
+    // The floating panels back-to-front: the last entry is the frontmost (drawn on
+    // top + first to receive clicks). Dragging or clicking a panel moves it to the
+    // end. Its position drives the per-frame `HudLayers` publish so overlapping
+    // panels occlude cleanly instead of merging.
+    panel_order: Vec<DragTarget>,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
@@ -217,7 +227,59 @@ impl EditorHook {
             edit_pos: None,
             preview_pos: None,
             drag: None,
+            // Back-to-front, matching the injected draw order (Preview frontmost).
+            panel_order: vec![DragTarget::Assets, DragTarget::Edit, DragTarget::Preview],
         }
+    }
+
+    // Bring a panel to the front of the focus stack (drawn on top, first to be
+    // clicked). A no-op if it is already frontmost.
+    fn focus_panel(&mut self, target: DragTarget) {
+        self.panel_order.retain(|&p| p != target);
+        self.panel_order.push(target);
+    }
+
+    // Every injected element id of a panel, for the `HudLayers` layer map.
+    fn panel_ids(target: DragTarget) -> Vec<AssetId> {
+        match target {
+            DragTarget::Assets => panel::all_sprite_ids()
+                .into_iter()
+                .chain(panel::all_label_ids())
+                .chain(panel::all_field_ids())
+                .collect(),
+            DragTarget::Edit => form_panel::all_sprite_ids()
+                .into_iter()
+                .chain(form_panel::all_label_ids())
+                .chain(form_panel::all_field_ids())
+                .collect(),
+            DragTarget::Preview => preview::all_sprite_ids()
+                .into_iter()
+                .chain(preview::all_label_ids())
+                .collect(),
+        }
+    }
+
+    // The per-frame HUD draw layers: each panel at its focus-stack rank (1..=3,
+    // higher = more front), the top bar pinned above them all.
+    fn compute_layers(&self) -> std::collections::HashMap<AssetId, i32> {
+        let mut layers = std::collections::HashMap::new();
+        for (rank, &target) in self.panel_order.iter().enumerate() {
+            let layer = rank as i32 + 1;
+            for id in Self::panel_ids(target) {
+                layers.insert(id, layer);
+            }
+        }
+        for id in hud::all_ids() {
+            layers.insert(id, TOP_BAR_LAYER);
+        }
+        layers
+    }
+
+    // Publish the draw layers for the renderer's overlay sort, so a dragged /
+    // clicked panel occludes the rest instead of its text bleeding through their
+    // backgrounds.
+    fn publish_layers(&self, world: &mut World) {
+        world.insert_resource(HudLayers(self.compute_layers()));
     }
 
     // Whether the add / edit form panel is open.
@@ -390,7 +452,7 @@ impl EditorHook {
 
     // The browse list, grouped by type: a sub-header row per type (matching the
     // active filter), then an indented row per asset name carrying its entry
-    // index (for the Edit / Delete menu). Insertion order within a type.
+    // index (for the Delete menu). Insertion order within a type.
     fn list_rows(&self) -> Vec<ListRow> {
         let mut rows = Vec::new();
         for ty in self.distinct_types() {
@@ -518,13 +580,17 @@ impl EditorHook {
         match action {
             HudAction::Save => return self.save(),
             HudAction::ToggleAssets => {
+                // Toggle the whole assets UI (browse panel + any open edit form +
+                // the browse highlight). Hiding it KEEPS all that state -- panel
+                // positions, the open form, the scroll offset, the selection -- so
+                // toggling back restores the same view. Only the transient combo /
+                // row-menu overlays are dropped.
                 self.panel_open = !self.panel_open;
                 if self.panel_open {
                     self.templates_open = false;
-                    self.combo = Combo::Closed;
-                    self.row_menu = None;
-                    self.list_scroll = 0;
                 }
+                self.combo = Combo::Closed;
+                self.row_menu = None;
             }
             HudAction::ToggleTemplates => {
                 self.templates_open = !self.templates_open;
@@ -582,6 +648,9 @@ impl EditorHook {
         self.field_dropdown_scroll = 0;
         self.form_scroll = 0;
         self.vec_expanded.clear();
+        // A freshly opened form comes to the front (the click that opened it focused
+        // the Assets panel; the form the user is now editing should sit on top).
+        self.focus_panel(DragTarget::Edit);
         self.refresh_form(world);
         widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
     }
@@ -726,14 +795,6 @@ impl EditorHook {
                 }
             }
             PanelAction::OpenRowMenu(entry) => self.row_menu = Some(entry),
-            PanelAction::RowEdit => {
-                if let Some(idx) = self.row_menu
-                    && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
-                {
-                    self.open_form(world, ty, Some(idx));
-                }
-                self.row_menu = None;
-            }
             PanelAction::RowDelete => {
                 if let Some(idx) = self.row_menu
                     && idx < self.entries.len()
@@ -955,75 +1016,116 @@ impl EditorHook {
         }
     }
 
-    // Route a press: the top bar first (it draws over the panels), then the
-    // Preview panel, the open edit-form panel, and the open Assets panel. A press
-    // on a panel's title bar starts a drag instead of resolving to a control.
+    // Route a press: the top bar first (it draws over the panels), then the panels
+    // front-to-back so the frontmost claims a press in an overlap. Whichever panel
+    // claims it comes to the front. A press on a panel's title bar starts a drag.
     fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
         if let Some(a) = hud::hit_test(mx, my, true, self.dirty, self.templates_open, vp[0]) {
             if self.apply_top(a) {
                 self.swap_requested = true;
+                // A SAVE recompiles + re-injects blank HUD fields, so a form left
+                // open would show empty inputs and could commit lost values; close
+                // it. Toggling the panel off (below) instead KEEPS the form so a
+                // later toggle-on restores it.
+                self.close_form();
             }
-            // Interacting with the top bar dismisses any panel overlay and
-            // the form: a SAVE swaps the world (re-injecting blank fields),
-            // so a stale form left open would show empty inputs and could
-            // commit lost values.
             self.combo = Combo::Closed;
             self.row_menu = None;
-            self.close_form();
             return;
         }
-        let pv = self.preview_origin(vp);
-        if point_in(mx, my, preview::title_rect(pv)) {
-            self.drag = Some(Drag {
-                target: DragTarget::Preview,
-                grab: [mx - pv[0], my - pv[1]],
-            });
-            return;
-        }
-        if let Some(a) = preview::hit_test(mx, my, pv) {
-            if a == PreviewAction::ToggleCapture {
-                self.world_capture = !self.world_capture;
-            }
-            return;
-        }
-        if self.form_open() {
-            let fo = self.edit_origin(vp);
-            if point_in(mx, my, form_panel::title_rect(fo)) {
-                self.drag = Some(Drag {
-                    target: DragTarget::Edit,
-                    grab: [mx - fo[0], my - fo[1]],
-                });
-                return;
-            }
-            let action = {
-                let data = self.panel_data(world);
-                let view = self.make_form_view(&data, [mx, my]);
-                form_panel::hit_test(&view, mx, my, fo)
-            };
-            if let Some(fa) = action {
-                self.apply_form(fa, world);
+        // Front-to-back: the frontmost shown panel to claim the press handles it and
+        // rises to the front (so clicking an exposed sliver of a buried panel brings
+        // it forward). `panel_order`'s tail is frontmost.
+        let front_to_back: Vec<DragTarget> = self.panel_order.iter().rev().copied().collect();
+        for target in front_to_back {
+            if self.try_panel_press(target, mx, my, vp, world) {
                 return;
             }
         }
-        if !self.panel_open {
-            return;
-        }
-        let po = self.panel_origin(vp);
-        if point_in(mx, my, panel::title_rect(po)) {
-            self.drag = Some(Drag {
-                target: DragTarget::Assets,
-                grab: [mx - po[0], my - po[1]],
-            });
-            return;
-        }
-        let action = {
-            let data = self.panel_data(world);
-            let view = self.make_view(&data, [mx, my]);
-            panel::hit_test(&view, mx, my, po)
-        };
-        if let Some(pa) = action {
-            self.apply_panel(pa, world);
+    }
+
+    // Try to resolve a press against panel `target`: `false` when it is hidden or
+    // the press misses it (the caller tries the next panel back). A hit brings the
+    // panel to the front; a title-bar press starts a drag, a body press resolves a
+    // control.
+    fn try_panel_press(
+        &mut self,
+        target: DragTarget,
+        mx: f32,
+        my: f32,
+        vp: [f32; 2],
+        world: &mut World,
+    ) -> bool {
+        match target {
+            DragTarget::Preview => {
+                let pv = self.preview_origin(vp);
+                if !point_in(mx, my, preview::panel_rect(pv)) {
+                    return false;
+                }
+                self.focus_panel(DragTarget::Preview);
+                if point_in(mx, my, preview::title_rect(pv)) {
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - pv[0], my - pv[1]],
+                    });
+                } else if let Some(PreviewAction::ToggleCapture) = preview::hit_test(mx, my, pv) {
+                    self.world_capture = !self.world_capture;
+                }
+                true
+            }
+            DragTarget::Edit => {
+                // The form is part of the assets UI: interactive only while the
+                // browse panel is open.
+                if !(self.form_open() && self.panel_open) {
+                    return false;
+                }
+                let fo = self.edit_origin(vp);
+                if point_in(mx, my, form_panel::title_rect(fo)) {
+                    self.focus_panel(DragTarget::Edit);
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - fo[0], my - fo[1]],
+                    });
+                    return true;
+                }
+                let action = {
+                    let data = self.panel_data(world);
+                    let view = self.make_form_view(&data, [mx, my]);
+                    form_panel::hit_test(&view, mx, my, fo)
+                };
+                if let Some(fa) = action {
+                    self.focus_panel(DragTarget::Edit);
+                    self.apply_form(fa, world);
+                    return true;
+                }
+                false
+            }
+            DragTarget::Assets => {
+                if !self.panel_open {
+                    return false;
+                }
+                let po = self.panel_origin(vp);
+                if point_in(mx, my, panel::title_rect(po)) {
+                    self.focus_panel(DragTarget::Assets);
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - po[0], my - po[1]],
+                    });
+                    return true;
+                }
+                let action = {
+                    let data = self.panel_data(world);
+                    let view = self.make_view(&data, [mx, my]);
+                    panel::hit_test(&view, mx, my, po)
+                };
+                if let Some(pa) = action {
+                    self.focus_panel(DragTarget::Assets);
+                    self.apply_panel(pa, world);
+                    return true;
+                }
+                false
+            }
         }
     }
 }
@@ -1049,24 +1151,37 @@ impl DebugHook for EditorHook {
                 if input.left_click && self.drag.is_none() {
                     self.route_click(input, vp, world);
                 }
-                // Wheel routing by cursor: over the form panel it scrolls the
-                // field window; over the Assets panel body, the list / combo
-                // options. An open value dropdown is modal and can extend past
-                // the panel bounds, so it scrolls from anywhere while open.
+                // Wheel routing: the frontmost scrollable panel under the cursor
+                // takes the wheel (the form's field window or the Assets list). An
+                // open value dropdown is modal and can extend past the panel, so it
+                // scrolls the form from anywhere while open.
                 if input.scroll_delta.abs() > 0.5 {
                     let (mx, my) = (input.mouse_x, input.mouse_y);
-                    let over_form = self.form_open() && {
-                        let data = self.panel_data(world);
-                        let view = self.make_form_view(&data, [mx, my]);
-                        self.field_dropdown.is_some()
-                            || form_panel::cursor_over(&view, mx, my, self.edit_origin(vp))
-                    };
-                    if over_form {
+                    let form_shown = self.form_open() && self.panel_open;
+                    if form_shown && self.field_dropdown.is_some() {
                         self.scroll(input.scroll_delta, ScrollTarget::Form, world);
-                    } else if self.panel_open
-                        && panel::cursor_over_body(mx, my, self.panel_origin(vp))
-                    {
-                        self.scroll(input.scroll_delta, ScrollTarget::List, world);
+                    } else {
+                        let front_to_back: Vec<DragTarget> =
+                            self.panel_order.iter().rev().copied().collect();
+                        for target in front_to_back {
+                            let hit = match target {
+                                DragTarget::Edit if form_shown => {
+                                    let data = self.panel_data(world);
+                                    let view = self.make_form_view(&data, [mx, my]);
+                                    form_panel::cursor_over(&view, mx, my, self.edit_origin(vp))
+                                        .then_some(ScrollTarget::Form)
+                                }
+                                DragTarget::Assets if self.panel_open => {
+                                    panel::cursor_over_body(mx, my, self.panel_origin(vp))
+                                        .then_some(ScrollTarget::List)
+                                }
+                                _ => None,
+                            };
+                            if let Some(t) = hit {
+                                self.scroll(input.scroll_delta, t, world);
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1083,6 +1198,14 @@ impl DebugHook for EditorHook {
             .as_ref()
             .map(|i| [i.mouse_x, i.mouse_y])
             .unwrap_or([0.0, 0.0]);
+        // Publish the panels' draw layers (focus stack) so the renderer occludes
+        // overlaps by focus this frame. Empty while the HUD is hidden, so the
+        // renderer skips the overlay sort entirely.
+        if self.hud_visible && vp[0] > 0.0 {
+            self.publish_layers(world);
+        } else {
+            world.insert_resource(HudLayers::default());
+        }
         if self.hud_visible && vp[0] > 0.0 {
             preview::apply(world, self.preview_origin(vp), self.world_capture);
         } else if !self.hud_visible {
@@ -1095,11 +1218,14 @@ impl DebugHook for EditorHook {
         } else if !(self.hud_visible && self.panel_open) {
             panel::apply(world, None, [0.0, 0.0]);
         }
-        if self.hud_visible && self.form_open() && vp[0] > 0.0 {
+        // The edit form shows only while the assets UI is on (panel_open); hiding
+        // it keeps its state so a later toggle-on restores it.
+        let show_form = self.hud_visible && self.panel_open && self.form_open();
+        if show_form && vp[0] > 0.0 {
             let data = self.panel_data(world);
             let view = self.make_form_view(&data, mouse);
             form_panel::apply(world, Some(&view), self.edit_origin(vp));
-        } else if !(self.hud_visible && self.form_open()) {
+        } else if !show_form {
             form_panel::apply(world, None, [0.0, 0.0]);
         }
     }
@@ -1307,14 +1433,12 @@ mod tests {
     }
 
     #[test]
-    fn row_menu_edit_renames_the_existing_entry() {
+    fn row_click_opens_the_edit_form_for_a_rename() {
         let mut h = hook(vec![entry("lamp", "PointLight")]);
         let mut world = world_with_fields();
         h.panel_open = true;
-        // Open the row's menu, then Edit -> form prefilled for a rename.
-        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
-        assert_eq!(h.row_menu, Some(0));
-        h.apply_panel(PanelAction::RowEdit, &mut world);
+        // Clicking the name row opens the edit form prefilled for a rename.
+        h.apply_panel(PanelAction::OpenEntry(0), &mut world);
         assert!(h.form_open());
         assert_eq!(h.editing, Some(0));
         assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
@@ -1780,6 +1904,61 @@ mod tests {
             panel::default_origin(vp[0]),
             "the Assets panel did not move"
         );
+    }
+
+    // Focusing a panel moves it to the front of the stack (drawn on top, first
+    // clicked) without duplicating it.
+    #[test]
+    fn focusing_a_panel_moves_it_to_the_front() {
+        let mut h = hook(Vec::new());
+        // Default order matches the injected draw order: Preview frontmost.
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Preview));
+        h.focus_panel(DragTarget::Assets);
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+        assert_eq!(h.panel_order.len(), 3, "no duplicates");
+        // Re-focusing the frontmost is a no-op.
+        h.focus_panel(DragTarget::Assets);
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+        assert_eq!(h.panel_order.len(), 3);
+    }
+
+    // The published HUD layers rank the panels by focus (frontmost highest) and pin
+    // the top bar above them all, so the renderer occludes overlaps cleanly.
+    #[test]
+    fn publish_layers_ranks_panels_below_the_top_bar() {
+        let mut h = hook(Vec::new());
+        h.focus_panel(DragTarget::Edit); // Edit -> frontmost
+        let layers = h.compute_layers();
+        let layer = |id| *layers.get(&id).expect("id mapped");
+        let edit = layer(form_panel::EDIT_BG);
+        let assets = layer(panel::PANEL_BG);
+        let preview = layer(preview::TITLE_BG);
+        assert!(
+            edit > assets && edit > preview,
+            "the frontmost panel outranks the others"
+        );
+        assert!(
+            layer(hud::SAVE_BUTTON) > edit,
+            "the top bar sits above every panel"
+        );
+        // A panel's text input shares its panel's layer (it must not sink below it).
+        assert_eq!(layer(form_panel::NAME_INPUT), edit);
+    }
+
+    // A press on a shown panel brings it to the front and (on its title bar) starts
+    // a drag.
+    #[test]
+    fn a_panel_press_brings_it_to_the_front() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        let vp = [1280.0, 720.0];
+        let po = h.panel_origin(vp);
+        let t = panel::title_rect(po);
+        let claimed = h.try_panel_press(DragTarget::Assets, t[0] + 5.0, t[1] + 5.0, vp, &mut world);
+        assert!(claimed, "the press was claimed by the Assets panel");
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+        assert!(h.drag.is_some(), "a title-bar press starts a drag");
     }
 
     #[test]
@@ -2298,27 +2477,59 @@ mod tests {
         assert!(h.entries.is_empty(), "nothing invalid was committed");
     }
 
+    // Toggling the Assets button off then on keeps the open form + its browse
+    // selection (the state is retained, only hidden), so the same view returns.
     #[test]
-    fn a_top_bar_click_closes_an_open_form() {
-        let mut h = hook(Vec::new());
+    fn toggling_the_assets_panel_keeps_the_open_form_state() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
         let mut world = world_with_fields();
         h.panel_open = true;
-        h.open_form(&mut world, "PointLight".to_string(), None);
-        assert!(h.form_open());
-        // Click the Templates button (a top-bar control, no disk I/O) while the
-        // form is open.
-        let vw = 1280.0;
-        let (_, _, tpl) = hud::layout(vw);
+        h.open_form(&mut world, "PointLight".to_string(), Some(0));
+        assert!(h.form_open() && h.editing == Some(0));
+        // Toggle the assets UI off: the form + selection are kept, not discarded.
+        h.apply_top(HudAction::ToggleAssets);
+        assert!(!h.panel_open);
+        assert!(
+            h.form_open(),
+            "the form is kept when the panel is toggled off"
+        );
+        assert_eq!(h.editing, Some(0), "the browse selection is kept");
+        // Toggle back on: the same form and selection are restored.
+        h.apply_top(HudAction::ToggleAssets);
+        assert!(h.panel_open && h.form_open());
+        assert_eq!(h.editing, Some(0));
+    }
+
+    // Hiding the assets UI hides the form's elements (but keeps its state); showing
+    // it again re-renders the form.
+    #[test]
+    fn a_hidden_assets_panel_hides_the_form_elements() {
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
         world.add_component(FrameInput {
-            viewport: [vw, 720.0],
-            mouse_x: tpl[0] + tpl[2] * 0.5,
-            mouse_y: tpl[1] + tpl[3] * 0.5,
-            left_click: true,
+            viewport: [1280.0, 720.0],
             ..Default::default()
         });
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        h.panel_open = true;
+        h.open_form(&mut world, "PointLight".to_string(), Some(0));
+        let form_shown = |w: &World| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == form_panel::EDIT_BG)
+                .unwrap()
+                .visible
+        };
         h.tick(&mut world);
-        assert!(!h.form_open(), "the form closed");
-        assert!(h.form_fields.is_empty() && h.selected_type.is_none());
+        assert!(form_shown(&world), "form shown while the panel is open");
+        // Toggle off: the form elements hide, but its state is retained.
+        h.apply_top(HudAction::ToggleAssets);
+        h.tick(&mut world);
+        assert!(!form_shown(&world), "form elements hidden when toggled off");
+        assert!(h.form_open(), "but the form state is retained");
+        // Toggle on: the form re-renders.
+        h.apply_top(HudAction::ToggleAssets);
+        h.tick(&mut world);
+        assert!(form_shown(&world), "form shown again on toggle-on");
     }
 
     #[test]
@@ -2328,8 +2539,7 @@ mod tests {
         })]);
         let mut world = world_with_fields();
         h.panel_open = true;
-        h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
-        h.apply_panel(PanelAction::RowEdit, &mut world);
+        h.apply_panel(PanelAction::OpenEntry(0), &mut world);
         assert_eq!(h.editing, Some(0));
         assert!(!h.form_fields.is_empty());
         // The name field was seeded from the entry.
@@ -2401,12 +2611,11 @@ mod tests {
                 .visible
         );
 
-        // Row menu: the Edit / Delete popup shows over the "a" name row (entry 0).
+        // Row menu: the Delete popup shows over the "a" name row (entry 0).
         h.combo = Combo::Closed;
         h.row_menu = Some(0);
         h.tick(&mut world);
         assert!(sprite_visible(&world, panel::MENU_BG), "row menu shown");
-        assert_eq!(label(&world, panel::MENU_EDIT_LABEL).content, "Edit");
         assert_eq!(label(&world, panel::MENU_DELETE_LABEL).content, "Delete");
 
         // Form open: the edit panel shows alongside the browse list, with its

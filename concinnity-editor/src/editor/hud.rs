@@ -268,6 +268,15 @@ fn all_label_ids() -> Vec<AssetId> {
     ids
 }
 
+// Every top-bar element id (sprites + labels), so the hook can pin the whole bar
+// to the top draw layer above the floating panels.
+pub(crate) fn all_ids() -> Vec<AssetId> {
+    all_sprite_ids()
+        .into_iter()
+        .chain(all_label_ids())
+        .collect()
+}
+
 fn hide_all(world: &mut World) {
     for id in all_sprite_ids() {
         widget::set_sprite_visible(world, id, false);

@@ -245,6 +245,7 @@ mod tests {
             indices: Vec::new(),
             atlas_slot: 0,
             clip_rect: None,
+            layer: 0,
         }
     }
 

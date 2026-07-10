@@ -43,6 +43,7 @@ pub fn build_sprite_calls(
     texture_slots: &HashMap<AssetId, usize>,
     viewport: [f32; 2],
     clips: &HashMap<AssetId, [f32; 4]>,
+    layers: &HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
     let fill_slot = match default_atlas_slot {
         Some(s) => s,
@@ -133,6 +134,7 @@ pub fn build_sprite_calls(
             clip_rect: clips
                 .get(&s.asset_id)
                 .map(|b| crate::text::band_to_window(&overlay, *b)),
+            layer: layers.get(&s.asset_id).copied().unwrap_or(0),
         });
     }
     calls
@@ -204,6 +206,9 @@ mod tests {
     fn no_clips() -> std::collections::HashMap<AssetId, [f32; 4]> {
         std::collections::HashMap::new()
     }
+    fn no_layers() -> std::collections::HashMap<AssetId, i32> {
+        std::collections::HashMap::new()
+    }
 
     fn no_slots() -> HashMap<AssetId, usize> {
         HashMap::new()
@@ -229,13 +234,30 @@ mod tests {
     #[test]
     fn no_fonts_means_no_calls() {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 0.0, 0.0, 1.0]);
-        assert!(build_sprite_calls(&[&s], None, &no_slots(), [0.0, 0.0], &no_clips()).is_empty());
+        assert!(
+            build_sprite_calls(
+                &[&s],
+                None,
+                &no_slots(),
+                [0.0, 0.0],
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn visible_sprite_emits_quad_with_sentinel_uv() {
         let s = sprite(10.0, 20.0, 100.0, 50.0, [0.5, 0.5, 0.5, 0.75]);
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [0.0, 0.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         assert_eq!(calls[0].indices, vec![0, 1, 2, 0, 2, 3]);
@@ -254,7 +276,14 @@ mod tests {
         s.texture = Some(AssetId(42));
         let mut slots = no_slots();
         slots.insert(AssetId(42), 3);
-        let calls = build_sprite_calls(&[&s], Some(0), &slots, [0.0, 0.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &slots,
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         // The call binds the sprite texture's atlas slot, not the font's.
         assert_eq!(calls[0].atlas_slot, 3);
@@ -274,7 +303,14 @@ mod tests {
     fn rounded_sprite_tessellates_with_a_feathered_edge() {
         let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
         s.corner_radius = 20.0;
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [0.0, 0.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         let vs = &calls[0].vertices;
         // An inner solid ring and an outer transparent ring, 4 corner arcs of
@@ -316,6 +352,7 @@ mod tests {
             &no_slots(),
             [2.0 * UI_REFERENCE_SIZE[0], 2.0 * UI_REFERENCE_SIZE[1]],
             &no_clips(),
+            &no_layers(),
         );
         let vs = &calls[0].vertices;
         let min_x = vs.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
@@ -333,7 +370,14 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 10.0, 10.0, [0.2, 0.3, 0.4, 1.0]);
         s.texture = Some(AssetId(42));
         // The texture never made it into the atlas pool: solid-fill sentinel.
-        let calls = build_sprite_calls(&[&s], Some(5), &no_slots(), [0.0, 0.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(5),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls[0].atlas_slot, 5);
         assert!(calls[0].vertices[0].uv[0] < 0.0);
         assert_eq!(calls[0].vertices[0].mode, 0.0);
@@ -344,7 +388,15 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 1.0, 1.0, 1.0]);
         s.visible = false;
         assert!(
-            build_sprite_calls(&[&s], Some(0), &no_slots(), [0.0, 0.0], &no_clips()).is_empty()
+            build_sprite_calls(
+                &[&s],
+                Some(0),
+                &no_slots(),
+                [0.0, 0.0],
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
         );
     }
 
@@ -352,7 +404,15 @@ mod tests {
     fn zero_alpha_sprite_is_skipped() {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 1.0, 1.0, 0.0]);
         assert!(
-            build_sprite_calls(&[&s], Some(0), &no_slots(), [0.0, 0.0], &no_clips()).is_empty()
+            build_sprite_calls(
+                &[&s],
+                Some(0),
+                &no_slots(),
+                [0.0, 0.0],
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
         );
     }
 
@@ -363,7 +423,14 @@ mod tests {
         // rect doubles and stays centered.
         let mut s = sprite(100.0, 100.0, 200.0, 100.0, [1.0, 1.0, 1.0, 1.0]);
         s.view = Some(AssetId(7));
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [2560.0, 1440.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [2560.0, 1440.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices[0].pos, [200.0, 200.0]);
         assert_eq!(calls[0].vertices[2].pos, [600.0, 400.0]);
@@ -375,7 +442,14 @@ mod tests {
         // full-screen backdrop: it fills the live window rather than letterboxing.
         let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [0.0, 0.0, 0.0, 0.5]);
         s.view = Some(AssetId(7));
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [2560.0, 1440.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [2560.0, 1440.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices[0].pos, [0.0, 0.0]);
         assert_eq!(calls[0].vertices[2].pos, [2560.0, 1440.0]);
@@ -389,7 +463,14 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [1.0, 1.0, 1.0, 1.0]);
         s.view = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [1024.0, 768.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [1024.0, 768.0],
+            &no_clips(),
+            &no_layers(),
+        );
         let scale = 768.0 / 720.0;
         let overflow = (1280.0 * scale - 1024.0) / 2.0;
         let vs = &calls[0].vertices;
@@ -415,7 +496,14 @@ mod tests {
         let mut s = sprite(400.0, 100.0, 480.0, 620.0, [1.0, 1.0, 1.0, 1.0]);
         s.view = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [1024.0, 768.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [1024.0, 768.0],
+            &no_clips(),
+            &no_layers(),
+        );
         let bottom = calls[0].vertices[2].pos[1];
         assert!((bottom - 768.0).abs() < 1e-3, "bottom={bottom}");
     }
@@ -424,7 +512,14 @@ mod tests {
     fn view_less_sprite_keeps_literal_pixels() {
         // A HUD / scene sprite (view == None) is never overlay-scaled.
         let s = sprite(10.0, 20.0, 100.0, 50.0, [0.5, 0.5, 0.5, 1.0]);
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [2560.0, 1440.0], &no_clips());
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [2560.0, 1440.0],
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls[0].vertices[0].pos, [10.0, 20.0]);
         assert_eq!(calls[0].vertices[2].pos, [110.0, 70.0]);
     }
@@ -442,7 +537,14 @@ mod tests {
         // 2560x1440, scale 2 about the centre): forward(200,200)=(400,400),
         // forward(400,260)=(800,520) -> clip [400,400,400,120].
         clips.insert(AssetId(7), [200.0, 200.0, 200.0, 60.0]);
-        let calls = build_sprite_calls(&[&s], Some(0), &no_slots(), [2560.0, 1440.0], &clips);
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [2560.0, 1440.0],
+            &clips,
+            &no_layers(),
+        );
         let clip = calls[0].clip_rect.expect("clipped sprite has a clip rect");
         assert!((clip[0] - 400.0).abs() < 1e-3, "x={}", clip[0]);
         assert!((clip[1] - 400.0).abs() < 1e-3, "y={}", clip[1]);
@@ -453,7 +555,45 @@ mod tests {
         let mut other = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         other.asset_id = AssetId(9);
         other.view = Some(AssetId(1));
-        let calls = build_sprite_calls(&[&other], Some(0), &no_slots(), [2560.0, 1440.0], &clips);
+        let calls = build_sprite_calls(
+            &[&other],
+            Some(0),
+            &no_slots(),
+            [2560.0, 1440.0],
+            &clips,
+            &no_layers(),
+        );
         assert!(calls[0].clip_rect.is_none());
+    }
+
+    // A sprite's call carries the draw layer its id maps to (used by the editor's
+    // panel occlusion sort); an id absent from the map draws at layer 0.
+    #[test]
+    fn sprite_call_takes_its_layer_from_the_map() {
+        let mut mapped = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
+        mapped.asset_id = AssetId(42);
+        let mut layers = std::collections::HashMap::new();
+        layers.insert(AssetId(42), 7);
+        let calls = build_sprite_calls(
+            &[&mapped],
+            Some(0),
+            &no_slots(),
+            [100.0, 100.0],
+            &no_clips(),
+            &layers,
+        );
+        assert_eq!(calls[0].layer, 7);
+
+        let mut unmapped = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
+        unmapped.asset_id = AssetId(99);
+        let calls = build_sprite_calls(
+            &[&unmapped],
+            Some(0),
+            &no_slots(),
+            [100.0, 100.0],
+            &no_clips(),
+            &layers,
+        );
+        assert_eq!(calls[0].layer, 0, "an unmapped id is layer 0");
     }
 }

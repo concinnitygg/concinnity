@@ -489,6 +489,7 @@ fn fit_line(
 fn build_text_input_overlay(
     ti: &TextInput,
     loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    caret_visible: bool,
 ) -> (Vec<Sprite>, Vec<TextLabel>) {
     const CARET_W: f32 = 2.0;
     let font = ti.font.and_then(|f| loaded_fonts.get(&f));
@@ -560,8 +561,8 @@ fn build_text_input_overlay(
     };
 
     // Caret: a thin bar at the caret's fit position, only while the field holds
-    // focus and the font loaded.
-    if ti.focused && font.is_some() {
+    // focus and the font loaded, and only on the visible half of the blink cycle.
+    if ti.focused && font.is_some() && caret_visible {
         let caret_x = ti.x + ti.padding + caret_off;
         sprites.push(Sprite {
             asset_id: AssetId::default(),
@@ -680,12 +681,23 @@ impl GraphicsSystem {
             let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
                 sprites.into_iter().partition(|s| s.follow_cursor);
 
+            // Draw-layer overrides for HUD occlusion (the `cn editor` panels): an
+            // id maps to a layer, and the overlay calls are stable-sorted by it
+            // below. Absent (a shipped game) leaves everything at layer 0, so the
+            // sort is skipped and draw order is unchanged.
+            let empty_layers = std::collections::HashMap::new();
+            let hud_layers = ctx
+                .resource::<crate::ecs::HudLayers>()
+                .map(|h| &h.0)
+                .unwrap_or(&empty_layers);
+
             let mut calls = gfx_sprite::build_sprite_calls(
                 &scene_sprites,
                 default_atlas_slot,
                 &self.sprite_texture_slots,
                 [win_w, win_h],
                 &self.clip_rects,
+                hud_layers,
             );
             let labels: Vec<&TextLabel> = ctx.query::<TextLabel>().collect();
             calls.extend(text::build_text_calls(
@@ -694,6 +706,7 @@ impl GraphicsSystem {
                 win_w,
                 win_h,
                 &self.clip_rects,
+                hud_layers,
             ));
 
             // A settings dropdown's open list draws on top of the menu (after the
@@ -713,6 +726,7 @@ impl GraphicsSystem {
                     &self.sprite_texture_slots,
                     [win_w, win_h],
                     &no_clips,
+                    &empty_layers,
                 ));
                 let label_refs: Vec<&TextLabel> = dl_labels.iter().collect();
                 calls.extend(text::build_text_calls(
@@ -721,6 +735,7 @@ impl GraphicsSystem {
                     win_w,
                     win_h,
                     &no_clips,
+                    &empty_layers,
                 ));
             }
 
@@ -729,24 +744,40 @@ impl GraphicsSystem {
             // shapers (clipped like the rest, so a field inside a scroll band
             // scissors correctly).
             let text_inputs: Vec<&TextInput> = ctx.query::<TextInput>().collect();
+            // Caret blink: visible for the first half of each period so a focused
+            // field's caret pulses rather than sitting solid.
+            const CARET_BLINK_PERIOD: f32 = 1.06;
+            let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
             for ti in text_inputs.iter().filter(|t| t.visible) {
-                let (ti_sprites, ti_labels) = build_text_input_overlay(ti, &self.loaded_fonts);
+                let (ti_sprites, ti_labels) =
+                    build_text_input_overlay(ti, &self.loaded_fonts, caret_visible);
+                // The synthesised overlay carries no asset id, so its calls take the
+                // field's own layer (from the field's id) rather than looking up the
+                // default id -- otherwise a focused panel's text fields would sink
+                // below it.
+                let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
                 let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
-                calls.extend(gfx_sprite::build_sprite_calls(
+                let mut ti_calls = gfx_sprite::build_sprite_calls(
                     &sprite_refs,
                     default_atlas_slot,
                     &self.sprite_texture_slots,
                     [win_w, win_h],
                     &self.clip_rects,
-                ));
+                    &empty_layers,
+                );
                 let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
-                calls.extend(text::build_text_calls(
+                ti_calls.extend(text::build_text_calls(
                     &label_refs,
                     &self.loaded_fonts,
                     win_w,
                     win_h,
                     &self.clip_rects,
+                    &empty_layers,
                 ));
+                for c in &mut ti_calls {
+                    c.layer = ti_layer;
+                }
+                calls.extend(ti_calls);
             }
 
             // A menu cursor is present when any visible follow_cursor sprite is
@@ -780,6 +811,14 @@ impl GraphicsSystem {
                 && scene_sprites
                     .iter()
                     .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
+            // Reorder the overlay by layer when a HUD-layer override is active (the
+            // editor's focus stack): a stable sort keeps same-layer order (so the
+            // sprites-then-text order within a panel is intact) while lifting the
+            // focused panel's whole content above the others'. Skipped entirely when
+            // no override is set, so a shipped game's draw order is untouched.
+            if !hud_layers.is_empty() {
+                calls.sort_by_key(|c| c.layer);
+            }
             (calls, want_cursor, menu_active, world_hidden)
         };
         // An external per-frame driver (the `cn editor` HUD) can force the
