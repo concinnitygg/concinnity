@@ -780,6 +780,12 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
     use crate::assets::Animation;
     use crate::ecs::Component;
 
+    // This deserializes each flagged clip (whose `target` is a name reference),
+    // so the name resolver must be installed. The full pipeline resets the
+    // interner before reaching here; installing it again is a cheap no-op and
+    // keeps this pass correct when called on its own.
+    crate::ecs::asset_id::ensure_name_resolver();
+
     for asset in assets.iter_mut() {
         if asset.asset_type != Animation::NAME
             || asset.args.get("root_motion").and_then(|v| v.as_bool()) != Some(true)

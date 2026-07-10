@@ -1687,6 +1687,7 @@ mod tests {
     // handler blocks, exactly as the per-frame debug drive would.
 
     fn anim_clip(name: &str, duration: f32) -> crate::assets::Animation {
+        crate::ecs::asset_id::ensure_name_resolver();
         let mut a: crate::assets::Animation = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": duration,
@@ -1698,6 +1699,7 @@ mod tests {
     }
 
     fn hero_graph() -> crate::assets::AnimGraph {
+        crate::ecs::asset_id::ensure_name_resolver();
         let mut g: crate::assets::AnimGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],

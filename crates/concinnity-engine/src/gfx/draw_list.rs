@@ -4,7 +4,8 @@
 // None of these functions hold or borrow a backend handle.
 
 use crate::assets::{
-    File, FileKind, InstancedProp, Mesh, ProceduralMesh, Room, SubMeshRef, VoxelChunk,
+    File, FileKind, InstancedProp, InstancedPropGeometry, Mesh, ProceduralMesh, Room, SubMeshRef,
+    VoxelChunk,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -1124,17 +1125,17 @@ mod tests {
             texture: None,
             cull_distance: 0.0,
             instances: vec![
-                crate::assets::instanced_prop::InstanceTransform {
+                crate::assets::InstanceTransform {
                     position: [0.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::assets::instanced_prop::InstanceTransform {
+                crate::assets::InstanceTransform {
                     position: [5.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::assets::instanced_prop::InstanceTransform {
+                crate::assets::InstanceTransform {
                     position: [-3.0, 0.0, 2.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
@@ -1660,7 +1661,7 @@ mod tests {
             material: None,
             texture: None,
             cull_distance: 0.0,
-            instances: vec![crate::assets::instanced_prop::InstanceTransform::default()],
+            instances: vec![crate::assets::InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],
@@ -1681,7 +1682,7 @@ mod tests {
             material: Some(AssetId(404)),
             texture: None,
             cull_distance: 0.0,
-            instances: vec![crate::assets::instanced_prop::InstanceTransform::default()],
+            instances: vec![crate::assets::InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],

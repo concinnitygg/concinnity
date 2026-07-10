@@ -1,4 +1,7 @@
 // src/assets/material_palette.rs
+//
+// Stays in concinnity-core rather than the schema crate: its `entries` field is
+// `Vec<serde_json::Value>`, and concinnity-asset is serde-only (no serde_json).
 
 use crate::ecs::{AssetOrigin, Component};
 

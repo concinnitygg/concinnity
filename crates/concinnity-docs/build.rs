@@ -42,7 +42,12 @@ use render::{
     render_values, rewrite_doc_links, slug,
 };
 
-const ASSETS_DIR: &str = "../concinnity-core/src/assets";
+// The asset sources are split across two crates: the plain data schema (structs,
+// their rustdoc, `Default`s, and enums) lives in concinnity-asset, while the
+// `impl Component` blocks (carrying NAME / ORIGIN / Args) stay in concinnity-core.
+// Both are parsed into one file set so a struct and its impl rejoin by name.
+const ASSET_SCHEMA_DIR: &str = "../concinnity-asset/src";
+const ASSET_IMPL_DIR: &str = "../concinnity-core/src/assets";
 
 // Per-type markdown pages written into the source tree, relative to this crate.
 const PAGES_DIR: &str = "../concinnity-docs/public/assets";
@@ -102,7 +107,8 @@ struct Entry {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed={ASSETS_DIR}");
+    println!("cargo:rerun-if-changed={ASSET_SCHEMA_DIR}");
+    println!("cargo:rerun-if-changed={ASSET_IMPL_DIR}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/render.rs");
 
@@ -320,21 +326,27 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeSet<String>) {
 
 fn parse_asset_files() -> Vec<syn::File> {
     let mut out = Vec::new();
-    let entries = fs::read_dir(ASSETS_DIR)
-        .unwrap_or_else(|e| panic!("build.rs: could not read {ASSETS_DIR}: {e}"));
+    for dir in [ASSET_SCHEMA_DIR, ASSET_IMPL_DIR] {
+        parse_dir(dir, &mut out);
+    }
+    out
+}
+
+fn parse_dir(dir: &str, out: &mut Vec<syn::File>) {
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|e| panic!("build.rs: could not read {dir}: {e}"));
     for entry in entries {
         let path = entry.expect("read_dir entry").path();
         if path.is_dir() {
             let sub = fs::read_dir(&path)
                 .unwrap_or_else(|e| panic!("build.rs: could not read {}: {e}", path.display()));
             for s in sub {
-                push_parsed(&s.expect("read_dir entry").path(), &mut out);
+                push_parsed(&s.expect("read_dir entry").path(), out);
             }
         } else {
-            push_parsed(&path, &mut out);
+            push_parsed(&path, out);
         }
     }
-    out
 }
 
 fn push_parsed(path: &Path, out: &mut Vec<syn::File>) {

@@ -31,6 +31,7 @@ mod environment_map;
 mod file;
 mod font;
 mod frame_input;
+mod geometry;
 mod glass_panel;
 mod graphics_config;
 mod ground_probes;
@@ -120,51 +121,54 @@ pub use anim_graph::{
 };
 pub use anim_params::AnimParams;
 pub use animation::Animation;
-pub use application::Application;
-pub use audio_clip::AudioClip;
 pub use audio_command::AudioCommand;
-pub use audio_cue::{AudioCue, CueKind};
-pub use audio_emitter::AudioEmitter;
-pub use block_type::BlockType;
 pub use camera_probe::CameraProbe;
-pub use camera_shot::CameraShot;
 pub use camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
 pub use character_rig::CharacterRig;
-pub use color_lut::ColorLut;
-pub use controls_command::ControlsCommand;
-pub use cubemap_texture::CubemapTexture;
-pub use decal::Decal;
-pub use despawn_request::DespawnRequest;
-pub use directional_light::DirectionalLight;
-pub use engine_defaults::EngineDefaults;
-pub use environment_map::EnvironmentMap;
-pub use file::{File, FileKind};
-pub use font::Font;
-pub use frame_input::FrameInput;
-pub use glass_panel::GlassPanel;
-pub use graphics_config::GraphicsConfig;
+pub use concinnity_asset::Application;
+pub use concinnity_asset::AudioClip;
+pub use concinnity_asset::AudioEmitter;
+pub use concinnity_asset::BlockType;
+pub use concinnity_asset::CameraShot;
+pub use concinnity_asset::ColorLut;
+pub use concinnity_asset::CubemapTexture;
+pub use concinnity_asset::Decal;
+pub use concinnity_asset::DirectionalLight;
+pub use concinnity_asset::EngineDefaults;
+pub use concinnity_asset::EnvironmentMap;
+pub use concinnity_asset::Font;
+pub use concinnity_asset::GlassPanel;
+pub use concinnity_asset::GraphicsConfig;
+pub use concinnity_asset::HitRegion;
+pub use concinnity_asset::KeyBinding;
+pub use concinnity_asset::LightRig;
+pub use concinnity_asset::Material;
+pub use concinnity_asset::OptionSelect;
+pub use concinnity_asset::Panel;
+pub use concinnity_asset::ParticleEmitter;
+pub use concinnity_asset::PhysicsConfig;
+pub use concinnity_asset::PointLight;
+pub use concinnity_asset::ProceduralMesh;
+pub use concinnity_asset::Prop;
 #[allow(unused_imports)]
-pub use graphics_config::ShadowUpdate;
+pub use concinnity_asset::ShadowUpdate;
+pub use concinnity_asset::{AudioCue, CueKind};
+pub use concinnity_asset::{InstanceTransform, InstancedProp};
+pub use concinnity_asset::{Joint, JointKind};
+pub use concinnity_asset::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
+pub use concinnity_asset::{MainMenu, MainMenuItem, SettingsProfile};
+pub use concinnity_asset::{Mesh, VertexData};
+pub use concinnity_asset::{Model, SubMeshRef};
+pub use controls_command::ControlsCommand;
+pub use despawn_request::DespawnRequest;
+pub use file::{File, FileKind};
+pub use frame_input::FrameInput;
+pub use geometry::{GlassPanelGeometry, InstancedPropGeometry, PropGeometry};
 pub use ground_probes::{GroundProbe, GroundProbes};
-pub use hit_region::HitRegion;
 pub use input_key::Key;
-pub use instanced_prop::InstancedProp;
-pub use joint::{Joint, JointKind};
-pub use key_binding::KeyBinding;
-pub use layout_container::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
 pub use lifetime::Lifetime;
-pub use light_rig::LightRig;
-pub use main_menu::{MainMenu, MainMenuItem, SettingsProfile};
-pub use material::Material;
 pub use material_palette::MaterialPalette;
-pub use mesh::{Mesh, VertexData};
-pub use model::{Model, SubMeshRef};
-pub use option_select::OptionSelect;
-pub use panel::Panel;
-pub use particle_emitter::ParticleEmitter;
-pub use physics_config::PhysicsConfig;
 pub use play_cue::PlayCue;
-pub use point_light::PointLight;
 #[allow(unused_imports)]
 pub use post_process_config::AaMode;
 #[allow(unused_imports)]
@@ -179,28 +183,42 @@ pub use post_process_config::UpscaleQuality;
 #[allow(unused_imports)]
 pub use post_process_config::UpscalerBackend;
 pub use prefab::Prefab;
-pub use procedural_mesh::ProceduralMesh;
-pub use prop::Prop;
 pub use root_motion_event::RootMotion;
 // `PropCollider` is re-exported for tests / future consumers; the crate
 // currently only uses it through `Prop.collider`, so the re-export is unused
 // at compile time outside of the test module.
+pub use concinnity_asset::PropBody;
 #[allow(unused_imports)]
-pub use prop::PropCollider;
-pub use prop_body::PropBody;
-pub use reflection_probe::ReflectionProbe;
+pub use concinnity_asset::PropCollider;
+pub use concinnity_asset::ReflectionProbe;
+pub use concinnity_asset::RigidBody;
+pub use concinnity_asset::Scene;
+pub use concinnity_asset::SceneImport;
+pub use concinnity_asset::SceneReel;
+pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use reparent_request::ReparentRequest;
-pub use rigid_body::RigidBody;
 pub use room::Room;
-pub use scene::Scene;
 pub use scene_command::SceneCommand;
-pub use scene_import::SceneImport;
-pub use scene_reel::SceneReel;
-pub use scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use sdf_volume::SdfVolume;
 pub use setting_command::{SettingCommand, SettingOp};
 // Re-exported for the Metal raymarch encoder; non-Metal builds reach
 // the asset through `SdfVolume` only.
+pub use concinnity_asset::Slider;
+pub use concinnity_asset::StoryImport;
+pub use concinnity_asset::StreamingConfig;
+pub use concinnity_asset::TextInput;
+pub use concinnity_asset::Texture;
+pub use concinnity_asset::View;
+pub use concinnity_asset::VolumetricFog;
+pub use concinnity_asset::VoxelChunk;
+pub use concinnity_asset::VoxelWorld;
+pub use concinnity_asset::{
+    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
+    StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
+};
+pub use concinnity_asset::{Sprite, SpriteFit};
+pub use concinnity_asset::{TextAlign, TextLabel};
+pub use concinnity_asset::{WaterSurface, WaterWave};
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
@@ -209,33 +227,17 @@ pub use skeleton_pose::SkeletonPose;
 pub use skinned_mesh::{
     CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs,
 };
-pub use slider::Slider;
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
-pub use sprite::{Sprite, SpriteFit};
-pub use story::{
-    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
-    StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
-};
 pub use story_command::StoryCommand;
-pub use story_import::StoryImport;
-pub use streaming_config::StreamingConfig;
-pub use text_input::TextInput;
-pub use text_label::{TextAlign, TextLabel};
-pub use texture::Texture;
-pub use view::View;
 pub use view_command::ViewCommand;
 pub use view_shown::ViewShown;
-pub use volumetric_fog::VolumetricFog;
-pub use voxel_chunk::VoxelChunk;
-pub use voxel_world::VoxelWorld;
-pub use water_surface::WaterSurface;
-// Re-exported for the Metal water encoder; non-Metal builds reach the
-// asset through `WaterSurface` only.
+// `MAX_WATER_WAVES` stays in core (used by `from_args`); re-exported for the
+// Metal water encoder, which also reaches `WaterWave` through the asset crate.
+pub use concinnity_asset::{Window, WindowArgs, WindowMode};
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
-pub use water_surface::{MAX_WATER_WAVES, WaterWave};
-pub use window::{Window, WindowArgs, WindowMode};
+pub use water_surface::MAX_WATER_WAVES;
 
 // Per-instance components an entity is composed from.
 pub use children::Children;
@@ -252,9 +254,9 @@ pub use scene_member::SceneMember;
 pub use transform::Transform;
 
 // HUD-overlay request components; their behavior lives in the client crate.
-pub use debug_hud::DebugHud;
-pub use fps_counter::FpsCounter;
-pub use stat_hud::StatHud;
+pub use concinnity_asset::DebugHud;
+pub use concinnity_asset::FpsCounter;
+pub use concinnity_asset::StatHud;
 
 #[cfg(test)]
 mod tests {

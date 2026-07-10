@@ -1,0 +1,84 @@
+// Instanced-prop schema.
+
+use crate::{AssetId, de_opt_asset_ref};
+use alloc::vec::Vec;
+
+/// Per-instance transform within an `InstancedProp`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct InstanceTransform {
+    /// World-space position `[x, y, z]`.
+    pub position: [f32; 3],
+    /// Euler rotation in degrees `[pitch, yaw, roll]`, applied in YXZ order.
+    pub rotation_deg: [f32; 3],
+    /// Non-uniform scale `[x, y, z]`.
+    pub scale: [f32; 3],
+}
+
+impl Default for InstanceTransform {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0],
+            rotation_deg: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// A single mesh + material drawn at many world-space transforms.
+///
+/// Use for foliage, debris, projectiles, or any content that repeats the same
+/// shape with varied placement. Each instance gets its own world transform and
+/// culling without the overhead of declaring many separate [Prop](#prop)s.
+///
+/// Each `instances` entry has the shape `{"position":[x,y,z], "rotation_deg":[p,y,r], "scale":[sx,sy,sz]}`.
+/// `rotation_deg` and `scale` may be omitted (defaults `[0,0,0]` and `[1,1,1]`).
+///
+/// ```jsonl
+/// {"name":"rock_mesh","type":"ProceduralMesh","args":{"generator":"sphere","radius":0.4,"rings":8,"segments":10}}
+/// {"name":"mat_stone","type":"Material","args":{"albedo":"tex_stone","roughness":0.9}}
+/// {"name":"rocks","type":"InstancedProp","args":{
+///   "mesh":"rock_mesh",
+///   "material":"mat_stone",
+///   "cull_distance":80.0,
+///   "instances":[
+///     {"position":[ 2.0, 0.4, -3.0]},
+///     {"position":[-5.0, 0.4,  1.0], "rotation_deg":[0, 45, 0]},
+///     {"position":[ 4.0, 0.4,  7.0], "scale":[1.5, 1.5, 1.5]}
+///   ]
+/// }}
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct InstancedProp {
+    /// Asset identity; injected via `inject_name`. Not part of `args`.
+    #[serde(skip)]
+    pub asset_id: AssetId,
+    /// A [Mesh](#mesh), [ProceduralMesh](#proceduralmesh),
+    /// [VoxelChunk](#voxelchunk), or mesh-kind [File](#file) asset.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub mesh: Option<AssetId>,
+    /// A [Material](#material); takes precedence over `texture` when set.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub material: Option<AssetId>,
+    /// Older texture-only reference; ignored when `material` is set.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub texture: Option<AssetId>,
+    /// Per-instance transforms. Empty list renders nothing.
+    pub instances: Vec<InstanceTransform>,
+    /// View-distance cutoff in world units per instance. 0 = always draw.
+    pub cull_distance: f32,
+}
+
+impl Default for InstancedProp {
+    fn default() -> Self {
+        Self {
+            asset_id: AssetId::default(),
+            mesh: None,
+            material: None,
+            texture: None,
+            instances: Vec::new(),
+            cull_distance: 0.0,
+        }
+    }
+}

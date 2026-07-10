@@ -158,15 +158,9 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
 }
 
 // Points to an asset's compiled binary payload within the data blob files.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PayloadLocator {
-    // Index into the blob file list (0 = data/0, 1 = data/1, ...).
-    pub blob_index: u32,
-    // Byte offset into the payload section of the target blob.
-    pub offset: u64,
-    // Byte length of the payload.
-    pub len: u64,
-}
+// Defined in the schema crate because blob-backed asset structs carry it as a
+// `#[serde(skip)]` field; re-exported here under its historical path.
+pub use concinnity_asset::PayloadLocator;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlobAssetDef {
@@ -442,6 +436,12 @@ macro_rules! __define_asset_kind {
                 self,
                 args: &serde_json::Value,
             ) -> Result<Vec<u8>, CnResult> {
+                // Deserializing the args interns any name-string cross-reference,
+                // which needs the name resolver installed. The build pipeline
+                // resets the interner before it gets here; installing it again is a
+                // cheap no-op and lets standalone callers (e.g. `cn check`
+                // validation) deserialize without doing their own setup.
+                $crate::ecs::asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {

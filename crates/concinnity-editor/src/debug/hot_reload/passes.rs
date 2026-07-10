@@ -379,6 +379,11 @@ pub(super) fn reload_stories(
     path: &str,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
 ) -> Vec<crate::assets::Story> {
+    // Each expanded Story deserializes its scaffold name-references, so the
+    // name resolver must be installed. In a running editor the initial build
+    // already set it up; installing it here too is a cheap no-op and keeps a
+    // standalone reload correct.
+    crate::ecs::asset_id::ensure_name_resolver();
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
