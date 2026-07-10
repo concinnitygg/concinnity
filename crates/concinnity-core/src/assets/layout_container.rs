@@ -1,7 +1,7 @@
 // src/assets/layout_container.rs
 
 use crate::assets::LayoutContainer;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for LayoutContainer {
     const NAME: &'static str = "LayoutContainer";
@@ -13,17 +13,6 @@ impl Component for LayoutContainer {
     }
     fn from_args(args: Self) -> Self {
         args
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        // Positioning runs inside the GraphicsSystem's frame assembly, where the
-        // font metrics live; ensure a GraphicsConfig (which gates that system)
-        // is present even if a world somehow has a container but no labels.
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
     }
 }
 

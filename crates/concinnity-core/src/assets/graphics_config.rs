@@ -1,7 +1,7 @@
 // src/assets/graphics_config.rs
 
 use crate::assets::GraphicsConfig;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for GraphicsConfig {
     const NAME: &'static str = "GraphicsConfig";
@@ -13,68 +13,6 @@ impl Component for GraphicsConfig {
     }
     fn from_args(args: Self) -> Self {
         args
-    }
-
-    // GraphicsConfig is the marker that a world renders: its presence gates the
-    // internal GraphicsSystem at runtime and pulls in the assets that system
-    // needs: a Window and, when the world declares no ShaderStage of its own,
-    // the bundled default shader set.
-    fn companions(_args: &serde_json::Value, world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        let mut specs = vec![CompanionSpec {
-            name: "Window",
-            asset_type: "Window",
-            args: serde_json::json!({}),
-        }];
-
-        // Inject the bundled default vertex + fragment ShaderStages as a set
-        // only when the world declares no ShaderStage at all. A world with even
-        // one custom ShaderStage owns its pipeline and is left alone.
-        let has_shader = world.iter().any(|v| {
-            v.get("type")
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_lowercase().replace('_', "") == "shaderstage")
-                .unwrap_or(false)
-        });
-        if !has_shader {
-            specs.push(CompanionSpec {
-                name: "default_vertex_shader",
-                asset_type: "ShaderStage",
-                args: serde_json::json!({
-                    "kind": "vertex",
-                    "sources": {"metal": "default.metal", "hlsl": "default_vert.hlsl"}
-                }),
-            });
-            specs.push(CompanionSpec {
-                name: "default_fragment_shader",
-                asset_type: "ShaderStage",
-                args: serde_json::json!({
-                    "kind": "fragment",
-                    "sources": {"metal": "default.metal", "hlsl": "default_frag.hlsl"}
-                }),
-            });
-            // The GPU-instanced vertex stage is only needed when the world has
-            // an InstancedProp; without it the backend cannot build the
-            // instanced main/SSR/SSAO/velocity pipelines and instanced clusters
-            // silently never rasterize. Inject it on demand so worlds without
-            // instancing don't pay for an extra shader compile.
-            let has_instanced = world.iter().any(|v| {
-                v.get("type")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_lowercase().replace('_', "") == "instancedprop")
-                    .unwrap_or(false)
-            });
-            if has_instanced {
-                specs.push(CompanionSpec {
-                    name: "default_instanced_vertex_shader",
-                    asset_type: "ShaderStage",
-                    args: serde_json::json!({
-                        "kind": "vertex_instanced",
-                        "sources": {"metal": "default.metal", "hlsl": "default_vert_instanced.hlsl"}
-                    }),
-                });
-            }
-        }
-        specs
     }
 }
 

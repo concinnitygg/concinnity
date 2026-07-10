@@ -1,6 +1,5 @@
 // src/assets/anim_graph.rs
 
-use crate::check::cross_reference::{CrossRef, CrossReferenced, RefKind};
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
 use crate::ecs::{AssetOrigin, Component};
 use crate::gfx::anim_graph::{
@@ -473,88 +472,6 @@ impl Component for AnimGraph {
     }
 }
 
-impl CrossReferenced for AnimGraph {
-    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        let mut refs = Vec::new();
-        match args.get("target").and_then(|v| v.as_str()).unwrap_or("") {
-            "" => refs.push(CrossRef::Issue(format!(
-                "AnimGraph '{name}': `target` field is required (the SkinnedMesh to animate)"
-            ))),
-            target => refs.push(CrossRef::Resolve {
-                kind: RefKind::SkinnedMesh,
-                target: target.to_string(),
-                error: format!("AnimGraph '{name}': target SkinnedMesh '{target}' not found"),
-            }),
-        }
-        let states = args
-            .get("states")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
-        for (i, state) in states.iter().enumerate() {
-            let state_name = state.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let label = if state_name.is_empty() {
-                format!("state #{i}")
-            } else {
-                format!("state '{state_name}'")
-            };
-            let clips = AnimGraph::state_clip_names(state);
-            if clips.is_empty() {
-                refs.push(CrossRef::Issue(format!(
-                    "AnimGraph '{name}': {label} names no Animation (set `clip`, or `blend` \
-                     members)"
-                )));
-            }
-            for clip in clips {
-                refs.push(CrossRef::Resolve {
-                    error: format!("AnimGraph '{name}': {label} clip '{clip}' not found"),
-                    kind: RefKind::Animation,
-                    target: clip,
-                });
-            }
-        }
-        refs
-    }
-}
-
-impl AnimGraph {
-    /// Every [Animation](#animation) name a state's raw JSON references: its
-    /// `clip`, or all of its blendspace members. Serves reference validation
-    /// over the raw world; empty/missing names are skipped.
-    pub fn state_clip_names(state: &serde_json::Value) -> Vec<String> {
-        let mut names = Vec::new();
-        let mut push = |v: Option<&serde_json::Value>| {
-            if let Some(clip) = v.and_then(|v| v.as_str())
-                && !clip.is_empty()
-            {
-                names.push(clip.to_string());
-            }
-        };
-        push(state.get("clip"));
-        if let Some(blend) = state.get("blend") {
-            for point in blend
-                .get("points")
-                .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[])
-            {
-                push(point.get("clip"));
-            }
-            for row in blend
-                .get("rows")
-                .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[])
-            {
-                for cell in row.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-                    push(Some(cell));
-                }
-            }
-        }
-        names
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,29 +580,6 @@ mod tests {
         assert!(g.compile(any_clip).unwrap_err().contains("no states"));
     }
 
-    #[test]
-    fn cross_refs_cover_target_and_clips() {
-        let refs = AnimGraph::cross_refs("g", &graph_json());
-        // One target resolve + two clip resolves.
-        assert_eq!(refs.len(), 3);
-        assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
-    }
-
-    #[test]
-    fn cross_refs_flag_missing_target_and_clip() {
-        let refs = AnimGraph::cross_refs("g", &serde_json::json!({"states":[{"name":"idle"}]}));
-        let issues: Vec<_> = refs
-            .iter()
-            .filter_map(|r| match r {
-                CrossRef::Issue(msg) => Some(msg.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(issues.len(), 2);
-        assert!(issues[0].contains("target"));
-        assert!(issues[1].contains("clip"));
-    }
-
     fn blend1d_graph_json() -> serde_json::Value {
         serde_json::json!({
             "target": "hero",
@@ -785,28 +679,5 @@ mod tests {
         v["states"][0]["blend"]["rows"] = serde_json::json!([["a", "b"]]);
         let g: AnimGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("rows"));
-    }
-
-    #[test]
-    fn cross_refs_cover_blend_members() {
-        let refs = AnimGraph::cross_refs("g", &blend1d_graph_json());
-        // One target resolve + three point-clip resolves.
-        assert_eq!(refs.len(), 4);
-        assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
-
-        let refs = AnimGraph::cross_refs("g", &blend2d_graph_json());
-        // One target resolve + four grid-cell resolves.
-        assert_eq!(refs.len(), 5);
-    }
-
-    #[test]
-    fn state_clip_names_walks_clip_points_and_rows() {
-        let names = AnimGraph::state_clip_names(&serde_json::json!({"clip":"solo"}));
-        assert_eq!(names, vec!["solo"]);
-        let names = AnimGraph::state_clip_names(&blend1d_graph_json()["states"][0]);
-        assert_eq!(names, vec!["idle", "walk", "run"]);
-        let names = AnimGraph::state_clip_names(&blend2d_graph_json()["states"][0]);
-        assert_eq!(names, vec!["run_l", "run_l", "run_r", "run_r"]);
-        assert!(AnimGraph::state_clip_names(&serde_json::json!({})).is_empty());
     }
 }

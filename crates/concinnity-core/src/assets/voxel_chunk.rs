@@ -29,39 +29,3 @@ impl Component for VoxelChunk {
         self.asset_id = id;
     }
 }
-
-impl crate::check::cross_reference::CrossReferenced for VoxelChunk {
-    fn cross_refs(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Vec<crate::check::cross_reference::CrossRef> {
-        use crate::check::cross_reference::{CrossRef, RefKind};
-        let mut refs = Vec::new();
-
-        let palette = args
-            .get("palette")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
-        for (i, entry) in palette.iter().enumerate() {
-            let bt_name = entry.as_str().unwrap_or("");
-            if bt_name.is_empty() {
-                refs.push(CrossRef::Issue(format!(
-                    "VoxelChunk '{}': palette[{}] is not a valid BlockType name",
-                    name, i
-                )));
-            } else {
-                refs.push(CrossRef::Resolve {
-                    kind: RefKind::BlockType,
-                    target: bt_name.to_string(),
-                    error: format!(
-                        "VoxelChunk '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that name",
-                        name, i, bt_name
-                    ),
-                });
-            }
-        }
-
-        refs
-    }
-}

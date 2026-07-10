@@ -1,7 +1,7 @@
 // src/assets/voxel_world.rs
 
 use crate::assets::VoxelWorld;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for VoxelWorld {
     const NAME: &'static str = "VoxelWorld";
@@ -13,63 +13,6 @@ impl Component for VoxelWorld {
     }
     fn to_args(&self) -> Self {
         self.clone()
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
-    }
-}
-
-impl crate::check::cross_reference::CrossReferenced for VoxelWorld {
-    fn cross_refs(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Vec<crate::check::cross_reference::CrossRef> {
-        use crate::check::cross_reference::{CrossRef, RefKind};
-        let mut refs = Vec::new();
-
-        let palette = args
-            .get("palette")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
-        for (i, entry) in palette.iter().enumerate() {
-            let bt_name = entry.as_str().unwrap_or("");
-            if bt_name.is_empty() {
-                refs.push(CrossRef::Issue(format!(
-                    "VoxelWorld '{}': palette[{}] is not a valid BlockType name",
-                    name, i
-                )));
-            } else {
-                refs.push(CrossRef::Resolve {
-                    kind: RefKind::BlockType,
-                    target: bt_name.to_string(),
-                    error: format!(
-                        "VoxelWorld '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that name",
-                        name, i, bt_name
-                    ),
-                });
-            }
-        }
-
-        if let Some(mat) = args.get("material").and_then(|v| v.as_str())
-            && !mat.is_empty()
-        {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Material,
-                target: mat.to_string(),
-                error: format!(
-                    "VoxelWorld '{}': material '{}' not found, add a Material asset with that name",
-                    name, mat
-                ),
-            });
-        }
-
-        refs
     }
 }
 

@@ -1,10 +1,9 @@
 // src/world/companion.rs
 // Inject companion assets implied by the presence of other assets.
 //
-// Each Component declares its companions in its own file via the
-// `companions(args, world)` trait method; see `crate::ecs::CompanionSpec`.
-// This module dispatches over the typed registry and applies the specs to a
-// world JSONL value list. Two passes:
+// Each renderable asset's companions are declared in `companion_specs` and
+// dispatched there by normalized type name. This module applies the resulting
+// specs to a world JSONL value list. Two passes:
 //
 //   1. Injection runs to a fixed point. Each round snapshots the current
 //      world, asks every declared asset for its companion specs, then filters
@@ -17,8 +16,8 @@
 //      world: when there are TextLabels but no Font, it injects one from the
 //      engine's bundled font and points empty-`font` labels at it.
 
+use super::companion_specs::{CompanionSpec, companions_for};
 use super::expand::ExpandReport;
-use crate::ecs::ComponentType;
 use std::collections::HashSet;
 
 // Same normalization the rest of the codebase uses for type-name dedup:
@@ -35,17 +34,13 @@ fn asset_type_norm(v: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-// Dispatch a companion lookup for one asset to the component registry.
+// Dispatch a companion lookup for one asset by its normalized type name.
 fn companions_for_type(
     asset_type: &str,
     args: &serde_json::Value,
     world: &[serde_json::Value],
-) -> Vec<crate::ecs::CompanionSpec> {
-    if let Some(ct) = ComponentType::parse(asset_type) {
-        ct.companions(args, world)
-    } else {
-        Vec::new()
-    }
+) -> Vec<CompanionSpec> {
+    companions_for(&type_norm_str(asset_type), args, world)
 }
 
 // Pixel size of the auto-injected default font. Deliberately larger than a
@@ -115,7 +110,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         let present_types: HashSet<String> = snapshot.iter().map(asset_type_norm).collect();
 
         // Collect every spec implied by every declared asset.
-        let mut candidates: Vec<crate::ecs::CompanionSpec> = Vec::new();
+        let mut candidates: Vec<CompanionSpec> = Vec::new();
         for value in &snapshot {
             let Some(t) = value.get("type").and_then(|s| s.as_str()) else {
                 continue;

@@ -49,29 +49,6 @@ impl Component for ParticleEmitter {
     }
 }
 
-impl crate::check::cross_reference::CrossReferenced for ParticleEmitter {
-    fn cross_refs(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Vec<crate::check::cross_reference::CrossRef> {
-        use crate::check::cross_reference::{CrossRef, RefKind};
-        let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
-        let mut refs = Vec::new();
-        let tex = arg("texture");
-        if !tex.is_empty() {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Texture,
-                target: tex.to_string(),
-                error: format!(
-                    "ParticleEmitter '{}': texture '{}' not found, add a Texture asset with that name",
-                    name, tex
-                ),
-            });
-        }
-        refs
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

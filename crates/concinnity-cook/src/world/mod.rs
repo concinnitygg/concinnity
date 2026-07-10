@@ -8,6 +8,7 @@ pub use concinnity_core::world::*;
 pub(crate) mod application;
 pub(crate) mod camera_shot;
 pub(crate) mod companion;
+pub(crate) mod companion_specs;
 pub(crate) mod config;
 pub(crate) mod defaults;
 

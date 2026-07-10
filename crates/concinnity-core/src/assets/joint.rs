@@ -25,48 +25,6 @@ impl Component for Joint {
     }
 }
 
-impl crate::check::cross_reference::CrossReferenced for Joint {
-    fn cross_refs(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Vec<crate::check::cross_reference::CrossRef> {
-        use crate::check::cross_reference::{CrossRef, RefKind};
-        let arg_str = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
-        let mut refs = Vec::new();
-
-        let kind = arg_str("kind");
-        if !kind.is_empty() && JointKind::from_str_norm(kind).is_none() {
-            refs.push(CrossRef::Issue(format!(
-                "Joint '{name}': unknown kind '{kind}' (expected one of fixed | revolute | spherical | prismatic)"
-            )));
-        }
-
-        let body_a = arg_str("body_a");
-        if body_a.is_empty() {
-            refs.push(CrossRef::Issue(format!(
-                "Joint '{name}': `body_a` is required, name of a Prop with a collider"
-            )));
-        } else {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Prop,
-                target: body_a.to_string(),
-                error: format!("Joint '{name}': body_a '{body_a}' is not a declared Prop"),
-            });
-        }
-
-        let body_b = arg_str("body_b");
-        if !body_b.is_empty() {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Prop,
-                target: body_b.to_string(),
-                error: format!("Joint '{name}': body_b '{body_b}' is not a declared Prop"),
-            });
-        }
-
-        refs
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

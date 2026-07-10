@@ -2,7 +2,7 @@
 
 use crate::assets::InstancedProp;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for InstancedProp {
     const NAME: &'static str = "InstancedProp";
@@ -19,68 +19,6 @@ impl Component for InstancedProp {
 
     fn inject_name(&mut self, id: AssetId) {
         self.asset_id = id;
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
-    }
-}
-
-impl crate::check::cross_reference::CrossReferenced for InstancedProp {
-    fn cross_refs(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Vec<crate::check::cross_reference::CrossRef> {
-        use crate::check::cross_reference::{CrossRef, RefKind};
-        let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
-        let mut refs = Vec::new();
-
-        let mesh_ref = arg("mesh");
-        if mesh_ref.is_empty() {
-            refs.push(CrossRef::Issue(format!(
-                "InstancedProp '{}': `mesh` field is required",
-                name
-            )));
-        } else {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::MeshSource,
-                target: mesh_ref.to_string(),
-                error: format!(
-                    "InstancedProp '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that name",
-                    name, mesh_ref
-                ),
-            });
-        }
-
-        let mat_ref = arg("material");
-        if !mat_ref.is_empty() {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Material,
-                target: mat_ref.to_string(),
-                error: format!(
-                    "InstancedProp '{}': material '{}' not found, add a Material asset with that name",
-                    name, mat_ref
-                ),
-            });
-        }
-
-        let tex_ref = arg("texture");
-        if !tex_ref.is_empty() {
-            refs.push(CrossRef::Resolve {
-                kind: RefKind::Texture,
-                target: tex_ref.to_string(),
-                error: format!(
-                    "InstancedProp '{}': texture '{}' not found, add a Texture asset with that name",
-                    name, tex_ref
-                ),
-            });
-        }
-
-        refs
     }
 }
 

@@ -5,6 +5,7 @@
 // crate::world::load_world.
 
 pub(crate) mod anim_graph;
+pub(crate) mod asset_refs;
 pub(crate) mod cross_reference;
 pub(crate) mod cubemap_texture;
 pub(crate) mod environment_map;

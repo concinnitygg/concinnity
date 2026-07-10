@@ -1,7 +1,7 @@
 // src/assets/main_menu.rs
 
 use crate::assets::MainMenu;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for MainMenu {
     const NAME: &'static str = "MainMenu";
@@ -13,14 +13,6 @@ impl Component for MainMenu {
     }
     fn to_args(&self) -> Self {
         self.clone()
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
     }
 }
 

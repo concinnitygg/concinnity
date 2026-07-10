@@ -2,7 +2,7 @@
 
 use crate::assets::EnvironmentMap;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, CompanionSpec, Component, PayloadLocator};
+use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator};
 
 impl Component for EnvironmentMap {
     const NAME: &'static str = "EnvironmentMap";
@@ -25,14 +25,6 @@ impl Component for EnvironmentMap {
 
     fn inject_name(&mut self, id: AssetId) {
         self.asset_id = id;
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
     }
 }
 

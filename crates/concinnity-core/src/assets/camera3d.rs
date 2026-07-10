@@ -4,32 +4,7 @@
 // the schema crate (concinnity_asset::camera3d).
 
 use crate::assets::{Camera3DArgs, CameraController};
-use crate::check::cross_reference::{CrossRef, CrossReferenced, RefKind};
 use crate::ecs::{AssetOrigin, Component};
-
-// A follow target references a SkinnedMesh by name; the build resolves it
-// like every other cross-reference.
-impl CrossReferenced for Camera3D {
-    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        let Some(follow) = args
-            .get("controller")
-            .and_then(|c| c.get("follow"))
-            .filter(|f| !f.is_null())
-        else {
-            return Vec::new();
-        };
-        match follow.get("target").and_then(|v| v.as_str()).unwrap_or("") {
-            "" => vec![CrossRef::Issue(format!(
-                "Camera3D '{name}': `controller.follow.target` is required (the SkinnedMesh to follow)"
-            ))],
-            target => vec![CrossRef::Resolve {
-                kind: RefKind::SkinnedMesh,
-                target: target.to_string(),
-                error: format!("Camera3D '{name}': follow target SkinnedMesh '{target}' not found"),
-            }],
-        }
-    }
-}
 
 /// Declares the 3D camera. One per scene.
 ///

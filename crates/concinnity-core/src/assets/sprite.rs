@@ -2,7 +2,7 @@
 
 use crate::assets::Sprite;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 impl Component for Sprite {
     const NAME: &'static str = "Sprite";
@@ -22,14 +22,6 @@ impl Component for Sprite {
 
     fn inject_name(&mut self, id: AssetId) {
         self.asset_id = id;
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
     }
 }
 

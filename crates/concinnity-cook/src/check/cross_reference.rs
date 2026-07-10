@@ -7,14 +7,14 @@
 // first error, so the caller can report them all in one pass.
 //
 // Each referencing asset declares its own references by implementing
-// `CrossReferenced` in its asset file; `cross_refs_for` dispatches to those
-// impls by type. The validator here only resolves a `RefKind` to the matching
-// set of asset names and detects Prop parent cycles. Adding a new referencing
-// asset means writing one impl plus one arm in `cross_refs_for`.
+// `CrossReferenced` in `asset_refs`; `cross_refs_for` dispatches to those impls
+// by type. The validator here only resolves a `RefKind` to the matching set of
+// asset names and detects Prop parent cycles. Adding a new referencing asset
+// means writing one impl there plus one arm in `cross_refs_for`.
 
+use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
 use crate::assets::FileKind;
 use crate::world::WorldJsonlAsset;
-use concinnity_core::check::cross_reference::{CrossRef, CrossReferenced, RefKind};
 use std::collections::HashSet;
 
 // Dispatch reference extraction by normalized asset type. Every arm delegates
@@ -243,7 +243,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         {
             // Single-clip and blendspace members alike; a state naming no
             // clips at all is already reported by cross_refs.
-            for clip in crate::assets::AnimGraph::state_clip_names(state) {
+            for clip in super::asset_refs::state_clip_names(state) {
                 if let Some(&clip_target) = clip_targets.get(clip.as_str())
                     && clip_target != mesh
                 {

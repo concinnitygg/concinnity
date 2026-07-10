@@ -2,7 +2,7 @@
 
 use crate::assets::{WaterSurface, WaterWave};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, CompanionSpec, Component};
+use crate::ecs::{AssetOrigin, Component};
 
 /// Maximum number of waves per water surface.
 pub const MAX_WATER_WAVES: usize = 4;
@@ -27,13 +27,5 @@ impl Component for WaterSurface {
     }
     fn inject_name(&mut self, id: AssetId) {
         self.asset_id = id;
-    }
-
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        vec![CompanionSpec {
-            name: "GraphicsConfig",
-            asset_type: "GraphicsConfig",
-            args: serde_json::json!({}),
-        }]
     }
 }

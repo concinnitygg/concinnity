@@ -11,7 +11,6 @@
 pub mod assets;
 pub mod blob;
 pub mod build;
-pub mod check;
 pub mod ecs;
 pub mod geometry;
 pub mod gfx;

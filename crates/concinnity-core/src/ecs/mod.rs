@@ -4,7 +4,7 @@
 // pipeline and the client runtime: the asset-identity interner (`asset_id`),
 // the `Component` metadata trait, and the plain data types the registry and
 // blob format are built from (`Registration`, `AssetOrigin`, `AssetPayload`,
-// `CompanionSpec`, `PayloadLocator`, `BlobAssetDef`, `AssetKind`).
+// `PayloadLocator`, `BlobAssetDef`, `AssetKind`).
 //
 // The runtime half (the `System` behavior trait, `PipelineContext`, `World`,
 // the value enums (`ComponentAsset` / `SystemAsset`), and the registry macros)
@@ -48,20 +48,6 @@ pub struct Registration {
     pub origin: AssetOrigin,
     pub payload: AssetPayload,
     pub default_args: Option<serde_json::Value>,
-}
-
-// A companion asset implied by the presence of another asset in the world.
-// Returned by `Component::companions`. The world's companion-injection pass
-// adds one of these only if no asset of the companion's `asset_type` is already
-// present (case-insensitive, underscores stripped).
-#[derive(Debug, Clone)]
-pub struct CompanionSpec {
-    // Default name for the injected asset (e.g. "GraphicsSystem").
-    pub name: &'static str,
-    // The asset type to inject.
-    pub asset_type: &'static str,
-    // JSON args for the injected asset.
-    pub args: serde_json::Value,
 }
 
 impl Registration {
@@ -132,17 +118,6 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
             payload: Self::PAYLOAD,
             default_args: serde_json::to_value(Self::Args::default()).ok(),
         }
-    }
-
-    // Companion assets implied by this asset's presence in a world.
-    // Default is none. Override for assets that require other assets to
-    // function (e.g. GraphicsConfig => GraphicsSystem).
-    //
-    // `world` is the pre-injection asset list: read it to make decisions
-    // that depend on the world state (e.g. only inject default ShaderStages
-    // when no ShaderStage of any kind already exists).
-    fn companions(_args: &serde_json::Value, _world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-        Vec::new()
     }
 
     // Fields of this asset's `Args` that are asset references, as
@@ -413,19 +388,6 @@ macro_rules! __define_asset_kind {
             }
             pub fn registration(self) -> Registration {
                 match self { $( Self::$variant => <$ty as $trait_name>::registration() ),+ }
-            }
-            // Companion assets implied by an asset of this type. See
-            // `Component::companions`.
-            pub fn companions(
-                self,
-                args: &serde_json::Value,
-                world: &[serde_json::Value],
-            ) -> Vec<$crate::ecs::CompanionSpec> {
-                match self {
-                    $(
-                        Self::$variant => <$ty as $trait_name>::companions(args, world)
-                    ),+
-                }
             }
             // Re-serialize a JSON args value through the typed `Args` struct.
             // With the build interner active, name-string cross-references in
@@ -743,12 +705,6 @@ mod tests {
                 .unwrap_err(),
             CnResult::InvalidArgument
         );
-    }
-
-    #[test]
-    fn companions_default_to_none() {
-        let ty = ComponentType::parse("Transform").unwrap();
-        assert!(ty.companions(&serde_json::json!({}), &[]).is_empty());
     }
 
     #[test]
