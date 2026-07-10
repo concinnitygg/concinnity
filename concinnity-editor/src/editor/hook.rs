@@ -35,6 +35,8 @@ use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
+use super::templates::{self, TemplatesAction};
+use super::view::{self, ViewAction, ViewState};
 use super::widget::{self, point_in};
 use crate::app::state::App;
 use crate::assets::FrameInput;
@@ -52,6 +54,8 @@ enum DragTarget {
     Assets,
     Edit,
     Preview,
+    View,
+    Templates,
 }
 
 // Which scroll region a wheel event lands in (decided by the tick from the
@@ -87,10 +91,15 @@ pub(crate) struct EditorHook {
     hud_visible: bool,
     // Set by a successful SAVE (in `tick`), consumed by `apply_world_swap`.
     swap_requested: bool,
-    // Whether the top-bar Templates dropdown is open.
+    // Whether the Templates panel is shown (toggled from the View panel).
     templates_open: bool,
-    // Assets panel state.
+    // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
+    // Whether the Preview panel is shown (starts shown; toggled from the View
+    // panel).
+    preview_open: bool,
+    // Whether the View panel itself is shown (the top-bar View button toggles it).
+    view_open: bool,
     // The header combo (dropdown) state: closed, filtering, or picking a type.
     combo: Combo,
     // Active type filter for the browse list, or `None` for "all".
@@ -133,6 +142,8 @@ pub(crate) struct EditorHook {
     panel_pos: Option<[f32; 2]>,
     edit_pos: Option<[f32; 2]>,
     preview_pos: Option<[f32; 2]>,
+    view_pos: Option<[f32; 2]>,
+    templates_pos: Option<[f32; 2]>,
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
@@ -208,6 +219,8 @@ impl EditorHook {
             swap_requested: false,
             templates_open: false,
             panel_open: false,
+            preview_open: true,
+            view_open: false,
             combo: Combo::Closed,
             type_filter: None,
             list_scroll: 0,
@@ -226,9 +239,17 @@ impl EditorHook {
             panel_pos: None,
             edit_pos: None,
             preview_pos: None,
+            view_pos: None,
+            templates_pos: None,
             drag: None,
-            // Back-to-front, matching the injected draw order (Preview frontmost).
-            panel_order: vec![DragTarget::Assets, DragTarget::Edit, DragTarget::Preview],
+            // Back-to-front, matching the injected draw order (Templates frontmost).
+            panel_order: vec![
+                DragTarget::Assets,
+                DragTarget::Edit,
+                DragTarget::Preview,
+                DragTarget::View,
+                DragTarget::Templates,
+            ],
         }
     }
 
@@ -255,6 +276,14 @@ impl EditorHook {
             DragTarget::Preview => preview::all_sprite_ids()
                 .into_iter()
                 .chain(preview::all_label_ids())
+                .collect(),
+            DragTarget::View => view::all_sprite_ids()
+                .into_iter()
+                .chain(view::all_label_ids())
+                .collect(),
+            DragTarget::Templates => templates::all_sprite_ids()
+                .into_iter()
+                .chain(templates::all_label_ids())
                 .collect(),
         }
     }
@@ -306,6 +335,29 @@ impl EditorHook {
     fn preview_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         let pos = self.preview_pos.unwrap_or(preview::default_origin());
         widget::clamp_origin(pos, preview::size(), vp)
+    }
+
+    // The View panel's top-left for this frame, clamped like the others.
+    fn view_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self.view_pos.unwrap_or(view::default_origin());
+        widget::clamp_origin(pos, view::size(), vp)
+    }
+
+    // The Templates panel's top-left for this frame, clamped like the others.
+    fn templates_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        let pos = self
+            .templates_pos
+            .unwrap_or(templates::default_origin(vp[0]));
+        widget::clamp_origin(pos, templates::size(), vp)
+    }
+
+    // Which panels are currently shown, so the View panel's checkboxes reflect it.
+    fn view_state(&self) -> ViewState {
+        ViewState {
+            assets: self.panel_open,
+            preview: self.preview_open,
+            templates: self.templates_open,
+        }
     }
 
     // Whether an entry with this name already exists.
@@ -579,32 +631,40 @@ impl EditorHook {
     fn apply_top(&mut self, action: HudAction) -> bool {
         match action {
             HudAction::Save => return self.save(),
-            HudAction::ToggleAssets => {
-                // Toggle the whole assets UI (browse panel + any open edit form +
-                // the browse highlight). Hiding it KEEPS all that state -- panel
-                // positions, the open form, the scroll offset, the selection -- so
-                // toggling back restores the same view. Only the transient combo /
-                // row-menu overlays are dropped.
-                self.panel_open = !self.panel_open;
-                if self.panel_open {
-                    self.templates_open = false;
-                }
-                self.combo = Combo::Closed;
-                self.row_menu = None;
-            }
-            HudAction::ToggleTemplates => {
-                self.templates_open = !self.templates_open;
-                if self.templates_open {
-                    self.panel_open = false;
-                }
-            }
-            HudAction::PickTemplate(i) => {
-                self.apply_template(i);
-                self.templates_open = false;
-            }
-            HudAction::CloseTemplates => self.templates_open = false,
+            HudAction::ToggleView => self.view_open = !self.view_open,
         }
         false
+    }
+
+    // Toggle the whole assets UI (browse panel + any open edit form + the browse
+    // highlight). Hiding it KEEPS all that state -- panel positions, the open
+    // form, the scroll offset, the selection -- so toggling back restores the same
+    // view. Only the transient combo / row-menu overlays are dropped.
+    fn toggle_assets(&mut self) {
+        self.panel_open = !self.panel_open;
+        self.combo = Combo::Closed;
+        self.row_menu = None;
+    }
+
+    // Route a resolved View-panel click: each checkbox toggles one panel's shown
+    // state (rows are Assets / Preview / Templates, in order).
+    fn apply_view(&mut self, action: ViewAction) {
+        match action {
+            ViewAction::Toggle(0) => self.toggle_assets(),
+            ViewAction::Toggle(1) => self.preview_open = !self.preview_open,
+            ViewAction::Toggle(2) => self.templates_open = !self.templates_open,
+            ViewAction::Toggle(_) => {}
+            ViewAction::Consume => {}
+        }
+    }
+
+    // Route a resolved Templates-panel click: applying a template layers its
+    // assets (idempotently); the panel stays open so several can be applied.
+    fn apply_templates(&mut self, action: TemplatesAction) {
+        match action {
+            TemplatesAction::Pick(i) => self.apply_template(i),
+            TemplatesAction::Consume => {}
+        }
     }
 
     // Open the combo in `flavour`, clearing and focusing the shared filter field.
@@ -985,8 +1045,7 @@ impl EditorHook {
     fn hud_state(&self) -> HudState {
         HudState {
             dirty: self.dirty,
-            templates_open: self.templates_open,
-            panel_open: self.panel_open,
+            view_open: self.view_open,
             visible: self.hud_visible,
         }
     }
@@ -1013,6 +1072,12 @@ impl EditorHook {
             DragTarget::Preview => {
                 self.preview_pos = Some(widget::clamp_origin(pos, preview::size(), vp));
             }
+            DragTarget::View => {
+                self.view_pos = Some(widget::clamp_origin(pos, view::size(), vp));
+            }
+            DragTarget::Templates => {
+                self.templates_pos = Some(widget::clamp_origin(pos, templates::size(), vp));
+            }
         }
     }
 
@@ -1021,7 +1086,7 @@ impl EditorHook {
     // claims it comes to the front. A press on a panel's title bar starts a drag.
     fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
-        if let Some(a) = hud::hit_test(mx, my, true, self.dirty, self.templates_open, vp[0]) {
+        if let Some(a) = hud::hit_test(mx, my, true, self.dirty, vp[0]) {
             if self.apply_top(a) {
                 self.swap_requested = true;
                 // A SAVE recompiles + re-injects blank HUD fields, so a form left
@@ -1059,6 +1124,9 @@ impl EditorHook {
     ) -> bool {
         match target {
             DragTarget::Preview => {
+                if !self.preview_open {
+                    return false;
+                }
                 let pv = self.preview_origin(vp);
                 if !point_in(mx, my, preview::panel_rect(pv)) {
                     return false;
@@ -1081,6 +1149,13 @@ impl EditorHook {
                     return false;
                 }
                 let fo = self.edit_origin(vp);
+                // The X in the title bar closes the form; checked before the
+                // title-bar drag so it never starts a drag instead.
+                if point_in(mx, my, form_panel::close_rect(fo)) {
+                    self.focus_panel(DragTarget::Edit);
+                    self.apply_form(FormAction::Close, world);
+                    return true;
+                }
                 if point_in(mx, my, form_panel::title_rect(fo)) {
                     self.focus_panel(DragTarget::Edit);
                     self.drag = Some(Drag {
@@ -1125,6 +1200,44 @@ impl EditorHook {
                     return true;
                 }
                 false
+            }
+            DragTarget::View => {
+                if !self.view_open {
+                    return false;
+                }
+                let vo = self.view_origin(vp);
+                if !point_in(mx, my, view::panel_rect(vo)) {
+                    return false;
+                }
+                self.focus_panel(DragTarget::View);
+                if point_in(mx, my, view::title_rect(vo)) {
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - vo[0], my - vo[1]],
+                    });
+                } else if let Some(a) = view::hit_test(mx, my, vo) {
+                    self.apply_view(a);
+                }
+                true
+            }
+            DragTarget::Templates => {
+                if !self.templates_open {
+                    return false;
+                }
+                let to = self.templates_origin(vp);
+                if !point_in(mx, my, templates::panel_rect(to)) {
+                    return false;
+                }
+                self.focus_panel(DragTarget::Templates);
+                if point_in(mx, my, templates::title_rect(to)) {
+                    self.drag = Some(Drag {
+                        target,
+                        grab: [mx - to[0], my - to[1]],
+                    });
+                } else if let Some(a) = templates::hit_test(mx, my, to) {
+                    self.apply_templates(a);
+                }
+                true
             }
         }
     }
@@ -1198,34 +1311,51 @@ impl DebugHook for EditorHook {
             .as_ref()
             .map(|i| [i.mouse_x, i.mouse_y])
             .unwrap_or([0.0, 0.0]);
+        // The panels lay out only once the HUD is shown and a real viewport exists
+        // (frame 0 keeps the injected-hidden placeholders).
+        let shown = self.hud_visible && vp[0] > 0.0;
         // Publish the panels' draw layers (focus stack) so the renderer occludes
         // overlaps by focus this frame. Empty while the HUD is hidden, so the
         // renderer skips the overlay sort entirely.
-        if self.hud_visible && vp[0] > 0.0 {
+        if shown {
             self.publish_layers(world);
         } else {
             world.insert_resource(HudLayers::default());
         }
-        if self.hud_visible && vp[0] > 0.0 {
+        // Preview panel (toggled from the View panel; shown by default).
+        if shown && self.preview_open {
             preview::apply(world, self.preview_origin(vp), self.world_capture);
-        } else if !self.hud_visible {
+        } else {
             preview::hide_all(world);
         }
-        if self.hud_visible && self.panel_open && vp[0] > 0.0 {
+        // View panel (toggled from the top-bar View button).
+        if shown && self.view_open {
+            view::apply(world, self.view_origin(vp), self.view_state(), mouse);
+        } else {
+            view::hide_all(world);
+        }
+        // Templates panel (toggled from the View panel).
+        if shown && self.templates_open {
+            templates::apply(world, self.templates_origin(vp), mouse);
+        } else {
+            templates::hide_all(world);
+        }
+        // Assets panel (toggled from the View panel).
+        if shown && self.panel_open {
             let data = self.panel_data(world);
             let view = self.make_view(&data, mouse);
             panel::apply(world, Some(&view), self.panel_origin(vp));
-        } else if !(self.hud_visible && self.panel_open) {
+        } else {
             panel::apply(world, None, [0.0, 0.0]);
         }
         // The edit form shows only while the assets UI is on (panel_open); hiding
         // it keeps its state so a later toggle-on restores it.
-        let show_form = self.hud_visible && self.panel_open && self.form_open();
-        if show_form && vp[0] > 0.0 {
+        let show_form = shown && self.panel_open && self.form_open();
+        if show_form {
             let data = self.panel_data(world);
             let view = self.make_form_view(&data, mouse);
             form_panel::apply(world, Some(&view), self.edit_origin(vp));
-        } else if !show_form {
+        } else {
             form_panel::apply(world, None, [0.0, 0.0]);
         }
     }
@@ -1318,39 +1448,51 @@ mod tests {
         let h = hook(Vec::new());
         assert!(!h.world_capture, "editor holds the cursor at launch");
         assert!(h.hud_visible, "HUD shown at launch");
-        assert!(!h.panel_open && !h.templates_open);
+        // Assets / View / Templates start closed; Preview starts shown.
+        assert!(!h.panel_open && !h.view_open && !h.templates_open);
+        assert!(h.preview_open, "the Preview panel is shown at launch");
         assert_eq!(h.combo, Combo::Closed);
     }
 
+    // The top-bar View button toggles the View panel; the View panel's rows toggle
+    // the Assets, Preview, and Templates panels independently (no mutual exclusion).
     #[test]
-    fn assets_button_toggles_panel_and_excludes_templates() {
+    fn view_button_and_view_rows_toggle_the_panels() {
         let mut h = hook(Vec::new());
-        h.apply_top(HudAction::ToggleAssets);
-        assert!(h.panel_open);
-        // Opening Templates closes the panel.
-        h.apply_top(HudAction::ToggleTemplates);
-        assert!(h.templates_open && !h.panel_open);
-        // Opening the panel closes Templates.
-        h.apply_top(HudAction::ToggleAssets);
-        assert!(h.panel_open && !h.templates_open);
+        assert!(!h.apply_top(HudAction::ToggleView));
+        assert!(h.view_open, "the View button shows the View panel");
+        h.apply_top(HudAction::ToggleView);
+        assert!(!h.view_open, "a second click hides it");
+        // Row 0 -> Assets, row 1 -> Preview, row 2 -> Templates.
+        h.apply_view(ViewAction::Toggle(0));
+        assert!(h.panel_open, "row 0 shows the Assets panel");
+        h.apply_view(ViewAction::Toggle(1));
+        assert!(
+            !h.preview_open,
+            "row 1 hides the (default-shown) Preview panel"
+        );
+        h.apply_view(ViewAction::Toggle(2));
+        assert!(h.templates_open, "row 2 shows the Templates panel");
+        assert!(
+            h.panel_open,
+            "Assets stayed shown -- panels are independent"
+        );
     }
 
     #[test]
     fn templates_pick_applies_and_is_idempotent() {
         let mut h = hook(Vec::new());
-        h.apply_top(HudAction::PickTemplate(0));
+        h.apply_templates(TemplatesAction::Pick(0));
         let first = concinnity_templates::TEMPLATES[0].assets().len();
         assert_eq!(h.entries.len(), first, "all template entries added");
-        h.apply_top(HudAction::PickTemplate(0));
+        h.apply_templates(TemplatesAction::Pick(0));
         assert_eq!(h.entries.len(), first, "re-apply is idempotent");
     }
 
     #[test]
     fn only_save_signals_a_world_swap() {
         let mut h = hook(Vec::new());
-        assert!(!h.apply_top(HudAction::ToggleAssets));
-        assert!(!h.apply_top(HudAction::ToggleTemplates));
-        assert!(!h.apply_top(HudAction::CloseTemplates));
+        assert!(!h.apply_top(HudAction::ToggleView));
     }
 
     #[test]
@@ -1399,7 +1541,7 @@ mod tests {
     fn plus_picker_then_name_form_adds_the_entry() {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
-        h.apply_top(HudAction::ToggleAssets);
+        h.panel_open = true;
         // "+" opens the picker; the filter field is focused.
         h.apply_panel(PanelAction::TogglePicker, &mut world);
         assert_eq!(h.combo, Combo::Picker);
@@ -1511,7 +1653,7 @@ mod tests {
             "name": "gfx", "type": "GraphicsConfig", "args": {}
         })]);
         let mut world = world_with_fields();
-        h.apply_top(HudAction::ToggleAssets);
+        h.panel_open = true;
         h.apply_panel(PanelAction::TogglePicker, &mut world);
         let gi = h
             .combo_options(&world)
@@ -1538,7 +1680,7 @@ mod tests {
         // A world WITHOUT the singleton: picking it opens a fresh add.
         let mut h2 = hook(Vec::new());
         let mut world2 = world_with_fields();
-        h2.apply_top(HudAction::ToggleAssets);
+        h2.panel_open = true;
         h2.apply_panel(PanelAction::TogglePicker, &mut world2);
         let wi = h2
             .combo_options(&world2)
@@ -1911,15 +2053,15 @@ mod tests {
     #[test]
     fn focusing_a_panel_moves_it_to_the_front() {
         let mut h = hook(Vec::new());
-        // Default order matches the injected draw order: Preview frontmost.
-        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Preview));
+        // Default order matches the injected draw order: Templates frontmost.
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Templates));
         h.focus_panel(DragTarget::Assets);
         assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
-        assert_eq!(h.panel_order.len(), 3, "no duplicates");
+        assert_eq!(h.panel_order.len(), 5, "no duplicates");
         // Re-focusing the frontmost is a no-op.
         h.focus_panel(DragTarget::Assets);
         assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
-        assert_eq!(h.panel_order.len(), 3);
+        assert_eq!(h.panel_order.len(), 5);
     }
 
     // The published HUD layers rank the panels by focus (frontmost highest) and pin
@@ -1961,11 +2103,147 @@ mod tests {
         assert!(h.drag.is_some(), "a title-bar press starts a drag");
     }
 
+    // The X in the edit form's title bar closes the form: the hook routes it before
+    // the title-bar drag, so it closes rather than starting a drag.
+    #[test]
+    fn edit_form_title_bar_x_closes_the_form() {
+        let mut h = hook(vec![entry("lamp", "PointLight")]);
+        let mut world = world_with_fields();
+        h.panel_open = true;
+        h.open_form(&mut world, "PointLight".to_string(), Some(0));
+        assert!(h.form_open());
+        let vp = [1280.0, 720.0];
+        let x = form_panel::close_rect(h.edit_origin(vp));
+        let claimed = h.try_panel_press(DragTarget::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
+        assert!(claimed, "the X press was claimed");
+        assert!(!h.form_open(), "the X closed the form");
+        assert!(h.drag.is_none(), "the X did not start a drag");
+    }
+
+    // A panel toggled off (its View checkbox unticked) is not interactive: a press
+    // where it would be falls through instead of being claimed.
+    #[test]
+    fn a_hidden_panel_is_not_interactive() {
+        let mut h = hook(Vec::new());
+        let vp = [1280.0, 720.0];
+        let mut world = world_with_fields();
+        // Preview starts shown: a title-bar press is claimed (starts a drag).
+        let pt = preview::title_rect(h.preview_origin(vp));
+        assert!(h.try_panel_press(
+            DragTarget::Preview,
+            pt[0] + 5.0,
+            pt[1] + 5.0,
+            vp,
+            &mut world
+        ));
+        // Hidden: the same press falls through.
+        h.drag = None;
+        h.preview_open = false;
+        assert!(!h.try_panel_press(
+            DragTarget::Preview,
+            pt[0] + 5.0,
+            pt[1] + 5.0,
+            vp,
+            &mut world
+        ));
+        // The View panel starts hidden: its press falls through until it is opened.
+        let vt = view::title_rect(h.view_origin(vp));
+        assert!(!h.try_panel_press(DragTarget::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
+        h.view_open = true;
+        assert!(h.try_panel_press(DragTarget::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
+    }
+
+    // The Templates panel drags by its own title bar and comes to the front on a
+    // press, like the other floating panels.
+    #[test]
+    fn templates_panel_press_drags_and_focuses() {
+        let mut h = hook(Vec::new());
+        h.templates_open = true;
+        let vp = [1280.0, 720.0];
+        let mut world = world_with_fields();
+        let t = templates::title_rect(h.templates_origin(vp));
+        assert!(h.try_panel_press(
+            DragTarget::Templates,
+            t[0] + 5.0,
+            t[1] + 5.0,
+            vp,
+            &mut world
+        ));
+        assert!(h.drag.is_some(), "a title-bar press starts a drag");
+        assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Templates));
+    }
+
+    // End-to-end through `tick` against a fully injected HUD: the top-bar View
+    // button opens the View panel, and clicking its "Templates" row opens the
+    // Templates panel (the same click path a real session drives).
+    #[test]
+    fn tick_view_button_opens_view_then_a_row_opens_templates() {
+        let vis = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == id)
+                .map(|s| s.visible)
+                .unwrap_or(false)
+        };
+        let rect = |w: &World, id: crate::ecs::asset_id::AssetId| {
+            let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
+            [s.x, s.y, s.width, s.height]
+        };
+        let mut world = World::new_empty();
+        super::super::inject::editor_hud(&mut world);
+        let vp = [1280.0, 720.0];
+        let mut h = hook(Vec::new());
+
+        // Frame 1: no interaction. View + Templates start hidden.
+        world.add_component(FrameInput {
+            viewport: vp,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+        assert!(!vis(&world, view::TITLE_BG) && !vis(&world, templates::TITLE_BG));
+
+        // Frame 2: click the top-bar View button -> the View panel opens.
+        let (_, view_btn) = hud::layout(vp[0]);
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: view_btn[0] + view_btn[2] * 0.5,
+                mouse_y: view_btn[1] + view_btn[3] * 0.5,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert!(
+            h.view_open && vis(&world, view::TITLE_BG),
+            "View panel opened"
+        );
+        // Its "Templates" row (index 2) is laid out; grab its rect to click it.
+        let row = rect(&world, view::row_bg(2));
+
+        // Frame 3: click that row -> the Templates panel opens.
+        set_input(
+            &mut world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: row[0] + row[2] * 0.5,
+                mouse_y: row[1] + row[3] * 0.5,
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(&mut world);
+        assert!(h.templates_open, "the Templates row toggled the panel on");
+        assert!(vis(&world, templates::TITLE_BG), "Templates panel shown");
+    }
+
     #[test]
     fn add_form_writes_edited_arg_values() {
         let mut h = hook(Vec::new());
         let mut world = world_with_fields();
-        h.apply_top(HudAction::ToggleAssets);
+        h.panel_open = true;
         h.apply_panel(PanelAction::TogglePicker, &mut world);
         // Pick a type with a float arg through the real picker->pick path.
         let ty = "PointLight".to_string();
@@ -2477,8 +2755,9 @@ mod tests {
         assert!(h.entries.is_empty(), "nothing invalid was committed");
     }
 
-    // Toggling the Assets button off then on keeps the open form + its browse
-    // selection (the state is retained, only hidden), so the same view returns.
+    // Toggling the Assets panel off then on (via the View panel) keeps the open
+    // form + its browse selection (the state is retained, only hidden), so the same
+    // view returns.
     #[test]
     fn toggling_the_assets_panel_keeps_the_open_form_state() {
         let mut h = hook(vec![entry("lamp", "PointLight")]);
@@ -2487,7 +2766,7 @@ mod tests {
         h.open_form(&mut world, "PointLight".to_string(), Some(0));
         assert!(h.form_open() && h.editing == Some(0));
         // Toggle the assets UI off: the form + selection are kept, not discarded.
-        h.apply_top(HudAction::ToggleAssets);
+        h.apply_view(ViewAction::Toggle(0));
         assert!(!h.panel_open);
         assert!(
             h.form_open(),
@@ -2495,7 +2774,7 @@ mod tests {
         );
         assert_eq!(h.editing, Some(0), "the browse selection is kept");
         // Toggle back on: the same form and selection are restored.
-        h.apply_top(HudAction::ToggleAssets);
+        h.apply_view(ViewAction::Toggle(0));
         assert!(h.panel_open && h.form_open());
         assert_eq!(h.editing, Some(0));
     }
@@ -2522,12 +2801,12 @@ mod tests {
         h.tick(&mut world);
         assert!(form_shown(&world), "form shown while the panel is open");
         // Toggle off: the form elements hide, but its state is retained.
-        h.apply_top(HudAction::ToggleAssets);
+        h.apply_view(ViewAction::Toggle(0));
         h.tick(&mut world);
         assert!(!form_shown(&world), "form elements hidden when toggled off");
         assert!(h.form_open(), "but the form state is retained");
         // Toggle on: the form re-renders.
-        h.apply_top(HudAction::ToggleAssets);
+        h.apply_view(ViewAction::Toggle(0));
         h.tick(&mut world);
         assert!(form_shown(&world), "form shown again on toggle-on");
     }

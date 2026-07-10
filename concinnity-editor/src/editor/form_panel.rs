@@ -3,12 +3,13 @@
 // The editor's add / edit form, in its own floating panel (separate from the
 // Assets browse panel, which stays on its list while this is open). Spawned by
 // clicking an asset in the browse list (or picking a type from the "+" picker):
-// a draggable title bar ("Edit <type>" / "New <type>"), then a header row with
-// the asset's editable NAME as a large heading and the Apply / Cancel buttons
-// pinned to the panel's top-right, then the scrollable arg-field area. Like the
-// rest of the editor HUD it is plain `Sprite` / `TextLabel` / `TextInput`
-// components at reserved ids driven each frame by the hook; the field model
-// itself lives in `form.rs` and the hook owns all state.
+// a draggable title bar ("Edit <type>" / "New <type>") with an "X" close button
+// in its top-right corner, then a header row with the asset's editable NAME as a
+// large heading and the Apply button pinned to the panel's top-right, then the
+// scrollable arg-field area. Like the rest of the editor HUD it is plain
+// `Sprite` / `TextLabel` / `TextInput` components at reserved ids driven each
+// frame by the hook; the field model itself lives in `form.rs` and the hook owns
+// all state.
 //
 // The field area renders a scrolling window over ALL of the type's fields into
 // a fixed pool of `form::FIELD_POOL` control slots: visible slot `r` shows
@@ -43,8 +44,9 @@ pub(crate) const TITLE_BG: AssetId = AssetId(EDIT + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(EDIT + 2);
 pub(crate) const APPLY_BG: AssetId = AssetId(EDIT + 3);
 pub(crate) const APPLY_LABEL: AssetId = AssetId(EDIT + 4);
-pub(crate) const CANCEL_BG: AssetId = AssetId(EDIT + 5);
-pub(crate) const CANCEL_LABEL: AssetId = AssetId(EDIT + 6);
+// The "X" close button in the title bar's top-right corner.
+pub(crate) const CLOSE_BG: AssetId = AssetId(EDIT + 5);
+pub(crate) const CLOSE_LABEL: AssetId = AssetId(EDIT + 6);
 // The asset-name heading: a real editable TextInput drawn a step larger.
 pub(crate) const NAME_INPUT: AssetId = AssetId(EDIT + 7);
 pub(crate) const FORM_STATUS: AssetId = AssetId(EDIT + 8);
@@ -98,9 +100,11 @@ pub(crate) enum FormFocus {
 pub(crate) const EDIT_W: f32 = 480.0;
 const PAD: f32 = 10.0;
 const GAP: f32 = 8.0;
-// The header row: the name heading and the Apply / Cancel buttons.
+// The header row: the name heading and the Apply button.
 const NAME_H: f32 = 34.0;
 const BTN_W: f32 = 84.0;
+// The square "X" close button in the title bar's top-right corner.
+const CLOSE_SZ: f32 = widget::TITLE_H;
 // The validation status line reserved under the header row.
 const STATUS_H: f32 = 22.0;
 // One arg-field row; the caption column on its left.
@@ -115,7 +119,8 @@ const NAME_SCALE: f32 = 1.2;
 const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
 const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
-const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+const CLOSE_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+const CLOSE_TINT_HOVER: [f32; 4] = [0.56, 0.26, 0.26, 1.0];
 const CYCLE_TINT: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const OPTION_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
@@ -163,7 +168,14 @@ pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], EDIT_W, widget::TITLE_H]
 }
 
-// The header row under the title bar: name heading + the two pinned buttons.
+// The "X" close button, a square flush in the title bar's top-right corner. The
+// hook checks this before the title-bar drag, so clicking the X closes the form
+// rather than starting a drag.
+pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
+    [o[0] + EDIT_W - CLOSE_SZ, o[1], CLOSE_SZ, widget::TITLE_H]
+}
+
+// The header row under the title bar: name heading + the pinned Apply button.
 fn header_y(o: [f32; 2]) -> f32 {
     o[1] + widget::TITLE_H + PAD
 }
@@ -171,19 +183,11 @@ pub(crate) fn name_rect(o: [f32; 2]) -> [f32; 4] {
     [
         o[0] + PAD,
         header_y(o),
-        EDIT_W - 2.0 * PAD - 2.0 * (BTN_W + GAP),
+        EDIT_W - 2.0 * PAD - (BTN_W + GAP),
         NAME_H,
     ]
 }
 pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
-    [
-        o[0] + EDIT_W - PAD - 2.0 * BTN_W - GAP,
-        header_y(o),
-        BTN_W,
-        NAME_H,
-    ]
-}
-pub(crate) fn cancel_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0] + EDIT_W - PAD - BTN_W, header_y(o), BTN_W, NAME_H]
 }
 
@@ -386,11 +390,13 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
     if !point_in(mx, my, panel_rect(view, o)) {
         return None;
     }
+    // The "X" in the title bar closes the form. (The hook checks this before the
+    // title-bar drag; resolved here too so the pure hit test stays complete.)
+    if point_in(mx, my, close_rect(o)) {
+        return Some(FormAction::Close);
+    }
     if point_in(mx, my, apply_rect(o)) {
         return Some(FormAction::Confirm);
-    }
-    if point_in(mx, my, cancel_rect(o)) {
-        return Some(FormAction::Close);
     }
     if point_in(mx, my, name_rect(o)) {
         return Some(FormAction::FocusName);
@@ -460,8 +466,25 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     place_sprite(world, EDIT_BG, panel_rect(view, o), PANEL_TINT, true);
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), view.title);
 
-    // The header row: the asset-name heading (drawn larger) and the pinned
-    // Apply / Cancel buttons at the panel's top right.
+    // The "X" close button in the title bar's top-right corner (drawn over the
+    // title strip; it brightens on hover).
+    let close = close_rect(o);
+    let close_hover = point_in(view.mouse[0], view.mouse[1], close);
+    place_sprite(
+        world,
+        CLOSE_BG,
+        close,
+        if close_hover {
+            CLOSE_TINT_HOVER
+        } else {
+            CLOSE_TINT
+        },
+        true,
+    );
+    place_center_label(world, CLOSE_LABEL, close, "X", LABEL_WHITE, true);
+
+    // The header row: the asset-name heading (drawn larger) and the pinned Apply
+    // button at the panel's top right.
     show_name_heading(world, o, view.form_focus == FormFocus::Name);
     let apply_btn = apply_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
@@ -474,9 +497,6 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     );
     let confirm = if view.editing { "Apply" } else { "Add" };
     place_center_label(world, APPLY_LABEL, apply_btn, confirm, LABEL_WHITE, true);
-    let cancel = cancel_rect(o);
-    place_sprite(world, CANCEL_BG, cancel, CANCEL_TINT, true);
-    place_center_label(world, CANCEL_LABEL, cancel, "Cancel", LABEL, true);
 
     // A validation error, if the last commit was rejected (a reserved line, so
     // showing it never shifts the fields below).
@@ -832,7 +852,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // title, buttons, per-slot chrome, then the floating overlays (scrollbar, value
 // dropdown) which must sit above the slot chrome.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![EDIT_BG, TITLE_BG, APPLY_BG, CANCEL_BG];
+    let mut ids = vec![EDIT_BG, TITLE_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..form::FIELD_POOL).map(form_toggle_bg));
     ids.extend((0..form::FIELD_POOL).map(form_swatch));
     ids.extend([FORM_TRACK, FORM_THUMB, DROP_BG]);
@@ -843,7 +863,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 // Same draw-order contract; the dropdown's option captions come last so they
 // draw above the slot captions the dropdown floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, APPLY_LABEL, CANCEL_LABEL, FORM_STATUS];
+    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, FORM_STATUS];
     ids.extend((0..form::FIELD_POOL).map(form_row_label));
     ids.extend((0..form::FIELD_POOL).map(form_enum_label));
     ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
@@ -959,30 +979,35 @@ mod tests {
             .expect("input present")
     }
 
-    // The header pins the name heading and the Apply / Cancel buttons under the
-    // title bar, buttons flush to the panel's top-right corner.
+    // The X close sits in the title bar's top-right corner; the header row pins the
+    // name heading and the Apply button under the title bar.
     #[test]
-    fn header_pins_name_and_buttons_under_the_title_bar() {
+    fn header_pins_name_and_button_under_the_title_bar() {
         let o = test_origin();
         let title = title_rect(o);
         assert_eq!(title, [o[0], o[1], EDIT_W, widget::TITLE_H]);
+        let close = close_rect(o);
+        assert_eq!(close[1], o[1], "the X sits in the title bar");
+        assert_eq!(
+            close[0] + close[2],
+            o[0] + EDIT_W,
+            "the X is flush to the panel's right edge"
+        );
         let name = name_rect(o);
         let apply_btn = apply_rect(o);
-        let cancel = cancel_rect(o);
         assert_eq!(name[1], o[1] + widget::TITLE_H + PAD, "under the title bar");
-        assert_eq!(name[1], apply_btn[1], "buttons share the header row");
+        assert_eq!(
+            name[1], apply_btn[1],
+            "the name and Apply share the header row"
+        );
         assert!(
             name[0] + name[2] <= apply_btn[0],
             "the name heading ends left of Apply"
         );
-        assert!(
-            apply_btn[0] + apply_btn[2] <= cancel[0],
-            "Apply left of Cancel"
-        );
         assert_eq!(
-            cancel[0] + cancel[2],
+            apply_btn[0] + apply_btn[2],
             o[0] + EDIT_W - PAD,
-            "Cancel flush to the panel's right pad"
+            "Apply flush to the panel's right pad"
         );
         // The whole panel follows its origin.
         let v = view(&[]);
@@ -1013,21 +1038,22 @@ mod tests {
         let v = view(&fields);
         let o = test_origin();
         let a = apply_rect(o);
-        let c = cancel_rect(o);
+        let x = close_rect(o);
         let n = name_rect(o);
         assert_eq!(
             hit_test(&v, a[0] + 5.0, a[1] + 5.0, o),
             Some(FormAction::Confirm)
         );
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
-            Some(FormAction::Close)
+            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o),
+            Some(FormAction::Close),
+            "the title-bar X closes the form"
         );
         assert_eq!(
             hit_test(&v, n[0] + 5.0, n[1] + 5.0, o),
             Some(FormAction::FocusName)
         );
-        // Title clicks are consumed (the hook grabs drags before this).
+        // A title-bar click off the X is consumed (the hook grabs drags before this).
         let t = title_rect(o);
         assert_eq!(
             hit_test(&v, t[0] + 5.0, t[1] + 5.0, o),
@@ -1047,7 +1073,11 @@ mod tests {
         apply(&mut world, Some(&view(&fields)), o);
         assert_eq!(label(&world, TITLE_LABEL).content, "New PointLight");
         assert_eq!(label(&world, APPLY_LABEL).content, "Add");
-        assert_eq!(label(&world, CANCEL_LABEL).content, "Cancel");
+        assert_eq!(
+            label(&world, CLOSE_LABEL).content,
+            "X",
+            "the title-bar close"
+        );
         let name = input(&world, NAME_INPUT);
         assert!(name.visible);
         assert!(name.scale > 1.0, "the name heading draws larger");

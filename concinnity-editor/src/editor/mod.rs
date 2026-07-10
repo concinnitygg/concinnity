@@ -13,6 +13,8 @@ mod hud;
 mod inject;
 mod panel;
 mod preview;
+mod templates;
+mod view;
 mod widget;
 
 use crate::app::state::App;

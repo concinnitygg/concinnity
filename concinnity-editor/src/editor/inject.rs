@@ -11,7 +11,7 @@
 // `TextInput` fields do bring in the engine's general text-input system, which
 // is real runtime code, not editor-only.)
 
-use super::{form_panel, hud, panel, preview};
+use super::{form_panel, hud, panel, preview, templates, view};
 use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -22,8 +22,7 @@ use concinnity_templates::{AssetSpec, asset};
 // tick's geometry so the initial placement is already close.
 const REF_W: f32 = 1280.0;
 const SAVE_W: f32 = 88.0;
-const ASSETS_W: f32 = 132.0;
-const TPL_W: f32 = 132.0;
+const VIEW_W: f32 = 132.0;
 const GAP: f32 = 8.0;
 
 // Reuse an existing HUD label's font for the button + field text. Every
@@ -34,25 +33,28 @@ fn hud_font(world: &World) -> Option<AssetId> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
-// Inject the editor HUD: the floating Assets, edit-form, and Preview panels and
-// the top bar (SAVE / Assets / Templates + Templates dropdown rows), all
-// view-less window-space overlays. Injected once by the caller, before start.
-// The overlay draws components in insertion order, so the panels go in FIRST and
-// the top bar LAST: a panel dragged under the bar slides behind it, matching the
-// hook's hit-test priority (top bar first). The edit form goes in after the
-// Assets panel so it floats over the browse list it was opened from.
+// Inject the editor HUD: the floating Assets, edit-form, Preview, View, and
+// Templates panels and the top bar (SAVE / View), all view-less window-space
+// overlays. Injected once by the caller, before start. The overlay draws
+// components in insertion order, so the panels go in FIRST and the top bar LAST:
+// a panel dragged under the bar slides behind it, matching the hook's hit-test
+// priority (top bar first). The edit form goes in after the Assets panel so it
+// floats over the browse list it was opened from. (The hook also publishes a
+// per-frame focus-stack draw layer that reorders overlapping panels; the
+// injection order is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
     inject_panel(world, font);
     inject_form_panel(world, font);
     inject_preview(world, font);
+    inject_view(world, font);
+    inject_templates(world, font);
     inject_top_bar(world, font);
 }
 
 fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
     let save_rect = [REF_W - SAVE_W, 0.0, SAVE_W, hud::BTN_H];
-    let assets_rect = [save_rect[0] - GAP - ASSETS_W, 0.0, ASSETS_W, hud::BTN_H];
-    let tpl_rect = [assets_rect[0] - GAP - TPL_W, 0.0, TPL_W, hud::BTN_H];
+    let view_rect = [save_rect[0] - GAP - VIEW_W, 0.0, VIEW_W, hud::BTN_H];
 
     world.add_component(button_sprite(
         hud::SAVE_BUTTON,
@@ -61,36 +63,36 @@ fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
         true,
     ));
     world.add_component(button_sprite(
-        hud::ASSETS_BUTTON,
-        assets_rect,
+        hud::VIEW_BUTTON,
+        view_rect,
         [0.20, 0.34, 0.52, 1.0],
         true,
     ));
-    world.add_component(button_sprite(
-        hud::TPL_BUTTON,
-        tpl_rect,
-        [0.28, 0.24, 0.44, 1.0],
-        true,
-    ));
     world.add_component(centered_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
-    world.add_component(centered_label(
-        hud::ASSETS_LABEL,
-        "Assets",
-        assets_rect,
-        font,
-    ));
-    world.add_component(centered_label(hud::TPL_LABEL, "Templates", tpl_rect, font));
+    world.add_component(centered_label(hud::VIEW_LABEL, "View", view_rect, font));
+}
 
-    // Templates dropdown rows (hidden; the tick shows / labels them on open).
-    for i in 0..hud::max_rows() {
-        let rect = hud::dropdown_row_rect(REF_W, i);
-        world.add_component(button_sprite(
-            hud::dropdown_bg(i),
-            rect,
-            [0.14, 0.14, 0.17, 0.96],
-            false,
-        ));
-        world.add_component(row_label(hud::dropdown_label(i), "", rect, font, false));
+// Inject the View panel's elements, hidden with placeholder geometry; the tick's
+// `view::apply` positions and shows them when the panel is toggled on.
+fn inject_view(world: &mut World, font: Option<AssetId>) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for id in view::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in view::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
+}
+
+// Inject the Templates panel's elements, hidden with placeholder geometry; the
+// tick's `templates::apply` positions and shows them when the panel is toggled on.
+fn inject_templates(world: &mut World, font: Option<AssetId>) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for id in templates::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in templates::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
     }
 }
 
@@ -203,16 +205,16 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<AssetId>) -> TextInpu
 mod tests {
     use super::*;
 
-    // Injection adds the top-bar controls (visible) plus the Assets and Preview
-    // panels' chrome, row families, and the typed fields (all hidden) -- every
-    // one a view-less overlay at a reserved id.
+    // Injection adds the top-bar controls (visible) plus the Assets, Preview,
+    // View, and Templates panels' chrome, row families, and the typed fields (all
+    // hidden) -- every one a view-less overlay at a reserved id.
     #[test]
     fn injects_top_bar_and_hidden_panels() {
         let mut world = World::new_empty();
         editor_hud(&mut world);
 
         // Top-bar buttons are visible.
-        for id in [hud::SAVE_BUTTON, hud::ASSETS_BUTTON, hud::TPL_BUTTON] {
+        for id in [hud::SAVE_BUTTON, hud::VIEW_BUTTON] {
             assert!(
                 world
                     .query::<Sprite>()
@@ -223,18 +225,19 @@ mod tests {
             );
         }
 
-        // The Assets button is labelled "Assets".
+        // The View button is labelled "View".
         assert_eq!(
             world
                 .query::<TextLabel>()
-                .find(|l| l.asset_id == hud::ASSETS_LABEL)
+                .find(|l| l.asset_id == hud::VIEW_LABEL)
                 .unwrap()
                 .content,
-            "Assets"
+            "View"
         );
 
-        // Panel chrome + a representative row from each family start hidden, as
-        // does the whole Preview panel (the tick shows it from frame 1).
+        // Panel chrome + a representative row from each family start hidden, as do
+        // the whole Preview, View, and Templates panels (the tick shows them on
+        // demand).
         for id in [
             panel::PANEL_BG,
             panel::TITLE_BG,
@@ -246,6 +249,11 @@ mod tests {
             preview::TITLE_BG,
             preview::ROW_BG,
             preview::CHECK_BOX,
+            view::TITLE_BG,
+            view::row_bg(0),
+            view::check_box(0),
+            templates::TITLE_BG,
+            templates::row_bg(0),
         ] {
             assert!(
                 !world
@@ -263,6 +271,8 @@ mod tests {
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
         assert!(pos(panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(preview::TITLE_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(view::TITLE_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(templates::TITLE_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();
