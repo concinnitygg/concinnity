@@ -1132,7 +1132,9 @@ impl EditorHook {
                     return false;
                 }
                 self.focus_panel(DragTarget::Preview);
-                if point_in(mx, my, preview::title_rect(pv)) {
+                if point_in(mx, my, preview::close_rect(pv)) {
+                    self.preview_open = false;
+                } else if point_in(mx, my, preview::title_rect(pv)) {
                     self.drag = Some(Drag {
                         target,
                         grab: [mx - pv[0], my - pv[1]],
@@ -1181,6 +1183,15 @@ impl EditorHook {
                     return false;
                 }
                 let po = self.panel_origin(vp);
+                // The X in the title bar closes the Assets panel (state kept, like a
+                // View-checkbox untick); checked before the title-bar drag.
+                if point_in(mx, my, panel::close_rect(po)) {
+                    self.focus_panel(DragTarget::Assets);
+                    self.panel_open = false;
+                    self.combo = Combo::Closed;
+                    self.row_menu = None;
+                    return true;
+                }
                 if point_in(mx, my, panel::title_rect(po)) {
                     self.focus_panel(DragTarget::Assets);
                     self.drag = Some(Drag {
@@ -1210,7 +1221,9 @@ impl EditorHook {
                     return false;
                 }
                 self.focus_panel(DragTarget::View);
-                if point_in(mx, my, view::title_rect(vo)) {
+                if point_in(mx, my, view::close_rect(vo)) {
+                    self.view_open = false;
+                } else if point_in(mx, my, view::title_rect(vo)) {
                     self.drag = Some(Drag {
                         target,
                         grab: [mx - vo[0], my - vo[1]],
@@ -1229,7 +1242,9 @@ impl EditorHook {
                     return false;
                 }
                 self.focus_panel(DragTarget::Templates);
-                if point_in(mx, my, templates::title_rect(to)) {
+                if point_in(mx, my, templates::close_rect(to)) {
+                    self.templates_open = false;
+                } else if point_in(mx, my, templates::title_rect(to)) {
                     self.drag = Some(Drag {
                         target,
                         grab: [mx - to[0], my - to[1]],
@@ -1324,7 +1339,7 @@ impl DebugHook for EditorHook {
         }
         // Preview panel (toggled from the View panel; shown by default).
         if shown && self.preview_open {
-            preview::apply(world, self.preview_origin(vp), self.world_capture);
+            preview::apply(world, self.preview_origin(vp), self.world_capture, mouse);
         } else {
             preview::hide_all(world);
         }
@@ -2118,6 +2133,65 @@ mod tests {
         assert!(claimed, "the X press was claimed");
         assert!(!h.form_open(), "the X closed the form");
         assert!(h.drag.is_none(), "the X did not start a drag");
+    }
+
+    // Every floating panel's title-bar X closes it: the press is checked before the
+    // title drag, so it closes rather than starting a drag.
+    #[test]
+    fn every_panel_title_bar_x_closes_it() {
+        let vp = [1280.0, 720.0];
+        let mut world = world_with_fields();
+
+        // Preview starts shown; its X hides it.
+        let mut h = hook(Vec::new());
+        let px = preview::close_rect(h.preview_origin(vp));
+        assert!(h.try_panel_press(
+            DragTarget::Preview,
+            px[0] + 5.0,
+            px[1] + 5.0,
+            vp,
+            &mut world
+        ));
+        assert!(
+            !h.preview_open && h.drag.is_none(),
+            "Preview X closed it, no drag"
+        );
+
+        // Assets.
+        let mut h = hook(Vec::new());
+        h.panel_open = true;
+        let ax = panel::close_rect(h.panel_origin(vp));
+        assert!(h.try_panel_press(DragTarget::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
+        assert!(
+            !h.panel_open && h.drag.is_none(),
+            "Assets X closed it, no drag"
+        );
+
+        // View.
+        let mut h = hook(Vec::new());
+        h.view_open = true;
+        let vx = view::close_rect(h.view_origin(vp));
+        assert!(h.try_panel_press(DragTarget::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
+        assert!(
+            !h.view_open && h.drag.is_none(),
+            "View X closed it, no drag"
+        );
+
+        // Templates.
+        let mut h = hook(Vec::new());
+        h.templates_open = true;
+        let tx = templates::close_rect(h.templates_origin(vp));
+        assert!(h.try_panel_press(
+            DragTarget::Templates,
+            tx[0] + 5.0,
+            tx[1] + 5.0,
+            vp,
+            &mut world
+        ));
+        assert!(
+            !h.templates_open && h.drag.is_none(),
+            "Templates X closed it, no drag"
+        );
     }
 
     // A panel toggled off (its View checkbox unticked) is not interactive: a press

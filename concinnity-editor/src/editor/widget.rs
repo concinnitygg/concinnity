@@ -17,6 +17,12 @@ pub(crate) const TITLE_H: f32 = 30.0;
 const TITLE_TINT: [f32; 4] = [0.15, 0.17, 0.23, 1.0];
 const TITLE_LABEL_COLOR: [f32; 3] = [0.92, 0.93, 0.96];
 
+// The title-bar close ("X") button: its background matches the title bar so it
+// blends in, and shows a subtly different square only when hovered; the "X" glyph
+// is always drawn. Shared so every floating panel's close button looks identical.
+const CLOSE_TINT_HOVER: [f32; 4] = [0.42, 0.26, 0.28, 1.0];
+const CLOSE_GLYPH_COLOR: [f32; 3] = [0.88, 0.89, 0.92];
+
 // Draw a panel's title bar: the background strip and its left-aligned heading.
 pub(crate) fn place_title(
     world: &mut World,
@@ -33,6 +39,39 @@ pub(crate) fn place_title(
         l.color = TITLE_LABEL_COLOR;
         l.visible = true;
         l.content = heading.to_string();
+    }
+}
+
+// The square close-button rect at the right end of a `title` bar rect.
+pub(crate) fn close_rect(title: [f32; 4]) -> [f32; 4] {
+    [title[0] + title[2] - TITLE_H, title[1], TITLE_H, TITLE_H]
+}
+
+// Draw a panel's title-bar close button at the right end of `title`: the
+// background blends into the title bar until `hovered`, when it shows a subtly
+// different square; the "X" glyph is always visible. Call after `place_title` so
+// the button draws over the title strip.
+pub(crate) fn place_close(
+    world: &mut World,
+    bg: AssetId,
+    label: AssetId,
+    title: [f32; 4],
+    hovered: bool,
+) {
+    let rect = close_rect(title);
+    let tint = if hovered {
+        CLOSE_TINT_HOVER
+    } else {
+        TITLE_TINT
+    };
+    place_sprite(world, bg, rect, tint, true);
+    if let Some(l) = label_mut(world, label) {
+        l.x = rect[0] + rect[2] * 0.5;
+        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.align = TextAlign::Center;
+        l.color = CLOSE_GLYPH_COLOR;
+        l.visible = true;
+        l.content = "X".to_string();
     }
 }
 
@@ -242,6 +281,46 @@ mod tests {
         assert_eq!(l.content, "Assets");
         assert_eq!(l.align, TextAlign::Left);
         assert_eq!(l.x, 48.0, "heading is inset from the strip's left edge");
+    }
+
+    // The close button is a square flush in the title bar's right end; its
+    // background blends into the title bar until hovered, and its "X" glyph always
+    // shows.
+    #[test]
+    fn close_button_blends_until_hovered() {
+        let mut world = world_with(&[AssetId(1), AssetId(2)]);
+        let title = [40.0, 60.0, 320.0, TITLE_H];
+        let r = close_rect(title);
+        assert_eq!(r[2], TITLE_H, "square");
+        assert_eq!(
+            r[0] + r[2],
+            title[0] + title[2],
+            "flush to the title bar's right edge"
+        );
+        // Not hovered: the background matches the title bar (blends in).
+        place_close(&mut world, AssetId(1), AssetId(2), title, false);
+        let bg = |w: &World| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == AssetId(1))
+                .unwrap()
+                .tint
+        };
+        assert_eq!(
+            bg(&world),
+            TITLE_TINT,
+            "blends into the title bar when idle"
+        );
+        let glyph = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == AssetId(2))
+            .unwrap();
+        assert!(
+            glyph.visible && glyph.content == "X",
+            "the X glyph always shows"
+        );
+        // Hovered: a subtly different square appears.
+        place_close(&mut world, AssetId(1), AssetId(2), title, true);
+        assert_ne!(bg(&world), TITLE_TINT, "a different square shows on hover");
     }
 
     // The clamp hard-stops a panel at every window edge: it can never be dragged

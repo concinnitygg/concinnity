@@ -21,6 +21,8 @@ pub(crate) const TITLE_LABEL: AssetId = AssetId(PREVIEW + 1);
 pub(crate) const ROW_BG: AssetId = AssetId(PREVIEW + 2);
 pub(crate) const CHECK_BOX: AssetId = AssetId(PREVIEW + 3);
 pub(crate) const CHECK_LABEL: AssetId = AssetId(PREVIEW + 4);
+pub(crate) const CLOSE_BG: AssetId = AssetId(PREVIEW + 5);
+pub(crate) const CLOSE_LABEL: AssetId = AssetId(PREVIEW + 6);
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
 // title bar's top-left), like the Assets panel.
@@ -55,6 +57,11 @@ pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], PREVIEW_W, widget::TITLE_H]
 }
 
+// The "X" close button in the title bar's top-right corner.
+pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
+    widget::close_rect(title_rect(o))
+}
+
 // The capture-checkbox row below the title bar.
 fn capture_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1] + widget::TITLE_H, PREVIEW_W, ROW_H]
@@ -80,9 +87,11 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 }
 
 // Position + show the panel at origin `o`, colouring the capture box by state
-// (green while the world holds the cursor).
-pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool) {
+// (green while the world holds the cursor) and its close button by hover.
+pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool, mouse: [f32; 2]) {
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Preview");
+    let close_hover = point_in(mouse[0], mouse[1], close_rect(o));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
     let row = capture_rect(o);
     place_sprite(world, ROW_BG, row, ROW_TINT, true);
     let box_tint = if capture { BOX_TINT_ON } else { BOX_TINT_OFF };
@@ -121,10 +130,10 @@ pub(crate) fn hide_all(world: &mut World) {
 // Every panel sprite / label id, for injection and the hidden pass (same
 // draw-order contract as the Assets panel's lists).
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    vec![TITLE_BG, ROW_BG, CHECK_BOX]
+    vec![TITLE_BG, CLOSE_BG, ROW_BG, CHECK_BOX]
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    vec![TITLE_LABEL, CHECK_LABEL]
+    vec![TITLE_LABEL, CLOSE_LABEL, CHECK_LABEL]
 }
 
 #[cfg(test)]
@@ -191,20 +200,26 @@ mod tests {
     fn apply_shows_heading_checkbox_and_capture_state() {
         let mut world = injected_world();
         let o = default_origin();
-        apply(&mut world, o, false);
+        apply(&mut world, o, false, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == TITLE_LABEL)
             .unwrap();
         assert!(title.visible);
         assert_eq!(title.content, "Preview");
+        // The close button shows its "X" glyph.
+        let close = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == CLOSE_LABEL)
+            .unwrap();
+        assert!(close.visible && close.content == "X");
         let label = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == CHECK_LABEL)
             .unwrap();
         assert_eq!(label.content, "Capture mouse");
         assert_eq!(sprite(&world, CHECK_BOX).tint, BOX_TINT_OFF);
-        apply(&mut world, o, true);
+        apply(&mut world, o, true, [0.0, 0.0]);
         assert_eq!(
             sprite(&world, CHECK_BOX).tint,
             BOX_TINT_ON,
@@ -215,7 +230,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(), true);
+        apply(&mut world, default_origin(), true, [0.0, 0.0]);
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

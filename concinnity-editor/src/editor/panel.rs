@@ -162,6 +162,9 @@ pub(crate) const COMBO_BG: AssetId = AssetId(PANEL + 0x5A);
 // The draggable title bar across the panel top.
 pub(crate) const TITLE_BG: AssetId = AssetId(PANEL + 0x5B);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 0x5C);
+// The "X" close button in the title bar's top-right corner.
+pub(crate) const CLOSE_BG: AssetId = AssetId(PANEL + 0x5D);
+pub(crate) const CLOSE_LABEL: AssetId = AssetId(PANEL + 0x5E);
 pub(crate) const DOT_BG: AssetId = AssetId(PANEL + 0xA0);
 pub(crate) const DOT1: AssetId = AssetId(PANEL + 0xA1);
 pub(crate) const DOT2: AssetId = AssetId(PANEL + 0xA2);
@@ -250,6 +253,11 @@ pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
 // The draggable title bar across the panel top.
 pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], PANEL_W, widget::TITLE_H]
+}
+
+// The "X" close button in the title bar's top-right corner.
+pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
+    widget::close_rect(title_rect(o))
 }
 
 // The square "+" add button (panel header below the title bar, left).
@@ -456,6 +464,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
 
     place_sprite(world, PANEL_BG, panel_rect(o), PANEL_BG_TINT, true);
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Assets");
+    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
 
     // The "+" add button. While the type picker is open it becomes a gray "X"
     // that returns to the browse list (the previous focus).
@@ -703,7 +713,7 @@ fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2])
 // overlays (scrollbar, triple-dot, row menu), which must sit ABOVE the row
 // backgrounds so a hovered row's fill cannot cover them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, PLUS_BG, TYPEDROP_BG, COMBO_BG];
+    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG, COMBO_BG];
     ids.extend((0..MAX_ROWS).map(list_row_bg));
     ids.extend((0..MAX_ROWS).map(combo_row_bg));
     ids.extend([
@@ -723,7 +733,13 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 // order decides who wins). The row-menu captions come last so they draw above the
 // row labels the menu floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, PLUS_LABEL, TYPEDROP_LABEL, EMPTY_LABEL];
+    let mut ids = vec![
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        PLUS_LABEL,
+        TYPEDROP_LABEL,
+        EMPTY_LABEL,
+    ];
     ids.extend((0..MAX_ROWS).map(list_row_label));
     ids.extend((0..MAX_ROWS).map(combo_row_label));
     ids.extend([MENU_DELETE_LABEL]);

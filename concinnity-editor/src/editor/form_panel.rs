@@ -103,8 +103,6 @@ const GAP: f32 = 8.0;
 // The header row: the name heading and the Apply button.
 const NAME_H: f32 = 34.0;
 const BTN_W: f32 = 84.0;
-// The square "X" close button in the title bar's top-right corner.
-const CLOSE_SZ: f32 = widget::TITLE_H;
 // The validation status line reserved under the header row.
 const STATUS_H: f32 = 22.0;
 // One arg-field row; the caption column on its left.
@@ -119,8 +117,6 @@ const NAME_SCALE: f32 = 1.2;
 const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
 const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
-const CLOSE_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-const CLOSE_TINT_HOVER: [f32; 4] = [0.56, 0.26, 0.26, 1.0];
 const CYCLE_TINT: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const OPTION_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
@@ -172,7 +168,7 @@ pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
 // hook checks this before the title-bar drag, so clicking the X closes the form
 // rather than starting a drag.
 pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0] + EDIT_W - CLOSE_SZ, o[1], CLOSE_SZ, widget::TITLE_H]
+    widget::close_rect(title_rect(o))
 }
 
 // The header row under the title bar: name heading + the pinned Apply button.
@@ -466,22 +462,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     place_sprite(world, EDIT_BG, panel_rect(view, o), PANEL_TINT, true);
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), view.title);
 
-    // The "X" close button in the title bar's top-right corner (drawn over the
-    // title strip; it brightens on hover).
-    let close = close_rect(o);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], close);
-    place_sprite(
-        world,
-        CLOSE_BG,
-        close,
-        if close_hover {
-            CLOSE_TINT_HOVER
-        } else {
-            CLOSE_TINT
-        },
-        true,
-    );
-    place_center_label(world, CLOSE_LABEL, close, "X", LABEL_WHITE, true);
+    // The "X" close button in the title bar's top-right corner (blends into the
+    // title bar until hovered; shared look across every panel).
+    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
 
     // The header row: the asset-name heading (drawn larger) and the pinned Apply
     // button at the panel's top right.

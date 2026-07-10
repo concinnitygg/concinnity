@@ -19,6 +19,8 @@ use crate::ecs::asset_id::AssetId;
 const TEMPLATES: u32 = 0x3000_0000 + 0x600;
 pub(crate) const TITLE_BG: AssetId = AssetId(TEMPLATES);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(TEMPLATES + 1);
+pub(crate) const CLOSE_BG: AssetId = AssetId(TEMPLATES + 2);
+pub(crate) const CLOSE_LABEL: AssetId = AssetId(TEMPLATES + 3);
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(TEMPLATES + 0x10 + i as u32)
 }
@@ -76,6 +78,11 @@ pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], TEMPLATES_W, widget::TITLE_H]
 }
 
+// The "X" close button in the title bar's top-right corner.
+pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
+    widget::close_rect(title_rect(o))
+}
+
 // Template row `i`, stacked below the title bar.
 fn row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
     [
@@ -101,6 +108,8 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<TemplatesAction>
 // Position + show the panel at origin `o`, highlighting the hovered row.
 pub(crate) fn apply(world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Templates");
+    let close_hover = point_in(mouse[0], mouse[1], close_rect(o));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
     for i in 0..count() {
         let row = row_rect(o, i);
         let hovered = point_in(mouse[0], mouse[1], row);
@@ -129,12 +138,12 @@ pub(crate) fn hide_all(world: &mut World) {
 
 // Every panel sprite / label id, for injection and the hidden pass.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_BG];
+    let mut ids = vec![TITLE_BG, CLOSE_BG];
     ids.extend((0..count()).map(row_bg));
     ids
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL];
+    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL];
     ids.extend((0..count()).map(row_label));
     ids
 }
