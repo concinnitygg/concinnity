@@ -6,6 +6,8 @@ use crate::ecs::{AssetOrigin, Component};
 impl Component for VolumetricFog {
     const NAME: &'static str = "VolumetricFog";
     const ORIGIN: AssetOrigin = AssetOrigin::External;
+    // Pass-through leaf: baked component is its authored args (see PointLight).
+    const BAKED: bool = true;
     type Args = Self;
 
     fn from_args(mut args: Self) -> Self {

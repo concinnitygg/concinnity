@@ -205,23 +205,31 @@ mod tests {
         assert!(args.is_object());
     }
 
-    // A type that has migrated to the baked path (PointLight) emits a `Baked`
-    // record; a type that has not (DirectionalLight) stays `Authored`.
+    // The record kind a def gets follows the type's `baked()` flag, so a
+    // migrated type emits `Baked` and an unmigrated one stays `Authored`. Driven
+    // by the flag rather than a hard-coded type list, so it stays correct as
+    // more types migrate. PointLight is pinned as an already-migrated leaf.
     #[test]
-    fn create_asset_def_marks_migrated_types_baked() {
-        let baked = create_asset_def(&AssetRequest {
-            asset_type: "PointLight".to_string(),
-            args: None,
-        })
-        .unwrap();
-        assert_eq!(baked.record, RecordKind::Baked);
-
-        let authored = create_asset_def(&AssetRequest {
-            asset_type: "DirectionalLight".to_string(),
-            args: None,
-        })
-        .unwrap();
-        assert_eq!(authored.record, RecordKind::Authored);
+    fn create_asset_def_record_kind_follows_baked_flag() {
+        for (ct, _) in ComponentType::addable_types() {
+            let def = create_asset_def(&AssetRequest {
+                asset_type: ct.as_str().to_string(),
+                args: None,
+            })
+            .unwrap();
+            let expected = if ct.baked() {
+                RecordKind::Baked
+            } else {
+                RecordKind::Authored
+            };
+            assert_eq!(
+                def.record,
+                expected,
+                "{} record kind must follow its baked() flag",
+                ct.as_str()
+            );
+        }
+        assert!(ComponentType::PointLight.baked());
     }
 
     #[test]

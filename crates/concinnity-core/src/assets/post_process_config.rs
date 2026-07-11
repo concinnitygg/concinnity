@@ -475,6 +475,8 @@ impl PostProcessConfig {
 impl Component for PostProcessConfig {
     const NAME: &'static str = "PostProcessConfig";
     const ORIGIN: AssetOrigin = AssetOrigin::External;
+    // Pass-through leaf: baked component is its authored args (see PointLight).
+    const BAKED: bool = true;
     type Args = Self;
 
     fn to_args(&self) -> Self {
