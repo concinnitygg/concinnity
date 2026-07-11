@@ -156,7 +156,7 @@ impl ShaderStage {
 pub fn resolve_runtime_source_path(raw: &str) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = crate::world::preset::find_in_assets(raw) {
+        if let Some(path) = crate::paths::find_in_assets(raw) {
             return path;
         }
         return crate::paths::assets_dir()
@@ -183,32 +183,6 @@ impl Component for ShaderStage {
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
     }
-}
-
-// Resolve a raw per-platform source string to the on-disk path the build
-// will read. A bare filename is looked up recursively under
-// `.concinnity/assets/` first, then under `<artifacts_dir>` when set, then
-// directly under `.concinnity/assets/<raw>`. A path with a directory
-// component is used verbatim. Mirrors the resolution `compile_payload`
-// applies; built-in shaders short-circuit upstream and never reach this.
-pub fn resolve_source_path_for(raw: &str, ctx: &crate::build::BuildCtx<'_>) -> String {
-    let p = std::path::Path::new(raw);
-    if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = crate::world::preset::find_in_assets(raw) {
-            return path;
-        }
-        if let Some(dir) = ctx.artifacts_dir {
-            let artifact_path = format!("{dir}/{raw}");
-            if std::path::Path::new(&artifact_path).exists() {
-                return artifact_path;
-            }
-        }
-        return crate::paths::assets_dir()
-            .join(raw)
-            .to_string_lossy()
-            .into_owned();
-    }
-    raw.to_string()
 }
 
 /// Validate ShaderStage args without compiling.
@@ -444,21 +418,13 @@ mod tests {
     }
 
     #[test]
-    fn resolvers_keep_paths_with_a_directory_component() {
-        // A path that already contains a directory is returned verbatim by both
-        // resolvers; the bare-filename branch consults process-global asset
-        // anchors and is left to integration coverage.
+    fn resolver_keeps_paths_with_a_directory_component() {
+        // A path that already contains a directory is returned verbatim; the
+        // bare-filename branch consults process-global asset anchors and is left
+        // to integration coverage. The build-side `resolve_source_path_for`
+        // (which takes a `BuildCtx`) is covered in concinnity-cook.
         assert_eq!(
             resolve_runtime_source_path("shaders/x.metal"),
-            "shaders/x.metal"
-        );
-        let ctx = crate::build::BuildCtx {
-            name: "s",
-            artifacts_dir: None,
-            all_assets: &[],
-        };
-        assert_eq!(
-            resolve_source_path_for("shaders/x.metal", &ctx),
             "shaders/x.metal"
         );
     }

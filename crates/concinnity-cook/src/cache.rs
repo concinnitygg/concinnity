@@ -230,7 +230,7 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
         return Some(s.to_string());
     }
     // Bare filename searched recursively under .concinnity/assets/.
-    if let Some(p) = crate::world::preset::find_in_assets(s) {
+    if let Some(p) = crate::paths::find_in_assets(s) {
         return Some(p);
     }
     // Account artifact directory, when the build supplied one.

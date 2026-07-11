@@ -28,12 +28,22 @@
 //                        Metal's validation layer cannot be toggled from a
 //                        running process, so the CLI re-execs with the env var
 //                        instead; this flag does not drive Metal.
+//   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
+//                        editor's `cn debug` / `cn editor` entry once the world
+//                        path is resolved; read by `GraphicsSystem::init` (only
+//                        under ENABLED) so the Prop-transform hot-reload watcher
+//                        knows which file to subscribe to. world.jsonl discovery
+//                        is authoring I/O that lives in `concinnity-cook`, which
+//                        the runtime does not link, so the dev host resolves the
+//                        path and hands it in rather than the engine looking it
+//                        up. Left None for `cn run` and embedded preview.
 //
 // A static is the pragmatic shape here: the flags are process-wide because the
 // rendering backend is too (a single context per process owns the GPU), and
 // plumbing them through the public `App` / `run_interpreted` signatures would
 // touch far more code for the same observable behaviour.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -42,6 +52,9 @@ static PENDING_ANIMATIONS: AtomicBool = AtomicBool::new(false);
 // Tri-state validation request: 0 = unset (use the build-profile default),
 // 1 = explicitly off, 2 = explicitly on.
 static VALIDATION: AtomicU8 = AtomicU8::new(0);
+
+// Path to the world.jsonl the dev host is running, or None outside a dev host.
+static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 
 // Mark this process as running under `cn debug` (or another dev-loop entry
 // point that opts in). Call once before world build.
@@ -101,6 +114,23 @@ pub(crate) fn validation() -> Option<bool> {
         2 => Some(true),
         _ => None,
     }
+}
+
+// Record the world.jsonl path the dev host resolved, so the hot-reload watcher
+// can subscribe to it. Called by the editor's `cn debug` / `cn editor` entry
+// before world build.
+//
+// `dead_code` allow: only the editor crate sets this; the library just reads
+// it, so `cargo check --lib` reports it unused.
+#[allow(dead_code)]
+pub fn set_world_jsonl_path(path: Option<String>) {
+    *WORLD_JSONL_PATH.lock().unwrap() = path;
+}
+
+// The world.jsonl path the dev host handed in, or None outside a dev host. Read
+// by `GraphicsSystem::init` to seed the Prop-transform reload watcher.
+pub(crate) fn world_jsonl_path() -> Option<String> {
+    WORLD_JSONL_PATH.lock().unwrap().clone()
 }
 
 #[cfg(test)]

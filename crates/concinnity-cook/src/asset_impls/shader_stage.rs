@@ -1,10 +1,37 @@
 // asset_impls/shader_stage.rs
 
+use crate::asset::BuildCtx;
 use concinnity_core::assets::ShaderKind;
 use concinnity_core::assets::ShaderStage;
 use concinnity_core::assets::shader_stage::{
-    declares_only_builtin_sources, platform_key, resolve_source_from_args, resolve_source_path_for,
+    declares_only_builtin_sources, platform_key, resolve_source_from_args,
 };
+
+// Resolve a raw per-platform source string to the on-disk path the build will
+// read. A bare filename is looked up recursively under `.concinnity/assets/`
+// first, then under `<artifacts_dir>` when set, then directly under
+// `.concinnity/assets/<raw>`. A path with a directory component is used
+// verbatim. Mirrors the resolution `compile_payload` applies; built-in shaders
+// short-circuit upstream and never reach this.
+pub fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
+    let p = std::path::Path::new(raw);
+    if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
+        if let Some(path) = concinnity_core::paths::find_in_assets(raw) {
+            return path;
+        }
+        if let Some(dir) = ctx.artifacts_dir {
+            let artifact_path = format!("{dir}/{raw}");
+            if std::path::Path::new(&artifact_path).exists() {
+                return artifact_path;
+            }
+        }
+        return concinnity_core::paths::assets_dir()
+            .join(raw)
+            .to_string_lossy()
+            .into_owned();
+    }
+    raw.to_string()
+}
 
 impl crate::asset::BuildAsset for ShaderStage {
     fn compile_payload(
@@ -47,15 +74,7 @@ impl crate::asset::BuildAsset for ShaderStage {
             )
         })?;
 
-        // `resolve_source_path_for` stays in core and is typed against core's
-        // `BuildCtx`; this crate's `BuildCtx` is a distinct (field-identical)
-        // type, so bridge it across the crate boundary by value.
-        let core_ctx = concinnity_core::build::BuildCtx {
-            name: ctx.name,
-            artifacts_dir: ctx.artifacts_dir,
-            all_assets: ctx.all_assets,
-        };
-        let source_path = resolve_source_path_for(&raw, &core_ctx);
+        let source_path = resolve_source_path_for(&raw, ctx);
 
         let compile_args = crate::shader::ShaderCompileArgs {
             source_path,
@@ -80,18 +99,32 @@ impl crate::asset::BuildAsset for ShaderStage {
         if concinnity_core::build::shader::builtin_shader_source(&raw).is_some() {
             return Vec::new();
         }
-        // See `compile_payload`: bridge this crate's `BuildCtx` to core's,
-        // which `resolve_source_path_for` is typed against.
-        let core_ctx = concinnity_core::build::BuildCtx {
-            name: ctx.name,
-            artifacts_dir: ctx.artifacts_dir,
-            all_assets: ctx.all_assets,
-        };
-        let path = resolve_source_path_for(&raw, &core_ctx);
+        let path = resolve_source_path_for(&raw, ctx);
         if std::path::Path::new(&path).exists() {
             vec![path]
         } else {
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_source_path_for_keeps_paths_with_a_directory_component() {
+        // A path that already contains a directory is returned verbatim; the
+        // bare-filename branch consults process-global asset anchors and is left
+        // to integration coverage.
+        let ctx = BuildCtx {
+            name: "s",
+            artifacts_dir: None,
+            all_assets: &[],
+        };
+        assert_eq!(
+            resolve_source_path_for("shaders/x.metal", &ctx),
+            "shaders/x.metal"
+        );
     }
 }

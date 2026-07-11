@@ -107,7 +107,7 @@ impl EditorHook {
     // (SAVE owns persistence). A GraphicsConfig is seeded when the authored entries
     // alone would not render, so the preview window never goes blank.
     pub(super) fn build_preview_world(&self) -> std::io::Result<World> {
-        let jsonl = concinnity_core::world::write_world_jsonl(&self.entries)
+        let jsonl = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         match crate::build_world_from_str(&jsonl) {
             Ok(world) if world.renders() => Ok(world),
@@ -137,7 +137,7 @@ impl EditorHook {
     // so a crash mid-write cannot truncate the user's world. Split from `persist`
     // so the serialization is unit-testable without the compile step.
     pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
-        let out = concinnity_core::world::write_world_jsonl(&self.entries)
+        let out = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let tmp = format!("{}.tmp", self.world_path);
         std::fs::write(&tmp, out)?;

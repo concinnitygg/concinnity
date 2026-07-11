@@ -70,7 +70,7 @@ pub fn resolve_lut_source(source: &str) -> String {
     if !is_bare {
         return source.to_string();
     }
-    if let Some(path) = crate::world::preset::find_in_assets(source) {
+    if let Some(path) = crate::paths::find_in_assets(source) {
         return path;
     }
     crate::paths::assets_dir()

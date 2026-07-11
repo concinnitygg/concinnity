@@ -1,9 +1,17 @@
-// Re-exports the runtime-side world surface from concinnity-core (WorldJsonlAsset,
-// parse/write_world_jsonl, find_world_jsonl, the path consts) and hosts the
-// build-front-half moved out of core: structural load, the expansion passes, and
-// prepare_world (load + expand + validate). Explicit items defined here shadow
-// the glob re-export of the same name.
-pub use concinnity_core::world::*;
+// The build-time world surface: world.jsonl I/O (`WorldJsonlAsset`,
+// parse/write/patch_world_jsonl, find_world_jsonl, the path consts), preset
+// loading, and the build front-half (structural load, the expansion passes, and
+// prepare_world = load + expand + validate). All authoring input handling; the
+// shipped runtime plays compiled blobs and never sees any of this.
+mod find;
+mod io;
+pub mod preset;
+
+pub use find::{WORLD_JSONL, find_world_jsonl};
+pub use io::{
+    WorldJsonlAsset, known_names, parse_world_jsonl, patch_world_jsonl, patch_world_jsonl_to,
+    write_world_jsonl,
+};
 
 pub(crate) mod application;
 pub(crate) mod camera_shot;

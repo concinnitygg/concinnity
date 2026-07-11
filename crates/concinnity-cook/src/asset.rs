@@ -4,14 +4,26 @@
 // The build pipeline calls `<T as BuildAsset>::compile_payload` for each
 // declared asset and packs the resulting bytes into a blob.
 //
-// `BuildCtx`, `Platform`, and the companion `SourceBacked` trait stay in
-// concinnity-core: the runtime and world layers, and several core asset-file
-// helpers whose signatures take `&BuildCtx`, depend on them. `BuildCtx` is
-// re-exported here so the trait + the moved impls can keep naming it as
-// `crate::asset::BuildCtx`.
+// `BuildCtx` is the build-time context handed to each impl. It lives here
+// because it is build-only: the runtime never compiles a payload. `Platform`
+// and the `SourceBacked` trait stay in concinnity-core, since the engine reads
+// a `ShaderStage`'s current-platform source at runtime.
 
 use crate::ecs::Component;
-pub use concinnity_core::build::BuildCtx;
+use crate::world::WorldJsonlAsset;
+
+// Build-time context handed to each `BuildAsset` impl.
+pub struct BuildCtx<'a> {
+    // The asset's declared name (used in error messages and as a key for
+    // build-time intermediates such as compiled shader filenames).
+    pub name: &'a str,
+    // Optional directory of user-supplied artifacts (e.g. account-uploaded
+    // shader source files) consulted when resolving bare filenames.
+    pub artifacts_dir: Option<&'a str>,
+    // All sibling assets declared in the same world. Used by types like
+    // `VoxelChunk` that need to resolve cross-asset references (palette).
+    pub all_assets: &'a [WorldJsonlAsset],
+}
 
 // A component that compiles to a binary payload at build time.
 //

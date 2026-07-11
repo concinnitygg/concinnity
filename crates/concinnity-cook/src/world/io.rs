@@ -1,19 +1,9 @@
-// src/world.rs
-// world.jsonl I/O: parsing, serialization, and file utilities.
+// world.jsonl I/O: parsing, serialization, and file-patch utilities. This is
+// authoring input handling -- the compile pipeline and the editor read and
+// rewrite world.jsonl through here. The shipped runtime plays compiled blobs
+// and never touches world.jsonl, so this lives in the build crate, not core.
 
-pub mod preset;
-
-mod find;
-
-pub use find::{WORLD_JSONL, find_world_jsonl};
-
-// The local project state directories (`assets`, `data`, `config`, `worlds`,
-// `cache`) all live under `.concinnity/`. Their locations are resolved through
-// `crate::paths`, which anchors the whole tree to a single root (the cwd by
-// default) so a host that chdirs for content resolution can still keep state
-// where the command was invoked.
-
-// An asset entry after $include resolution and type parsing
+// An asset entry after $include resolution and type parsing.
 #[derive(Clone)]
 pub struct WorldJsonlAsset {
     pub name: String,
@@ -99,7 +89,7 @@ where
     std::fs::write(dst_path, out)
 }
 
-// Read world.jsonl at json_path, mutate the asset list in-place, write back
+// Read world.jsonl at json_path, mutate the asset list in-place, write back.
 pub fn patch_world_jsonl<F>(json_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>),
@@ -110,7 +100,7 @@ where
     })
 }
 
-// Read asset names from world.jsonl without a full parse, for error messages
+// Read asset names from world.jsonl without a full parse, for error messages.
 pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content)

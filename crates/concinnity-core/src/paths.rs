@@ -180,9 +180,45 @@ pub fn cache_dir() -> PathBuf {
     state_dir().join("cache")
 }
 
+// Recursively search `assets_dir()` for a file matching the given bare
+// filename, returning the first match. Source strings that are bare filenames
+// (a texture, HDRI, `.cube` LUT, or shader named without a directory) are
+// resolved against `.concinnity/assets/` this way. Used only by source-path
+// resolution: the compile pipeline (cook) and the `cn debug` hot-reload watcher
+// (which reads the resolved on-disk path to subscribe to changes). The shipped
+// runtime plays compiled blobs and never resolves a source file.
+pub fn find_in_assets(filename: &str) -> Option<String> {
+    fn walk(dir: &Path, filename: &str) -> Option<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return None;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.file_name().and_then(|n| n.to_str()) == Some(filename) {
+                return Some(path);
+            }
+            if path.is_dir()
+                && let Some(found) = walk(&path, filename)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(&assets_dir(), filename).map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Only the miss path is exercised: a hit resolves against the process-global
+    // assets-dir anchor, which the roots test below redirects, so pointing it at
+    // a temp tree here would race that test.
+    #[test]
+    fn find_in_assets_misses_cleanly() {
+        assert_eq!(find_in_assets("cn_test_no_such_asset.json"), None);
+    }
 
     #[test]
     fn anchor_without_root_stays_relative() {

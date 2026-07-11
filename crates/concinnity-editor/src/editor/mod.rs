@@ -49,11 +49,16 @@ pub(crate) fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> st
     // empty world and creates the file on the first SAVE.
     let (world_path, world_exists) = resolve_edit_target(json_path);
 
+    // Hand the resolved path to the engine so its hot-reload watcher (armed only
+    // when a debug port opts in) subscribes to this world.jsonl. The engine no
+    // longer discovers it; world.jsonl lookup is authoring I/O in concinnity-cook.
+    concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(world_path.clone()));
+
     // Parse the authored entry list up front so edits patch it directly (empty
     // when the file does not exist yet).
     let entries = if world_exists {
         let content = std::fs::read_to_string(&world_path)?;
-        concinnity_core::world::parse_world_jsonl(&content)
+        crate::world::parse_world_jsonl(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
     } else {
         Vec::new()
@@ -200,7 +205,7 @@ mod tests {
     fn seeded_content_appends_marker_to_authored_content() {
         let base = "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}";
         let seeded = seeded_content(base);
-        let parsed = concinnity_core::world::parse_world_jsonl(&seeded).unwrap();
+        let parsed = crate::world::parse_world_jsonl(&seeded).unwrap();
         assert_eq!(parsed.len(), 2, "authored entry plus the seed marker");
         assert_eq!(parsed[0]["name"], "phys");
         assert_eq!(parsed[1]["type"], "GraphicsConfig");
@@ -209,7 +214,7 @@ mod tests {
     // The seed marker is itself a well-formed, renderable asset line.
     #[test]
     fn seed_marker_is_a_graphics_config() {
-        let parsed = concinnity_core::world::parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
+        let parsed = crate::world::parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["type"], "GraphicsConfig");
     }

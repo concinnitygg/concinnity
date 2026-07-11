@@ -1810,7 +1810,7 @@ fn write_jsonl_persists_entries_atomically() {
     h.write_jsonl().unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
-    let parsed = concinnity_core::world::parse_world_jsonl(&content).unwrap();
+    let parsed = crate::world::parse_world_jsonl(&content).unwrap();
     assert_eq!(parsed.len(), 2, "both entries written, one line each");
     assert_eq!(parsed[1]["name"], "lamp");
     assert!(!std::path::Path::new(&format!("{path_str}.tmp")).exists());

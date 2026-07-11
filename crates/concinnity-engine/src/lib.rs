@@ -17,9 +17,10 @@ pub mod ecs;
 // Renderer-free foundation shared with the build/validate pipeline lives in
 // concinnity-core. Re-export its modules under the historical crate::* paths so
 // the rest of the client keeps resolving (crate::result / crate::gfx are the
-// pre-existing slices; build / check / geometry / world join them here).
+// pre-existing slices; build / geometry join them here). world.jsonl I/O moved
+// to concinnity-cook (authoring), which the runtime does not link.
 pub(crate) use concinnity_core::result;
-pub(crate) use concinnity_core::{build, geometry, world};
+pub(crate) use concinnity_core::{build, geometry};
 
 pub mod app;
 // Flat entry point for a shipped player: run a compiled world from a state dir.

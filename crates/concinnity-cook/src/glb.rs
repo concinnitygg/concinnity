@@ -251,7 +251,7 @@ pub fn resolve_source(source: &str) -> String {
     if !bare {
         return source.to_string();
     }
-    if let Some(found) = concinnity_core::world::preset::find_in_assets(source) {
+    if let Some(found) = crate::paths::find_in_assets(source) {
         return found;
     }
     concinnity_core::paths::assets_dir()

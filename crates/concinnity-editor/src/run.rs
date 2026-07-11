@@ -27,6 +27,11 @@ pub(crate) fn run_interpreted(
         }
     };
 
+    // Hand the resolved world path to the engine so its hot-reload watcher can
+    // subscribe to world.jsonl. The engine no longer discovers it (that lookup
+    // is authoring I/O in concinnity-cook, which the runtime does not link).
+    concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(json_path.to_string()));
+
     let mut app = App::new();
     *app.world_mut() = crate::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");

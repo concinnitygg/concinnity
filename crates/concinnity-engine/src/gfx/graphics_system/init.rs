@@ -2356,12 +2356,14 @@ impl GraphicsSystem {
             backend.set_reflection_probes(&placements);
         }
 
-        // World.jsonl path for the Prop transform reload pass. Best-effort:
-        // `cn debug` runs from the client checkout so the lookup succeeds in
-        // practice; embedded preview / WS-driven runs leave it None and the
-        // file watcher simply has no `.jsonl` to subscribe to.
+        // World.jsonl path for the Prop transform reload pass. The dev host
+        // (`cn debug` / `cn editor`) resolves the world path -- world.jsonl
+        // discovery is authoring I/O in `concinnity-cook`, which the runtime does
+        // not link -- and hands it in via `dev_flags`. Embedded preview / WS-
+        // driven runs leave it None and the file watcher has no `.jsonl` to
+        // subscribe to.
         let world_jsonl_path: Option<String> = if capture_sources {
-            crate::world::find_world_jsonl(None).ok()
+            crate::app::dev_flags::world_jsonl_path()
         } else {
             None
         };
