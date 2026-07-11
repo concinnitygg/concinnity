@@ -15,7 +15,9 @@
 
 // One entry resolved from a VoxelChunk palette.  `None` slots are
 // non-solid (air) and emit no geometry; their neighbours treat them as empty.
-pub(crate) struct PaletteSlot {
+// Public so the cook crate's `compile_voxel_chunk_payload` (build-time mesher)
+// can build the palette this crate's runtime `build_chunk_mesh` also consumes.
+pub struct PaletteSlot {
     pub uv_top: [f32; 4],
     pub uv_bottom: [f32; 4],
     pub uv_side: [f32; 4],
@@ -31,7 +33,7 @@ type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 // id either indexes a `Some(slot)` (solid) or `None` (air). The chunk origin
 // is at the local-space origin (`0,0,0` corner); the far corner is at
 // `(dx*block_size, dy*block_size, dz*block_size)`.
-pub(crate) fn build_voxel_mesh(
+pub fn build_voxel_mesh(
     dim: [u32; 3],
     block_size: f32,
     blocks: &[u32],

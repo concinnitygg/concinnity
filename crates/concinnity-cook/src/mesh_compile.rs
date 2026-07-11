@@ -1,13 +1,13 @@
 // Build-time mesh payload entry point. Most generators compile with no source
-// decode and delegate straight to concinnity-core; the `heightfield` generator
+// decode and delegate straight to `crate::geometry`; the `heightfield` generator
 // needs its source image decoded (the runtime crate links no image decoders),
-// so this crate decodes it here and hands the pixels to core's
-// `compile_heightfield_payload`.
+// so this crate decodes it here and hands the pixels to
+// `crate::geometry::compile_heightfield_payload`.
 
 // Compile a Mesh / ProceduralMesh component's JSON args into a packed binary
 // payload. The `heightfield` generator's source PNG is decoded here in the
 // build crate; every other generator delegates to
-// `concinnity_core::geometry::compile_mesh_payload`.
+// `crate::geometry::compile_mesh_payload`.
 pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     if args.get("generator").and_then(|v| v.as_str()) == Some("heightfield") {
         let source = args
@@ -16,9 +16,9 @@ pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
             .ok_or("heightfield generator requires a `source` PNG path")?;
         let (w, h, rgba) =
             crate::texture::decode_source(source, 0).map_err(|e| format!("heightfield: {e}"))?;
-        concinnity_core::geometry::compile_heightfield_payload(args, w, h, rgba)
+        crate::geometry::compile_heightfield_payload(args, w, h, rgba)
     } else {
-        concinnity_core::geometry::compile_mesh_payload(args)
+        crate::geometry::compile_mesh_payload(args)
     }
 }
 
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn non_heightfield_generator_delegates_to_core() {
+    fn non_heightfield_generator_delegates_to_the_generator_module() {
         let args = serde_json::json!({ "generator": "sphere", "radius": 1.0 });
         assert!(compile_mesh_payload(&args).is_ok());
     }

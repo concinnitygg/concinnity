@@ -7,7 +7,7 @@
 // decoders, so these live here in the build crate; the editor's debug server
 // drives them.
 
-use concinnity_core::geometry::{
+use crate::geometry::{
     compile_mesh_payload, compile_skinned_mesh_payload_with_lods, payload_joints_to_defs,
 };
 use concinnity_core::gfx::mesh_payload::{deserialise_skinned, deserialise_with_lods};

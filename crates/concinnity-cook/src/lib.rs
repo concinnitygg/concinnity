@@ -10,7 +10,7 @@
 // its `crate::{assets,ecs,gfx,geometry,result}` paths. The payload *decoders*
 // and shared payload types live in `concinnity_core::build`; this crate's
 // modules call back into them.
-pub use concinnity_core::{assets, ecs, geometry, gfx, paths, result};
+pub use concinnity_core::{assets, ecs, gfx, paths, result};
 
 pub mod asset;
 pub mod asset_api;
@@ -25,6 +25,10 @@ pub mod environment_map;
 pub mod fbx;
 pub mod file;
 pub mod font;
+// Build-time mesh generators + payload compilers. The runtime-side mesh helpers
+// they share (tangents, the voxel mesher, chunk streaming) stay in
+// `concinnity_core::geometry`; this module re-exports what cook code names.
+pub mod geometry;
 pub mod glb;
 pub mod gltf;
 pub mod import;
