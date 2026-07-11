@@ -17,11 +17,16 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod handle;
 mod id;
 mod locator;
 mod reference;
 mod resolver;
 
+pub use handle::{
+    AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
+    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle,
+};
 pub use id::{AssetId, de_opt_asset_ref};
 pub use locator::PayloadLocator;
 pub use reference::{AssetRef, de_opt_asset_ref_typed};

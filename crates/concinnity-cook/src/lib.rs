@@ -32,6 +32,7 @@ pub mod mesh_compile;
 pub mod mesh_reimport;
 pub mod pipeline;
 pub mod registry;
+pub mod resource_handles;
 pub mod shader;
 pub mod template_spec;
 pub mod texture;

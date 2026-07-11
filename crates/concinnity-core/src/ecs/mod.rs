@@ -138,6 +138,14 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
 // `#[serde(skip)]` field; re-exported here under its historical path.
 pub use concinnity_asset::PayloadLocator;
 
+// Per-kind resource handles (dense per-kind indices into the runtime resource
+// tables), defined in the schema crate alongside `AssetId`. Cook assigns them;
+// components and the resource tables address resources by them.
+pub use concinnity_asset::{
+    AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
+    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle,
+};
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlobAssetDef {
     // The asset's interned identity. `None` for unnamed runtime-only assets.
