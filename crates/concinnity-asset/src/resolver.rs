@@ -43,6 +43,41 @@ pub(crate) fn resolve_name(name: &str) -> Option<u32> {
     }
 }
 
+/// A name -> per-kind resource-handle resolver. Returns the resource's dense
+/// handle, or `None` when the name is not a known resource of that kind in the
+/// current build (or no build map is installed). Unlike the name interner a
+/// handle is not assignable on demand: it is a position in the build's
+/// declaration-ordered resource table, so a name with no matching resource has
+/// no handle.
+pub type HandleResolveFn = fn(&str) -> Option<u32>;
+
+// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
+static TEXTURE_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the name -> texture-handle resolver. Called by concinnity-cook,
+/// backed by the current build's declaration-ordered texture handle map.
+/// Idempotent; the last writer wins.
+pub fn set_texture_handle_resolver(f: HandleResolveFn) {
+    TEXTURE_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+}
+
+/// Resolve a texture reference name to its dense `TextureHandle` value via the
+/// installed resolver. `None` means either no resolver is installed or the name
+/// is not a declared texture; the caller decides whether to fall back (a
+/// validation context) or to fail (a real build).
+pub(crate) fn resolve_texture_handle(name: &str) -> Option<u32> {
+    let v = TEXTURE_HANDLE_RESOLVER.load(Ordering::Acquire);
+    if v == 0 {
+        None
+    } else {
+        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address
+        // stored by `set_texture_handle_resolver`; the transmute reverses that
+        // exact `fn as usize`.
+        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
+        f(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // These tests own the process-global resolver: each installs the same

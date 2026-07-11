@@ -124,14 +124,12 @@ pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
 // consume. Skips decals whose texture reference is missing, invisible decals,
 // and decals whose size is degenerate (any non-positive component).
 //
-// `texture_name_to_slot` maps a Texture asset id to its slot in the backend's
-// albedo texture pool; a decal referencing an unknown texture is logged and
-// dropped. A decal with no `texture` falls back to texture slot 0 (the
-// renderer's white fallback) so the tint colour still stamps.
-pub fn build_decal_records(
-    decals: &[&Decal],
-    texture_name_to_slot: &std::collections::HashMap<crate::ecs::asset_id::AssetId, usize>,
-) -> Vec<DecalRecord> {
+// A decal's `texture` carries its cook-assigned `TextureHandle`, whose value is
+// the texture's slot in the backend's albedo texture pool; `texture_count` is
+// that pool's size and bounds the handle. A decal whose handle is out of range
+// is logged and dropped. A decal with no `texture` falls back to texture slot 0
+// (the renderer's white fallback) so the tint colour still stamps.
+pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<DecalRecord> {
     let mut out = Vec::new();
     for d in decals {
         if !d.visible {
@@ -142,17 +140,19 @@ pub fn build_decal_records(
         }
         let slot = match d.texture {
             None => 0,
-            Some(tex_id) => match texture_name_to_slot.get(&tex_id) {
-                Some(&s) => s,
-                None => {
+            Some(handle) => {
+                let slot = handle.index();
+                if slot >= texture_count {
                     tracing::error!(
-                        "GraphicsSystem: Decal {} references unknown texture {}",
+                        "GraphicsSystem: Decal {} references out-of-range texture handle {} (only {} textures)",
                         d.asset_id,
-                        tex_id
+                        handle.index(),
+                        texture_count
                     );
                     continue;
                 }
-            },
+                slot
+            }
         };
         let model = decal_model_matrix(d.position, d.rotation_deg, d.size);
         let inv_model = match invert_decal_model(model) {
@@ -239,8 +239,7 @@ mod tests {
             visible: false,
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        assert!(build_decal_records(&[&d], &names).is_empty());
+        assert!(build_decal_records(&[&d], 0).is_empty());
     }
 
     #[test]
@@ -249,24 +248,40 @@ mod tests {
             size: [1.0, 0.0, 1.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        assert!(build_decal_records(&[&d], &names).is_empty());
+        assert!(build_decal_records(&[&d], 0).is_empty());
     }
 
     #[test]
     fn decal_without_texture_uses_fallback_slot() {
         let d = Decal::default();
-        let names = std::collections::HashMap::new();
-        let recs = build_decal_records(&[&d], &names);
+        let recs = build_decal_records(&[&d], 0);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].texture_slot, 0);
     }
 
     #[test]
+    fn decal_texture_handle_is_used_directly_as_the_slot() {
+        // The cook-assigned handle value is the albedo pool slot; an in-range
+        // handle passes through, an out-of-range one drops the decal.
+        let d = Decal {
+            texture: Some(crate::ecs::TextureHandle(3)),
+            ..Default::default()
+        };
+        let recs = build_decal_records(&[&d], 5);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].texture_slot, 3);
+
+        let past = Decal {
+            texture: Some(crate::ecs::TextureHandle(9)),
+            ..Default::default()
+        };
+        assert!(build_decal_records(&[&past], 5).is_empty());
+    }
+
+    #[test]
     fn aabb_of_unit_decal_at_origin_is_half_unit_box() {
         let d = Decal::default();
-        let names = std::collections::HashMap::new();
-        let recs = build_decal_records(&[&d], &names);
+        let recs = build_decal_records(&[&d], 0);
         let (mn, mx) = recs[0].aabb();
         assert!((mn[0] + 0.5).abs() < 1e-5 && (mx[0] - 0.5).abs() < 1e-5);
         assert!((mn[1] + 0.5).abs() < 1e-5 && (mx[1] - 0.5).abs() < 1e-5);
@@ -279,8 +294,7 @@ mod tests {
             position: [10.0, 5.0, -3.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_decal_records(&[&d], &names);
+        let recs = build_decal_records(&[&d], 0);
         let (mn, mx) = recs[0].aabb();
         // size = [1,1,1] → half-extents 0.5 in every axis.
         assert!((mn[0] - 9.5).abs() < 1e-5 && (mx[0] - 10.5).abs() < 1e-5);
@@ -294,8 +308,7 @@ mod tests {
             size: [4.0, 0.5, 8.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_decal_records(&[&d], &names);
+        let recs = build_decal_records(&[&d], 0);
         let (mn, mx) = recs[0].aabb();
         assert!((mx[0] - mn[0] - 4.0).abs() < 1e-5);
         assert!((mx[1] - mn[1] - 0.5).abs() < 1e-5);
@@ -312,8 +325,7 @@ mod tests {
             rotation_deg: [0.0, 45.0, 0.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_decal_records(&[&d], &names);
+        let recs = build_decal_records(&[&d], 0);
         let (mn, mx) = recs[0].aabb();
         let span_x = mx[0] - mn[0];
         let span_z = mx[2] - mn[2];

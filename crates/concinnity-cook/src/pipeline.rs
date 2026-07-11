@@ -102,7 +102,11 @@ pub fn validate_asset(
 ) -> Result<(), String> {
     // Single-asset validation has no surrounding world to intern against; the
     // resulting ids are throwaway. Reset so calls do not accumulate entries.
+    // Clear the texture handle map too: with no world there are no handles, so
+    // a texture reference falls back to the interner (parses without resolving
+    // to a real slot, which single-asset validation never needs).
     asset_id::reset_interner();
+    crate::resource_handles::reset_texture_handles();
     let (asset_type, args) = normalize_single_shader_type(asset_type, args);
     let asset_type = asset_type.as_str();
     let type_norm = asset_type.to_lowercase().replace('_', "");
@@ -175,6 +179,19 @@ pub fn build_compiled(
     let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
     asset_id::intern_all(&names);
     resolve_scene_refs(&mut assets);
+
+    // Assign each texture resource its dense handle in declaration order and
+    // install the map so texture references (Material.albedo, Room.*_texture,
+    // Decal/ParticleEmitter.texture) resolve to a `TextureHandle` during the
+    // reserialize pass below. The assignment walks this same `assets` list that
+    // the blob is emitted from, so a texture's handle equals the position the
+    // runtime drains it from its Texture column -- i.e. its albedo pool slot.
+    crate::resource_handles::reset_texture_handles();
+    let resource_assets = assets.iter().filter_map(|a| {
+        ComponentType::parse(&a.asset_type).map(|ct| (asset_id::intern(&a.name), ct))
+    });
+    let texture_handles = crate::resource_handles::ResourceHandles::from_assets(resource_assets);
+    crate::resource_handles::install_texture_handles(texture_handles);
 
     let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
     for asset in &assets {

@@ -128,11 +128,13 @@ impl ParticleEmitterRecord {
 
 // Resolve a list of `ParticleEmitter` components into `ParticleEmitterRecord`s
 // the backend can consume. Skips invisible emitters and emitters whose pool
-// would be empty. An emitter referencing an unknown texture is logged and
+// would be empty. An emitter's `texture` carries its cook-assigned
+// `TextureHandle`, whose value is the texture's albedo pool slot; `texture_count`
+// is the pool size and bounds the handle. An out-of-range handle is logged and
 // dropped; an emitter with no `texture` falls back to slot 0 (white).
 pub fn build_particle_records(
     emitters: &[&ParticleEmitter],
-    texture_name_to_slot: &std::collections::HashMap<crate::ecs::asset_id::AssetId, usize>,
+    texture_count: usize,
 ) -> Vec<ParticleEmitterRecord> {
     let mut out = Vec::new();
     for e in emitters {
@@ -142,17 +144,19 @@ pub fn build_particle_records(
         let max_particles = e.max_particles.clamp(1, MAX_PARTICLES_PER_EMITTER);
         let slot = match e.texture {
             None => 0,
-            Some(tex_id) => match texture_name_to_slot.get(&tex_id) {
-                Some(&s) => s,
-                None => {
+            Some(handle) => {
+                let slot = handle.index();
+                if slot >= texture_count {
                     tracing::error!(
-                        "GraphicsSystem: ParticleEmitter {} references unknown texture {}",
+                        "GraphicsSystem: ParticleEmitter {} references out-of-range texture handle {} (only {} textures)",
                         e.asset_id,
-                        tex_id
+                        handle.index(),
+                        texture_count
                     );
                     continue;
                 }
-            },
+                slot
+            }
         };
         let direction = normalise_direction(e.direction);
         let spread_cos = (e.spread_deg.clamp(0.0, 180.0).to_radians()).cos();
@@ -248,25 +252,33 @@ mod tests {
             visible: false,
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        assert!(build_particle_records(&[&e], &names).is_empty());
+        assert!(build_particle_records(&[&e], 0).is_empty());
     }
 
     #[test]
-    fn missing_texture_drops_emitter() {
+    fn out_of_range_texture_handle_drops_emitter() {
         let e = ParticleEmitter {
-            texture: Some(crate::ecs::asset_id::AssetId(999)),
+            texture: Some(crate::ecs::TextureHandle(999)),
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        assert!(build_particle_records(&[&e], &names).is_empty());
+        assert!(build_particle_records(&[&e], 0).is_empty());
+    }
+
+    #[test]
+    fn emitter_texture_handle_is_used_directly_as_the_slot() {
+        let e = ParticleEmitter {
+            texture: Some(crate::ecs::TextureHandle(2)),
+            ..Default::default()
+        };
+        let recs = build_particle_records(&[&e], 5);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].texture_slot, 2);
     }
 
     #[test]
     fn emitter_without_texture_uses_fallback_slot() {
         let e = ParticleEmitter::default();
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].texture_slot, 0);
     }
@@ -277,8 +289,7 @@ mod tests {
             direction: [0.0, 5.0, 0.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         let d = recs[0].direction;
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         assert!((len - 1.0).abs() < 1e-5);
@@ -290,8 +301,7 @@ mod tests {
             direction: [0.0, 0.0, 0.0],
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         assert_eq!(recs[0].direction, [0.0, 1.0, 0.0]);
     }
 
@@ -301,8 +311,7 @@ mod tests {
             max_particles: u32::MAX,
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         assert_eq!(recs[0].max_particles, MAX_PARTICLES_PER_EMITTER);
     }
 
@@ -312,8 +321,7 @@ mod tests {
             spread_deg: 0.0,
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         assert!((recs[0].spread_cos - 1.0).abs() < 1e-6);
     }
 
@@ -324,8 +332,7 @@ mod tests {
             lifetime_max: 0.1,
             ..Default::default()
         };
-        let names = std::collections::HashMap::new();
-        let recs = build_particle_records(&[&e], &names);
+        let recs = build_particle_records(&[&e], 0);
         assert!(recs[0].lifetime_max >= recs[0].lifetime_min);
     }
 

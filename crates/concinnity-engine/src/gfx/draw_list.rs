@@ -868,9 +868,19 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 switch_distance: *switch_distance,
             });
         }
+        // A room's texture carries its cook-assigned `TextureHandle`, whose
+        // value is the texture's slot in the albedo pool. An out-of-range handle
+        // (an unresolved generator name) falls back to slot 0, as before.
         let texture_slot = match room.effective_texture() {
             None => 0,
-            Some(id) => *texture_name_to_slot.get(&id).unwrap_or(&0),
+            Some(handle) => {
+                let slot = handle.index();
+                if slot < texture_name_to_slot.len() {
+                    slot
+                } else {
+                    0
+                }
+            }
         };
         draw_objects.push(DrawObject {
             vertex_offset: vertex_byte_offset,
@@ -905,6 +915,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 mod tests {
     use super::*;
     use crate::assets::Prop;
+    use crate::ecs::TextureHandle;
 
     fn make_prop(position: [f32; 3]) -> Prop {
         Prop {
@@ -1433,8 +1444,9 @@ mod tests {
         assert_eq!(mesh_id_to_draws.get(&AssetId(0)), Some(&vec![0]));
     }
 
-    // A Room is placed at the origin with culling disabled; its texture resolves
-    // through the name->slot map and its LOD alternates carry through.
+    // A Room is placed at the origin with culling disabled; its cook-assigned
+    // texture handle is used directly as its albedo pool slot and its LOD
+    // alternates carry through.
     #[test]
     fn build_draw_list_places_room_at_origin_with_texture_and_lods() {
         let room = Room {
@@ -1442,7 +1454,7 @@ mod tests {
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
-            texture: Some(AssetId(70)),
+            texture: Some(TextureHandle(6)),
             wall_texture: None,
             floor_texture: None,
             ceiling_texture: None,
@@ -1453,8 +1465,12 @@ mod tests {
         let room_lods = vec![(12.0_f32, vec![0u16, 1, 2])];
         let room_geometry = vec![(room, verts, idxs, room_lods)];
 
+        // Handle 6 must land inside the pool; a 7-texture pool (slots 0..=6)
+        // makes it the last valid slot.
         let mut texture_name_to_slot = std::collections::HashMap::new();
-        texture_name_to_slot.insert(AssetId(70), 6usize);
+        for i in 0..7 {
+            texture_name_to_slot.insert(AssetId(i), i as usize);
+        }
 
         let (rv, ri, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
             items: &[],

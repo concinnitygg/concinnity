@@ -17,7 +17,7 @@ use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
     Component, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources,
-    StepResult,
+    StepResult, TextureHandle,
 };
 use crate::gfx::backend::{GpuProfile, GpuTier, GpuVendor};
 use crate::gfx::backend_init::SwapchainConfig;
@@ -114,9 +114,11 @@ impl WorldBuilder {
             locator: Some(tex_loc),
             ..Default::default()
         });
+        // The single Texture pushed above drains at slot 0, so its cook-assigned
+        // handle is `TextureHandle(0)` regardless of the texture's asset id.
         self.push(Material {
             asset_id: mat,
-            albedo: Some(tex),
+            albedo: Some(TextureHandle(0)),
             ..Default::default()
         });
         self.push(Prop {

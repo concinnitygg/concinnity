@@ -25,12 +25,12 @@ mod resolver;
 
 pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
-    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle,
+    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_opt_texture_handle,
 };
 pub use id::{AssetId, de_opt_asset_ref};
 pub use locator::PayloadLocator;
 pub use reference::{AssetRef, de_opt_asset_ref_typed};
-pub use resolver::{ResolveFn, set_name_resolver};
+pub use resolver::{HandleResolveFn, ResolveFn, set_name_resolver, set_texture_handle_resolver};
 
 // Asset data schema: one module per asset type, mirroring the impl-side layout
 // under concinnity-core/src/assets. Each holds the plain struct(s), enum(s),

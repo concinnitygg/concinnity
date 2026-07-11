@@ -1,6 +1,6 @@
 // Projected-decal schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_texture_handle};
 
 /// A projected texture stamped onto whatever scene geometry sits inside the
 /// decal's oriented box.
@@ -33,8 +33,8 @@ pub struct Decal {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [Texture](#texture) asset projected onto the scene.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// World-space position of the decal box's centre.
     pub position: [f32; 3],
     /// Euler rotation in degrees [pitch, yaw, roll], YXZ order, same as

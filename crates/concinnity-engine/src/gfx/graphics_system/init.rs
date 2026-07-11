@@ -908,18 +908,31 @@ impl GraphicsSystem {
             std::collections::HashMap::new();
         let mut normal_map_locators: Vec<crate::ecs::PayloadLocator> = Vec::new();
 
+        // Albedo-region textures (albedo, secondary albedo, emissive, packed
+        // ORM) carry a cook-assigned `TextureHandle` whose value is the texture's
+        // declaration-order drain slot -- i.e. its slot in this pool -- so the
+        // handle indexes `texture_locators` directly, no name->slot scan. A
+        // handle past the pool is a resolution error (cook validates the
+        // reference exists, so this only guards a corrupt build).
+        let texture_count = textures.len();
+        let albedo_slot_of = |handle: crate::ecs::TextureHandle| -> Option<usize> {
+            let slot = handle.index();
+            (slot < texture_count).then_some(slot)
+        };
+
         let mut material_map: std::collections::HashMap<AssetId, MaterialEntry> =
             std::collections::HashMap::new();
         for mat in ctx.drain::<Material>() {
             let albedo_slot = match mat.albedo {
                 None => 0,
-                Some(albedo_id) => match texture_name_to_slot.get(&albedo_id) {
-                    Some(&slot) => slot,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown texture {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range albedo texture handle {} (only {} textures)",
                             mat.asset_id,
-                            albedo_id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
@@ -985,13 +998,14 @@ impl GraphicsSystem {
             // secondary actually gets sampled.
             let albedo_secondary_slot: u32 = match mat.albedo_secondary {
                 None => 0,
-                Some(id) => match texture_name_to_slot.get(&id) {
-                    Some(&slot) => slot as u32,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown albedo_secondary texture {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range albedo_secondary texture handle {} (only {} textures)",
                             mat.asset_id,
-                            id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
@@ -1052,13 +1066,14 @@ impl GraphicsSystem {
             // sentinel the shader gates on to keep the scalar fallback.
             let emissive_map_slot: u32 = match mat.emissive_map {
                 None => 0,
-                Some(id) => match texture_name_to_slot.get(&id) {
-                    Some(&slot) => slot as u32,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown emissive_map texture {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range emissive_map texture handle {} (only {} textures)",
                             mat.asset_id,
-                            id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
@@ -1067,13 +1082,14 @@ impl GraphicsSystem {
             };
             let orm_map_slot: u32 = match mat.orm_map {
                 None => 0,
-                Some(id) => match texture_name_to_slot.get(&id) {
-                    Some(&slot) => slot as u32,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown orm_map texture {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range orm_map texture handle {} (only {} textures)",
                             mat.asset_id,
-                            id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
@@ -1977,7 +1993,7 @@ impl GraphicsSystem {
         let decal_records = {
             let decals: Vec<Decal> = ctx.drain::<Decal>();
             let refs: Vec<&Decal> = decals.iter().collect();
-            crate::gfx::decal::build_decal_records(&refs, &texture_name_to_slot)
+            crate::gfx::decal::build_decal_records(&refs, texture_count)
         };
         let decal_count = decal_records.len();
 
@@ -1988,7 +2004,7 @@ impl GraphicsSystem {
         let particle_records = {
             let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
             let refs: Vec<&ParticleEmitter> = emitters.iter().collect();
-            crate::gfx::particles::build_particle_records(&refs, &texture_name_to_slot)
+            crate::gfx::particles::build_particle_records(&refs, texture_count)
         };
         let particle_count = particle_records.len();
 

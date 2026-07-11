@@ -143,7 +143,8 @@ pub use concinnity_asset::PayloadLocator;
 // components and the resource tables address resources by them.
 pub use concinnity_asset::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
-    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle,
+    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_opt_texture_handle,
+    set_texture_handle_resolver,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

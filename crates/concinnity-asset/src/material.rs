@@ -1,6 +1,6 @@
 // Surface-material schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
 /// lit and shaded.
@@ -24,8 +24,8 @@ pub struct Material {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [Texture](#texture) asset used as the base colour (albedo) map.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub albedo: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub albedo: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a tangent-space normal map.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub normal_map: Option<AssetId>,
@@ -33,8 +33,8 @@ pub struct Material {
     /// `emissive_factor` to drive the glow; when omitted, only the scalar
     /// `emissive_factor` is used. Pair a textured emissive with an
     /// `emissive_factor` above 1 to make the bright parts bloom.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub emissive_map: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub emissive_map: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a packed surface map: green =
     /// roughness, blue = metalness. When present it overrides the scalar
     /// `roughness` and `metallic` per-texel; when omitted those scalars are
@@ -42,8 +42,8 @@ pub struct Material {
     /// packed maps in the wild (glTF metallic-roughness, FBX specular maps)
     /// leave red empty, so treating it as occlusion would darken indirect
     /// light to black. Ambient occlusion comes from the screen-space pass.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub orm_map: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub orm_map: Option<TextureHandle>,
     /// Perceptual roughness in [0, 1]. 0 = mirror, 1 = fully diffuse.
     /// Controls the width of the specular highlight.
     pub roughness: f32,
@@ -77,8 +77,8 @@ pub struct Material {
     /// transition doesn't read as a clean line). Without it, a rocky-tint
     /// multiplier is applied to the primary texture instead. Only used when
     /// `terrain_blend > 0`.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub albedo_secondary: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub albedo_secondary: Option<TextureHandle>,
     /// Tangent-space normal map paired with `albedo_secondary`. Only used when
     /// both that field and `terrain_blend` are set.
     #[serde(deserialize_with = "de_opt_asset_ref")]

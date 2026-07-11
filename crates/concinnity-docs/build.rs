@@ -582,7 +582,20 @@ fn map_type(ty: &syn::Type, ctx: &Ctx, refs: &mut Refs) -> FieldType {
                     FieldType::Integer
                 }
                 "bool" => FieldType::Bool,
+                // `AssetId` and the per-kind resource handles are authored as a
+                // by-name reference string (an already-resolved integer is the
+                // compiled form), so they document as a string like any other
+                // cross-reference field.
                 "String" | "AssetId" => FieldType::Str,
+                "TextureHandle"
+                | "MeshHandle"
+                | "MaterialHandle"
+                | "FontHandle"
+                | "AudioClipHandle"
+                | "CubemapTextureHandle"
+                | "EnvironmentMapHandle"
+                | "ColorLutHandle"
+                | "SkinnedMeshHandle" => FieldType::Str,
                 // serde_json::Value and maps are open-ended JSON objects.
                 "Value" | "HashMap" | "BTreeMap" => FieldType::Object,
                 "Option" | "Box" => first_generic(seg)

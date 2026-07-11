@@ -1,6 +1,6 @@
 // Room authoring schema. The runtime `Room` component lives in core.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{TextureHandle, de_opt_texture_handle};
 use alloc::vec::Vec;
 
 /// Authored fields of a `Room`; the resolved dimensions and payload locator are
@@ -20,18 +20,18 @@ pub struct RoomArgs {
     /// [Texture](#texture) applied to all surfaces. Falls back to `wall_texture`
     /// when unset. Generator names such as `"brick"` or `"concrete"` resolve to
     /// a matching texture at build time.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// [Texture](#texture) for the walls. Currently all surfaces share one
     /// texture; per-surface texturing is reserved for a future update.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub wall_texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub wall_texture: Option<TextureHandle>,
     /// [Texture](#texture) for the floor (see `wall_texture`).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub floor_texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub floor_texture: Option<TextureHandle>,
     /// [Texture](#texture) for the ceiling (see `wall_texture`).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub ceiling_texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub ceiling_texture: Option<TextureHandle>,
     /// Number of level-of-detail versions to generate, including the original.
     /// `1` (the default) generates no alternates.
     pub lod_levels: u32,

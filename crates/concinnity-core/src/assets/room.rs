@@ -5,7 +5,7 @@
 
 use crate::assets::RoomArgs;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator};
+use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator, TextureHandle};
 
 /// A self-contained room (floor, ceiling, four walls), with optional texturing.
 ///
@@ -29,16 +29,16 @@ pub struct Room {
     pub half_width: f32,
     pub half_depth: f32,
     pub ceiling_height: f32,
-    pub texture: Option<AssetId>,
-    pub wall_texture: Option<AssetId>,
-    pub floor_texture: Option<AssetId>,
-    pub ceiling_texture: Option<AssetId>,
+    pub texture: Option<TextureHandle>,
+    pub wall_texture: Option<TextureHandle>,
+    pub floor_texture: Option<TextureHandle>,
+    pub ceiling_texture: Option<TextureHandle>,
     pub locator: Option<PayloadLocator>,
 }
 
 impl Room {
     // Returns the first set texture reference across all texture fields.
-    pub fn effective_texture(&self) -> Option<AssetId> {
+    pub fn effective_texture(&self) -> Option<TextureHandle> {
         [
             self.texture,
             self.wall_texture,
@@ -122,13 +122,13 @@ mod tests {
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
-            texture: Some(AssetId(1)),
-            wall_texture: Some(AssetId(2)),
+            texture: Some(TextureHandle(1)),
+            wall_texture: Some(TextureHandle(2)),
             floor_texture: None,
             ceiling_texture: None,
             locator: None,
         };
-        assert_eq!(room.effective_texture(), Some(AssetId(1)));
+        assert_eq!(room.effective_texture(), Some(TextureHandle(1)));
     }
 
     #[test]
@@ -139,12 +139,12 @@ mod tests {
             half_depth: 10.0,
             ceiling_height: 3.5,
             texture: None,
-            wall_texture: Some(AssetId(7)),
+            wall_texture: Some(TextureHandle(7)),
             floor_texture: None,
             ceiling_texture: None,
             locator: None,
         };
-        assert_eq!(room.effective_texture(), Some(AssetId(7)));
+        assert_eq!(room.effective_texture(), Some(TextureHandle(7)));
     }
 
     #[test]

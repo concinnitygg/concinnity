@@ -13,7 +13,9 @@
 
 use crate::ecs::asset_id::AssetId;
 use crate::registry::ComponentType;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Once;
 
 // The kinds of resource the runtime keeps in per-kind tables. One dense handle
 // space per kind.
@@ -89,6 +91,45 @@ impl ResourceHandles {
     }
 }
 
+// The current build's handle map, consulted by the name -> texture-handle
+// resolver seam. Thread-local so parallel builds (and the interner they share)
+// stay isolated, exactly like `concinnity_core::ecs::asset_id`'s interner.
+thread_local! {
+    static TEXTURE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
+}
+
+// Install the schema crate's texture-handle resolver seam so a texture
+// reference name deserializes to its dense `TextureHandle` value. The closure
+// is non-capturing (the map is a thread-local static), so it coerces to the
+// plain `fn` pointer the seam holds. It resolves a name to its `AssetId`
+// through the shared build interner, then looks up that resource's texture
+// handle; an unknown name yields `None`, letting the deserializer fall back or
+// fail as its context requires. Idempotent and cheap after the first call.
+pub fn ensure_texture_handle_resolver() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        crate::ecs::set_texture_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            TEXTURE_HANDLES.with(|h| h.borrow().get(ResourceKind::Texture, id))
+        });
+    });
+}
+
+// Install this build's handle map so texture references resolve to handles
+// during the component reserialize pass. Call after `from_assets` over the
+// expanded + injected world, before reserializing any component.
+pub fn install_texture_handles(handles: ResourceHandles) {
+    ensure_texture_handle_resolver();
+    TEXTURE_HANDLES.with(|h| *h.borrow_mut() = handles);
+}
+
+// Clear the thread-local handle map. Call at the start of a build so a prior
+// build's map cannot leak into this one (mirrors `reset_interner`).
+pub fn reset_texture_handles() {
+    ensure_texture_handle_resolver();
+    TEXTURE_HANDLES.with(|h| *h.borrow_mut() = ResourceHandles::default());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +186,49 @@ mod tests {
         assert_eq!(handles.assign(ResourceKind::Mesh, AssetId(1)), 0);
         assert_eq!(handles.get(ResourceKind::Texture, AssetId(1)), Some(0));
         assert_eq!(handles.get(ResourceKind::Mesh, AssetId(1)), Some(0));
+    }
+
+    // The load-bearing invariant of the migration: a texture reference name
+    // resolves, through the installed seam, to the texture's declaration-order
+    // handle -- the same order the blob emits and the runtime drains its Texture
+    // column, so the handle equals that texture's albedo pool slot. Exercised on
+    // the real cook path (`reserialize_args`), the same call the build uses.
+    #[test]
+    fn a_texture_reference_name_reserializes_to_its_declaration_order_handle() {
+        use crate::ecs::asset_id;
+
+        // Declaration order: tex_a -> Texture handle 0, tex_b -> Texture 1.
+        asset_id::reset_interner();
+        let a = asset_id::intern("tex_a");
+        let b = asset_id::intern("tex_b");
+
+        reset_texture_handles();
+        install_texture_handles(ResourceHandles::from_assets([
+            (a, ComponentType::Texture),
+            (b, ComponentType::Texture),
+        ]));
+
+        // A Material referencing the second texture bakes albedo == 1, the first
+        // bakes albedo == 0. A Decal (single texture ref) resolves the same way.
+        let bake = |field_json: serde_json::Value| -> serde_json::Value {
+            let bytes = ComponentType::Material
+                .reserialize_args(&field_json)
+                .unwrap();
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        assert_eq!(
+            bake(serde_json::json!({"albedo": "tex_b"}))["albedo"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            bake(serde_json::json!({"albedo": "tex_a"}))["albedo"],
+            serde_json::json!(0)
+        );
+
+        let decal_bytes = ComponentType::Decal
+            .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
+            .unwrap();
+        let decal: serde_json::Value = serde_json::from_slice(&decal_bytes).unwrap();
+        assert_eq!(decal["texture"], serde_json::json!(1));
     }
 }

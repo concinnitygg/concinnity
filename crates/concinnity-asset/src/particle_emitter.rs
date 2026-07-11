@@ -1,6 +1,6 @@
 // Billboard particle-emitter schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_texture_handle};
 
 /// A billboard particle emitter.
 ///
@@ -25,8 +25,8 @@ pub struct ParticleEmitter {
     pub asset_id: AssetId,
     /// [Texture](#texture) sampled per particle. `None` uses a white fallback so
     /// the colour gradient still shows.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// World-space spawn origin.
     pub position: [f32; 3],
     /// Mean emission direction. The cone of width `spread_deg` is centred on
