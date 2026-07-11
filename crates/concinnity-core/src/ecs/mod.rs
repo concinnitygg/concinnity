@@ -25,7 +25,7 @@ pub use concinnity_eas::{Entity, EventCursor, EventStore, Events, Resources};
 // historical `crate::ecs::*` paths. The authoring `ComponentType` registry is
 // built from the same component list in the build crate. The runtime
 // `SystemAsset` enum is generated client-side from the `System` behavior trait.
-pub use registry::{ComponentAsset, ComponentSlot, ComponentStorage};
+pub use registry::{ComponentAsset, ComponentSlot, ComponentStorage, ComponentTag};
 
 // Where an asset comes from and whether it persists to a blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -371,17 +371,31 @@ macro_rules! __define_asset_kind {
 
 #[macro_export]
 macro_rules! define_components {
-    ( $( $variant:ident => $ty:path, $disc:expr_2021 ),+ $(,)? ) => {
+    ( $( $variant:ident => $ty:path ),+ $(,)? ) => {
+        // The component type tag: one fieldless variant per component, in list
+        // order, so each variant's `#[repr(u8)]` discriminant is its list
+        // position (0, 1, 2, ...). `ComponentTag::$variant as u8` is that tag,
+        // used both as the on-disk blob discriminant and as the in-memory ECS
+        // `ComponentId`. The tag is assigned by position, not hand-written, and
+        // is not a stable on-disk contract: a build regenerates the blob, so the
+        // blob and the engine that loads it always agree. The authoring
+        // `ComponentType` registry derives the same tag from this enum.
+        #[repr(u8)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum ComponentTag {
+            $( $variant ),+
+        }
+
         $crate::__define_asset_kind! {
             asset_enum: ComponentAsset,
             asset_kind: Component,
-            $( $variant => $ty, $disc ),+
+            $( $variant => $ty, ComponentTag::$variant as u8 ),+
         }
 
         impl ComponentAsset {
             pub fn from_def(def: &BlobAssetDef) -> Result<Self, CnResult> {
                 $(
-                    if def.discriminant == $disc {
+                    if def.discriminant == ComponentTag::$variant as u8 {
                         let args = serde_json::from_slice::<<$ty as Component>::Args>(&def.args_bytes)?;
                         let mut c = <$ty as Component>::from_args(args);
                         if let Some(id) = def.name {
@@ -411,7 +425,7 @@ macro_rules! define_components {
         concinnity_eas::define_component_storage! {
             storage: ComponentStorage,
             slot: ComponentSlot,
-            $( $variant => $ty, $disc ),+
+            $( $variant => $ty, ComponentTag::$variant as u8 ),+
         }
 
         impl ComponentStorage {
@@ -432,7 +446,7 @@ macro_rules! define_components {
                         out.push(BlobAssetDef {
                             name: None,
                             kind: AssetKind::Component,
-                            discriminant: $disc,
+                            discriminant: ComponentTag::$variant as u8,
                             args_bytes: serde_json::to_vec(&c.to_args())
                                 .expect(concat!("serialize ", stringify!($variant))),
                             payload: None,
@@ -541,9 +555,9 @@ mod tests {
         });
         let def = asset.to_def();
         assert_eq!(def.kind, AssetKind::Component);
-        // Transform's stable on-disk discriminant (see the component list in
-        // `registry`).
-        assert_eq!(def.discriminant, 66);
+        // The tag is Transform's position in the component list, derived from
+        // `ComponentTag` so this stays correct if the list is reordered.
+        assert_eq!(def.discriminant, ComponentTag::Transform as u8);
         let back = ComponentAsset::from_def(&def).unwrap();
         assert!(matches!(back, ComponentAsset::Transform(_)));
     }
@@ -569,8 +583,8 @@ mod tests {
         storage.push(crate::assets::Transform::default().into());
         let defs = storage.all_defs();
         assert_eq!(defs.len(), 1);
-        // Transform's stable on-disk discriminant (see the list in `registry`).
-        assert_eq!(defs[0].discriminant, 66);
+        // Transform's tag is its position in the component list.
+        assert_eq!(defs[0].discriminant, ComponentTag::Transform as u8);
     }
 
     #[test]

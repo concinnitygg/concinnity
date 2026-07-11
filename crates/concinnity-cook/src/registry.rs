@@ -37,7 +37,7 @@ pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
 // Generate `ComponentType` and its authoring methods from the shared component
 // list. Invoked once, below, via `concinnity_core::for_each_component!`.
 macro_rules! define_component_type {
-    ( $( $variant:ident => $ty:path, $disc:expr_2021 ),+ $(,)? ) => {
+    ( $( $variant:ident => $ty:path ),+ $(,)? ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum ComponentType {
             $( $variant ),+
@@ -47,12 +47,17 @@ macro_rules! define_component_type {
             pub fn as_str(self) -> &'static str {
                 match self { $( Self::$variant => <$ty as Component>::NAME ),+ }
             }
+            // The on-disk blob tag / in-memory `ComponentId`, derived from the
+            // shared `ComponentTag` enum (list position) so it matches the
+            // runtime loader exactly.
             pub fn discriminant(self) -> u8 {
-                match self { $( Self::$variant => $disc ),+ }
+                match self {
+                    $( Self::$variant => crate::ecs::ComponentTag::$variant as u8 ),+
+                }
             }
             #[allow(dead_code)]
             pub fn from_discriminant(val: u8) -> Option<Self> {
-                $( if val == $disc { return Some(Self::$variant); } )+
+                $( if val == crate::ecs::ComponentTag::$variant as u8 { return Some(Self::$variant); } )+
                 None
             }
             // A name either matches a known type or it does not; callers that
