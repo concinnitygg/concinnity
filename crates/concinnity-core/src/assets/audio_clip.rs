@@ -1,34 +1,13 @@
 // src/assets/audio_clip.rs
+//
+// `AudioClip`'s `Component` impl is generated centrally (see
+// `cn_impl_components!`); this module keeps its build-time source binding and
+// the blob-residency helper `AudioSystem` relies on.
 
 use std::collections::HashSet;
 
 use crate::assets::AudioClip;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator, PipelineContext};
-
-impl Component for AudioClip {
-    const NAME: &'static str = "AudioClip";
-
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    const PAYLOAD: AssetPayload = AssetPayload::Compiled;
-    type Args = Self;
-
-    fn to_args(&self) -> Self {
-        self.clone()
-    }
-
-    fn from_args(args: Self) -> Self {
-        args
-    }
-
-    fn inject_locator(&mut self, locator: PayloadLocator) {
-        self.locator = Some(locator);
-    }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
-    }
-}
+use crate::ecs::PipelineContext;
 
 /// Blob indices that hold an `AudioClip` payload.
 ///

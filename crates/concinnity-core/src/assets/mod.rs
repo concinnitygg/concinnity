@@ -1,98 +1,55 @@
 // src/assets/mod.rs
 //
-// Asset type definitions: one pure-data component per file. Systems are not
-// assets: every system is internal client code (see the client's
-// `World::build_internal_systems`), driven by the presence of the components
-// defined here. The client re-exports this module under the historical
-// `crate::assets::*` paths.
+// Asset type definitions and the runtime components they map to. Most
+// components are pure data whose `Component` impl is generated from the
+// registry (see `cn_impl_components!` in `ecs::registry`); the modules kept
+// here define a runtime struct distinct from its authored args, an extension
+// trait, a build-time `SourceBacked` binding, or a helper the generated impl
+// can't express. Systems are not assets: every system is internal client code
+// (see the client's `World::build_internal_systems`), driven by the presence of
+// the components defined here. The client re-exports this module under the
+// historical `crate::assets::*` paths.
 
 // Component data types.
 mod anim_graph;
 mod anim_params;
 mod animation;
-mod application;
 pub mod audio_clip;
 mod audio_command;
-mod audio_cue;
-mod audio_emitter;
-mod block_type;
 mod camera3d;
 mod camera_probe;
-mod camera_shot;
 mod character_rig;
 mod color_lut;
 mod controls_command;
 mod cubemap_texture;
-mod decal;
 mod despawn_request;
-mod directional_light;
-mod engine_defaults;
 mod environment_map;
 mod file;
 mod font;
 mod frame_input;
 mod geometry;
-mod glass_panel;
-mod graphics_config;
 mod ground_probes;
-mod hit_region;
 mod input_key;
-pub mod instanced_prop;
-mod joint;
-mod key_binding;
-mod layout_container;
 mod lifetime;
-mod light_rig;
-mod main_menu;
-mod material;
-mod material_palette;
 mod mesh;
-mod model;
-mod option_select;
-mod panel;
-mod particle_emitter;
-mod physics_config;
 mod play_cue;
-mod point_light;
 mod post_process_config;
-mod prefab;
 pub mod procedural_mesh;
-mod prop;
-mod prop_body;
-mod reflection_probe;
 mod reparent_request;
-mod rigid_body;
 mod room;
 mod root_motion_event;
-mod scene;
 mod scene_command;
-mod scene_import;
-mod scene_reel;
-mod scroll_panel;
 pub mod sdf_volume;
 mod setting_command;
 pub mod shader_stage;
 mod skeleton_pose;
 mod skinned_mesh;
-mod slider;
 mod spawn_request;
 mod spawner;
-mod sprite;
-mod story;
 mod story_command;
-mod story_import;
-mod streaming_config;
-mod text_input;
-mod text_label;
 mod texture;
-mod view;
 mod view_command;
 mod view_shown;
-mod volumetric_fog;
-mod voxel_chunk;
-mod voxel_world;
-mod water_surface;
-mod window;
 
 // Per-instance components an entity is composed from: its placement, render
 // description, collision, hierarchy, and gameplay tags.
@@ -109,11 +66,15 @@ mod render_handle;
 mod scene_member;
 mod transform;
 
-// HUD-overlay request components. Declaring one runs the matching internal
-// overlay behavior (in the client crate); all are pure data here.
-mod debug_hud;
-mod fps_counter;
-mod stat_hud;
+// Named `from_args` validators referenced by the generated `Component` impls
+// (see `cn_impl_components!`, invoked in `ecs::registry`). One free function per
+// asset that clamps or normalizes its authored args at load time.
+pub(crate) mod validate;
+
+// Serde / default / round-trip coverage for the generated data-only
+// components, gathered here after their per-type modules were removed.
+#[cfg(test)]
+mod component_tests;
 
 pub use anim_graph::{
     AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphIkChain, GraphParam, GraphState,
@@ -225,6 +186,7 @@ pub use concinnity_asset::{
 pub use concinnity_asset::{Sprite, SpriteFit};
 pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{WaterSurface, WaterWave};
+pub use concinnity_asset::{Window, WindowArgs, WindowMode};
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
@@ -236,12 +198,12 @@ pub use spawner::Spawner;
 pub use story_command::StoryCommand;
 pub use view_command::ViewCommand;
 pub use view_shown::ViewShown;
-// `MAX_WATER_WAVES` stays in core (used by `from_args`); re-exported for the
-// Metal water encoder, which also reaches `WaterWave` through the asset crate.
-pub use concinnity_asset::{Window, WindowArgs, WindowMode};
+// `MAX_WATER_WAVES` stays in core (used by the water-surface validator);
+// re-exported for the Metal water encoder, which also reaches `WaterWave`
+// through the asset crate.
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
-pub use water_surface::MAX_WATER_WAVES;
+pub use validate::MAX_WATER_WAVES;
 
 // Per-instance components an entity is composed from.
 pub use children::Children;

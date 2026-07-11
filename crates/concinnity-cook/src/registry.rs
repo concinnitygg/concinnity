@@ -37,7 +37,10 @@ pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
 // Generate `ComponentType` and its authoring methods from the shared component
 // list. Invoked once, below, via `concinnity_core::for_each_component!`.
 macro_rules! define_component_type {
-    ( $( $variant:ident => $ty:path ),+ $(,)? ) => {
+    // Each entry carries a `{ ... }` metadata block used by `cn_impl_components!`
+    // to generate the trivial `Component` impls; the authoring registry only
+    // needs the `Variant => Type` pair and ignores the block.
+    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum ComponentType {
             $( $variant ),+

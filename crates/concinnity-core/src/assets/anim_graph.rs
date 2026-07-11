@@ -1,7 +1,6 @@
 // src/assets/anim_graph.rs
 
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
-use crate::ecs::{AssetOrigin, Component};
 use crate::gfx::anim_graph::{
     Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
     CompiledTransition, ParamSpec, StatePlay,
@@ -452,23 +451,6 @@ fn compile_blend(
                 sync: *sync,
             }))
         }
-    }
-}
-
-impl Component for AnimGraph {
-    const NAME: &'static str = "AnimGraph";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    type Args = Self;
-
-    fn to_args(&self) -> Self {
-        self.clone()
-    }
-    fn from_args(args: Self) -> Self {
-        args
-    }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
     }
 }
 

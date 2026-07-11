@@ -418,7 +418,11 @@ macro_rules! __define_asset_kind {
 
 #[macro_export]
 macro_rules! define_components {
-    ( $( $variant:ident => $ty:path ),+ $(,)? ) => {
+    // Each list entry carries a `{ ... }` metadata block consumed by
+    // `cn_impl_components!` (which generates the trivial `Component` impls). The
+    // runtime registry only needs the `Variant => Type` pair, so it captures the
+    // block and ignores it.
+    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
         // The component type tag: one fieldless variant per component, in list
         // order, so each variant's `#[repr(u8)]` discriminant is its list
         // position (0, 1, 2, ...). `ComponentTag::$variant as u8` is that tag,

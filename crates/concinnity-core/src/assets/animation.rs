@@ -1,7 +1,6 @@
 // src/assets/animation.rs
 
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
-use crate::ecs::{AssetOrigin, Component};
 use crate::gfx::skinning::{self, JointPose};
 
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
@@ -169,23 +168,6 @@ impl Animation {
             });
             key.pose.translation = [0.0, if strip_y { 0.0 } else { t[1] }, 0.0];
         }
-    }
-}
-
-impl Component for Animation {
-    const NAME: &'static str = "Animation";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    type Args = Self;
-
-    fn to_args(&self) -> Self {
-        self.clone()
-    }
-    fn from_args(args: Self) -> Self {
-        args
-    }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
     }
 }
 

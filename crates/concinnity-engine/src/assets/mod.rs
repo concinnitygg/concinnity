@@ -14,7 +14,3 @@ pub use concinnity_core::assets::*;
 // `crate::assets::sdf_volume::sdf_volume_blob_indices`. Re-export the modules
 // themselves so those paths keep resolving against core.
 pub use concinnity_core::assets::{audio_clip, procedural_mesh, sdf_volume, shader_stage};
-// `instanced_prop`'s module path is only referenced from a `gfx::draw_list`
-// unit test; gate the re-export to test builds so non-test builds don't flag it.
-#[cfg(test)]
-pub use concinnity_core::assets::instanced_prop;

@@ -36,93 +36,93 @@ use crate::result::CnResult;
 macro_rules! for_each_component {
     ($cb:ident) => {
         $cb! {
-            Window            => $crate::assets::Window,
-            GraphicsConfig    => $crate::assets::GraphicsConfig,
-            ShaderStage       => $crate::assets::ShaderStage,
-            Camera3D          => $crate::assets::Camera3D,
-            Mesh              => $crate::assets::Mesh,
-            FrameInput        => $crate::assets::FrameInput,
-            Texture           => $crate::assets::Texture,
-            Prop              => $crate::assets::Prop,
-            RigidBody         => $crate::assets::RigidBody,
-            PropBody          => $crate::assets::PropBody,
-            Room              => $crate::assets::Room,
-            Material          => $crate::assets::Material,
-            DirectionalLight  => $crate::assets::DirectionalLight,
-            PointLight        => $crate::assets::PointLight,
-            ProceduralMesh    => $crate::assets::ProceduralMesh,
-            Model             => $crate::assets::Model,
-            Scene             => $crate::assets::Scene,
-            SceneReel         => $crate::assets::SceneReel,
-            Font              => $crate::assets::Font,
-            TextLabel         => $crate::assets::TextLabel,
-            LightRig          => $crate::assets::LightRig,
-            MaterialPalette   => $crate::assets::MaterialPalette,
-            CameraShot        => $crate::assets::CameraShot,
-            Prefab            => $crate::assets::Prefab,
-            HitRegion         => $crate::assets::HitRegion,
-            File              => $crate::assets::File,
-            BlockType         => $crate::assets::BlockType,
-            VoxelChunk        => $crate::assets::VoxelChunk,
-            InstancedProp     => $crate::assets::InstancedProp,
-            CubemapTexture    => $crate::assets::CubemapTexture,
-            EnvironmentMap    => $crate::assets::EnvironmentMap,
-            PostProcessConfig => $crate::assets::PostProcessConfig,
-            ColorLut          => $crate::assets::ColorLut,
-            SkinnedMesh       => $crate::assets::SkinnedMesh,
-            Animation         => $crate::assets::Animation,
-            SkeletonPose      => $crate::assets::SkeletonPose,
-            StreamingConfig   => $crate::assets::StreamingConfig,
-            VoxelWorld        => $crate::assets::VoxelWorld,
-            AudioClip         => $crate::assets::AudioClip,
-            AudioEmitter      => $crate::assets::AudioEmitter,
-            Sprite            => $crate::assets::Sprite,
-            KeyBinding        => $crate::assets::KeyBinding,
-            View              => $crate::assets::View,
-            Decal             => $crate::assets::Decal,
-            VolumetricFog     => $crate::assets::VolumetricFog,
-            Joint             => $crate::assets::Joint,
-            ParticleEmitter   => $crate::assets::ParticleEmitter,
-            WaterSurface      => $crate::assets::WaterSurface,
-            SdfVolume         => $crate::assets::SdfVolume,
-            GlassPanel        => $crate::assets::GlassPanel,
-            LayoutContainer   => $crate::assets::LayoutContainer,
-            PhysicsConfig     => $crate::assets::PhysicsConfig,
-            FpsCounter        => $crate::assets::FpsCounter,
-            StatHud           => $crate::assets::StatHud,
-            SceneImport       => $crate::assets::SceneImport,
-            MainMenu          => $crate::assets::MainMenu,
-            OptionSelect      => $crate::assets::OptionSelect,
-            Slider            => $crate::assets::Slider,
-            ScrollPanel       => $crate::assets::ScrollPanel,
-            ReflectionProbe   => $crate::assets::ReflectionProbe,
-            Transform         => $crate::assets::Transform,
-            MeshRenderer      => $crate::assets::MeshRenderer,
-            ModelRenderer     => $crate::assets::ModelRenderer,
-            Collider          => $crate::assets::Collider,
-            Interactable      => $crate::assets::Interactable,
-            Pickup            => $crate::assets::Pickup,
-            Parent            => $crate::assets::Parent,
-            Children          => $crate::assets::Children,
-            SceneMember       => $crate::assets::SceneMember,
-            GlobalTransform   => $crate::assets::GlobalTransform,
-            RenderHandle      => $crate::assets::RenderHandle,
-            Held              => $crate::assets::Held,
-            Lifetime          => $crate::assets::Lifetime,
-            Spawner           => $crate::assets::Spawner,
-            DebugHud          => $crate::assets::DebugHud,
-            EngineDefaults    => $crate::assets::EngineDefaults,
-            StoryImport       => $crate::assets::StoryImport,
-            AudioCue          => $crate::assets::AudioCue,
-            Story             => $crate::assets::Story,
-            Application       => $crate::assets::Application,
-            AnimGraph         => $crate::assets::AnimGraph,
-            AnimParams        => $crate::assets::AnimParams,
-            CharacterRig      => $crate::assets::CharacterRig,
-            GroundProbes      => $crate::assets::GroundProbes,
-            CameraProbe       => $crate::assets::CameraProbe,
-            TextInput         => $crate::assets::TextInput,
-            Panel             => $crate::assets::Panel,
+            Window            => $crate::assets::Window { gen, external },
+            GraphicsConfig    => $crate::assets::GraphicsConfig { gen, external },
+            ShaderStage       => $crate::assets::ShaderStage { manual },
+            Camera3D          => $crate::assets::Camera3D { manual },
+            Mesh              => $crate::assets::Mesh { gen, external, compiled, id },
+            FrameInput        => $crate::assets::FrameInput { manual },
+            Texture           => $crate::assets::Texture { gen, external, compiled, id },
+            Prop              => $crate::assets::Prop { gen, external, id, validate: prop },
+            RigidBody         => $crate::assets::RigidBody { gen, external, validate: rigid_body },
+            PropBody          => $crate::assets::PropBody { gen, external },
+            Room              => $crate::assets::Room { manual },
+            Material          => $crate::assets::Material { gen, external, id, validate: material, refs: [("albedo", "Texture"), ("normal_map", "Texture"), ("emissive_map", "Texture"), ("orm_map", "Texture"), ("albedo_secondary", "Texture"), ("normal_secondary", "Texture")] },
+            DirectionalLight  => $crate::assets::DirectionalLight { gen, external, baked, validate: directional_light },
+            PointLight        => $crate::assets::PointLight { gen, external, baked, validate: point_light },
+            ProceduralMesh    => $crate::assets::ProceduralMesh { gen, external, compiled, id },
+            Model             => $crate::assets::Model { gen, external, id },
+            Scene             => $crate::assets::Scene { gen, external, id },
+            SceneReel         => $crate::assets::SceneReel { gen, external, id },
+            Font              => $crate::assets::Font { gen, external, compiled, id },
+            TextLabel         => $crate::assets::TextLabel { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
+            LightRig          => $crate::assets::LightRig { gen, build_only },
+            MaterialPalette   => $crate::assets::MaterialPalette { gen, build_only },
+            CameraShot        => $crate::assets::CameraShot { gen, build_only },
+            Prefab            => $crate::assets::Prefab { gen, build_only },
+            HitRegion         => $crate::assets::HitRegion { gen, external, refs: [("label", "TextLabel"), ("view", "View")] },
+            File              => $crate::assets::File { manual },
+            BlockType         => $crate::assets::BlockType { gen, external, id },
+            VoxelChunk        => $crate::assets::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk },
+            InstancedProp     => $crate::assets::InstancedProp { gen, external, id, validate: instanced_prop },
+            CubemapTexture    => $crate::assets::CubemapTexture { gen, external, compiled, id },
+            EnvironmentMap    => $crate::assets::EnvironmentMap { gen, external, compiled, id },
+            PostProcessConfig => $crate::assets::PostProcessConfig { manual },
+            ColorLut          => $crate::assets::ColorLut { gen, external, compiled, id },
+            SkinnedMesh       => $crate::assets::SkinnedMesh { manual },
+            Animation         => $crate::assets::Animation { gen, external, id },
+            SkeletonPose      => $crate::assets::SkeletonPose { manual },
+            StreamingConfig   => $crate::assets::StreamingConfig { gen, external },
+            VoxelWorld        => $crate::assets::VoxelWorld { gen, external },
+            AudioClip         => $crate::assets::AudioClip { gen, external, compiled, id },
+            AudioEmitter      => $crate::assets::AudioEmitter { gen, external, refs: [("clip", "AudioClip"), ("prop", "Prop")] },
+            Sprite            => $crate::assets::Sprite { gen, external, id, refs: [("texture", "Texture"), ("view", "View")] },
+            KeyBinding        => $crate::assets::KeyBinding { gen, external },
+            View              => $crate::assets::View { gen, external, id },
+            Decal             => $crate::assets::Decal { gen, external, id, validate: decal, refs: [("texture", "Texture")] },
+            VolumetricFog     => $crate::assets::VolumetricFog { gen, external, baked, validate: volumetric_fog },
+            Joint             => $crate::assets::Joint { gen, external, id, validate: joint },
+            ParticleEmitter   => $crate::assets::ParticleEmitter { gen, external, id, validate: particle_emitter, refs: [("texture", "Texture")] },
+            WaterSurface      => $crate::assets::WaterSurface { gen, external, id, validate: water_surface },
+            SdfVolume         => $crate::assets::SdfVolume { manual },
+            GlassPanel        => $crate::assets::GlassPanel { gen, external, id, validate: glass_panel },
+            LayoutContainer   => $crate::assets::LayoutContainer { gen, external },
+            PhysicsConfig     => $crate::assets::PhysicsConfig { gen, external },
+            FpsCounter        => $crate::assets::FpsCounter { gen, external, refs: [("label", "TextLabel")] },
+            StatHud           => $crate::assets::StatHud { gen, external },
+            SceneImport       => $crate::assets::SceneImport { gen, build_only },
+            MainMenu          => $crate::assets::MainMenu { gen, build_only },
+            OptionSelect      => $crate::assets::OptionSelect { gen, build_only },
+            Slider            => $crate::assets::Slider { gen, build_only },
+            ScrollPanel       => $crate::assets::ScrollPanel { gen, external },
+            ReflectionProbe   => $crate::assets::ReflectionProbe { gen, external, baked, validate: reflection_probe },
+            Transform         => $crate::assets::Transform { manual },
+            MeshRenderer      => $crate::assets::MeshRenderer { manual },
+            ModelRenderer     => $crate::assets::ModelRenderer { manual },
+            Collider          => $crate::assets::Collider { manual },
+            Interactable      => $crate::assets::Interactable { manual },
+            Pickup            => $crate::assets::Pickup { manual },
+            Parent            => $crate::assets::Parent { manual },
+            Children          => $crate::assets::Children { manual },
+            SceneMember       => $crate::assets::SceneMember { manual },
+            GlobalTransform   => $crate::assets::GlobalTransform { manual },
+            RenderHandle      => $crate::assets::RenderHandle { manual },
+            Held              => $crate::assets::Held { manual },
+            Lifetime          => $crate::assets::Lifetime { manual },
+            Spawner           => $crate::assets::Spawner { manual },
+            DebugHud          => $crate::assets::DebugHud { gen, external },
+            EngineDefaults    => $crate::assets::EngineDefaults { gen, build_only },
+            StoryImport       => $crate::assets::StoryImport { gen, build_only },
+            AudioCue          => $crate::assets::AudioCue { gen, external, refs: [("clip", "AudioClip"), ("view", "View")] },
+            Story             => $crate::assets::Story { gen, external, id },
+            Application       => $crate::assets::Application { gen, external },
+            AnimGraph         => $crate::assets::AnimGraph { gen, external, id },
+            AnimParams        => $crate::assets::AnimParams { manual },
+            CharacterRig      => $crate::assets::CharacterRig { manual },
+            GroundProbes      => $crate::assets::GroundProbes { manual },
+            CameraProbe       => $crate::assets::CameraProbe { manual },
+            TextInput         => $crate::assets::TextInput { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
+            Panel             => $crate::assets::Panel { gen, build_only },
         }
     };
 }
@@ -131,6 +131,131 @@ macro_rules! for_each_component {
 // its blob loader, and the ECS storage. The authoring `ComponentType` registry
 // is built from the same list in the build crate.
 crate::for_each_component!(define_components);
+
+// Generate the trivial `impl Component` blocks from the shared component list.
+//
+// Most components are pure data whose `Component` impl is mechanical: a NAME
+// equal to the type name, `Args = Self`, `to_args` = clone, an identity (or
+// named-validator) `from_args`, and the optional payload / identity / reference
+// hooks. Rather than hand-write one such block per file, each list entry in
+// `for_each_component!` carries a compact `{ ... }` metadata block and this macro
+// expands it into the impl. Entries whose impl is genuinely bespoke (distinct
+// `Args`, an extension trait, or a runtime-only struct defined in this crate)
+// mark themselves `{ manual }` and keep their hand-written impl.
+//
+// Metadata grammar (inside the braces):
+//   manual                      -- skip; the impl is hand-written elsewhere
+//   gen, <flags...>             -- generate the impl from the flags:
+//     external | build_only     -- the `ORIGIN` (defaults to RuntimeOnly if
+//                                  omitted, which no generated type uses)
+//     compiled                  -- `PAYLOAD = Compiled` + an `inject_locator`
+//                                  that stores into `self.locator`
+//     baked                     -- `BAKED = true`
+//     id                        -- an `inject_name` that stores into
+//                                  `self.asset_id`
+//     validate: <fn>            -- `from_args` calls `assets::validate::<fn>`
+//                                  (defaults to identity)
+//     refs: [ ("field", "Type"), ... ] -- the `ref_fields` list
+macro_rules! cn_impl_components {
+    // Entry point: expand one impl per list entry.
+    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
+        $( cn_impl_components!(@one $variant $ty { $($meta)* }); )+
+    };
+
+    // Bespoke impls opt out here.
+    (@one $variant:ident $ty:path { manual }) => {};
+
+    // Generated impls: seed an empty method accumulator and the default
+    // (`identity`) from_args marker, then consume the flag list one token at a
+    // time. The from_args marker travels as `identity` or `validate $fn` rather
+    // than as an expanded expression so the eventual `args` in the body is
+    // written in the same expansion as the `from_args(args)` parameter (macro
+    // hygiene ties a name to the expansion that wrote it).
+    (@one $variant:ident $ty:path { gen $($flags:tt)* }) => {
+        cn_impl_components!(@munch $variant $ty [] { identity } $($flags)*);
+    };
+
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , external $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::External;]
+            { $($fa)* } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , build_only $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::BuildOnly;]
+            { $($fa)* } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , compiled $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)*
+             const PAYLOAD: $crate::ecs::AssetPayload = $crate::ecs::AssetPayload::Compiled;
+             fn inject_locator(&mut self, locator: $crate::ecs::PayloadLocator) {
+                 self.locator = Some(locator);
+             }]
+            { $($fa)* } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , baked $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* const BAKED: bool = true;]
+            { $($fa)* } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , id $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* fn inject_name(&mut self, id: $crate::ecs::asset_id::AssetId) {
+                 self.asset_id = id;
+             }]
+            { $($fa)* } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , validate: $f:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)*]
+            { validate $f } $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* fn ref_fields() -> &'static [(&'static str, &'static str)] {
+                 &[ $( ($fld, $tgt) ),+ ]
+             }]
+            { $($fa)* } $($rest)*);
+    };
+
+    // No flags left: emit the impl. Two terminal arms select the from_args body
+    // by marker. Each writes the `from_args(args)` parameter and its body in the
+    // same arm, so the body's `args` binds to that parameter (writing `args` in
+    // a separate expansion would leave it unresolved).
+    (@munch $variant:ident $ty:path [$($body:tt)*] { identity }) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+            type Args = Self;
+            $($body)*
+            fn to_args(&self) -> Self {
+                self.clone()
+            }
+            fn from_args(args: Self) -> Self {
+                args
+            }
+        }
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] { validate $f:ident }) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+            type Args = Self;
+            $($body)*
+            fn to_args(&self) -> Self {
+                self.clone()
+            }
+            fn from_args(args: Self) -> Self {
+                $crate::assets::validate::$f(args)
+            }
+        }
+    };
+}
+
+// The generated trivial `impl Component` blocks: one per list entry marked
+// `gen`, expanded from its metadata. Entries marked `manual` keep the
+// hand-written impl in their own `assets` module. Emitted here (rather than in
+// `assets`) so the macro is in textual scope, alongside `define_components`.
+crate::for_each_component!(cn_impl_components);
 
 // Retired discriminants that must not be reintroduced as components. Each is now
 // an Events<T> queue: SceneCommand, ViewCommand, SettingCommand, ControlsCommand,
