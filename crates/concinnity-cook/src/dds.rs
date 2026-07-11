@@ -29,9 +29,9 @@ pub fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     }
 
     let pixels = match fourcc {
-        b"DXT1" => super::bcn::decode_bc1(data, width, height)?,
-        b"DXT5" => super::bcn::decode_bc3(data, width, height)?,
-        b"ATI2" => super::bcn::decode_bc5(data, width, height)?,
+        b"DXT1" => crate::bcn::decode_bc1(data, width, height)?,
+        b"DXT5" => crate::bcn::decode_bc3(data, width, height)?,
+        b"ATI2" => crate::bcn::decode_bc5(data, width, height)?,
         b"DX10" => {
             return Err("DDS uses a DX10 extended header, which is not supported; \
                  re-export as DXT1/DXT5/ATI2"

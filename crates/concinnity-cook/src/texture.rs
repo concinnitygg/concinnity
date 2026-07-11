@@ -116,14 +116,14 @@ pub fn decode_file_source(source: &str, image_index: u32) -> Result<(u32, u32, V
 fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
     let bytes = std::fs::read(source)
         .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
-    concinnity_core::build::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))
+    crate::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))
 }
 
 // Decode a Targa (.tga) image from disk into RGBA.
 fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
     let bytes = std::fs::read(source)
         .map_err(|e| format!("failed to open TGA texture '{}': {}", source, e))?;
-    concinnity_core::build::tga::decode_tga(&bytes).map_err(|e| format!("'{}': {}", source, e))
+    crate::tga::decode_tga(&bytes).map_err(|e| format!("'{}': {}", source, e))
 }
 
 // Decode a PNG file from disk into (width, height, RGBA pixels).

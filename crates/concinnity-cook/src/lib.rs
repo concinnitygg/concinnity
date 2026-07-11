@@ -16,11 +16,16 @@ pub mod asset;
 pub mod asset_api;
 pub mod asset_impls;
 pub mod audio_clip;
+// Source-image format decoders (Targa, DDS, and the BCn block decompressors DDS
+// needs). Build-only: they turn an authored `.tga` / `.dds` into RGBA the
+// texture encoder packs; the runtime plays the compiled RGBA payload.
+pub mod bcn;
 pub mod blob;
 pub mod cache;
 pub mod check;
 pub mod color_lut;
 pub mod cubemap;
+pub mod dds;
 pub mod environment_map;
 pub mod fbx;
 pub mod file;
@@ -40,6 +45,7 @@ pub mod resource_handles;
 pub mod shader;
 pub mod template_spec;
 pub mod texture;
+pub mod tga;
 pub mod wavefront;
 pub mod world;
 
