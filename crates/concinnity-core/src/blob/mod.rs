@@ -461,6 +461,7 @@ mod tests {
         let defs = vec![BlobAssetDef {
             name: Some(crate::ecs::asset_id::AssetId(1)),
             kind: crate::ecs::AssetKind::Component,
+            record: crate::ecs::RecordKind::Authored,
             discriminant: 7,
             args_bytes: vec![1, 2, 3],
             payload: None,

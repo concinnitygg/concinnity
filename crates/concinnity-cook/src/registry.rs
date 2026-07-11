@@ -60,6 +60,11 @@ macro_rules! define_component_type {
                 $( if val == crate::ecs::ComponentTag::$variant as u8 { return Some(Self::$variant); } )+
                 None
             }
+            // Whether cook emits this type on the baked record path
+            // (`RecordKind::Baked`). Reads the type's `Component::BAKED` flag.
+            pub fn baked(self) -> bool {
+                match self { $( Self::$variant => <$ty as Component>::BAKED ),+ }
+            }
             // A name either matches a known type or it does not; callers that
             // want a message supply their own via `ok_or`/`ok_or_else`.
             pub fn parse(s: &str) -> Option<Self> {

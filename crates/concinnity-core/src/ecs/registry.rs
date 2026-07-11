@@ -26,7 +26,7 @@
 // `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
 use crate::define_components;
-use crate::ecs::{AssetKind, BlobAssetDef, Component, PayloadLocator};
+use crate::ecs::{AssetKind, BlobAssetDef, Component, PayloadLocator, RecordKind};
 use crate::result::CnResult;
 
 // The one component list. `$cb` is a macro that receives the `Variant => Type`

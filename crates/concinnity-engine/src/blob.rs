@@ -5,7 +5,7 @@
 // `pub` so the editor crate's in-memory build path can construct `BlobData`.
 pub use concinnity_core::blob::*;
 
-use crate::ecs::ComponentAsset;
+use crate::ecs::{ComponentAsset, RecordKind};
 use crate::result::CnResult;
 
 // Load the primary blob, resolve every stored def to a `ComponentAsset` (the
@@ -22,7 +22,13 @@ pub(crate) fn load() -> Result<(Vec<ComponentAsset>, BlobData), CnResult> {
     let components = defs
         .iter()
         .map(|def| {
-            let mut component = ComponentAsset::from_def(def)?;
+            // `Authored` records carry the authored `Args` (reconstructed via
+            // `from_args`); `Baked` records carry the already-translated runtime
+            // component. A blob may hold both while the migration is in flight.
+            let mut component = match def.record {
+                RecordKind::Authored => ComponentAsset::from_def(def)?,
+                RecordKind::Baked => ComponentAsset::from_baked(def)?,
+            };
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }

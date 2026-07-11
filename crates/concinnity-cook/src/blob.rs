@@ -225,12 +225,13 @@ fn now_iso8601() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::AssetKind;
+    use concinnity_core::ecs::{AssetKind, RecordKind};
 
     fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
         BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
+            record: RecordKind::Authored,
             discriminant,
             args_bytes,
             payload: None,

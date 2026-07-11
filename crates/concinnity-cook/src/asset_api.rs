@@ -2,7 +2,7 @@
 //
 // This module is the single place where "type name + JSON args → BlobAssetDef"
 // is implemented.
-use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef, Registration};
+use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef, RecordKind, Registration};
 use crate::registry::ComponentType;
 use crate::result::CnResult;
 
@@ -43,9 +43,19 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
             return Err(CnResult::InvalidArgument);
         }
         let args = resolve_args(&reg, &req.args);
+        // A type that has migrated to the baked path emits a `Baked` record. For
+        // a pass-through leaf the baked component is its authored args, so the
+        // bytes are the same reserialization; only the record kind differs, and
+        // the runtime reconstructs it identically via `from_baked`.
+        let record = if ct.baked() {
+            RecordKind::Baked
+        } else {
+            RecordKind::Authored
+        };
         return Ok(BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
+            record,
             discriminant: ct.discriminant(),
             args_bytes: ct.reserialize_args(&args)?,
             payload: None,
@@ -193,6 +203,25 @@ mod tests {
         assert!(def.payload.is_none());
         let args: serde_json::Value = serde_json::from_slice(&def.args_bytes).unwrap();
         assert!(args.is_object());
+    }
+
+    // A type that has migrated to the baked path (PointLight) emits a `Baked`
+    // record; a type that has not (DirectionalLight) stays `Authored`.
+    #[test]
+    fn create_asset_def_marks_migrated_types_baked() {
+        let baked = create_asset_def(&AssetRequest {
+            asset_type: "PointLight".to_string(),
+            args: None,
+        })
+        .unwrap();
+        assert_eq!(baked.record, RecordKind::Baked);
+
+        let authored = create_asset_def(&AssetRequest {
+            asset_type: "DirectionalLight".to_string(),
+            args: None,
+        })
+        .unwrap();
+        assert_eq!(authored.record, RecordKind::Authored);
     }
 
     #[test]

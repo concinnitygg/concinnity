@@ -77,10 +77,30 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
     const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
     const PAYLOAD: AssetPayload = AssetPayload::None;
 
+    // Transitional: whether cook emits this type as a `RecordKind::Baked` blob
+    // record (loaded via `from_baked`) instead of the authored-args record
+    // (loaded via `from_args`). Set true as each type migrates to the baked
+    // path. Read only by cook when choosing the record kind; the runtime routes
+    // on the record's own `RecordKind`, never on this flag. Removed once every
+    // type is baked and the authored path retires.
+    const BAKED: bool = false;
+
     type Args: serde::Serialize + serde::de::DeserializeOwned + Default;
     #[allow(dead_code)]
     fn to_args(&self) -> Self::Args;
     fn from_args(args: Self::Args) -> Self;
+
+    // Reconstruct this component from a `RecordKind::Baked` blob record, whose
+    // bytes are the serialized runtime component (cook already ran the
+    // asset -> component translation). The default treats the bytes as the
+    // authored `Args`, which is correct for pass-through types (`Args = Self`,
+    // where the component *is* its args). A type whose baked form differs from
+    // its authored args (a compiled-payload or decomposed component) overrides
+    // this to deserialize its own runtime shape.
+    fn from_baked(bytes: &[u8]) -> Result<Self, CnResult> {
+        let args = serde_json::from_slice::<Self::Args>(bytes)?;
+        Ok(Self::from_args(args))
+    }
 
     // Called after construction to inject the payload locator from the blob def.
     // Only meaningful for components with `AssetPayload::Compiled`.
@@ -124,6 +144,11 @@ pub struct BlobAssetDef {
     // Injected into the component at load time via `Component::inject_name`.
     pub name: Option<AssetId>,
     pub kind: AssetKind,
+    // How the runtime reconstructs this record: `Authored` deserializes the
+    // component's authored `Args` and runs `from_args`; `Baked` deserializes the
+    // already-baked runtime component directly. Both produce a component; the
+    // dual path lets cook migrate types to the baked form one at a time.
+    pub record: RecordKind,
     pub discriminant: u8,
     #[serde(with = "serde_bytes")]
     pub args_bytes: Vec<u8>,
@@ -136,6 +161,18 @@ pub struct BlobAssetDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetKind {
     Component,
+}
+
+// Which of the two reconstruction paths a blob record takes. `Authored` is the
+// original path (`args_bytes` is the authored `Args` JSON, reconstructed via
+// `Component::from_args`). `Baked` means cook already ran the translation, so
+// `args_bytes` is the serialized runtime component, loaded via
+// `Component::from_baked`. During the asset/component migration a blob may hold
+// both kinds; a fully migrated blob is all `Baked`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RecordKind {
+    Authored,
+    Baked,
 }
 
 // PipelineContext -- systems' view of the world during a tick. Renderer-free:
@@ -355,6 +392,7 @@ macro_rules! __define_asset_kind {
                         $asset_enum::$variant(c) => BlobAssetDef {
                             name: None,
                             kind: AssetKind::$kind_variant,
+                            record: RecordKind::Authored,
                             discriminant: $disc,
                             args_bytes: serde_json::to_vec(&c.to_args())
                                 .expect(concat!("serialize ", stringify!($variant))),
@@ -407,6 +445,23 @@ macro_rules! define_components {
                 Err(CnResult::AssetInvalidType)
             }
 
+            // Reconstruct a component from a `RecordKind::Baked` def: dispatch on
+            // the tag and deserialize the runtime component via
+            // `Component::from_baked` (rather than the authored `Args` +
+            // `from_args` of `from_def`). Name injection matches `from_def`.
+            pub fn from_baked(def: &BlobAssetDef) -> Result<Self, CnResult> {
+                $(
+                    if def.discriminant == ComponentTag::$variant as u8 {
+                        let mut c = <$ty as Component>::from_baked(&def.args_bytes)?;
+                        if let Some(id) = def.name {
+                            <$ty as Component>::inject_name(&mut c, id);
+                        }
+                        return Ok(ComponentAsset::$variant(c));
+                    }
+                )+
+                Err(CnResult::AssetInvalidType)
+            }
+
             // Inject a payload locator into the component after construction.
             // Delegates to `Component::inject_locator`; a no-op for types
             // that don't override that method.
@@ -446,6 +501,7 @@ macro_rules! define_components {
                         out.push(BlobAssetDef {
                             name: None,
                             kind: AssetKind::Component,
+                            record: RecordKind::Authored,
                             discriminant: ComponentTag::$variant as u8,
                             args_bytes: serde_json::to_vec(&c.to_args())
                                 .expect(concat!("serialize ", stringify!($variant))),
@@ -555,6 +611,8 @@ mod tests {
         });
         let def = asset.to_def();
         assert_eq!(def.kind, AssetKind::Component);
+        // `to_def` writes the original authored-args path.
+        assert_eq!(def.record, RecordKind::Authored);
         // The tag is Transform's position in the component list, derived from
         // `ComponentTag` so this stays correct if the list is reordered.
         assert_eq!(def.discriminant, ComponentTag::Transform as u8);
@@ -562,11 +620,58 @@ mod tests {
         assert!(matches!(back, ComponentAsset::Transform(_)));
     }
 
+    // A `RecordKind::Baked` record loads through `from_baked`. For a pass-through
+    // type (`Args = Self`) the default `from_baked` reconstructs the same
+    // component the authored path would, so a baked record and the equivalent
+    // authored record are parity: the migration can flip a leaf type with no
+    // observable change.
+    #[test]
+    fn baked_pass_through_record_matches_authored() {
+        use crate::assets::PointLight;
+        let light = PointLight {
+            intensity: 3.5,
+            range: 12.0,
+            ..Default::default()
+        };
+        let baked_bytes = serde_json::to_vec(&light).unwrap();
+        let baked = BlobAssetDef {
+            name: None,
+            kind: AssetKind::Component,
+            record: RecordKind::Baked,
+            discriminant: ComponentTag::PointLight as u8,
+            args_bytes: baked_bytes.clone(),
+            payload: None,
+        };
+        let authored = BlobAssetDef {
+            record: RecordKind::Authored,
+            args_bytes: baked_bytes,
+            ..baked.clone()
+        };
+        let from_baked = ComponentAsset::from_baked(&baked).unwrap();
+        let from_authored = ComponentAsset::from_def(&authored).unwrap();
+        let (ComponentAsset::PointLight(b), ComponentAsset::PointLight(a)) =
+            (&from_baked, &from_authored)
+        else {
+            panic!("expected PointLight from both paths");
+        };
+        assert_eq!(b.intensity, a.intensity);
+        assert_eq!(b.range, a.range);
+        assert_eq!(b.intensity, 3.5);
+        // An unknown tag is rejected on the baked path too.
+        let mut bad = baked;
+        bad.discriminant = 255;
+        assert_eq!(
+            ComponentAsset::from_baked(&bad).unwrap_err(),
+            CnResult::AssetInvalidType
+        );
+    }
+
     #[test]
     fn from_def_rejects_unknown_discriminants() {
         let def = BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
+            record: RecordKind::Authored,
             discriminant: 255,
             args_bytes: b"{}".to_vec(),
             payload: None,
