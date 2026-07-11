@@ -39,4 +39,4 @@ transform.
 
 ## Parameters
 
-- `props`: An array of objects. Ordered list of prop entries. Each entry must have a `name`, a `kind` ("prop", "point_light", or "prefab"), and kind-specific fields: - prop: `model`, optional `position`, `rotation_deg`, `scale` - point_light: `position`, `light_color`, `light_intensity`, `light_range` - prefab: `prefab` (name of another Prefab asset), optional `position`, `rotation_deg`, `scale`.
+- `props`: An array of [PrefabEntry](PrefabEntry.md) objects. Ordered list of entries. Each is a prop, a point light, or a nested prefab (selected by `kind`), placed relative to the instance transform.

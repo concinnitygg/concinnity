@@ -125,6 +125,8 @@ pub use audio_command::AudioCommand;
 pub use camera_probe::CameraProbe;
 pub use camera3d::Camera3D;
 pub use character_rig::CharacterRig;
+#[allow(unused_imports)]
+pub use concinnity_asset::AaMode;
 pub use concinnity_asset::Application;
 pub use concinnity_asset::AudioClip;
 pub use concinnity_asset::AudioEmitter;
@@ -140,18 +142,31 @@ pub use concinnity_asset::Font;
 pub use concinnity_asset::GlassPanel;
 pub use concinnity_asset::GraphicsConfig;
 pub use concinnity_asset::HitRegion;
+#[allow(unused_imports)]
+pub use concinnity_asset::IndirectLighting;
 pub use concinnity_asset::KeyBinding;
 pub use concinnity_asset::LightRig;
 pub use concinnity_asset::Material;
+pub use concinnity_asset::MaterialPalette;
 pub use concinnity_asset::OptionSelect;
 pub use concinnity_asset::Panel;
 pub use concinnity_asset::ParticleEmitter;
 pub use concinnity_asset::PhysicsConfig;
 pub use concinnity_asset::PointLight;
+pub use concinnity_asset::PostProcessConfig;
+pub use concinnity_asset::Prefab;
 pub use concinnity_asset::ProceduralMesh;
 pub use concinnity_asset::Prop;
 #[allow(unused_imports)]
+pub use concinnity_asset::ReflectionBlurResolution;
+#[allow(unused_imports)]
 pub use concinnity_asset::ShadowUpdate;
+#[allow(unused_imports)]
+pub use concinnity_asset::SsgiResolution;
+#[allow(unused_imports)]
+pub use concinnity_asset::UpscaleQuality;
+#[allow(unused_imports)]
+pub use concinnity_asset::UpscalerBackend;
 pub use concinnity_asset::{AudioCue, CueKind};
 pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
 pub use concinnity_asset::{FileArgs, FileKind};
@@ -169,22 +184,8 @@ pub use geometry::{GlassPanelGeometry, InstancedPropGeometry, PropGeometry};
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;
 pub use lifetime::Lifetime;
-pub use material_palette::MaterialPalette;
 pub use play_cue::PlayCue;
-#[allow(unused_imports)]
-pub use post_process_config::AaMode;
-#[allow(unused_imports)]
-pub use post_process_config::IndirectLighting;
-pub use post_process_config::PostProcessConfig;
-#[allow(unused_imports)]
-pub use post_process_config::ReflectionBlurResolution;
-#[allow(unused_imports)]
-pub use post_process_config::SsgiResolution;
-#[allow(unused_imports)]
-pub use post_process_config::UpscaleQuality;
-#[allow(unused_imports)]
-pub use post_process_config::UpscalerBackend;
-pub use prefab::Prefab;
+pub use post_process_config::PostProcessResolve;
 pub use root_motion_event::RootMotion;
 // `PropCollider` is re-exported for tests / future consumers; the crate
 // currently only uses it through `Prop.collider`, so the re-export is unused
@@ -216,6 +217,7 @@ pub use concinnity_asset::View;
 pub use concinnity_asset::VolumetricFog;
 pub use concinnity_asset::VoxelChunk;
 pub use concinnity_asset::VoxelWorld;
+pub use concinnity_asset::{CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData};
 pub use concinnity_asset::{
     CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
@@ -226,11 +228,9 @@ pub use concinnity_asset::{WaterSurface, WaterWave};
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
-pub use shader_stage::{ShaderKind, ShaderStage};
+pub use shader_stage::{ShaderKind, ShaderStage, ShaderStageExt};
 pub use skeleton_pose::SkeletonPose;
-pub use skinned_mesh::{
-    CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData, build_skeleton_from_joint_defs,
-};
+pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;

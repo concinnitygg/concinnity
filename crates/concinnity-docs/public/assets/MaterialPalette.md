@@ -7,10 +7,6 @@ A named set of [Material](Material.md) entries with short aliases.
 Expands into [Material](Material.md) assets named `<palette_name>_<alias>`.
 [Prop](Prop.md)s reference the expanded names.
 
-**Each entry:**
-
-**Library presets** (JSON files in `assets/palettes/`):
-
 ```jsonl
 // Inline:
 {"type":"MaterialPalette","name":"pal","args":{"entries":[
@@ -29,4 +25,4 @@ Expands into [Material](Material.md) assets named `<palette_name>_<alias>`.
 ## Parameters
 
 - `preset`: A string. Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon"). When set, `entries` is ignored.
-- `entries`: An array of objects. Inline material entries. Each entry must have an `alias` plus Material fields (albedo, normal_map, roughness, metallic, tint, emissive_factor). Ignored when `preset` is set.
+- `entries`: An array of [PaletteEntry](PaletteEntry.md) objects. Inline material entries. Ignored when `preset` is set.

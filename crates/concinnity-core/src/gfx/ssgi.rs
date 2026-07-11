@@ -24,18 +24,19 @@ const MIN_DISTANCE: f32 = 0.5;
 const MAX_DISTANCE: f32 = 100.0;
 
 // Hemisphere rays cast per pixel, clamped to a sane range. More rays trade
-// performance for a smoother, less noisy gather. The default matches the
-// historical compile-time count and is the source of truth for the
-// `PostProcessConfig` default.
-pub const DEFAULT_RAYS: u32 = 8;
+// performance for a smoother, less noisy gather. The default is the authored
+// `PostProcessConfig.ssgi_rays` default, owned by the schema crate and
+// re-exported here so the authored default and the runtime clamp path stay a
+// single source of truth.
+pub const DEFAULT_RAYS: u32 = concinnity_asset::DEFAULT_SSGI_RAYS;
 const MIN_RAYS: u32 = 1;
 const MAX_RAYS: u32 = 32;
 
 // Ray-march samples taken per ray. The step length is `max_distance / steps`,
 // so a longer ray spends a longer stride rather than more samples. The default
-// matches the historical compile-time count and is the source of truth for the
-// `PostProcessConfig` default.
-pub const DEFAULT_STEPS: u32 = 12;
+// is the authored `PostProcessConfig.ssgi_steps` default, owned by the schema
+// crate and re-exported here.
+pub const DEFAULT_STEPS: u32 = concinnity_asset::DEFAULT_SSGI_STEPS;
 const MIN_STEPS: u32 = 1;
 const MAX_STEPS: u32 = 64;
 

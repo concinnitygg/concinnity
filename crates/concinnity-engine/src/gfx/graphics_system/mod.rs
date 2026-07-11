@@ -11,7 +11,7 @@
 //   scene.rs     scene-reel wiring + scene visibility
 //   helpers.rs   shared free functions
 
-use crate::assets::WindowArgs;
+use crate::assets::{PostProcessResolve, WindowArgs};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;

@@ -1,44 +1,13 @@
 // src/assets/material_palette.rs
 //
-// Stays in concinnity-core rather than the schema crate: its `entries` field is
-// `Vec<serde_json::Value>`, and concinnity-asset is serde-only (no serde_json).
+// Runtime metadata for the MaterialPalette asset. The authored schema
+// (MaterialPalette, PaletteEntry) lives in concinnity-asset; this file keeps
+// only the `Component` impl. MaterialPalette is BuildOnly: cook expands it into
+// concrete Material assets and it never reaches the runtime, so the impl is a
+// trivial pass-through.
 
+use crate::assets::MaterialPalette;
 use crate::ecs::{AssetOrigin, Component};
-
-/// A named set of [Material](#material) entries with short aliases.
-///
-/// Expands into [Material](#material) assets named `<palette_name>_<alias>`.
-/// [Prop](#prop)s reference the expanded names.
-///
-/// **Each entry:**
-///
-/// **Library presets** (JSON files in `assets/palettes/`):
-///
-/// ```jsonl
-/// // Inline:
-/// {"type":"MaterialPalette","name":"pal","args":{"entries":[
-///   {"alias":"floor","albedo":"tex_stone","roughness":0.9},
-///   {"alias":"wall","albedo":"tex_brick","roughness":0.85},
-///   {"alias":"trim","albedo":"tex_metal","roughness":0.3,"metallic":0.8}
-/// ]}}
-/// // Props reference expanded names:
-/// {"type":"Prop","name":"floor","args":{"mesh":"room_mesh","material":"pal_floor","position":[0,0,0]}}
-///
-/// // From library preset:
-/// {"type":"MaterialPalette","name":"pal","args":{"preset":"pal_stone_dungeon"}}
-/// {"type":"Prop","name":"south_wall","args":{"mesh":"wall_mesh","material":"pal_wall"}}
-/// ```
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct MaterialPalette {
-    /// Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon").
-    /// When set, `entries` is ignored.
-    pub preset: String,
-    /// Inline material entries. Each entry must have an `alias` plus Material
-    /// fields (albedo, normal_map, roughness, metallic, tint, emissive_factor).
-    /// Ignored when `preset` is set.
-    pub entries: Vec<serde_json::Value>,
-}
 
 impl Component for MaterialPalette {
     const NAME: &'static str = "MaterialPalette";
