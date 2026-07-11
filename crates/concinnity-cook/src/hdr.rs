@@ -1,14 +1,12 @@
-// src/build/cubemap.rs
+// src/hdr.rs
 //
-// Compiles a CubemapTexture component's args into the binary payload that the
-// renderer reads at runtime. A cubemap is six square HDR faces stored as
-// RGBA32F in face-major order (face 0 → face 5, each face row-major top-down).
+// Build-time HDR source primitives shared by the CubemapTexture and
+// EnvironmentMap compilers: a Radiance `.hdr` (RGBE) decoder, an
+// equirectangular-to-cubemap resampler, and the raw six-face cube payload
+// format (magic / header / `deserialise`). All build-only: the runtime plays
+// the compiled payloads and never decodes an HDR source or an equirect.
 //
-// Source format: equirectangular Radiance HDR (.hdr / RGBE). The
-// equirect is resampled at build time into six cube faces using bilinear
-// interpolation in HDR space.
-//
-// Payload format (little-endian):
+// Cube payload format (little-endian), written by the CubemapTexture compiler:
 //   u32  magic     = b"CUBE" = 0x45425543
 //   u32  face_size
 //   u32  mip_count = 1
@@ -16,7 +14,8 @@
 //   6 * face_size * face_size * 4 * 4 bytes  raw RGBA32F, face-major
 //
 // Face order matches the standard cube convention used by Metal / Vulkan / DX:
-//   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z
+//   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z. The equirect is resampled into
+// six cube faces using bilinear interpolation in HDR space.
 
 pub const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub const CUBE_FORMAT_RGBA32F: u32 = 0;
@@ -25,6 +24,11 @@ pub const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
 // Deserialise a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
 // The byte slice returned is borrowed from the input; callers can reinterpret
 // it as `&[f32]` after a length check.
+//
+// `dead_code` allow: the round-trip reader for the CUBE payload format, kept as
+// the counterpart to `compile_cubemap_payload`'s writer and exercised by that
+// module's tests; no non-test caller today (the runtime reads the raw bytes
+// directly). Remove the allow if a caller adopts it.
 #[allow(dead_code)]
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     if bytes.len() < CUBE_PAYLOAD_HEADER_BYTES {

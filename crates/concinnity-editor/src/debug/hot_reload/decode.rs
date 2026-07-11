@@ -121,7 +121,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
         .name("cn-envmap-reload".into())
         .spawn(move || {
             let result = crate::jobs::pool().install(|| {
-                crate::build::environment_map::decode_source(
+                concinnity_cook::environment_map::decode_source(
                     &env_map_copy.resolved_path,
                     env_map_copy.prefilter_face_size,
                     env_map_copy.irradiance_face_size,

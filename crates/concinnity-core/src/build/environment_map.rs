@@ -34,9 +34,7 @@
 //
 // Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
-use crate::build::cubemap::{HdrImage, decode_hdr, equirect_to_cube};
 use rayon::prelude::*;
-use std::io::Read;
 
 pub const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
 pub const ENVMAP_FORMAT_RGBA32F: u32 = 0;
@@ -58,55 +56,12 @@ pub fn max_mip_count(face_size: u32) -> u32 {
     mips
 }
 
-// Decode an EnvironmentMap source path the same way
-// `compile_environment_map_payload` does at build time, returning the
-// serialised payload (header + irradiance + prefilter mips). Exposed for the
-// runtime asset hot-reload path (`cn debug` only); production reads the
-// compiled payload from a blob locator instead. `prefilter_face`,
-// `irradiance_face`, and `prefilter_samples` should be the values from the
-// declared `EnvironmentMap` asset so the runtime decode produces the same
-// texture sizes as the build pass. The convolutions are CPU-bound and take
-// seconds at default sizes: the caller pays this on the render thread.
-pub fn decode_source(
-    source: &str,
-    prefilter_face: u32,
-    irradiance_face: u32,
-    prefilter_samples: u32,
-    prefilter_clamp: f32,
-) -> Result<Vec<u8>, String> {
-    let resolved = resolve_hdr_source(source);
-    let hdr = load_hdr_file(&resolved)?;
-    let source_cube = equirect_to_cube(&hdr, prefilter_face);
-    let prefilter_mips = max_mip_count(prefilter_face);
-    let irradiance = compute_irradiance(
-        &source_cube,
-        prefilter_face,
-        irradiance_face,
-        DEFAULT_IRRADIANCE_PHI_SAMPLES,
-        DEFAULT_IRRADIANCE_THETA_SAMPLES,
-    );
-    let prefilter = compute_prefilter(
-        &source_cube,
-        prefilter_face,
-        prefilter_mips,
-        prefilter_samples,
-        prefilter_clamp,
-        // Imported environment map: mip 0 IS the on-screen skybox, keep it unclamped.
-        false,
-    );
-    Ok(serialise_payload(
-        irradiance_face,
-        prefilter_face,
-        prefilter_mips,
-        &irradiance,
-        &prefilter,
-    ))
-}
-
 // Resolve an EnvironmentMap `source` string into the actual file path on
 // disk. The runtime hot-reload watcher needs the resolved path so it can
 // subscribe to the correct parent directory; bare filenames are otherwise
-// unfindable after the build pipeline runs.
+// unfindable after the build pipeline runs. The decode itself (`decode_source`)
+// lives in the cook crate; only this path resolution stays here for the
+// dev-time watcher.
 pub fn resolve_source_path(source: &str) -> String {
     resolve_hdr_source(source)
 }
@@ -129,15 +84,6 @@ pub fn resolve_hdr_source(source: &str) -> String {
         .join(source)
         .to_string_lossy()
         .into_owned()
-}
-
-pub fn load_hdr_file(path: &str) -> Result<HdrImage, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("failed to read HDR source '{}': {}", path, e))?;
-    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{}': {}", path, e))
 }
 
 // Cube sampling
@@ -867,70 +813,5 @@ mod tests {
             "assets/hdri/x.hdr"
         );
         assert_eq!(resolve_source_path("/abs/path.hdr"), "/abs/path.hdr");
-    }
-
-    // Build a minimal uncompressed Radiance HDR blob of `width × height` solid
-    // (r, g, b) pixels. Mirrors the helpers in `build/cubemap.rs`'s test module:
-    // they're private there, so re-implement the tiny encoder here.
-    fn synth_rgbe(r: f32, g: f32, b: f32) -> [u8; 4] {
-        let maxv = r.max(g).max(b);
-        if maxv < 1e-32 {
-            return [0, 0, 0, 0];
-        }
-        let bits = maxv.to_bits();
-        let raw_exp = ((bits >> 23) & 0xff) as i32;
-        let exp = raw_exp - 126;
-        let mantissa_bits = (bits & 0x7f_ffff) | (126 << 23);
-        let mantissa = f32::from_bits(mantissa_bits);
-        let scale = (mantissa * 256.0) / maxv;
-        [
-            (r * scale) as u8,
-            (g * scale) as u8,
-            (b * scale) as u8,
-            (exp + 128) as u8,
-        ]
-    }
-
-    fn raw_hdr_blob(width: u32, height: u32, rgb: [f32; 3]) -> Vec<u8> {
-        let pixel = synth_rgbe(rgb[0], rgb[1], rgb[2]);
-        let mut blob = Vec::new();
-        blob.extend_from_slice(b"#?RADIANCE\n");
-        blob.extend_from_slice(b"FORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
-        for _ in 0..(width * height) {
-            blob.extend_from_slice(&pixel);
-        }
-        blob
-    }
-
-    #[test]
-    fn decode_source_missing_file_errors() {
-        let err = decode_source("/definitely/does/not/exist.hdr", 16, 8, 16, 0.0)
-            .expect_err("should fail");
-        assert!(
-            err.contains("failed to open") || err.contains("No such file"),
-            "got: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn decode_source_round_trips_through_deserialise() {
-        // Write a tiny solid-colour HDR into a tempfile, decode it, and verify
-        // the resulting payload deserialises with the requested sizes.
-        let tmp = std::env::temp_dir().join(format!(
-            "concinnity_envmap_decode_test_{}.hdr",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, raw_hdr_blob(16, 8, [0.6, 0.3, 0.15])).expect("write hdr");
-        let payload = decode_source(tmp.to_str().unwrap(), 16, 8, 16, 0.0).expect("decode");
-        let _ = std::fs::remove_file(&tmp);
-        let view = deserialise(&payload).expect("deserialise");
-        assert_eq!(view.irradiance_face, 8);
-        assert_eq!(view.prefilter_face, 16);
-        // mip chain for face_size 16: 16, 8, 4 → 3 levels.
-        assert_eq!(view.prefilter_mips, 3);
-        assert_eq!(view.prefilter_mip_bytes.len(), 3);
-        assert_eq!(view.irradiance_bytes.len(), 6 * 8 * 8 * 4 * 4);
     }
 }

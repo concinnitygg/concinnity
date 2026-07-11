@@ -11,7 +11,6 @@
 // runtime and the build crate can reach them across the workspace split.
 pub mod asset;
 pub mod color_lut;
-pub mod cubemap;
 pub mod environment_map;
 pub mod font;
 pub mod shader;

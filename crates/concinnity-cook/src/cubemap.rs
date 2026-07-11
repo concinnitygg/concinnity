@@ -20,7 +20,7 @@
 
 use std::io::Read;
 
-use concinnity_core::build::cubemap::{
+use crate::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, HdrImage, decode_hdr,
     equirect_to_cube,
 };
@@ -100,7 +100,7 @@ fn load_hdr(path: &str) -> Result<HdrImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::build::cubemap::deserialise;
+    use crate::hdr::deserialise;
 
     #[test]
     fn payload_round_trip_via_deserialise() {

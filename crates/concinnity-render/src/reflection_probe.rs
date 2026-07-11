@@ -4,8 +4,9 @@
 // consumes. Backend-agnostic; the Metal backend drives the actual scene render
 // into each face (see metal/probe.rs). DirectX / Vulkan can reuse this math.
 //
-// Face order and orientation match the engine's cube convention
-// (`concinnity-core::build::cubemap` / `environment_map::cube_texel_dir`):
+// Face order and orientation match the engine's cube convention (the build-time
+// `concinnity-cook::hdr` equirect resampler and core `environment_map`'s private
+// `cube_texel_dir`):
 //   0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z, with a face texel at (u,v) in [-1,1]
 // looking along `cube_texel_dir(face, u, v)`. Each face's view-projection is
 // built so that direction projects to NDC (u, -v) (screen-down is +v), which

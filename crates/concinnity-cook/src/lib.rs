@@ -36,6 +36,9 @@ pub mod font;
 pub mod geometry;
 pub mod glb;
 pub mod gltf;
+// Build-time HDR source primitives (Radiance decode, equirect->cube, cube
+// payload format) shared by the CubemapTexture + EnvironmentMap compilers.
+pub mod hdr;
 pub mod import;
 pub mod mesh_compile;
 pub mod mesh_reimport;
