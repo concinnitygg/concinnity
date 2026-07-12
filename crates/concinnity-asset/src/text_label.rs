@@ -1,6 +1,6 @@
 // Screen-space UI text-label schema.
 
-use crate::{AssetId, SpriteFit, de_opt_asset_ref};
+use crate::{AssetId, FontHandle, SpriteFit, de_opt_asset_ref, de_opt_font_handle};
 use alloc::string::String;
 
 /// Horizontal alignment of a [TextLabel](#textlabel) relative to its `x`.
@@ -54,8 +54,8 @@ pub struct TextLabel {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [Font](#font) asset to use for rendering.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub font: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_font_handle")]
+    pub font: Option<FontHandle>,
     /// Text to display. Can be updated each frame.
     pub content: String,
     /// Horizontal position in pixels from the left edge of the window.

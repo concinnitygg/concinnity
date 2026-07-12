@@ -2,10 +2,10 @@
 // shader / texture / streaming wiring performed on the first tick.
 
 use crate::assets::{
-    BlockType, Camera3D, ColorLut, Decal, DirectionalLight, EnvironmentMap, Font, GlassPanel,
-    GraphicsConfig, HitRegion, Material, Model, ParticleEmitter, PointLight, PostProcessConfig,
-    PostProcessResolve, SdfVolume, ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry,
-    StreamingConfig, TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
+    BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
+    Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, SdfVolume,
+    ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, StreamingConfig, TextLabel,
+    VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PipelineContext};
@@ -1373,7 +1373,7 @@ impl GraphicsSystem {
             }
         }
 
-        // Drain the first EnvironmentMap asset and capture its payload.
+        // Read the first EnvironmentMap from its resource table and capture its payload.
         // The runtime supports at most one IBL environment per world;
         // additional declarations are logged and ignored. Under `cn debug` we also
         // capture the resolved HDR source path + sizing knobs into
@@ -1381,108 +1381,104 @@ impl GraphicsSystem {
         // subscribe to and the reload helper can re-run the convolutions with
         // matching dimensions. Procedural `generator` declarations have no
         // file to watch and are skipped.
-        let env_maps = ctx.drain::<EnvironmentMap>();
+        let env_map_table = ctx
+            .resource::<crate::resource::EnvironmentMapTable>()
+            .cloned()
+            .unwrap_or_default();
+        if env_map_table.len() > 1 {
+            tracing::warn!(
+                "GraphicsSystem: {} EnvironmentMaps declared; only the first is used",
+                env_map_table.len()
+            );
+        }
         let mut env_map_bytes: Option<Vec<u8>> = None;
         let mut environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource> =
             None;
-        for (idx, em) in env_maps.iter().enumerate() {
-            if idx > 0 {
-                tracing::warn!(
-                    "GraphicsSystem: ignoring extra EnvironmentMap '{}' (only the first is used)",
-                    em.asset_id
-                );
-                continue;
-            }
-            if capture_sources && em.generator.is_empty() && !em.source.is_empty() {
-                let resolved = crate::build::environment_map::resolve_source_path(&em.source);
-                environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
-                    resolved_path: resolved,
-                    prefilter_face_size: em.prefilter_face_size,
-                    irradiance_face_size: em.irradiance_face_size,
-                    prefilter_samples: em.prefilter_samples,
-                    prefilter_clamp: em.prefilter_clamp,
-                });
-            }
-            match &em.locator {
-                Some(l) => match ctx.read_payload(l) {
-                    Ok(b) => env_map_bytes = Some(b.to_vec()),
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: failed to read EnvironmentMap '{}' payload: {:?}",
-                            em.asset_id,
-                            e
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-                None => {
+        // The runtime uses handle 0; a compiled EnvironmentMap always carries a
+        // payload (procedural generators bake one too), so a `None` locator here
+        // means simply "no EnvironmentMap declared".
+        if let Some(locator) = env_map_table.locator(0) {
+            match ctx.read_payload(&locator) {
+                Ok(b) => env_map_bytes = Some(b.to_vec()),
+                Err(e) => {
                     tracing::error!(
-                        "GraphicsSystem: EnvironmentMap '{}' has no compiled payload -- did the build succeed?",
-                        em.asset_id
+                        "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
+                        e
                     );
                     self.failed = true;
                     return;
                 }
             }
         }
+        if capture_sources
+            && let Some(info) = ctx
+                .resource::<crate::resource::EnvironmentMapSources>()
+                .and_then(|s| s.0.clone())
+        {
+            environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
+                resolved_path: crate::build::environment_map::resolve_source_path(&info.source),
+                prefilter_face_size: info.prefilter_face_size,
+                irradiance_face_size: info.irradiance_face_size,
+                prefilter_samples: info.prefilter_samples,
+                prefilter_clamp: info.prefilter_clamp,
+            });
+        }
 
-        // Drain the first ColorLut asset and capture its payload. At most one
-        // colour-grading LUT per world; extras are logged and ignored. Under
-        // `cn debug` we also capture the resolved source path into
-        // `color_lut_source` so the hot-reload watcher knows what to subscribe
-        // to and the reload helper knows where to re-read the LUT.
-        let color_luts = ctx.drain::<ColorLut>();
+        // Read the first ColorLut from its resource table and capture its payload.
+        // At most one colour-grading LUT per world; extras are logged and ignored.
+        // Under `cn debug` we also capture the resolved source path (from the dev
+        // source catalogue) into `color_lut_source` so the hot-reload watcher knows
+        // what to subscribe to and the reload helper knows where to re-read the LUT.
+        let color_lut_table = ctx
+            .resource::<crate::resource::ColorLutTable>()
+            .cloned()
+            .unwrap_or_default();
+        if color_lut_table.len() > 1 {
+            tracing::warn!(
+                "GraphicsSystem: {} ColorLuts declared; only the first is used",
+                color_lut_table.len()
+            );
+        }
         let mut color_lut_bytes: Option<Vec<u8>> = None;
         let mut color_lut_source: Option<super::hot_reload_sources::ColorLutSource> = None;
-        for (idx, cl) in color_luts.iter().enumerate() {
-            if idx > 0 {
-                tracing::warn!(
-                    "GraphicsSystem: ignoring extra ColorLut '{}' (only the first is used)",
-                    cl.asset_id
-                );
-                continue;
-            }
-            if capture_sources && !cl.source.is_empty() {
-                let resolved = crate::build::color_lut::resolve_source_path(&cl.source);
-                color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
-                    resolved_path: resolved,
-                });
-            }
-            match &cl.locator {
-                Some(l) => match ctx.read_payload(l) {
-                    Ok(b) => color_lut_bytes = Some(b.to_vec()),
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: failed to read ColorLut '{}' payload: {:?}",
-                            cl.asset_id,
-                            e
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: ColorLut '{}' has no compiled payload -- did the build succeed?",
-                        cl.asset_id
-                    );
+        // Handle 0 is the sole LUT the renderer applies; a compiled ColorLut always
+        // carries a payload, so a `None` locator means "no ColorLut declared".
+        if let Some(locator) = color_lut_table.locator(0) {
+            match ctx.read_payload(&locator) {
+                Ok(b) => color_lut_bytes = Some(b.to_vec()),
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {:?}", e);
                     self.failed = true;
                     return;
                 }
             }
         }
+        if capture_sources
+            && let Some(src) = ctx
+                .resource::<crate::resource::ColorLutSources>()
+                .and_then(|c| c.0.clone())
+        {
+            color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
+                resolved_path: crate::build::color_lut::resolve_source_path(&src),
+            });
+        }
 
-        // drain Font components; deserialise atlas + metrics for text rendering
-        let fonts = ctx.drain::<Font>();
+        // Read Font resources from the FontTable; deserialise each atlas + metrics
+        // for text rendering. A font's `FontHandle` is its atlas slot (dense 0..N),
+        // so the handle indexes both `loaded_fonts` and the leading `text_atlas_data`
+        // slots. `size_px` now rides in the payload (it left the component column).
+        let font_table = ctx
+            .resource::<crate::resource::FontTable>()
+            .cloned()
+            .unwrap_or_default();
         let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
-        for (slot, font) in fonts.iter().enumerate() {
-            let locator = match &font.locator {
+        for (slot, entry) in font_table.0.iter().enumerate() {
+            let locator = match &entry.payload {
                 Some(l) => l.clone(),
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Font '{}' has no compiled payload -- did the build succeed?",
-                        font.asset_id
+                        "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
+                        slot
                     );
                     self.failed = true;
                     return;
@@ -1492,8 +1488,8 @@ impl GraphicsSystem {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
                     tracing::error!(
-                        "GraphicsSystem: failed to read Font '{}' payload: {:?}",
-                        font.asset_id,
+                        "GraphicsSystem: failed to read Font handle {} payload: {:?}",
+                        slot,
                         e
                     );
                     self.failed = true;
@@ -1501,20 +1497,21 @@ impl GraphicsSystem {
                 }
             };
             match crate::build::font::deserialise(&bytes) {
-                Ok((aw, ah, supersample, rgba, metrics)) => {
+                Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
                     let metrics_map: std::collections::HashMap<
                         u32,
                         crate::build::font::GlyphMetrics,
                     > = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+                    let size_px = size_px as f32;
                     self.loaded_fonts.insert(
-                        font.asset_id,
+                        crate::ecs::FontHandle(slot as u32),
                         text::LoadedFont {
                             atlas_slot: slot,
-                            cap_px: text::derive_cap_px(&metrics_map, font.size_px as f32),
+                            cap_px: text::derive_cap_px(&metrics_map, size_px),
                             metrics: metrics_map,
                             atlas_w: aw,
                             atlas_h: ah,
-                            size_px: font.size_px as f32,
+                            size_px,
                             supersample: (supersample.max(1)) as f32,
                         },
                     );
@@ -1603,10 +1600,7 @@ impl GraphicsSystem {
             ambient_intensity,
         );
 
-        let font_blob_indices: Vec<u32> = fonts
-            .iter()
-            .filter_map(|f| f.locator.as_ref().map(|l| l.blob_index))
-            .collect();
+        let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
 
         // AudioSystem inits after GraphicsSystem and reads audio-clip payloads
         // from the `AudioClipTable`, so any blob a clip lives in must survive this

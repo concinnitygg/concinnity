@@ -1311,9 +1311,16 @@ mod tests {
     fn add_types_cook_with_default_args() {
         isolate_state_dir();
         for ty in picker_types() {
-            let ct = concinnity_cook::ComponentType::parse(ty)
-                .unwrap_or_else(|| panic!("{ty} is a real component type"));
-            assert!(ct.addable(), "{ty} must be External / addable");
+            // Most add types are components; Font (and future resources) are
+            // addable-blank resource assets, External by construction.
+            if let Some(ct) = concinnity_cook::ComponentType::parse(ty) {
+                assert!(ct.addable(), "{ty} must be External / addable");
+            } else {
+                assert!(
+                    concinnity_cook::resource_handles::ResourceAssetType::parse(ty).is_some(),
+                    "{ty} must be a known component or resource asset type"
+                );
+            }
             let world = format!(
                 "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
                  {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"

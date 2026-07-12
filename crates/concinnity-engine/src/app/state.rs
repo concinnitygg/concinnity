@@ -56,6 +56,11 @@ impl App {
         // renderer reads the TextureTable to build its shared texture pool.
         world.insert_resource(crate::resource::AudioClipTable::from_records(&resources));
         world.insert_resource(crate::resource::TextureTable::from_records(&resources));
+        world.insert_resource(crate::resource::ColorLutTable::from_records(&resources));
+        world.insert_resource(crate::resource::EnvironmentMapTable::from_records(
+            &resources,
+        ));
+        world.insert_resource(crate::resource::FontTable::from_records(&resources));
         self.world = world;
         Ok(())
     }

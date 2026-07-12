@@ -166,7 +166,7 @@ pub struct GraphicsSystem {
     // per-frame dt for the Lifetime countdown.
     prev_elapsed: f32,
     // Font atlas data, keyed by asset id, built during init().
-    loaded_fonts: std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     // Texture handle -> slot in the text-atlas pool, for Sprites with a
     // texture. Sprite textures are appended after the font atlases at init.
     sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,

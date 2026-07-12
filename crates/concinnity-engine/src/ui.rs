@@ -158,7 +158,7 @@ struct OpenDropdownState {
     view: Option<AssetId>,
     // Font / scale / color copied from the row's value label so the list text
     // matches the row (the un-hovered style, captured at open).
-    font: Option<AssetId>,
+    font: Option<crate::ecs::FontHandle>,
     scale: f32,
     color: [f32; 3],
 }

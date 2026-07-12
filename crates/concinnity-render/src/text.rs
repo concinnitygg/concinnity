@@ -5,6 +5,7 @@
 // geometry from TextLabel components each frame.
 
 use crate::assets::{LabelBox, SpriteFit, TextAlign, TextLabel};
+use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -121,7 +122,7 @@ fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) 
 // and reserves no space.
 pub fn measure_label_box(
     label: &TextLabel,
-    loaded_fonts: &std::collections::HashMap<AssetId, LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
 ) -> Option<LabelBox> {
     if !label.visible {
         return None;
@@ -156,7 +157,7 @@ pub fn measure_label_box(
 // panel's off-band rows do not bleed over its chrome.
 pub fn build_text_calls(
     labels: &[&TextLabel],
-    loaded_fonts: &std::collections::HashMap<AssetId, LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
     win_w: f32,
     win_h: f32,
     clips: &std::collections::HashMap<AssetId, [f32; 4]>,
@@ -407,7 +408,7 @@ mod tests {
         }
     }
 
-    fn make_label(font: AssetId, content: &str, x: f32) -> TextLabel {
+    fn make_label(font: FontHandle, content: &str, x: f32) -> TextLabel {
         TextLabel {
             asset_id: AssetId::default(),
             font: Some(font),
@@ -435,7 +436,7 @@ mod tests {
     #[test]
     fn unknown_font_produces_no_call() {
         let fonts = std::collections::HashMap::new();
-        let label = make_label(AssetId(99), "hello", 0.0);
+        let label = make_label(FontHandle(99), "hello", 0.0);
         assert!(
             build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers()).is_empty()
         );
@@ -445,8 +446,8 @@ mod tests {
     fn single_glyph_produces_quad() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let label = make_label(AssetId(0), "A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let label = make_label(FontHandle(0), "A", 0.0);
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
@@ -458,8 +459,8 @@ mod tests {
     fn background_prepends_a_box_quad() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let mut label = make_label(AssetId(0), "A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         label.padding = 4.0;
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
@@ -494,8 +495,8 @@ mod tests {
         // of the full em line box, which left a large gap above the caps).
         let g = make_glyph(10, 12, 11.0); // bearing_y = 12, no descent
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let mut label = make_label(AssetId(0), "A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.1, 0.1, 0.1, 1.0];
         label.padding = 4.0;
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
@@ -519,8 +520,8 @@ mod tests {
     fn background_with_empty_content_draws_nothing() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let mut label = make_label(AssetId(0), "", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle(0), "", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         // A blanked label (e.g. a toggled-off HUD chip) draws no box.
         assert!(
@@ -533,9 +534,9 @@ mod tests {
         let space = make_glyph(0, 0, 8.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[(' ', space), ('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // Two spaces then 'A': only 'A' produces geometry.
-        let label = make_label(AssetId(0), "  A", 0.0);
+        let label = make_label(FontHandle(0), "  A", 0.0);
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
@@ -559,8 +560,8 @@ mod tests {
         };
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('X', zero), ('A', g)]));
-        let label = make_label(AssetId(0), "XA", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('X', zero), ('A', g)]));
+        let label = make_label(FontHandle(0), "XA", 0.0);
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A'
@@ -574,8 +575,8 @@ mod tests {
         // down by one line height (font size_px * scale = 16).
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let label = make_label(AssetId(0), "A\nA", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let label = make_label(FontHandle(0), "A\nA", 0.0);
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
         assert_eq!(calls.len(), 1);
         // Two glyphs -> two quads -> 8 vertices, 12 indices.
@@ -597,8 +598,8 @@ mod tests {
     fn centered_label_is_repositioned() {
         let g = make_glyph(10, 12, 20.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let mut label = make_label(AssetId(0), "A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle(0), "A", 0.0);
         label.centered = true;
         // Viewport 200×100; glyph advance=20, size_px=16, cap_px=12 ('A' bearing).
         // Auto-scale: sw = 200*0.85/20 = 8.5, sh = 100*0.85/16 = 5.3125 -> scale = 5.3125
@@ -622,10 +623,10 @@ mod tests {
         // None) at the same coordinates stays put.
         let g = make_glyph(10, 12, 20.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
 
-        let hud = make_label(AssetId(0), "A", 100.0); // view == None
-        let mut overlay_label = make_label(AssetId(0), "A", 100.0);
+        let hud = make_label(FontHandle(0), "A", 100.0); // view == None
+        let mut overlay_label = make_label(FontHandle(0), "A", 100.0);
         overlay_label.y = 100.0;
         overlay_label.view = Some(AssetId(5));
 
@@ -657,8 +658,8 @@ mod tests {
     fn measure_label_box_grows_text_by_padding() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g), ('B', g)]));
-        let mut label = make_label(AssetId(0), "AB", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g), ('B', g)]));
+        let mut label = make_label(FontHandle(0), "AB", 0.0);
         label.padding = 4.0;
         let b = measure_label_box(&label, &fonts).unwrap();
         // text width = 2 * advance(11) = 22, grown by padding on both sides.
@@ -678,13 +679,13 @@ mod tests {
     fn measure_label_box_skips_hidden_and_unloaded() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         // Hidden label → None even with a loaded font.
-        let mut hidden = make_label(AssetId(0), "A", 0.0);
+        let mut hidden = make_label(FontHandle(0), "A", 0.0);
         hidden.visible = false;
         assert!(measure_label_box(&hidden, &fonts).is_none());
         // Visible label whose font isn't loaded → None.
-        let orphan = make_label(AssetId(99), "A", 0.0);
+        let orphan = make_label(FontHandle(99), "A", 0.0);
         assert!(measure_label_box(&orphan, &fonts).is_none());
     }
 
@@ -696,9 +697,9 @@ mod tests {
         // when right-aligned.
         let g = make_glyph(10, 12, 10.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let first_x = |align: TextAlign| {
-            let mut l = make_label(AssetId(0), "AA", 100.0);
+            let mut l = make_label(FontHandle(0), "AA", 100.0);
             l.align = align;
             build_text_calls(&[&l], &fonts, 0.0, 0.0, &no_clips(), &no_layers())[0].vertices[0].pos
                 [0]
@@ -715,8 +716,8 @@ mod tests {
         // viewport the overlay is identity, so the scissor equals the band.
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
-        let mut label = make_label(AssetId(0), "A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle(0), "A", 0.0);
         label.asset_id = AssetId(7);
         let mut clips = std::collections::HashMap::new();
         let band = [10.0, 20.0, 300.0, 40.0];
@@ -725,7 +726,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].clip_rect, Some(band));
         // A label absent from `clips` (asset_id 0) draws unclipped.
-        let other = make_label(AssetId(0), "A", 0.0);
+        let other = make_label(FontHandle(0), "A", 0.0);
         let unclipped = build_text_calls(&[&other], &fonts, 1280.0, 720.0, &clips, &no_layers());
         assert_eq!(unclipped[0].clip_rect, None);
     }
@@ -750,10 +751,10 @@ mod tests {
         // distinct origin.
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let vp = (1024.0, 768.0);
         let first_y = |fit: SpriteFit| {
-            let mut l = make_label(AssetId(0), "A", 100.0);
+            let mut l = make_label(FontHandle(0), "A", 100.0);
             l.y = 600.0;
             l.view = Some(AssetId(5));
             l.fit = fit;
@@ -777,9 +778,9 @@ mod tests {
         let space = make_glyph(0, 0, 7.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[(' ', space), ('A', g)]));
+        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // '?' has no metric; it consumes one space advance before 'A'.
-        let label = make_label(AssetId(0), "?A", 0.0);
+        let label = make_label(FontHandle(0), "?A", 0.0);
         let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A' draws a quad
@@ -793,9 +794,9 @@ mod tests {
         let space = make_glyph(0, 0, 7.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = std::collections::HashMap::new();
-        fonts.insert(AssetId(0), make_font(&[(' ', space), ('A', g)]));
-        let known = make_label(AssetId(0), "A", 0.0);
-        let with_missing = make_label(AssetId(0), "?A", 0.0);
+        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
+        let known = make_label(FontHandle(0), "A", 0.0);
+        let with_missing = make_label(FontHandle(0), "?A", 0.0);
         let wk = measure_label_box(&known, &fonts).unwrap().w;
         let wm = measure_label_box(&with_missing, &fonts).unwrap().w;
         // The '?' contributes exactly one space advance (7) of extra width.

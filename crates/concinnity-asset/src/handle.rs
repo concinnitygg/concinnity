@@ -19,7 +19,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use alloc::vec::Vec;
 
-use crate::resolver::{resolve_audio_clip_handle, resolve_name, resolve_texture_handle};
+use crate::resolver::{
+    resolve_audio_clip_handle, resolve_font_handle, resolve_name, resolve_texture_handle,
+};
 
 macro_rules! resource_handles {
     ( $( $(#[$m:meta])* $name:ident ),+ $(,)? ) => {
@@ -167,6 +169,66 @@ where
 // table there. Mirrors [`resolve_texture_ref`].
 fn resolve_audio_clip_ref(name: &str) -> Option<u32> {
     resolve_audio_clip_handle(name).or_else(|| resolve_name(name))
+}
+
+// Resolve a font reference name to its handle, with the same build / fallback
+// behaviour as [`resolve_texture_ref`].
+fn resolve_font_ref(name: &str) -> Option<u32> {
+    resolve_font_handle(name).or_else(|| resolve_name(name))
+}
+
+/// `serde` `deserialize_with` helper for an optional font reference field.
+///
+/// The font analogue of [`de_opt_texture_handle`]: an integer is an
+/// already-resolved [`FontHandle`]; a name string is resolved through the
+/// installed font-handle resolver; an empty string or null is `None`. Apply with
+/// `#[serde(default, deserialize_with = "concinnity_asset::de_opt_font_handle")]`.
+pub fn de_opt_font_handle<'de, D>(d: D) -> Result<Option<FontHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<FontHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a font handle integer, reference name string, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<FontHandle>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<FontHandle>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<FontHandle>, E> {
+            Ok(Some(FontHandle(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<FontHandle>, E> {
+            Ok(Some(FontHandle(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<FontHandle>, E> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            resolve_font_ref(v)
+                .map(|h| Some(FontHandle(h)))
+                .ok_or_else(|| {
+                    E::custom(format!(
+                        "no font-handle resolver installed to resolve reference {v:?}"
+                    ))
+                })
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<FontHandle>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
 }
 
 /// `serde` `deserialize_with` helper for an optional audio-clip reference field.

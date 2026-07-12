@@ -21,8 +21,8 @@ mod registry;
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
-    Entity, EventCursor, EventStore, Events, PayloadLocator, PipelineContext, RecordKind,
-    Resources, TextureHandle, asset_id,
+    Entity, EventCursor, EventStore, Events, FontHandle, PayloadLocator, PipelineContext,
+    RecordKind, Resources, TextureHandle, asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's
@@ -135,7 +135,7 @@ pub struct DropdownView {
     pub first: usize,
     pub hovered: Option<usize>,
     pub view: Option<asset_id::AssetId>,
-    pub font: Option<asset_id::AssetId>,
+    pub font: Option<FontHandle>,
     pub scale: f32,
     pub color: [f32; 3],
 }

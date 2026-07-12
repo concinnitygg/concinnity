@@ -103,7 +103,7 @@ fn capture_row_labels(ctx: &mut PipelineContext, keys: &[&str]) -> Vec<(AssetId,
 // each label so `build_text_calls` then draws it in place.
 fn apply_label_layout(
     ctx: &mut PipelineContext,
-    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
 ) {
     let containers: Vec<LayoutContainer> = ctx
         .query::<LayoutContainer>()
@@ -152,7 +152,7 @@ fn apply_label_layout(
 fn position_debug_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
-    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     win_w: f32,
 ) {
     if chip_ids.is_empty() || win_w <= 0.0 {
@@ -195,7 +195,7 @@ fn position_debug_hud(
 fn position_stat_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
-    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
 ) {
     if chip_ids.is_empty() {
         return;
@@ -311,7 +311,7 @@ fn cycle_next_key_of(action: &str) -> Option<&str> {
 // window pixels otherwise), matching the input hit-test in `ui`.
 fn build_dropdown_overlay(
     view: &crate::ecs::DropdownView,
-    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
 ) -> (Vec<Sprite>, Vec<TextLabel>) {
     // Panel fill (near-opaque so rows behind it do not show through), a framing
     // border, and the selected / hovered row highlights.
@@ -488,7 +488,7 @@ fn fit_line(
 // box (`fit_line`) so a long value never bleeds past the field's edges.
 fn build_text_input_overlay(
     ti: &TextInput,
-    loaded_fonts: &std::collections::HashMap<AssetId, text::LoadedFont>,
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     caret_visible: bool,
 ) -> (Vec<Sprite>, Vec<TextLabel>) {
     const CARET_W: f32 = 2.0;

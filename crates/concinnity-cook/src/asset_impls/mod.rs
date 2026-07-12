@@ -6,11 +6,7 @@
 // `source_files` impls live here, calling the compile pipeline in this crate.
 // These are trait impls only, so the modules need no re-exports.
 
-mod color_lut;
-mod cubemap_texture;
-mod environment_map;
 mod file;
-mod font;
 mod mesh;
 mod procedural_mesh;
 mod room;

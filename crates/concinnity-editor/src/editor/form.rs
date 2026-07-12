@@ -194,8 +194,14 @@ fn number_text(n: &serde_json::Number) -> String {
 // The type's registered default args as an object (empty if the type is unknown
 // or has no args schema).
 pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
+    // A resource asset (Font, ...) is not a `ComponentType`; its registration
+    // (and default args) come from `ResourceAssetType` instead.
     ComponentType::parse(ty)
         .and_then(|ct| ct.registration().default_args)
+        .or_else(|| {
+            concinnity_cook::resource_handles::ResourceAssetType::parse(ty)
+                .and_then(|rt| rt.registration().default_args)
+        })
         .and_then(|v| match v {
             Value::Object(m) => Some(m),
             _ => None,
@@ -663,12 +669,21 @@ fn get_at_path_mut<'a>(obj: &'a mut Map<String, Value>, path: &str) -> Option<&'
 // Validate an assembled args object by round-tripping it through the type's typed
 // `Args` (the same check `cn add` applies). `Ok(())` means it will cook.
 pub(crate) fn validate(ty: &str, args: &Map<String, Value>) -> Result<(), String> {
-    let Some(ct) = ComponentType::parse(ty) else {
-        return Err(format!("unknown asset type '{ty}'"));
-    };
-    ct.reserialize_args(&Value::Object(args.clone()))
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    if let Some(ct) = ComponentType::parse(ty) {
+        return ct
+            .reserialize_args(&Value::Object(args.clone()))
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
+    // A resource asset validates by compiling its payload (the same check its
+    // build step runs); Font is the only addable-blank resource today.
+    if let Some(rt) = concinnity_cook::resource_handles::ResourceAssetType::parse(ty) {
+        return rt
+            .compile_payload(&Value::Object(args.clone()))
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
+    Err(format!("unknown asset type '{ty}'"))
 }
 
 #[cfg(test)]

@@ -56,6 +56,9 @@ pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
     let font: Font =
         serde_json::from_value(args.clone()).map_err(|e| format!("Font: invalid args: {}", e))?;
     let path = font.path.as_str();
+    // Captured before `font` is shadowed by the loaded fontdue face below; baked
+    // into the payload for the runtime's line-height / cap-height.
+    let size_px_arg = font.size_px;
     let logical_size_px = font.size_px as f32;
     // The whole pipeline (rasterise, SDF, pack) runs at the supersampled size, so
     // the atlas and its texel-space metrics come out SUPERSAMPLE times larger.
@@ -245,7 +248,14 @@ pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
         });
     }
 
-    serialise(atlas_w, atlas_h, SUPERSAMPLE, &atlas, &metrics_out)
+    serialise(
+        atlas_w,
+        atlas_h,
+        SUPERSAMPLE,
+        size_px_arg,
+        &atlas,
+        &metrics_out,
+    )
 }
 
 fn round_up_to(n: u16, mult: u16) -> u16 {
@@ -414,6 +424,7 @@ fn serialise(
     atlas_w: u32,
     atlas_h: u32,
     supersample: u32,
+    size_px: u32,
     rgba: &[u8],
     metrics: &[GlyphMetrics],
 ) -> Result<Vec<u8>, String> {
@@ -421,6 +432,9 @@ fn serialise(
     out.extend_from_slice(&atlas_w.to_le_bytes());
     out.extend_from_slice(&atlas_h.to_le_bytes());
     out.extend_from_slice(&supersample.to_le_bytes());
+    // Rasterisation size (px). Intrinsic to the atlas -- the runtime reads it for
+    // line-height / cap-height now that Font carries no drained `size_px` field.
+    out.extend_from_slice(&size_px.to_le_bytes());
     out.extend_from_slice(rgba);
     out.extend_from_slice(&(metrics.len() as u32).to_le_bytes());
     for m in metrics {
@@ -479,11 +493,12 @@ mod tests {
             },
         ];
         let rgba = vec![128u8; 64 * 64 * 4]; // 64x64 atlas
-        let payload = serialise(64, 64, 2, &rgba, &metrics).unwrap();
-        let (w, h, supersample, out_rgba, out_metrics) = deserialise(&payload).unwrap();
+        let payload = serialise(64, 64, 2, 20, &rgba, &metrics).unwrap();
+        let (w, h, supersample, size_px, out_rgba, out_metrics) = deserialise(&payload).unwrap();
         assert_eq!(w, 64);
         assert_eq!(h, 64);
         assert_eq!(supersample, 2);
+        assert_eq!(size_px, 20);
         assert_eq!(out_rgba, rgba);
         assert_eq!(out_metrics.len(), 2);
         assert_eq!(out_metrics[0].char_code, b'A' as u32);
@@ -502,7 +517,7 @@ mod tests {
             serde_json::json!({ "path": "", "size_px": 48 }),
         ] {
             let payload = compile_font_payload(&args).expect("compile bundled font at 48px");
-            let (w, h, _supersample, rgba, metrics) = deserialise(&payload).unwrap();
+            let (w, h, _supersample, _size_px, rgba, metrics) = deserialise(&payload).unwrap();
             assert!(w > 0 && h > 0, "atlas has non-zero dimensions");
             assert!(!rgba.is_empty());
             assert!(!metrics.is_empty());

@@ -40,9 +40,72 @@ fn ensure_shader_layout_validator() {
 #[cfg(not(backend_metal))]
 fn ensure_shader_layout_validator() {}
 
+// Normalized asset-type match (lowercase, underscores stripped), matching the
+// convention used across the cook world passes.
+fn type_is(asset: &concinnity_cook::world::WorldJsonlAsset, norm_type: &str) -> bool {
+    asset.asset_type.to_lowercase().replace('_', "") == norm_type
+}
+
+// The first declared ColorLut's authored `source` path (non-empty), or `None`.
+// Dev-only; feeds the hot-reload watcher.
+fn scan_color_lut_source(assets: &[concinnity_cook::world::WorldJsonlAsset]) -> Option<String> {
+    assets
+        .iter()
+        .find(|a| type_is(a, "colorlut"))
+        .and_then(|a| a.args.get("source").and_then(|v| v.as_str()))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+// The first declared file-backed EnvironmentMap's re-bake inputs, or `None` (a
+// procedural `generator` has no file to watch). The face-size / sample defaults
+// mirror the EnvironmentMap schema defaults in `concinnity-asset/src/environment_map.rs`.
+fn scan_environment_map_source(
+    assets: &[concinnity_cook::world::WorldJsonlAsset],
+) -> Option<crate::resource::EnvironmentMapSourceInfo> {
+    let a = assets.iter().find(|a| type_is(a, "environmentmap"))?;
+    let generator = a
+        .args
+        .get("generator")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let source = a.args.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    if !generator.is_empty() || source.is_empty() {
+        return None;
+    }
+    let u32_arg = |key: &str, default: u32| {
+        a.args
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(default)
+    };
+    Some(crate::resource::EnvironmentMapSourceInfo {
+        source: source.to_string(),
+        prefilter_face_size: u32_arg("prefilter_face_size", 512),
+        irradiance_face_size: u32_arg("irradiance_face_size", 8),
+        prefilter_samples: u32_arg("prefilter_samples", 1024),
+        prefilter_clamp: a
+            .args
+            .get("prefilter_clamp")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(12.0),
+    })
+}
+
 // Compile a prepared world and assemble it into an in-memory World, ready to
 // run without touching any blob files on disk.
 pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
+    // Capture the dev-only hot-reload source info for the singleton ColorLut and
+    // EnvironmentMap resources BEFORE `build_compiled` consumes the asset list.
+    // These kinds are authored (never injected by an expansion pass), so the raw
+    // world list carries every one; the renderer's `capture_sources` path reads
+    // these to seed the file-reload watcher now that the drained `source` field is
+    // gone. Only the first of each is used (the runtime uses handle 0).
+    let color_lut_source = scan_color_lut_source(&loaded.assets);
+    let environment_map_source = scan_environment_map_source(&loaded.assets);
+
     let result = build_compiled(loaded.assets, None)?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
@@ -67,6 +130,18 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     ));
     world.insert_resource(crate::resource::TextureTable::from_records(
         &result.resources,
+    ));
+    world.insert_resource(crate::resource::ColorLutTable::from_records(
+        &result.resources,
+    ));
+    world.insert_resource(crate::resource::EnvironmentMapTable::from_records(
+        &result.resources,
+    ));
+    world.insert_resource(crate::resource::FontTable::from_records(&result.resources));
+    // Dev-only source catalogues for the hot-reload watcher (see the scan above).
+    world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
+    world.insert_resource(crate::resource::EnvironmentMapSources(
+        environment_map_source,
     ));
     // Dev-only: the texture source catalogue, so the renderer's hot-reload
     // capture and the runtime spawn-by-name path can map a texture handle back to

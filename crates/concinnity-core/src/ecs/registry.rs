@@ -53,7 +53,6 @@ macro_rules! for_each_component {
             Model             => $crate::assets::Model { gen, external, id },
             Scene             => $crate::assets::Scene { gen, external, id },
             SceneReel         => $crate::assets::SceneReel { gen, external, id },
-            Font              => $crate::assets::Font { gen, external, compiled, id },
             TextLabel         => $crate::assets::TextLabel { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
             LightRig          => $crate::assets::LightRig { gen, build_only },
             MaterialPalette   => $crate::assets::MaterialPalette { gen, build_only },
@@ -64,10 +63,7 @@ macro_rules! for_each_component {
             BlockType         => $crate::assets::BlockType { gen, external, id },
             VoxelChunk        => $crate::assets::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk },
             InstancedProp     => $crate::assets::InstancedProp { gen, external, id, validate: instanced_prop },
-            CubemapTexture    => $crate::assets::CubemapTexture { gen, external, compiled, id },
-            EnvironmentMap    => $crate::assets::EnvironmentMap { gen, external, compiled, id },
             PostProcessConfig => $crate::assets::PostProcessConfig { manual },
-            ColorLut          => $crate::assets::ColorLut { gen, external, compiled, id },
             SkinnedMesh       => $crate::assets::SkinnedMesh { manual },
             Animation         => $crate::assets::Animation { gen, external, id },
             SkeletonPose      => $crate::assets::SkeletonPose { runtime, build: skeleton_pose },
@@ -136,14 +132,18 @@ macro_rules! for_each_component {
 // `Variant => Type { resource: <ResourceKind>, <flags...> }`.
 //
 // This is the asset-registry / component-registry split the P5 design calls for,
-// applied one kind at a time; AudioClip was the first kind to leave, Texture the
-// second.
+// applied one kind at a time; AudioClip left first, then Texture, then the GPU
+// resource kinds (CubemapTexture, ...).
 #[macro_export]
 macro_rules! for_each_resource_asset {
     ($cb:ident) => {
         $cb! {
             AudioClip => $crate::assets::AudioClip { resource: AudioClip, compiled },
             Texture => $crate::assets::Texture { resource: Texture, compiled },
+            CubemapTexture => $crate::assets::CubemapTexture { resource: CubemapTexture, compiled },
+            EnvironmentMap => $crate::assets::EnvironmentMap { resource: EnvironmentMap, compiled },
+            ColorLut => $crate::assets::ColorLut { resource: ColorLut, compiled },
+            Font => $crate::assets::Font { resource: Font, compiled },
         }
     };
 }

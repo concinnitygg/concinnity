@@ -31,10 +31,6 @@ pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
     Some(match ct {
         ComponentType::Mesh => ResourceKind::Mesh,
         ComponentType::Material => ResourceKind::Material,
-        ComponentType::Font => ResourceKind::Font,
-        ComponentType::CubemapTexture => ResourceKind::CubemapTexture,
-        ComponentType::EnvironmentMap => ResourceKind::EnvironmentMap,
-        ComponentType::ColorLut => ResourceKind::ColorLut,
         ComponentType::SkinnedMesh => ResourceKind::SkinnedMesh,
         _ => return None,
     })
@@ -106,6 +102,14 @@ impl ResourceAssetType {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Texture => crate::texture::compile_texture_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::CubemapTexture => crate::cubemap::compile_cubemap_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::EnvironmentMap => crate::environment_map::compile_environment_map_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::ColorLut => crate::color_lut::compile_color_lut_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::Font => crate::font::compile_font_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
         }
     }
 
@@ -113,8 +117,20 @@ impl ResourceAssetType {
     // an unchanged source is a cache hit.
     pub fn source_files(self, args: &serde_json::Value) -> Vec<String> {
         match self {
-            Self::AudioClip | Self::Texture => args
+            Self::AudioClip
+            | Self::Texture
+            | Self::CubemapTexture
+            | Self::EnvironmentMap
+            | Self::ColorLut => args
                 .get("source")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .into_iter()
+                .collect(),
+            // A Font keys its TTF source under `path`, not `source`.
+            Self::Font => args
+                .get("path")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
@@ -194,6 +210,10 @@ pub fn ensure_resource_handle_resolvers() {
             let id = crate::ecs::asset_id::intern(name);
             RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::AudioClip, id))
         });
+        crate::ecs::set_font_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Font, id))
+        });
     });
 }
 
@@ -222,6 +242,30 @@ mod tests {
         // `ResourceAssetType`, folded in by `asset_resource_kind`.
         assert_eq!(ComponentType::parse("Texture"), None);
         assert_eq!(asset_resource_kind("Texture"), Some(ResourceKind::Texture));
+        // CubemapTexture has also left: a resource-only asset, no longer a
+        // `ComponentType`, classified through `ResourceAssetType`.
+        assert_eq!(ComponentType::parse("CubemapTexture"), None);
+        assert_eq!(
+            ResourceAssetType::parse("CubemapTexture"),
+            Some(ResourceAssetType::CubemapTexture)
+        );
+        assert_eq!(
+            asset_resource_kind("CubemapTexture"),
+            Some(ResourceKind::CubemapTexture)
+        );
+        // EnvironmentMap, ColorLut, and Font have left too.
+        assert_eq!(ComponentType::parse("EnvironmentMap"), None);
+        assert_eq!(
+            asset_resource_kind("EnvironmentMap"),
+            Some(ResourceKind::EnvironmentMap)
+        );
+        assert_eq!(ComponentType::parse("ColorLut"), None);
+        assert_eq!(
+            asset_resource_kind("ColorLut"),
+            Some(ResourceKind::ColorLut)
+        );
+        assert_eq!(ComponentType::parse("Font"), None);
+        assert_eq!(asset_resource_kind("Font"), Some(ResourceKind::Font));
         // Component-registry resources still classify through `resource_kind`.
         assert_eq!(resource_kind(ComponentType::Mesh), Some(ResourceKind::Mesh));
         assert_eq!(

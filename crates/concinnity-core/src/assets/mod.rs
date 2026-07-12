@@ -18,13 +18,9 @@ mod audio_command;
 mod camera3d;
 mod camera_probe;
 mod character_rig;
-mod color_lut;
 mod controls_command;
-mod cubemap_texture;
 mod despawn_request;
-mod environment_map;
 mod file;
-mod font;
 mod frame_input;
 mod geometry;
 mod ground_probes;
@@ -260,15 +256,11 @@ mod tests {
 
     #[test]
     fn simple_assets_round_trip_defaults() {
-        exercise::<Font>();
-        exercise::<CubemapTexture>();
-        exercise::<ColorLut>();
         exercise::<Mesh>();
         exercise::<Room>();
         exercise::<Scene>();
         exercise::<Model>();
         exercise::<ProceduralMesh>();
-        exercise::<EnvironmentMap>();
         exercise::<WaterSurface>();
         // More data-only components sharing the same shape.
         exercise::<Material>();
@@ -281,39 +273,7 @@ mod tests {
 
     #[test]
     fn source_backed_source_path_branches() {
-        // Procedural generator -> no source file; file-backed -> the path;
-        // neither -> None. Covers both arms of the generator-gated types.
-        assert_eq!(
-            EnvironmentMap::source_path(&json!({"generator": "sky"}), Platform::Metal),
-            None
-        );
-        assert_eq!(
-            EnvironmentMap::source_path(&json!({"source": "env.hdr"}), Platform::Metal),
-            Some("env.hdr".to_string())
-        );
-
-        // Font keys its source under `path`, not `source`.
-        assert_eq!(
-            Font::source_path(&json!({"path": "f.ttf"}), Platform::Metal),
-            Some("f.ttf".to_string())
-        );
-        assert_eq!(Font::source_path(&json!({}), Platform::Metal), None);
-
-        // The remaining source-keyed types share one shape: present -> Some,
-        // absent -> None.
-        assert_eq!(
-            CubemapTexture::source_path(&json!({"source": "c"}), Platform::Metal),
-            Some("c".to_string())
-        );
-        assert_eq!(
-            CubemapTexture::source_path(&json!({}), Platform::Metal),
-            None
-        );
-        assert_eq!(
-            ColorLut::source_path(&json!({"source": "l"}), Platform::Metal),
-            Some("l".to_string())
-        );
-        assert_eq!(ColorLut::source_path(&json!({}), Platform::Metal), None);
+        // Mesh keys its source under `source`: present -> Some, absent -> None.
         assert_eq!(
             Mesh::source_path(&json!({"source": "m.obj"}), Platform::Metal),
             Some("m.obj".to_string())

@@ -1,6 +1,6 @@
 // Editable single-line text-field schema.
 
-use crate::{AssetId, SpriteFit, de_opt_asset_ref};
+use crate::{AssetId, FontHandle, SpriteFit, de_opt_asset_ref, de_opt_font_handle};
 use alloc::string::String;
 
 /// An editable single-line text field drawn as a UI overlay.
@@ -34,8 +34,8 @@ pub struct TextInput {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [Font](#font) used to render the field's text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub font: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_font_handle")]
+    pub font: Option<FontHandle>,
     /// The current text. Edited in place as the player types; set an initial
     /// value here to pre-fill the field.
     pub content: String,

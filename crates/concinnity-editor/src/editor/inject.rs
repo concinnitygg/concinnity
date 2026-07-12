@@ -13,6 +13,7 @@
 
 use super::{form_panel, hud, panel, preview, template_panel, templates, view};
 use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use concinnity_templates::{AssetSpec, asset};
@@ -29,7 +30,7 @@ const GAP: f32 = 8.0;
 // rendering world carries an injected `hud_font` (via the engine-default
 // DebugHud) unless it explicitly opted out; falling back to `None` leaves the
 // text to the renderer's default font.
-fn hud_font(world: &World) -> Option<AssetId> {
+fn hud_font(world: &World) -> Option<FontHandle> {
     world.query::<TextLabel>().find_map(|l| l.font)
 }
 
@@ -53,7 +54,7 @@ pub(crate) fn editor_hud(world: &mut World) {
     inject_top_bar(world, font);
 }
 
-fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
+fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     let save_rect = [REF_W - SAVE_W, 0.0, SAVE_W, hud::BTN_H];
     let view_rect = [save_rect[0] - GAP - VIEW_W, 0.0, VIEW_W, hud::BTN_H];
 
@@ -75,7 +76,7 @@ fn inject_top_bar(world: &mut World, font: Option<AssetId>) {
 
 // Inject the View panel's elements, hidden with placeholder geometry; the tick's
 // `view::apply` positions and shows them when the panel is toggled on.
-fn inject_view(world: &mut World, font: Option<AssetId>) {
+fn inject_view(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in view::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -87,7 +88,7 @@ fn inject_view(world: &mut World, font: Option<AssetId>) {
 
 // Inject the Templates panel's elements, hidden with placeholder geometry; the
 // tick's `templates::apply` positions and shows them when the panel is toggled on.
-fn inject_templates(world: &mut World, font: Option<AssetId>) {
+fn inject_templates(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in templates::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -100,7 +101,7 @@ fn inject_templates(world: &mut World, font: Option<AssetId>) {
 // Inject the Template detail panel's elements, hidden with placeholder geometry;
 // the tick's `template_panel::apply` positions and shows them once a template row
 // is picked from the Templates list.
-fn inject_template_panel(world: &mut World, font: Option<AssetId>) {
+fn inject_template_panel(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in template_panel::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -115,7 +116,7 @@ fn inject_template_panel(world: &mut World, font: Option<AssetId>) {
 // active mode needs each frame, so inject every element hidden with placeholder
 // geometry / tint / content. Sourcing the ids from the panel's own id lists keeps
 // this in lockstep with what the panel draws.
-fn inject_panel(world: &mut World, font: Option<AssetId>) {
+fn inject_panel(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in panel::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -131,7 +132,7 @@ fn inject_panel(world: &mut World, font: Option<AssetId>) {
 // Inject the edit-form panel's elements, all starting hidden (the form opens
 // from a browse-list click or the "+" picker): its chrome + slot pools from its
 // id lists, plus the name heading and the fixed pool of arg text inputs.
-fn inject_form_panel(world: &mut World, font: Option<AssetId>) {
+fn inject_form_panel(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in form_panel::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -148,7 +149,7 @@ fn inject_form_panel(world: &mut World, font: Option<AssetId>) {
 // Inject the Preview panel's elements, hidden with placeholder geometry; the
 // tick's `preview::apply` positions and shows them from the first frame that has
 // a `FrameInput`.
-fn inject_preview(world: &mut World, font: Option<AssetId>) {
+fn inject_preview(world: &mut World, font: Option<FontHandle>) {
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for id in preview::all_sprite_ids() {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
@@ -173,7 +174,12 @@ fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) -> 
     s
 }
 
-fn centered_label(id: AssetId, content: &str, rect: [f32; 4], font: Option<AssetId>) -> TextLabel {
+fn centered_label(
+    id: AssetId,
+    content: &str,
+    rect: [f32; 4],
+    font: Option<FontHandle>,
+) -> TextLabel {
     let pos = [rect[0] + rect[2] * 0.5, rect[1] + hud::LABEL_TOP];
     let mut l: TextLabel = materialize(asset::text_label(
         "",
@@ -191,7 +197,7 @@ fn row_label(
     id: AssetId,
     content: &str,
     rect: [f32; 4],
-    font: Option<AssetId>,
+    font: Option<FontHandle>,
     visible: bool,
 ) -> TextLabel {
     let pos = [rect[0] + 12.0, rect[1] + 10.0];
@@ -203,7 +209,7 @@ fn row_label(
     l
 }
 
-fn text_field(id: AssetId, placeholder: &str, font: Option<AssetId>) -> TextInput {
+fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextInput {
     let mut t: TextInput = materialize(
         asset::text_input("", placeholder)
             .set("background", [0.14, 0.15, 0.20, 1.0])
@@ -310,7 +316,7 @@ mod tests {
         let mut world = World::new_empty();
         world.add_component(TextLabel {
             asset_id: AssetId(7),
-            font: Some(AssetId(42)),
+            font: Some(FontHandle(42)),
             ..Default::default()
         });
         editor_hud(&mut world);
@@ -318,12 +324,12 @@ mod tests {
             .query::<TextLabel>()
             .find(|l| l.asset_id == hud::SAVE_LABEL)
             .unwrap();
-        assert_eq!(save.font, Some(AssetId(42)));
+        assert_eq!(save.font, Some(FontHandle(42)));
         let field = world
             .query::<TextInput>()
             .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
-        assert_eq!(field.font, Some(AssetId(42)));
+        assert_eq!(field.font, Some(FontHandle(42)));
     }
 
     // The templates-spec-driven constructors materialize the same components the
@@ -344,12 +350,12 @@ mod tests {
         assert!(s.visible);
         assert_eq!(s.asset_id, AssetId(1));
 
-        let t = text_field(AssetId(2), "name", Some(AssetId(9)));
+        let t = text_field(AssetId(2), "name", Some(FontHandle(9)));
         assert_eq!(t.placeholder, "name");
         assert_eq!(t.background, [0.14, 0.15, 0.20, 1.0]);
         assert_eq!(t.max_len, 48);
         assert!(!t.visible);
-        assert_eq!(t.font, Some(AssetId(9)));
+        assert_eq!(t.font, Some(FontHandle(9)));
 
         let c = centered_label(AssetId(3), "SAVE", [0.0, 0.0, 88.0, 88.0], None);
         assert_eq!(c.content, "SAVE");

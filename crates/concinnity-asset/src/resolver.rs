@@ -105,6 +105,33 @@ pub(crate) fn resolve_audio_clip_handle(name: &str) -> Option<u32> {
     }
 }
 
+// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
+static FONT_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the name -> font-handle resolver. Called by concinnity-cook, backed by
+/// the current build's declaration-ordered font handle map. Idempotent; the last
+/// writer wins. Mirrors [`set_texture_handle_resolver`].
+pub fn set_font_handle_resolver(f: HandleResolveFn) {
+    FONT_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+}
+
+/// Resolve a font reference name to its dense `FontHandle` value via the installed
+/// resolver. `None` means either no resolver is installed or the name is not a
+/// declared font; the caller decides whether to fall back (a validation context)
+/// or to fail (a real build).
+pub(crate) fn resolve_font_handle(name: &str) -> Option<u32> {
+    let v = FONT_HANDLE_RESOLVER.load(Ordering::Acquire);
+    if v == 0 {
+        None
+    } else {
+        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address stored
+        // by `set_font_handle_resolver`; the transmute reverses that exact
+        // `fn as usize`.
+        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
+        f(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // These tests own the process-global resolver: each installs the same

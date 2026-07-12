@@ -144,6 +144,122 @@ pub struct TextureSource {
 #[derive(Debug, Clone, Default)]
 pub struct TextureSources(pub Vec<TextureSource>);
 
+// The color-grading LUTs loaded from the blob, indexed by `ColorLutHandle`. The
+// renderer uses only the first (handle 0); a world declares at most one. Replaces
+// the `query::<ColorLut>()` drain -- the LUT payload is read once at init.
+#[derive(Debug, Clone, Default)]
+pub struct ColorLutTable(pub Vec<ResourceEntry>);
+
+impl ColorLutTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::ColorLut))
+    }
+
+    // Number of declared LUTs; the renderer warns and uses only handle 0 when >1.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // The payload locator for a LUT handle, if in range and compiled.
+    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
+        self.0.get(handle).and_then(|e| e.payload.clone())
+    }
+}
+
+// The IBL environment maps loaded from the blob, indexed by `EnvironmentMapHandle`.
+// The renderer uses only the first (handle 0); a world declares at most one.
+// Replaces the `query::<EnvironmentMap>()` drain.
+#[derive(Debug, Clone, Default)]
+pub struct EnvironmentMapTable(pub Vec<ResourceEntry>);
+
+impl EnvironmentMapTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::EnvironmentMap))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
+        self.0.get(handle).and_then(|e| e.payload.clone())
+    }
+}
+
+// Dev-only source catalogue for the singleton ColorLut, inserted by the in-memory
+// (`cn debug` / editor) build so `GraphicsSystem::init` can seed the hot-reload
+// watcher now that ColorLut is a resource without a drained `source` field. The
+// raw authored source path of the first declared ColorLut, or `None`. Absent in
+// the shipped disk runtime, which does not hot-reload.
+#[derive(Debug, Clone, Default)]
+pub struct ColorLutSources(pub Option<String>);
+
+// One file-backed EnvironmentMap's re-bake inputs, captured dev-only so the
+// hot-reload watcher can re-run the IBL convolution with the same dimensions the
+// build used (a size change would invalidate the shader's prefilter-mip
+// assumptions).
+#[derive(Debug, Clone, Default)]
+pub struct EnvironmentMapSourceInfo {
+    pub source: String,
+    pub prefilter_face_size: u32,
+    pub irradiance_face_size: u32,
+    pub prefilter_samples: u32,
+    pub prefilter_clamp: f32,
+}
+
+// Dev-only source catalogue for the singleton EnvironmentMap. `Some` only for a
+// file-backed map (a procedural `generator` has nothing to watch). Mirrors
+// [`ColorLutSources`]; absent in the shipped disk runtime.
+#[derive(Debug, Clone, Default)]
+pub struct EnvironmentMapSources(pub Option<EnvironmentMapSourceInfo>);
+
+// The fonts loaded from the blob, indexed by `FontHandle`. The renderer reads this
+// at init to build its glyph atlases + metrics, in place of draining a `Font`
+// component column. Every font (built-in or file-backed) has a compiled SDF-atlas
+// payload, so an entry's `payload` is normally `Some`.
+#[derive(Debug, Clone, Default)]
+pub struct FontTable(pub Vec<ResourceEntry>);
+
+impl FontTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::Font))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // Iterate each font's payload locator in handle order (index == the font's
+    // `FontHandle`), skipping any font with no payload.
+    pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
+    }
+
+    // Blob indices that hold a font payload, so the graphics systems keep the font
+    // blobs resident. Mirrors `TextureTable::blob_indices`.
+    pub fn blob_indices(&self) -> HashSet<u32> {
+        self.0
+            .iter()
+            .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

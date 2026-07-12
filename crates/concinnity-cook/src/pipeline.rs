@@ -1194,8 +1194,7 @@ fn compile_by_type(
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
     use crate::assets::{
-        ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
-        SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
+        File, Mesh, ProceduralMesh, Room, SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
     };
     match ct {
         ComponentType::Mesh => <Mesh as BuildAsset>::compile_payload(args, ctx),
@@ -1203,11 +1202,7 @@ fn compile_by_type(
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
         ComponentType::File => <File as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::CubemapTexture => <CubemapTexture as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::EnvironmentMap => <EnvironmentMap as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::ColorLut => <ColorLut as BuildAsset>::compile_payload(args, ctx),
         ComponentType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::Font => <Font as BuildAsset>::compile_payload(args, ctx),
         ComponentType::ShaderStage => <ShaderStage as BuildAsset>::compile_payload(args, ctx),
         ComponentType::SdfVolume => <SdfVolume as BuildAsset>::compile_payload(args, ctx),
         other => Err(std::io::Error::new(
@@ -1231,8 +1226,7 @@ fn source_files_by_type(
 ) -> Vec<String> {
     use crate::asset::BuildAsset;
     use crate::assets::{
-        ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
-        SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
+        File, Mesh, ProceduralMesh, Room, SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
     };
     match ct {
         ComponentType::Mesh => <Mesh as BuildAsset>::source_files(args, ctx),
@@ -1240,11 +1234,7 @@ fn source_files_by_type(
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::source_files(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::source_files(args, ctx),
         ComponentType::File => <File as BuildAsset>::source_files(args, ctx),
-        ComponentType::CubemapTexture => <CubemapTexture as BuildAsset>::source_files(args, ctx),
-        ComponentType::EnvironmentMap => <EnvironmentMap as BuildAsset>::source_files(args, ctx),
-        ComponentType::ColorLut => <ColorLut as BuildAsset>::source_files(args, ctx),
         ComponentType::Room => <Room as BuildAsset>::source_files(args, ctx),
-        ComponentType::Font => <Font as BuildAsset>::source_files(args, ctx),
         ComponentType::ShaderStage => <ShaderStage as BuildAsset>::source_files(args, ctx),
         ComponentType::SdfVolume => <SdfVolume as BuildAsset>::source_files(args, ctx),
         _ => Vec::new(),
@@ -1972,7 +1962,7 @@ mod tests {
     // (it left the component registry). Its source-less error still surfaces, and
     // its source file is folded into the payload cache key.
     #[test]
-    fn resource_asset_types_compile_audio_clip_and_texture() {
+    fn resource_asset_types_compile_audio_clip_texture_cubemap_env_lut_and_font() {
         use crate::resource_handles::ResourceAssetType;
         let rt = ResourceAssetType::parse("AudioClip").expect("AudioClip is a resource asset");
         let err = rt
@@ -1996,6 +1986,70 @@ mod tests {
         assert_eq!(
             tex.source_files(&serde_json::json!({"source": "a.png"})),
             vec!["a.png".to_string()]
+        );
+
+        // CubemapTexture is a resource asset too. Source-less args fail, and its
+        // `.hdr` source folds into the payload cache key.
+        let cube =
+            ResourceAssetType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
+        let err = cube
+            .compile_payload(&serde_json::json!({}))
+            .expect_err("a source-less CubemapTexture must fail to compile");
+        assert!(
+            err.to_string().contains("requires a `source` path"),
+            "got: {err}"
+        );
+        assert_eq!(
+            cube.source_files(&serde_json::json!({"source": "c.hdr"})),
+            vec!["c.hdr".to_string()]
+        );
+
+        // EnvironmentMap and ColorLut are resource assets too. Both surface their
+        // source-less error through `ResourceAssetType::compile_payload`, and fold
+        // their `source` into the payload cache key.
+        let env =
+            ResourceAssetType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
+        let err = env
+            .compile_payload(&serde_json::json!({}))
+            .expect_err("a source-less EnvironmentMap must fail to compile");
+        assert!(
+            err.to_string()
+                .contains("requires either `source` or `generator`"),
+            "got: {err}"
+        );
+        assert_eq!(
+            env.source_files(&serde_json::json!({"source": "e.hdr"})),
+            vec!["e.hdr".to_string()]
+        );
+
+        let lut = ResourceAssetType::parse("ColorLut").expect("ColorLut is a resource asset");
+        let err = lut
+            .compile_payload(&serde_json::json!({}))
+            .expect_err("a source-less ColorLut must fail to compile");
+        assert!(
+            err.to_string().contains("requires a `source` path"),
+            "got: {err}"
+        );
+        assert_eq!(
+            lut.source_files(&serde_json::json!({"source": "l.cube"})),
+            vec!["l.cube".to_string()]
+        );
+
+        // Font is a resource asset. The built-in font (empty `path`) compiles a
+        // non-empty atlas, and a file-backed font folds its `path` (not `source`)
+        // into the payload cache key.
+        let font = ResourceAssetType::parse("Font").expect("Font is a resource asset");
+        let bytes = font
+            .compile_payload(&serde_json::json!({"size_px": 20}))
+            .expect("the built-in font compiles");
+        assert!(!bytes.is_empty());
+        assert_eq!(
+            font.source_files(&serde_json::json!({"path": "f.ttf"})),
+            vec!["f.ttf".to_string()]
+        );
+        assert!(
+            font.source_files(&serde_json::json!({"source": "x.ttf"}))
+                .is_empty()
         );
     }
 
@@ -2030,24 +2084,8 @@ mod tests {
             assert!(!bytes.is_empty(), "{name} payload should be non-empty");
         }
 
-        let err_cases: &[(&str, serde_json::Value, &str)] = &[
-            (
-                "ColorLut",
-                serde_json::json!({}),
-                "requires a `source` path",
-            ),
-            (
-                "CubemapTexture",
-                serde_json::json!({}),
-                "requires a `source` path",
-            ),
-            (
-                "EnvironmentMap",
-                serde_json::json!({}),
-                "requires either `source` or `generator`",
-            ),
-            ("File", serde_json::json!({}), "unsupported File kind"),
-        ];
+        let err_cases: &[(&str, serde_json::Value, &str)] =
+            &[("File", serde_json::json!({}), "unsupported File kind")];
         for case in err_cases {
             let name = case.0;
             let args = &case.1;
