@@ -116,7 +116,6 @@ impl MtlContext {
             media:
                 MediaPayloads {
                     textures,
-                    normal_maps,
                     text_atlases,
                     env_map_bytes,
                     color_lut_bytes,
@@ -301,26 +300,23 @@ impl MtlContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // normal-map texture pool: slot 0 = 1x1 flat-normal fallback (tangent-space (0,0,1)),
-        // followed by caller-supplied normal map textures.
+        // Flat-normal fallback: the single normal-region texture (1x1 tangent-space
+        // (0,0,1)), sampled by a draw with no normal map. Real normal maps are
+        // textures in `gpu_textures` (the shared pool) at their own handle; only
+        // this fallback lives in `gpu_normal_maps`, one slot past the last texture.
         let flat_normal = upload_texture(&device, 1, 1, &[128u8, 128, 255, 255])
             .map_err(|e| format!("flat normal fallback: {}", e))?;
-        let mut gpu_normal_maps: Vec<Retained<ProtocolObject<dyn MTLTexture>>> = vec![flat_normal];
-        for (i, (w, h, pixels)) in normal_maps.iter().enumerate() {
-            let tex = upload_texture(&device, *w, *h, pixels)
-                .map_err(|e| format!("normal_map[{}]: {}", i, e))?;
-            gpu_normal_maps.push(tex);
-        }
+        let gpu_normal_maps: Vec<Retained<ProtocolObject<dyn MTLTexture>>> = vec![flat_normal];
 
-        // The bindless static pass binds the albedo + normal textures into one
-        // capped pool. A world that exceeds the cap still renders, but objects
-        // whose pool index would overflow get clamped to the last slot.
+        // The bindless static pass binds every texture plus the flat-normal
+        // fallback into one capped pool. A world that exceeds the cap still
+        // renders, but objects whose pool index would overflow get clamped to
+        // the last slot.
         if bindless && gpu_textures.len() + gpu_normal_maps.len() > BINDLESS_TEXTURE_COUNT {
             tracing::warn!(
-                "Metal: texture pool ({} albedo + {} normal) exceeds bindless capacity {}; \
-                 some objects will sample a clamped texture",
+                "Metal: texture pool ({} textures + flat-normal fallback) exceeds bindless \
+                 capacity {}; some objects will sample a clamped texture",
                 gpu_textures.len(),
-                gpu_normal_maps.len(),
                 BINDLESS_TEXTURE_COUNT,
             );
         }
@@ -956,7 +952,6 @@ impl MtlContext {
                 },
                 super::raytrace::RtTextureCounts {
                     albedo_count: gpu_textures.len(),
-                    normal_count: gpu_normal_maps.len(),
                 },
                 // Skinned meshes upload after `new`, so the initial BVH is
                 // static + instanced; the first frame's update seeds the
@@ -1009,11 +1004,8 @@ impl MtlContext {
         let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
         let (instance_records, instance_draw_args) = {
             use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
-            let records = super::cull::metal_instance_records(
-                &instanced_clusters,
-                gpu_textures.len(),
-                gpu_normal_maps.len(),
-            );
+            let records =
+                super::cull::metal_instance_records(&instanced_clusters, gpu_textures.len());
             let mut args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
             for cluster in &instanced_clusters {
                 for _ in &cluster.instances {

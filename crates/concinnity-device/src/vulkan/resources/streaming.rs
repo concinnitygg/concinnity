@@ -116,16 +116,18 @@ impl VkContext {
             .next()
             .ok_or("chunk descriptor set: allocation returned none")?;
         let tex_slot = texture_slot.min(self.textures.len().saturating_sub(1));
-        let nm_slot = normal_map_slot.min(self.normal_map_textures.len().saturating_sub(1));
         self.chunk_stream.texture_slot = Some(tex_slot);
-        self.chunk_stream.normal_map_slot = Some(nm_slot);
+        // The normal map is a texture in the shared pool at its own handle (or
+        // `NO_NORMAL_MAP_SLOT`); store it as authored so a streamed swap of that
+        // texture re-points this binding.
+        self.chunk_stream.normal_map_slot = Some(normal_map_slot);
         let albedo_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.textures[tex_slot].view)
             .sampler(self.linear_sampler);
         let nm_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.normal_map_textures[nm_slot].view)
+            .image_view(self.normal_pool_view(normal_map_slot))
             .sampler(self.linear_sampler);
         let writes = [
             vk::WriteDescriptorSet::default()

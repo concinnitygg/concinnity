@@ -1200,18 +1200,6 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
-        fn evict_normal_map_slot(&mut self, _slot: usize) -> Result<(), String> {
-            Ok(())
-        }
-        fn update_normal_map_slot(
-            &mut self,
-            _slot: usize,
-            _w: u32,
-            _h: u32,
-            _px: &[u8],
-        ) -> Result<(), String> {
-            Ok(())
-        }
         fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
             Ok(())
         }

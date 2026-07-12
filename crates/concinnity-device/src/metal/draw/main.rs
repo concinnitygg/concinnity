@@ -606,7 +606,6 @@ impl MtlContext {
         }
 
         let last_tex = self.textures.len().saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
 
         let icb_ref = icb_override.or(self.cull.icb.as_deref());
@@ -627,7 +626,6 @@ impl MtlContext {
             draw_calls += self.draw_static_objects(enc, visible, cam_pos, |enc, obj, _| {
                 let model_uniforms = ModelUniforms { model: obj.model };
                 let slot = obj.texture_slot.min(last_tex);
-                let nm_slot = obj.normal_map_slot.min(last_nm);
                 unsafe {
                     // model matrix at vertex buffer(2)
                     enc.setVertexBytes_length_atIndex(
@@ -644,7 +642,7 @@ impl MtlContext {
                     // albedo at texture(0), normal map at texture(1)
                     enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
                     enc.setFragmentTexture_atIndex(
-                        Some(self.normal_map_textures[nm_slot].as_ref()),
+                        Some(self.normal_pool_texture(obj.normal_map_slot)),
                         1,
                     );
                     enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
@@ -691,7 +689,6 @@ impl MtlContext {
         enc.setRenderPipelineState(&inst_ps);
 
         let last_tex = self.textures.len().saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
 
         // Per cluster: bind material (fragment buffer(3)) + albedo / normal
         // textures, shared across the cluster's LOD buckets. The shared helper
@@ -705,10 +702,12 @@ impl MtlContext {
                 );
             }
             let slot = cluster.texture_slot.min(last_tex);
-            let nm_slot = cluster.normal_map_slot.min(last_nm);
             unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(self.normal_map_textures[nm_slot].as_ref()), 1);
+                enc.setFragmentTexture_atIndex(
+                    Some(self.normal_pool_texture(cluster.normal_map_slot)),
+                    1,
+                );
                 enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
             }
         });
@@ -761,7 +760,6 @@ impl MtlContext {
         }
 
         let last_tex = self.textures.len().saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
 
         // The shared helper owns the visible filter, the skinned-camera-distance
         // LOD pick, and the u16 indexed draw; the closure binds this mesh's model,
@@ -769,7 +767,6 @@ impl MtlContext {
         let draw_calls = self.draw_skinned_objects(enc, &sib, cam_pos, |enc, obj, i| {
             let model_uniforms = ModelUniforms { model: obj.model };
             let slot = obj.texture_slot.min(last_tex);
-            let nm_slot = obj.normal_map_slot.min(last_nm);
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model_uniforms).cast(),
@@ -783,7 +780,10 @@ impl MtlContext {
                     3,
                 );
                 enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(self.normal_map_textures[nm_slot].as_ref()), 1);
+                enc.setFragmentTexture_atIndex(
+                    Some(self.normal_pool_texture(obj.normal_map_slot)),
+                    1,
+                );
                 enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
             }
         });

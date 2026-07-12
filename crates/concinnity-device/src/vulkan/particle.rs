@@ -1310,7 +1310,7 @@ impl VkContext {
     // emitter albedo lives in the shared texture pool, so a streamed or
     // hot-reloaded albedo swap recreates the view and leaves a dangling
     // descriptor unless every emitter sampling that slot is re-pointed. Called
-    // from `rewrite_albedo_slot`, the sibling of the per-object / clone rewires.
+    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
     pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
         let Some(resources) = self.particle_resources.as_ref() else {
             return;

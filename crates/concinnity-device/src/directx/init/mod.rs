@@ -108,7 +108,6 @@ impl DxContext {
             media:
                 MediaPayloads {
                     textures,
-                    normal_maps,
                     text_atlases,
                     env_map_bytes,
                     color_lut_bytes,
@@ -370,12 +369,13 @@ impl DxContext {
         let n_objects = draw_objects.len();
         let n_clusters = instanced_clusters.len();
         let n_atlases = text_atlases.len();
-        // Flat bindless pool sizes, derived from the resource pools built below:
-        // the albedo region has one SRV per `gpu_textures` entry (a 1x1 white
-        // fallback stands in when no textures exist), the normal region one per
-        // `gpu_normal_maps` entry (slot 0 is the flat-normal fallback).
+        // Flat bindless pool sizes, derived from the resource pools built below.
+        // Albedo and normal maps share ONE handle-indexed pool: the real
+        // textures (a 1x1 white fallback stands in when there are none) followed
+        // by a single flat-normal fallback for normal-less draws. So the pool is
+        // `flat_albedo_count + 1` SRVs; `flat_normal_count` is that trailing 1.
         let flat_albedo_count = textures.len().max(1);
-        let flat_normal_count = normal_maps.len() + 1;
+        let flat_normal_count = 1;
         let _ = decal_srv_extra; // folded into the heap_layout decal block.
 
         // Planar reflections: group each glass pane's plane into a bounded set of
@@ -737,38 +737,45 @@ impl DxContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // Normal map pool
-        // Slot 0 is the flat-normal fallback (matching Metal/Vulkan), so the
-        // material map's normal_map_slot of 0 means "no normal map".
-        let mut gpu_normal_maps: Vec<ID3D12Resource> = vec![create_fallback_flat_normal_resource(
+        // Flat-normal fallback: the single normal-region resource, sampled by a
+        // draw with no normal map. Real normal maps are textures in
+        // `gpu_textures` (the shared pool), addressed by their own handle; only
+        // this fallback lives in `normal_map_textures`.
+        let gpu_normal_maps: Vec<ID3D12Resource> = vec![create_fallback_flat_normal_resource(
             &device,
             &command_queue,
         )?];
-        for (i, (w, h, px)) in normal_maps.iter().enumerate() {
-            gpu_normal_maps.push(
-                upload_texture_resource(&device, &command_queue, *w, *h, px)
-                    .map_err(|e| format!("normal_map[{i}]: {e}"))?,
-            );
-        }
 
-        // Flat deduplicated bindless pool: one SRV per distinct albedo resource
-        // followed by one per distinct normal resource. The bindless main pass
-        // and the RT hit shader bind this region's base and index it by a flat
-        // slot (`albedo = texture_slot`, `normal = albedo_count + normal_slot`),
-        // mirroring Vulkan/Metal. A shared texture resolves to ONE descriptor
-        // here, unlike the per-object pairs above which bake a copy per draw.
+        // Flat deduplicated bindless pool: one SRV per distinct texture, then the
+        // flat-normal fallback at `flat_albedo_count`. The bindless main pass and
+        // the RT hit shader bind this region's base and index it by a flat slot
+        // (`albedo = texture_slot`, `normal = normal's own handle`, or the
+        // fallback slot when the draw has no normal map), mirroring Vulkan/Metal.
+        // A shared texture resolves to ONE descriptor here, unlike the per-object
+        // pairs below which bake a copy per draw.
         debug_assert_eq!(gpu_textures.len(), flat_albedo_count);
         debug_assert_eq!(gpu_normal_maps.len(), flat_normal_count);
+        let last_tex = gpu_textures.len() - 1;
         for (k, tex) in gpu_textures.iter().enumerate() {
             write_rgba8_srv(&device, tex, slot_cpu(flat_pool_base_slot + k));
         }
-        for (k, nm) in gpu_normal_maps.iter().enumerate() {
-            write_rgba8_srv(
-                &device,
-                nm,
-                slot_cpu(flat_pool_base_slot + flat_albedo_count + k),
-            );
-        }
+        write_rgba8_srv(
+            &device,
+            &gpu_normal_maps[0],
+            slot_cpu(flat_pool_base_slot + flat_albedo_count),
+        );
+
+        // Resolve the pool resource a `normal_map_slot` samples for the legacy
+        // per-object / per-cluster SRV pairs: a real normal map is a texture in
+        // the shared pool at its own slot; `NO_NORMAL_MAP_SLOT` selects the
+        // flat-normal fallback.
+        let normal_resource = |slot: usize| -> &ID3D12Resource {
+            if slot == NO_NORMAL_MAP_SLOT {
+                &gpu_normal_maps[0]
+            } else {
+                &gpu_textures[slot.min(last_tex)]
+            }
+        };
 
         // Per-object albedo + normal SRV pairs
         // Layout: slot object_base_slot+obj_idx*2 = albedo, +1 = normal.
@@ -776,11 +783,8 @@ impl DxContext {
         // resource selected by texture_slot / normal_map_slot, clamped to the
         // pool length so out-of-range slots fall back to the last valid entry.
         if n_objects > 0 {
-            let last_tex = gpu_textures.len() - 1;
-            let last_nm = gpu_normal_maps.len() - 1;
             for (obj_idx, obj) in draw_objects.iter().enumerate() {
                 let albedo_idx = obj.texture_slot.min(last_tex);
-                let nm_idx = obj.normal_map_slot.min(last_nm);
                 let albedo_slot_idx = object_base_slot + obj_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
                 write_rgba8_srv(
@@ -788,19 +792,20 @@ impl DxContext {
                     &gpu_textures[albedo_idx],
                     slot_cpu(albedo_slot_idx),
                 );
-                write_rgba8_srv(&device, &gpu_normal_maps[nm_idx], slot_cpu(normal_slot_idx));
+                write_rgba8_srv(
+                    &device,
+                    normal_resource(obj.normal_map_slot),
+                    slot_cpu(normal_slot_idx),
+                );
             }
         }
 
         // Per-cluster albedo + normal SRV pairs
         // Layout: slot (object_base_slot + n_objects*2 + cluster_idx*2) = albedo, +1 = normal.
         if n_clusters > 0 {
-            let last_tex = gpu_textures.len() - 1;
-            let last_nm = gpu_normal_maps.len() - 1;
             let cluster_base_slot = object_base_slot + n_objects * 2;
             for (cluster_idx, cluster) in instanced_clusters.iter().enumerate() {
                 let albedo_idx = cluster.texture_slot.min(last_tex);
-                let nm_idx = cluster.normal_map_slot.min(last_nm);
                 let albedo_slot_idx = cluster_base_slot + cluster_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
                 write_rgba8_srv(
@@ -808,7 +813,11 @@ impl DxContext {
                     &gpu_textures[albedo_idx],
                     slot_cpu(albedo_slot_idx),
                 );
-                write_rgba8_srv(&device, &gpu_normal_maps[nm_idx], slot_cpu(normal_slot_idx));
+                write_rgba8_srv(
+                    &device,
+                    normal_resource(cluster.normal_map_slot),
+                    slot_cpu(normal_slot_idx),
+                );
             }
         }
 
@@ -1116,11 +1125,7 @@ impl DxContext {
             use crate::gfx::render_types::{
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
-            let records = instance_object_records(
-                &instanced_clusters,
-                flat_albedo_count as u32,
-                flat_normal_count as u32,
-            );
+            let records = instance_object_records(&instanced_clusters, flat_albedo_count as u32);
             // Cluster base index range (cluster indices are absolute, so
             // base_vertex = 0); per-instance LOD is a follow-up. Every instance is
             // visible + resident + cullable, so its finite per-instance world AABB
@@ -1905,7 +1910,6 @@ impl DxContext {
                 clusters: &instanced_clusters,
                 total_vertices: vertices.len(),
                 albedo_count: flat_albedo_count as u32,
-                normal_count: flat_normal_count as u32,
             }) {
                 Ok(Some(mut accel)) => {
                     match super::raytrace::build_rt_skin_pipeline(&device, hot_reload) {

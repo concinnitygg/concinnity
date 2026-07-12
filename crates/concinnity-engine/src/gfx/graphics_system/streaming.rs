@@ -81,66 +81,6 @@ impl GraphicsSystem {
         self.texture_streamer = Some(streamer);
     }
 
-    // Stand up the normal-map streaming subsystem when a StreamingConfig was
-    // declared. Mirrors setup_texture_streaming for the normal-map pool: a
-    // second TextureStreamer drives it, and streamed item `i` is pool slot
-    // `i + 1` (slot 0 is the never-streamed flat-normal fallback). Reuses the
-    // shared texture_budget / texture_cap, and the same disk-backed vs
-    // RAM-backed payload source choice.
-    pub(super) fn setup_normal_map_streaming(
-        &mut self,
-        config: Option<StreamingConfig>,
-        normal_map_payloads: Vec<Vec<u8>>,
-        normal_map_locators: &[crate::ecs::PayloadLocator],
-        disk_backed: bool,
-        normal_map_centers: Vec<Vec<[f32; 3]>>,
-    ) {
-        let Some(config) = config else { return };
-        // When disk-backed the payloads were not retained, so the streamed
-        // map count comes from the locators instead.
-        let map_count = if disk_backed {
-            normal_map_locators.len()
-        } else {
-            normal_map_payloads.len()
-        };
-        if map_count == 0 {
-            return;
-        }
-        let Some(backend) = self.backend.as_deref_mut() else {
-            return;
-        };
-        for i in 0..map_count {
-            if let Err(e) = backend.evict_normal_map_slot(i + 1) {
-                tracing::warn!("GraphicsSystem: normal-map evict slot {}: {}", i + 1, e);
-            }
-        }
-        let source = match build_texture_payload_source(
-            normal_map_payloads,
-            normal_map_locators,
-            disk_backed,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("GraphicsSystem: normal-map streaming source: {}", e);
-                return;
-            }
-        };
-        let streamer = crate::app::texture_stream::TextureStreamer::new(
-            source,
-            normal_map_centers,
-            config.budget(),
-            config.cap(),
-        );
-        tracing::info!(
-            "GraphicsSystem: normal-map streaming enabled ({} maps, {} source, budget {}/frame, cap {})",
-            streamer.len(),
-            if disk_backed { "disk" } else { "ram" },
-            config.budget(),
-            config.cap(),
-        );
-        self.normal_map_streamer = Some(streamer);
-    }
-
     // Stand up the mesh-geometry streaming subsystem when a StreamingConfig
     // was declared. Every streamed draw's geometry region is zeroed now (via
     // evict_mesh); the streamer brings them back resident over the next
@@ -266,7 +206,11 @@ impl GraphicsSystem {
         let (texture_slot, normal_map_slot, material) = vw
             .material
             .and_then(|id| material_map.get(&id).copied())
-            .unwrap_or((0, 0, crate::gfx::render_types::MaterialUniforms::DEFAULT));
+            .unwrap_or((
+                0,
+                crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                crate::gfx::render_types::MaterialUniforms::DEFAULT,
+            ));
 
         let chunk_blocks = vw.chunk_blocks();
         let block_size = vw.block_size();
@@ -384,7 +328,6 @@ impl GraphicsSystem {
     pub fn streaming_stats(&self) -> StreamingStats {
         StreamingStats {
             texture: self.texture_streamer.as_ref().map(|s| s.stats()),
-            normal_map: self.normal_map_streamer.as_ref().map(|s| s.stats()),
             mesh: self.mesh_streamer.as_ref().map(|s| s.stats()),
             chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
         }

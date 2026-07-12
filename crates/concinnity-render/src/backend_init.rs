@@ -56,10 +56,11 @@ pub struct ShaderBytes<'a> {
 // Decoded image payloads: texture pools, glyph atlases, and the serialised
 // IBL / grading payloads (None = the backend binds identity fallbacks).
 pub struct MediaPayloads<'a> {
-    // Decoded albedo textures: (width, height, RGBA pixels) per slot.
+    // Decoded textures for the shared handle-indexed pool: (width, height, RGBA
+    // pixels) per slot. Every texture -- albedo, normal map, emissive/ORM,
+    // terrain secondary -- lives here once at its handle; the backend appends a
+    // flat-normal fallback past the last entry for normal-less draws.
     pub textures: &'a [(u32, u32, Vec<u8>)],
-    // Decoded normal maps; slot 0 is the backend-added flat-normal fallback.
-    pub normal_maps: &'a [(u32, u32, Vec<u8>)],
     // Glyph atlas textures for text rendering; empty = no text support.
     pub text_atlases: Vec<(u32, u32, Vec<u8>)>,
     // Serialised EnvironmentMap payload (irradiance + prefilter cubemaps).

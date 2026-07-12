@@ -5,10 +5,28 @@
 // asset hot-reload (`cn debug` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use objc2::runtime::ProtocolObject;
+
 use crate::metal::context::MtlContext;
 use crate::metal::texture::upload_texture;
 
 impl MtlContext {
+    // The texture a `normal_map_slot` samples for the legacy per-draw normal
+    // binding: a real normal map is a texture in the shared pool at its own slot;
+    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole entry of
+    // `normal_map_textures`).
+    pub(in crate::metal) fn normal_pool_texture(
+        &self,
+        normal_map_slot: usize,
+    ) -> &ProtocolObject<dyn objc2_metal::MTLTexture> {
+        if normal_map_slot == crate::gfx::render_types::NO_NORMAL_MAP_SLOT {
+            self.normal_map_textures[0].as_ref()
+        } else {
+            let last = self.textures.len().saturating_sub(1);
+            self.textures[normal_map_slot.min(last)].as_ref()
+        }
+    }
+
     // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
     //
     // The asset-streaming subsystem calls this to bring a texture resident
@@ -48,48 +66,6 @@ impl MtlContext {
             ));
         }
         self.textures[slot] = upload_texture(&self.device, 1, 1, &[128, 128, 128, 255])?;
-        Ok(())
-    }
-
-    // Replace normal-map pool `slot` with freshly decoded RGBA8 pixels.
-    //
-    // The normal-map counterpart of [`update_texture_slot`](Self::update_texture_slot):
-    // the asset-streaming subsystem calls this to bring a normal map resident
-    // after init. Slot 0 is the flat-normal fallback and is never streamed;
-    // streamed maps occupy slots >= 1.
-    pub fn update_normal_map_slot(
-        &mut self,
-        slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-    ) -> Result<(), String> {
-        if slot >= self.normal_map_textures.len() {
-            return Err(format!(
-                "update_normal_map_slot: slot {} out of range (pool size {})",
-                slot,
-                self.normal_map_textures.len()
-            ));
-        }
-        self.normal_map_textures[slot] = upload_texture(&self.device, width, height, pixels)?;
-        Ok(())
-    }
-
-    // Reset normal-map pool `slot` to a 1x1 flat-normal placeholder.
-    //
-    // The normal-map counterpart of [`evict_texture_slot`](Self::evict_texture_slot).
-    // A not-yet-streamed normal map reads as tangent-space (0,0,1), so the
-    // surface shades flat (no bump detail) until its real map is resident --
-    // the same value the slot-0 fallback carries.
-    pub fn evict_normal_map_slot(&mut self, slot: usize) -> Result<(), String> {
-        if slot >= self.normal_map_textures.len() {
-            return Err(format!(
-                "evict_normal_map_slot: slot {} out of range (pool size {})",
-                slot,
-                self.normal_map_textures.len()
-            ));
-        }
-        self.normal_map_textures[slot] = upload_texture(&self.device, 1, 1, &[128, 128, 255, 255])?;
         Ok(())
     }
 

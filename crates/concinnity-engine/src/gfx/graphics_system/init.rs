@@ -888,7 +888,7 @@ impl GraphicsSystem {
                     texture_name_to_slot.insert(tex.asset_id, slot);
                     texture_locators.push(l.clone());
                     if capture_sources && tex.generator.is_empty() && !tex.source.is_empty() {
-                        asset_source_map.push_albedo(tex.source.clone(), tex.image_index, slot);
+                        asset_source_map.push_texture(tex.source.clone(), tex.image_index, slot);
                     }
                 }
                 None => {
@@ -903,11 +903,14 @@ impl GraphicsSystem {
 
         // drain Materials and build a name -> (albedo_slot, normal_map_slot, gpu uniforms) map.
         // Materials have no payload; all data lives in their args.
-        // normal_map_slot 0 is always the flat-normal fallback; named maps start at 1.
-        let mut normal_map_name_to_slot: std::collections::HashMap<AssetId, usize> =
-            std::collections::HashMap::new();
-        let mut normal_map_locators: Vec<crate::ecs::PayloadLocator> = Vec::new();
-
+        //
+        // Every texture -- whether referenced as an albedo, a normal map, an
+        // emissive/ORM map, or a terrain secondary -- lives once in the shared
+        // pool at its drain slot, so a normal-map reference resolves to the same
+        // slot as any other reference to that texture (no separate normal pool).
+        // A material with no normal map carries `NO_NORMAL_MAP_SLOT`, which the
+        // backend maps to the pool's flat-normal fallback.
+        //
         // Albedo-region textures (albedo, secondary albedo, emissive, packed
         // ORM) carry a cook-assigned `TextureHandle` whose value is the texture's
         // declaration-order drain slot -- i.e. its slot in this pool -- so the
@@ -940,53 +943,24 @@ impl GraphicsSystem {
                 },
             };
 
-            // normal_map_slot 0 = flat-normal fallback; real maps get slot >= 1
+            // A normal map is a texture in the shared pool at its own drain slot;
+            // unset selects the flat-normal fallback. Every drained texture is in
+            // `texture_name_to_slot` (the drain loop errored out on any without a
+            // payload), so an id that misses is a genuine missing-asset error.
             let normal_map_slot = match mat.normal_map {
-                None => 0,
-                Some(nm_id) => {
-                    if let Some(&slot) = normal_map_name_to_slot.get(&nm_id) {
-                        slot
-                    } else {
-                        match textures.iter().find(|t| t.asset_id == nm_id) {
-                            Some(tex) => match &tex.locator {
-                                Some(l) => {
-                                    let slot = normal_map_locators.len() + 1;
-                                    normal_map_name_to_slot.insert(nm_id, slot);
-                                    normal_map_locators.push(l.clone());
-                                    if capture_sources
-                                        && tex.generator.is_empty()
-                                        && !tex.source.is_empty()
-                                    {
-                                        asset_source_map.push_normal_map(
-                                            tex.source.clone(),
-                                            tex.image_index,
-                                            slot,
-                                        );
-                                    }
-                                    slot
-                                }
-                                None => {
-                                    tracing::error!(
-                                        "GraphicsSystem: Material {} normal_map {} has no compiled payload",
-                                        mat.asset_id,
-                                        nm_id
-                                    );
-                                    self.failed = true;
-                                    return;
-                                }
-                            },
-                            None => {
-                                tracing::error!(
-                                    "GraphicsSystem: Material {} references unknown normal_map {} -- add a Texture asset with that id",
-                                    mat.asset_id,
-                                    nm_id
-                                );
-                                self.failed = true;
-                                return;
-                            }
-                        }
+                None => crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                Some(nm_id) => match texture_name_to_slot.get(&nm_id) {
+                    Some(&slot) => slot,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references unknown normal_map {} -- add a Texture asset with that id",
+                            mat.asset_id,
+                            nm_id
+                        );
+                        self.failed = true;
+                        return;
                     }
-                }
+                },
             };
 
             // Optional secondary albedo/normal pair for the terrain
@@ -1012,52 +986,25 @@ impl GraphicsSystem {
                     }
                 },
             };
+            // Secondary normal for the terrain slope-blend layer, sampled only
+            // when `terrain_blend > 0`. Resolves to the texture's shared-pool
+            // slot; unset selects the flat-normal fallback (index `texture_count`,
+            // one past the last real texture) so a slope layer without its own
+            // normal map perturbs nothing.
             let normal_secondary_slot: u32 = match mat.normal_secondary {
-                None => 0,
-                Some(nm_id) => {
-                    if let Some(&slot) = normal_map_name_to_slot.get(&nm_id) {
-                        slot as u32
-                    } else {
-                        match textures.iter().find(|t| t.asset_id == nm_id) {
-                            Some(tex) => match &tex.locator {
-                                Some(l) => {
-                                    let slot = normal_map_locators.len() + 1;
-                                    normal_map_name_to_slot.insert(nm_id, slot);
-                                    normal_map_locators.push(l.clone());
-                                    if capture_sources
-                                        && tex.generator.is_empty()
-                                        && !tex.source.is_empty()
-                                    {
-                                        asset_source_map.push_normal_map(
-                                            tex.source.clone(),
-                                            tex.image_index,
-                                            slot,
-                                        );
-                                    }
-                                    slot as u32
-                                }
-                                None => {
-                                    tracing::error!(
-                                        "GraphicsSystem: Material {} normal_secondary {} has no compiled payload",
-                                        mat.asset_id,
-                                        nm_id
-                                    );
-                                    self.failed = true;
-                                    return;
-                                }
-                            },
-                            None => {
-                                tracing::error!(
-                                    "GraphicsSystem: Material {} references unknown normal_secondary {} -- add a Texture asset with that id",
-                                    mat.asset_id,
-                                    nm_id
-                                );
-                                self.failed = true;
-                                return;
-                            }
-                        }
+                None => texture_count as u32,
+                Some(nm_id) => match texture_name_to_slot.get(&nm_id) {
+                    Some(&slot) => slot as u32,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references unknown normal_secondary {} -- add a Texture asset with that id",
+                            mat.asset_id,
+                            nm_id
+                        );
+                        self.failed = true;
+                        return;
                     }
-                }
+                },
             };
 
             // Emissive + packed-ORM maps live in the albedo region of the
@@ -1165,11 +1112,15 @@ impl GraphicsSystem {
             } else if let Some(tex_id) = sm.texture {
                 (
                     *texture_name_to_slot.get(&tex_id).unwrap_or(&0),
-                    0,
+                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
                     crate::gfx::render_types::MaterialUniforms::DEFAULT,
                 )
             } else {
-                (0, 0, crate::gfx::render_types::MaterialUniforms::DEFAULT)
+                (
+                    0,
+                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                    crate::gfx::render_types::MaterialUniforms::DEFAULT,
+                )
             };
 
             let base = skinned_vertices.len() as u16;
@@ -1501,34 +1452,6 @@ impl GraphicsSystem {
             }
         }
 
-        let mut normal_map_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
-        // Raw compiled normal-map payloads, kept past blob release so the
-        // asset-streaming subsystem can re-decode them off the main thread.
-        // Left empty when the blobs are disk-backed: the streamer then re-reads
-        // each payload from its blob file instead of holding a RAM copy.
-        let mut normal_map_payloads: Vec<Vec<u8>> = Vec::new();
-        for locator in &normal_map_locators {
-            let nm_bytes = match ctx.read_payload(locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read normal_map payload: {:?}", e);
-                    self.failed = true;
-                    return;
-                }
-            };
-            match crate::build::texture::deserialise(&nm_bytes) {
-                Ok(t) => normal_map_data.push(t),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: malformed normal_map payload: {}", e);
-                    self.failed = true;
-                    return;
-                }
-            }
-            if !blob_disk_backed {
-                normal_map_payloads.push(nm_bytes);
-            }
-        }
-
         // drain Font components; deserialise atlas + metrics for text rendering
         let fonts = ctx.drain::<Font>();
         let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
@@ -1688,7 +1611,6 @@ impl GraphicsSystem {
             .chain(std::iter::once(frag_locator.blob_index))
             .chain(vert_instanced_locator.iter().map(|l| l.blob_index))
             .chain(texture_locators.iter().map(|l| l.blob_index))
-            .chain(normal_map_locators.iter().map(|l| l.blob_index))
             .chain(room_blob_indices)
             .chain(font_blob_indices)
             .chain(skinned_blob_indices)
@@ -1831,27 +1753,21 @@ impl GraphicsSystem {
 
         // Per-texture-slot draw positions, captured before `draw_objects` is
         // moved into the backend. The streaming subsystem scores each texture
-        // by the camera's distance to the nearest draw that samples it.
+        // by the camera's distance to the nearest draw that samples it. Albedo
+        // and normal maps share one pool, so a draw contributes its position to
+        // both the texture it samples as albedo and the one it samples as a
+        // normal map (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither).
         let texture_centers: Vec<Vec<[f32; 3]>> = {
             let mut centers = vec![Vec::new(); texture_data.len()];
             for obj in &draw_objects {
+                let pos = draw_object_position(obj);
                 if let Some(slot) = centers.get_mut(obj.texture_slot) {
-                    slot.push(draw_object_position(obj));
+                    slot.push(pos);
                 }
-            }
-            centers
-        };
-
-        // Per-normal-map draw positions. Streamed item `i` is normal-map pool
-        // slot `i + 1` -- slot 0 is the flat-normal fallback and never streams,
-        // so a draw sampling slot 0 contributes to no streamed item.
-        let normal_map_centers: Vec<Vec<[f32; 3]>> = {
-            let mut centers = vec![Vec::new(); normal_map_data.len()];
-            for obj in &draw_objects {
-                if obj.normal_map_slot >= 1
-                    && let Some(slot) = centers.get_mut(obj.normal_map_slot - 1)
+                if obj.normal_map_slot != crate::gfx::render_types::NO_NORMAL_MAP_SLOT
+                    && let Some(slot) = centers.get_mut(obj.normal_map_slot)
                 {
-                    slot.push(draw_object_position(obj));
+                    slot.push(pos);
                 }
             }
             centers
@@ -2183,7 +2099,6 @@ impl GraphicsSystem {
             },
             media: MediaPayloads {
                 textures: &texture_data,
-                normal_maps: &normal_map_data,
                 text_atlases: text_atlas_data,
                 env_map_bytes: env_map_bytes.as_deref(),
                 color_lut_bytes: color_lut_bytes.as_deref(),
@@ -2481,13 +2396,6 @@ impl GraphicsSystem {
             &texture_locators,
             blob_disk_backed,
             texture_centers,
-        );
-        self.setup_normal_map_streaming(
-            streaming_config.clone(),
-            normal_map_payloads,
-            &normal_map_locators,
-            blob_disk_backed,
-            normal_map_centers,
         );
         self.setup_mesh_streaming(
             streaming_config,

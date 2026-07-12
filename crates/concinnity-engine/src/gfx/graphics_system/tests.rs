@@ -244,7 +244,6 @@ fn init_builds_draw_list_and_render_handles() {
     assert_eq!(draw.model[3][1], 2.0);
     assert_eq!(draw.model[3][2], 3.0);
     assert_eq!(init.texture_count, 1);
-    assert_eq!(init.normal_map_count, 0, "no normal maps declared");
     assert_eq!(init.text_atlas_count, 0, "no fonts or sprite textures");
     assert_eq!(init.n_skinned, 0);
     assert_eq!(init.instanced_cluster_count, 0);
@@ -941,10 +940,6 @@ fn streaming_init_evicts_streamable_slots() {
     assert!(s.saw(&Call::EvictMesh(0)));
     assert!(gs.texture_streamer.is_some());
     assert!(gs.mesh_streamer.is_some());
-    assert!(
-        gs.normal_map_streamer.is_none(),
-        "no normal maps declared: nothing to stream"
-    );
 }
 
 #[test]

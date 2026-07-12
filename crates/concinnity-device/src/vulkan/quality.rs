@@ -374,7 +374,6 @@ impl VkContext {
                 draw_objects: &self.draw_objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
-                normal_count: self.normal_map_textures.len(),
                 total_vertices: self.rt_static_vertex_count,
             },
             self.frames_in_flight,

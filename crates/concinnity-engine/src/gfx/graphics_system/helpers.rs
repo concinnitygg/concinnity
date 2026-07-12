@@ -167,7 +167,7 @@ pub(super) fn build_texture_payload_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{DrawObject, MaterialUniforms};
+    use crate::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     // A finite-bounds draw object at `model` covering `[index_offset, +count)`
     // of the shared index buffer. Culling stays enabled unless the caller
@@ -188,7 +188,7 @@ mod tests {
             base_vertex,
             model,
             texture_slot: 0,
-            normal_map_slot: 0,
+            normal_map_slot: NO_NORMAL_MAP_SLOT,
             material: MaterialUniforms::DEFAULT,
             visible: true,
             resident: true,

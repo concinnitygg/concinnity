@@ -650,11 +650,12 @@ pub(super) struct DxDescriptors {
     pub shadow_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub linear_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub text_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // Scene texture pools (kept alive). Layout matches Metal/Vulkan so that
-    // DrawObject::texture_slot/normal_map_slot index directly into these vecs.
-    // Slot 0 of `normal_map_textures` is the flat-normal fallback; real maps
-    // start at slot 1, matching the convention used by graphics_system.rs when
-    // it builds the material map.
+    // Shared texture pool (kept alive). Every texture -- albedo, normal map,
+    // emissive/ORM, terrain secondary -- lives here once at its handle, matching
+    // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
+    // index directly into it. `normal_map_textures` holds only the single
+    // flat-normal fallback a normal-less draw samples (its pool slot is one past
+    // the last real texture); real normal maps are entries in `textures`.
     pub textures: Vec<ID3D12Resource>,
     pub normal_map_textures: Vec<ID3D12Resource>,
     // Held only to keep the text-atlas textures resident; the SRV handles

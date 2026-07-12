@@ -22,13 +22,12 @@ use super::watcher::spawn_watcher;
 type Inflight<T> = Mutex<Option<std::sync::mpsc::Receiver<T>>>;
 
 // One decoded `Texture` ready for the render thread to push through the
-// matching `update_texture_slot` / `update_normal_map_slot` backend call.
-// Computed off-thread by the `cn-asset-reload` worker so the (sometimes
-// seconds-long) decode never blocks the render loop.
+// `update_texture_slot` backend call. Computed off-thread by the
+// `cn-asset-reload` worker so the (sometimes seconds-long) decode never blocks
+// the render loop.
 #[derive(Debug)]
 pub struct DecodedTexture {
     pub slot: usize,
-    pub kind: TextureKind,
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,

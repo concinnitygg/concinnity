@@ -264,57 +264,72 @@ impl DxContext {
         }
     }
 
-    // Re-point every per-object / per-cluster albedo SRV that resolves to
-    // albedo-pool `slot` at the (just-swapped) `self.descriptors.textures[slot]` resource.
-    //
-    // The per-object / per-cluster SRVs are baked into the descriptor heap at
-    // init from the texture selected by `texture_slot` (clamped to the pool
-    // length), so a streamed swap must rewrite every heap slot that resolved
-    // to this pool index -- mirroring the init loop in `Self::new`.
-    fn rewrite_albedo_slot(&self, slot: usize) {
+    // Resolve the pool resource a legacy per-draw normal SRV should bake for a
+    // `normal_map_slot`: a real normal map is a texture at its own slot (clamped
+    // to the pool); `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the
+    // sole entry of `normal_map_textures`).
+    fn normal_pool_resource(&self, normal_map_slot: usize) -> &ID3D12Resource {
+        if normal_map_slot == NO_NORMAL_MAP_SLOT {
+            &self.descriptors.normal_map_textures[0]
+        } else {
+            let last = self.descriptors.textures.len().saturating_sub(1);
+            &self.descriptors.textures[normal_map_slot.min(last)]
+        }
+    }
+
+    // Re-point every per-object / per-cluster SRV that samples texture-pool
+    // `slot`, at the (just-swapped) `self.descriptors.textures[slot]` resource.
+    // Albedo and normal maps share one pool, so a streamed texture may be an
+    // albedo for one draw (the even SRV of its heap pair) and a normal map for
+    // another (the odd SRV); this re-points both wherever they resolve to `slot`.
+    fn rewrite_texture_slot(&self, slot: usize) {
         let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
+        // Whether a draw samples texture `slot` as its normal map. A real normal
+        // is a texture at its own handle; `NO_NORMAL_MAP_SLOT` samples the
+        // never-streamed flat-normal fallback and matches no streamed slot.
+        let normal_is_slot = |nms: usize| nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot;
+        // Per-object (albedo, normal) heap pairs: runtime clones live in their
+        // own pool; streamed `VoxelWorld` chunks share `chunk_srv_base_slot` and
+        // are fixed at `setup_chunk_streaming` time (skipped here); everything
+        // else is a build-time draw at `3 + obj_idx * 2`.
         for (obj_idx, obj) in self.draw_objects.iter().enumerate() {
-            if obj.texture_slot.min(last) != slot {
-                continue;
-            }
-            // Runtime clones live in their own (albedo, normal) heap pool;
-            // streamed `VoxelWorld` chunks share `chunk_srv_base_slot` and
-            // are not refreshed here (their material is fixed at
-            // `setup_chunk_streaming` time). Everything else is a build-time
-            // draw at `3 + obj_idx * 2`.
-            let albedo_cpu = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&obj_idx)
-            {
-                self.srv_slot_cpu(self.clone.srv_base_slot + clone_offset * 2)
+            let pair_base = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&obj_idx) {
+                self.clone.srv_base_slot + clone_offset * 2
             } else if obj_idx >= self.n_objects {
                 continue;
             } else {
-                self.srv_slot_cpu(3 + obj_idx * 2)
+                3 + obj_idx * 2
             };
-            write_rgba8_srv(&self.device, resource, albedo_cpu);
+            if obj.texture_slot.min(last) == slot {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+            }
+            if normal_is_slot(obj.normal_map_slot) {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+            }
         }
         let cluster_base = 3 + self.n_objects * 2;
         for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
+            let pair_base = cluster_base + cluster_idx * 2;
             if cluster.texture_slot.min(last) == slot {
-                write_rgba8_srv(
-                    &self.device,
-                    resource,
-                    self.srv_slot_cpu(cluster_base + cluster_idx * 2),
-                );
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+            }
+            if normal_is_slot(cluster.normal_map_slot) {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+            let pair_base = self.skinned.srv_base_slot + i * 2;
             if obj.texture_slot.min(last) == slot {
-                write_rgba8_srv(
-                    &self.device,
-                    resource,
-                    self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2),
-                );
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+            }
+            if normal_is_slot(obj.normal_map_slot) {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
-        // Flat deduplicated pool: the swapped resource has exactly one descriptor
-        // here (shared by every consumer), so one re-point refreshes the bindless
-        // main pass + the RT hit shader at once.
+        // Flat shared pool: the swapped resource has exactly one descriptor here
+        // (index == its handle), shared by albedo + normal sampling and by the RT
+        // hit shader, so one re-point refreshes every consumer at once.
         write_rgba8_srv(
             &self.device,
             resource,
@@ -322,69 +337,16 @@ impl DxContext {
         );
     }
 
-    // Re-point every per-object / per-cluster normal-map SRV that resolves to
-    // normal-map-pool `slot` at the (just-swapped)
-    // `self.descriptors.normal_map_textures[slot]` resource. The normal SRV sits one slot
-    // after the albedo SRV in each (albedo, normal) heap pair.
-    fn rewrite_normal_slot(&self, slot: usize) {
-        let last = self.descriptors.normal_map_textures.len() - 1;
-        let resource = &self.descriptors.normal_map_textures[slot];
-        for (obj_idx, obj) in self.draw_objects.iter().enumerate() {
-            if obj.normal_map_slot.min(last) != slot {
-                continue;
-            }
-            // Same kind-routing as `rewrite_albedo_slot`: clones in the
-            // clone pool, chunks skipped, build-time draws at the per-object
-            // pair offset.
-            let normal_cpu = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&obj_idx)
-            {
-                self.srv_slot_cpu(self.clone.srv_base_slot + clone_offset * 2 + 1)
-            } else if obj_idx >= self.n_objects {
-                continue;
-            } else {
-                self.srv_slot_cpu(3 + obj_idx * 2 + 1)
-            };
-            write_rgba8_srv(&self.device, resource, normal_cpu);
-        }
-        let cluster_base = 3 + self.n_objects * 2;
-        for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
-            if cluster.normal_map_slot.min(last) == slot {
-                write_rgba8_srv(
-                    &self.device,
-                    resource,
-                    self.srv_slot_cpu(cluster_base + cluster_idx * 2 + 1),
-                );
-            }
-        }
-        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
-            if obj.normal_map_slot.min(last) == slot {
-                write_rgba8_srv(
-                    &self.device,
-                    resource,
-                    self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2 + 1),
-                );
-            }
-        }
-        // Flat deduplicated pool: the normal region follows the albedo region, so
-        // normal pool slot `slot` lives at `flat_pool_base_slot + albedo_count +
-        // slot`. One re-point refreshes the bindless main pass + RT hit shader.
-        let albedo_count = self.descriptors.textures.len();
-        write_rgba8_srv(
-            &self.device,
-            resource,
-            self.srv_slot_cpu(self.descriptors.flat_pool_base_slot + albedo_count + slot),
-        );
-    }
-
-    // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
+    // Replace texture-pool `slot` with freshly decoded RGBA8 pixels.
     //
     // The asset-streaming subsystem calls this to bring a texture resident
     // after init. Like Vulkan -- and unlike Metal, whose bind paths re-read
     // the texture pool every frame -- the D3D12 per-object / per-cluster SRVs
     // are baked into the descriptor heap at init, so a streamed swap must
-    // rewrite every heap slot that samples this pool index. `wait_idle` first
-    // guarantees no in-flight command list still reads the old descriptor (or
-    // the old resource) before it is overwritten and dropped.
+    // rewrite every heap slot that samples this pool index (as an albedo or a
+    // normal map). `wait_idle` first guarantees no in-flight command list still
+    // reads the old descriptor (or the old resource) before it is overwritten
+    // and dropped.
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
@@ -403,11 +365,11 @@ impl DxContext {
         let texture =
             upload_texture_resource(&self.device, &self.command_queue, width, height, pixels)?;
         self.descriptors.textures[slot] = texture;
-        self.rewrite_albedo_slot(slot);
+        self.rewrite_texture_slot(slot);
         Ok(())
     }
 
-    // Reset albedo texture-pool `slot` to a 1x1 mid-grey placeholder.
+    // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     //
     // Used by the asset-streaming subsystem to mark a slot whose texture is
     // not yet resident; a later `update_texture_slot` brings the real texture
@@ -415,43 +377,6 @@ impl DxContext {
     // not-yet-streamed slot reads differently under inspection.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         self.update_texture_slot(slot, 1, 1, &[128, 128, 128, 255])
-    }
-
-    // Replace normal-map pool `slot` with freshly decoded RGBA8 pixels.
-    //
-    // The normal-map counterpart of [`update_texture_slot`](Self::update_texture_slot).
-    // Slot 0 is the flat-normal fallback and is never streamed; streamed maps
-    // occupy slots >= 1.
-    pub fn update_normal_map_slot(
-        &mut self,
-        slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-    ) -> Result<(), String> {
-        if slot >= self.descriptors.normal_map_textures.len() {
-            return Err(format!(
-                "update_normal_map_slot: slot {} out of range (pool size {})",
-                slot,
-                self.descriptors.normal_map_textures.len()
-            ));
-        }
-        self.wait_idle();
-        let texture =
-            upload_texture_resource(&self.device, &self.command_queue, width, height, pixels)?;
-        self.descriptors.normal_map_textures[slot] = texture;
-        self.rewrite_normal_slot(slot);
-        Ok(())
-    }
-
-    // Reset normal-map pool `slot` to a 1x1 flat-normal placeholder.
-    //
-    // The normal-map counterpart of [`evict_texture_slot`](Self::evict_texture_slot).
-    // A not-yet-streamed normal map reads as tangent-space (0,0,1), so the
-    // surface shades flat (no bump detail) until its real map is resident --
-    // the same value the slot-0 fallback carries.
-    pub fn evict_normal_map_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.update_normal_map_slot(slot, 1, 1, &[128, 128, 255, 255])
     }
 
     // Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.
@@ -628,7 +553,6 @@ impl DxContext {
         let albedo_slot = self.clone.srv_base_slot + clone_offset * 2;
         let normal_slot = albedo_slot + 1;
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        let last_nm = self.descriptors.normal_map_textures.len().saturating_sub(1);
         write_rgba8_srv(
             &self.device,
             &self.descriptors.textures[texture_slot.min(last_tex)],
@@ -636,7 +560,7 @@ impl DxContext {
         );
         write_rgba8_srv(
             &self.device,
-            &self.descriptors.normal_map_textures[normal_map_slot.min(last_nm)],
+            self.normal_pool_resource(normal_map_slot),
             self.srv_slot_cpu(normal_slot),
         );
 
@@ -1122,9 +1046,8 @@ impl DxContext {
             .free(old_i_len, chunk_idx_bytes as u64, 0);
 
         // Bake the shared chunk (albedo, normal) SRV pair from the chunk
-        // material's texture-pool slots, clamped to the pool lengths.
+        // material's texture-pool slots, clamped to the pool length.
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        let last_nm = self.descriptors.normal_map_textures.len().saturating_sub(1);
         write_rgba8_srv(
             &self.device,
             &self.descriptors.textures[texture_slot.min(last_tex)],
@@ -1132,7 +1055,7 @@ impl DxContext {
         );
         write_rgba8_srv(
             &self.device,
-            &self.descriptors.normal_map_textures[normal_map_slot.min(last_nm)],
+            self.normal_pool_resource(normal_map_slot),
             self.srv_slot_cpu(self.chunk_stream.srv_base_slot + 1),
         );
         Ok(())
@@ -1468,9 +1391,8 @@ impl DxContext {
         }
 
         // Bake each skinned object's (albedo, normal) SRV pair from its
-        // material's texture-pool slots, clamped to the pool lengths.
+        // material's texture-pool slots, clamped to the pool length.
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        let last_nm = self.descriptors.normal_map_textures.len().saturating_sub(1);
         for (i, obj) in draw_objects.iter().enumerate() {
             write_rgba8_srv(
                 &self.device,
@@ -1479,7 +1401,7 @@ impl DxContext {
             );
             write_rgba8_srv(
                 &self.device,
-                &self.descriptors.normal_map_textures[obj.normal_map_slot.min(last_nm)],
+                self.normal_pool_resource(obj.normal_map_slot),
                 self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2 + 1),
             );
         }

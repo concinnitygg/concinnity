@@ -2043,40 +2043,6 @@ impl GraphicsSystem {
                     }
                 }
 
-                // Drive normal-map streaming: identical to the albedo path
-                // above, but streamed item `i` maps to normal-map pool slot
-                // `i + 1` (slot 0 is the flat-normal fallback).
-                if !world_hidden && let Some(streamer) = &mut self.normal_map_streamer {
-                    streamer.update_scores(cam_pos, self.frame_count);
-                    for item in streamer.plan_and_dispatch() {
-                        if let Err(e) = backend.evict_normal_map_slot(item + 1) {
-                            tracing::warn!(
-                                "GraphicsSystem: normal-map evict slot {}: {}",
-                                item + 1,
-                                e
-                            );
-                        }
-                    }
-                    streamer.drain_completed(self.frame_count, |item, w, h, px| {
-                        if let Err(e) = backend.update_normal_map_slot(item + 1, w, h, px) {
-                            tracing::warn!(
-                                "GraphicsSystem: normal-map upload slot {}: {}",
-                                item + 1,
-                                e
-                            );
-                        }
-                    });
-                    if self.frame_count.is_multiple_of(120) {
-                        let (resident, pending, unloaded) = streamer.stats();
-                        tracing::info!(
-                            "GraphicsSystem: normal-map streaming -- {} resident, {} pending, {} unloaded",
-                            resident,
-                            pending,
-                            unloaded
-                        );
-                    }
-                }
-
                 // Drive mesh-geometry streaming: re-score each streamed mesh
                 // by camera distance, dispatch this frame's background loads,
                 // then apply completed geometry uploads + evictions. A mesh is

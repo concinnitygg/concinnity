@@ -179,7 +179,6 @@ impl VkContext {
         let object_layouts: Vec<_> = (0..n).map(|_| self.descriptors.object_set_layout).collect();
         let object_sets = alloc_descriptor_sets(&self.device, pool, &object_layouts)?;
         let last_tex = self.textures.len().saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
         for (&set, obj) in object_sets.iter().zip(draw_objects.iter()) {
             let albedo_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -187,7 +186,7 @@ impl VkContext {
                 .sampler(self.linear_sampler);
             let nm_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.normal_map_textures[obj.normal_map_slot.min(last_nm)].view)
+                .image_view(self.normal_pool_view(obj.normal_map_slot))
                 .sampler(self.linear_sampler);
             let writes = [
                 vk::WriteDescriptorSet::default()

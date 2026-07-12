@@ -37,21 +37,22 @@ impl DxContext {
     // `update_model` / `update_visibility` edits are reflected; a no-op when
     // the bindless pass is inactive.
     pub(in crate::directx) fn build_object_buffer(&self, frame_idx: usize) {
-        use crate::gfx::render_types::{GpuObjectData, pack_object_record, pack_skinned_record};
+        use crate::gfx::render_types::{
+            GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
+            pack_skinned_record,
+        };
         let Some(&ptr) = self.cull.object_buffer_ptrs.get(frame_idx) else {
             return;
         };
         let stride = std::mem::size_of::<GpuObjectData>();
-        // Flat deduplicated bindless pool indices, identical to Vulkan/Metal:
-        // albedo = texture_slot, normal = albedo_count + normal_map_slot, both
-        // clamped to the pool. The bindless main pass + RT hit shader bind the
-        // flat pool base, so a shared texture resolves to one descriptor.
-        let albedo_count = self.descriptors.textures.len();
-        let last_tex = albedo_count.saturating_sub(1);
-        let last_nm = self.descriptors.normal_map_textures.len().saturating_sub(1);
+        // Shared handle-indexed pool indices, identical to Vulkan/Metal: albedo =
+        // texture_slot, normal = the normal map's own handle (or the flat-normal
+        // fallback slot for a normal-less draw). The bindless main pass + RT hit
+        // shader bind the pool base, so a shared texture resolves to one descriptor.
+        let texture_count = self.descriptors.textures.len() as u32;
         for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
             // SAFETY: the buffer was sized for `n_objects` records and the
             // loop is bounded by `take(n_objects)`, so `i * stride` is in range.
@@ -74,8 +75,8 @@ impl DxContext {
         // disabled record. The unused reserve tail is likewise never read.
         let chunk_base = self.chunk_record_base();
         self.for_each_chunk_record(|k, obj| {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
             // SAFETY: the chunk reserve is `[chunk_base, chunk_base + n_chunk)` and
             // `for_each_chunk_record` caps `k < n_chunk`, so the write is in range.
@@ -101,8 +102,8 @@ impl DxContext {
             .take(self.n_skinned)
             .enumerate()
         {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_skinned_record(obj, albedo, normal);
             // SAFETY: the buffer reserved `n_skinned` records past
             // `skinned_record_base()` at init; the loop is bounded by

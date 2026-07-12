@@ -215,7 +215,6 @@ pub(super) fn decode_asset_batch(
         match decoded {
             Ok((w, h, px)) => batch.textures.push(DecodedTexture {
                 slot: entry.slot,
-                kind: entry.kind,
                 width: w,
                 height: h,
                 pixels: px,
@@ -419,14 +418,7 @@ pub fn poll_pending_assets(
     let mut failed = batch.decode_failures;
 
     for tex in &batch.textures {
-        let result = match tex.kind {
-            TextureKind::Albedo => {
-                backend.update_texture_slot(tex.slot, tex.width, tex.height, &tex.pixels)
-            }
-            TextureKind::NormalMap => {
-                backend.update_normal_map_slot(tex.slot, tex.width, tex.height, &tex.pixels)
-            }
-        };
+        let result = backend.update_texture_slot(tex.slot, tex.width, tex.height, &tex.pixels);
         match result {
             Ok(()) => reloaded += 1,
             Err(e) => {

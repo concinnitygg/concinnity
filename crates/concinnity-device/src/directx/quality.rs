@@ -315,7 +315,6 @@ impl DxContext {
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
-            normal_count: self.descriptors.normal_map_textures.len() as u32,
         }) {
             Ok(Some(accel)) => accel,
             Ok(None) => {

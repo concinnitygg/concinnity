@@ -8,6 +8,8 @@
 
 use ash::vk;
 
+use crate::gfx::render_types::NO_NORMAL_MAP_SLOT;
+
 use super::super::context::*;
 use super::super::texture::{GpuUploadContext, upload_texture};
 
@@ -33,9 +35,22 @@ impl VkContext {
         };
     }
 
+    // The image view a `normal_map_slot` samples for a baked per-object binding:
+    // a real normal map is a texture in the shared pool at its own slot;
+    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole entry of
+    // `normal_map_textures`).
+    pub(in crate::vulkan) fn normal_pool_view(&self, normal_map_slot: usize) -> vk::ImageView {
+        if normal_map_slot == NO_NORMAL_MAP_SLOT {
+            self.normal_map_textures[0].view
+        } else {
+            let last = self.textures.len().saturating_sub(1);
+            self.textures[normal_map_slot.min(last)].view
+        }
+    }
+
     // Re-point bindless texture-pool element `index` of `set` to `view`.
-    // Keeps the bindless texture pool in sync with a streamed albedo /
-    // normal-map swap. The pool layout is `[albedo..] ++ [normal..]`.
+    // Keeps the bindless texture pool in sync with a streamed texture swap; the
+    // pool is one handle-indexed image set (albedo + normal maps share it).
     fn write_pool_image(&self, set: vk::DescriptorSet, index: u32, view: vk::ImageView) {
         let info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -54,10 +69,17 @@ impl VkContext {
     }
 
     // Re-point every per-object / per-cluster descriptor set that samples
-    // albedo `slot` at the (just-swapped) `self.textures[slot]` view.
-    fn rewrite_albedo_slot(&self, slot: usize) {
+    // texture-pool `slot`, at the (just-swapped) `self.textures[slot]` view.
+    // Albedo and normal maps share one pool, so a streamed texture may be an
+    // albedo for one draw (binding 0) and a normal map for another (binding 1);
+    // this re-points both wherever they resolve to `slot`.
+    fn rewrite_texture_slot(&self, slot: usize) {
         let last = self.textures.len().saturating_sub(1);
         let view = self.textures[slot].view;
+        // Whether a draw samples texture `slot` as its normal map. A real normal
+        // is a texture at its own handle; `NO_NORMAL_MAP_SLOT` samples the
+        // never-streamed flat-normal fallback and matches no streamed slot.
+        let normal_is_slot = |nms: usize| nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot;
         for (set, obj) in self
             .descriptors
             .object_sets
@@ -67,8 +89,12 @@ impl VkContext {
             if obj.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
+            if normal_is_slot(obj.normal_map_slot) {
+                self.write_object_image(*set, 1, view);
+            }
         }
-        // The bindless pool addresses albedo slot `s` at pool index `s`.
+        // The bindless pool addresses each texture at pool index == its handle,
+        // shared by albedo and normal sampling, so one re-point covers both.
         for &set in &self.cull.bindless_sets {
             self.write_pool_image(set, slot as u32, view);
         }
@@ -81,6 +107,9 @@ impl VkContext {
             if cluster.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
+            if normal_is_slot(cluster.normal_map_slot) {
+                self.write_object_image(*set, 1, view);
+            }
         }
         for (set, obj) in self
             .skinned
@@ -91,92 +120,44 @@ impl VkContext {
             if obj.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
+            if normal_is_slot(obj.normal_map_slot) {
+                self.write_object_image(*set, 1, view);
+            }
         }
-        // The shared VoxelWorld chunk set bakes its albedo view at init too,
-        // and is not part of object/cluster/skinned, so re-point it explicitly.
-        if let (Some(set), Some(chunk_slot)) =
-            (self.chunk_stream.object_set, self.chunk_stream.texture_slot)
-            && chunk_slot == slot
-        {
-            self.write_object_image(set, 0, view);
+        // The shared VoxelWorld chunk set bakes its (albedo, normal) views at
+        // init too, and is not part of object/cluster/skinned, so re-point it.
+        if let Some(set) = self.chunk_stream.object_set {
+            if self.chunk_stream.texture_slot == Some(slot) {
+                self.write_object_image(set, 0, view);
+            }
+            if let Some(chunk_nms) = self.chunk_stream.normal_map_slot
+                && normal_is_slot(chunk_nms)
+            {
+                self.write_object_image(set, 1, view);
+            }
         }
         // Per-decal albedo descriptors. Walk the decal-side slot tracker;
         // a world with no decals pays nothing here.
         self.rewrite_decal_albedo_slot(slot);
         // Runtime clones (from `clone_static_draw_object`) carry their own
-        // (albedo, normal) descriptor sets, so re-point those that sample
-        // this slot.
-        for (offset, &clone_slot) in self.clone_texture_slots.iter().enumerate() {
-            if clone_slot.min(last) == slot
-                && let Some(&set) = self.clone_object_sets.get(offset)
-            {
+        // (albedo, normal) descriptor sets, so re-point those that sample this
+        // slot as either.
+        for (offset, &clone_tex) in self.clone_texture_slots.iter().enumerate() {
+            let Some(&set) = self.clone_object_sets.get(offset) else {
+                continue;
+            };
+            if clone_tex.min(last) == slot {
                 self.write_object_image(set, 0, view);
+            }
+            if let Some(&clone_nms) = self.clone_normal_map_slots.get(offset)
+                && normal_is_slot(clone_nms)
+            {
+                self.write_object_image(set, 1, view);
             }
         }
         // Particle emitters sample an albedo from the texture pool into their
         // own render set, so re-point any whose source slot is this one.
         self.rewrite_particle_albedo_slot(slot);
-    }
-
-    // Re-point every per-object / per-cluster descriptor set that samples
-    // normal-map `slot` at the (just-swapped) `self.normal_map_textures[slot]`
-    // view.
-    fn rewrite_normal_slot(&self, slot: usize) {
-        let last = self.normal_map_textures.len().saturating_sub(1);
-        let view = self.normal_map_textures[slot].view;
-        for (set, obj) in self
-            .descriptors
-            .object_sets
-            .iter()
-            .zip(self.draw_objects.iter())
-        {
-            if obj.normal_map_slot.min(last) == slot {
-                self.write_object_image(*set, 1, view);
-            }
-        }
-        // The bindless pool ([albedo..] ++ [normal..]) addresses normal slot
-        // `s` at pool index `albedo_count + s`.
-        let albedo_count = self.textures.len();
-        for &set in &self.cull.bindless_sets {
-            self.write_pool_image(set, (albedo_count + slot) as u32, view);
-        }
-        for (set, cluster) in self
-            .instanced
-            .object_sets
-            .iter()
-            .zip(self.instanced.clusters.iter())
-        {
-            if cluster.normal_map_slot.min(last) == slot {
-                self.write_object_image(*set, 1, view);
-            }
-        }
-        for (set, obj) in self
-            .skinned
-            .object_sets
-            .iter()
-            .zip(self.skinned.draw_objects.iter())
-        {
-            if obj.normal_map_slot.min(last) == slot {
-                self.write_object_image(*set, 1, view);
-            }
-        }
-        // The shared VoxelWorld chunk set bakes its normal-map view at init
-        // too, and is not part of object/cluster/skinned, so re-point it.
-        if let (Some(set), Some(chunk_slot)) = (
-            self.chunk_stream.object_set,
-            self.chunk_stream.normal_map_slot,
-        ) && chunk_slot == slot
-        {
-            self.write_object_image(set, 1, view);
-        }
-        // Runtime clones: re-point those that sample this normal-map slot.
-        for (offset, &clone_slot) in self.clone_normal_map_slots.iter().enumerate() {
-            if clone_slot.min(last) == slot
-                && let Some(&set) = self.clone_object_sets.get(offset)
-            {
-                self.write_object_image(set, 1, view);
-            }
-        }
     }
 
     // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
@@ -218,55 +199,14 @@ impl VkContext {
         // SkinnedMesh + VoxelWorld chunk material that share the
         // object_set_layout).
         let old = std::mem::replace(&mut self.textures[slot], img);
-        self.rewrite_albedo_slot(slot);
+        self.rewrite_texture_slot(slot);
         old.destroy(&self.device);
         Ok(())
     }
 
-    // Reset albedo texture-pool `slot` to a 1x1 mid-grey placeholder.
+    // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         self.update_texture_slot(slot, 1, 1, &[128, 128, 128, 255])
-    }
-
-    // Replace normal-map pool `slot` with freshly decoded RGBA8 pixels.
-    pub fn update_normal_map_slot(
-        &mut self,
-        slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-    ) -> Result<(), String> {
-        if slot >= self.normal_map_textures.len() {
-            return Err(format!(
-                "update_normal_map_slot: slot {} out of range (pool size {})",
-                slot,
-                self.normal_map_textures.len()
-            ));
-        }
-        self.wait_idle();
-        let img = upload_texture(
-            &GpuUploadContext {
-                instance: &self.instance,
-                device: &self.device,
-                physical_device: self.physical_device,
-                command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
-            },
-            width,
-            height,
-            pixels,
-        )?;
-        // Rewrite descriptors before destroying the old view; see
-        // `update_texture_slot` for the rationale.
-        let old = std::mem::replace(&mut self.normal_map_textures[slot], img);
-        self.rewrite_normal_slot(slot);
-        old.destroy(&self.device);
-        Ok(())
-    }
-
-    // Reset normal-map pool `slot` to a 1x1 flat-normal placeholder.
-    pub fn evict_normal_map_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.update_normal_map_slot(slot, 1, 1, &[128, 128, 255, 255])
     }
 
     // Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.
@@ -489,9 +429,8 @@ impl VkContext {
         };
 
         let last_tex = self.textures.len().saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
         let albedo_view = self.textures[texture_slot.min(last_tex)].view;
-        let normal_view = self.normal_map_textures[normal_map_slot.min(last_nm)].view;
+        let normal_view = self.normal_pool_view(normal_map_slot);
 
         // Reuse a vacated clone descriptor set, else allocate a fresh one up to
         // the pool cap. A reused set may still be referenced by an in-flight frame

@@ -134,7 +134,7 @@ pub(in crate::vulkan) struct DecalResources {
     pub(in crate::vulkan) sampler: vk::Sampler,
 
     // Last-uploaded texture-pool slot per decal id. Used by
-    // `rewrite_albedo_slot` to detect which decal albedo sets need
+    // `rewrite_texture_slot` to detect which decal albedo sets need
     // re-writing when a streamed texture pool entry swaps.
     pub(in crate::vulkan) decal_texture_slots: Cell<[usize; MAX_DECALS]>,
 }
@@ -1033,7 +1033,7 @@ impl VkContext {
 
         // Write the albedo descriptor for this slot. The texture pool
         // entry is referenced live; a future eviction routes through
-        // `rewrite_albedo_slot` to re-point.
+        // `rewrite_texture_slot` to re-point.
         let decals = self
             .decals_state
             .as_ref()

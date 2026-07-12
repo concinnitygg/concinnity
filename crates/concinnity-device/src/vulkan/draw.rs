@@ -58,9 +58,9 @@ impl VkContext {
     // static pass: one 144-byte record per build-time `DrawObject`, indexed
     // by object id. Streamed `VoxelWorld` chunks (past `n_objects`) are
     // skipped: they render through the legacy pipeline. The pool indices
-    // address the deduplicated `[albedo..] ++ [normal..]` texture pool:
-    // albedo = `texture_slot`, normal = `albedo_count + normal_map_slot`,
-    // both clamped to the pool. Rebuilt every frame so `update_model` /
+    // address the shared handle-indexed texture pool: albedo = `texture_slot`,
+    // normal = the normal map's own handle (or the flat-normal fallback slot
+    // for a normal-less draw). Rebuilt every frame so `update_model` /
     // `update_visibility` edits are reflected; a no-op when bindless is off.
     fn build_object_buffer(&self, frame_idx: usize) {
         let Some(&ptr) = self.cull.object_buffer_ptrs.get(frame_idx) else {
@@ -76,14 +76,15 @@ impl VkContext {
     // so a bake buffer must be zeroed first -- a zero record is a disabled draw the
     // cull kernel skips, which is how the probe omits instanced geometry in V1).
     pub(in crate::vulkan) fn build_object_records_into(&self, ptr: *mut u8) {
-        use crate::gfx::render_types::{GpuObjectData, pack_object_record, pack_skinned_record};
-        let albedo_count = self.textures.len();
-        let last_tex = albedo_count.saturating_sub(1);
-        let last_nm = self.normal_map_textures.len().saturating_sub(1);
+        use crate::gfx::render_types::{
+            GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
+            pack_skinned_record,
+        };
+        let texture_count = self.textures.len() as u32;
         let stride = std::mem::size_of::<GpuObjectData>();
         for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
             // SAFETY: the buffer was sized for `n_objects + n_instances + n_skinned`
             // records (the instance tail is written once at init) and the loop is
@@ -106,8 +107,8 @@ impl VkContext {
         // and the cull kernel skips `objects[i]` for a disabled record.
         let chunk_base = self.chunk_record_base();
         self.for_each_chunk_record(|k, obj| {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
             // SAFETY: the chunk reserve is `[chunk_base, chunk_base + n_chunk)` and
             // `for_each_chunk_record` caps `k < n_chunk`, so the write is in range.
@@ -134,8 +135,8 @@ impl VkContext {
             .take(self.n_skinned)
             .enumerate()
         {
-            let albedo = obj.texture_slot.min(last_tex) as u32;
-            let normal = (albedo_count + obj.normal_map_slot.min(last_nm)) as u32;
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_skinned_record(obj, albedo, normal);
             // SAFETY: the buffer reserved `n_skinned` records past
             // `skinned_record_base()` at init; the loop is bounded by

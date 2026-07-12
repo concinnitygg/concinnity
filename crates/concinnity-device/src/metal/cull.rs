@@ -117,16 +117,15 @@ pub(crate) struct MirrorCullSlot {
 // for this same index.
 pub(super) const CULL_ICB_BUFFER_INDEX: usize = 4;
 
-// The six flat bindless-pool texture indices the Metal bindless fragment shader
-// (`fragment_main_bindless`, default.metal) reads for one surface. The shared
-// pool is laid out as [albedo textures..][normal maps..] and the shader indexes
-// it DIRECTLY (`tex_pool[obj.normal_index]`, no in-shader bias), so the CPU must
-// bias every normal-region slot by `albedo_count` (primary + secondary normal),
-// clamp each to its pool size, then clamp to the `BINDLESS_TEXTURE_COUNT` cap
-// (the pool is a fixed-size MSL array, so an over-cap index would read past it).
-// DX/VK bias the normal region IN-shader and leave these raw, which is why this
-// convention lives in the Metal backend, not the shared `pack_object_record` /
-// `instance_object_records` core helpers. Shared by the per-frame static fill
+// The six texture-pool indices the Metal bindless fragment shader
+// (`fragment_main_bindless`, default.metal) reads for one surface. Albedo,
+// normal, and every optional map share ONE handle-indexed pool (`tex_pool`,
+// [real textures..][flat-normal fallback]), which the shader indexes directly
+// (`tex_pool[obj.normal_index]`), so each index is the texture's own handle --
+// no albedo-count bias. A normal-less draw's `normal` is the flat-normal
+// fallback slot (`normal_pool_index`, at `texture_count`). Every index is
+// clamped to the `BINDLESS_TEXTURE_COUNT` cap (a fixed-size MSL array, so an
+// over-cap index would read past it). Shared by the per-frame static fill
 // (`build_object_buffer`) and the init-time instanced records
 // (`metal_instance_records`) so a folded instance addresses the pool identically
 // to a static object.
@@ -140,26 +139,26 @@ pub(super) struct FlatPoolIndices {
 }
 
 pub(super) fn metal_flat_pool_indices(
-    albedo_count: usize,
-    normal_count: usize,
+    texture_count: usize,
     texture_slot: usize,
     normal_map_slot: usize,
     material: &crate::gfx::render_types::MaterialUniforms,
 ) -> FlatPoolIndices {
+    use crate::gfx::render_types::{albedo_pool_index, normal_pool_index};
     let cap = (super::context::BINDLESS_TEXTURE_COUNT as u32).saturating_sub(1);
-    let last_albedo = albedo_count.saturating_sub(1);
-    let last_normal = normal_count.saturating_sub(1);
-    // Albedo-region slots index the pool directly; normal-region slots follow
-    // the albedo block, so bias by the albedo count. Both clamp to the cap.
-    let albedo_region = |slot: usize| (slot.min(last_albedo) as u32).min(cap);
-    let normal_region = |slot: usize| ((albedo_count + slot.min(last_normal)) as u32).min(cap);
+    let tc = texture_count as u32;
+    let clamp = |i: u32| i.min(cap);
+    // The secondary / emissive / ORM indices already carry their final shared-pool
+    // handle (cook / graphics_system resolve them, `0` = unset for the optional
+    // maps, `texture_count` = flat-normal for an unset secondary normal), so they
+    // index the pool directly.
     FlatPoolIndices {
-        albedo: albedo_region(texture_slot),
-        normal: normal_region(normal_map_slot),
-        albedo_secondary: albedo_region(material.albedo_secondary_index as usize),
-        normal_secondary: normal_region(material.normal_secondary_index as usize),
-        emissive: albedo_region(material.emissive_map_index as usize),
-        orm: albedo_region(material.orm_map_index as usize),
+        albedo: clamp(albedo_pool_index(texture_slot, tc)),
+        normal: clamp(normal_pool_index(normal_map_slot, tc)),
+        albedo_secondary: clamp(material.albedo_secondary_index),
+        normal_secondary: clamp(material.normal_secondary_index),
+        emissive: clamp(material.emissive_map_index),
+        orm: clamp(material.orm_map_index),
     }
 }
 
@@ -170,22 +169,20 @@ pub(super) fn metal_flat_pool_indices(
 // transformed by each instance's model, so the cull kernel frustum/distance/
 // Hi-Z-tests each instance independently. Built once at init (instances are
 // placed at world load and never move) and appended to the per-frame object
-// buffer after the static records. Deliberately NOT the shared core
-// `instance_object_records`: that helper uses the DX/VK raw-index convention
-// (their shaders bias the normal region), which would mis-address Metal's flat
-// pool -- a cluster with a secondary normal map would sample an albedo texture.
+// buffer after the static records. Kept separate from the shared core
+// `instance_object_records` (which the DX/VK folds use) because Metal resolves
+// all six texture indices through `metal_flat_pool_indices` and clamps them to
+// its fixed-size MSL pool; the addressing itself now matches DX/VK.
 pub(super) fn metal_instance_records(
     clusters: &[crate::gfx::render_types::InstancedCluster],
-    albedo_count: usize,
-    normal_count: usize,
+    texture_count: usize,
 ) -> Vec<crate::gfx::render_types::GpuObjectData> {
     use crate::gfx::render_types::GpuObjectData;
     let total: usize = clusters.iter().map(|c| c.instances.len()).sum();
     let mut records = Vec::with_capacity(total);
     for cluster in clusters {
         let idx = metal_flat_pool_indices(
-            albedo_count,
-            normal_count,
+            texture_count,
             cluster.texture_slot,
             cluster.normal_map_slot,
             &cluster.material,
@@ -230,12 +227,10 @@ pub(super) fn metal_instance_records(
 // static + instanced records use.
 pub(super) fn metal_skinned_record(
     obj: &crate::gfx::render_types::SkinnedDrawObject,
-    albedo_count: usize,
-    normal_count: usize,
+    texture_count: usize,
 ) -> crate::gfx::render_types::GpuObjectData {
     let idx = metal_flat_pool_indices(
-        albedo_count,
-        normal_count,
+        texture_count,
         obj.texture_slot,
         obj.normal_map_slot,
         &obj.material,
@@ -320,21 +315,19 @@ impl MtlContext {
         if self.draw_objects.is_empty() {
             return Ok(None);
         }
-        let albedo_count = self.textures.len();
-        let normal_count = self.normal_map_textures.len();
+        let texture_count = self.textures.len();
         // Reuse a persistent scratch Vec across frames; `mem::take` lifts it out
         // so the build loop borrows only `draw_objects` while the ring + device
         // borrows below stay on disjoint fields.
         let mut objects = std::mem::take(&mut self.object_scratch);
         objects.clear();
         for obj in &self.draw_objects {
-            // Flat bindless-pool indices (normal region biased by the albedo
-            // count, all clamped to the cap); the identical mapping the folded
-            // instance records use, so static + instances address the pool the
-            // same way.
+            // Shared-pool indices (each the texture's own handle, a normal-less
+            // draw's normal being the flat-normal fallback slot, all clamped to
+            // the cap); the identical mapping the folded instance records use, so
+            // static + instances address the pool the same way.
             let idx = metal_flat_pool_indices(
-                albedo_count,
-                normal_count,
+                texture_count,
                 obj.texture_slot,
                 obj.normal_map_slot,
                 &obj.material,
@@ -374,7 +367,7 @@ impl MtlContext {
         // which animates), unlike the cached static instance records.
         if self.n_skinned > 0 {
             for obj in &self.skinned.draw_objects {
-                objects.push(metal_skinned_record(obj, albedo_count, normal_count));
+                objects.push(metal_skinned_record(obj, texture_count));
             }
         }
         let result = self.object_ring.write(
@@ -949,13 +942,15 @@ impl MtlContext {
             enc.setArgumentBuffer_offset(Some(&buf), 0);
         }
         let count = super::context::BINDLESS_TEXTURE_COUNT;
-        let albedo_count = self.textures.len();
-        let normal_count = self.normal_map_textures.len();
+        // The shared pool: every real texture, then the flat-normal fallback at
+        // `texture_count`, then the white fallback for the unused tail (so an
+        // over-cap or clamped index still samples a valid texture).
+        let texture_count = self.textures.len();
         for i in 0..count {
-            let tex = if i < albedo_count {
+            let tex = if i < texture_count {
                 self.textures[i].as_ref()
-            } else if i < albedo_count + normal_count {
-                self.normal_map_textures[i - albedo_count].as_ref()
+            } else if i == texture_count {
+                self.normal_map_textures[0].as_ref()
             } else {
                 self.textures[0].as_ref()
             };
@@ -1136,11 +1131,12 @@ pub(super) fn build_shadow_cull_pipeline(
 #[cfg(test)]
 mod tests {
     use super::metal_flat_pool_indices;
-    use crate::gfx::render_types::MaterialUniforms;
+    use crate::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     #[test]
-    fn flat_pool_indices_bias_albedo_and_normal_regions() {
-        // Pool: 4 albedo + 3 normal maps, laid out [a0 a1 a2 a3][n0 n1 n2].
+    fn flat_pool_indices_share_one_handle_indexed_pool() {
+        // Albedo, normal, and every optional map index the shared pool by their
+        // own handle -- no albedo-count bias. 8 real textures.
         let material = MaterialUniforms {
             albedo_secondary_index: 1,
             normal_secondary_index: 2,
@@ -1148,42 +1144,35 @@ mod tests {
             orm_map_index: 0,
             ..MaterialUniforms::DEFAULT
         };
-        let idx = metal_flat_pool_indices(4, 3, 2, 1, &material);
-        // Albedo-region slots index the pool directly.
+        let idx = metal_flat_pool_indices(8, 2, 1, &material);
         assert_eq!(idx.albedo, 2);
+        assert_eq!(idx.normal, 1);
         assert_eq!(idx.albedo_secondary, 1);
+        assert_eq!(idx.normal_secondary, 2);
         assert_eq!(idx.emissive, 3);
         assert_eq!(idx.orm, 0);
-        // Normal-region slots are biased by the albedo count: the regression the
-        // shared core helper missed for folded instances was the SECONDARY normal.
-        assert_eq!(idx.normal, 4 + 1);
-        assert_eq!(idx.normal_secondary, 4 + 2);
     }
 
     #[test]
-    fn flat_pool_indices_clamp_out_of_range_slots() {
-        // A stale/oversized slot clamps to the last valid entry of its region
-        // rather than reading past the pool.
-        let material = MaterialUniforms {
-            albedo_secondary_index: 50,
-            normal_secondary_index: 99,
-            ..MaterialUniforms::DEFAULT
-        };
-        let idx = metal_flat_pool_indices(2, 2, 99, 99, &material);
-        assert_eq!(idx.albedo, 1); // clamped to last albedo
-        assert_eq!(idx.albedo_secondary, 1);
-        assert_eq!(idx.normal, 2 + 1); // bias + clamp to last normal
-        assert_eq!(idx.normal_secondary, 2 + 1);
+    fn flat_pool_indices_map_a_missing_normal_to_the_fallback() {
+        // A draw with no normal map addresses the flat-normal fallback slot
+        // (one past the last real texture), so the shader samples flat (0,0,1).
+        let idx = metal_flat_pool_indices(8, 3, NO_NORMAL_MAP_SLOT, &MaterialUniforms::DEFAULT);
+        assert_eq!(idx.albedo, 3);
+        assert_eq!(idx.normal, 8);
     }
 
     #[test]
-    fn flat_pool_indices_clamp_to_bindless_cap() {
-        // A pathological over-capacity pool (albedo_count + normal_count beyond
-        // BINDLESS_TEXTURE_COUNT) must still cap every index at the last pool
-        // slot so the fixed-size MSL tex_pool array is never indexed past its end.
+    fn flat_pool_indices_clamp_out_of_range_and_cap() {
+        // Out-of-range albedo / normal slots clamp to the last real texture; a
+        // pool larger than the fixed-size MSL array caps every index at the last
+        // valid slot so `tex_pool` is never indexed past its end.
+        let idx = metal_flat_pool_indices(4, 99, 99, &MaterialUniforms::DEFAULT);
+        assert_eq!(idx.albedo, 3); // clamped to last real texture
+        assert_eq!(idx.normal, 3);
         let cap = super::super::context::BINDLESS_TEXTURE_COUNT;
-        let idx = metal_flat_pool_indices(cap, cap, 5, 10, &MaterialUniforms::DEFAULT);
-        assert_eq!(idx.albedo, 5); // below the cap, untouched
-        assert_eq!(idx.normal, (cap - 1) as u32); // cap + 10 -> capped
+        let idx = metal_flat_pool_indices(cap + 5, 9999, 9999, &MaterialUniforms::DEFAULT);
+        assert_eq!(idx.albedo, (cap - 1) as u32);
+        assert_eq!(idx.normal, (cap - 1) as u32);
     }
 }

@@ -378,12 +378,12 @@ pub(crate) struct RtSceneGeometry<'a> {
     pub clusters: &'a [InstancedCluster],
 }
 
-// The bindless texture-pool sizes a geometry table is clamped against, so a
-// per-object albedo / normal index never points past the resident pool.
+// The shared texture pool's real-texture count a geometry table resolves its
+// per-object albedo / normal indices against (the flat-normal fallback sits at
+// this index), so an index never points past the resident pool.
 #[derive(Clone, Copy)]
 pub(crate) struct RtTextureCounts {
     pub albedo_count: usize,
-    pub normal_count: usize,
 }
 
 // The trailing knobs of an incremental topology refresh: whether see-through
@@ -421,30 +421,23 @@ pub(crate) fn pack_instance_transform(model: [[f32; 4]; 4]) -> MTLPackedFloat4x3
     }
 }
 
-// Bindless-pool (albedo, normal) indices for a `(texture_slot, normal_map_slot)`
-// pair. The slots are clamped into range and the normal index is biased past
-// the albedo region, matching the main pass (`cull.rs`); an object with no
-// normal map lands on the 1x1 flat-normal fallback at normal slot 0, so the
-// hit shader's normal-map sample is always safe.
-fn pool_indices(
-    texture_slot: usize,
-    normal_map_slot: usize,
-    albedo_count: usize,
-    normal_count: usize,
-) -> (u32, u32) {
-    let albedo = texture_slot.min(albedo_count.saturating_sub(1)) as u32;
-    let normal = (albedo_count + normal_map_slot.min(normal_count.saturating_sub(1))) as u32;
-    (albedo, normal)
+// Shared-pool (albedo, normal) indices for a `(texture_slot, normal_map_slot)`
+// pair. Albedo and normal maps share one handle-indexed pool, so each index is
+// the texture's own handle (resolved through the shared `render_types` helpers),
+// matching the main pass (`cull.rs`); an object with no normal map lands on the
+// flat-normal fallback (`normal_pool_index`, at `texture_count`), so the hit
+// shader's normal-map sample is always safe.
+fn pool_indices(texture_slot: usize, normal_map_slot: usize, texture_count: usize) -> (u32, u32) {
+    (
+        crate::gfx::render_types::albedo_pool_index(texture_slot, texture_count as u32),
+        crate::gfx::render_types::normal_pool_index(normal_map_slot, texture_count as u32),
+    )
 }
 
 // Build the geometry-table entry for one draw object.
-fn geom_entry(obj: &DrawObject, albedo_count: usize, normal_count: usize) -> RtGeomEntry {
-    let (albedo_index, normal_index) = pool_indices(
-        obj.texture_slot,
-        obj.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+fn geom_entry(obj: &DrawObject, texture_count: usize) -> RtGeomEntry {
+    let (albedo_index, normal_index) =
+        pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: obj.index_offset as u32,
         base_vertex: obj.base_vertex as u32,
@@ -466,15 +459,10 @@ fn geom_entry(obj: &DrawObject, albedo_count: usize, normal_count: usize) -> RtG
 fn cluster_geom_entry(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
-    albedo_count: usize,
-    normal_count: usize,
+    texture_count: usize,
 ) -> RtGeomEntry {
-    let (albedo_index, normal_index) = pool_indices(
-        cluster.texture_slot,
-        cluster.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+    let (albedo_index, normal_index) =
+        pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: cluster.index_offset as u32,
         base_vertex: 0,
@@ -495,17 +483,9 @@ fn cluster_geom_entry(
 // so `base_vertex` is 0 and the model matrix brings the hit to world space (the
 // instance transform does the same for the trace). The skinned flag is OR'd
 // into `normal_index` so the kernel fetches from the deformed / u16 buffers.
-fn skinned_geom_entry(
-    obj: &SkinnedDrawObject,
-    albedo_count: usize,
-    normal_count: usize,
-) -> RtGeomEntry {
-    let (albedo_index, normal_index) = pool_indices(
-        obj.texture_slot,
-        obj.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: usize) -> RtGeomEntry {
+    let (albedo_index, normal_index) =
+        pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: obj.index_offset as u32,
         base_vertex: 0,
@@ -910,10 +890,7 @@ pub(crate) fn build_rt_accel(
         draw_objects,
         clusters,
     } = scene;
-    let RtTextureCounts {
-        albedo_count,
-        normal_count,
-    } = texture_counts;
+    let RtTextureCounts { albedo_count } = texture_counts;
     // Only resident draw objects with real triangles take part. When the Layer 2
     // see-through path is enabled, see-through glass meshes are excluded (they
     // route through the transparent pass with their own per-pixel trace, so glass
@@ -1049,7 +1026,7 @@ pub(crate) fn build_rt_accel(
         .collect();
     let mut geom_entries: Vec<RtGeomEntry> = objects
         .iter()
-        .map(|obj| geom_entry(obj, albedo_count, normal_count))
+        .map(|obj| geom_entry(obj, albedo_count))
         .collect();
 
     // Clusters: one TLAS instance + one geometry entry per cluster instance, all
@@ -1063,7 +1040,7 @@ pub(crate) fn build_rt_accel(
         let blas_index = (draw_blas_count + ci) as u32;
         for model in &c.instances {
             cluster_instances.push(instance_desc_at(*model, blas_index));
-            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count, normal_count));
+            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count));
         }
     }
     instance_descs.extend_from_slice(&cluster_instances);
@@ -1076,7 +1053,7 @@ pub(crate) fn build_rt_accel(
     for (si, (_, obj)) in skinned_objects.iter().enumerate() {
         let blas_index = (skinned_blas_base + si) as u32;
         instance_descs.push(instance_desc_at(obj.model, blas_index));
-        geom_entries.push(skinned_geom_entry(obj, albedo_count, normal_count));
+        geom_entries.push(skinned_geom_entry(obj, albedo_count));
     }
 
     let instance_buffer = upload_buffer(device, &instance_descs, "RT instance descriptors")?;
@@ -1193,7 +1170,6 @@ impl RtAccelData {
         command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
         draw_objects: &[DrawObject],
         albedo_count: usize,
-        normal_count: usize,
     ) -> Result<(), String> {
         let Some(objects) = self.current_objects(draw_objects) else {
             return Ok(());
@@ -1210,7 +1186,7 @@ impl RtAccelData {
             .collect();
         let mut geom_entries: Vec<RtGeomEntry> = objects
             .iter()
-            .map(|obj| geom_entry(obj, albedo_count, normal_count))
+            .map(|obj| geom_entry(obj, albedo_count))
             .collect();
         instance_descs.extend_from_slice(&self.cluster_instances);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1314,10 +1290,7 @@ impl RtAccelData {
             vertex_buffer,
             index_buffer,
         } = static_geometry;
-        let RtTextureCounts {
-            albedo_count,
-            normal_count,
-        } = texture_counts;
+        let RtTextureCounts { albedo_count } = texture_counts;
         let RtTopologyRefreshOptions {
             exclude_seethrough,
             build_tlas,
@@ -1424,7 +1397,7 @@ impl RtAccelData {
                 .collect();
             let mut geom_entries: Vec<RtGeomEntry> = objects
                 .iter()
-                .map(|obj| geom_entry(obj, albedo_count, normal_count))
+                .map(|obj| geom_entry(obj, albedo_count))
                 .collect();
             instance_descs.extend_from_slice(&self.cluster_instances);
             geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1550,10 +1523,7 @@ impl RtAccelData {
             device,
             command_queue,
         } = gpu;
-        let RtTextureCounts {
-            albedo_count,
-            normal_count,
-        } = texture_counts;
+        let RtTextureCounts { albedo_count } = texture_counts;
         let Some(objects) = self.current_objects(draw_objects) else {
             return Ok(());
         };
@@ -1566,13 +1536,7 @@ impl RtAccelData {
         // No skinned geometry visible this frame: keep the static BLAS and just
         // refresh the TLAS from current transforms (the static path).
         if skinned_objects.is_empty() {
-            return self.rebuild_tlas(
-                device,
-                command_queue,
-                draw_objects,
-                albedo_count,
-                normal_count,
-            );
+            return self.rebuild_tlas(device, command_queue, draw_objects, albedo_count);
         }
 
         // Fresh deformed-vertex buffer (Shared): a prior frame's trace may still
@@ -1629,7 +1593,7 @@ impl RtAccelData {
             .collect();
         let mut geom_entries: Vec<RtGeomEntry> = objects
             .iter()
-            .map(|obj| geom_entry(obj, albedo_count, normal_count))
+            .map(|obj| geom_entry(obj, albedo_count))
             .collect();
         instance_descs.extend_from_slice(&self.cluster_instances);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1638,7 +1602,7 @@ impl RtAccelData {
                 obj.model,
                 (self.static_blas_count + si) as u32,
             ));
-            geom_entries.push(skinned_geom_entry(obj, albedo_count, normal_count));
+            geom_entries.push(skinned_geom_entry(obj, albedo_count));
         }
 
         // Fresh instance-descriptor + geometry-table buffers (the old ones are
@@ -1907,19 +1871,20 @@ mod tests {
     }
 
     #[test]
-    fn pool_indices_clamp_and_bias_match_the_main_pass() {
-        // Albedo is clamped into [0, albedo_count); a normal map's global index
-        // is biased past the albedo region, both matching cull.rs.
-        let (a, n) = pool_indices(2, 1, 5, 3);
-        assert_eq!(a, 2); // in range
-        assert_eq!(n, 5 + 1); // albedo_count + slot
-        // Out-of-range slots clamp to the last valid entry.
-        let (a, n) = pool_indices(9, 9, 5, 3);
-        assert_eq!(a, 4); // albedo_count - 1
-        assert_eq!(n, 5 + 2); // albedo_count + (normal_count - 1)
-        // No normal maps (count 0) still resolves to the albedo-region boundary,
-        // which is where the flat-normal fallback lives.
-        let (_a, n) = pool_indices(0, 0, 4, 0);
+    fn pool_indices_share_one_pool_matching_the_main_pass() {
+        use crate::gfx::render_types::NO_NORMAL_MAP_SLOT;
+        // Albedo and a real normal map both index the shared pool by their own
+        // handle (no albedo-count bias), matching cull.rs. 5 real textures.
+        let (a, n) = pool_indices(2, 1, 5);
+        assert_eq!(a, 2);
+        assert_eq!(n, 1);
+        // Out-of-range slots clamp to the last real texture.
+        let (a, n) = pool_indices(9, 9, 5);
+        assert_eq!(a, 4);
+        assert_eq!(n, 4);
+        // A draw with no normal map resolves to the flat-normal fallback slot,
+        // one past the last real texture.
+        let (_a, n) = pool_indices(0, NO_NORMAL_MAP_SLOT, 4);
         assert_eq!(n, 4);
     }
 

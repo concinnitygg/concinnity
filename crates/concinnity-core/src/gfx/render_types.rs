@@ -675,6 +675,14 @@ pub struct LodSlice {
     pub switch_distance: f32,
 }
 
+// Sentinel `normal_map_slot` meaning "this object has no normal map." The
+// texture pool is a single handle-indexed table shared by albedo and normal
+// maps, so a real normal map carries its own texture handle (which may be 0);
+// `usize::MAX` cannot collide with any handle and lets a backend substitute the
+// synthesized flat-normal fallback (tangent-space (0,0,1)) without a shader
+// branch. Backends map this to the fallback's reserved pool index.
+pub const NO_NORMAL_MAP_SLOT: usize = usize::MAX;
+
 // One renderable object: vertex/index slice within the shared GPU buffers,
 // a model matrix, albedo and normal-map texture slots, and material parameters.
 pub struct DrawObject {
@@ -699,10 +707,13 @@ pub struct DrawObject {
     pub base_vertex: i32,
     // Column-major model-to-world matrix.
     pub model: [[f32; 4]; 4],
-    // Index into MtlContext::textures. Clamped to the last slot if out of range.
+    // Index into the shared texture pool for this object's albedo map.
+    // Clamped to the last slot if out of range.
     #[allow(dead_code)]
     pub texture_slot: usize,
-    // Index into MtlContext::normal_map_textures. 0 = flat-normal fallback.
+    // Index into the shared texture pool for this object's normal map, or
+    // `NO_NORMAL_MAP_SLOT` when the object has no normal map (the backend then
+    // substitutes the flat-normal fallback).
     #[allow(dead_code)]
     pub normal_map_slot: usize,
     // Per-draw material scalars pushed to the fragment shader at buffer(3).
@@ -784,10 +795,12 @@ impl DrawObject {
 // inline `std430` SSBO GLSL in `vulkan/pipeline.rs`. The `gpu_object_data_*`
 // layout test below pins the offsets all three rely on.
 //
-// `albedo_index` / `normal_index` are *opaque* indices into each backend's
-// texture pool: the pool's internal addressing differs per backend (Metal
-// deduplicates into `[albedo..]++[normal..]`; DirectX and Vulkan address
-// interleaved `(albedo, normal)` pairs), but the struct layout is identical.
+// `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
+// are indices into each backend's single handle-indexed texture pool: albedo,
+// normal, and every optional map share one dense table, so a texture used in
+// more than one role resolves to one descriptor. The pool's flat-normal
+// fallback occupies a reserved slot past the real textures; an object with no
+// normal map addresses it, so `normal_index` never needs a shader branch.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct GpuObjectData {
@@ -837,13 +850,32 @@ pub struct GpuObjectData {
     pub orm_map_index: u32,
 }
 
+// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
+// pool, clamped into the real-texture range so a stale slot reads the last
+// valid entry rather than out of bounds. `texture_count` is the pool's
+// real-texture count (the flat-normal fallback sits one past it).
+pub fn albedo_pool_index(texture_slot: usize, texture_count: u32) -> u32 {
+    (texture_slot as u32).min(texture_count.saturating_sub(1))
+}
+
+// Resolve a `normal_map_slot` to its index in the handle-indexed texture pool.
+// A real normal map addresses its own texture slot (clamped into the
+// real-texture range); `NO_NORMAL_MAP_SLOT` addresses the flat-normal fallback
+// at `texture_count` (one past the last real texture), so the shader never
+// needs a "has a normal map?" branch.
+pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
+    if normal_map_slot == NO_NORMAL_MAP_SLOT {
+        texture_count
+    } else {
+        (normal_map_slot as u32).min(texture_count.saturating_sub(1))
+    }
+}
+
 // Pack one `DrawObject` into its `GpuObjectData` record for the DirectX and
-// Vulkan bindless static pass. The caller supplies the texture-pool indices
-// because the pool addressing differs per backend: DirectX addresses an
-// interleaved per-object SRV region (object `i` → albedo `2*i`, normal
-// `2*i+1`); Vulkan addresses a deduplicated `[albedo..]++[normal..]` pool
-// (albedo = `texture_slot`, normal = `albedo_count + normal_map_slot`),
-// mirroring Metal. Only the 144-byte struct layout is shared across backends.
+// Vulkan bindless static pass. The caller supplies the resolved texture-pool
+// indices: `albedo_index` / `normal_index` are dense indices into the one
+// handle-indexed pool (a normal-less object's `normal_index` points at the
+// pool's flat-normal fallback slot), identical across all three backends.
 //
 // `bb_min` / `bb_max` / `cull_distance` are copied even though the
 // main-pass shaders ignore them, so a GPU-driven compute cull can read object
@@ -911,23 +943,21 @@ pub fn pack_instance_record(
 
 // Expand every instance of every cluster into a flat `GpuObjectData` list for the
 // GPU-driven bindless instanced path, in cluster-then-instance order (so a
-// parallel per-instance draw-args list can be walked in the same order). The flat
-// texture-pool indices clamp to the pool (a stale slot reads the last valid entry
-// rather than out of bounds), matching `build_object_buffer`'s static addressing.
-// `albedo_count` is the albedo-pool size; `normal_count` the normal-pool size.
+// parallel per-instance draw-args list can be walked in the same order). The
+// texture-pool indices are resolved through `albedo_pool_index` /
+// `normal_pool_index`, matching `build_object_buffer`'s static addressing.
+// `texture_count` is the pool's real-texture count (the flat-normal fallback
+// sits at `texture_count`).
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn instance_object_records(
     clusters: &[InstancedCluster],
-    albedo_count: u32,
-    normal_count: u32,
+    texture_count: u32,
 ) -> Vec<GpuObjectData> {
-    let last_tex = albedo_count.saturating_sub(1);
-    let last_nm = normal_count.saturating_sub(1);
     let total: usize = clusters.iter().map(|c| c.instances.len()).sum();
     let mut records = Vec::with_capacity(total);
     for cluster in clusters {
-        let albedo = (cluster.texture_slot as u32).min(last_tex);
-        let normal = albedo_count + (cluster.normal_map_slot as u32).min(last_nm);
+        let albedo = albedo_pool_index(cluster.texture_slot, texture_count);
+        let normal = normal_pool_index(cluster.normal_map_slot, texture_count);
         for &model in &cluster.instances {
             records.push(pack_instance_record(cluster, model, albedo, normal));
         }
@@ -1067,9 +1097,10 @@ pub struct InstancedCluster {
     pub index_offset: usize,
     // Number of indices per instance.
     pub index_count: usize,
-    // Index into the backend's albedo texture pool.
+    // Index into the shared texture pool for this cluster's albedo map.
     pub texture_slot: usize,
-    // Index into the backend's normal-map pool. 0 = flat-normal fallback.
+    // Index into the shared texture pool for this cluster's normal map, or
+    // `NO_NORMAL_MAP_SLOT` when the cluster has no normal map.
     pub normal_map_slot: usize,
     // Per-cluster material scalars, identical for every instance.
     pub material: MaterialUniforms,
@@ -1257,9 +1288,10 @@ pub struct SkinnedDrawObject {
     pub index_count: usize,
     // Column-major model-to-world matrix. Applied after skinning.
     pub model: [[f32; 4]; 4],
-    // Index into the backend's albedo texture pool.
+    // Index into the shared texture pool for this object's albedo map.
     pub texture_slot: usize,
-    // Index into the backend's normal-map pool. 0 = flat-normal fallback.
+    // Index into the shared texture pool for this object's normal map, or
+    // `NO_NORMAL_MAP_SLOT` when the object has no normal map.
     pub normal_map_slot: usize,
     // Per-object material scalars.
     pub material: MaterialUniforms,
@@ -1626,21 +1658,35 @@ mod tests {
         b.local_bb_min = [0.0, 0.0, 0.0];
         b.local_bb_max = [2.0, 2.0, 2.0];
 
-        let recs = instance_object_records(&[a, b], 8, 4);
+        // 8 real textures in the shared pool (flat-normal fallback at slot 8).
+        let recs = instance_object_records(&[a, b], 8);
         // Cluster-then-instance order: 2 from A, then 1 from B.
         assert_eq!(recs.len(), 3);
-        // Flat pool addressing: albedo = texture_slot, normal = albedo_count + slot.
+        // Shared pool addressing: albedo and a real normal map both index the pool
+        // by their own handle.
         assert_eq!(recs[0].albedo_index, 3);
-        assert_eq!(recs[0].normal_index, 8 + 2);
+        assert_eq!(recs[0].normal_index, 2);
         assert_eq!(recs[1].albedo_index, 3);
         // The second instance carries its own model + translated world AABB.
         assert_eq!(recs[1].model[3][0], 10.0);
         let (exp_min, exp_max) = transform_aabb([0.0; 3], [1.0, 1.0, 1.0], translate(10.0));
         assert_eq!(recs[1].bb_min, exp_min);
         assert_eq!(recs[1].bb_max, exp_max);
-        // Out-of-range slots clamp to the last valid albedo (7) / normal (8+3) entry.
+        // Out-of-range slots clamp to the last real texture (7).
         assert_eq!(recs[2].albedo_index, 7);
-        assert_eq!(recs[2].normal_index, 8 + 3);
+        assert_eq!(recs[2].normal_index, 7);
+    }
+
+    #[test]
+    fn instance_object_records_map_a_missing_normal_to_the_fallback() {
+        // A cluster with no normal map addresses the flat-normal fallback slot
+        // (one past the last real texture), so the shader samples flat (0,0,1).
+        let mut c = sample_cluster(vec![[[0.0; 4]; 4]], Vec::new());
+        c.texture_slot = 1;
+        c.normal_map_slot = NO_NORMAL_MAP_SLOT;
+        let recs = instance_object_records(&[c], 5);
+        assert_eq!(recs[0].albedo_index, 1);
+        assert_eq!(recs[0].normal_index, 5);
     }
 
     #[test]

@@ -818,8 +818,11 @@ pub struct VkContext {
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
     pub(super) shadow: VkShadow,
 
-    // Scene textures
+    // Shared texture pool: every texture (albedo, normal map, emissive/ORM,
+    // terrain secondary) lives here once at its handle, matching DX/Metal.
     pub(super) textures: Vec<GpuImage>,
+    // Holds only the flat-normal fallback a normal-less draw samples (its pool
+    // slot is one past the last real texture); real normal maps are in `textures`.
     pub(super) normal_map_textures: Vec<GpuImage>,
     pub(super) text_atlas_textures: Vec<GpuImage>,
 
@@ -1199,13 +1202,13 @@ pub struct VkContext {
     // the right per-clone descriptor set when drawing an entry past
     // `n_objects` (chunks fall through to `chunk_object_set` instead).
     pub(super) clone_slot_by_draw_idx: std::collections::HashMap<usize, usize>,
-    // Texture-pool slot each clone samples, parallel to
-    // `clone_object_sets`. Read by `rewrite_albedo_slot` so a streamed
-    // albedo swap repoints the matching clone sets.
+    // Texture-pool slot each clone samples as its albedo, parallel to
+    // `clone_object_sets`. Read by `rewrite_texture_slot` so a streamed swap
+    // repoints the matching clone sets.
     pub(super) clone_texture_slots: Vec<usize>,
-    // Normal-map pool slot each clone samples, parallel to
-    // `clone_object_sets`. Read by `rewrite_normal_slot` for the same
-    // reason as `clone_texture_slots`.
+    // Texture-pool slot (or `NO_NORMAL_MAP_SLOT`) each clone samples as its
+    // normal map, parallel to `clone_object_sets`. Read by `rewrite_texture_slot`
+    // for the same reason as `clone_texture_slots`.
     pub(super) clone_normal_map_slots: Vec<usize>,
 
     // Skinned (skeletally animated) mesh rendering. See `VkSkinned`.

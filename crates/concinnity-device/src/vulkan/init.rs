@@ -85,7 +85,6 @@ impl VkContext {
             media:
                 MediaPayloads {
                     textures,
-                    normal_maps,
                     text_atlases,
                     env_map_bytes,
                     color_lut_bytes,
@@ -675,6 +674,10 @@ impl VkContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
+        // Flat-normal fallback: the single normal-region image, sampled by a
+        // draw with no normal map. Real normal maps are textures in
+        // `gpu_textures` (the shared pool) at their own handle; only this
+        // fallback lives in `normal_map_textures`, one slot past the last texture.
         let flat_normal = texture::create_fallback_flat_normal(
             &instance,
             &device,
@@ -682,24 +685,7 @@ impl VkContext {
             command_pool,
             graphics_queue,
         )?;
-        let mut gpu_normal_maps = vec![flat_normal];
-        for (i, (w, h, px)) in normal_maps.iter().enumerate() {
-            gpu_normal_maps.push(
-                upload_texture(
-                    &GpuUploadContext {
-                        instance: &instance,
-                        device: &device,
-                        physical_device,
-                        command_pool,
-                        queue: graphics_queue,
-                    },
-                    *w,
-                    *h,
-                    px,
-                )
-                .map_err(|e| format!("normal_map[{i}]: {e}"))?,
-            );
-        }
+        let gpu_normal_maps = vec![flat_normal];
 
         let gpu_text_atlases: Vec<GpuImage> = text_atlases
             .iter()
@@ -1751,17 +1737,26 @@ impl VkContext {
         } else {
             let sets = alloc_descriptor_sets(&device, descriptor_pool, &object_set_layouts)?;
             let last_tex = gpu_textures.len().saturating_sub(1);
-            let last_nm = gpu_normal_maps.len().saturating_sub(1);
+            // Resolve the image view a `normal_map_slot` samples: a real normal
+            // map is a texture in the shared pool at its own slot;
+            // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole
+            // entry of `gpu_normal_maps`).
+            let normal_view = |nms: usize| {
+                if nms == NO_NORMAL_MAP_SLOT {
+                    gpu_normal_maps[0].view
+                } else {
+                    gpu_textures[nms.min(last_tex)].view
+                }
+            };
             for (&set, obj) in sets.iter().zip(draw_objects.iter()) {
                 let tex_slot = obj.texture_slot.min(last_tex);
-                let nm_slot = obj.normal_map_slot.min(last_nm);
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(gpu_textures[tex_slot].view)
                     .sampler(linear_sampler);
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(gpu_normal_maps[nm_slot].view)
+                    .image_view(normal_view(obj.normal_map_slot))
                     .sampler(linear_sampler);
                 let writes = [
                     vk::WriteDescriptorSet::default()
@@ -1944,7 +1939,6 @@ impl VkContext {
                     draw_objects: &draw_objects,
                     clusters: &instanced_clusters,
                     albedo_count: gpu_textures.len(),
-                    normal_count: gpu_normal_maps.len(),
                     total_vertices: vertices.len(),
                 },
                 frames,
@@ -2316,11 +2310,7 @@ impl VkContext {
             use crate::gfx::render_types::{
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
-            let records = instance_object_records(
-                &instanced_clusters,
-                gpu_textures.len() as u32,
-                gpu_normal_maps.len() as u32,
-            );
+            let records = instance_object_records(&instanced_clusters, gpu_textures.len() as u32);
             // Cluster base LOD slice (absolute indices, so `base_vertex = 0`);
             // per-instance LOD is a follow-up. Every instance is visible +
             // resident + cullable, so its finite per-instance world AABB is
@@ -2745,17 +2735,22 @@ impl VkContext {
                 .collect();
             let sets = alloc_descriptor_sets(&device, descriptor_pool, &cluster_layouts)?;
             let last_tex = gpu_textures.len().saturating_sub(1);
-            let last_nm = gpu_normal_maps.len().saturating_sub(1);
+            let normal_view = |nms: usize| {
+                if nms == NO_NORMAL_MAP_SLOT {
+                    gpu_normal_maps[0].view
+                } else {
+                    gpu_textures[nms.min(last_tex)].view
+                }
+            };
             for (cluster, &set) in instanced_clusters.iter().zip(sets.iter()) {
                 let tex_slot = cluster.texture_slot.min(last_tex);
-                let nm_slot = cluster.normal_map_slot.min(last_nm);
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(gpu_textures[tex_slot].view)
                     .sampler(linear_sampler);
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(gpu_normal_maps[nm_slot].view)
+                    .image_view(normal_view(cluster.normal_map_slot))
                     .sampler(linear_sampler);
                 let writes = [
                     vk::WriteDescriptorSet::default()

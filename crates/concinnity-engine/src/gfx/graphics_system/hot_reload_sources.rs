@@ -14,17 +14,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-// Which GPU pool a [`TextureSourceEntry`]'s slot lives in. Drives the choice
-// of `update_texture_slot` vs `update_normal_map_slot` at reload time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextureKind {
-    // Albedo texture pool; reload via `backend.update_texture_slot`.
-    Albedo,
-    // Normal-map pool (slot 0 is the always-resident flat-normal fallback;
-    // real maps start at slot 1). Reload via `backend.update_normal_map_slot`.
-    NormalMap,
-}
-
 // One reload entry: a file-backed source and the GPU slot it owns. Built once
 // at `GraphicsSystem::init` from the live `Texture` assets and consulted on
 // every reload event. Procedural textures (sky / plaster / etc.) carry no
@@ -38,10 +27,9 @@ pub struct TextureSourceEntry {
     pub source: String,
     // `image_index` for `.glb`-image sources; 0 (ignored) for plain PNGs.
     pub image_index: u32,
-    // GPU slot in the matching pool (`textures[slot]` for albedo,
-    // `normal_map_textures[slot]` for normal maps).
+    // Slot in the shared texture pool (`textures[slot]`), regardless of whether
+    // the texture is sampled as an albedo, a normal map, or an optional map.
     pub slot: usize,
-    pub kind: TextureKind,
 }
 
 // Singleton `ColorLut` reload entry. The 3D grading LUT has no slot (the
@@ -335,26 +323,14 @@ impl TextureSourceMap {
         Self::default()
     }
 
-    // Add an albedo-pool entry. Procedural / source-less textures should be
+    // Add a texture-pool entry. Procedural / source-less textures should be
     // filtered by the caller before calling this; every entry must have a
     // non-empty `source`.
-    pub fn push_albedo(&mut self, source: String, image_index: u32, slot: usize) {
+    pub fn push_texture(&mut self, source: String, image_index: u32, slot: usize) {
         self.entries.push(TextureSourceEntry {
             source,
             image_index,
             slot,
-            kind: TextureKind::Albedo,
-        });
-    }
-
-    // Add a normal-map-pool entry. Slot 0 is the flat-normal fallback and
-    // should never appear here; real maps live at slot >= 1.
-    pub fn push_normal_map(&mut self, source: String, image_index: u32, slot: usize) {
-        self.entries.push(TextureSourceEntry {
-            source,
-            image_index,
-            slot,
-            kind: TextureKind::NormalMap,
         });
     }
 

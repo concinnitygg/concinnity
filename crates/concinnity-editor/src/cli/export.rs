@@ -1278,11 +1278,22 @@ mod tests {
 
     #[test]
     fn run_tool_reports_success_failure_and_missing() {
-        // A tool that exits 0 succeeds.
-        run_tool("true", &[]).unwrap();
-        // A non-zero exit is surfaced as an error naming the tool.
-        let err = run_tool("false", &[]).unwrap_err();
-        assert!(err.to_string().contains("false"), "got: {err}");
+        // A tool that exits 0 succeeds; a non-zero exit is surfaced as an error
+        // naming the tool. `true`/`false` are not reliably on PATH on Windows
+        // (they exist only under a Unix shell), so drive the exit code through
+        // the platform shell, which always resolves.
+        #[cfg(windows)]
+        {
+            run_tool("cmd", &["/C", "exit 0"]).unwrap();
+            let err = run_tool("cmd", &["/C", "exit 1"]).unwrap_err();
+            assert!(err.to_string().contains("cmd"), "got: {err}");
+        }
+        #[cfg(not(windows))]
+        {
+            run_tool("true", &[]).unwrap();
+            let err = run_tool("false", &[]).unwrap_err();
+            assert!(err.to_string().contains("false"), "got: {err}");
+        }
         // A missing program is surfaced as an error rather than a panic. How
         // it is reported is platform-dependent: some spawn paths fail to spawn
         // (ErrorKind::NotFound -> "failed to run"), others run and exit non-zero

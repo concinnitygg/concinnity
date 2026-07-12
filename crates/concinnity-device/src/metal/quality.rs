@@ -155,7 +155,6 @@ impl MtlContext {
                     },
                     RtTextureCounts {
                         albedo_count: self.textures.len(),
-                        normal_count: self.normal_map_textures.len(),
                     },
                     None,
                     self.seethrough_meshes_enabled(),

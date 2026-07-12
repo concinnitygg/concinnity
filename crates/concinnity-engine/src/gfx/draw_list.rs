@@ -10,7 +10,9 @@ use crate::assets::{
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawObject, InstancedCluster, LodSlice, MaterialUniforms};
+use crate::gfx::render_types::{
+    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
+};
 
 pub(crate) const IDENTITY4: [[f32; 4]; 4] = [
     [1.0, 0.0, 0.0, 0.0],
@@ -601,7 +603,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                             return None;
                         }
                     },
-                    None => (0, 0, MaterialUniforms::DEFAULT),
+                    None => (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT),
                 };
                 let (bb_min, bb_max) =
                     if item.is_dynamic || always_resident_meshes.contains(&sub_mesh_id) {
@@ -679,9 +681,9 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 }
             } else if let Some(tex_id) = item.texture {
                 let slot = *texture_name_to_slot.get(&tex_id).unwrap_or(&0);
-                (slot, 0, MaterialUniforms::DEFAULT)
+                (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
             } else {
-                (0, 0, MaterialUniforms::DEFAULT)
+                (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
             };
             let (bb_min, bb_max) = if item.is_dynamic || always_resident_meshes.contains(&mesh_id) {
                 UNCULLED_BB
@@ -760,9 +762,9 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             }
         } else if let Some(tex_id) = inst.texture {
             let slot = *texture_name_to_slot.get(&tex_id).unwrap_or(&0);
-            (slot, 0, MaterialUniforms::DEFAULT)
+            (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
         } else {
-            (0, 0, MaterialUniforms::DEFAULT)
+            (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
         };
 
         let mut instance_mats: Vec<[[f32; 4]; 4]> = Vec::with_capacity(inst.instances.len());
@@ -835,7 +837,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 base_vertex: 0,
                 model: IDENTITY4,
                 texture_slot: 0,
-                normal_map_slot: 0,
+                normal_map_slot: NO_NORMAL_MAP_SLOT,
                 material: MaterialUniforms::DEFAULT,
                 visible: true,
                 resident: true,
@@ -890,7 +892,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             base_vertex: 0,
             model: IDENTITY4,
             texture_slot,
-            normal_map_slot: 0,
+            normal_map_slot: NO_NORMAL_MAP_SLOT,
             material: MaterialUniforms::DEFAULT,
             visible: true,
             resident: true,
@@ -1407,7 +1409,7 @@ mod tests {
         assert_eq!(draw_objects[0].texture_slot, 3);
         assert_eq!(draw_objects[0].normal_map_slot, 4);
         assert_eq!(draw_objects[1].texture_slot, 0);
-        assert_eq!(draw_objects[1].normal_map_slot, 0);
+        assert_eq!(draw_objects[1].normal_map_slot, NO_NORMAL_MAP_SLOT);
         // Hot-reload map tracks each sub-mesh id -> its draw slot.
         assert_eq!(mesh_id_to_draws.get(&AssetId(10)), Some(&vec![0]));
         assert_eq!(mesh_id_to_draws.get(&AssetId(11)), Some(&vec![1]));
@@ -1531,7 +1533,7 @@ mod tests {
 
         assert_eq!(draw_objects.len(), 1);
         assert_eq!(draw_objects[0].texture_slot, 2);
-        assert_eq!(draw_objects[0].normal_map_slot, 0);
+        assert_eq!(draw_objects[0].normal_map_slot, NO_NORMAL_MAP_SLOT);
     }
 
     // Every missing-reference branch returns None (the error is logged and the

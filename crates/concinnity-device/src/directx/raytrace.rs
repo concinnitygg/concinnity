@@ -132,32 +132,28 @@ pub(super) fn pack_instance_transform(model: [[f32; 4]; 4]) -> [f32; 12] {
     ]
 }
 
-// Flat deduplicated bindless-pool indices for a material. The RT hit shader
-// binds the same flat pool the bindless main pass does (`flat_pool_base_slot`),
-// so albedo = texture_slot, normal = albedo_count + normal_map_slot, both
-// clamped to the pool. Mirrors `draw/main.rs::build_object_buffer` and
-// Vulkan/Metal.
+// Shared handle-indexed bindless-pool indices for a material. The RT hit shader
+// binds the same pool the bindless main pass does (`flat_pool_base_slot`), so
+// albedo = texture_slot and normal = the normal's own texture handle (or the
+// flat-normal fallback slot when the material has none), both resolved through
+// the shared `render_types` helpers. `texture_count` is the real-texture count
+// (the flat-normal fallback sits at `texture_count`). Mirrors
+// `draw/main.rs::build_object_buffer` and Vulkan/Metal.
 fn flat_pool_indices(
     texture_slot: usize,
     normal_map_slot: usize,
-    albedo_count: u32,
-    normal_count: u32,
+    texture_count: u32,
 ) -> (u32, u32) {
-    let last_tex = albedo_count.saturating_sub(1);
-    let last_nm = normal_count.saturating_sub(1);
-    let albedo = (texture_slot as u32).min(last_tex);
-    let normal = albedo_count + (normal_map_slot as u32).min(last_nm);
-    (albedo, normal)
+    (
+        crate::gfx::render_types::albedo_pool_index(texture_slot, texture_count),
+        crate::gfx::render_types::normal_pool_index(normal_map_slot, texture_count),
+    )
 }
 
 // Build the geometry-table entry for one static draw object.
-fn geom_entry(obj: &DrawObject, albedo_count: u32, normal_count: u32) -> RtGeomEntry {
-    let (albedo_index, normal_index) = flat_pool_indices(
-        obj.texture_slot,
-        obj.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
+    let (albedo_index, normal_index) =
+        flat_pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: obj.index_offset as u32,
         base_vertex: obj.base_vertex as u32,
@@ -179,15 +175,10 @@ fn geom_entry(obj: &DrawObject, albedo_count: u32, normal_count: u32) -> RtGeomE
 fn cluster_geom_entry(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
-    albedo_count: u32,
-    normal_count: u32,
+    texture_count: u32,
 ) -> RtGeomEntry {
-    let (albedo_index, normal_index) = flat_pool_indices(
-        cluster.texture_slot,
-        cluster.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+    let (albedo_index, normal_index) =
+        flat_pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: cluster.index_offset as u32,
         base_vertex: 0,
@@ -210,17 +201,9 @@ fn cluster_geom_entry(
 // deformed / u16 buffers. Albedo / normal resolve through the shared flat pool
 // by the object's `texture_slot` / `normal_map_slot`, so skinned hits shade
 // textured like static ones (the flag bit lives above any valid pool index).
-fn skinned_geom_entry(
-    obj: &SkinnedDrawObject,
-    albedo_count: u32,
-    normal_count: u32,
-) -> RtGeomEntry {
-    let (albedo_index, normal_index) = flat_pool_indices(
-        obj.texture_slot,
-        obj.normal_map_slot,
-        albedo_count,
-        normal_count,
-    );
+fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeomEntry {
+    let (albedo_index, normal_index) =
+        flat_pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     RtGeomEntry {
         index_offset: obj.index_offset as u32,
         base_vertex: 0,
@@ -742,11 +725,10 @@ pub(super) struct RtAccelData {
     // Whether any skinned object is currently live in the BVH (drives whether the
     // per-frame update runs `rebuild_skinned` or the static `rebuild_tlas`).
     has_skinned: bool,
-    // Flat bindless pool sizes, so the dynamic-rebuild paths can recompute each
-    // geometry's `albedo = texture_slot` / `normal = albedo_count + normal_slot`
-    // pool indices without re-querying the descriptor pools.
+    // Real-texture count in the shared pool, so the dynamic-rebuild paths can
+    // recompute each geometry's albedo / normal pool indices (the flat-normal
+    // fallback sits at `albedo_count`) without re-querying the descriptor pools.
     albedo_count: u32,
-    normal_count: u32,
     // Shared vertex buffer's vertex count, so an incremental topology refresh can
     // bound a freshly-built BLAS's `VertexCount` exactly as `build_rt_accel` does
     // (`total_vertices - base_vertex`), without re-threading it from the context.
@@ -828,10 +810,9 @@ pub(super) struct RtInitGeometry<'a> {
     pub clusters: &'a [InstancedCluster],
     // Shared vertex buffer's vertex count (bounds each geometry's VertexCount).
     pub total_vertices: usize,
-    // Flat bindless albedo-pool length (resolves per-object pool indices).
+    // Real-texture count in the shared pool (resolves per-object pool indices;
+    // the flat-normal fallback sits at this index).
     pub albedo_count: u32,
-    // Flat bindless normal-map-pool length (clamps normal indices).
-    pub normal_count: u32,
 }
 
 // Per-frame dynamic-update policy + skinned inputs for `dynamic_update`.
@@ -863,9 +844,9 @@ pub(super) struct RtSkinnedRebuildInputs<'a> {
 // geometry to trace: the caller then leaves RT disabled and falls back to SSR.
 //
 // `total_vertices` is the shared vertex buffer's vertex count (used to bound
-// each geometry's `VertexCount`); `albedo_count` / `normal_count` are the flat
-// bindless pool sizes used to resolve each geometry's `albedo = texture_slot` /
-// `normal = albedo_count + normal_slot` pool indices for the RT hit shader.
+// each geometry's `VertexCount`); `albedo_count` is the shared pool's
+// real-texture count, used to resolve each geometry's albedo / normal pool
+// indices (the flat-normal fallback sits at `albedo_count`) for the RT hit shader.
 pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelData>, String> {
     let RtInitGeometry {
         device,
@@ -876,7 +857,6 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         clusters,
         total_vertices,
         albedo_count,
-        normal_count,
     } = geometry;
     let device5: ID3D12Device5 = device
         .cast()
@@ -946,7 +926,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
             blas[slot].GetGPUVirtualAddress()
         }));
-        geom_entries.push(geom_entry(obj, albedo_count, normal_count));
+        geom_entries.push(geom_entry(obj, albedo_count));
     }
     let mut cluster_instances: Vec<D3D12_RAYTRACING_INSTANCE_DESC> = Vec::new();
     let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
@@ -955,7 +935,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         for model in &c.instances {
             let id = (instance_descs.len() + cluster_instances.len()) as u32;
             cluster_instances.push(instance_desc(*model, id, blas_gva));
-            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count, normal_count));
+            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count));
         }
     }
     instance_descs.extend_from_slice(&cluster_instances);
@@ -1062,7 +1042,6 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         skinned_indices,
         has_skinned: false,
         albedo_count,
-        normal_count,
         total_vertices: total_vertices as u32,
         vbuf_gva,
         ibuf_gva,
@@ -1386,7 +1365,7 @@ impl RtAccelData {
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 new_blas[slot].GetGPUVirtualAddress()
             }));
-            geom_entries.push(geom_entry(obj, self.albedo_count, self.normal_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         instance_descs.extend_from_slice(&rebaked_clusters);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1500,7 +1479,7 @@ impl RtAccelData {
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 self.blas[slot].GetGPUVirtualAddress()
             }));
-            geom_entries.push(geom_entry(obj, self.albedo_count, self.normal_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         // Cluster instances keep their stored BLAS GVA + transform; only their
         // instance id shifts to follow the (unchanged-count) object instances,
@@ -1754,7 +1733,7 @@ impl RtAccelData {
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 self.blas[slot].GetGPUVirtualAddress()
             }));
-            geom_entries.push(geom_entry(obj, self.albedo_count, self.normal_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         instance_descs.extend_from_slice(&self.cluster_instances);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1764,11 +1743,7 @@ impl RtAccelData {
             instance_descs.push(instance_desc(obj.model, id, blas_gva));
             // Albedo / normal resolve through the shared flat pool by the skinned
             // object's own material slots, like any static object.
-            geom_entries.push(skinned_geom_entry(
-                obj,
-                self.albedo_count,
-                self.normal_count,
-            ));
+            geom_entries.push(skinned_geom_entry(obj, self.albedo_count));
         }
 
         write_upload_ring(
@@ -2012,7 +1987,6 @@ impl super::context::DxContext {
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
-            normal_count: self.descriptors.normal_map_textures.len() as u32,
         }) {
             Ok(Some(accel)) => accel,
             Ok(None) => return,
@@ -2108,18 +2082,23 @@ mod tests {
     }
 
     #[test]
-    fn flat_pool_indices_are_dedup_slots() {
-        // albedo = texture_slot, normal = albedo_count + normal_map_slot.
-        // 8 albedo textures, 4 normal maps.
-        assert_eq!(flat_pool_indices(0, 0, 8, 4), (0, 8));
-        assert_eq!(flat_pool_indices(3, 2, 8, 4), (3, 10));
+    fn flat_pool_indices_share_one_pool() {
+        // Albedo and a real normal map both index the shared pool by their own
+        // handle. 8 real textures; the flat-normal fallback sits at slot 8.
+        assert_eq!(flat_pool_indices(0, 0, 8), (0, 0));
+        assert_eq!(flat_pool_indices(3, 2, 8), (3, 2));
+        // A draw with no normal map addresses the flat-normal fallback slot.
+        assert_eq!(
+            flat_pool_indices(3, crate::gfx::render_types::NO_NORMAL_MAP_SLOT, 8),
+            (3, 8)
+        );
     }
 
     #[test]
     fn flat_pool_indices_clamp_to_pool() {
-        // Out-of-range slots clamp to the last valid entry (mirrors the
+        // Out-of-range real slots clamp to the last real texture (mirrors the
         // descriptor write loop's clamp), so a stale slot never reads past pool.
-        assert_eq!(flat_pool_indices(99, 99, 8, 4), (7, 11));
+        assert_eq!(flat_pool_indices(99, 99, 8), (7, 7));
     }
 
     #[test]
@@ -2214,20 +2193,16 @@ mod tests {
             local_bb_max: [1.0, 1.0, 1.0],
             lod_alternates: Vec::new(),
         };
-        let (albedo_count, normal_count) = (16u32, 8u32);
-        let e = skinned_geom_entry(&obj, albedo_count, normal_count);
+        let texture_count = 16u32;
+        let e = skinned_geom_entry(&obj, texture_count);
         // The skinned BLAS bakes absolute indices, so base_vertex is folded to 0.
         assert_eq!(e.base_vertex, 0);
-        // The skinned flag is set; masking it off recovers the real flat-pool
-        // indices the hit shader samples (albedo = texture_slot, normal =
-        // albedo_count + normal_map_slot).
+        // The skinned flag is set; masking it off recovers the real shared-pool
+        // indices the hit shader samples (albedo = texture_slot, normal = the
+        // normal map's own handle).
         assert_ne!(e.normal_index & RT_SKINNED_FLAG, 0);
-        let (exp_albedo, exp_normal) = flat_pool_indices(
-            obj.texture_slot,
-            obj.normal_map_slot,
-            albedo_count,
-            normal_count,
-        );
+        let (exp_albedo, exp_normal) =
+            flat_pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
         assert_eq!(e.albedo_index, exp_albedo);
         assert_eq!(e.normal_index & !RT_SKINNED_FLAG, exp_normal);
         // Material + index offset carry through; the model lifts the hit to world.

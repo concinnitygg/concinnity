@@ -22,9 +22,9 @@ fn empty_map_round_trips() {
 #[test]
 fn pushes_and_collects_unique_parent_dirs() {
     let mut m = TextureSourceMap::new();
-    m.push_albedo("assets/a.png".to_string(), 0, 0);
-    m.push_albedo("assets/b.png".to_string(), 0, 1);
-    m.push_normal_map("textures/nm.png".to_string(), 0, 1);
+    m.push_texture("assets/a.png".to_string(), 0, 0);
+    m.push_texture("assets/b.png".to_string(), 0, 1);
+    m.push_texture("textures/nm.png".to_string(), 0, 1);
     assert_eq!(m.entries.len(), 3);
     let dirs = m.watch_dirs();
     assert_eq!(dirs.len(), 2);
@@ -37,7 +37,7 @@ fn bare_filenames_skip_watch_dir() {
     // A source with no parent directory has nowhere to watch; the watcher
     // would otherwise try to subscribe to "" which notify rejects.
     let mut m = TextureSourceMap::new();
-    m.push_albedo("standalone.png".to_string(), 0, 0);
+    m.push_texture("standalone.png".to_string(), 0, 0);
     assert!(m.watch_dirs().is_empty());
 }
 
@@ -665,18 +665,6 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         ) -> Result<(), String> {
             Ok(())
         }
-        fn evict_normal_map_slot(&mut self, _: usize) -> Result<(), String> {
-            Ok(())
-        }
-        fn update_normal_map_slot(
-            &mut self,
-            _: usize,
-            _: u32,
-            _: u32,
-            _: &[u8],
-        ) -> Result<(), String> {
-            Ok(())
-        }
         fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
             Ok(())
         }
@@ -755,7 +743,6 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
 #[derive(Default)]
 struct RecordingBackend {
     texture_updates: Vec<(usize, u32, u32)>,
-    normal_updates: Vec<(usize, u32, u32)>,
     lut_updates: Vec<u32>,
     mesh_updates: Vec<usize>,
     static_rebuild_change_counts: Vec<usize>,
@@ -823,19 +810,6 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         if self.fail_texture_updates {
             return Err("texture update rejected".to_string());
         }
-        Ok(())
-    }
-    fn evict_normal_map_slot(&mut self, _: usize) -> Result<(), String> {
-        Ok(())
-    }
-    fn update_normal_map_slot(
-        &mut self,
-        slot: usize,
-        w: u32,
-        h: u32,
-        _: &[u8],
-    ) -> Result<(), String> {
-        self.normal_updates.push((slot, w, h));
         Ok(())
     }
     fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -1072,14 +1046,12 @@ fn decode_asset_batch_decodes_a_png_texture() {
         source: png.to_string_lossy().into_owned(),
         image_index: 0,
         slot: 3,
-        kind: TextureKind::Albedo,
     };
     let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
     assert_eq!(batch.decode_failures, 0);
     assert_eq!(batch.textures.len(), 1);
     let tex = &batch.textures[0];
     assert_eq!(tex.slot, 3);
-    assert_eq!(tex.kind, TextureKind::Albedo);
     assert_eq!((tex.width, tex.height), (1, 1));
     assert_eq!(tex.pixels, vec![10, 20, 30, 255]);
 }
@@ -1095,7 +1067,6 @@ fn decode_asset_batch_counts_a_missing_texture_as_a_failure() {
             .into_owned(),
         image_index: 0,
         slot: 0,
-        kind: TextureKind::Albedo,
     };
     let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
     assert!(batch.textures.is_empty());
@@ -1111,17 +1082,14 @@ fn decode_asset_batch_mixes_successes_and_failures() {
         source: png.to_string_lossy().into_owned(),
         image_index: 0,
         slot: 1,
-        kind: TextureKind::NormalMap,
     };
     let bad = TextureSourceEntry {
         source: dir.path().join("gone.png").to_string_lossy().into_owned(),
         image_index: 0,
         slot: 2,
-        kind: TextureKind::Albedo,
     };
     let batch = decode_asset_batch(vec![good, bad], None, Vec::new(), Vec::new());
     assert_eq!(batch.textures.len(), 1);
-    assert_eq!(batch.textures[0].kind, TextureKind::NormalMap);
     assert_eq!(batch.decode_failures, 1);
 }
 
@@ -1136,7 +1104,6 @@ fn decode_asset_batch_counts_an_unparseable_glb_texture_as_a_failure() {
         source: glb.to_string_lossy().into_owned(),
         image_index: 0,
         slot: 0,
-        kind: TextureKind::Albedo,
     };
     let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
     assert!(batch.textures.is_empty());
@@ -1213,7 +1180,7 @@ fn reload_assets_with_no_sources_spawns_nothing() {
 #[test]
 fn reload_assets_skips_the_spawn_while_a_batch_is_in_flight() {
     let mut map = TextureSourceMap::new();
-    map.push_albedo("standalone.png".to_string(), 0, 0);
+    map.push_texture("standalone.png".to_string(), 0, 0);
     let state = AssetHotReloadState::from_sources(HotReloadSources {
         map,
         ..Default::default()
@@ -1290,13 +1257,14 @@ fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
 }
 
 #[test]
-fn poll_pending_assets_dispatches_textures_by_kind() {
+fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
+    // Albedo and normal maps share one pool, so both reload through
+    // `update_texture_slot` at their own pool slot (no separate normal path).
     let batch = DecodedAssetBatch {
         textures: vec![
             DecodedTexture {
                 slot: 2,
-                kind: TextureKind::Albedo,
                 width: 4,
                 height: 4,
                 pixels: vec![0; 64],
@@ -1304,7 +1272,6 @@ fn poll_pending_assets_dispatches_textures_by_kind() {
             },
             DecodedTexture {
                 slot: 5,
-                kind: TextureKind::NormalMap,
                 width: 8,
                 height: 8,
                 pixels: vec![0; 256],
@@ -1316,8 +1283,7 @@ fn poll_pending_assets_dispatches_textures_by_kind() {
     inject_batch(&state, batch);
     let mut backend = RecordingBackend::default();
     assert!(poll_pending_assets(&mut state, &mut backend));
-    assert_eq!(backend.texture_updates, vec![(2, 4, 4)]);
-    assert_eq!(backend.normal_updates, vec![(5, 8, 8)]);
+    assert_eq!(backend.texture_updates, vec![(2, 4, 4), (5, 8, 8)]);
     assert!(state.asset_batch_inflight.lock().unwrap().is_none());
 }
 
@@ -1327,7 +1293,6 @@ fn poll_pending_assets_survives_a_backend_texture_rejection() {
     let batch = DecodedAssetBatch {
         textures: vec![DecodedTexture {
             slot: 0,
-            kind: TextureKind::Albedo,
             width: 1,
             height: 1,
             pixels: vec![0; 4],
@@ -2057,7 +2022,7 @@ fn state_reload_flag_round_trips() {
 #[test]
 fn state_debug_format_summarises_the_catalogue() {
     let mut map = TextureSourceMap::new();
-    map.push_albedo("standalone.png".to_string(), 0, 0);
+    map.push_texture("standalone.png".to_string(), 0, 0);
     let state = AssetHotReloadState::from_sources(HotReloadSources {
         map,
         ..Default::default()
@@ -2144,7 +2109,7 @@ fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
 fn spawn_watcher_subscribes_to_an_existing_source_directory() {
     let dir = tempfile::tempdir().unwrap();
     let mut map = TextureSourceMap::new();
-    map.push_albedo(
+    map.push_texture(
         dir.path().join("albedo.png").to_string_lossy().into_owned(),
         0,
         0,

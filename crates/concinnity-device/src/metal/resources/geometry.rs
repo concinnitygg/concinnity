@@ -257,8 +257,7 @@ impl MtlContext {
         // success) and must NOT fail the geometry reload, which already succeeded.
         if self.rt.accel.is_some() {
             let albedo_count = self.textures.len();
-            let normal_count = self.normal_map_textures.len();
-            if let Err(e) = self.rebuild_rt_accel(albedo_count, normal_count) {
+            if let Err(e) = self.rebuild_rt_accel(albedo_count) {
                 tracing::warn!(
                     "rebuild_static_geometry: RT BVH rebuild failed, reflections may be stale: {e}"
                 );

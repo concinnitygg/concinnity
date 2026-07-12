@@ -46,7 +46,6 @@ pub(crate) struct InitSnapshot {
     pub instanced_cluster_count: usize,
     pub n_skinned: usize,
     pub texture_count: usize,
-    pub normal_map_count: usize,
     pub text_atlas_count: usize,
     pub shadows: ShadowParams,
     pub anisotropy: u32,
@@ -85,8 +84,6 @@ pub(crate) enum Call {
         w: u32,
         h: u32,
     },
-    EvictNormalMapSlot(usize),
-    UpdateNormalMapSlot(usize),
     EvictMesh(usize),
     UploadMesh {
         draw_idx: usize,
@@ -220,7 +217,6 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         instanced_cluster_count: init.scene.instanced_clusters.len(),
         n_skinned: init.scene.n_skinned,
         texture_count: init.media.textures.len(),
-        normal_map_count: init.media.normal_maps.len(),
         text_atlas_count: init.media.text_atlases.len(),
         shadows: init.shadows,
         anisotropy: init.anisotropy,
@@ -396,22 +392,6 @@ impl RenderBackend for MockBackend {
         _px: &[u8],
     ) -> Result<(), String> {
         self.record(Call::UpdateTextureSlot { slot, w, h });
-        Ok(())
-    }
-
-    fn evict_normal_map_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.record(Call::EvictNormalMapSlot(slot));
-        Ok(())
-    }
-
-    fn update_normal_map_slot(
-        &mut self,
-        slot: usize,
-        _w: u32,
-        _h: u32,
-        _px: &[u8],
-    ) -> Result<(), String> {
-        self.record(Call::UpdateNormalMapSlot(slot));
         Ok(())
     }
 

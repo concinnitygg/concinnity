@@ -183,14 +183,10 @@ pub struct GraphicsSystem {
     // StreamingConfig was declared and the backend supports it (Metal); None
     // means every texture was uploaded eagerly at init, as before. Read only
     // by the Metal step path -- dead on backends without streaming yet.
+    // Asset-streaming subsystem for the shared texture pool (albedo and normal
+    // maps alike -- one handle-indexed pool, so one streamer covers both).
     #[allow(dead_code)]
     texture_streamer: Option<crate::app::texture_stream::TextureStreamer>,
-    // Asset-streaming subsystem for the normal-map texture pool. A second
-    // TextureStreamer instance: streamed item `i` is normal-map pool slot
-    // `i + 1` (slot 0 is the never-streamed flat-normal fallback). Some only
-    // when a StreamingConfig was declared and the backend supports it (Metal).
-    #[allow(dead_code)]
-    normal_map_streamer: Option<crate::app::texture_stream::TextureStreamer>,
     // Mesh-geometry streaming subsystem. Some only when a StreamingConfig was
     // declared and the backend supports it (Metal); None means every mesh was
     // uploaded eagerly at init, as before. Read only by the Metal step path.
@@ -412,7 +408,6 @@ struct ChunkStreamState {
 #[derive(Debug, Clone, Default)]
 pub struct StreamingStats {
     pub texture: Option<(usize, usize, usize)>,
-    pub normal_map: Option<(usize, usize, usize)>,
     pub mesh: Option<(usize, usize, usize)>,
     // `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
     pub chunk: Option<(usize, usize)>,
@@ -476,7 +471,6 @@ impl GraphicsSystem {
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             texture_streamer: None,
-            normal_map_streamer: None,
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,

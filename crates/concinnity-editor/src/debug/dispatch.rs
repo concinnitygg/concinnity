@@ -77,7 +77,6 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 "ok": true,
                 "frame": state.frame,
                 "texture": pool(&state.streaming.texture),
-                "normal_map": pool(&state.streaming.normal_map),
                 "mesh": pool(&state.streaming.mesh),
                 "chunk": chunk_pool(&state.streaming.chunk),
             })
@@ -431,7 +430,6 @@ mod tests {
             frame: 9,
             streaming: StreamingStats {
                 texture: Some((10, 2, 1)),
-                normal_map: None,
                 mesh: Some((4, 0, 3)),
                 chunk: Some((7, 5)),
             },
@@ -443,8 +441,6 @@ mod tests {
         assert_eq!(r["texture"]["resident"], 10);
         assert_eq!(r["texture"]["pending"], 2);
         assert_eq!(r["texture"]["unloaded"], 1);
-        // A pool left at None still reports null.
-        assert!(r["normal_map"].is_null());
         assert_eq!(r["mesh"]["resident"], 4);
         // The chunk pool reports resident + pending but carries no unloaded count.
         assert_eq!(r["chunk"]["resident"], 7);

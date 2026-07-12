@@ -214,14 +214,14 @@ pub struct MtlContext {
     // drawable size, so text stays crisp.
     pub(super) geometry_less: bool,
     pub(super) view_matrix: [[f32; 4]; 4],
-    // Textures bound per draw call (slot == vec index).
-    // A 1x1 opaque-white fallback is always present at slot 0 so shaders that
-    // sample texture(0) produce correct output even when no Texture asset was
-    // declared in the blob.
+    // Shared texture pool (slot == handle): every texture (albedo, normal map,
+    // emissive/ORM, terrain secondary) lives here once, matching DX/VK. A 1x1
+    // opaque-white fallback is always present at slot 0 so shaders that sample
+    // texture(0) produce correct output even when no Texture asset was declared.
     pub(super) textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // Normal-map textures bound per draw call at texture(1).
-    // Slot 0 is always the 1x1 flat-normal fallback (RGBA 128,128,255,255).
-    // DrawObject.normal_map_slot indexes into this vec.
+    // Holds only the 1x1 flat-normal fallback (RGBA 128,128,255,255) a
+    // normal-less draw samples; its pool slot is one past the last real texture.
+    // Real normal maps are entries in `textures`.
     pub(super) normal_map_textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,

@@ -962,7 +962,6 @@ impl MtlContext {
             return Ok(());
         }
         let albedo_count = self.textures.len();
-        let normal_count = self.normal_map_textures.len();
 
         // Free resources parked by prior skinned rebuilds that the frames-in-
         // flight fence now guarantees no in-flight frame can still read.
@@ -990,15 +989,15 @@ impl MtlContext {
             && self.rt.skin_pipeline.is_some();
         if has_skinned {
             if self.rt.accel.is_none() || self.rt.dynamic_mode == RtDynamicMode::Rebuild {
-                return self.rebuild_rt_accel(albedo_count, normal_count);
+                return self.rebuild_rt_accel(albedo_count);
             }
             // Fold any added/removed draw geometry into the static head (BLAS only,
             // async), then the skinned path rebuilds the TLAS + table over the
             // refreshed head + the fresh skinned tail.
             if topology_changed {
-                self.refresh_rt_topology(albedo_count, normal_count, false, frame_id)?;
+                self.refresh_rt_topology(albedo_count, false, frame_id)?;
             }
-            return self.update_rt_skinned(albedo_count, normal_count, frame_id);
+            return self.update_rt_skinned(albedo_count, frame_id);
         }
         // No skinned geometry.
         if self.rt.accel.is_none() {
@@ -1006,14 +1005,14 @@ impl MtlContext {
             // (e.g. the first streamed chunk in a world that began empty): seed
             // the BVH from scratch. Otherwise nothing to keep current.
             if topology_changed {
-                return self.rebuild_rt_accel(albedo_count, normal_count);
+                return self.rebuild_rt_accel(albedo_count);
             }
             return Ok(());
         }
         // The `Rebuild` diagnostic rebuilds every BLAS every frame, which already
         // absorbs any topology change.
         if self.rt.dynamic_mode == RtDynamicMode::Rebuild {
-            return self.rebuild_rt_accel(albedo_count, normal_count);
+            return self.rebuild_rt_accel(albedo_count);
         }
         if topology_changed {
             // Incrementally refresh the draw-object BLAS head AND rebuild the TLAS
@@ -1021,7 +1020,7 @@ impl MtlContext {
             // transform dirty check only sees the prior set, so the rebuild is
             // forced). `build_tlas = true` does the TLAS inline -- no separate
             // `rebuild_rt_tlas` follow-up.
-            self.refresh_rt_topology(albedo_count, normal_count, true, frame_id)?;
+            self.refresh_rt_topology(albedo_count, true, frame_id)?;
             if self.rt.accel.as_ref().is_some_and(|a| a.is_empty()) {
                 // The refresh removed the last draw + cluster geometry; drop the
                 // BVH so a later add re-seeds it instead of building a degenerate
@@ -1040,10 +1039,10 @@ impl MtlContext {
                     .expect("rt_accel is Some (checked above)")
                     .transforms_dirty(&self.draw_objects);
                 if dirty {
-                    self.rebuild_rt_tlas(albedo_count, normal_count)?;
+                    self.rebuild_rt_tlas(albedo_count)?;
                 }
             }
-            RtDynamicMode::Tlas => self.rebuild_rt_tlas(albedo_count, normal_count)?,
+            RtDynamicMode::Tlas => self.rebuild_rt_tlas(albedo_count)?,
             // Handled above / filtered out by the `is_dynamic` guard.
             RtDynamicMode::Rebuild | RtDynamicMode::Off => {}
         }
@@ -1062,7 +1061,6 @@ impl MtlContext {
     fn refresh_rt_topology(
         &mut self,
         albedo_count: usize,
-        normal_count: usize,
         build_tlas: bool,
         frame_id: u64,
     ) -> Result<(), String> {
@@ -1087,10 +1085,7 @@ impl MtlContext {
                     index_buffer: &ibuf,
                 },
                 &draw_objects,
-                super::raytrace::RtTextureCounts {
-                    albedo_count,
-                    normal_count,
-                },
+                super::raytrace::RtTextureCounts { albedo_count },
                 super::raytrace::RtTopologyRefreshOptions {
                     exclude_seethrough,
                     build_tlas,
@@ -1109,11 +1104,7 @@ impl MtlContext {
     // failure or an emptied scene leaves the previous BVH in place. The
     // immutable borrows of `self` all end when the build returns, before the
     // assignment, so there is no aliasing.
-    pub(in crate::metal) fn rebuild_rt_accel(
-        &mut self,
-        albedo_count: usize,
-        normal_count: usize,
-    ) -> Result<(), String> {
+    pub(in crate::metal) fn rebuild_rt_accel(&mut self, albedo_count: usize) -> Result<(), String> {
         use super::raytrace::SkinnedRtInputs;
         let skinned = match (
             &self.skinned.vertex_buffer,
@@ -1146,10 +1137,7 @@ impl MtlContext {
                 draw_objects: &self.draw_objects,
                 clusters: &self.instanced_clusters,
             },
-            super::raytrace::RtTextureCounts {
-                albedo_count,
-                normal_count,
-            },
+            super::raytrace::RtTextureCounts { albedo_count },
             skinned,
             self.seethrough_meshes_enabled(),
         )?;
@@ -1166,12 +1154,7 @@ impl MtlContext {
     // the draw list is lifted out (an O(1) `Vec` swap) to keep the borrows
     // disjoint, then restored. A no-op (keeps last frame's BVH) if the required
     // skinned resources are missing.
-    fn update_rt_skinned(
-        &mut self,
-        albedo_count: usize,
-        normal_count: usize,
-        frame_id: u64,
-    ) -> Result<(), String> {
+    fn update_rt_skinned(&mut self, albedo_count: usize, frame_id: u64) -> Result<(), String> {
         use super::raytrace::SkinnedRtInputs;
         let device = self.device.clone();
         let queue = self.command_queue.clone();
@@ -1202,10 +1185,7 @@ impl MtlContext {
                 },
                 &draw_objects,
                 skinned,
-                super::raytrace::RtTextureCounts {
-                    albedo_count,
-                    normal_count,
-                },
+                super::raytrace::RtTextureCounts { albedo_count },
                 frame_id,
             );
         self.draw_objects = draw_objects;
@@ -1217,7 +1197,7 @@ impl MtlContext {
     // mutably while reading the device / queue / draw list, so clone the two
     // cheap handles and lift the draw list out (an O(1) `Vec` swap) to keep the
     // borrows from aliasing, then put the draw list back.
-    fn rebuild_rt_tlas(&mut self, albedo_count: usize, normal_count: usize) -> Result<(), String> {
+    fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.command_queue.clone();
         let draw_objects = std::mem::take(&mut self.draw_objects);
@@ -1226,7 +1206,7 @@ impl MtlContext {
             .accel
             .as_mut()
             .expect("rt_accel is Some (checked by caller)")
-            .rebuild_tlas(&device, &queue, &draw_objects, albedo_count, normal_count);
+            .rebuild_tlas(&device, &queue, &draw_objects, albedo_count);
         self.draw_objects = draw_objects;
         res
     }
