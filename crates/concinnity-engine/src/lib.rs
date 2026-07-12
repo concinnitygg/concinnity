@@ -37,6 +37,10 @@ pub(crate) mod hud;
 // reaching it through `concinnity_engine::jobs`.
 pub use concinnity_render::jobs;
 pub(crate) mod physics;
+// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
+// stream). `pub` so the editor's in-memory build path can construct the tables it
+// inserts into the world, mirroring the shipped-runtime loader.
+pub mod resource;
 pub(crate) mod story;
 pub(crate) mod text_input_system;
 pub(crate) mod ui;

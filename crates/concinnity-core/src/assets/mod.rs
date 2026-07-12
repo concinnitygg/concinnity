@@ -14,7 +14,6 @@
 mod anim_graph;
 mod anim_params;
 mod animation;
-pub mod audio_clip;
 mod audio_command;
 mod camera3d;
 mod camera_probe;
@@ -271,7 +270,6 @@ mod tests {
         exercise::<Scene>();
         exercise::<Model>();
         exercise::<ProceduralMesh>();
-        exercise::<AudioClip>();
         exercise::<EnvironmentMap>();
         exercise::<WaterSurface>();
         // More data-only components sharing the same shape.
@@ -333,10 +331,5 @@ mod tests {
             Some("m.obj".to_string())
         );
         assert_eq!(Mesh::source_path(&json!({}), Platform::Metal), None);
-        assert_eq!(
-            AudioClip::source_path(&json!({"source": "a.wav"}), Platform::Metal),
-            Some("a.wav".to_string())
-        );
-        assert_eq!(AudioClip::source_path(&json!({}), Platform::Metal), None);
     }
 }

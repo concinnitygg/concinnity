@@ -74,7 +74,6 @@ macro_rules! for_each_component {
             SkeletonPose      => $crate::assets::SkeletonPose { runtime, build: skeleton_pose },
             StreamingConfig   => $crate::assets::StreamingConfig { gen, external },
             VoxelWorld        => $crate::assets::VoxelWorld { gen, external },
-            AudioClip         => $crate::assets::AudioClip { gen, external, compiled, id },
             AudioEmitter      => $crate::assets::AudioEmitter { gen, external, refs: [("clip", "AudioClip"), ("prop", "Prop")] },
             Sprite            => $crate::assets::Sprite { gen, external, id, refs: [("texture", "Texture"), ("view", "View")] },
             KeyBinding        => $crate::assets::KeyBinding { gen, external },
@@ -123,6 +122,27 @@ macro_rules! for_each_component {
             CameraProbe       => $crate::assets::CameraProbe { runtime },
             TextInput         => $crate::assets::TextInput { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
             Panel             => $crate::assets::Panel { gen, build_only },
+        }
+    };
+}
+
+// The resource-asset list: asset types that are compiled into the blob's
+// resource stream and addressed at runtime by a per-kind handle, rather than
+// stored as ECS components. These have left `for_each_component!` (no
+// `ComponentTag`, no `ComponentAsset`, no `impl Component`): the runtime keeps
+// them in per-kind resource tables owned by the system that uses them, not in a
+// component column. Cook still recognizes them as declarable asset types (it
+// builds a `ResourceAssetType` from this list), compiles their payload, assigns
+// their handle, and emits a resource record. Each entry is
+// `Variant => Type { resource: <ResourceKind>, <flags...> }`.
+//
+// This is the asset-registry / component-registry split the P5 design calls for,
+// applied one kind at a time; AudioClip is the first kind to leave.
+#[macro_export]
+macro_rules! for_each_resource_asset {
+    ($cb:ident) => {
+        $cb! {
+            AudioClip => $crate::assets::AudioClip { resource: AudioClip, compiled },
         }
     };
 }

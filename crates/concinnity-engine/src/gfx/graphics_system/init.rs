@@ -1665,9 +1665,13 @@ impl GraphicsSystem {
             .filter_map(|f| f.locator.as_ref().map(|l| l.blob_index))
             .collect();
 
-        // AudioSystem inits after GraphicsSystem and reads AudioClip payloads,
-        // so any blob an AudioClip lives in must survive this release sweep.
-        let audio_blobs = crate::assets::audio_clip::audio_clip_blob_indices(ctx);
+        // AudioSystem inits after GraphicsSystem and reads audio-clip payloads
+        // from the `AudioClipTable`, so any blob a clip lives in must survive this
+        // release sweep.
+        let audio_blobs = ctx
+            .resource::<crate::resource::AudioClipTable>()
+            .map(|table| table.blob_indices())
+            .unwrap_or_default();
         // SdfVolume payloads are drained later in this same init pass (see
         // the `sdf_volumes` block below), so the release sweep here must
         // also leave their blobs resident. Without this gate, any world

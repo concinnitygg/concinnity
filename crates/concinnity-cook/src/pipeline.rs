@@ -12,7 +12,7 @@ use crate::world::{WorldConfig, WorldJsonlAsset, normalize_single_shader_type};
 use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
 use crate::ecs::asset_id;
-use crate::ecs::{AssetKind, BlobAssetDef};
+use crate::ecs::{AssetKind, BlobAssetDef, ResourceRecord};
 use crate::registry::ComponentType;
 
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
@@ -53,7 +53,7 @@ pub fn write_build_outputs(
     result: &PipelineResult,
     injected: &[crate::world::InjectedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
-    let pack_result = crate::blob::write_blobs(&result.defs, &result.payloads)?;
+    let pack_result = crate::blob::write_blobs(&result.defs, &result.resources, &result.payloads)?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -79,6 +79,10 @@ pub struct PipelineResult {
     // Asset name of each def, index-aligned with `defs` (defs only carry the
     // interned id; the lock file records the readable name).
     pub names: Vec<String>,
+    // The blob's resource stream: compiled resources addressed by their dense
+    // per-kind handle, carried alongside the component defs. Empty until a
+    // resource kind migrates off the component registry (AudioClip first).
+    pub resources: Vec<ResourceRecord>,
     pub payloads: Vec<Vec<u8>>,
     // Compiled-asset payloads served from the build cache this run.
     pub cache_hits: usize,
@@ -102,11 +106,11 @@ pub fn validate_asset(
 ) -> Result<(), String> {
     // Single-asset validation has no surrounding world to intern against; the
     // resulting ids are throwaway. Reset so calls do not accumulate entries.
-    // Clear the texture handle map too: with no world there are no handles, so
-    // a texture reference falls back to the interner (parses without resolving
+    // Clear the resource handle map too: with no world there are no handles, so
+    // a resource reference falls back to the interner (parses without resolving
     // to a real slot, which single-asset validation never needs).
     asset_id::reset_interner();
-    crate::resource_handles::reset_texture_handles();
+    crate::resource_handles::reset_resource_handles();
     let (asset_type, args) = normalize_single_shader_type(asset_type, args);
     let asset_type = asset_type.as_str();
     let type_norm = asset_type.to_lowercase().replace('_', "");
@@ -117,6 +121,14 @@ pub fn validate_asset(
         type_norm.as_str(),
         "environment" | "lightrig" | "materialpalette" | "camerashot" | "prefab" | "sceneimport"
     ) {
+        return Ok(());
+    }
+
+    // Resource-only asset types (AudioClip) have left the component registry, so
+    // they never build a component def; validate them as known types with a
+    // structural check instead of routing through `create_asset_def`.
+    if crate::resource_handles::ResourceAssetType::parse(asset_type).is_some() {
+        crate::check::check_asset(&type_norm, name, &args)?;
         return Ok(());
     }
 
@@ -180,21 +192,44 @@ pub fn build_compiled(
     asset_id::intern_all(&names);
     resolve_scene_refs(&mut assets);
 
-    // Assign each texture resource its dense handle in declaration order and
-    // install the map so texture references (Material.albedo, Room.*_texture,
-    // Decal/ParticleEmitter.texture) resolve to a `TextureHandle` during the
-    // reserialize pass below. The assignment walks this same `assets` list that
-    // the blob is emitted from, so a texture's handle equals the position the
-    // runtime drains it from its Texture column -- i.e. its albedo pool slot.
-    crate::resource_handles::reset_texture_handles();
+    // Assign each resource its dense per-kind handle in declaration order and
+    // install the map so resource references resolve during the reserialize pass
+    // below: texture references (Material.albedo, Room.*_texture,
+    // Decal/ParticleEmitter.texture) to a `TextureHandle`, and audio-clip
+    // references (AudioEmitter.clip, AudioCue.clip, Story music/sounds) to an
+    // `AudioClipHandle`. The assignment walks this same `assets` list that the
+    // blob is emitted from, so a resource's handle equals the position the
+    // runtime encounters it (a texture's albedo pool slot, an audio clip's drain
+    // index / resource-table slot).
+    crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().filter_map(|a| {
-        ComponentType::parse(&a.asset_type).map(|ct| (asset_id::intern(&a.name), ct))
+        crate::resource_handles::asset_resource_kind(&a.asset_type)
+            .map(|kind| (asset_id::intern(&a.name), kind))
     });
-    let texture_handles = crate::resource_handles::ResourceHandles::from_assets(resource_assets);
-    crate::resource_handles::install_texture_handles(texture_handles);
+    let resource_handles = crate::resource_handles::ResourceHandles::from_assets(resource_assets);
+    // Install a clone; the original is kept to look up each resource asset's
+    // handle while partitioning below.
+    crate::resource_handles::install_resource_handles(resource_handles.clone());
 
+    // Partition the world into component assets (each becomes a `BlobAssetDef`)
+    // and resource assets (each becomes a resource-stream record). A resource
+    // asset (AudioClip) has left the component registry, so it never goes through
+    // `create_asset_def`; it is compiled + packed as a resource below. `named` is
+    // therefore no longer 1:1 with `assets`, so `named_src[i]` records the source
+    // asset index of each component def.
+    use crate::resource_handles::ResourceAssetType;
     let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
-    for asset in &assets {
+    let mut named_src: Vec<usize> = Vec::new();
+    let mut resource_jobs: Vec<(usize, ResourceAssetType, u32)> = Vec::new();
+    for (i, asset) in assets.iter().enumerate() {
+        if let Some(rt) = ResourceAssetType::parse(&asset.asset_type) {
+            let id = asset_id::intern(&asset.name);
+            let handle = resource_handles
+                .get(rt.resource_kind(), id)
+                .expect("resource asset was assigned a handle above");
+            resource_jobs.push((i, rt, handle));
+            continue;
+        }
         let req = AssetRequest {
             asset_type: asset.asset_type.clone(),
             args: Some(asset.args.clone()),
@@ -207,27 +242,32 @@ pub fn build_compiled(
         })?;
         def.name = Some(asset_id::intern(&asset.name));
         named.push((asset.name.clone(), def));
+        named_src.push(i);
     }
 
-    let (blob_payloads, cache_hits, cache_misses) = compile_and_pack_payloads(
+    let compiled = compile_and_pack_payloads(
         &mut named,
+        &named_src,
         &assets,
+        &resource_jobs,
         config.max_blob_bytes,
         artifacts_dir,
         &gltf_cache,
     )?;
 
-    // The blob carries only components, emitted in declaration order. (System
-    // run order is no longer a build concern: every system is internal client
-    // code ordered by the client's `World::build_internal_systems` schedule.)
+    // The blob carries components (emitted in declaration order) plus the
+    // resource stream. (System run order is no longer a build concern: every
+    // system is internal client code ordered by the client's
+    // `World::build_internal_systems` schedule.)
     let (names, defs): (Vec<String>, Vec<BlobAssetDef>) = named.into_iter().unzip();
 
     Ok(PipelineResult {
         defs,
         names,
-        payloads: blob_payloads,
-        cache_hits,
-        cache_misses,
+        resources: compiled.resources,
+        payloads: compiled.blobs,
+        cache_hits: compiled.cache_hits,
+        cache_misses: compiled.cache_misses,
     })
 }
 
@@ -863,6 +903,11 @@ pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
+        // Resource-only assets (AudioClip) do not build a component def; they are
+        // a known type on their own registry, so skip the component resolution.
+        if crate::resource_handles::ResourceAssetType::parse(&asset.asset_type).is_some() {
+            continue;
+        }
         let req = AssetRequest {
             asset_type: asset.asset_type.clone(),
             args: Some(asset.args.clone()),
@@ -879,13 +924,29 @@ pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
     }
 }
 
+// Cache-key discriminant base for resource payloads. Resource kinds are keyed
+// as `128 + ResourceKind as u8` so their cache keys never collide with a
+// component discriminant (all < 128, the `ComponentMask` ceiling).
+const RESOURCE_CACHE_DISC_BASE: u8 = 128;
+
+// The output of the compile + pack pass: the packed blob payload sections, the
+// resource-stream records (each with its payload locator), and cache accounting.
+struct CompiledOutput {
+    blobs: Vec<Vec<u8>>,
+    resources: Vec<ResourceRecord>,
+    cache_hits: usize,
+    cache_misses: usize,
+}
+
 fn compile_and_pack_payloads(
     named: &mut [(String, BlobAssetDef)],
+    named_src: &[usize],
     assets: &[WorldJsonlAsset],
+    resource_jobs: &[(usize, crate::resource_handles::ResourceAssetType, u32)],
     max_blob_bytes: u64,
     artifacts_dir: Option<&str>,
     gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
-) -> std::io::Result<(Vec<Vec<u8>>, usize, usize)> {
+) -> std::io::Result<CompiledOutput> {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -901,8 +962,8 @@ fn compile_and_pack_payloads(
             };
             if ct.as_str() == "File" {
                 // only compile File assets whose kind maps to a supported payload
-                // `named[i]` is built 1:1 from `assets[i]`, so index directly.
-                return assets[*i]
+                // `named[i]` maps to `assets[named_src[i]]`.
+                return assets[named_src[*i]]
                     .args
                     .get("kind")
                     .and_then(|k| k.as_str())
@@ -941,9 +1002,10 @@ fn compile_and_pack_payloads(
                     )
                 })?;
 
-                // `named[i]` is built 1:1 from `assets[i]` and the job carries
-                // that index, so recover the args directly instead of scanning.
-                let asset_args = &assets[*idx].args;
+                // The job carries the `named` index; map it to its source asset
+                // via `named_src` (`named` is not 1:1 with `assets` once resource
+                // assets are partitioned out).
+                let asset_args = &assets[named_src[*idx]].args;
 
                 let ctx = crate::asset::BuildCtx {
                     name: name.as_str(),
@@ -981,13 +1043,54 @@ fn compile_and_pack_payloads(
         )
         .collect::<std::io::Result<Vec<_>>>()?;
 
-    let cache_hits = cache_hits.into_inner();
-    let cache_misses = pending.len() - cache_hits;
+    let component_hits = cache_hits.into_inner();
 
-    if pending.is_empty() {
-        return Ok((vec![Vec::new()], 0, 0));
+    // Compile the resource-stream payloads (AudioClip today). Few and cheap, so
+    // this stays serial; the content-addressed payload cache still short-circuits
+    // an unchanged source. Bypasses the `BuildAsset`/`ComponentType` path a
+    // component takes -- a resource is no longer a component.
+    let mut resource_hits = 0usize;
+    let mut resource_pending: Vec<(u8, u32, Vec<u8>)> = Vec::new();
+    for (asset_idx, rt, handle) in resource_jobs {
+        let asset = &assets[*asset_idx];
+        let ctx = crate::asset::BuildCtx {
+            name: asset.name.as_str(),
+            artifacts_dir,
+            all_assets: assets,
+        };
+        let extra_sources = rt.source_files(&asset.args);
+        let key = crate::cache::payload_key(
+            RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
+            &asset.args,
+            &ctx,
+            &extra_sources,
+        );
+        let bytes = if let Some(bytes) = crate::cache::load(&key) {
+            resource_hits += 1;
+            bytes
+        } else {
+            let compiled = rt.compile_payload(&asset.args)?;
+            crate::cache::store(&key, &compiled);
+            compiled
+        };
+        resource_pending.push((rt.resource_kind() as u8, *handle, bytes));
     }
 
+    let cache_hits = component_hits + resource_hits;
+    let cache_misses = (pending.len() - component_hits) + (resource_pending.len() - resource_hits);
+
+    if pending.is_empty() && resource_pending.is_empty() {
+        return Ok(CompiledOutput {
+            blobs: vec![Vec::new()],
+            resources: Vec::new(),
+            cache_hits: 0,
+            cache_misses: 0,
+        });
+    }
+
+    // Pack component payloads first (recording each def's locator), then the
+    // resource payloads (building each resource record's locator). One packer, so
+    // both streams address the same blob(s).
     let mut packer = PayloadPacker::new(max_blob_bytes);
 
     for (idx, bytes) in &pending {
@@ -995,7 +1098,23 @@ fn compile_and_pack_payloads(
         named[*idx].1.payload = Some(locator);
     }
 
-    Ok((packer.finish(), cache_hits, cache_misses))
+    let mut resources: Vec<ResourceRecord> = Vec::with_capacity(resource_pending.len());
+    for (resource_kind, handle, bytes) in &resource_pending {
+        let locator = packer.push(bytes);
+        resources.push(ResourceRecord {
+            resource_kind: *resource_kind,
+            handle: *handle,
+            payload: Some(locator),
+            data_bytes: Vec::new(),
+        });
+    }
+
+    Ok(CompiledOutput {
+        blobs: packer.finish(),
+        resources,
+        cache_hits,
+        cache_misses,
+    })
 }
 
 // Dispatch payload compilation by ComponentType. Every variant listed below
@@ -1012,11 +1131,10 @@ fn compile_by_type(
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
     use crate::assets::{
-        AudioClip, ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh,
-        Room, SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
+        ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
+        SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
     };
     match ct {
-        ComponentType::AudioClip => <AudioClip as BuildAsset>::compile_payload(args, ctx),
         ComponentType::Mesh => <Mesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::compile_payload(args, ctx),
@@ -1051,11 +1169,10 @@ fn source_files_by_type(
 ) -> Vec<String> {
     use crate::asset::BuildAsset;
     use crate::assets::{
-        AudioClip, ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh,
-        Room, SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
+        ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
+        SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
     };
     match ct {
-        ComponentType::AudioClip => <AudioClip as BuildAsset>::source_files(args, ctx),
         ComponentType::Mesh => <Mesh as BuildAsset>::source_files(args, ctx),
         ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::source_files(args, ctx),
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::source_files(args, ctx),
@@ -1790,6 +1907,24 @@ mod tests {
         assert!(source_files_by_type(ct, &serde_json::json!({}), &ctx()).is_empty());
     }
 
+    // AudioClip compiles through `ResourceAssetType` now, not `compile_by_type`
+    // (it left the component registry). Its source-less error still surfaces, and
+    // its source file is folded into the payload cache key.
+    #[test]
+    fn resource_asset_type_compiles_audio_clip() {
+        use crate::resource_handles::ResourceAssetType;
+        let rt = ResourceAssetType::parse("AudioClip").expect("AudioClip is a resource asset");
+        let err = rt
+            .compile_payload(&serde_json::json!({}))
+            .expect_err("a source-less AudioClip must fail to compile");
+        assert!(err.to_string().contains("missing 'source'"), "got: {err}");
+        assert_eq!(
+            rt.source_files(&serde_json::json!({"source": "a.wav"})),
+            vec!["a.wav".to_string()]
+        );
+        assert!(rt.source_files(&serde_json::json!({})).is_empty());
+    }
+
     // Dispatch coverage: compile_by_type / source_files_by_type route each
     // compiled ComponentType to its asset_impls wrapper.
 
@@ -1826,7 +1961,6 @@ mod tests {
         }
 
         let err_cases: &[(&str, serde_json::Value, &str)] = &[
-            ("AudioClip", serde_json::json!({}), "missing 'source'"),
             (
                 "ColorLut",
                 serde_json::json!({}),

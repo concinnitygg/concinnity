@@ -17,7 +17,7 @@ use crate::assets::{
     StoryOp, StoryReload, StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
+use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};
 
 mod graph;
 mod input;
@@ -561,7 +561,7 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
     }
 }
 
-fn play(ctx: &mut PipelineContext, clip: Option<AssetId>, kind: CueKind) {
+fn play(ctx: &mut PipelineContext, clip: Option<AudioClipHandle>, kind: CueKind) {
     let Some(clip) = clip else { return };
     ctx.events_mut::<PlayCue>().send(PlayCue {
         clip,

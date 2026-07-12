@@ -1,6 +1,6 @@
 // Audio-cue schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
 
 /// Plays audio when a [View](#view) is shown.
 ///
@@ -32,8 +32,8 @@ pub struct AudioCue {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub view: Option<AssetId>,
     /// The [AudioClip](#audioclip) to play.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub clip: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
+    pub clip: Option<AudioClipHandle>,
     /// Playback behavior: a looping `music` track or a one-shot `sound`.
     pub kind: CueKind,
     /// Linear gain applied to the clip (1.0 leaves it unchanged).

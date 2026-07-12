@@ -20,9 +20,9 @@ mod registry;
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage, Entity, EventCursor,
-    EventStore, Events, PayloadLocator, PipelineContext, RecordKind, Resources, TextureHandle,
-    asset_id,
+    AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
+    Entity, EventCursor, EventStore, Events, PayloadLocator, PipelineContext, RecordKind,
+    Resources, TextureHandle, asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's

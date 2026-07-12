@@ -1,6 +1,6 @@
 // Positional audio-emitter schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
 
 /// A point source of sound in the world.
 ///
@@ -16,8 +16,8 @@ use crate::{AssetId, de_opt_asset_ref};
 #[serde(default)]
 pub struct AudioEmitter {
     /// The [AudioClip](#audioclip) this emitter plays.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub clip: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
+    pub clip: Option<AudioClipHandle>,
     /// World-space position of the sound source.
     pub position: [f32; 3],
     /// Linear gain multiplier applied to the clip.

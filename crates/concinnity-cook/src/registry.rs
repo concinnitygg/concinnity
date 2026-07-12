@@ -279,12 +279,15 @@ mod tests {
         );
         // A type without references reports none.
         assert!(ComponentType::PointLight.ref_fields().is_empty());
-        // Every declared ref field names an existing arg key and a real target type.
+        // Every declared ref field names an existing arg key and a real target
+        // type -- either a component or a resource-only asset (e.g. AudioClip,
+        // which has left the component registry).
         for &(ty, reg_fn) in ComponentType::all() {
             let default_args = reg_fn().default_args;
             for &(field, target) in ty.ref_fields() {
                 assert!(
-                    ComponentType::parse(target).is_some(),
+                    ComponentType::parse(target).is_some()
+                        || crate::resource_handles::ResourceAssetType::parse(target).is_some(),
                     "{}.{field} targets unknown type {target}",
                     ty.as_str()
                 );

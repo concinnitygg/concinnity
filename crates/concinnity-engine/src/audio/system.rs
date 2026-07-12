@@ -8,13 +8,13 @@
 use std::collections::HashMap;
 
 use crate::assets::{
-    AudioClip, AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Story, Transform,
-    ViewShown,
+    AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
 };
 use crate::audio::{AudioEngine, EmitterId};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::decompose::EntityByName;
-use crate::ecs::{PipelineContext, StepResult, System};
+use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};
+use crate::resource::AudioClipTable;
 
 // Audio behavior. Constructed internally by `World::start` when the world
 // declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
@@ -25,8 +25,9 @@ pub struct AudioSystem {
     emitters: Vec<EmitterBinding>,
     // View-triggered cues, keyed by the View whose activation fires them.
     cues: HashMap<AssetId, Vec<CueBinding>>,
-    // Encoded clip payloads for the cue clips, keyed by AudioClip id.
-    cue_clip_bytes: HashMap<AssetId, Vec<u8>>,
+    // Encoded clip payloads for the cue and story clips, keyed by the clip's
+    // AudioClipHandle.
+    cue_clip_bytes: HashMap<AudioClipHandle, Vec<u8>>,
     // Cursor into the Events<AudioCommand> queue (live master-volume changes).
     audio_cmd_cursor: crate::ecs::EventCursor,
     // Cursor into the Events<ViewShown> queue (cue triggers).
@@ -48,7 +49,7 @@ struct EmitterBinding {
 
 // One AudioCue resolved to its clip and playback style.
 struct CueBinding {
-    clip: AssetId,
+    clip: AudioClipHandle,
     kind: CueKind,
     volume: f32,
 }
@@ -82,14 +83,16 @@ impl AudioSystem {
 
 impl System for AudioSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        // Snapshot the emitters, then resolve every clip's payload locator so
-        // the borrow of `ctx` for the AudioClip query is released before the
-        // `read_payload` calls below.
+        // Snapshot the emitters, then the clip payload locators indexed by
+        // AudioClipHandle. The `AudioClipTable` resource is built from the blob's
+        // resource stream, dense in handle order, so index N is the clip with
+        // `AudioClipHandle(N)`. Collecting this owned Vec releases the resource
+        // borrow before the `read_payload` calls below.
         let emitter_snaps: Vec<AudioEmitter> = ctx.query::<AudioEmitter>().cloned().collect();
-        let clip_locators: HashMap<AssetId, crate::ecs::PayloadLocator> = ctx
-            .query::<AudioClip>()
-            .filter_map(|c| c.locator.clone().map(|l| (c.asset_id, l)))
-            .collect();
+        let clip_locators: Vec<Option<crate::ecs::PayloadLocator>> = ctx
+            .resource::<AudioClipTable>()
+            .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
+            .unwrap_or_default();
 
         // The persisted master volume (settings menu) scales every emitter via
         // the main mix track, so it can be changed live (see `step`). `None`
@@ -105,8 +108,11 @@ impl System for AudioSystem {
             let Some(id) = self.engine.add_emitter(emitter.position) else {
                 continue;
             };
-            match emitter.clip.and_then(|clip| clip_locators.get(&clip)) {
-                Some(locator) => match ctx.read_payload(locator) {
+            match emitter
+                .clip
+                .and_then(|clip| clip_locators.get(clip.index()).cloned().flatten())
+            {
+                Some(locator) => match ctx.read_payload(&locator) {
                     Ok(bytes) => {
                         self.engine
                             .play_clip(id, bytes, emitter.looping, emitter.volume);
@@ -123,8 +129,8 @@ impl System for AudioSystem {
             });
         }
 
-        // Bind the view-triggered cues and cache their clip payloads, so
-        // firing a cue never touches the blob mid-frame.
+        // Bind the view-triggered cues and cache their clip payloads (keyed by
+        // handle), so firing a cue never touches the blob mid-frame.
         let cue_snaps: Vec<AudioCue> = ctx.query::<AudioCue>().cloned().collect();
         for cue in cue_snaps {
             let (Some(view), Some(clip)) = (cue.view, cue.clip) else {
@@ -133,8 +139,8 @@ impl System for AudioSystem {
             };
             if let std::collections::hash_map::Entry::Vacant(slot) = self.cue_clip_bytes.entry(clip)
             {
-                match clip_locators.get(&clip) {
-                    Some(locator) => match ctx.read_payload(locator) {
+                match clip_locators.get(clip.index()).cloned().flatten() {
+                    Some(locator) => match ctx.read_payload(&locator) {
                         Ok(bytes) => {
                             slot.insert(bytes.to_vec());
                         }
@@ -153,17 +159,18 @@ impl System for AudioSystem {
         }
 
         // A story plays clips by direct PlayCue request rather than through
-        // view-keyed cues, so cache every clip payload up front.
+        // view-keyed cues, so cache every clip payload up front, keyed by handle.
         if ctx.query::<Story>().next().is_some() {
-            let uncached: Vec<(AssetId, crate::ecs::PayloadLocator)> = clip_locators
+            let uncached: Vec<(AudioClipHandle, crate::ecs::PayloadLocator)> = clip_locators
                 .iter()
-                .filter(|(id, _)| !self.cue_clip_bytes.contains_key(id))
-                .map(|(id, locator)| (*id, locator.clone()))
+                .enumerate()
+                .filter_map(|(i, loc)| loc.clone().map(|l| (AudioClipHandle(i as u32), l)))
+                .filter(|(handle, _)| !self.cue_clip_bytes.contains_key(handle))
                 .collect();
-            for (id, locator) in uncached {
+            for (handle, locator) in uncached {
                 match ctx.read_payload(&locator) {
                     Ok(bytes) => {
-                        self.cue_clip_bytes.insert(id, bytes.to_vec());
+                        self.cue_clip_bytes.insert(handle, bytes.to_vec());
                     }
                     Err(e) => tracing::warn!("AudioSystem: story clip payload read failed: {e}"),
                 }
@@ -315,24 +322,23 @@ mod tests {
     // compiled payload, so the test observes the match counter.
     #[test]
     fn initial_view_fires_its_cue() {
-        use crate::assets::{AudioClip, AudioCue, View};
+        use crate::assets::{AudioCue, View};
+        use crate::ecs::AudioClipHandle;
         use crate::ecs::asset_id::AssetId;
 
         let mut world = World::new_empty();
         let view = AssetId(90);
-        let clip = AssetId(91);
+        // The cue references its clip by handle. Matching (view + clip present)
+        // is independent of the clip payload, so no `AudioClipTable` is needed
+        // here -- the counter observes the match, not playback.
         world.add_component(View {
             asset_id: view,
             initial: true,
             fade_in_secs: 0.0,
         });
-        world.add_component(AudioClip {
-            asset_id: clip,
-            ..Default::default()
-        });
         world.add_component(AudioCue {
             view: Some(view),
-            clip: Some(clip),
+            clip: Some(AudioClipHandle(0)),
             ..Default::default()
         });
         world.start().unwrap();
@@ -418,24 +424,29 @@ mod tests {
     // which needs a real device. Cue payloads are opaque to the caching path,
     // so any bytes serve.
     use super::{AudioSystem, EmitterBinding};
-    use crate::assets::{
-        AudioClip, AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
-    };
+    use crate::assets::{AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown};
     use crate::audio::EmitterId;
     use crate::blob::BlobData;
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::decompose::EntityByName;
     use crate::ecs::{
-        Component, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources,
-        StepResult, System,
+        AudioClipHandle, Component, ComponentSlot, ComponentStorage, PayloadLocator,
+        PipelineContext, Resources, StepResult, System,
     };
     use crate::gfx::profile::FrameProfile;
+    use crate::resource::AudioClipTable;
+    use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     // Accumulates audio components + one blob section serving every payload
-    // locator handed out, then seals into a context-owning world.
+    // locator handed out, plus the audio-clip resource records, then seals into a
+    // context-owning world whose `AudioClipTable` is built from those records --
+    // exactly as the runtime loads the blob's resource stream.
     struct AudioWorld {
         components: ComponentStorage,
         section: Vec<u8>,
+        // The audio-clip resource records, in handle order (a clip added Nth is
+        // handle N). Sealed into the world's `AudioClipTable`.
+        clips: Vec<ResourceRecord>,
     }
 
     struct SealedAudio {
@@ -450,6 +461,7 @@ mod tests {
             Self {
                 components: ComponentStorage::default(),
                 section: Vec::new(),
+                clips: Vec::new(),
             }
         }
 
@@ -467,22 +479,28 @@ mod tests {
             self.components.push_typed(c);
         }
 
-        // Push an AudioClip whose payload is `bytes`, returning its id.
-        fn clip(&mut self, id: AssetId, bytes: &[u8]) {
+        // Add an audio clip whose payload is `bytes`, returning its handle (its
+        // record order, which the table indexes by).
+        fn clip(&mut self, bytes: &[u8]) -> AudioClipHandle {
+            let handle = AudioClipHandle(self.clips.len() as u32);
             let locator = self.payload(bytes);
-            self.push(AudioClip {
-                asset_id: id,
-                locator: Some(locator),
-                ..Default::default()
+            self.clips.push(ResourceRecord {
+                resource_kind: ResourceKind::AudioClip as u8,
+                handle: handle.0,
+                payload: Some(locator),
+                data_bytes: Vec::new(),
             });
+            handle
         }
 
         fn seal(self) -> SealedAudio {
+            let mut resources = Resources::new();
+            resources.insert(AudioClipTable::from_records(&self.clips));
             SealedAudio {
                 components: self.components,
                 blob: BlobData::new(vec![Some(self.section)]),
                 profile: FrameProfile::default(),
-                resources: Resources::new(),
+                resources,
             }
         }
     }
@@ -503,11 +521,10 @@ mod tests {
     #[test]
     fn init_binds_cue_and_caches_its_payload() {
         let view = AssetId(90);
-        let clip = AssetId(91);
         let bytes = b"cue-clip-bytes";
 
         let mut w = AudioWorld::new();
-        w.clip(clip, bytes);
+        let clip = w.clip(bytes);
         w.push(AudioCue {
             view: Some(view),
             clip: Some(clip),
@@ -554,11 +571,10 @@ mod tests {
     // PlayCue request, not through view-keyed cues).
     #[test]
     fn init_caches_story_clip_payloads() {
-        let clip = AssetId(91);
         let bytes = b"story-page-audio";
 
         let mut w = AudioWorld::new();
-        w.clip(clip, bytes);
+        let clip = w.clip(bytes);
         w.push(Story::default());
         let mut sealed = w.seal();
 
@@ -577,12 +593,10 @@ mod tests {
     #[test]
     fn step_fires_cued_view_across_both_kinds() {
         let view = AssetId(90);
-        let music_clip = AssetId(91);
-        let sound_clip = AssetId(92);
 
         let mut w = AudioWorld::new();
-        w.clip(music_clip, b"music");
-        w.clip(sound_clip, b"sound");
+        let music_clip = w.clip(b"music");
+        let sound_clip = w.clip(b"sound");
         w.push(AudioCue {
             view: Some(view),
             clip: Some(music_clip),
@@ -624,10 +638,8 @@ mod tests {
     // same tick it is sent.
     #[test]
     fn step_plays_direct_play_cue_requests() {
-        let clip = AssetId(91);
-
         let mut w = AudioWorld::new();
-        w.clip(clip, b"page-audio");
+        let clip = w.clip(b"page-audio");
         w.push(Story::default());
         let mut sealed = w.seal();
 

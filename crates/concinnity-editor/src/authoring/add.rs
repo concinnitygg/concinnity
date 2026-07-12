@@ -344,6 +344,28 @@ fn validated_entry(
     asset_type: &str,
     args: serde_json::Value,
 ) -> std::io::Result<serde_json::Value> {
+    // Resource-only assets (AudioClip) have left the component registry, so they
+    // don't build a component def. Resolve their args against the resource
+    // registration (supplied over defaults) instead of `create_asset_def`.
+    if let Some(rt) = concinnity_cook::resource_handles::ResourceAssetType::parse(asset_type) {
+        let mut resolved = rt
+            .registration()
+            .default_args
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        if let (serde_json::Value::Object(base), serde_json::Value::Object(supplied)) =
+            (&mut resolved, &args)
+        {
+            for (k, v) in supplied {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        return Ok(serde_json::json!({
+            "name": name,
+            "type": asset_type,
+            "args": resolved,
+        }));
+    }
+
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
         args: Some(args),

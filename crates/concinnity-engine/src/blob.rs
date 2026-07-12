@@ -8,16 +8,18 @@ pub use concinnity_core::blob::*;
 use crate::ecs::{ComponentAsset, RecordKind};
 use crate::result::CnResult;
 
-// Load the primary blob, resolve every stored def to a `ComponentAsset` (the
-// blob carries only components, systems are internal and constructed at
-// runtime), and return the `BlobData` alongside them.
+// Load the primary blob, resolve every stored def to a `ComponentAsset`, and
+// return the resource stream and `BlobData` alongside them. The blob carries a
+// component stream (systems are internal and constructed at runtime) and a
+// resource stream (compiled resources addressed by a per-kind handle, which the
+// caller loads into per-kind tables).
 //
 // Each component that has a compiled payload carries its `PayloadLocator`
 // injected into it (see `ComponentAsset::inject_locator`). Only blob 0's payload
 // section is read into memory by `load_raw`; overflow blobs are read from disk
 // lazily on first access.
-pub(crate) fn load() -> Result<(Vec<ComponentAsset>, BlobData), CnResult> {
-    let (defs, blob_data) = concinnity_core::blob::load_raw()?;
+pub(crate) fn load() -> Result<(Vec<ComponentAsset>, Vec<ResourceRecord>, BlobData), CnResult> {
+    let (defs, resources, blob_data) = concinnity_core::blob::load_raw()?;
 
     let components = defs
         .iter()
@@ -36,5 +38,5 @@ pub(crate) fn load() -> Result<(Vec<ComponentAsset>, BlobData), CnResult> {
         })
         .collect::<Result<Vec<_>, CnResult>>()?;
 
-    Ok((components, blob_data))
+    Ok((components, resources, blob_data))
 }

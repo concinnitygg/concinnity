@@ -1,5 +1,6 @@
 use super::*;
 use crate::assets::{Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker, View};
+use crate::ecs::AudioClipHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::intern;
 
@@ -483,8 +484,10 @@ fn stage_dressing_applies_to_sprites() {
 #[test]
 fn page_audio_sends_play_cues() {
     let mut story = two_page_story();
-    story.nodes[0].pages[0].music = Some(intern("s_clip0"));
-    story.nodes[0].pages[0].sounds = vec![intern("s_clip1")];
+    // The story graph carries pre-resolved AudioClipHandles (cook resolves the
+    // clip names at build time); a hand-built graph sets them directly.
+    story.nodes[0].pages[0].music = Some(AudioClipHandle(0));
+    story.nodes[0].pages[0].sounds = vec![AudioClipHandle(1)];
     let mut world = story_world(story);
     world.start().unwrap();
     world.step();
@@ -497,7 +500,7 @@ fn page_audio_sends_play_cues() {
         .copied()
         .collect();
     assert_eq!(cues.len(), 2);
-    assert_eq!(cues[0].clip, intern("s_clip0"));
+    assert_eq!(cues[0].clip, AudioClipHandle(0));
     assert_eq!(cues[0].kind, CueKind::Music);
     assert_eq!(cues[1].kind, CueKind::Sound);
 }
@@ -1490,7 +1493,7 @@ fn two_option_world(story: Story) -> World {
 
 // A single choice node linking to a landing node (shared by several menu
 // tests). `choice_sounds` is optional so an audio-free variant stays silent.
-fn one_choice_story(label: &str, sounds: Vec<AssetId>) -> Story {
+fn one_choice_story(label: &str, sounds: Vec<AudioClipHandle>) -> Story {
     Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1823,7 +1826,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
 // events.
 #[test]
 fn choice_menu_fires_its_one_shot_sounds() {
-    let click = intern("s_click");
+    let click = AudioClipHandle(0);
     let mut world = story_world(one_choice_story("Go", vec![click]));
     world.start().unwrap();
     world.step();

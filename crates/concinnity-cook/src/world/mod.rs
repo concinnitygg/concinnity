@@ -159,6 +159,10 @@ pub fn load_world(content: &str) -> Result<Vec<serde_json::Value>, Vec<String>> 
 
         let origin = if let Some(ct) = ComponentType::parse(type_str) {
             Some(ct.registration().origin)
+        } else if crate::resource_handles::ResourceAssetType::parse(type_str).is_some() {
+            // Resource-only assets (AudioClip) have left the component registry;
+            // they are External and build into the blob's resource stream.
+            Some(AssetOrigin::External)
         } else {
             errors.push(format!("{}: unknown type '{}'", label, type_str));
             None

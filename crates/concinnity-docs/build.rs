@@ -507,6 +507,18 @@ fn collect_generated_components() -> Vec<ComponentMeta> {
         };
         let meta = after[open + 1..close].trim();
         let Some(flags) = meta.strip_prefix("gen") else {
+            // A resource-only asset entry (from `for_each_resource_asset!`, e.g.
+            // `{ resource: AudioClip, ... }`) still gets a doc page: its schema
+            // lives in concinnity-asset like every External asset, it has just
+            // left the component registry.
+            if meta.starts_with("resource") {
+                out.push(ComponentMeta {
+                    name: ty.clone(),
+                    struct_ident: ty.clone(),
+                    args_struct: ty,
+                    origin: "External".to_string(),
+                });
+            }
             continue; // a `manual` entry: its impl is collected the usual way.
         };
         let origin = if flags.contains("build_only") {

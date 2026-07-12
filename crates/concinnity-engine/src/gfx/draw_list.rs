@@ -284,8 +284,8 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
     // ProceduralMesh components are cloned rather than drained: PhysicsSystem
     // inits after GraphicsSystem and resolves its `terrain_mesh` reference by
     // querying ProceduralMesh for the live heightfield args. Same precedent as
-    // [`crate::assets::audio_clip::audio_clip_blob_indices`]: leave the
-    // component in place so a later init step can still read it.
+    // the audio-clip residency the graphics init leaves resident for AudioSystem:
+    // leave the component in place so a later init step can still read it.
     let proc_meshes: Vec<ProceduralMesh> = ctx.query::<ProceduralMesh>().cloned().collect();
     let voxel_chunks = ctx.drain::<VoxelChunk>();
     let file_assets = ctx.drain::<File>();

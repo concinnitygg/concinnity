@@ -45,12 +45,16 @@ impl App {
     // load assets and blob payload data from the primary blob and
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let (assets, blob_data) = blob::load()?;
+        let (assets, resources, blob_data) = blob::load()?;
 
         let mut world = World::new(blob_data);
         for asset in assets {
             world.add(asset);
         }
+        // Load the blob's resource stream into the per-kind tables the systems
+        // read by handle. AudioClip is the first resource kind; its table is a
+        // world resource AudioSystem reads at init.
+        world.insert_resource(crate::resource::AudioClipTable::from_records(&resources));
         self.world = world;
         Ok(())
     }

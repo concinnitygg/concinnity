@@ -17,7 +17,9 @@ use alloc::format;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::resolver::{resolve_name, resolve_texture_handle};
+use alloc::vec::Vec;
+
+use crate::resolver::{resolve_audio_clip_handle, resolve_name, resolve_texture_handle};
 
 macro_rules! resource_handles {
     ( $( $(#[$m:meta])* $name:ident ),+ $(,)? ) => {
@@ -117,9 +119,126 @@ where
     d.deserialize_any(OptVisitor)
 }
 
+// Resolve an audio-clip reference name to its handle. A real build has the
+// declaration-ordered audio-clip map installed; outside a build (single-asset
+// validation, the editor's add form) it falls back to the name interner so the
+// reference still parses to *a* handle value that is never used to index a clip
+// table there. Mirrors [`resolve_texture_ref`].
+fn resolve_audio_clip_ref(name: &str) -> Option<u32> {
+    resolve_audio_clip_handle(name).or_else(|| resolve_name(name))
+}
+
+/// `serde` `deserialize_with` helper for an optional audio-clip reference field.
+///
+/// The audio-clip analogue of [`de_opt_texture_handle`]: an integer is an
+/// already-resolved [`AudioClipHandle`]; a name string is resolved through the
+/// installed audio-clip-handle resolver; an empty string or null is `None`.
+/// Apply with `#[serde(default, deserialize_with =
+/// "concinnity_asset::de_opt_audio_clip_handle")]`.
+pub fn de_opt_audio_clip_handle<'de, D>(d: D) -> Result<Option<AudioClipHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<AudioClipHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an audio-clip handle integer, reference name string, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<AudioClipHandle>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<AudioClipHandle>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<AudioClipHandle>, E> {
+            Ok(Some(AudioClipHandle(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<AudioClipHandle>, E> {
+            Ok(Some(AudioClipHandle(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<AudioClipHandle>, E> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            resolve_audio_clip_ref(v)
+                .map(|h| Some(AudioClipHandle(h)))
+                .ok_or_else(|| {
+                    E::custom(format!(
+                        "no audio-clip-handle resolver installed to resolve reference {v:?}"
+                    ))
+                })
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<AudioClipHandle>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
+}
+
+/// `serde` `deserialize_with` helper for a list of audio-clip reference fields.
+///
+/// Each element is either an already-resolved handle integer or a name string
+/// resolved through the installed audio-clip-handle resolver, so the compiled /
+/// runtime form (integers) and the authoring form (names) both parse. Apply with
+/// `#[serde(default, deserialize_with =
+/// "concinnity_asset::de_audio_clip_handle_vec")]`.
+pub fn de_audio_clip_handle_vec<'de, D>(d: D) -> Result<Vec<AudioClipHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct VecVisitor;
+
+    impl<'de> Visitor<'de> for VecVisitor {
+        type Value = Vec<AudioClipHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a list of audio-clip handle integers or reference name strings")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<AudioClipHandle>, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            // Each element is one optional audio-clip reference; drop the `None`
+            // (empty / null) entries so a list never carries a dangling handle.
+            while let Some(handle) = seq.next_element_seed(OneRef)? {
+                if let Some(handle) = handle {
+                    out.push(handle);
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    // Deserialize one list element via the same integer-or-name path as
+    // `de_opt_audio_clip_handle`.
+    struct OneRef;
+    impl<'de> de::DeserializeSeed<'de> for OneRef {
+        type Value = Option<AudioClipHandle>;
+        fn deserialize<D2>(self, d: D2) -> Result<Option<AudioClipHandle>, D2::Error>
+        where
+            D2: Deserializer<'de>,
+        {
+            de_opt_audio_clip_handle(d)
+        }
+    }
+
+    d.deserialize_seq(VecVisitor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn handle_serializes_as_a_bare_u32() {
@@ -187,5 +306,57 @@ mod tests {
                 .is_none()
         );
         assert!(serde_json::from_str::<Holder>("{}").unwrap().tex.is_none());
+    }
+
+    // A name resolves to its byte length, standing in for the build's real
+    // declaration-ordered audio-clip handle map.
+    fn len_audio_resolver(name: &str) -> Option<u32> {
+        Some(name.len() as u32)
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AudioHolder {
+        #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
+        clip: Option<AudioClipHandle>,
+        #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
+        sounds: Vec<AudioClipHandle>,
+    }
+
+    #[test]
+    fn de_opt_audio_clip_handle_reads_integers_and_resolves_names() {
+        crate::set_audio_clip_handle_resolver(len_audio_resolver);
+        // Already-resolved integer passes through; a name resolves via the seam.
+        let h: AudioHolder = serde_json::from_str("{\"clip\":7}").unwrap();
+        assert_eq!(h.clip, Some(AudioClipHandle(7)));
+        let h: AudioHolder = serde_json::from_str("{\"clip\":\"theme\"}").unwrap();
+        assert_eq!(h.clip, Some(AudioClipHandle(5)));
+        // Empty, null, and missing are None.
+        assert!(
+            serde_json::from_str::<AudioHolder>("{\"clip\":\"\"}")
+                .unwrap()
+                .clip
+                .is_none()
+        );
+        assert!(
+            serde_json::from_str::<AudioHolder>("{}")
+                .unwrap()
+                .clip
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn de_audio_clip_handle_vec_resolves_mixed_and_drops_empties() {
+        crate::set_audio_clip_handle_resolver(len_audio_resolver);
+        // A mix of integers and names; empty entries drop out.
+        let h: AudioHolder = serde_json::from_str("{\"sounds\":[3,\"door\",\"\"]}").unwrap();
+        assert_eq!(h.sounds, vec![AudioClipHandle(3), AudioClipHandle(4)]);
+        // Missing defaults to an empty list.
+        assert!(
+            serde_json::from_str::<AudioHolder>("{}")
+                .unwrap()
+                .sounds
+                .is_empty()
+        );
     }
 }

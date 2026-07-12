@@ -1,6 +1,8 @@
 // Branching-story graph schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{
+    AssetId, AudioClipHandle, de_audio_clip_handle_vec, de_opt_asset_ref, de_opt_audio_clip_handle,
+};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -162,10 +164,11 @@ pub struct StoryNode {
     /// Stage dressing current at the choice menu.
     pub choice_stage: StoryStage,
     /// Music current at the choice menu ([AudioClip](#audioclip) reference).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub choice_music: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
+    pub choice_music: Option<AudioClipHandle>,
     /// One-shots played when the choice menu shows.
-    pub choice_sounds: Vec<AssetId>,
+    #[serde(deserialize_with = "de_audio_clip_handle_vec")]
+    pub choice_sounds: Vec<AudioClipHandle>,
     /// Flag operations run when the choice menu shows.
     pub choice_ops: Vec<StoryOp>,
     /// Conditional jumps evaluated before the choice menu shows.
@@ -185,10 +188,11 @@ pub struct StoryPage {
     pub jump: Option<u32>,
     /// Music current at this page ([AudioClip](#audioclip) reference).
     /// Re-triggering the already-playing track is seamless.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub music: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
+    pub music: Option<AudioClipHandle>,
     /// One-shot effects played when the page shows.
-    pub sounds: Vec<AssetId>,
+    #[serde(deserialize_with = "de_audio_clip_handle_vec")]
+    pub sounds: Vec<AudioClipHandle>,
     /// Stage dressing current at this page.
     pub stage: StoryStage,
     /// Flag operations run when the page shows.

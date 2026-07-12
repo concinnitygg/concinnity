@@ -59,6 +59,12 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         }
         world.add(component);
     }
+    // Load the compiled resource stream into its per-kind tables, exactly as the
+    // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
+    // audio clips by handle too.
+    world.insert_resource(crate::resource::AudioClipTable::from_records(
+        &result.resources,
+    ));
     Ok(world)
 }
 

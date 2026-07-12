@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use concinnity_core::blob::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE, LOCK_PATH};
-use concinnity_core::ecs::{BlobAssetDef, PayloadLocator};
+use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
 // Re-export the read side from core so `crate::blob::{BlobData, load_raw, ...}`
 // resolves for build-crate consumers that read blobs back. `blob_path` is shared
@@ -72,25 +72,37 @@ pub struct PackResult {
     pub blob_paths: Vec<String>,
 }
 
-// Pack defs and their payloads into one or more blobs
+// Pack the metadata (component defs + resource records) and their payloads into
+// one or more blobs. The full metadata rides in blob 0; overflow blobs carry an
+// empty metadata section and pure payload bytes.
 pub fn write_blobs(
     defs: &[BlobAssetDef],
+    resources: &[ResourceRecord],
     blob_payloads: &[Vec<u8>],
 ) -> std::io::Result<PackResult> {
     fs::create_dir_all(concinnity_core::paths::data_dir())?;
+
+    let primary_meta = || BlobMeta {
+        defs: defs.to_vec(),
+        resources: resources.to_vec(),
+    };
 
     let mut blob_paths = Vec::new();
 
     for (idx, payload) in blob_payloads.iter().enumerate() {
         let path = blob_path(idx as u32);
-        let defs_to_write: &[BlobAssetDef] = if idx == 0 { defs } else { &[] };
-        write_cnb(defs_to_write, payload, &path)?;
+        let meta = if idx == 0 {
+            primary_meta()
+        } else {
+            BlobMeta::default()
+        };
+        write_cnb(&meta, payload, &path)?;
         blob_paths.push(path);
     }
 
     if blob_payloads.is_empty() {
         let primary = blob_path(0);
-        write_cnb(defs, &[], &primary)?;
+        write_cnb(&primary_meta(), &[], &primary)?;
         blob_paths.push(primary);
     }
 
@@ -98,16 +110,16 @@ pub fn write_blobs(
 }
 
 // Write a single blob file
-fn write_cnb(defs: &[BlobAssetDef], payload: &[u8], path: &str) -> std::io::Result<()> {
-    let defs_bytes = postcard::to_stdvec(defs).map_err(|e| std::io::Error::other(e.to_string()))?;
+fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
+    let meta_bytes = postcard::to_stdvec(meta).map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    let defs_len = defs_bytes.len() as u64;
+    let meta_len = meta_bytes.len() as u64;
 
-    let mut data = Vec::with_capacity(HEADER_SIZE + defs_bytes.len() + payload.len());
+    let mut data = Vec::with_capacity(HEADER_SIZE + meta_bytes.len() + payload.len());
     data.extend_from_slice(&BLOB_MAGIC);
     data.extend_from_slice(&BLOB_VERSION.to_le_bytes());
-    data.extend_from_slice(&defs_len.to_le_bytes());
-    data.extend_from_slice(&defs_bytes);
+    data.extend_from_slice(&meta_len.to_le_bytes());
+    data.extend_from_slice(&meta_bytes);
     data.extend_from_slice(payload);
 
     fs::write(path, &data)
@@ -283,24 +295,46 @@ mod tests {
         assert_eq!((b.blob_index, b.offset, b.len), (0, 0, 1));
     }
 
+    fn meta(defs: Vec<BlobAssetDef>, resources: Vec<ResourceRecord>) -> BlobMeta {
+        BlobMeta { defs, resources }
+    }
+
     #[test]
-    fn write_cnb_round_trips_defs_and_payload() {
+    fn write_cnb_round_trips_defs_resources_and_payload() {
+        use concinnity_core::ecs::{PayloadLocator, ResourceKind};
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0.cnb");
         let path = path.to_str().unwrap();
 
-        let defs = vec![def(3, vec![1, 2]), def(9, vec![])];
+        let resources = vec![ResourceRecord {
+            resource_kind: ResourceKind::AudioClip as u8,
+            handle: 0,
+            payload: Some(PayloadLocator {
+                blob_index: 0,
+                offset: 0,
+                len: 3,
+            }),
+            data_bytes: Vec::new(),
+        }];
+        let m = meta(vec![def(3, vec![1, 2]), def(9, vec![])], resources);
         let payload = [0xAA, 0xBB, 0xCC];
-        write_cnb(&defs, &payload, path).unwrap();
+        write_cnb(&m, &payload, path).unwrap();
 
-        let (read_defs, payload_start) = read_cnb(path).expect("read back");
-        assert_eq!(read_defs.len(), 2);
-        assert_eq!(read_defs[0].discriminant, 3);
-        assert_eq!(read_defs[0].args_bytes, vec![1, 2]);
-        assert_eq!(read_defs[1].discriminant, 9);
-        assert!(read_defs[1].args_bytes.is_empty());
+        let (read_meta, payload_start) = read_cnb(path).expect("read back");
+        assert_eq!(read_meta.defs.len(), 2);
+        assert_eq!(read_meta.defs[0].discriminant, 3);
+        assert_eq!(read_meta.defs[0].args_bytes, vec![1, 2]);
+        assert_eq!(read_meta.defs[1].discriminant, 9);
+        assert!(read_meta.defs[1].args_bytes.is_empty());
+        // The resource stream round-trips alongside the component defs.
+        assert_eq!(read_meta.resources.len(), 1);
+        assert_eq!(
+            read_meta.resources[0].resource_kind,
+            ResourceKind::AudioClip as u8
+        );
 
-        // The payload section starts right after the header + defs table and
+        // The payload section starts right after the header + metadata table and
         // holds exactly the bytes we packed.
         let data = fs::read(path).unwrap();
         assert_eq!(&data[payload_start..], &payload);
@@ -311,15 +345,16 @@ mod tests {
     }
 
     #[test]
-    fn write_cnb_with_no_defs_and_no_payload_is_readable() {
+    fn write_cnb_with_no_metadata_and_no_payload_is_readable() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("empty.cnb");
         let path = path.to_str().unwrap();
 
-        write_cnb(&[], &[], path).unwrap();
+        write_cnb(&BlobMeta::default(), &[], path).unwrap();
 
-        let (defs, payload_start) = read_cnb(path).expect("read back");
-        assert!(defs.is_empty());
+        let (m, payload_start) = read_cnb(path).expect("read back");
+        assert!(m.defs.is_empty());
+        assert!(m.resources.is_empty());
         assert_eq!(fs::read(path).unwrap().len(), payload_start);
     }
 
@@ -329,7 +364,7 @@ mod tests {
         let path = dir.path().join("hdr.cnb");
         let path = path.to_str().unwrap();
 
-        write_cnb(&[], &[1], path).unwrap();
+        write_cnb(&BlobMeta::default(), &[1], path).unwrap();
 
         let data = fs::read(path).unwrap();
         assert_eq!(&data[0..4], &BLOB_MAGIC);

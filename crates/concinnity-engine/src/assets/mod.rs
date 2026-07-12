@@ -10,7 +10,8 @@ pub use concinnity_core::assets::*;
 
 // Submodule paths referenced explicitly elsewhere in the client, e.g.
 // `crate::assets::shader_stage::ShaderKind`,
-// `crate::assets::audio_clip::audio_clip_blob_indices`,
 // `crate::assets::sdf_volume::sdf_volume_blob_indices`. Re-export the modules
-// themselves so those paths keep resolving against core.
-pub use concinnity_core::assets::{audio_clip, procedural_mesh, sdf_volume, shader_stage};
+// themselves so those paths keep resolving against core. (Audio-clip residency
+// moved to `crate::resource::AudioClipTable::blob_indices` when AudioClip became
+// a resource.)
+pub use concinnity_core::assets::{procedural_mesh, sdf_volume, shader_stage};

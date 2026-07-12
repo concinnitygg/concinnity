@@ -193,8 +193,13 @@ mod story {
         assert_eq!(s.scaffold.options, vec![intern("s_stage_opt0_lbl")]);
         assert_eq!(s.scaffold.option_boxes, vec![intern("s_stage_opt0_box")]);
         assert_eq!(s.scaffold.dialog_box, None);
-        assert_eq!(page.music, Some(intern("s_clip0")));
-        assert_eq!(page.sounds, vec![intern("s_clip1")]);
+        // Audio-clip references resolve to an `AudioClipHandle`. With no
+        // audio-clip handle resolver installed (this is a bare serde test, not a
+        // build), the deserializer falls back to the name interner, exactly like
+        // an `AssetId`, so the handle value is the interned id of the name.
+        use crate::ecs::AudioClipHandle;
+        assert_eq!(page.music, Some(AudioClipHandle(intern("s_clip0").0)));
+        assert_eq!(page.sounds, vec![AudioClipHandle(intern("s_clip1").0)]);
         assert_eq!(page.stage.bg.as_ref().unwrap().texture, intern("s_img0"));
         // Ids serialize back out as integers (the blob path carries only
         // numbers).

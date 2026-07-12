@@ -143,7 +143,8 @@ pub use concinnity_asset::PayloadLocator;
 // components and the resource tables address resources by them.
 pub use concinnity_asset::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
-    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_opt_texture_handle,
+    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_audio_clip_handle_vec,
+    de_opt_audio_clip_handle, de_opt_texture_handle, set_audio_clip_handle_resolver,
     set_texture_handle_resolver,
 };
 
@@ -182,6 +183,53 @@ pub enum AssetKind {
 pub enum RecordKind {
     Authored,
     Baked,
+}
+
+// The kinds of resource the runtime keeps in per-kind tables, one dense handle
+// space per kind. The `#[repr(u8)]` discriminant is the resource stream's
+// `resource_kind` tag (like `ComponentTag` for components); cook writes it and
+// the runtime selects the table by it. Order is the assignment order cook uses.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceKind {
+    Mesh,
+    Texture,
+    Material,
+    Font,
+    AudioClip,
+    CubemapTexture,
+    EnvironmentMap,
+    ColorLut,
+    SkinnedMesh,
+}
+
+// One entry in the blob's resource stream: a compiled resource addressed by its
+// dense per-kind handle, carried alongside the component stream. `resource_kind`
+// selects the per-kind table (`ResourceKind as u8`); `handle` is the dense index
+// within that kind (== the record's position within its kind). A payload
+// resource (mesh, texture, audio clip) carries a `PayloadLocator` into the blob
+// payload section; a data resource (a baked Material) carries its runtime bytes
+// in `data_bytes`. Both fields are present so either shape round-trips; a given
+// kind uses one branch (AudioClip uses `payload`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResourceRecord {
+    pub resource_kind: u8,
+    pub handle: u32,
+    pub payload: Option<PayloadLocator>,
+    #[serde(with = "serde_bytes")]
+    pub data_bytes: Vec<u8>,
+}
+
+// The blob's metadata section: the component stream and the resource stream,
+// postcard-serialized together as the block the header's `defs_len` measures.
+// Folding both into one block keeps the 16-byte header and every payload-offset
+// computation (`payload_section_start`, the lock's `payload_bytes`) unchanged;
+// only the block's contents grew a second stream. Blob 0 carries the full
+// metadata; overflow blobs carry an empty `BlobMeta`.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct BlobMeta {
+    pub defs: Vec<BlobAssetDef>,
+    pub resources: Vec<ResourceRecord>,
 }
 
 // PipelineContext -- systems' view of the world during a tick. Renderer-free:

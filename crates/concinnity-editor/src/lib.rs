@@ -15,7 +15,7 @@ pub(crate) use concinnity_cook::world;
 #[allow(unused_imports)]
 pub(crate) use concinnity_core::{build, geometry, result};
 #[allow(unused_imports)]
-pub(crate) use concinnity_engine::{app, assets, blob, config, ecs, gfx, jobs};
+pub(crate) use concinnity_engine::{app, assets, blob, config, ecs, gfx, jobs, resource};
 
 // Authoring / in-memory build, shared with the FFI embedding surface.
 mod authoring;
