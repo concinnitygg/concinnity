@@ -1,7 +1,5 @@
 // src/assets/transform.rs
 
-use crate::ecs::{AssetOrigin, Component};
-
 /// World-space placement of an entity: translation, rotation, and scale.
 ///
 /// Runtime-only placement state. Physics and interaction systems mutate it and
@@ -62,22 +60,5 @@ impl Transform {
             [sz * (sy_ * cp), sz * (-sp), sz * (cy * cp), 0.0],
             [px, py, pz, 1.0],
         ]
-    }
-}
-
-/// `Transform` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TransformArgs {}
-
-impl Component for Transform {
-    const NAME: &'static str = "Transform";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = TransformArgs;
-
-    fn to_args(&self) -> TransformArgs {
-        TransformArgs {}
-    }
-    fn from_args(_: TransformArgs) -> Self {
-        Self::default()
     }
 }

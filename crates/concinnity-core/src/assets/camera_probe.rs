@@ -1,7 +1,6 @@
 // src/assets/camera_probe.rs
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
 
 /// Runtime-only occlusion probe for the third-person follow camera.
 ///
@@ -25,23 +24,4 @@ pub struct CameraProbe {
     /// Largest unobstructed distance from `pivot` toward `desired`, or
     /// `None` when the path is clear (or unanswered).
     pub clearance: Option<f32>,
-}
-
-/// `CameraProbe` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CameraProbeArgs {}
-
-impl Component for CameraProbe {
-    const NAME: &'static str = "CameraProbe";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = CameraProbeArgs;
-
-    fn to_args(&self) -> CameraProbeArgs {
-        CameraProbeArgs {}
-    }
-    fn from_args(_: CameraProbeArgs) -> Self {
-        // A RuntimeOnly component never round-trips through args; real
-        // instances are built by the third-person controller.
-        Self::default()
-    }
 }

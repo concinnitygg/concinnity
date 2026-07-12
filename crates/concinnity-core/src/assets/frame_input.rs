@@ -1,7 +1,5 @@
 // src/assets/frame_input.rs
 
-use crate::ecs::Component;
-
 /// Per-frame keyboard and mouse input state.
 ///
 /// One `FrameInput` is updated each frame from the window's keyboard and mouse
@@ -72,18 +70,4 @@ pub struct FrameInput {
     /// [captured_key](#structfield.captured_key). Editing keys (Backspace,
     /// Delete, arrows) arrive via `captured_key`, not here.
     pub typed_char: Option<char>,
-}
-
-impl Component for FrameInput {
-    const NAME: &'static str = "FrameInput";
-
-    type Args = FrameInput;
-
-    fn to_args(&self) -> FrameInput {
-        self.clone()
-    }
-
-    fn from_args(args: FrameInput) -> Self {
-        args
-    }
 }

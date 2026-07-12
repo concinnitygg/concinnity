@@ -1,7 +1,6 @@
 // src/assets/anim_params.rs
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
 
 /// Runtime-only parameter block for one animation graph target.
 ///
@@ -34,25 +33,6 @@ impl AnimParams {
         if let Some(slot) = self.values.get_mut(index) {
             *slot = value;
         }
-    }
-}
-
-/// `AnimParams` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AnimParamsArgs {}
-
-impl Component for AnimParams {
-    const NAME: &'static str = "AnimParams";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = AnimParamsArgs;
-
-    fn to_args(&self) -> AnimParamsArgs {
-        AnimParamsArgs {}
-    }
-    fn from_args(_: AnimParamsArgs) -> Self {
-        // A RuntimeOnly component never round-trips through args; real
-        // instances are built by AnimationSystem via `new`.
-        Self::new(AssetId::default(), Vec::new())
     }
 }
 

@@ -1,8 +1,7 @@
 // src/assets/skeleton_pose.rs
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
-use crate::gfx::skinning::{self, Mat4, Skeleton};
+use crate::gfx::skinning::{Mat4, Skeleton};
 
 /// Runtime-only link between a skinned mesh and its animation state.
 ///
@@ -42,24 +41,5 @@ impl SkeletonPose {
             skeleton,
             joint_matrices,
         }
-    }
-}
-
-/// `SkeletonPose` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SkeletonPoseArgs {}
-
-impl Component for SkeletonPose {
-    const NAME: &'static str = "SkeletonPose";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = SkeletonPoseArgs;
-
-    fn to_args(&self) -> SkeletonPoseArgs {
-        SkeletonPoseArgs {}
-    }
-    fn from_args(_: SkeletonPoseArgs) -> Self {
-        // A RuntimeOnly component never round-trips through args; real
-        // instances are built by GraphicsSystem via `new`.
-        Self::new(AssetId::default(), 0, skinning::Skeleton::new(Vec::new()))
     }
 }

@@ -1,6 +1,6 @@
 // src/assets/parent.rs
 
-use crate::ecs::{AssetOrigin, Component, Entity};
+use crate::ecs::Entity;
 
 /// The entity whose world transform this entity inherits.
 ///
@@ -15,22 +15,5 @@ impl Default for Parent {
         // Never observed: Parent is inserted at runtime with a real parent, not
         // built from serialized args.
         Parent(Entity::dangling())
-    }
-}
-
-/// `Parent` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ParentArgs {}
-
-impl Component for Parent {
-    const NAME: &'static str = "Parent";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = ParentArgs;
-
-    fn to_args(&self) -> ParentArgs {
-        ParentArgs {}
-    }
-    fn from_args(_: ParentArgs) -> Self {
-        Self::default()
     }
 }

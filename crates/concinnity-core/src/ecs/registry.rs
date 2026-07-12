@@ -41,7 +41,7 @@ macro_rules! for_each_component {
             ShaderStage       => $crate::assets::ShaderStage { manual },
             Camera3D          => $crate::assets::Camera3D { manual },
             Mesh              => $crate::assets::Mesh { gen, external, compiled, id },
-            FrameInput        => $crate::assets::FrameInput { manual },
+            FrameInput        => $crate::assets::FrameInput { gen, runtime },
             Texture           => $crate::assets::Texture { gen, external, compiled, id },
             Prop              => $crate::assets::Prop { gen, external, id, validate: prop },
             RigidBody         => $crate::assets::RigidBody { gen, external, validate: rigid_body },
@@ -71,7 +71,7 @@ macro_rules! for_each_component {
             ColorLut          => $crate::assets::ColorLut { gen, external, compiled, id },
             SkinnedMesh       => $crate::assets::SkinnedMesh { manual },
             Animation         => $crate::assets::Animation { gen, external, id },
-            SkeletonPose      => $crate::assets::SkeletonPose { manual },
+            SkeletonPose      => $crate::assets::SkeletonPose { runtime, build: skeleton_pose },
             StreamingConfig   => $crate::assets::StreamingConfig { gen, external },
             VoxelWorld        => $crate::assets::VoxelWorld { gen, external },
             AudioClip         => $crate::assets::AudioClip { gen, external, compiled, id },
@@ -96,19 +96,19 @@ macro_rules! for_each_component {
             Slider            => $crate::assets::Slider { gen, build_only },
             ScrollPanel       => $crate::assets::ScrollPanel { gen, external },
             ReflectionProbe   => $crate::assets::ReflectionProbe { gen, external, baked, validate: reflection_probe },
-            Transform         => $crate::assets::Transform { manual },
-            MeshRenderer      => $crate::assets::MeshRenderer { manual },
-            ModelRenderer     => $crate::assets::ModelRenderer { manual },
-            Collider          => $crate::assets::Collider { manual },
-            Interactable      => $crate::assets::Interactable { manual },
-            Pickup            => $crate::assets::Pickup { manual },
-            Parent            => $crate::assets::Parent { manual },
-            Children          => $crate::assets::Children { manual },
-            SceneMember       => $crate::assets::SceneMember { manual },
-            GlobalTransform   => $crate::assets::GlobalTransform { manual },
-            RenderHandle      => $crate::assets::RenderHandle { manual },
-            Held              => $crate::assets::Held { manual },
-            Lifetime          => $crate::assets::Lifetime { manual },
+            Transform         => $crate::assets::Transform { runtime },
+            MeshRenderer      => $crate::assets::MeshRenderer { runtime },
+            ModelRenderer     => $crate::assets::ModelRenderer { runtime },
+            Collider          => $crate::assets::Collider { runtime },
+            Interactable      => $crate::assets::Interactable { runtime },
+            Pickup            => $crate::assets::Pickup { runtime },
+            Parent            => $crate::assets::Parent { runtime },
+            Children          => $crate::assets::Children { runtime },
+            SceneMember       => $crate::assets::SceneMember { runtime },
+            GlobalTransform   => $crate::assets::GlobalTransform { runtime },
+            RenderHandle      => $crate::assets::RenderHandle { runtime },
+            Held              => $crate::assets::Held { runtime },
+            Lifetime          => $crate::assets::Lifetime { runtime },
             Spawner           => $crate::assets::Spawner { manual },
             DebugHud          => $crate::assets::DebugHud { gen, external },
             EngineDefaults    => $crate::assets::EngineDefaults { gen, build_only },
@@ -117,10 +117,10 @@ macro_rules! for_each_component {
             Story             => $crate::assets::Story { gen, external, id },
             Application       => $crate::assets::Application { gen, external },
             AnimGraph         => $crate::assets::AnimGraph { gen, external, id },
-            AnimParams        => $crate::assets::AnimParams { manual },
-            CharacterRig      => $crate::assets::CharacterRig { manual },
-            GroundProbes      => $crate::assets::GroundProbes { manual },
-            CameraProbe       => $crate::assets::CameraProbe { manual },
+            AnimParams        => $crate::assets::AnimParams { runtime, build: anim_params },
+            CharacterRig      => $crate::assets::CharacterRig { runtime, build: character_rig },
+            GroundProbes      => $crate::assets::GroundProbes { runtime },
+            CameraProbe       => $crate::assets::CameraProbe { runtime },
             TextInput         => $crate::assets::TextInput { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
             Panel             => $crate::assets::Panel { gen, build_only },
         }
@@ -137,17 +137,17 @@ crate::for_each_component!(define_components);
 // Most components are pure data whose `Component` impl is mechanical: a NAME
 // equal to the type name, `Args = Self`, `to_args` = clone, an identity (or
 // named-validator) `from_args`, and the optional payload / identity / reference
-// hooks. Rather than hand-write one such block per file, each list entry in
-// `for_each_component!` carries a compact `{ ... }` metadata block and this macro
-// expands it into the impl. Entries whose impl is genuinely bespoke (distinct
-// `Args`, an extension trait, or a runtime-only struct defined in this crate)
-// mark themselves `{ manual }` and keep their hand-written impl.
+// hooks. Runtime-only components are just as mechanical the other way: an empty
+// `Args` and a placeholder `from_args`. Rather than hand-write one such block
+// per file, each list entry in `for_each_component!` carries a compact `{ ... }`
+// metadata block and this macro expands it into the impl. Entries whose impl is
+// genuinely bespoke (a distinct authored `Args`, an extension trait, or a real
+// `from_args` translation) mark themselves `{ manual }` and keep their impl.
 //
 // Metadata grammar (inside the braces):
 //   manual                      -- skip; the impl is hand-written elsewhere
-//   gen, <flags...>             -- generate the impl from the flags:
-//     external | build_only     -- the `ORIGIN` (defaults to RuntimeOnly if
-//                                  omitted, which no generated type uses)
+//   gen, <flags...>             -- pass-through (`Args = Self`) impl from flags:
+//     external | build_only | runtime -- the `ORIGIN`
 //     compiled                  -- `PAYLOAD = Compiled` + an `inject_locator`
 //                                  that stores into `self.locator`
 //     baked                     -- `BAKED = true`
@@ -156,6 +156,11 @@ crate::for_each_component!(define_components);
 //     validate: <fn>            -- `from_args` calls `assets::validate::<fn>`
 //                                  (defaults to identity)
 //     refs: [ ("field", "Type"), ... ] -- the `ref_fields` list
+//   runtime                     -- RuntimeOnly impl: empty `RuntimeArgs`,
+//                                  `from_args` = `Self::default()`
+//   runtime, build: <fn>        -- as `runtime` but `from_args` calls
+//                                  `assets::runtime_component::<fn>` (for the
+//                                  few RuntimeOnly types without `Default`)
 macro_rules! cn_impl_components {
     // Entry point: expand one impl per list entry.
     ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
@@ -175,6 +180,38 @@ macro_rules! cn_impl_components {
         cn_impl_components!(@munch $variant $ty [] { identity } $($flags)*);
     };
 
+    // RuntimeOnly components: never authored in a world and never round-tripped
+    // through a blob (their owning systems build the real instances). They all
+    // share the empty `RuntimeArgs`, so `from_args` only needs to yield a valid
+    // placeholder -- `Self::default()`, or a named constructor for the few types
+    // that do not derive `Default`.
+    (@one $variant:ident $ty:path { runtime }) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+            const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;
+            type Args = $crate::assets::RuntimeArgs;
+            fn to_args(&self) -> Self::Args {
+                $crate::assets::RuntimeArgs::default()
+            }
+            fn from_args(_: Self::Args) -> Self {
+                Self::default()
+            }
+        }
+    };
+    (@one $variant:ident $ty:path { runtime, build: $f:ident }) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+            const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;
+            type Args = $crate::assets::RuntimeArgs;
+            fn to_args(&self) -> Self::Args {
+                $crate::assets::RuntimeArgs::default()
+            }
+            fn from_args(_: Self::Args) -> Self {
+                $crate::assets::runtime_component::$f()
+            }
+        }
+    };
+
     (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , external $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty
             [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::External;]
@@ -183,6 +220,14 @@ macro_rules! cn_impl_components {
     (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , build_only $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty
             [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::BuildOnly;]
+            { $($fa)* } $($rest)*);
+    };
+    // A pass-through (`Args = Self`) component that is nonetheless RuntimeOnly,
+    // e.g. the per-frame input snapshot: keeps clone/identity but is never
+    // authored.
+    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , runtime $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;]
             { $($fa)* } $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , compiled $($rest:tt)*) => {

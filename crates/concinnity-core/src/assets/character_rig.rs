@@ -1,7 +1,6 @@
 // src/assets/character_rig.rs
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
 use crate::gfx::skinning::Mat4;
 
 /// Runtime-only link between a skinned mesh and its character capsule.
@@ -108,31 +107,6 @@ impl CharacterRig {
     fn turn(&self, v: [f32; 3]) -> [f32; 3] {
         let (s, c) = self.yaw.sin_cos();
         [v[0] * c + v[2] * s, v[1], v[2] * c - v[0] * s]
-    }
-}
-
-/// `CharacterRig` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CharacterRigArgs {}
-
-impl Component for CharacterRig {
-    const NAME: &'static str = "CharacterRig";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = CharacterRigArgs;
-
-    fn to_args(&self) -> CharacterRigArgs {
-        CharacterRigArgs {}
-    }
-    fn from_args(_: CharacterRigArgs) -> Self {
-        // A RuntimeOnly component never round-trips through args; real
-        // instances are built by GraphicsSystem via `new`.
-        Self::new(
-            AssetId::default(),
-            0,
-            crate::gfx::skinning::IDENTITY,
-            0.5,
-            0.3,
-        )
     }
 }
 

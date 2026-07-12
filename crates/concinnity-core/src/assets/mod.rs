@@ -71,6 +71,11 @@ mod transform;
 // asset that clamps or normalizes its authored args at load time.
 pub(crate) mod validate;
 
+// The shared empty `RuntimeArgs` and placeholder constructors used by the
+// generated impls of RuntimeOnly components.
+pub(crate) mod runtime_component;
+pub use runtime_component::RuntimeArgs;
+
 // Serde / default / round-trip coverage for the generated data-only
 // components, gathered here after their per-type modules were removed.
 #[cfg(test)]

@@ -1,7 +1,6 @@
 // src/assets/ground_probes.rs
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
 
 /// One downward ground probe: a ray and, once physics has answered it, the
 /// hit it found.
@@ -31,23 +30,4 @@ pub struct GroundProbes {
     pub target: AssetId,
     /// One probe per IK chain, in the graph's `ik_chains` order.
     pub probes: Vec<GroundProbe>,
-}
-
-/// `GroundProbes` is never authored, so its args are empty.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct GroundProbesArgs {}
-
-impl Component for GroundProbes {
-    const NAME: &'static str = "GroundProbes";
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    type Args = GroundProbesArgs;
-
-    fn to_args(&self) -> GroundProbesArgs {
-        GroundProbesArgs {}
-    }
-    fn from_args(_: GroundProbesArgs) -> Self {
-        // A RuntimeOnly component never round-trips through args; real
-        // instances are built by AnimationSystem.
-        Self::default()
-    }
 }
