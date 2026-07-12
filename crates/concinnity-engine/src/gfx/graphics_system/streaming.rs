@@ -176,7 +176,7 @@ impl GraphicsSystem {
         &mut self,
         voxel_world: Option<VoxelWorld>,
         block_types: &std::collections::HashMap<AssetId, BlockType>,
-        material_map: &std::collections::HashMap<AssetId, MaterialEntry>,
+        material_map: &std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>,
     ) {
         let Some(vw) = voxel_world else { return };
 

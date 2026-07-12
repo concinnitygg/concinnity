@@ -27,7 +27,11 @@ pub(crate) fn directional_light(mut args: DirectionalLight) -> DirectionalLight 
     args
 }
 
-pub(crate) fn material(mut args: Material) -> Material {
+// Public so the cook-side Material data-resource compiler can apply the same
+// clamps: Material left the component registry, so its generated `from_args` (the
+// usual caller of this validator) no longer runs -- cook must call it explicitly
+// before baking the material into its `data_bytes`.
+pub fn material(mut args: Material) -> Material {
     args.roughness = args.roughness.clamp(0.0, 1.0);
     args.metallic = args.metallic.clamp(0.0, 1.0);
     args.macro_variation = args.macro_variation.clamp(0.0, 1.0);
@@ -177,7 +181,7 @@ mod tests {
         fn see_through_implies_transparent() {
             // A material that opts into see-through but leaves `transparent` at
             // its default must still route through the transparent pass.
-            let m = Material::from_args(Material {
+            let m = crate::assets::validate::material(Material {
                 see_through: true,
                 ..Material::default()
             });
@@ -189,7 +193,7 @@ mod tests {
         fn transparent_without_see_through_stays_opaque_layer() {
             // The importer's glass detection sets `transparent` only; that
             // material stays Layer 1 (opaque reflective) and keeps see-through off.
-            let m = Material::from_args(Material {
+            let m = crate::assets::validate::material(Material {
                 transparent: true,
                 ..Material::default()
             });

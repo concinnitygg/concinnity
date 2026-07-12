@@ -120,12 +120,38 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
     }
 }
 
-// The target asset type of `key` if the component declares it as a reference.
-fn ref_target_of(ct: ComponentType, key: &str) -> Option<&'static str> {
-    ct.ref_fields()
-        .iter()
-        .find(|(field, _)| *field == key)
-        .map(|(_, target)| *target)
+// The authoring-type metadata the recursive field walker threads unchanged: the
+// component type (for per-field string-enum variant pickers, a component-only
+// notion) and the declared asset-reference fields. Bundled so the walker takes
+// one context argument rather than two.
+#[derive(Clone, Copy)]
+struct TypeMeta {
+    ct: Option<ComponentType>,
+    // `(field, target type)` each; the add form turns each into a name picker.
+    refs: &'static [(&'static str, &'static str)],
+}
+
+impl TypeMeta {
+    // Build from an authoring type name. Reference fields come from the component
+    // registry (`ComponentType::ref_fields`) or, for a resource type that has left
+    // it (Material's texture refs), from `ResourceAssetType`.
+    fn of(ty: &str) -> Self {
+        let ct = ComponentType::parse(ty);
+        let refs = ct.map(|c| c.ref_fields()).unwrap_or_else(|| {
+            concinnity_cook::resource_handles::ResourceAssetType::parse(ty)
+                .map(|rt| rt.ref_fields())
+                .unwrap_or(&[])
+        });
+        TypeMeta { ct, refs }
+    }
+
+    // The target asset type declared for `field`, if any.
+    fn ref_target(&self, field: &str) -> Option<&'static str> {
+        self.refs
+            .iter()
+            .find(|(name, _)| *name == field)
+            .map(|(_, target)| *target)
+    }
 }
 
 // Fill a reference field's options: `(none)` followed by `names` (the world's
@@ -237,9 +263,9 @@ pub(crate) fn fields_for_with(
     expanded: &std::collections::HashSet<String>,
 ) -> Vec<FormField> {
     let base = base_args(ty);
-    let ct = ComponentType::parse(ty);
+    let meta = TypeMeta::of(ty);
     let mut out = Vec::new();
-    collect_fields(ct, "", &base, seed, expanded, 0, &mut out);
+    collect_fields(meta, "", &base, seed, expanded, 0, &mut out);
     out
 }
 
@@ -248,7 +274,7 @@ pub(crate) fn fields_for_with(
 // is always the top-level args (an existing entry's values when editing); every
 // leaf reads its current value from it by full path.
 fn collect_fields(
-    ct: Option<ComponentType>,
+    meta: TypeMeta,
     prefix: &str,
     obj: &Map<String, Value>,
     root_seed: Option<&Map<String, Value>>,
@@ -262,7 +288,7 @@ fn collect_fields(
         } else {
             format!("{prefix}.{key}")
         };
-        collect_value(ct, &path, def, root_seed, expanded, depth, out);
+        collect_value(meta, &path, def, root_seed, expanded, depth, out);
     }
 }
 
@@ -272,7 +298,7 @@ fn collect_fields(
 // element's fields, keyed by index). `prefix.is_empty()`-style root detection uses
 // whether `path` contains a `.`.
 fn collect_value(
-    ct: Option<ComponentType>,
+    meta: TypeMeta,
     path: &str,
     def: &Value,
     root_seed: Option<&Map<String, Value>>,
@@ -284,7 +310,7 @@ fn collect_value(
     let leaf = path.rsplit('.').next().unwrap_or(path);
     // Asset-ref fields default to null (which `kind_of` skips), so detect them first
     // from the type's declared references (matched by full path).
-    let ref_target = ct.and_then(|c| ref_target_of(c, path));
+    let ref_target = meta.ref_target(path);
 
     // A plain nested object that is not itself a declared reference is flattened into
     // its leaves one level deeper -- UNLESS the seed (an entry being edited) authored
@@ -299,7 +325,7 @@ fn collect_value(
         && !nested.is_empty()
         && !seed_overrides_with_non_object(root_seed, path)
     {
-        collect_fields(ct, path, nested, root_seed, expanded, depth + 1, out);
+        collect_fields(meta, path, nested, root_seed, expanded, depth + 1, out);
         return;
     }
 
@@ -317,7 +343,7 @@ fn collect_value(
         let mut variant_idx = 0;
         if is_root
             && matches!(kind, FieldKind::Str)
-            && let Some(v) = ct.and_then(|c| c.field_enum_variants(leaf))
+            && let Some(v) = meta.ct.and_then(|c| c.field_enum_variants(leaf))
         {
             variant_idx = cur
                 .as_str()
@@ -402,7 +428,7 @@ fn collect_value(
         });
         for (i, elem) in cur_arr.iter().enumerate() {
             let elem_path = format!("{path}.{i}");
-            collect_value(ct, &elem_path, elem, root_seed, expanded, depth + 1, out);
+            collect_value(meta, &elem_path, elem, root_seed, expanded, depth + 1, out);
         }
     }
 }
@@ -942,6 +968,25 @@ mod tests {
         assert_eq!(coerce(&f, "", &Value::Null), Value::Null);
         f.variant_idx = 2;
         assert_eq!(coerce(&f, "", &Value::Null), Value::String("stone".into()));
+    }
+
+    // A resource type declares its references through `ResourceAssetType`, not the
+    // component registry: Material left the registry but its albedo/normal/etc.
+    // fields must still render as Texture pickers in the add form.
+    #[test]
+    fn resource_type_material_texture_fields_are_ref_pickers() {
+        let fields = fields_for("Material", None);
+        for key in ["albedo", "normal_map", "emissive_map", "orm_map"] {
+            let f = fields
+                .iter()
+                .find(|f| f.key == key)
+                .unwrap_or_else(|| panic!("Material `{key}` field"));
+            assert_eq!(
+                f.kind,
+                FieldKind::Ref { target: "Texture" },
+                "Material `{key}` should be a Texture ref picker"
+            );
+        }
     }
 
     // Editing an entry whose ref is already set selects that asset in the options.

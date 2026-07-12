@@ -942,9 +942,29 @@ impl GraphicsSystem {
             (slot < texture_count).then_some(slot)
         };
 
-        let mut material_map: std::collections::HashMap<AssetId, MaterialEntry> =
-            std::collections::HashMap::new();
-        for mat in ctx.drain::<Material>() {
+        // Materials are a DATA resource: each `MaterialTable` entry's `data_bytes`
+        // is the cook-validated Material, serialized. Decode each in handle order
+        // into the per-object GPU uniforms + resolved texture slots the draw list
+        // indexes by `MaterialHandle` (the table is dense, so index == handle).
+        let material_table = ctx
+            .resource::<crate::resource::MaterialTable>()
+            .cloned()
+            .unwrap_or_default();
+        let mut material_map: std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry> =
+            std::collections::HashMap::with_capacity(material_table.len());
+        for (material_handle, entry) in material_table.0.iter().enumerate() {
+            let mat: Material = match serde_json::from_slice(&entry.data_bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: Material handle {} failed to decode: {}",
+                        material_handle,
+                        e
+                    );
+                    self.failed = true;
+                    return;
+                }
+            };
             let albedo_slot = match mat.albedo {
                 None => 0,
                 Some(handle) => match albedo_slot_of(handle) {
@@ -952,7 +972,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range albedo texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -973,7 +993,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range normal_map texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -996,7 +1016,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range albedo_secondary texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -1017,7 +1037,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range normal_secondary texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -1038,7 +1058,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range emissive_map texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -1054,7 +1074,7 @@ impl GraphicsSystem {
                     None => {
                         tracing::error!(
                             "GraphicsSystem: Material {} references out-of-range orm_map texture handle {} (only {} textures)",
-                            mat.asset_id,
+                            material_handle,
                             handle.index(),
                             texture_count
                         );
@@ -1081,7 +1101,10 @@ impl GraphicsSystem {
                 transparent: u32::from(mat.transparent),
                 see_through: u32::from(mat.see_through),
             };
-            material_map.insert(mat.asset_id, (albedo_slot, normal_map_slot, uniforms));
+            material_map.insert(
+                crate::ecs::MaterialHandle(material_handle as u32),
+                (albedo_slot, normal_map_slot, uniforms),
+            );
         }
 
         // Build skinned draw objects, the shared skinned vertex/index buffers,
@@ -1123,7 +1146,7 @@ impl GraphicsSystem {
                         tracing::error!(
                             "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
                             sm.asset_id,
-                            mat_id
+                            mat_id.index()
                         );
                         self.failed = true;
                         return;

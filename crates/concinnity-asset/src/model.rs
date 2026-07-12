@@ -1,6 +1,6 @@
 // Multi-mesh model schema.
 
-use crate::{AssetId, MeshHandle, de_opt_asset_ref, de_opt_mesh_handle};
+use crate::{AssetId, MaterialHandle, MeshHandle, de_opt_material_handle, de_opt_mesh_handle};
 use alloc::vec::Vec;
 
 /// One geometric part of a Model, referencing a mesh and its surface material.
@@ -10,8 +10,8 @@ pub struct SubMeshRef {
     #[serde(default, deserialize_with = "de_opt_mesh_handle")]
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) asset.  `None` uses the default material.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub material: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_material_handle")]
+    pub material: Option<MaterialHandle>,
 }
 
 /// An ordered list of sub-meshes, each with its own material.

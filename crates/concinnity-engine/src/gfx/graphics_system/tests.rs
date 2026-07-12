@@ -60,6 +60,9 @@ struct WorldBuilder {
     components: ComponentStorage,
     section: Vec<u8>,
     texture_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    // Material data-resource records; each `push_textured_quad` bakes one Material
+    // into `data_bytes` at the next handle, mirroring cook.
+    material_records: Vec<concinnity_core::ecs::ResourceRecord>,
     // Mesh sources pushed so far; each `push_textured_quad` Mesh takes the next
     // handle in declaration order, matching the runtime's mesh-source table.
     mesh_count: u32,
@@ -71,6 +74,7 @@ impl WorldBuilder {
             components: ComponentStorage::default(),
             section: Vec::new(),
             texture_records: Vec::new(),
+            material_records: Vec::new(),
             mesh_count: 0,
         }
     }
@@ -130,15 +134,27 @@ impl WorldBuilder {
                 payload: Some(tex_loc),
                 data_bytes: Vec::new(),
             });
-        self.push(Material {
-            asset_id: mat,
+        // Materials are a data resource: bake this one into `data_bytes` at the
+        // next handle (serialized like cook does), and reference it by that
+        // handle. `mat`'s asset id is unused now that the reference is a handle.
+        let _ = mat;
+        let mat_handle = self.material_records.len() as u32;
+        let mat_bytes = serde_json::to_vec(&Material {
             albedo: Some(TextureHandle(0)),
             ..Default::default()
-        });
+        })
+        .unwrap();
+        self.material_records
+            .push(concinnity_core::ecs::ResourceRecord {
+                resource_kind: concinnity_core::ecs::ResourceKind::Material as u8,
+                handle: mat_handle,
+                payload: None,
+                data_bytes: mat_bytes,
+            });
         self.push(Prop {
             asset_id: prop,
             mesh: Some(mesh_handle),
-            material: Some(mat),
+            material: Some(crate::ecs::MaterialHandle(mat_handle)),
             position: [1.0, 2.0, 3.0],
             ..Default::default()
         });
@@ -150,6 +166,9 @@ impl WorldBuilder {
         // the runtime does after loading the blob's resource stream.
         resources.insert(crate::resource::TextureTable::from_records(
             &self.texture_records,
+        ));
+        resources.insert(crate::resource::MaterialTable::from_records(
+            &self.material_records,
         ));
         TestWorld {
             components: self.components,

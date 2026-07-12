@@ -129,7 +129,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 mod tests {
     use super::*;
     use crate::assets::{Prop, PropCollider};
-    use crate::ecs::{MeshHandle, World};
+    use crate::ecs::{MaterialHandle, MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
         Prop {
@@ -151,7 +151,7 @@ mod tests {
         // A mesh-backed child: material, collider, interactable, scene, parent.
         let mut panel = prop(2);
         panel.mesh = Some(MeshHandle(101));
-        panel.material = Some(AssetId(102));
+        panel.material = Some(MaterialHandle(102));
         panel.collider = Some(PropCollider::default());
         panel.interactable = true;
         panel.scene = Some(AssetId(200));
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(meshes.len(), 1);
         let (panel_e, mesh_id, material_id, panel_pos, panel_rot) = meshes[0];
         assert_eq!(mesh_id, Some(MeshHandle(101)));
-        assert_eq!(material_id, Some(AssetId(102)));
+        assert_eq!(material_id, Some(MaterialHandle(102)));
         assert_eq!(panel_pos, [4.0, 5.0, 6.0]);
         assert_eq!(panel_rot, [0.0, 90.0, 0.0]);
 

@@ -1119,7 +1119,10 @@ fn compile_and_pack_payloads(
     // an unchanged source. Bypasses the `BuildAsset`/`ComponentType` path a
     // component takes -- a resource is no longer a component.
     let mut resource_hits = 0usize;
-    let mut resource_pending: Vec<(u8, u32, Vec<u8>)> = Vec::new();
+    // (resource kind tag, handle, compiled bytes, is_data). A payload resource's
+    // bytes go into a blob payload section; a data resource's bytes go inline in
+    // the record's `data_bytes`.
+    let mut resource_pending: Vec<(u8, u32, Vec<u8>, bool)> = Vec::new();
     for (asset_idx, rt, handle) in resource_jobs {
         let asset = &assets[*asset_idx];
         let ctx = crate::asset::BuildCtx {
@@ -1142,7 +1145,7 @@ fn compile_and_pack_payloads(
             crate::cache::store(&key, &compiled);
             compiled
         };
-        resource_pending.push((rt.resource_kind() as u8, *handle, bytes));
+        resource_pending.push((rt.resource_kind() as u8, *handle, bytes, rt.is_data()));
     }
 
     let cache_hits = component_hits + resource_hits;
@@ -1168,13 +1171,19 @@ fn compile_and_pack_payloads(
     }
 
     let mut resources: Vec<ResourceRecord> = Vec::with_capacity(resource_pending.len());
-    for (resource_kind, handle, bytes) in &resource_pending {
-        let locator = packer.push(bytes);
+    for (resource_kind, handle, bytes, is_data) in &resource_pending {
+        // A data resource (Material) carries its bytes inline; a payload resource
+        // parks its bytes in a blob section and records the locator.
+        let (payload, data_bytes) = if *is_data {
+            (None, bytes.clone())
+        } else {
+            (Some(packer.push(bytes)), Vec::new())
+        };
         resources.push(ResourceRecord {
             resource_kind: *resource_kind,
             handle: *handle,
-            payload: Some(locator),
-            data_bytes: Vec::new(),
+            payload,
+            data_bytes,
         });
     }
 

@@ -1,6 +1,6 @@
 // Infinite procedurally generated voxel world schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, MaterialHandle, de_opt_material_handle};
 use alloc::vec::Vec;
 
 /// An infinite, procedurally generated voxel world.
@@ -51,8 +51,8 @@ pub struct VoxelWorld {
     /// block; 2, when present, is the subsurface block.
     pub palette: Vec<AssetId>,
     /// [Material](#material) shared by every chunk: textures and lighting.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub material: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_material_handle")]
+    pub material: Option<MaterialHandle>,
 }
 
 impl Default for VoxelWorld {

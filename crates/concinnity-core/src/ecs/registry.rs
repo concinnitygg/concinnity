@@ -46,7 +46,6 @@ macro_rules! for_each_component {
             RigidBody         => $crate::assets::RigidBody { gen, external, validate: rigid_body },
             PropBody          => $crate::assets::PropBody { gen, external },
             Room              => $crate::assets::Room { manual },
-            Material          => $crate::assets::Material { gen, external, id, validate: material, refs: [("albedo", "Texture"), ("normal_map", "Texture"), ("emissive_map", "Texture"), ("orm_map", "Texture"), ("albedo_secondary", "Texture"), ("normal_secondary", "Texture")] },
             DirectionalLight  => $crate::assets::DirectionalLight { gen, external, baked, validate: directional_light },
             PointLight        => $crate::assets::PointLight { gen, external, baked, validate: point_light },
             ProceduralMesh    => $crate::assets::ProceduralMesh { gen, external, compiled, id },
@@ -144,6 +143,7 @@ macro_rules! for_each_resource_asset {
             EnvironmentMap => $crate::assets::EnvironmentMap { resource: EnvironmentMap, compiled },
             ColorLut => $crate::assets::ColorLut { resource: ColorLut, compiled },
             Font => $crate::assets::Font { resource: Font, compiled },
+            Material => $crate::assets::Material { resource: Material, data },
         }
     };
 }

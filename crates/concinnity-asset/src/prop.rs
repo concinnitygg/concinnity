@@ -1,7 +1,8 @@
 // Scene-object prop schema.
 
 use crate::{
-    AssetId, MeshHandle, TextureHandle, de_opt_asset_ref, de_opt_mesh_handle, de_opt_texture_handle,
+    AssetId, MaterialHandle, MeshHandle, TextureHandle, de_opt_asset_ref, de_opt_material_handle,
+    de_opt_mesh_handle, de_opt_texture_handle,
 };
 use alloc::string::{String, ToString};
 
@@ -78,8 +79,8 @@ pub struct Prop {
     /// precedence over `texture` and provides the albedo texture plus the
     /// lighting parameters (roughness, metallic, tint, emissive). Used when
     /// `model` is unset.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub material: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_material_handle")]
+    pub material: Option<MaterialHandle>,
     /// A [Texture](#texture) to use for this prop. Older field: ignored when
     /// `material` is set. Unset uses the first declared texture (or a white
     /// fallback).

@@ -1,7 +1,10 @@
 // Skinned-mesh schema: skeletal geometry, its bind-pose joints, and an optional
 // character capsule.
 
-use crate::{AssetId, PayloadLocator, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
+use crate::{
+    AssetId, MaterialHandle, PayloadLocator, TextureHandle, de_opt_material_handle,
+    de_opt_texture_handle,
+};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -102,8 +105,8 @@ pub struct SkinnedMesh {
     pub indices: Vec<u16>,
     /// [Material](#material); provides the albedo texture plus lighting
     /// parameters.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub material: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_material_handle")]
+    pub material: Option<MaterialHandle>,
     /// [Texture](#texture) (older path); ignored when `material` is set.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,

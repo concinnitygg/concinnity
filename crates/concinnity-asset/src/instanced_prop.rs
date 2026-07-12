@@ -1,7 +1,8 @@
 // Instanced-prop schema.
 
 use crate::{
-    AssetId, MeshHandle, TextureHandle, de_opt_asset_ref, de_opt_mesh_handle, de_opt_texture_handle,
+    AssetId, MaterialHandle, MeshHandle, TextureHandle, de_opt_material_handle, de_opt_mesh_handle,
+    de_opt_texture_handle,
 };
 use alloc::vec::Vec;
 
@@ -61,8 +62,8 @@ pub struct InstancedProp {
     #[serde(deserialize_with = "de_opt_mesh_handle")]
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material); takes precedence over `texture` when set.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub material: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_material_handle")]
+    pub material: Option<MaterialHandle>,
     /// Older texture-only reference; ignored when `material` is set.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,

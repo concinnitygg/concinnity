@@ -9,7 +9,7 @@ use crate::assets::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MeshHandle, TextureHandle};
+use crate::ecs::{MaterialHandle, MeshHandle, TextureHandle};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
@@ -102,7 +102,7 @@ pub(crate) struct RenderableItem {
     pub asset_id: AssetId,
     pub model: Option<AssetId>,
     pub mesh: Option<MeshHandle>,
-    pub material: Option<AssetId>,
+    pub material: Option<MaterialHandle>,
     pub texture: Option<TextureHandle>,
     pub cull_distance: f32,
     pub is_dynamic: bool,
@@ -479,7 +479,7 @@ pub(crate) struct DrawListInputs<'a> {
     // index is below this. A legacy texture-on-mesh reference past it falls back
     // to slot 0.
     pub texture_count: usize,
-    pub material_map: &'a std::collections::HashMap<AssetId, MaterialEntry>,
+    pub material_map: &'a std::collections::HashMap<MaterialHandle, MaterialEntry>,
     pub always_resident_meshes: &'a std::collections::HashSet<AssetId>,
     // Mesh-source handle table from `load_mesh_geometry`: a `.mesh` reference's
     // `MeshHandle` indexes this to the asset id its geometry was loaded under.
@@ -630,7 +630,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                             tracing::error!(
                                 "GraphicsSystem: Model {} sub-mesh material {} not found",
                                 model_id,
-                                mat_id
+                                mat_id.index()
                             );
                             return None;
                         }
@@ -706,7 +706,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         tracing::error!(
                             "GraphicsSystem: Prop {} references unknown material {} -- add a Material asset with that id",
                             item.asset_id,
-                            mat_id
+                            mat_id.index()
                         );
                         return None;
                     }
@@ -790,7 +790,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     tracing::error!(
                         "GraphicsSystem: InstancedProp {} references unknown material {}",
                         inst.asset_id,
-                        mat_id
+                        mat_id.index()
                     );
                     return None;
                 }
@@ -1325,7 +1325,7 @@ mod tests {
         let mut prop = make_prop([0.0; 3]);
         prop.asset_id = AssetId(7);
         prop.mesh = Some(MeshHandle(10));
-        prop.material = Some(AssetId(20));
+        prop.material = Some(MaterialHandle(20));
         prop.cull_distance = 50.0;
         prop.pickup = true;
         prop.collider = Some(PropCollider::default());
@@ -1361,7 +1361,7 @@ mod tests {
                 asset_id: AssetId(7),
                 model: None,
                 mesh: Some(MeshHandle(10)),
-                material: Some(AssetId(20)),
+                material: Some(MaterialHandle(20)),
                 texture: None,
                 cull_distance: 50.0,
                 is_dynamic: true,
@@ -1419,7 +1419,7 @@ mod tests {
             vec![
                 SubMeshRef {
                     mesh: Some(MeshHandle(10)),
-                    material: Some(AssetId(20)),
+                    material: Some(MaterialHandle(20)),
                 },
                 SubMeshRef {
                     mesh: Some(MeshHandle(11)),
@@ -1429,7 +1429,10 @@ mod tests {
         );
 
         let mut material_map = std::collections::HashMap::new();
-        material_map.insert(AssetId(20), (3usize, 4usize, MaterialUniforms::DEFAULT));
+        material_map.insert(
+            MaterialHandle(20),
+            (3usize, 4usize, MaterialUniforms::DEFAULT),
+        );
 
         let (verts, idxs, draw_objects, clusters, prop_idxs, mesh_id_to_draws) =
             build_draw_list(DrawListInputs {
@@ -1656,7 +1659,7 @@ mod tests {
             AssetId(1),
             vec![SubMeshRef {
                 mesh: Some(MeshHandle(0)),
-                material: Some(AssetId(404)),
+                material: Some(MaterialHandle(404)),
             }],
         );
         assert!(none(DrawListInputs {
@@ -1688,7 +1691,7 @@ mod tests {
 
         // Single-mesh item referencing a material absent from the material_map.
         let mut item_bad_mat = mesh_item(AssetId(0));
-        item_bad_mat.material = Some(AssetId(404));
+        item_bad_mat.material = Some(MaterialHandle(404));
         assert!(none(DrawListInputs {
             items: &[item_bad_mat],
             instanced_props: &[],
@@ -1750,7 +1753,7 @@ mod tests {
         let inst_bad_mat = InstancedProp {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
-            material: Some(AssetId(404)),
+            material: Some(MaterialHandle(404)),
             texture: None,
             cull_distance: 0.0,
             instances: vec![crate::assets::InstanceTransform::default()],

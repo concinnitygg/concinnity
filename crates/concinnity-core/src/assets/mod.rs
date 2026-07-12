@@ -63,7 +63,7 @@ mod transform;
 // Named `from_args` validators referenced by the generated `Component` impls
 // (see `cn_impl_components!`, invoked in `ecs::registry`). One free function per
 // asset that clamps or normalizes its authored args at load time.
-pub(crate) mod validate;
+pub mod validate;
 
 // The shared empty `RuntimeArgs` and placeholder constructors used by the
 // generated impls of RuntimeOnly components.
@@ -263,7 +263,6 @@ mod tests {
         exercise::<ProceduralMesh>();
         exercise::<WaterSurface>();
         // More data-only components sharing the same shape.
-        exercise::<Material>();
         exercise::<Decal>();
         exercise::<ParticleEmitter>();
         exercise::<VoxelWorld>();

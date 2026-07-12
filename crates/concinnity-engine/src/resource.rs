@@ -260,6 +260,33 @@ impl FontTable {
     }
 }
 
+// The materials loaded from the blob's resource stream, indexed by
+// `MaterialHandle`. Unlike the payload-backed tables above, a Material is a DATA
+// resource: cook bakes its validated args into the record's `data_bytes` (no blob
+// payload), so `data_bytes(handle)` returns the serialized `Material` the renderer
+// deserializes to build its material map.
+#[derive(Debug, Clone, Default)]
+pub struct MaterialTable(pub Vec<ResourceEntry>);
+
+impl MaterialTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::Material))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // The baked material bytes for a handle, if the handle is in range.
+    pub fn data_bytes(&self, handle: usize) -> Option<&[u8]> {
+        self.0.get(handle).map(|e| e.data_bytes.as_slice())
+    }
+}
+
 // Install every per-kind resource table from a compiled blob's resource stream
 // into `world`. This is the single place the table set is enumerated: the
 // shipped runtime (`App::load_blob`), the editor's in-memory build, and the
@@ -273,6 +300,7 @@ pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[Resourc
     world.insert_resource(ColorLutTable::from_records(records));
     world.insert_resource(EnvironmentMapTable::from_records(records));
     world.insert_resource(FontTable::from_records(records));
+    world.insert_resource(MaterialTable::from_records(records));
 }
 
 #[cfg(test)]

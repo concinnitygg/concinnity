@@ -29,7 +29,6 @@ pub use crate::ecs::ResourceKind;
 // the two together for callers that only have the type name.
 pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
     Some(match ct {
-        ComponentType::Material => ResourceKind::Material,
         ComponentType::SkinnedMesh => ResourceKind::SkinnedMesh,
         _ => return None,
     })
@@ -152,6 +151,35 @@ impl ResourceAssetType {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Font => crate::font::compile_font_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::Material => compile_material_data(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        }
+    }
+
+    // Whether this resource is a DATA resource: its compiled bytes are the
+    // record's inline `data_bytes`, not a blob payload the record points at.
+    // Material (small, per-object surface params) is the only one today; every
+    // other kind is a `compiled` payload resource.
+    pub fn is_data(self) -> bool {
+        matches!(self, Self::Material)
+    }
+
+    // The asset-reference fields this resource declares, as `(field, target type)`.
+    // Mirrors `ComponentType::ref_fields`: the editor add-form turns each into a
+    // name picker over the world's assets of that type. Material carries its
+    // texture references here now that it has left the component registry (which
+    // used to supply this via the `refs:` metadata).
+    pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Material => &[
+                ("albedo", "Texture"),
+                ("normal_map", "Texture"),
+                ("emissive_map", "Texture"),
+                ("orm_map", "Texture"),
+                ("albedo_secondary", "Texture"),
+                ("normal_secondary", "Texture"),
+            ],
+            _ => &[],
         }
     }
 
@@ -178,8 +206,23 @@ impl ResourceAssetType {
                 .map(str::to_string)
                 .into_iter()
                 .collect(),
+            // A Material bakes only its authored args (texture refs are already
+            // resolved handles); it reads no external source file.
+            Self::Material => Vec::new(),
         }
     }
+}
+
+// Bake a Material into its resource `data_bytes`: resolve its texture references
+// to handles (the texture-handle resolver is installed before this runs), apply
+// the runtime validation clamps -- which no longer run via a generated `from_args`
+// now that Material is a resource -- and serialize. The runtime deserializes these
+// bytes straight back into a `Material` to build its material map.
+fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let mat: crate::assets::Material =
+        serde_json::from_value(args.clone()).map_err(|e| format!("Material args: {e}"))?;
+    let mat = crate::assets::validate::material(mat);
+    serde_json::to_vec(&mat).map_err(|e| format!("Material serialize: {e}"))
 }
 
 // Per-kind handles assigned to each resource asset, keyed by its identity.
@@ -285,6 +328,10 @@ pub fn ensure_resource_handle_resolvers() {
             let id = crate::ecs::asset_id::intern(name);
             RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Mesh, id))
         });
+        crate::ecs::set_material_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Material, id))
+        });
     });
 }
 
@@ -345,10 +392,20 @@ mod tests {
         assert_eq!(resource_kind(ComponentType::Mesh), None);
         assert_eq!(asset_resource_kind("Mesh"), None);
         assert!(is_mesh_source("Mesh", &serde_json::json!({})));
-        // Component-registry resources still classify through `resource_kind`.
+        // Material has left the component registry: a DATA resource, no longer a
+        // `ComponentType`, classified through `ResourceAssetType`.
+        assert_eq!(ComponentType::parse("Material"), None);
         assert_eq!(
-            resource_kind(ComponentType::Material),
+            asset_resource_kind("Material"),
             Some(ResourceKind::Material)
+        );
+        assert!(ResourceAssetType::Material.is_data());
+        assert!(!ResourceAssetType::Texture.is_data());
+        // The last component-registry resource still classifies through
+        // `resource_kind`.
+        assert_eq!(
+            resource_kind(ComponentType::SkinnedMesh),
+            Some(ResourceKind::SkinnedMesh)
         );
         // Pure-data components and containers are not resources.
         assert_eq!(resource_kind(ComponentType::PointLight), None);
@@ -496,9 +553,11 @@ mod tests {
 
         // A Material referencing the second texture bakes albedo == 1, the first
         // bakes albedo == 0. A Decal (single texture ref) resolves the same way.
+        // Material is a resource now, so it bakes through `compile_payload` (its
+        // `data_bytes` is the serialized Material) rather than `reserialize_args`.
         let bake = |field_json: serde_json::Value| -> serde_json::Value {
-            let bytes = ComponentType::Material
-                .reserialize_args(&field_json)
+            let bytes = ResourceAssetType::Material
+                .compile_payload(&field_json)
                 .unwrap();
             serde_json::from_slice(&bytes).unwrap()
         };
