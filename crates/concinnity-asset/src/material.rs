@@ -1,6 +1,6 @@
 // Surface-material schema.
 
-use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
+use crate::{AssetId, TextureHandle, de_opt_texture_handle};
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
 /// lit and shaded.
@@ -27,8 +27,8 @@ pub struct Material {
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub albedo: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a tangent-space normal map.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub normal_map: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub normal_map: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as an emissive map. Multiplied by
     /// `emissive_factor` to drive the glow; when omitted, only the scalar
     /// `emissive_factor` is used. Pair a textured emissive with an
@@ -81,8 +81,8 @@ pub struct Material {
     pub albedo_secondary: Option<TextureHandle>,
     /// Tangent-space normal map paired with `albedo_secondary`. Only used when
     /// both that field and `terrain_blend` are set.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub normal_secondary: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub normal_secondary: Option<TextureHandle>,
     /// Sharpness of the slope-based blend in [0, 1]. 0 = wide soft
     /// gradient between the two layers; 1 = nearly hard cliff edge.
     /// Default `0.5` matches the "smooth but visible" transition AAA

@@ -943,19 +943,20 @@ impl GraphicsSystem {
                 },
             };
 
-            // A normal map is a texture in the shared pool at its own drain slot;
-            // unset selects the flat-normal fallback. Every drained texture is in
-            // `texture_name_to_slot` (the drain loop errored out on any without a
-            // payload), so an id that misses is a genuine missing-asset error.
+            // A normal map is a texture in the shared pool at its own drain slot,
+            // addressed by its cook-assigned `TextureHandle` just like the albedo
+            // region; unset selects the flat-normal fallback. A handle past the
+            // pool is a resolution error (cook validated the reference exists).
             let normal_map_slot = match mat.normal_map {
                 None => crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                Some(nm_id) => match texture_name_to_slot.get(&nm_id) {
-                    Some(&slot) => slot,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown normal_map {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range normal_map texture handle {} (only {} textures)",
                             mat.asset_id,
-                            nm_id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
@@ -963,13 +964,12 @@ impl GraphicsSystem {
                 },
             };
 
-            // Optional secondary albedo/normal pair for the terrain
-            // shader's slope-blending mode. Same resolution as the
-            // primary pair (albedo into `texture_name_to_slot`, normal
-            // into `normal_map_name_to_slot`); slot 0 + slot 0 fall
-            // through when either is unset and the shader's
-            // `terrain_blend > 0` gate is what controls whether the
-            // secondary actually gets sampled.
+            // Optional secondary albedo/normal pair for the terrain shader's
+            // slope-blending mode. Same handle resolution as the primary pair
+            // (both index the shared pool by `TextureHandle`); the fallback slots
+            // fall through when either is unset and the shader's
+            // `terrain_blend > 0` gate is what controls whether the secondary
+            // actually gets sampled.
             let albedo_secondary_slot: u32 = match mat.albedo_secondary {
                 None => 0,
                 Some(handle) => match albedo_slot_of(handle) {
@@ -993,13 +993,14 @@ impl GraphicsSystem {
             // normal map perturbs nothing.
             let normal_secondary_slot: u32 = match mat.normal_secondary {
                 None => texture_count as u32,
-                Some(nm_id) => match texture_name_to_slot.get(&nm_id) {
-                    Some(&slot) => slot as u32,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Material {} references unknown normal_secondary {} -- add a Texture asset with that id",
+                            "GraphicsSystem: Material {} references out-of-range normal_secondary texture handle {} (only {} textures)",
                             mat.asset_id,
-                            nm_id
+                            handle.index(),
+                            texture_count
                         );
                         self.failed = true;
                         return;
