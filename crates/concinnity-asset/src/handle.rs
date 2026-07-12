@@ -20,7 +20,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use alloc::vec::Vec;
 
 use crate::resolver::{
-    resolve_audio_clip_handle, resolve_font_handle, resolve_name, resolve_texture_handle,
+    resolve_audio_clip_handle, resolve_font_handle, resolve_mesh_handle, resolve_name,
+    resolve_texture_handle,
 };
 
 macro_rules! resource_handles {
@@ -175,6 +176,70 @@ fn resolve_audio_clip_ref(name: &str) -> Option<u32> {
 // behaviour as [`resolve_texture_ref`].
 fn resolve_font_ref(name: &str) -> Option<u32> {
     resolve_font_handle(name).or_else(|| resolve_name(name))
+}
+
+// Resolve a mesh-source reference name to its handle, with the same build /
+// fallback behaviour as [`resolve_texture_ref`]. The mesh-source handle space is
+// shared across Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File, so a `.mesh`
+// name resolves the same way whichever kind declared it.
+fn resolve_mesh_ref(name: &str) -> Option<u32> {
+    resolve_mesh_handle(name).or_else(|| resolve_name(name))
+}
+
+/// `serde` `deserialize_with` helper for an optional mesh reference field.
+///
+/// The mesh analogue of [`de_opt_texture_handle`]: an integer is an
+/// already-resolved [`MeshHandle`]; a name string is resolved through the
+/// installed mesh-handle resolver; an empty string or null is `None`. The handle
+/// addresses the shared mesh-source space (Mesh / ProceduralMesh / VoxelChunk /
+/// mesh-kind File). Apply with `#[serde(default, deserialize_with =
+/// "concinnity_asset::de_opt_mesh_handle")]`.
+pub fn de_opt_mesh_handle<'de, D>(d: D) -> Result<Option<MeshHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<MeshHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a mesh handle integer, reference name string, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<MeshHandle>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<MeshHandle>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<MeshHandle>, E> {
+            Ok(Some(MeshHandle(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<MeshHandle>, E> {
+            Ok(Some(MeshHandle(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<MeshHandle>, E> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            resolve_mesh_ref(v)
+                .map(|h| Some(MeshHandle(h)))
+                .ok_or_else(|| {
+                    E::custom(format!(
+                        "no mesh-handle resolver installed to resolve reference {v:?}"
+                    ))
+                })
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<MeshHandle>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
 }
 
 /// `serde` `deserialize_with` helper for an optional font reference field.

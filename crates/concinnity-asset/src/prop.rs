@@ -1,6 +1,8 @@
 // Scene-object prop schema.
 
-use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
+use crate::{
+    AssetId, MeshHandle, TextureHandle, de_opt_asset_ref, de_opt_mesh_handle, de_opt_texture_handle,
+};
 use alloc::string::{String, ToString};
 
 /// Collision volume attached to a [Prop](#prop).
@@ -70,8 +72,8 @@ pub struct Prop {
     pub model: Option<AssetId>,
     /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset this prop
     /// renders. Used when `model` is unset.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub mesh: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_mesh_handle")]
+    pub mesh: Option<MeshHandle>,
     /// A [Material](#material) to use for this prop. When set it takes
     /// precedence over `texture` and provides the albedo texture plus the
     /// lighting parameters (roughness, metallic, tint, emissive). Used when

@@ -125,19 +125,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
-    world.insert_resource(crate::resource::AudioClipTable::from_records(
-        &result.resources,
-    ));
-    world.insert_resource(crate::resource::TextureTable::from_records(
-        &result.resources,
-    ));
-    world.insert_resource(crate::resource::ColorLutTable::from_records(
-        &result.resources,
-    ));
-    world.insert_resource(crate::resource::EnvironmentMapTable::from_records(
-        &result.resources,
-    ));
-    world.insert_resource(crate::resource::FontTable::from_records(&result.resources));
+    crate::resource::install_resource_tables(&mut world, &result.resources);
     // Dev-only source catalogues for the hot-reload watcher (see the scan above).
     world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
     world.insert_resource(crate::resource::EnvironmentMapSources(

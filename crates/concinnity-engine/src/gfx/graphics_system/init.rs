@@ -693,7 +693,7 @@ impl GraphicsSystem {
             std::collections::HashMap::new()
         };
 
-        let (mesh_geometry, mesh_sources, always_resident_meshes) =
+        let (mesh_geometry, mesh_sources, always_resident_meshes, mesh_handle_to_id) =
             match draw_list::load_mesh_geometry(ctx) {
                 Some(m) => m,
                 None => {
@@ -1691,6 +1691,7 @@ impl GraphicsSystem {
             texture_count,
             material_map: &material_map,
             always_resident_meshes: &always_resident_meshes,
+            mesh_handle_to_id: &mesh_handle_to_id,
         }) {
             Some(d) => d,
             None => {

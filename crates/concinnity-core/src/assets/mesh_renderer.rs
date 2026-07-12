@@ -1,7 +1,7 @@
 // src/assets/mesh_renderer.rs
 
-use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{MeshHandle, TextureHandle};
 
 /// Single-mesh render description for an entity: which mesh, material, and
 /// optional legacy texture to draw, plus an optional view-distance cutoff.
@@ -11,8 +11,9 @@ use crate::ecs::asset_id::AssetId;
 /// `Prop` expresses with its `model` field taking precedence.
 #[derive(Debug, Clone, Default)]
 pub struct MeshRenderer {
-    /// A `Mesh` or `ProceduralMesh` to render.
-    pub mesh: Option<AssetId>,
+    /// A `Mesh` or `ProceduralMesh` to render, addressed by its shared
+    /// mesh-source handle.
+    pub mesh: Option<MeshHandle>,
     /// A `Material` providing albedo plus lighting parameters.
     pub material: Option<AssetId>,
     /// Legacy texture, used only when `material` is unset.

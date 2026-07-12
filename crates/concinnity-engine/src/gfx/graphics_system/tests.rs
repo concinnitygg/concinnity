@@ -60,6 +60,9 @@ struct WorldBuilder {
     components: ComponentStorage,
     section: Vec<u8>,
     texture_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    // Mesh sources pushed so far; each `push_textured_quad` Mesh takes the next
+    // handle in declaration order, matching the runtime's mesh-source table.
+    mesh_count: u32,
 }
 
 impl WorldBuilder {
@@ -68,6 +71,7 @@ impl WorldBuilder {
             components: ComponentStorage::default(),
             section: Vec::new(),
             texture_records: Vec::new(),
+            mesh_count: 0,
         }
     }
 
@@ -105,6 +109,10 @@ impl WorldBuilder {
     // One quad Mesh + a Texture-backed Material + a Prop placing it.
     fn push_textured_quad(&mut self, mesh: AssetId, _tex: AssetId, mat: AssetId, prop: AssetId) {
         let mesh_loc = self.payload(&quad_mesh_payload());
+        // This Mesh is the next mesh source in declaration order; the Prop below
+        // references it by that handle, as cook resolves a `.mesh` name.
+        let mesh_handle = crate::ecs::MeshHandle(self.mesh_count);
+        self.mesh_count += 1;
         self.push(Mesh {
             asset_id: mesh,
             locator: Some(mesh_loc),
@@ -129,7 +137,7 @@ impl WorldBuilder {
         });
         self.push(Prop {
             asset_id: prop,
-            mesh: Some(mesh),
+            mesh: Some(mesh_handle),
             material: Some(mat),
             position: [1.0, 2.0, 3.0],
             ..Default::default()

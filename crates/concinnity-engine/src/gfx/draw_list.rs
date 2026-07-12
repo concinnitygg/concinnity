@@ -8,8 +8,8 @@ use crate::assets::{
     VoxelChunk,
 };
 use crate::ecs::PipelineContext;
-use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{MeshHandle, TextureHandle};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
@@ -30,11 +30,14 @@ pub(crate) type MaterialEntry = (usize, usize, MaterialUniforms);
 pub(crate) type RoomGeometry = (Room, Vec<Vertex>, Vec<u16>, Vec<(f32, Vec<u16>)>);
 
 // Mesh-geometry lookup tables from `load_mesh_geometry`: loaded meshes, their
-// source metadata, and the always-resident mesh id set.
+// source metadata, the always-resident mesh id set, and the mesh-source handle
+// table (a `MeshHandle` indexes it to the asset id the geometry was loaded
+// under, so a `.mesh` reference resolves without an AssetId scan).
 pub(crate) type MeshGeometryMaps = (
     std::collections::HashMap<AssetId, LoadedMesh>,
     std::collections::HashMap<AssetId, MeshSourceMeta>,
     std::collections::HashSet<AssetId>,
+    Vec<AssetId>,
 );
 
 // Output of `build_draw_list`: shared vertex/index buffers, draw objects,
@@ -98,7 +101,7 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 pub(crate) struct RenderableItem {
     pub asset_id: AssetId,
     pub model: Option<AssetId>,
-    pub mesh: Option<AssetId>,
+    pub mesh: Option<MeshHandle>,
     pub material: Option<AssetId>,
     pub texture: Option<TextureHandle>,
     pub cull_distance: f32,
@@ -339,6 +342,12 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
 
     let mut geometry: std::collections::HashMap<AssetId, LoadedMesh> =
         std::collections::HashMap::new();
+    // The mesh-source handle table: a `MeshHandle` indexes this to the asset id
+    // its geometry was loaded under. Built in the same fixed block order cook
+    // assigns handles (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind
+    // File), each in declaration order, so entry `h` is the mesh source cook gave
+    // handle `h`.
+    let mut mesh_handle_to_id: Vec<AssetId> = Vec::new();
 
     macro_rules! load_meshes {
         ($label:expr_2021, $items:expr_2021) => {
@@ -379,6 +388,11 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
                                 lod_alternates: alternates,
                             },
                         );
+                        // Record this mesh source at its handle position. The
+                        // macro is invoked in cook's block order, and each item
+                        // iterates in declaration order, so pushes land in handle
+                        // order.
+                        mesh_handle_to_id.push(mesh.asset_id);
                     }
                     Err(e) => {
                         tracing::error!("GraphicsSystem: malformed {} payload: {}", $label, e);
@@ -393,7 +407,12 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
     load_meshes!("VoxelChunk", voxel_chunks);
     load_meshes!("File", file_meshes);
 
-    Some((geometry, mesh_sources, always_resident_meshes))
+    Some((
+        geometry,
+        mesh_sources,
+        always_resident_meshes,
+        mesh_handle_to_id,
+    ))
 }
 
 // Decode all Room mesh payloads and collect blob indices for the release step.
@@ -462,6 +481,9 @@ pub(crate) struct DrawListInputs<'a> {
     pub texture_count: usize,
     pub material_map: &'a std::collections::HashMap<AssetId, MaterialEntry>,
     pub always_resident_meshes: &'a std::collections::HashSet<AssetId>,
+    // Mesh-source handle table from `load_mesh_geometry`: a `.mesh` reference's
+    // `MeshHandle` indexes this to the asset id its geometry was loaded under.
+    pub mesh_handle_to_id: &'a [AssetId],
 }
 
 pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
@@ -475,7 +497,13 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         texture_count,
         material_map,
         always_resident_meshes,
+        mesh_handle_to_id,
     } = inputs;
+    // Translate a `.mesh` reference handle to the asset id its geometry was
+    // loaded under. An out-of-range handle (a build / runtime mismatch) resolves
+    // to `None` and is handled as a missing mesh at each call site.
+    let resolve_mesh =
+        |h: MeshHandle| -> Option<AssetId> { mesh_handle_to_id.get(h.index()).copied() };
     let mut all_vertices: Vec<Vertex> = Vec::new();
     let mut all_indices: Vec<u32> = Vec::new();
     let mut draw_objects: Vec<DrawObject> = Vec::new();
@@ -492,21 +520,21 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // track explicitly referenced mesh ids so unreferenced ones get auto-rendered
     let mut referenced: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
     for item in items {
-        if let Some(mesh_id) = item.mesh {
+        if let Some(mesh_id) = item.mesh.and_then(resolve_mesh) {
             referenced.insert(mesh_id);
         }
         if let Some(model_id) = item.model
             && let Some(submeshes) = model_map.get(&model_id)
         {
             for sub in submeshes {
-                if let Some(sub_mesh) = sub.mesh {
+                if let Some(sub_mesh) = sub.mesh.and_then(resolve_mesh) {
                     referenced.insert(sub_mesh);
                 }
             }
         }
     }
     for inst in instanced_props {
-        if let Some(mesh_id) = inst.mesh {
+        if let Some(mesh_id) = inst.mesh.and_then(resolve_mesh) {
             referenced.insert(mesh_id);
         }
     }
@@ -566,11 +594,11 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 }
             };
             for sub in submeshes {
-                let sub_mesh_id = match sub.mesh {
+                let sub_mesh_id = match sub.mesh.and_then(resolve_mesh) {
                     Some(m) => m,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Model {} has a sub-mesh with no mesh",
+                            "GraphicsSystem: Model {} has a sub-mesh with no (or unresolved) mesh",
                             model_id
                         );
                         return None;
@@ -642,11 +670,11 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             }
         } else {
             // single-mesh path
-            let mesh_id = match item.mesh {
+            let mesh_id = match item.mesh.and_then(resolve_mesh) {
                 Some(m) => m,
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {} has neither a model nor a mesh",
+                        "GraphicsSystem: Prop {} has neither a model nor a (resolvable) mesh",
                         item.asset_id
                     );
                     return None;
@@ -729,7 +757,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // resolved up front and uploaded to the GPU each frame. The cluster's
     // union AABB is used as a single frustum-cull test for the whole batch.
     for inst in instanced_props {
-        let mesh_id = match inst.mesh {
+        let mesh_id = match inst.mesh.and_then(resolve_mesh) {
             Some(m) if !inst.instances.is_empty() => m,
             _ => continue,
         };
@@ -1137,7 +1165,7 @@ mod tests {
 
         let inst = crate::assets::InstancedProp {
             asset_id: AssetId::default(),
-            mesh: Some(AssetId(0)),
+            mesh: Some(MeshHandle(0)),
             material: None,
             texture: None,
             cull_distance: 0.0,
@@ -1171,6 +1199,7 @@ mod tests {
                 texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
+                mesh_handle_to_id: &id_table(),
             })
             .expect("build_draw_list");
 
@@ -1210,7 +1239,7 @@ mod tests {
 
         let inst = crate::assets::InstancedProp {
             asset_id: AssetId::default(),
-            mesh: Some(AssetId(0)),
+            mesh: Some(MeshHandle(0)),
             material: None,
             texture: None,
             cull_distance: 0.0,
@@ -1228,6 +1257,7 @@ mod tests {
                 texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
+                mesh_handle_to_id: &id_table(),
             })
             .expect("build_draw_list");
 
@@ -1250,7 +1280,7 @@ mod tests {
         let items = vec![RenderableItem {
             asset_id: AssetId(0),
             model: None,
-            mesh: Some(AssetId(0)),
+            mesh: Some(MeshHandle(0)),
             material: None,
             texture: None,
             cull_distance: 0.0,
@@ -1271,6 +1301,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &always_resident,
+            mesh_handle_to_id: &id_table(),
         })
         .expect("build_draw_list");
 
@@ -1293,7 +1324,7 @@ mod tests {
 
         let mut prop = make_prop([0.0; 3]);
         prop.asset_id = AssetId(7);
-        prop.mesh = Some(AssetId(10));
+        prop.mesh = Some(MeshHandle(10));
         prop.material = Some(AssetId(20));
         prop.cull_distance = 50.0;
         prop.pickup = true;
@@ -1329,7 +1360,7 @@ mod tests {
             RenderableItem {
                 asset_id: AssetId(7),
                 model: None,
-                mesh: Some(AssetId(10)),
+                mesh: Some(MeshHandle(10)),
                 material: Some(AssetId(20)),
                 texture: None,
                 cull_distance: 50.0,
@@ -1342,12 +1373,24 @@ mod tests {
         RenderableItem {
             asset_id: mesh,
             model: None,
-            mesh: Some(mesh),
+            // The tests below use an identity `id_table`, so a `.mesh` handle N
+            // resolves back to `AssetId(N)` -- the same id the geometry is keyed
+            // under. This keeps each test's mesh reference pointing where it did
+            // before the handle migration.
+            mesh: Some(MeshHandle(mesh.0)),
             material: None,
             texture: None,
             cull_distance: 0.0,
             is_dynamic: false,
         }
+    }
+
+    // An identity mesh-source handle table: handle N maps to `AssetId(N)`. The
+    // build tests key geometry by the same AssetId their `.mesh` handles point
+    // at, so this preserves their original reference semantics. Long enough to
+    // cover every id the tests use (including the deliberately-missing 999).
+    fn id_table() -> Vec<AssetId> {
+        (0..1000).map(AssetId).collect()
     }
 
     fn model_item(model: AssetId) -> RenderableItem {
@@ -1375,11 +1418,11 @@ mod tests {
             AssetId(1),
             vec![
                 SubMeshRef {
-                    mesh: Some(AssetId(10)),
+                    mesh: Some(MeshHandle(10)),
                     material: Some(AssetId(20)),
                 },
                 SubMeshRef {
-                    mesh: Some(AssetId(11)),
+                    mesh: Some(MeshHandle(11)),
                     material: None,
                 },
             ],
@@ -1399,6 +1442,7 @@ mod tests {
                 texture_count: 0,
                 material_map: &material_map,
                 always_resident_meshes: &std::collections::HashSet::new(),
+                mesh_handle_to_id: &id_table(),
             })
             .expect("build_draw_list");
 
@@ -1437,6 +1481,7 @@ mod tests {
                 texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
+                mesh_handle_to_id: &id_table(),
             })
             .expect("build_draw_list");
 
@@ -1483,6 +1528,7 @@ mod tests {
             texture_count: 7,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         })
         .expect("build_draw_list");
 
@@ -1509,7 +1555,7 @@ mod tests {
         let item = RenderableItem {
             asset_id: AssetId(0),
             model: None,
-            mesh: Some(AssetId(0)),
+            mesh: Some(MeshHandle(0)),
             material: None,
             texture: Some(TextureHandle(2)),
             cull_distance: 0.0,
@@ -1526,6 +1572,7 @@ mod tests {
             texture_count: 3,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         })
         .expect("build_draw_list");
 
@@ -1556,6 +1603,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Model sub-mesh with no mesh field.
@@ -1577,6 +1625,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Model sub-mesh whose mesh id has no geometry.
@@ -1584,7 +1633,7 @@ mod tests {
         model_bad_geo.insert(
             AssetId(1),
             vec![SubMeshRef {
-                mesh: Some(AssetId(999)),
+                mesh: Some(MeshHandle(999)),
                 material: None,
             }],
         );
@@ -1598,6 +1647,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Model sub-mesh referencing a material absent from the material_map.
@@ -1605,7 +1655,7 @@ mod tests {
         model_bad_mat.insert(
             AssetId(1),
             vec![SubMeshRef {
-                mesh: Some(AssetId(0)),
+                mesh: Some(MeshHandle(0)),
                 material: Some(AssetId(404)),
             }],
         );
@@ -1619,6 +1669,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Single-mesh item whose mesh id has no geometry.
@@ -1632,6 +1683,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Single-mesh item referencing a material absent from the material_map.
@@ -1647,6 +1699,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // Item carrying neither a model nor a mesh.
@@ -1668,12 +1721,13 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // InstancedProp mesh id has no geometry.
         let inst_bad_mesh = InstancedProp {
             asset_id: AssetId::default(),
-            mesh: Some(AssetId(999)),
+            mesh: Some(MeshHandle(999)),
             material: None,
             texture: None,
             cull_distance: 0.0,
@@ -1689,12 +1743,13 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
 
         // InstancedProp material absent from the material_map.
         let inst_bad_mat = InstancedProp {
             asset_id: AssetId::default(),
-            mesh: Some(AssetId(0)),
+            mesh: Some(MeshHandle(0)),
             material: Some(AssetId(404)),
             texture: None,
             cull_distance: 0.0,
@@ -1710,6 +1765,7 @@ mod tests {
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
+            mesh_handle_to_id: &id_table(),
         }));
     }
 
@@ -1799,12 +1855,15 @@ mod tests {
         let mut world = b.seal();
         let mut ctx = world.ctx();
 
-        let (geometry, sources, resident) = load_mesh_geometry(&mut ctx).expect("decoded");
+        let (geometry, sources, resident, handle_to_id) =
+            load_mesh_geometry(&mut ctx).expect("decoded");
         assert_eq!(geometry.len(), 1);
         let m = geometry.get(&AssetId(1)).expect("mesh 1 present");
         assert_eq!(m.vertices.len(), 3);
         assert_eq!(m.indices, vec![0, 1, 2]);
         assert!(m.lod_alternates.is_empty());
+        // The lone mesh source is handle 0, mapping back to its asset id.
+        assert_eq!(handle_to_id, vec![AssetId(1)]);
         // The source-capture map only fills under the dev-flag global, which the
         // tests never set, so it stays empty here.
         assert!(sources.is_empty());
@@ -1829,7 +1888,8 @@ mod tests {
         let mut world = b.seal();
         let mut ctx = world.ctx();
 
-        let (geometry, _sources, resident) = load_mesh_geometry(&mut ctx).expect("decoded");
+        let (geometry, _sources, resident, _handle_to_id) =
+            load_mesh_geometry(&mut ctx).expect("decoded");
         assert!(geometry.contains_key(&AssetId(2)));
         assert!(
             resident.contains(&AssetId(2)),
@@ -1872,8 +1932,9 @@ mod tests {
     fn load_mesh_geometry_empty_world_is_ok_and_empty() {
         let mut world = BlobWorld::new().seal();
         let mut ctx = world.ctx();
-        let (geometry, sources, resident) = load_mesh_geometry(&mut ctx).expect("ok");
+        let (geometry, sources, resident, handle_to_id) = load_mesh_geometry(&mut ctx).expect("ok");
         assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
+        assert!(handle_to_id.is_empty());
     }
 
     fn test_room(locator: Option<crate::ecs::PayloadLocator>) -> Room {

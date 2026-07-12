@@ -144,8 +144,9 @@ pub use concinnity_asset::PayloadLocator;
 pub use concinnity_asset::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
     MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_audio_clip_handle_vec,
-    de_opt_audio_clip_handle, de_opt_font_handle, de_opt_texture_handle,
-    set_audio_clip_handle_resolver, set_font_handle_resolver, set_texture_handle_resolver,
+    de_opt_audio_clip_handle, de_opt_font_handle, de_opt_mesh_handle, de_opt_texture_handle,
+    set_audio_clip_handle_resolver, set_font_handle_resolver, set_mesh_handle_resolver,
+    set_texture_handle_resolver,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

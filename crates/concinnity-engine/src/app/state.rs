@@ -54,13 +54,7 @@ impl App {
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.
-        world.insert_resource(crate::resource::AudioClipTable::from_records(&resources));
-        world.insert_resource(crate::resource::TextureTable::from_records(&resources));
-        world.insert_resource(crate::resource::ColorLutTable::from_records(&resources));
-        world.insert_resource(crate::resource::EnvironmentMapTable::from_records(
-            &resources,
-        ));
-        world.insert_resource(crate::resource::FontTable::from_records(&resources));
+        crate::resource::install_resource_tables(&mut world, &resources);
         self.world = world;
         Ok(())
     }

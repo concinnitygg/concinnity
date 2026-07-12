@@ -129,7 +129,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 mod tests {
     use super::*;
     use crate::assets::{Prop, PropCollider};
-    use crate::ecs::World;
+    use crate::ecs::{MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
         Prop {
@@ -150,7 +150,7 @@ mod tests {
 
         // A mesh-backed child: material, collider, interactable, scene, parent.
         let mut panel = prop(2);
-        panel.mesh = Some(AssetId(101));
+        panel.mesh = Some(MeshHandle(101));
         panel.material = Some(AssetId(102));
         panel.collider = Some(PropCollider::default());
         panel.interactable = true;
@@ -182,7 +182,7 @@ mod tests {
             .collect();
         assert_eq!(meshes.len(), 1);
         let (panel_e, mesh_id, material_id, panel_pos, panel_rot) = meshes[0];
-        assert_eq!(mesh_id, Some(AssetId(101)));
+        assert_eq!(mesh_id, Some(MeshHandle(101)));
         assert_eq!(material_id, Some(AssetId(102)));
         assert_eq!(panel_pos, [4.0, 5.0, 6.0]);
         assert_eq!(panel_rot, [0.0, 90.0, 0.0]);
@@ -215,11 +215,11 @@ mod tests {
         // Child declared BEFORE its parent: the two-pass resolution still links.
         let mut world = World::new_empty();
         let mut child = prop(1);
-        child.mesh = Some(AssetId(10));
+        child.mesh = Some(MeshHandle(10));
         child.parent = Some(AssetId(2));
         world.add_component(child);
         let mut parent = prop(2);
-        parent.mesh = Some(AssetId(11));
+        parent.mesh = Some(MeshHandle(11));
         world.add_component(parent);
 
         world.start().expect("start");
@@ -231,13 +231,13 @@ mod tests {
         // The child (mesh 10) points at the parent entity.
         assert_eq!(by_parent.len(), 1);
         let (parent_e, child_mesh) = by_parent[0];
-        assert_eq!(child_mesh, Some(AssetId(10)));
+        assert_eq!(child_mesh, Some(MeshHandle(10)));
         // That parent entity is the one holding mesh 11.
         let parent_mesh = world
             .join2::<MeshRenderer, Transform>()
             .find(|(e, _, _)| *e == parent_e)
             .map(|(_, m, _)| m.mesh);
-        assert_eq!(parent_mesh, Some(Some(AssetId(11))));
+        assert_eq!(parent_mesh, Some(Some(MeshHandle(11))));
     }
 
     // The pass drains the Prop column but keeps each entity on its per-instance
@@ -246,7 +246,7 @@ mod tests {
     fn decomposed_default_drains_prop_keeping_components() {
         let mut world = World::new_empty();
         let mut a = prop(1);
-        a.mesh = Some(AssetId(10));
+        a.mesh = Some(MeshHandle(10));
         world.add_component(a);
         let mut b = prop(2);
         b.model = Some(AssetId(20));

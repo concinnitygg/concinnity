@@ -54,6 +54,14 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
         world.add(component);
     }
 
+    // Load the compiled blob's resource stream into the per-kind tables the
+    // systems read by handle. Kinds that have left the component registry
+    // (textures, audio clips, fonts, colour LUTs, environment maps) live here,
+    // not in `defs`, so without this the renderer sees an empty texture pool and
+    // every material's albedo handle resolves out of range. Same call the shipped
+    // runtime's `App::load_blob` makes.
+    concinnity_engine::resource::install_resource_tables(&mut world, &result.resources);
+
     Ok(world)
 }
 

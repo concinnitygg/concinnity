@@ -223,7 +223,13 @@ pub fn build_compiled(
         crate::resource_handles::asset_resource_kind(&a.asset_type)
             .map(|kind| (asset_id::intern(&a.name), kind))
     });
-    let resource_handles = crate::resource_handles::ResourceHandles::from_assets(resource_assets);
+    let mut resource_handles =
+        crate::resource_handles::ResourceHandles::from_assets(resource_assets);
+    // The mesh-source handle space spans four kinds (Mesh, ProceduralMesh,
+    // VoxelChunk, mesh-kind File) and File is polymorphic, so it is assigned in a
+    // second pass in the fixed block order the runtime enumerates mesh sources
+    // rather than through the per-type classifier above.
+    crate::resource_handles::assign_mesh_source_handles(&mut resource_handles, &assets);
     // Install a clone; the original is kept to look up each resource asset's
     // handle while partitioning below.
     crate::resource_handles::install_resource_handles(resource_handles.clone());

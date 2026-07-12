@@ -29,11 +29,53 @@ pub use crate::ecs::ResourceKind;
 // the two together for callers that only have the type name.
 pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
     Some(match ct {
-        ComponentType::Mesh => ResourceKind::Mesh,
         ComponentType::Material => ResourceKind::Material,
         ComponentType::SkinnedMesh => ResourceKind::SkinnedMesh,
         _ => return None,
     })
+}
+
+// The mesh-source handle space is shared across every geometry-producing kind
+// (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so it is not assigned
+// through the type-name classifier above: File is polymorphic (only a mesh-kind
+// File is geometry, which the type name alone cannot tell), and the four kinds
+// must draw from one dense space in a fixed order. `assign_mesh_source_handles`
+// owns that assignment.
+
+// Normalize an asset type name the same way the cross-reference checker does, so
+// both agree on what counts as a mesh source.
+fn norm_type(t: &str) -> String {
+    t.to_lowercase().replace('_', "")
+}
+
+// True when a `File`'s args name a mesh-kind file (the only File that produces
+// geometry).
+fn file_is_mesh(args: &serde_json::Value) -> bool {
+    args.get("kind")
+        .and_then(|k| k.as_str())
+        .and_then(crate::assets::FileKind::from_ext)
+        .map(|fk| fk.is_mesh())
+        .unwrap_or(false)
+}
+
+// The mesh-source block an asset belongs to, or `None` if it is not a geometry
+// producer. The blocks are the fixed order the runtime enumerates mesh sources
+// in (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind File), so a
+// handle assigned in block order equals the runtime's mesh-source index.
+fn mesh_source_block(asset_type: &str, args: &serde_json::Value) -> Option<u8> {
+    match norm_type(asset_type).as_str() {
+        "mesh" => Some(0),
+        "proceduralmesh" => Some(1),
+        "voxelchunk" | "chunk" => Some(2),
+        "file" => file_is_mesh(args).then_some(3),
+        _ => None,
+    }
+}
+
+// Whether an asset produces geometry addressable by a mesh handle. The single
+// classifier the checker and the handle assigner share.
+pub fn is_mesh_source(asset_type: &str, args: &serde_json::Value) -> bool {
+    mesh_source_block(asset_type, args).is_some()
 }
 
 // The resource kind a declarable asset type name maps to, across both registries:
@@ -182,6 +224,31 @@ impl ResourceHandles {
     }
 }
 
+// Assign the shared mesh-source handle space over the expanded world. Every
+// geometry-producing kind draws from one dense `ResourceKind::Mesh` space; the
+// handles are assigned in the fixed block order the runtime enumerates them
+// (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind File), each in
+// declaration order, so a `.mesh` reference resolves to the same index the
+// runtime assigns while decoding geometry. Call over the same expanded +
+// injected `assets` list the blob is emitted from, after the per-kind generic
+// pass and before installing the map.
+pub fn assign_mesh_source_handles(
+    handles: &mut ResourceHandles,
+    assets: &[crate::world::WorldJsonlAsset],
+) {
+    for block in 0..=3u8 {
+        for asset in assets
+            .iter()
+            .filter(|a| mesh_source_block(&a.asset_type, &a.args) == Some(block))
+        {
+            handles.assign(
+                ResourceKind::Mesh,
+                crate::ecs::asset_id::intern(&asset.name),
+            );
+        }
+    }
+}
+
 // The current build's handle map, consulted by the per-kind resource-handle
 // resolver seams. One map holds every kind's handles; each seam closure reads it
 // with its own `ResourceKind`. Thread-local so parallel builds (and the interner
@@ -213,6 +280,10 @@ pub fn ensure_resource_handle_resolvers() {
         crate::ecs::set_font_handle_resolver(|name| {
             let id = crate::ecs::asset_id::intern(name);
             RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Font, id))
+        });
+        crate::ecs::set_mesh_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Mesh, id))
         });
     });
 }
@@ -266,8 +337,15 @@ mod tests {
         );
         assert_eq!(ComponentType::parse("Font"), None);
         assert_eq!(asset_resource_kind("Font"), Some(ResourceKind::Font));
+        // Mesh stays a component but its handle is not assigned through the
+        // type-name classifier: it shares the mesh-source handle space with
+        // ProceduralMesh / VoxelChunk / File, assigned by
+        // `assign_mesh_source_handles`. So the generic classifier does not treat
+        // it as a resource.
+        assert_eq!(resource_kind(ComponentType::Mesh), None);
+        assert_eq!(asset_resource_kind("Mesh"), None);
+        assert!(is_mesh_source("Mesh", &serde_json::json!({})));
         // Component-registry resources still classify through `resource_kind`.
-        assert_eq!(resource_kind(ComponentType::Mesh), Some(ResourceKind::Mesh));
         assert_eq!(
             resource_kind(ComponentType::Material),
             Some(ResourceKind::Material)
@@ -291,6 +369,67 @@ mod tests {
             Some(ResourceKind::AudioClip)
         );
         assert_eq!(asset_resource_kind("PointLight"), None);
+    }
+
+    // The load-bearing invariant of the shared mesh-source handle space: handles
+    // are assigned across all four producer kinds in the fixed block order the
+    // runtime enumerates them (Mesh, ProceduralMesh, VoxelChunk, mesh-kind File),
+    // each in declaration order. Non-mesh Files and non-geometry assets get no
+    // mesh handle. The runtime derives the same order while decoding geometry, so
+    // a `.mesh` reference resolves to the mesh source the runtime loaded there.
+    #[test]
+    fn mesh_source_handles_are_block_ordered_across_kinds() {
+        use crate::ecs::asset_id;
+        use crate::world::WorldJsonlAsset;
+
+        let a = |name: &str, ty: &str, args: serde_json::Value| WorldJsonlAsset {
+            name: name.to_string(),
+            asset_type: ty.to_string(),
+            args,
+        };
+
+        // Interleaved declaration order across every producer kind, plus a
+        // non-mesh File and a non-geometry asset that must be skipped.
+        let assets = vec![
+            a("m0", "Mesh", serde_json::json!({})),
+            a(
+                "p0",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "box"}),
+            ),
+            a("f_tex", "File", serde_json::json!({"kind": "png"})),
+            a("v0", "VoxelChunk", serde_json::json!({})),
+            a("m1", "Mesh", serde_json::json!({})),
+            a("f_mesh", "File", serde_json::json!({"kind": "obj"})),
+            a("light", "PointLight", serde_json::json!({})),
+            a(
+                "p1",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "sphere"}),
+            ),
+        ];
+
+        // Intern in declaration order, mirroring the pipeline.
+        asset_id::reset_interner();
+        let names: Vec<&str> = assets.iter().map(|x| x.name.as_str()).collect();
+        asset_id::intern_all(&names);
+
+        let mut handles = ResourceHandles::default();
+        assign_mesh_source_handles(&mut handles, &assets);
+
+        let h = |name: &str| handles.get(ResourceKind::Mesh, asset_id::intern(name));
+        // Block order: all Meshes, then ProceduralMeshes, then VoxelChunks, then
+        // mesh-kind Files; declaration order within each block.
+        assert_eq!(h("m0"), Some(0));
+        assert_eq!(h("m1"), Some(1));
+        assert_eq!(h("p0"), Some(2));
+        assert_eq!(h("p1"), Some(3));
+        assert_eq!(h("v0"), Some(4));
+        assert_eq!(h("f_mesh"), Some(5));
+        // A non-mesh File and a non-geometry component get no mesh handle.
+        assert_eq!(h("f_tex"), None);
+        assert_eq!(h("light"), None);
+        assert_eq!(handles.count(ResourceKind::Mesh), 6);
     }
 
     #[test]

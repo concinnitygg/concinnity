@@ -13,7 +13,6 @@
 // means writing one impl there plus one arm in `cross_refs_for`.
 
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
-use crate::assets::FileKind;
 use crate::world::WorldJsonlAsset;
 use std::collections::HashSet;
 
@@ -75,20 +74,12 @@ impl<'a> RefScope<'a> {
         };
 
         // Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File are all valid
-        // mesh sources.
+        // mesh sources; the same classifier the build's mesh-source handle
+        // assignment uses, so the two never disagree on what a `.mesh` name may
+        // resolve to.
         let mesh_sources = assets
             .iter()
-            .filter(|a| match norm(&a.asset_type).as_str() {
-                "mesh" | "proceduralmesh" | "voxelchunk" | "chunk" => true,
-                "file" => a
-                    .args
-                    .get("kind")
-                    .and_then(|k| k.as_str())
-                    .and_then(FileKind::from_ext)
-                    .map(|fk| fk.is_mesh())
-                    .unwrap_or(false),
-                _ => false,
-            })
+            .filter(|a| crate::resource_handles::is_mesh_source(&a.asset_type, &a.args))
             .map(|a| a.name.as_str())
             .collect();
 

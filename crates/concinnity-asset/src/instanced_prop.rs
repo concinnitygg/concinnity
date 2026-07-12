@@ -1,6 +1,8 @@
 // Instanced-prop schema.
 
-use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
+use crate::{
+    AssetId, MeshHandle, TextureHandle, de_opt_asset_ref, de_opt_mesh_handle, de_opt_texture_handle,
+};
 use alloc::vec::Vec;
 
 /// Per-instance transform within an `InstancedProp`.
@@ -56,8 +58,8 @@ pub struct InstancedProp {
     pub asset_id: AssetId,
     /// A [Mesh](#mesh), [ProceduralMesh](#proceduralmesh),
     /// [VoxelChunk](#voxelchunk), or mesh-kind [File](#file) asset.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub mesh: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_mesh_handle")]
+    pub mesh: Option<MeshHandle>,
     /// A [Material](#material); takes precedence over `texture` when set.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub material: Option<AssetId>,

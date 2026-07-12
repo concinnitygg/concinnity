@@ -260,6 +260,21 @@ impl FontTable {
     }
 }
 
+// Install every per-kind resource table from a compiled blob's resource stream
+// into `world`. This is the single place the table set is enumerated: the
+// shipped runtime (`App::load_blob`), the editor's in-memory build, and the
+// examples' `compile_world` all call it, so a resource kind that migrates into
+// the stream gets wired into every host by adding one line here. Systems then
+// read their table by handle. Dev-only source catalogues (hot-reload) stay with
+// the debug path that captures them, not here.
+pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[ResourceRecord]) {
+    world.insert_resource(AudioClipTable::from_records(records));
+    world.insert_resource(TextureTable::from_records(records));
+    world.insert_resource(ColorLutTable::from_records(records));
+    world.insert_resource(EnvironmentMapTable::from_records(records));
+    world.insert_resource(FontTable::from_records(records));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
