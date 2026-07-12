@@ -87,6 +87,63 @@ impl AudioClipTable {
     }
 }
 
+// The textures loaded from the blob, indexed by `TextureHandle`. The renderer
+// reads this at init to build its shared texture pool, in place of draining a
+// `Texture` component column and scanning names to slots. Every texture (file or
+// procedural) has a compiled payload, so an entry's `payload` is normally `Some`.
+#[derive(Debug, Clone, Default)]
+pub struct TextureTable(pub Vec<ResourceEntry>);
+
+impl TextureTable {
+    // Build the table from the blob's resource stream.
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::Texture))
+    }
+
+    // Number of textures (the shared pool size); a `TextureHandle` is in range
+    // when its index is below this.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // The payload locator for a texture handle, if in range and compiled.
+    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
+        self.0.get(handle).and_then(|e| e.payload.clone())
+    }
+
+    // Blob indices that hold a texture payload, so the graphics systems can keep
+    // the texture blobs resident. Mirrors `AudioClipTable::blob_indices`.
+    pub fn blob_indices(&self) -> HashSet<u32> {
+        self.0
+            .iter()
+            .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
+            .collect()
+    }
+}
+
+// One texture's identity + source file, in `TextureHandle` order. A procedural
+// texture has an empty `source`. `name_id` is the interned asset name (the same
+// interner the runtime shares in-process under `cn debug`), used by the runtime
+// spawn-by-name path without interning at runtime.
+#[derive(Debug, Clone, Default)]
+pub struct TextureSource {
+    pub name_id: u32,
+    pub source: String,
+    pub image_index: u32,
+}
+
+// Dev-only catalogue of texture source files, indexed by `TextureHandle`,
+// inserted as a world resource by the in-memory (`cn debug` / editor) build.
+// `GraphicsSystem::init` reads it to seed the hot-reload watcher now that Texture
+// is a resource without a drained `source` field. Absent in the shipped disk
+// runtime, which does not hot-reload; init simply captures no sources then.
+#[derive(Debug, Clone, Default)]
+pub struct TextureSources(pub Vec<TextureSource>);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +196,25 @@ mod tests {
         let mut indices: Vec<u32> = table.blob_indices().into_iter().collect();
         indices.sort_unstable();
         assert_eq!(indices, vec![0, 3]);
+    }
+
+    #[test]
+    fn texture_table_is_dense_by_handle_and_ignores_other_kinds() {
+        // A texture record and an audio record interleaved; the texture table
+        // keeps only the textures, placed at their handle index.
+        let records = vec![
+            rec(ResourceKind::Texture, 1, 2),
+            rec(ResourceKind::AudioClip, 0, 9),
+            rec(ResourceKind::Texture, 0, 1),
+        ];
+        let table = TextureTable::from_records(&records);
+        assert_eq!(table.len(), 2);
+        assert!(table.locator(0).is_some());
+        assert!(table.locator(1).is_some());
+        assert!(table.locator(2).is_none());
+        let mut indices: Vec<u32> = table.blob_indices().into_iter().collect();
+        indices.sort_unstable();
+        assert_eq!(indices, vec![1, 2]);
+        assert!(TextureTable::from_records(&[]).is_empty());
     }
 }

@@ -42,7 +42,6 @@ macro_rules! for_each_component {
             Camera3D          => $crate::assets::Camera3D { manual },
             Mesh              => $crate::assets::Mesh { gen, external, compiled, id },
             FrameInput        => $crate::assets::FrameInput { gen, runtime },
-            Texture           => $crate::assets::Texture { gen, external, compiled, id },
             Prop              => $crate::assets::Prop { gen, external, id, validate: prop },
             RigidBody         => $crate::assets::RigidBody { gen, external, validate: rigid_body },
             PropBody          => $crate::assets::PropBody { gen, external },
@@ -137,12 +136,14 @@ macro_rules! for_each_component {
 // `Variant => Type { resource: <ResourceKind>, <flags...> }`.
 //
 // This is the asset-registry / component-registry split the P5 design calls for,
-// applied one kind at a time; AudioClip is the first kind to leave.
+// applied one kind at a time; AudioClip was the first kind to leave, Texture the
+// second.
 #[macro_export]
 macro_rules! for_each_resource_asset {
     ($cb:ident) => {
         $cb! {
             AudioClip => $crate::assets::AudioClip { resource: AudioClip, compiled },
+            Texture => $crate::assets::Texture { resource: Texture, compiled },
         }
     };
 }

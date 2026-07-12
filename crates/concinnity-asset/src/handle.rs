@@ -119,6 +119,47 @@ where
     d.deserialize_any(OptVisitor)
 }
 
+/// `serde` `deserialize_with` helper for a required texture reference field.
+///
+/// Like [`de_opt_texture_handle`] but for a non-optional [`TextureHandle`]: an
+/// integer is an already-resolved handle (the compiled-args / runtime form); a
+/// name string is resolved through the installed texture-handle resolver. Used
+/// by the compiled `StoryImage.texture`, which always names a texture. Apply
+/// with `#[serde(deserialize_with = "concinnity_asset::de_texture_handle")]`.
+pub fn de_texture_handle<'de, D>(d: D) -> Result<TextureHandle, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct HandleVisitor;
+
+    impl Visitor<'_> for HandleVisitor {
+        type Value = TextureHandle;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a texture handle integer or reference name string")
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<TextureHandle, E> {
+            Ok(TextureHandle(v as u32))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<TextureHandle, E> {
+            Ok(TextureHandle(v as u32))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<TextureHandle, E> {
+            resolve_texture_ref(v).map(TextureHandle).ok_or_else(|| {
+                E::custom(format!(
+                    "no texture-handle resolver installed to resolve reference {v:?}"
+                ))
+            })
+        }
+        fn visit_string<E: de::Error>(self, v: alloc::string::String) -> Result<TextureHandle, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(HandleVisitor)
+}
+
 // Resolve an audio-clip reference name to its handle. A real build has the
 // declaration-ordered audio-clip map installed; outside a build (single-asset
 // validation, the editor's add form) it falls back to the name interner so the

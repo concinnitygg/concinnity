@@ -56,8 +56,8 @@ pub mod world;
 // server call. The runtime-side decode + world parse API stays in
 // concinnity-core.
 pub use pipeline::{
-    PipelineResult, build_compiled, build_from_path, build_pipeline_from_str, validate_asset,
-    validate_world_jsonl, write_build_outputs,
+    PipelineResult, TextureSourceInfo, build_compiled, build_from_path, build_pipeline_from_str,
+    validate_asset, validate_world_jsonl, write_build_outputs,
 };
 pub use registry::ComponentType;
 pub use world::prepare_world;

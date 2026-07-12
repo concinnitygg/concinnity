@@ -1,8 +1,8 @@
 use super::*;
 use crate::assets::{Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker, View};
-use crate::ecs::AudioClipHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::intern;
+use crate::ecs::{AudioClipHandle, TextureHandle};
 
 fn page(text: &str) -> StoryPage {
     StoryPage {
@@ -434,14 +434,14 @@ fn stage_dressing_applies_to_sprites() {
     let mut story = two_page_story();
     story.nodes[0].pages[0].stage = StoryStage {
         bg: Some(StoryImage {
-            texture: intern("s_img0"),
+            texture: TextureHandle(intern("s_img0").0),
             x: 0.0,
             y: 0.0,
             width: 1280.0,
             height: 720.0,
         }),
         center: Some(StoryImage {
-            texture: intern("s_img1"),
+            texture: TextureHandle(intern("s_img1").0),
             x: 412.0,
             y: 20.0,
             width: 456.0,
@@ -455,7 +455,7 @@ fn stage_dressing_applies_to_sprites() {
 
     let bg = intern("s_stage_bg");
     let sprite = world.query::<Sprite>().find(|s| s.asset_id == bg).unwrap();
-    assert_eq!(sprite.texture, Some(intern("s_img0")));
+    assert_eq!(sprite.texture, Some(TextureHandle(intern("s_img0").0)));
     let center = intern("s_stage_center");
     let sprite = world
         .query::<Sprite>()

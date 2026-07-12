@@ -1,7 +1,8 @@
 // Branching-story graph schema.
 
 use crate::{
-    AssetId, AudioClipHandle, de_audio_clip_handle_vec, de_opt_asset_ref, de_opt_audio_clip_handle,
+    AssetId, AudioClipHandle, TextureHandle, de_audio_clip_handle_vec, de_opt_asset_ref,
+    de_opt_audio_clip_handle, de_texture_handle,
 };
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -233,7 +234,8 @@ pub struct StoryStage {
 #[serde(default)]
 pub struct StoryImage {
     /// [Texture](#texture) to sample.
-    pub texture: AssetId,
+    #[serde(deserialize_with = "de_texture_handle")]
+    pub texture: TextureHandle,
     /// Left edge on the reference canvas.
     pub x: f32,
     /// Top edge on the reference canvas.

@@ -52,9 +52,10 @@ impl App {
             world.add(asset);
         }
         // Load the blob's resource stream into the per-kind tables the systems
-        // read by handle. AudioClip is the first resource kind; its table is a
-        // world resource AudioSystem reads at init.
+        // read by handle. AudioSystem reads the AudioClipTable at init; the
+        // renderer reads the TextureTable to build its shared texture pool.
         world.insert_resource(crate::resource::AudioClipTable::from_records(&resources));
+        world.insert_resource(crate::resource::TextureTable::from_records(&resources));
         self.world = world;
         Ok(())
     }

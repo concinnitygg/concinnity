@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::assets::{Sprite, SpriteFit};
+use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
@@ -40,7 +41,7 @@ pub fn covers_canvas(s: &Sprite) -> bool {
 pub fn build_sprite_calls(
     sprites: &[&Sprite],
     default_atlas_slot: Option<usize>,
-    texture_slots: &HashMap<AssetId, usize>,
+    texture_slots: &HashMap<TextureHandle, usize>,
     viewport: [f32; 2],
     clips: &HashMap<AssetId, [f32; 4]>,
     layers: &HashMap<AssetId, i32>,
@@ -210,7 +211,7 @@ mod tests {
         std::collections::HashMap::new()
     }
 
-    fn no_slots() -> HashMap<AssetId, usize> {
+    fn no_slots() -> HashMap<TextureHandle, usize> {
         HashMap::new()
     }
 
@@ -273,9 +274,9 @@ mod tests {
     #[test]
     fn textured_sprite_emits_real_uvs_and_its_slot() {
         let mut s = sprite(10.0, 20.0, 100.0, 50.0, [1.0, 0.9, 0.8, 0.75]);
-        s.texture = Some(AssetId(42));
+        s.texture = Some(TextureHandle(42));
         let mut slots = no_slots();
-        slots.insert(AssetId(42), 3);
+        slots.insert(TextureHandle(42), 3);
         let calls = build_sprite_calls(
             &[&s],
             Some(0),
@@ -368,7 +369,7 @@ mod tests {
     #[test]
     fn textured_sprite_without_a_loaded_texture_falls_back_to_fill() {
         let mut s = sprite(0.0, 0.0, 10.0, 10.0, [0.2, 0.3, 0.4, 1.0]);
-        s.texture = Some(AssetId(42));
+        s.texture = Some(TextureHandle(42));
         // The texture never made it into the atlas pool: solid-fill sentinel.
         let calls = build_sprite_calls(
             &[&s],

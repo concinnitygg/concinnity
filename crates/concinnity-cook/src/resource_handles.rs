@@ -30,7 +30,6 @@ pub use crate::ecs::ResourceKind;
 pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
     Some(match ct {
         ComponentType::Mesh => ResourceKind::Mesh,
-        ComponentType::Texture => ResourceKind::Texture,
         ComponentType::Material => ResourceKind::Material,
         ComponentType::Font => ResourceKind::Font,
         ComponentType::CubemapTexture => ResourceKind::CubemapTexture,
@@ -105,6 +104,8 @@ impl ResourceAssetType {
         match self {
             Self::AudioClip => crate::audio_clip::compile_audio_clip_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::Texture => crate::texture::compile_texture_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
         }
     }
 
@@ -112,7 +113,7 @@ impl ResourceAssetType {
     // an unchanged source is a cache hit.
     pub fn source_files(self, args: &serde_json::Value) -> Vec<String> {
         match self {
-            Self::AudioClip => args
+            Self::AudioClip | Self::Texture => args
                 .get("source")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
@@ -217,11 +218,11 @@ mod tests {
 
     #[test]
     fn resource_types_classify_others_do_not() {
-        // Component-registry resources classify through `resource_kind`.
-        assert_eq!(
-            resource_kind(ComponentType::Texture),
-            Some(ResourceKind::Texture)
-        );
+        // Texture has left the component registry: it classifies through
+        // `ResourceAssetType`, folded in by `asset_resource_kind`.
+        assert_eq!(ComponentType::parse("Texture"), None);
+        assert_eq!(asset_resource_kind("Texture"), Some(ResourceKind::Texture));
+        // Component-registry resources still classify through `resource_kind`.
         assert_eq!(resource_kind(ComponentType::Mesh), Some(ResourceKind::Mesh));
         assert_eq!(
             resource_kind(ComponentType::Material),
@@ -332,6 +333,21 @@ mod tests {
             .unwrap();
         let decal: serde_json::Value = serde_json::from_slice(&decal_bytes).unwrap();
         assert_eq!(decal["texture"], serde_json::json!(1));
+
+        // The legacy texture-on-mesh path (Prop / InstancedProp / SkinnedMesh
+        // `texture`) resolves the same declaration-order handle. SkinnedMesh
+        // uses the identical `de_opt_texture_handle` deserializer.
+        let prop_bytes = ComponentType::Prop
+            .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
+            .unwrap();
+        let prop: serde_json::Value = serde_json::from_slice(&prop_bytes).unwrap();
+        assert_eq!(prop["texture"], serde_json::json!(1));
+
+        let inst_bytes = ComponentType::InstancedProp
+            .reserialize_args(&serde_json::json!({"texture": "tex_a"}))
+            .unwrap();
+        let inst: serde_json::Value = serde_json::from_slice(&inst_bytes).unwrap();
+        assert_eq!(inst["texture"], serde_json::json!(0));
     }
 
     // The same invariant for audio clips: an audio-clip reference name resolves

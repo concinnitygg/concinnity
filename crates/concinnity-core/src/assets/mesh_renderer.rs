@@ -1,5 +1,6 @@
 // src/assets/mesh_renderer.rs
 
+use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 
 /// Single-mesh render description for an entity: which mesh, material, and
@@ -15,7 +16,7 @@ pub struct MeshRenderer {
     /// A `Material` providing albedo plus lighting parameters.
     pub material: Option<AssetId>,
     /// Legacy texture, used only when `material` is unset.
-    pub texture: Option<AssetId>,
+    pub texture: Option<TextureHandle>,
     /// View-distance cutoff in world units; 0 keeps the draw visible at any
     /// distance.
     pub cull_distance: f32,

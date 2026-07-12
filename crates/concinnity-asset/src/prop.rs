@@ -1,6 +1,6 @@
 // Scene-object prop schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 use alloc::string::{String, ToString};
 
 /// Collision volume attached to a [Prop](#prop).
@@ -81,8 +81,8 @@ pub struct Prop {
     /// A [Texture](#texture) to use for this prop. Older field: ignored when
     /// `material` is set. Unset uses the first declared texture (or a white
     /// fallback).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// World-space position [x, y, z].
     pub position: [f32; 3],
     /// Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order

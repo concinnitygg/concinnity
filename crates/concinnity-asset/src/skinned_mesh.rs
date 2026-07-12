@@ -1,7 +1,7 @@
 // Skinned-mesh schema: skeletal geometry, its bind-pose joints, and an optional
 // character capsule.
 
-use crate::{AssetId, PayloadLocator, de_opt_asset_ref};
+use crate::{AssetId, PayloadLocator, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -105,8 +105,8 @@ pub struct SkinnedMesh {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub material: Option<AssetId>,
     /// [Texture](#texture) (older path); ignored when `material` is set.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// World-space position.
     pub position: [f32; 3],
     /// World rotation, Euler degrees [pitch, yaw, roll], YXZ order.

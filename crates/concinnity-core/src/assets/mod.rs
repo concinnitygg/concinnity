@@ -46,7 +46,6 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
-mod texture;
 mod view_command;
 mod view_shown;
 
@@ -261,7 +260,6 @@ mod tests {
 
     #[test]
     fn simple_assets_round_trip_defaults() {
-        exercise::<Texture>();
         exercise::<Font>();
         exercise::<CubemapTexture>();
         exercise::<ColorLut>();
@@ -285,16 +283,6 @@ mod tests {
     fn source_backed_source_path_branches() {
         // Procedural generator -> no source file; file-backed -> the path;
         // neither -> None. Covers both arms of the generator-gated types.
-        assert_eq!(
-            Texture::source_path(&json!({"generator": "checker"}), Platform::Metal),
-            None
-        );
-        assert_eq!(
-            Texture::source_path(&json!({"source": "img.png"}), Platform::Metal),
-            Some("img.png".to_string())
-        );
-        assert_eq!(Texture::source_path(&json!({}), Platform::Metal), None);
-
         assert_eq!(
             EnvironmentMap::source_path(&json!({"generator": "sky"}), Platform::Metal),
             None

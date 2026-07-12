@@ -8,6 +8,7 @@ use crate::assets::{
     VoxelChunk,
 };
 use crate::ecs::PipelineContext;
+use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
@@ -99,7 +100,7 @@ pub(crate) struct RenderableItem {
     pub model: Option<AssetId>,
     pub mesh: Option<AssetId>,
     pub material: Option<AssetId>,
-    pub texture: Option<AssetId>,
+    pub texture: Option<TextureHandle>,
     pub cull_distance: f32,
     pub is_dynamic: bool,
 }
@@ -455,7 +456,10 @@ pub(crate) struct DrawListInputs<'a> {
     pub model_map: &'a std::collections::HashMap<AssetId, Vec<SubMeshRef>>,
     pub mesh_geometry: &'a std::collections::HashMap<AssetId, LoadedMesh>,
     pub room_geometry: &'a [RoomGeometry],
-    pub texture_name_to_slot: &'a std::collections::HashMap<AssetId, usize>,
+    // Size of the shared texture pool; a texture handle is in range when its
+    // index is below this. A legacy texture-on-mesh reference past it falls back
+    // to slot 0.
+    pub texture_count: usize,
     pub material_map: &'a std::collections::HashMap<AssetId, MaterialEntry>,
     pub always_resident_meshes: &'a std::collections::HashSet<AssetId>,
 }
@@ -468,7 +472,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         model_map,
         mesh_geometry,
         room_geometry,
-        texture_name_to_slot,
+        texture_count,
         material_map,
         always_resident_meshes,
     } = inputs;
@@ -680,7 +684,10 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     }
                 }
             } else if let Some(tex_id) = item.texture {
-                let slot = *texture_name_to_slot.get(&tex_id).unwrap_or(&0);
+                // The texture handle is the texture's declaration-order pool
+                // slot; an out-of-range handle falls back to slot 0.
+                let s = tex_id.index();
+                let slot = if s < texture_count { s } else { 0 };
                 (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
             } else {
                 (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
@@ -761,7 +768,8 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 }
             }
         } else if let Some(tex_id) = inst.texture {
-            let slot = *texture_name_to_slot.get(&tex_id).unwrap_or(&0);
+            let s = tex_id.index();
+            let slot = if s < texture_count { s } else { 0 };
             (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
         } else {
             (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
@@ -877,11 +885,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             None => 0,
             Some(handle) => {
                 let slot = handle.index();
-                if slot < texture_name_to_slot.len() {
-                    slot
-                } else {
-                    0
-                }
+                if slot < texture_count { slot } else { 0 }
             }
         };
         draw_objects.push(DrawObject {
@@ -1164,7 +1168,7 @@ mod tests {
                 model_map: &std::collections::HashMap::new(),
                 mesh_geometry: &mesh_geometry,
                 room_geometry: &[],
-                texture_name_to_slot: &std::collections::HashMap::new(),
+                texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
             })
@@ -1221,7 +1225,7 @@ mod tests {
                 model_map: &std::collections::HashMap::new(),
                 mesh_geometry: &mesh_geometry,
                 room_geometry: &[],
-                texture_name_to_slot: &std::collections::HashMap::new(),
+                texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
             })
@@ -1264,7 +1268,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &always_resident,
         })
@@ -1392,7 +1396,7 @@ mod tests {
                 model_map: &model_map,
                 mesh_geometry: &mesh_geometry,
                 room_geometry: &[],
-                texture_name_to_slot: &std::collections::HashMap::new(),
+                texture_count: 0,
                 material_map: &material_map,
                 always_resident_meshes: &std::collections::HashSet::new(),
             })
@@ -1430,7 +1434,7 @@ mod tests {
                 model_map: &std::collections::HashMap::new(),
                 mesh_geometry: &mesh_geometry,
                 room_geometry: &[],
-                texture_name_to_slot: &std::collections::HashMap::new(),
+                texture_count: 0,
                 material_map: &std::collections::HashMap::new(),
                 always_resident_meshes: &std::collections::HashSet::new(),
             })
@@ -1469,11 +1473,6 @@ mod tests {
 
         // Handle 6 must land inside the pool; a 7-texture pool (slots 0..=6)
         // makes it the last valid slot.
-        let mut texture_name_to_slot = std::collections::HashMap::new();
-        for i in 0..7 {
-            texture_name_to_slot.insert(AssetId(i), i as usize);
-        }
-
         let (rv, ri, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
             items: &[],
             instanced_props: &[],
@@ -1481,7 +1480,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &std::collections::HashMap::new(),
             room_geometry: &room_geometry,
-            texture_name_to_slot: &texture_name_to_slot,
+            texture_count: 7,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         })
@@ -1505,15 +1504,14 @@ mod tests {
     fn build_draw_list_single_mesh_resolves_texture_slot() {
         let mut mesh_geometry = std::collections::HashMap::new();
         mesh_geometry.insert(AssetId(0), unit_quad_mesh());
-        let mut texture_name_to_slot = std::collections::HashMap::new();
-        texture_name_to_slot.insert(AssetId(9), 2usize);
-
+        // The texture handle is the pool slot directly; the pool size (3) makes
+        // slot 2 in range.
         let item = RenderableItem {
             asset_id: AssetId(0),
             model: None,
             mesh: Some(AssetId(0)),
             material: None,
-            texture: Some(AssetId(9)),
+            texture: Some(TextureHandle(2)),
             cull_distance: 0.0,
             is_dynamic: false,
         };
@@ -1525,7 +1523,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
-            texture_name_to_slot: &texture_name_to_slot,
+            texture_count: 3,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         })
@@ -1555,7 +1553,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1576,7 +1574,7 @@ mod tests {
             model_map: &model_no_mesh,
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1597,7 +1595,7 @@ mod tests {
             model_map: &model_bad_geo,
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1618,7 +1616,7 @@ mod tests {
             model_map: &model_bad_mat,
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1631,7 +1629,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1646,7 +1644,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1667,7 +1665,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1688,7 +1686,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));
@@ -1709,7 +1707,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
-            texture_name_to_slot: &std::collections::HashMap::new(),
+            texture_count: 0,
             material_map: &std::collections::HashMap::new(),
             always_resident_meshes: &std::collections::HashSet::new(),
         }));

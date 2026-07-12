@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::assets::{
     Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Mesh, Prop,
     RenderHandle, Scene, SceneCommand, SceneReel, ShaderKind, ShaderStage, SpawnRequest, Sprite,
-    StreamingConfig, Texture, Transform, Window,
+    StreamingConfig, Transform, Window,
 };
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
@@ -59,6 +59,7 @@ impl TestWorld {
 struct WorldBuilder {
     components: ComponentStorage,
     section: Vec<u8>,
+    texture_records: Vec<concinnity_core::ecs::ResourceRecord>,
 }
 
 impl WorldBuilder {
@@ -66,6 +67,7 @@ impl WorldBuilder {
         Self {
             components: ComponentStorage::default(),
             section: Vec::new(),
+            texture_records: Vec::new(),
         }
     }
 
@@ -101,7 +103,7 @@ impl WorldBuilder {
     }
 
     // One quad Mesh + a Texture-backed Material + a Prop placing it.
-    fn push_textured_quad(&mut self, mesh: AssetId, tex: AssetId, mat: AssetId, prop: AssetId) {
+    fn push_textured_quad(&mut self, mesh: AssetId, _tex: AssetId, mat: AssetId, prop: AssetId) {
         let mesh_loc = self.payload(&quad_mesh_payload());
         self.push(Mesh {
             asset_id: mesh,
@@ -109,13 +111,17 @@ impl WorldBuilder {
             ..Default::default()
         });
         let tex_loc = self.payload(&texture_payload(2, 2));
-        self.push(Texture {
-            asset_id: tex,
-            locator: Some(tex_loc),
-            ..Default::default()
-        });
-        // The single Texture pushed above drains at slot 0, so its cook-assigned
-        // handle is `TextureHandle(0)` regardless of the texture's asset id.
+        // Textures are resources now: the payload rides the resource stream at
+        // the next texture handle. The Material references `TextureHandle(0)` (the
+        // first texture) regardless of any texture's asset id.
+        let handle = self.texture_records.len() as u32;
+        self.texture_records
+            .push(concinnity_core::ecs::ResourceRecord {
+                resource_kind: concinnity_core::ecs::ResourceKind::Texture as u8,
+                handle,
+                payload: Some(tex_loc),
+                data_bytes: Vec::new(),
+            });
         self.push(Material {
             asset_id: mat,
             albedo: Some(TextureHandle(0)),
@@ -131,11 +137,17 @@ impl WorldBuilder {
     }
 
     fn build(self) -> TestWorld {
+        let mut resources = Resources::new();
+        // The renderer reads the shared texture pool from this table, exactly as
+        // the runtime does after loading the blob's resource stream.
+        resources.insert(crate::resource::TextureTable::from_records(
+            &self.texture_records,
+        ));
         TestWorld {
             components: self.components,
             blob: BlobData::new(vec![Some(self.section)]),
             profile: FrameProfile::default(),
-            resources: Resources::new(),
+            resources,
         }
     }
 }

@@ -26,7 +26,7 @@ mod resolver;
 pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
     MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_audio_clip_handle_vec,
-    de_opt_audio_clip_handle, de_opt_texture_handle,
+    de_opt_audio_clip_handle, de_opt_texture_handle, de_texture_handle,
 };
 pub use id::{AssetId, de_opt_asset_ref};
 pub use locator::PayloadLocator;

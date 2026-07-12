@@ -1,6 +1,6 @@
 // Screen-space sprite overlay schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 
 /// Screen-space 2D rectangle drawn as a UI overlay each frame.
 ///
@@ -35,8 +35,8 @@ pub struct Sprite {
     /// Height in screen pixels.
     pub height: f32,
     /// [Texture](#texture) to draw (reserved; not yet sampled).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// RGBA colour the rectangle is filled with, each channel in [0, 1].
     pub tint: [f32; 4],
     /// When true, the sprite acts as an in-engine cursor: it is drawn on top of

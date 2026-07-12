@@ -61,9 +61,26 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     }
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
-    // audio clips by handle too.
+    // audio clips and textures by handle too.
     world.insert_resource(crate::resource::AudioClipTable::from_records(
         &result.resources,
+    ));
+    world.insert_resource(crate::resource::TextureTable::from_records(
+        &result.resources,
+    ));
+    // Dev-only: the texture source catalogue, so the renderer's hot-reload
+    // capture and the runtime spawn-by-name path can map a texture handle back to
+    // its file / name. Not present in the shipped `load_blob` path.
+    world.insert_resource(crate::resource::TextureSources(
+        result
+            .texture_sources
+            .iter()
+            .map(|t| crate::resource::TextureSource {
+                name_id: t.name_id,
+                source: t.source.clone(),
+                image_index: t.image_index,
+            })
+            .collect(),
     ));
     Ok(world)
 }

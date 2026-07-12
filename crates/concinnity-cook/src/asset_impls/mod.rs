@@ -17,5 +17,4 @@ mod room;
 mod sdf_volume;
 mod shader_stage;
 mod skinned_mesh;
-mod texture;
 mod voxel_chunk;

@@ -71,6 +71,20 @@ fn errors_to_io(errors: Vec<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, errors.join("\n"))
 }
 
+// A texture's identity + on-disk source, in `TextureHandle` order. Now that
+// Texture is a resource (no `source`/`asset_id` on a component the renderer
+// drains), this is how a dev build hands the `cn debug` tools what they need: the
+// hot-reload watcher maps `source` -> handle, and the runtime spawn-by-name path
+// maps `name_id` -> handle. `source` is empty for a procedural texture (nothing
+// to watch). `name_id` is the interned asset name (same interner the runtime
+// shares in-process under `cn debug`), so nothing is interned at runtime.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextureSourceInfo {
+    pub name_id: u32,
+    pub source: String,
+    pub image_index: u32,
+}
+
 // The in-memory result of a complete build pipeline run.
 // Defs have payload locators filled in; payloads[i] is the raw bytes for
 // blob i. This can be used directly without touching disk.
@@ -88,6 +102,9 @@ pub struct PipelineResult {
     pub cache_hits: usize,
     // Compiled-asset payloads compiled fresh this run.
     pub cache_misses: usize,
+    // File-backed texture sources in `TextureHandle` order, for the `cn debug`
+    // hot-reload watcher. Dev-only info; not written to the shipped blob.
+    pub texture_sources: Vec<TextureSourceInfo>,
 }
 
 // Validate a single asset's type and generator without running the full build
@@ -245,6 +262,51 @@ pub fn build_compiled(
         named_src.push(i);
     }
 
+    // Dev-only: the file source behind each texture handle, so `cn debug`'s
+    // hot-reload watcher can map a saved file back to its handle. Built in
+    // handle order from the same resource jobs; a procedural texture (generator
+    // set) leaves an empty source (nothing to watch).
+    let texture_count = resource_jobs
+        .iter()
+        .filter(|(_, rt, _)| *rt == ResourceAssetType::Texture)
+        .map(|(_, _, h)| *h as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut texture_sources = vec![TextureSourceInfo::default(); texture_count];
+    for (asset_idx, rt, handle) in &resource_jobs {
+        if *rt != ResourceAssetType::Texture {
+            continue;
+        }
+        let asset = &assets[*asset_idx];
+        let generator = asset
+            .args
+            .get("generator")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let (source, image_index) = if generator.is_empty() {
+            (
+                asset
+                    .args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                asset
+                    .args
+                    .get("image_index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+            )
+        } else {
+            (String::new(), 0)
+        };
+        texture_sources[*handle as usize] = TextureSourceInfo {
+            name_id: asset_id::intern(&asset.name).0,
+            source,
+            image_index,
+        };
+    }
+
     let compiled = compile_and_pack_payloads(
         &mut named,
         &named_src,
@@ -268,6 +330,7 @@ pub fn build_compiled(
         payloads: compiled.blobs,
         cache_hits: compiled.cache_hits,
         cache_misses: compiled.cache_misses,
+        texture_sources,
     })
 }
 
@@ -1132,7 +1195,7 @@ fn compile_by_type(
     use crate::asset::BuildAsset;
     use crate::assets::{
         ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
-        SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
+        SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
     };
     match ct {
         ComponentType::Mesh => <Mesh as BuildAsset>::compile_payload(args, ctx),
@@ -1140,7 +1203,6 @@ fn compile_by_type(
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
         ComponentType::File => <File as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::Texture => <Texture as BuildAsset>::compile_payload(args, ctx),
         ComponentType::CubemapTexture => <CubemapTexture as BuildAsset>::compile_payload(args, ctx),
         ComponentType::EnvironmentMap => <EnvironmentMap as BuildAsset>::compile_payload(args, ctx),
         ComponentType::ColorLut => <ColorLut as BuildAsset>::compile_payload(args, ctx),
@@ -1170,7 +1232,7 @@ fn source_files_by_type(
     use crate::asset::BuildAsset;
     use crate::assets::{
         ColorLut, CubemapTexture, EnvironmentMap, File, Font, Mesh, ProceduralMesh, Room,
-        SdfVolume, ShaderStage, SkinnedMesh, Texture, VoxelChunk,
+        SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
     };
     match ct {
         ComponentType::Mesh => <Mesh as BuildAsset>::source_files(args, ctx),
@@ -1178,7 +1240,6 @@ fn source_files_by_type(
         ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::source_files(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::source_files(args, ctx),
         ComponentType::File => <File as BuildAsset>::source_files(args, ctx),
-        ComponentType::Texture => <Texture as BuildAsset>::source_files(args, ctx),
         ComponentType::CubemapTexture => <CubemapTexture as BuildAsset>::source_files(args, ctx),
         ComponentType::EnvironmentMap => <EnvironmentMap as BuildAsset>::source_files(args, ctx),
         ComponentType::ColorLut => <ColorLut as BuildAsset>::source_files(args, ctx),
@@ -1911,7 +1972,7 @@ mod tests {
     // (it left the component registry). Its source-less error still surfaces, and
     // its source file is folded into the payload cache key.
     #[test]
-    fn resource_asset_type_compiles_audio_clip() {
+    fn resource_asset_types_compile_audio_clip_and_texture() {
         use crate::resource_handles::ResourceAssetType;
         let rt = ResourceAssetType::parse("AudioClip").expect("AudioClip is a resource asset");
         let err = rt
@@ -1923,6 +1984,19 @@ mod tests {
             vec!["a.wav".to_string()]
         );
         assert!(rt.source_files(&serde_json::json!({})).is_empty());
+
+        // Texture is also a resource asset (it left the component registry). A
+        // procedural texture compiles a non-empty payload, and a file-backed one
+        // folds its source into the payload cache key.
+        let tex = ResourceAssetType::parse("Texture").expect("Texture is a resource asset");
+        let bytes = tex
+            .compile_payload(&serde_json::json!({"generator": "checker", "resolution": 32}))
+            .expect("a procedural texture compiles");
+        assert!(!bytes.is_empty());
+        assert_eq!(
+            tex.source_files(&serde_json::json!({"source": "a.png"})),
+            vec!["a.png".to_string()]
+        );
     }
 
     // Dispatch coverage: compile_by_type / source_files_by_type route each
@@ -1938,10 +2012,6 @@ mod tests {
     #[test]
     fn compile_by_type_dispatches_deterministic_arms() {
         let ok_cases: &[(&str, serde_json::Value)] = &[
-            (
-                "Texture",
-                serde_json::json!({"generator": "checker", "resolution": 32}),
-            ),
             (
                 "Mesh",
                 serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),

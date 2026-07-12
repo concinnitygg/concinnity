@@ -1,6 +1,6 @@
 // Instanced-prop schema.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 use alloc::vec::Vec;
 
 /// Per-instance transform within an `InstancedProp`.
@@ -62,8 +62,8 @@ pub struct InstancedProp {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub material: Option<AssetId>,
     /// Older texture-only reference; ignored when `material` is set.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub texture: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_texture_handle")]
+    pub texture: Option<TextureHandle>,
     /// Per-instance transforms. Empty list renders nothing.
     pub instances: Vec<InstanceTransform>,
     /// View-distance cutoff in world units per instance. 0 = always draw.

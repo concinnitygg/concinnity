@@ -5,7 +5,7 @@ use crate::assets::{
     BlockType, Camera3D, ColorLut, Decal, DirectionalLight, EnvironmentMap, Font, GlassPanel,
     GraphicsConfig, HitRegion, Material, Model, ParticleEmitter, PointLight, PostProcessConfig,
     PostProcessResolve, SdfVolume, ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry,
-    StreamingConfig, TextLabel, Texture, VolumetricFog, VoxelWorld, WaterSurface, Window,
+    StreamingConfig, TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PipelineContext};
@@ -874,21 +874,40 @@ impl GraphicsSystem {
         // when the user saves a texture on disk. Procedural textures (generator
         // non-empty) and source-less assets carry no source file and are
         // omitted from the map.
-        let textures = ctx.drain::<Texture>();
+        // The shared texture pool comes from the blob's resource stream: cook
+        // assigned each texture a dense `TextureHandle` (== its pool slot) and the
+        // runtime loaded them into a `TextureTable`. Reading the table by handle
+        // replaces draining a `Texture` component column and scanning names.
+        let texture_table = ctx
+            .resource::<crate::resource::TextureTable>()
+            .cloned()
+            .unwrap_or_default();
+        // Dev-only source catalogue (present under `cn debug`) so the hot-reload
+        // watcher can map a texture handle back to the file that backs it.
+        let texture_sources = ctx.resource::<crate::resource::TextureSources>().cloned();
+        let mut texture_locators = Vec::with_capacity(texture_table.len());
+        let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
+        // Name -> pool slot, built only under `cn debug` for the runtime
+        // spawn-by-name path (`WorldReloadState`). The shipped runtime resolves
+        // every texture by handle and never needs it.
         let mut texture_name_to_slot: std::collections::HashMap<AssetId, usize> =
             std::collections::HashMap::new();
-        let mut texture_locators = Vec::new();
-        let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
         let capture_sources = crate::app::dev_flags::enabled();
-        for (slot, tex) in textures.iter().enumerate() {
-            match &tex.locator {
+        for (slot, entry) in texture_table.0.iter().enumerate() {
+            match &entry.payload {
                 Some(l) => {
-                    // key by asset id (injected via inject_name) so Prop.texture
-                    // references match regardless of generator or source path
-                    texture_name_to_slot.insert(tex.asset_id, slot);
                     texture_locators.push(l.clone());
-                    if capture_sources && tex.generator.is_empty() && !tex.source.is_empty() {
-                        asset_source_map.push_texture(tex.source.clone(), tex.image_index, slot);
+                    if capture_sources
+                        && let Some(info) = texture_sources.as_ref().and_then(|s| s.0.get(slot))
+                    {
+                        texture_name_to_slot.insert(AssetId(info.name_id), slot);
+                        if !info.source.is_empty() {
+                            asset_source_map.push_texture(
+                                info.source.clone(),
+                                info.image_index,
+                                slot,
+                            );
+                        }
                     }
                 }
                 None => {
@@ -917,7 +936,7 @@ impl GraphicsSystem {
         // handle indexes `texture_locators` directly, no name->slot scan. A
         // handle past the pool is a resolution error (cook validates the
         // reference exists, so this only guards a corrupt build).
-        let texture_count = textures.len();
+        let texture_count = texture_table.len();
         let albedo_slot_of = |handle: crate::ecs::TextureHandle| -> Option<usize> {
             let slot = handle.index();
             (slot < texture_count).then_some(slot)
@@ -1009,9 +1028,9 @@ impl GraphicsSystem {
             };
 
             // Emissive + packed-ORM maps live in the albedo region of the
-            // bindless pool, so they resolve through `texture_name_to_slot`
-            // exactly like the primary/secondary albedo. Slot 0 (unset) is the
-            // sentinel the shader gates on to keep the scalar fallback.
+            // bindless pool, so their `TextureHandle` indexes the pool directly
+            // like the primary/secondary albedo. Slot 0 (unset) is the sentinel
+            // the shader gates on to keep the scalar fallback.
             let emissive_map_slot: u32 = match mat.emissive_map {
                 None => 0,
                 Some(handle) => match albedo_slot_of(handle) {
@@ -1111,8 +1130,9 @@ impl GraphicsSystem {
                     }
                 }
             } else if let Some(tex_id) = sm.texture {
+                let slot = tex_id.index();
                 (
-                    *texture_name_to_slot.get(&tex_id).unwrap_or(&0),
+                    if slot < texture_count { slot } else { 0 },
                     crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
                     crate::gfx::render_types::MaterialUniforms::DEFAULT,
                 )
@@ -1516,8 +1536,8 @@ impl GraphicsSystem {
         // though no sprite references them yet. A texture that cannot be
         // resolved demotes its sprite to the solid tint fill, warned rather
         // than fatal.
-        let sprite_texture_ids: Vec<AssetId> = {
-            let mut ids: Vec<AssetId> = ctx
+        let sprite_texture_ids: Vec<crate::ecs::TextureHandle> = {
+            let mut ids: Vec<crate::ecs::TextureHandle> = ctx
                 .query::<crate::assets::Sprite>()
                 .filter_map(|s| s.texture)
                 .collect();
@@ -1542,12 +1562,11 @@ impl GraphicsSystem {
             ids
         };
         for tex_id in sprite_texture_ids {
-            let Some(locator) = texture_name_to_slot
-                .get(&tex_id)
-                .map(|&slot| texture_locators[slot].clone())
-            else {
+            // The texture handle is the texture's declaration-order pool slot,
+            // so it indexes the locator table directly.
+            let Some(locator) = texture_locators.get(tex_id.index()).cloned() else {
                 tracing::warn!(
-                    "GraphicsSystem: Sprite references unknown texture {}; drawing its tint",
+                    "GraphicsSystem: Sprite references unknown texture {:?}; drawing its tint",
                     tex_id
                 );
                 continue;
@@ -1560,11 +1579,11 @@ impl GraphicsSystem {
                         text_atlas_data.push((w, h, rgba));
                     }
                     Err(e) => {
-                        tracing::warn!("GraphicsSystem: sprite texture {}: {}", tex_id, e)
+                        tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e)
                     }
                 },
                 Err(e) => tracing::warn!(
-                    "GraphicsSystem: sprite texture {} payload read failed: {:?}",
+                    "GraphicsSystem: sprite texture {:?} payload read failed: {:?}",
                     tex_id,
                     e
                 ),
@@ -1675,7 +1694,7 @@ impl GraphicsSystem {
             model_map: &model_map,
             mesh_geometry: &mesh_geometry,
             room_geometry: &room_geometry,
-            texture_name_to_slot: &texture_name_to_slot,
+            texture_count,
             material_map: &material_map,
             always_resident_meshes: &always_resident_meshes,
         }) {
