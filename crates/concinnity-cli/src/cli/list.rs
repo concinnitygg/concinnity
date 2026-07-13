@@ -1,7 +1,6 @@
 // src/cli/list.rs
-use crate::world::{find_world_jsonl, parse_world_jsonl};
 use concinnity_cook::ComponentType;
-use concinnity_cook::world::resolve_includes;
+use concinnity_cook::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
 
 // Resolve the world path the same way every other subcommand does: an explicit
 // existing path wins, otherwise discover from .concinnity/worlds/ or cwd.

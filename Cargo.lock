@@ -598,11 +598,19 @@ name = "concinnity-cli"
 version = "0.10.1"
 dependencies = [
  "ash",
+ "clap",
+ "concinnity-cook",
+ "concinnity-core",
  "concinnity-editor",
+ "concinnity-engine",
  "concinnity-toolchain",
  "glfw",
+ "serde_json",
  "shaderc",
+ "tempfile",
+ "tracing",
  "windows 0.61.3",
+ "zip",
 ]
 
 [[package]]
@@ -697,7 +705,6 @@ dependencies = [
  "bitflags 2.11.1",
  "chrono",
  "ciborium",
- "clap",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-device",
@@ -727,7 +734,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
- "zip",
 ]
 
 [[package]]

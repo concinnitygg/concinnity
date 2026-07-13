@@ -1,12 +1,14 @@
-// concinnity-editor/src/entry.rs
+// concinnity-cli/src/entry.rs
 //
 // The `concinnity` dev CLI: parse argv and dispatch build / add / rm / list /
-// test / run / debug / editor / export. `run` is the entry point the thin
-// concinnity-cli binary calls; `cn run` is delegated to the runtime
-// (concinnity-engine), and every other command drives the compile pipeline, the
-// authoring API, and the localhost debug server, all owned by this crate.
+// test / run / debug / editor / export. `run` is the entry point main() calls;
+// `cn run` is delegated to the runtime (concinnity-engine), and every other
+// command drives the compile pipeline (concinnity-cook), the authoring API,
+// and the dev-session entry points owned by concinnity-editor.
 
-use crate::{app, cli, debug, editor};
+use crate::cli;
+use concinnity_editor::{WatchTarget, debug_client};
+use concinnity_engine::app::dev_flags;
 
 use clap::{Parser, Subcommand};
 
@@ -197,11 +199,32 @@ pub struct DebugScreenshotArgs {
     pub port: u16,
 }
 
+// The argv face of the library's `WatchTarget`: the value-enum derive lives
+// here so concinnity-editor carries no clap dependency.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum WatchTargetArg {
+    Camera,
+    State,
+    Streaming,
+    Profile,
+}
+
+impl From<WatchTargetArg> for WatchTarget {
+    fn from(t: WatchTargetArg) -> Self {
+        match t {
+            WatchTargetArg::Camera => WatchTarget::Camera,
+            WatchTargetArg::State => WatchTarget::State,
+            WatchTargetArg::Streaming => WatchTarget::Streaming,
+            WatchTargetArg::Profile => WatchTarget::Profile,
+        }
+    }
+}
+
 #[derive(Debug, clap::Args)]
 pub struct DebugWatchArgs {
     /// Which read-only snapshot to poll
     #[arg(value_enum, default_value = "camera")]
-    pub target: debug::WatchTarget,
+    pub target: WatchTargetArg,
 
     /// Milliseconds between polls
     #[arg(long, default_value_t = 500)]
@@ -405,35 +428,27 @@ pub fn run() -> std::io::Result<()> {
         Commands::New(args) => cli::new(&args.path),
         Commands::Build(args) => cli::build(args.file.as_deref()),
         Commands::Run(args) => {
-            app::dev_flags::set_validation(args.validation);
+            dev_flags::set_validation(args.validation);
             concinnity_engine::app::run()
         }
         // A client subcommand talks to an already running server; its absence
         // means start the server (the interpreted run below).
         Commands::Debug(args) => match &args.client {
-            Some(DebugClientCommand::Send(a)) => debug::client::send(a.port, &a.json),
-            Some(DebugClientCommand::Smoke(a)) => debug::client::smoke(a.port, a.wait, a.shutdown),
-            Some(DebugClientCommand::Screenshot(a)) => debug::client::screenshot(a.port, &a.path),
+            Some(DebugClientCommand::Send(a)) => debug_client::send(a.port, &a.json),
+            Some(DebugClientCommand::Smoke(a)) => debug_client::smoke(a.port, a.wait, a.shutdown),
+            Some(DebugClientCommand::Screenshot(a)) => debug_client::screenshot(a.port, &a.path),
             Some(DebugClientCommand::Watch(a)) => {
-                debug::client::watch(a.port, a.target, a.interval)
+                debug_client::watch(a.port, a.target.into(), a.interval)
             }
             None => {
-                app::dev_flags::set_enabled(true);
-                app::dev_flags::set_validation(args.validation);
+                dev_flags::set_enabled(true);
+                dev_flags::set_validation(args.validation);
                 let port = args.debug_port.unwrap_or(8777);
-                let debug_hook: Box<dyn crate::debug_hook::DebugHook> =
-                    match debug::DebugServer::start(port) {
-                        Ok(srv) => Box::new(srv),
-                        Err(e) => {
-                            eprintln!("error: could not start debug server: {e}");
-                            return Err(e);
-                        }
-                    };
-                crate::run::run_interpreted(args.file.as_deref(), Some(debug_hook))
+                concinnity_editor::run_debug(args.file.as_deref(), port)
             }
         },
         Commands::Editor(args) => {
-            app::dev_flags::set_validation(args.validation);
+            dev_flags::set_validation(args.validation);
             // A debug port turns the editor into an inspectable dev session, so
             // arm the same dev flags the `cn debug` host sets (above). This flips
             // on the backend's frame-capture path (the retained drawable behind
@@ -441,9 +456,9 @@ pub fn run() -> std::io::Result<()> {
             // surface -- not just `smoke` / `send` -- works against an editor.
             // Left off for a plain `cn editor`, which keeps production defaults.
             if args.debug_port.is_some() {
-                app::dev_flags::set_enabled(true);
+                dev_flags::set_enabled(true);
             }
-            editor::run_editor(args.file.as_deref(), args.debug_port)
+            concinnity_editor::run_editor(args.file.as_deref(), args.debug_port)
         }
         Commands::Add(args) => {
             cli::add(args.name.as_deref(), &args.target, args.template.as_deref())
@@ -568,7 +583,7 @@ mod tests {
         let Some(DebugClientCommand::Watch(w)) = a.client else {
             panic!("expected watch");
         };
-        assert!(matches!(w.target, crate::debug::WatchTarget::Camera));
+        assert!(matches!(w.target, WatchTargetArg::Camera));
         assert_eq!(w.interval, 500);
         assert_eq!(w.port, 8777);
     }
@@ -582,7 +597,7 @@ mod tests {
         let Some(DebugClientCommand::Watch(w)) = a.client else {
             panic!("expected watch");
         };
-        assert!(matches!(w.target, crate::debug::WatchTarget::Streaming));
+        assert!(matches!(w.target, WatchTargetArg::Streaming));
     }
 
     #[test]

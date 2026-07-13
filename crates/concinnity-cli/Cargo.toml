@@ -6,10 +6,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-# The `concinnity` dev CLI binary: a thin frontend that dispatches through
-# `concinnity_editor::run`. All command logic lives in the concinnity-editor
-# library; this crate owns only the executable entry point, the Windows Agility
-# SDK export statics the final binary must carry (src/main.rs), and the
+# The `concinnity` dev CLI binary: the clap command tree + dispatch and the
+# subcommand implementations, over the dev-session entry points concinnity-editor
+# exposes and the concinnity-cook compile pipeline. Also owns the Windows
+# Agility SDK export statics the final binary must carry (src/main.rs) and the
 # graphics-SDK DLL bundling its build script performs.
 [[bin]]
 name = "concinnity"
@@ -26,8 +26,18 @@ vulkan = [
 ]
 
 [dependencies]
-# The dev tooling library the CLI dispatches into.
 concinnity-editor = { path = "../concinnity-editor" }
+concinnity-cook = { path = "../concinnity-cook" }
+concinnity-engine = { path = "../concinnity-engine" }
+concinnity-core = { path = "../concinnity-core" }
+
+clap = { version = "4", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tracing = "0.1.44"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.25.0"
 
 # Linux (and any non-macOS/non-Windows target) always builds the Vulkan backend:
 # the final binary links its runtime crates directly.

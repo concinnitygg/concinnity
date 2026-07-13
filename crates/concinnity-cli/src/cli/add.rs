@@ -1,12 +1,12 @@
-// src/cli/add.rs: discovery wrapper around crate::add_to_path
+// src/cli/add.rs: discovery wrapper around concinnity_editor::add_to_path
 //
 // The CLI binary handles world-path discovery: try the standard
 // `.concinnity/worlds/` location first, then fall back to `world.jsonl` in
 // cwd. When the fallback is hit and the target is a 3D scene (.glb),
 // `add_to_path` scaffolds a fresh world at that location.
 
-use crate::add_to_path;
-use crate::world::{WORLD_JSONL, find_world_jsonl};
+use concinnity_cook::world::{WORLD_JSONL, find_world_jsonl};
+use concinnity_editor::add_to_path;
 
 pub fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
     let world_path = match find_world_jsonl(None) {

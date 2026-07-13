@@ -7,8 +7,9 @@ license.workspace = true
 publish = false
 
 # The dev tooling library: world authoring/build, the in-engine editor HUD, the
-# localhost debug server, and the `concinnity` CLI dispatch. The thin CLI binary
-# (concinnity-cli) and the C-ABI cdylib (concinnity-ffi) both build on this.
+# localhost debug server, and the interpreted run loop. The `concinnity` CLI
+# binary (concinnity-cli, which owns argv parsing) and the C-ABI cdylib
+# (concinnity-ffi) both build on this.
 [lib]
 name = "concinnity_editor"
 path = "src/lib.rs"
@@ -33,12 +34,12 @@ concinnity-engine = { path = "../concinnity-engine" }
 # The device backends: the Metal shader-layout contract (shader_reflect) the
 # authoring build installs before compiling shaders.
 concinnity-device = { path = "../concinnity-device" }
-# The asset compile pipeline: cn build / cn add / cn debug + the authoring API.
-# Carries the gltf/png/jpeg decoders; the CLI calls them through
+# The asset compile pipeline: the authoring API + in-memory builds. Carries
+# the gltf/png/jpeg decoders; the authoring/hot-reload code calls them through
 # concinnity_cook::{glb,texture,color_lut,mesh_reimport}.
 concinnity-cook = { path = "../concinnity-cook" }
-# Direct core access for the world/geometry/ecs types the CLI/debug code names
-# (concinnity_core::{world,build,geometry,ecs}).
+# Direct core access for the world/geometry/ecs types the editor/debug code
+# names (concinnity_core::{world,build,geometry,ecs}).
 concinnity-core = { path = "../concinnity-core" }
 # Engine-owned content templates the editor's Templates dropdown applies.
 concinnity-templates = { path = "../concinnity-templates" }
@@ -47,8 +48,6 @@ async-stream = "0.3.6"
 ciborium = "0.2"
 bitflags = "2.0"
 chrono = "0.4.44"
-clap = { version = "4", features = ["derive"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
 ctrlc = "3.5.2"
 directories = "6.0.0"
 gltf = { version = "1", default-features = false, features = ["utils", "names"] }

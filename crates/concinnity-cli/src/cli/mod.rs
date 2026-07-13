@@ -1,8 +1,7 @@
-// Command-line subcommand implementations for the `concinnity` binary.
-//
-// This module is declared only by `main.rs`, never by `lib.rs`, so it is
-// compiled into the CLI binary and excluded from the `concinnity_editor`
-// library. CLI-only std code belongs here; the library stays free of it.
+// Command-line subcommand implementations for the `concinnity` binary: thin
+// discovery/printing wrappers over the concinnity-editor authoring API and the
+// concinnity-cook compile pipeline. CLI-only std code (argv handling, stdout
+// tables, packaging) belongs here; the libraries stay free of it.
 
 mod add;
 mod build;

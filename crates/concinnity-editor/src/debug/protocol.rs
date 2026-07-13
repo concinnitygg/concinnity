@@ -26,8 +26,9 @@ pub(super) fn reply_ok(reply: &Value) -> bool {
 }
 
 // A read-only snapshot the `watch` command can poll. Each maps to the matching
-// server command; `label` names it in the poll banner.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+// server command; `label` names it in the poll banner. Argv parsing lives in
+// the CLI binary, which maps its own value-enum onto this type.
+#[derive(Clone, Copy, Debug)]
 pub enum WatchTarget {
     Camera,
     State,

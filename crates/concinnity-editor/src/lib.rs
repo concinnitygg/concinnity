@@ -1,11 +1,11 @@
 // concinnity-editor: the dev tooling library.
 //
 // Holds the world authoring / in-memory build code (add / rm / check / build),
-// the in-engine editor HUD, the localhost debug server, and the `concinnity`
-// CLI dispatch. The thin `concinnity` binary (concinnity-cli) and the C-ABI
-// embedding surface (concinnity-ffi) both build on this crate. Sits on top of
-// the runtime (concinnity-engine) and the compiler (concinnity-cook); a shipped
-// runtime links none of this.
+// the in-engine editor HUD, the localhost debug server, and the interpreted
+// (`cn debug`) run loop. The `concinnity` CLI binary (concinnity-cli, which
+// owns the argv parsing) and the C-ABI embedding surface (concinnity-ffi) both
+// build on this crate. Sits on top of the runtime (concinnity-engine) and the
+// compiler (concinnity-cook); a shipped runtime links none of this.
 
 // Bridge: re-export the runtime/core modules the authoring, editor, and debug
 // code names under crate::* so their `crate::<module>` import paths resolve.
@@ -19,13 +19,10 @@ pub(crate) use concinnity_engine::{app, assets, blob, config, ecs, gfx, jobs, re
 
 // Authoring / in-memory build, shared with the FFI embedding surface.
 mod authoring;
-// The dev CLI: clap command tree + dispatch.
-mod entry;
 
-// CLI subcommands, the in-engine editor HUD, the localhost debug server, the
-// interpreted run loop, and animation clip hot-reload.
+// The in-engine editor HUD, the localhost debug server, the interpreted run
+// loop, and animation clip hot-reload.
 mod anim_reload;
-mod cli;
 mod debug;
 mod debug_hook;
 mod editor;
@@ -40,8 +37,12 @@ mod shader_reflect;
 #[cfg(test)]
 mod test_support;
 
-// The dev CLI entry point: parse argv and dispatch. concinnity-cli calls this.
-pub use entry::run;
+// Dev-session entry points, consumed by the concinnity-cli binary: the debug
+// server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
+// and the debug-server WebSocket client (`cn debug send/smoke/...`).
+pub use debug::{WatchTarget, client as debug_client};
+pub use editor::run_editor;
+pub use run::run_debug;
 
 // The authoring API, shared with the FFI embedding surface (concinnity-ffi) and
 // published as the Rust build + validate surface.

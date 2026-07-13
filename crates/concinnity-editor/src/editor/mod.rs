@@ -41,7 +41,7 @@ const SEED_GRAPHICS_CONFIG: &str =
 // blobs first if they are missing, and falling back to an empty in-memory world
 // when there is nothing to load -- injects the editor HUD, and runs the world
 // loop driven by the editor hook (plus the debug server when a port is given).
-pub(crate) fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
+pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
     concinnity_engine::app::run::init_logging();
 
     // Resolve the edit target -- the world.jsonl where readable names live and

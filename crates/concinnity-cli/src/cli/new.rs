@@ -1,7 +1,7 @@
 // src/cli/new.rs
 
-use crate::world::WORLD_JSONL;
 use concinnity_cook::build_from_path;
+use concinnity_cook::world::WORLD_JSONL;
 
 // Default starter world file. Everything else a running world needs (window,
 // renderer, debug HUD) is injected at build time and recorded in

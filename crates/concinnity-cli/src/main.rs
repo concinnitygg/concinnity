@@ -1,10 +1,10 @@
 // concinnity-cli: the `concinnity` dev CLI binary.
 //
-// A thin frontend over the concinnity-editor library: it parses argv and
-// dispatches through `concinnity_editor::run`. The dev tooling (world authoring,
-// the in-engine editor HUD, the localhost debug server) all lives in that
-// library; this crate is the executable entry point plus the Windows Agility SDK
-// export statics the final binary must carry.
+// Owns the clap command tree + dispatch (entry.rs) and the subcommand
+// implementations (cli/), driving the dev-session entry points the
+// concinnity-editor library exposes and the concinnity-cook compile pipeline.
+// Also carries the Windows Agility SDK export statics the final binary must
+// carry.
 
 // Microsoft Agility SDK opt-in.
 //
@@ -36,6 +36,9 @@ pub static D3D12SDKVersion: u32 = 619;
 #[used]
 pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
 
+mod cli;
+mod entry;
+
 fn main() -> std::io::Result<()> {
-    concinnity_editor::run()
+    entry::run()
 }

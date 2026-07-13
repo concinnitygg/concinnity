@@ -1,5 +1,5 @@
-use crate::world::find_world_jsonl;
 use concinnity_cook::build_from_path;
+use concinnity_cook::world::find_world_jsonl;
 
 // Compile a world to binary blobs and write world-lock.json.
 // Entry point for the `cn build` CLI subcommand.
