@@ -27,4 +27,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [build-dependencies]
 # Links the NGX import lib and bundles the graphics-SDK runtime DLLs next to the
 # .exe, the same setup the editor binary runs.
-concinnity-toolchain = { path = "../../concinnity-toolchain" }
+concinnity-toolchain = { path = "../../crates/concinnity-toolchain" }

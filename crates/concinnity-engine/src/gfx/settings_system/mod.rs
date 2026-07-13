@@ -1,0 +1,218 @@
+// src/gfx/settings_system/mod.rs
+//
+// SettingsSystem: applies the runtime command batches UiInputSystem produces
+// -- SettingCommand (settings-menu changes: graphics toggles, sliders, key
+// rebinds, volume) and SceneCommand (imperative scene jumps) -- against the
+// world's parked render backend, owns the in-memory settings snapshot + the
+// background disk writer, and publishes the per-frame HUD-preference state:
+//   mod.rs    system + state + scene jumps + HUD-state publish
+//   apply.rs  the SettingCommand drain (one arm per settings row)
+//   rows.rs   row helpers shared with GraphicsSystem's init-time captures
+//   writer.rs background disk writer for settings changes
+//
+// Scheduled after SpawnSystem and before GraphicsSystem, so a change lands on
+// the backend before this frame's submit (visible the same frame, as it was
+// when the drain ran inside the graphics step) and the HUD-preference
+// resources are fresh for StatHud / UiInput later this tick. The state is
+// resolved by GraphicsSystem's init (world config + persisted overrides +
+// backend capabilities) and parked here as the `SettingsState` resource; each
+// step takes it and puts it back, so the state and the `PipelineContext` are
+// never borrowed together.
+
+use crate::assets::SceneCommand;
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
+use crate::gfx::backend::RenderBackend;
+use crate::gfx::scene_reel;
+
+mod apply;
+pub(crate) mod rows;
+pub(crate) mod writer;
+
+// The live settings state: every value the settings menu displays and cycles,
+// with the authored baselines a preset change re-clamps from, the row
+// bookkeeping captured at init, and the persistence machinery. Field meanings
+// match the settings-menu rows they back; see the drain arms in `apply.rs`.
+pub(crate) struct SettingsState {
+    // Live gameplay movement key map (the source of truth for the Controls-tab
+    // rebind rows), pushed to the backend on each rebind (with a swap).
+    pub(crate) keymap: crate::gfx::keymap::KeyMap,
+    pub(crate) rebind_rows: Vec<crate::gfx::graphics_system::RebindViz>,
+    pub(crate) sliders: Vec<crate::gfx::graphics_system::SliderViz>,
+    // Cycle rows' setting key -> value-label id, captured at init, so a change
+    // can relabel a row other than the one clicked.
+    pub(crate) cycle_value_labels: std::collections::HashMap<String, AssetId>,
+    // Live post-process parameters (bloom / exposure / vignette / LUT blend),
+    // the source of truth for slider settings.
+    pub(crate) post_process: crate::gfx::render_types::PostProcessParams,
+    // The world's resolved PostProcessConfig with the user's persisted
+    // quality-toggle overrides applied: the source of truth for the
+    // Quality-group toggles and cycle knobs.
+    pub(crate) post_config: crate::assets::PostProcessConfig,
+    // The authored baseline a live preset change re-clamps from.
+    pub(crate) authored_post_config: crate::assets::PostProcessConfig,
+    // Live ambient (IBL) light scale (lives in the backend's LightUniforms,
+    // so it takes a dedicated setter).
+    pub(crate) ambient_intensity: f32,
+    // The live master "Graphics Quality" preset; an explicit per-row change
+    // flips it to Custom.
+    pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
+    pub(crate) gpu_profile: crate::gfx::backend::GpuProfile,
+    // Restart-required display state (persist + relabel only).
+    pub(crate) render_scale: crate::assets::UpscaleQuality,
+    pub(crate) upscale_backend: crate::assets::UpscalerBackend,
+    pub(crate) temporal_upscaling: bool,
+    pub(crate) hdr_display: bool,
+    pub(crate) hdr_pq: bool,
+    // Shadow knobs (live) and their authored baselines.
+    pub(crate) shadow_map_size: u32,
+    pub(crate) shadow_update: crate::assets::ShadowUpdate,
+    pub(crate) shadow_distance: u32,
+    pub(crate) shadow_cascades: u32,
+    pub(crate) anisotropy: u32,
+    pub(crate) authored_shadow_map_size: u32,
+    pub(crate) authored_shadow_update: crate::assets::ShadowUpdate,
+    pub(crate) authored_shadow_distance: u32,
+    pub(crate) authored_shadow_cascades: u32,
+    pub(crate) authored_anisotropy: u32,
+    pub(crate) vsync: bool,
+    // Frame-rate cap; a change republishes the `FrameRateCap` resource the
+    // App-level pacer reads.
+    pub(crate) fps_cap: u32,
+    // Stats-HUD display toggles + the captured sub-row labels the master
+    // toggle grays.
+    pub(crate) perf_stats: bool,
+    pub(crate) show_fps: bool,
+    pub(crate) show_vram: bool,
+    pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
+    // Window mode + authored size (the windowed size restored on mode return).
+    pub(crate) window_args: crate::assets::WindowArgs,
+    // The Resolution row's mode list, the user's chosen fullscreen mode, the
+    // display's own mode at init, and the row labels grayed outside
+    // fullscreen.
+    pub(crate) display_modes: Vec<crate::gfx::display_mode::DisplayMode>,
+    pub(crate) resolution: Option<crate::gfx::display_mode::DisplayMode>,
+    pub(crate) current_mode: Option<crate::gfx::display_mode::DisplayMode>,
+    pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
+    // System / streaming restart rows (persist + display only).
+    pub(crate) frames_in_flight: usize,
+    pub(crate) occlusion_two_pass: bool,
+    pub(crate) texture_cap: u32,
+    pub(crate) texture_budget: u32,
+    // In-memory copy of the persisted settings store, loaded once on the first
+    // settings change and mutated in place from then on, so a queued (not yet
+    // flushed) background write is never re-read stale from disk.
+    pub(crate) settings_cache: Option<crate::config::Settings>,
+    // Background disk writer for settings changes; spawned on the first
+    // persisted change so an unchanged session never starts the thread.
+    pub(crate) settings_writer: Option<writer::SettingsWriter>,
+    // Cursors into the SceneCommand / SettingCommand queues.
+    pub(crate) scene_cmd_cursor: crate::ecs::EventCursor,
+    pub(crate) setting_cmd_cursor: crate::ecs::EventCursor,
+}
+
+#[derive(Debug, Default)]
+pub struct SettingsSystem;
+
+impl SettingsSystem {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl std::fmt::Debug for SettingsState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsState")
+            .field("quality_preset", &self.quality_preset)
+            .finish()
+    }
+}
+
+impl System for SettingsSystem {
+    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+        // No parked state (graphics init has not succeeded) or backend:
+        // nothing to apply against; the queued commands wait in retention.
+        let Some(mut state) = ctx.resources.remove::<SettingsState>() else {
+            return StepResult::Continue;
+        };
+        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
+            ctx.resources.insert(state);
+            return StepResult::Continue;
+        };
+        state.apply_scene_commands(ctx, backend.as_mut());
+        state.apply_setting_commands(ctx, backend.as_mut());
+        ActiveRenderBackend::put(ctx.resources, backend);
+        state.publish_hud_state(ctx);
+        ctx.resources.insert(state);
+        StepResult::Continue
+    }
+}
+
+impl SettingsState {
+    // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
+    // out of the event queue so the borrow is released before the jump touches
+    // the backend. The reel lives in the shared `ActiveSceneReel` resource
+    // (GraphicsSystem ticks its fades later this same tick, so a jump's fade
+    // starts on this frame).
+    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, backend: &mut dyn RenderBackend) {
+        let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
+            Some(events) => events
+                .read(&mut self.scene_cmd_cursor)
+                .into_iter()
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
+        if scene_cmds.is_empty() {
+            return;
+        }
+        // Source scene-jump visibility from the per-entity components,
+        // snapshotting once for the whole command batch.
+        let (draws, scenes) =
+            crate::gfx::graphics_system::scene::decomposed_visibility_snapshot(ctx);
+        let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneReel>() else {
+            return;
+        };
+        let elapsed = slot.epoch.elapsed().as_secs_f32();
+        for cmd in scene_cmds {
+            scene_reel::jump_to_scene(
+                &mut slot.reel,
+                &draws,
+                &scenes,
+                elapsed,
+                cmd.scene,
+                &cmd.transition,
+                backend,
+            );
+        }
+    }
+
+    // Publish the stats-HUD state for the systems that run after this one each
+    // tick. Done AFTER the settings drain so a "Display performance stats"
+    // toggle this frame is reflected the same frame -- the visibility
+    // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
+    // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
+    // gray-out applied in the drain.
+    fn publish_hud_state(&self, ctx: &mut PipelineContext) {
+        ctx.insert_resource(crate::ecs::HudPrefs {
+            show_fps: self.perf_stats && self.show_fps,
+            show_vram: self.perf_stats && self.show_vram,
+        });
+        let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {
+            std::collections::HashSet::new()
+        } else {
+            ["show_fps", "show_vram"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        };
+        // The Resolution row only applies in fullscreen (windowed sizes
+        // come from the window, borderless covers the display), so it is
+        // inert in the other modes; its gray-out is applied on the
+        // window-mode change (and at init) via `set_rows_grayed`.
+        if self.window_args.mode != crate::assets::WindowMode::Fullscreen {
+            disabled_rows.insert("resolution".to_string());
+        }
+        ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
+    }
+}

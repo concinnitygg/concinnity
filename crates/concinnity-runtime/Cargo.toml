@@ -1,0 +1,23 @@
+[package]
+name = "concinnity-runtime"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Pass-through so a Windows host can target the Vulkan backend instead of the
+# default DirectX one, matching the rest of the workspace. Inert on macOS
+# (always Metal) and Linux (always Vulkan).
+vulkan = ["concinnity-engine/vulkan"]
+
+[dependencies]
+concinnity-engine = { path = "../concinnity-engine" }
+concinnity-core = { path = "../concinnity-core" }
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }
+
+[dev-dependencies]
+tempfile = "3"

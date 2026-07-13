@@ -301,7 +301,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bistro"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "concinnity-toolchain",
  "example-common",
@@ -585,60 +585,55 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-app"
-version = "0.10.0"
+name = "concinnity-asset"
+version = "0.10.1"
 dependencies = [
- "cbindgen",
- "concinnity-client",
- "concinnity-cook",
- "concinnity-core",
- "concinnity-device",
- "concinnity-templates",
- "concinnity-toolchain",
- "core-foundation",
+ "postcard",
+ "serde",
  "serde_json",
- "tempfile",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
-name = "concinnity-client"
-version = "0.10.0"
+name = "concinnity-blob"
+version = "0.10.1"
 dependencies = [
- "bitflags 2.11.1",
- "ciborium",
- "concinnity-core",
- "concinnity-device",
- "concinnity-render",
- "concinnity-toolchain",
- "core-foundation",
- "ctrlc",
- "directories",
- "kira",
- "mint",
- "objc2 0.6.4",
- "objc2-app-kit",
- "rand 0.8.6",
- "rapier3d",
+ "concinnity-asset",
+ "concinnity-blob",
+ "postcard",
  "serde",
  "serde_bytes",
- "serde_json",
- "slotmap",
  "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
  "tracing",
- "tracing-subscriber",
+]
+
+[[package]]
+name = "concinnity-cli"
+version = "0.10.1"
+dependencies = [
+ "ash",
+ "clap",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-editor",
+ "concinnity-engine",
+ "concinnity-toolchain",
+ "glfw",
+ "serde_json",
+ "shaderc",
+ "tempfile",
+ "tracing",
+ "windows 0.61.3",
+ "zip",
 ]
 
 [[package]]
 name = "concinnity-cook"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
+ "concinnity-blob",
  "concinnity-core",
  "concinnity-templates",
+ "concinnity-world",
  "fbxcel",
  "fontdue",
  "gltf",
@@ -661,8 +656,10 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
+ "concinnity-asset",
+ "concinnity-blob",
  "concinnity-eas",
  "postcard",
  "rayon",
@@ -671,13 +668,12 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tracing",
 ]
 
 [[package]]
 name = "concinnity-device"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "ash",
  "block2",
@@ -699,7 +695,6 @@ dependencies = [
  "objc2-quartz-core",
  "png",
  "rayon",
- "serde_json",
  "shaderc",
  "tracing",
  "windows 0.61.3",
@@ -707,35 +702,33 @@ dependencies = [
 
 [[package]]
 name = "concinnity-docs"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
+ "concinnity-world",
  "syn",
 ]
 
 [[package]]
 name = "concinnity-eas"
-version = "0.10.0"
+version = "0.10.1"
 
 [[package]]
 name = "concinnity-editor"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "argon2",
- "ash",
  "async-stream",
  "bitflags 2.11.1",
  "chrono",
  "ciborium",
- "clap",
- "concinnity-app",
- "concinnity-client",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-device",
+ "concinnity-engine",
  "concinnity-templates",
  "concinnity-toolchain",
  "ctrlc",
  "directories",
- "glfw",
  "gltf",
  "hex",
  "hmac",
@@ -748,23 +741,60 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "shaderc",
  "slotmap",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "ureq",
- "windows 0.61.3",
- "zip",
+]
+
+[[package]]
+name = "concinnity-engine"
+version = "0.10.1"
+dependencies = [
+ "ciborium",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-render",
+ "concinnity-toolchain",
+ "core-foundation",
+ "ctrlc",
+ "kira",
+ "mint",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "postcard",
+ "rapier3d",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "concinnity-ffi"
+version = "0.10.1"
+dependencies = [
+ "cbindgen",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-editor",
+ "concinnity-engine",
+ "concinnity-toolchain",
+ "core-foundation",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "concinnity-render"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -775,23 +805,36 @@ dependencies = [
 
 [[package]]
 name = "concinnity-runtime"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
- "concinnity-client",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-toolchain",
  "tempfile",
 ]
 
 [[package]]
 name = "concinnity-templates"
-version = "0.10.0"
+version = "0.10.1"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "concinnity-world"
+version = "0.10.1"
+dependencies = [
+ "concinnity-core",
+ "concinnity-templates",
+ "postcard",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -1129,10 +1172,10 @@ dependencies = [
 
 [[package]]
 name = "example-common"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
- "concinnity-client",
  "concinnity-cook",
+ "concinnity-engine",
 ]
 
 [[package]]
@@ -1267,17 +1310,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
 
 [[package]]
-name = "futures-macro"
-version = "0.3.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e835b70203e41293343137df5c0664546da5745f82ec9b84d40be8336958447b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "futures-sink"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,7 +1328,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
- "futures-macro",
  "futures-sink",
  "futures-task",
  "pin-project-lite",
@@ -4137,20 +4168,6 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tungstenite",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.7.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
-dependencies = [
- "bytes",
- "futures-core",
- "futures-sink",
- "futures-util",
- "pin-project-lite",
- "tokio",
 ]
 
 [[package]]

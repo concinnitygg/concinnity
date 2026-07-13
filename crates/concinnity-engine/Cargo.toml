@@ -1,0 +1,56 @@
+[package]
+name = "concinnity-engine"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "concinnity_engine"
+crate-type = ["rlib"]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Build the Windows client against the Vulkan backend instead of the default
+# DirectX one. Linux always uses Vulkan and macOS always uses Metal regardless
+# of this feature; build.rs resolves the backend cfg from the target and this
+# feature. On non-Windows targets the feature is inert (the deps it activates
+# are Windows-only optional deps). Windows Vulkan uses the shared native Win32
+# window layer (no glfw; GLFW is the Linux windowing layer only).
+vulkan = [
+    "concinnity-device/vulkan",
+    "concinnity-core/vulkan",
+    "concinnity-render/vulkan",
+]
+
+[dependencies]
+concinnity-core = { path = "../concinnity-core" }
+concinnity-render = { path = "../concinnity-render" }
+concinnity-device = { path = "../concinnity-device" }
+
+ciborium = "0.2"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+ctrlc = "3.5.2"
+kira = "0.12"
+mint = "0.5"
+rapier3d = "0.32"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS run loop for `cn run` (app/run.rs drives NSApplication + the
+# CFRunLoop directly, and needs a MainThreadMarker). The Metal backend's wider
+# objc2 stack lives in concinnity-device.
+core-foundation = "0.10.1"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+tempfile = "3.25.0"
+
+[build-dependencies]
+concinnity-toolchain = { path = "../concinnity-toolchain" }
