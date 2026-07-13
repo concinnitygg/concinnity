@@ -29,19 +29,12 @@ vulkan = [
 ]
 
 [dependencies]
-# The dev tooling library: the authoring / in-memory build API the ffi drives
-# (add / rm / check / world_from_loaded).
 concinnity-editor = { path = "../concinnity-editor" }
-# The runtime crate (rlib): App, the render loop, and the ecs StepResult the ffi
-# steps the world through.
 concinnity-engine = { path = "../concinnity-engine" }
-# The device backends: the embedded-preview hooks (set_preview_view) the host
-# app drives.
 concinnity-device = { path = "../concinnity-device" }
-# The asset compile pipeline the ffi build / preview entries drive directly.
 concinnity-cook = { path = "../concinnity-cook" }
-# Named for the `vulkan` feature forward; also reached transitively.
 concinnity-core = { path = "../concinnity-core" }
+
 tracing = "0.1.44"
 
 [target.'cfg(target_os = "macos")'.dependencies]

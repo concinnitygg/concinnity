@@ -1,7 +1,9 @@
-// The blob WRITE half (build output): pack compiled payloads + the def table
-// into .cnb files and emit world-lock.json. The READ half (BlobData, load_raw,
-// read_cnb, payload_section_start, load_defs) stays in concinnity-core and is
-// re-exported here so callers can keep using `blob::...` uniformly.
+// The blob WRITE side (build output): pack compiled payloads + the def table
+// into .cnb files and emit world-lock.json. The file format itself -- the
+// header, the record schema, and the single-file encoder `write_cnb` -- is
+// owned by the concinnity-blob crate (its encode half sits behind the `write`
+// feature only this crate enables); this file owns the packing POLICY (payload
+// distribution across overflow blobs, the size ceiling) and the lock.
 
 use std::fs;
 
@@ -9,7 +11,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use concinnity_core::blob::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE, LOCK_PATH};
+use concinnity_blob::{HEADER_SIZE, write_cnb};
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
 // Re-export the read side from core so `crate::blob::{BlobData, load_raw, ...}`
@@ -20,6 +22,10 @@ pub use concinnity_core::blob::{
 };
 
 use serde::{Deserialize, Serialize};
+
+// The build record written beside the blobs. Provenance metadata, not part of
+// the .cnb format, so it lives here rather than in concinnity-blob.
+pub const LOCK_PATH: &str = "world-lock.json";
 
 // Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,22 +113,6 @@ pub fn write_blobs(
     }
 
     Ok(PackResult { blob_paths })
-}
-
-// Write a single blob file
-fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
-    let meta_bytes = postcard::to_stdvec(meta).map_err(|e| std::io::Error::other(e.to_string()))?;
-
-    let meta_len = meta_bytes.len() as u64;
-
-    let mut data = Vec::with_capacity(HEADER_SIZE + meta_bytes.len() + payload.len());
-    data.extend_from_slice(&BLOB_MAGIC);
-    data.extend_from_slice(&BLOB_VERSION.to_le_bytes());
-    data.extend_from_slice(&meta_len.to_le_bytes());
-    data.extend_from_slice(&meta_bytes);
-    data.extend_from_slice(payload);
-
-    fs::write(path, &data)
 }
 
 // PayloadPacker (build step)
@@ -237,18 +227,6 @@ fn now_iso8601() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::{AssetKind, RecordKind};
-
-    fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
-        BlobAssetDef {
-            name: None,
-            kind: AssetKind::Component,
-            record: RecordKind::Authored,
-            discriminant,
-            args_bytes,
-            payload: None,
-        }
-    }
 
     #[test]
     fn packer_appends_within_the_limit() {
@@ -295,95 +273,10 @@ mod tests {
         assert_eq!((b.blob_index, b.offset, b.len), (0, 0, 1));
     }
 
-    fn meta(defs: Vec<BlobAssetDef>, resources: Vec<ResourceRecord>) -> BlobMeta {
-        BlobMeta { defs, resources }
-    }
-
-    #[test]
-    fn write_cnb_round_trips_defs_resources_and_payload() {
-        use concinnity_core::ecs::{PayloadLocator, ResourceKind};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("0.cnb");
-        let path = path.to_str().unwrap();
-
-        let resources = vec![ResourceRecord {
-            resource_kind: ResourceKind::AudioClip as u8,
-            handle: 0,
-            payload: Some(PayloadLocator {
-                blob_index: 0,
-                offset: 0,
-                len: 3,
-            }),
-            data_bytes: Vec::new(),
-        }];
-        let m = meta(vec![def(3, vec![1, 2]), def(9, vec![])], resources);
-        let payload = [0xAA, 0xBB, 0xCC];
-        write_cnb(&m, &payload, path).unwrap();
-
-        let (read_meta, payload_start) = read_cnb(path).expect("read back");
-        assert_eq!(read_meta.defs.len(), 2);
-        assert_eq!(read_meta.defs[0].discriminant, 3);
-        assert_eq!(read_meta.defs[0].args_bytes, vec![1, 2]);
-        assert_eq!(read_meta.defs[1].discriminant, 9);
-        assert!(read_meta.defs[1].args_bytes.is_empty());
-        // The resource stream round-trips alongside the component defs.
-        assert_eq!(read_meta.resources.len(), 1);
-        assert_eq!(
-            read_meta.resources[0].resource_kind,
-            ResourceKind::AudioClip as u8
-        );
-
-        // The payload section starts right after the header + metadata table and
-        // holds exactly the bytes we packed.
-        let data = fs::read(path).unwrap();
-        assert_eq!(&data[payload_start..], &payload);
-        assert_eq!(
-            payload_section_start(path).expect("header-only offset"),
-            payload_start as u64
-        );
-    }
-
-    #[test]
-    fn write_cnb_with_no_metadata_and_no_payload_is_readable() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty.cnb");
-        let path = path.to_str().unwrap();
-
-        write_cnb(&BlobMeta::default(), &[], path).unwrap();
-
-        let (m, payload_start) = read_cnb(path).expect("read back");
-        assert!(m.defs.is_empty());
-        assert!(m.resources.is_empty());
-        assert_eq!(fs::read(path).unwrap().len(), payload_start);
-    }
-
-    #[test]
-    fn write_cnb_emits_magic_and_version_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hdr.cnb");
-        let path = path.to_str().unwrap();
-
-        write_cnb(&BlobMeta::default(), &[1], path).unwrap();
-
-        let data = fs::read(path).unwrap();
-        assert_eq!(&data[0..4], &BLOB_MAGIC);
-        assert_eq!(
-            u32::from_le_bytes(data[4..8].try_into().unwrap()),
-            BLOB_VERSION
-        );
-        let defs_len = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
-        assert_eq!(data.len(), HEADER_SIZE + defs_len + 1);
-    }
-
-    #[test]
-    fn read_cnb_rejects_a_non_blob_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("garbage.cnb");
-        fs::write(&path, b"this is not a blob file at all").unwrap();
-        assert!(read_cnb(path.to_str().unwrap()).is_err());
-        assert!(payload_section_start(path.to_str().unwrap()).is_err());
-    }
+    // The write_cnb round-trip tests live in the concinnity-blob crate with the
+    // encoder; here the tests cover cook's packing policy and the lock.
+    // (write_blobs itself writes through the process-global data-dir anchor, so
+    // it is exercised by `cn build`, not unit-tested.)
 
     #[test]
     fn checksum_matches_known_sha256_vectors() {

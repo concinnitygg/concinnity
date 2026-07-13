@@ -22,6 +22,8 @@ vulkan = []
 [dependencies]
 concinnity-eas = { path = "../concinnity-eas" }
 concinnity-asset = { path = "../concinnity-asset" }
+concinnity-blob = { path = "../concinnity-blob" }
+
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = { version = "1", features = ["preserve_order"] }

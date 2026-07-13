@@ -13,20 +13,11 @@ publish = false
 vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
-# The runtime only: reads pre-compiled blobs and drives the world loop. Never
-# depends on concinnity-cook or concinnity-editor, so a shipped game links no
-# compile pipeline.
 concinnity-engine = { path = "../concinnity-engine" }
-# Path resolution: anchors the flat state root and redirects runtime-writable
-# state (saves/settings) to a per-user dir on read-only installs. Feature
-# unification keeps its backend cfg in lockstep with the client's.
 concinnity-core = { path = "../concinnity-core" }
 
 [build-dependencies]
-# Emits the backend cfg (main.rs gates the Agility SDK export statics on
-# backend_dx) and bundles the graphics-SDK runtime DLLs next to the .exe.
 concinnity-toolchain = { path = "../concinnity-toolchain" }
 
 [dev-dependencies]
-# Temp directories for the state-path resolution tests.
 tempfile = "3"

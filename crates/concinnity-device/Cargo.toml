@@ -26,11 +26,9 @@ vulkan = [
 ]
 
 [dependencies]
-# The GPU-free layers the device backends build on: core (repr(C) GPU layouts,
-# render math, asset data) and render (the RenderBackend/SceneControl trait seam,
-# record builders, render graph, the Metal host-struct layout contract, jobs).
 concinnity-core = { path = "../concinnity-core" }
 concinnity-render = { path = "../concinnity-render" }
+
 libloading = "0.9.0"
 png = "0.18.1"
 rayon = "1"

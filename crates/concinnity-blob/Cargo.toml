@@ -1,0 +1,36 @@
+[package]
+name = "concinnity-blob"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The .cnb blob container format: the record schema, the 16-byte header, the
+# format version, and the read half. Blob data is read-only at runtime, so the
+# symmetric encode half is behind the off-by-default `write` feature, enabled
+# only by the compile pipeline (concinnity-cook) -- a runtime build links a
+# crate that cannot write. Path-agnostic: callers supply explicit file paths;
+# the `.concinnity/` layout stays in concinnity-core.
+[lib]
+name = "concinnity_blob"
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# The encode half (write_cnb). Cook-only: keeps write operations out of the
+# runtime tier's build.
+write = []
+
+[dependencies]
+concinnity-asset = { path = "../concinnity-asset" }
+
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+tracing = "0.1.44"
+
+[dev-dependencies]
+# Self-dependency to enable the write half for the in-crate round-trip tests.
+concinnity-blob = { path = ".", features = ["write"] }
+tempfile = "3.25.0"

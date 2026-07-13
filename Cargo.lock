@@ -594,6 +594,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-blob"
+version = "0.10.1"
+dependencies = [
+ "concinnity-asset",
+ "concinnity-blob",
+ "postcard",
+ "serde",
+ "serde_bytes",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "concinnity-cli"
 version = "0.10.1"
 dependencies = [
@@ -617,6 +630,7 @@ dependencies = [
 name = "concinnity-cook"
 version = "0.10.1"
 dependencies = [
+ "concinnity-blob",
  "concinnity-core",
  "concinnity-templates",
  "fbxcel",
@@ -644,6 +658,7 @@ name = "concinnity-core"
 version = "0.10.1"
 dependencies = [
  "concinnity-asset",
+ "concinnity-blob",
  "concinnity-eas",
  "postcard",
  "rayon",

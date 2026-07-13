@@ -26,21 +26,10 @@ vulkan = [
 ]
 
 [dependencies]
-# Renderer-free shared foundation: the crate-wide result type and the
-# backend-agnostic GPU data layouts, re-exported under crate::result and
-# crate::gfx so existing internal paths keep resolving.
-# Runtime foundation only: the runtime reads pre-compiled blobs and links no
-# image/glTF decoder. Those decoders live in concinnity-cook, which the
-# build/edit/debug paths reach through the concinnity-editor crate, not here.
 concinnity-core = { path = "../concinnity-core" }
-# The GPU-free render-prep layer: the RenderBackend/SceneControl trait seam plus
-# the record builders, render graph, and CPU-side render math the backends
-# consume. Re-exported under crate::gfx so existing internal paths keep resolving.
 concinnity-render = { path = "../concinnity-render" }
-# The hardware backends (Metal/DirectX/Vulkan/Win32) + the init_backend factory.
-# GraphicsSystem drives them through a Box<dyn RenderBackend>; the concrete
-# context types never cross into this crate.
 concinnity-device = { path = "../concinnity-device" }
+
 ciborium = "0.2"
 bitflags = "2.0"
 ctrlc = "3.5.2"

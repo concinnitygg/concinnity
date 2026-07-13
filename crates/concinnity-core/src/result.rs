@@ -27,6 +27,14 @@ impl From<std::io::Error> for CnResult {
     }
 }
 
+// The blob format crate logs failure detail at the site; both classes fold
+// onto the runtime's coarse file-I/O result.
+impl From<concinnity_blob::BlobError> for CnResult {
+    fn from(_e: concinnity_blob::BlobError) -> Self {
+        CnResult::FileIo
+    }
+}
+
 impl From<serde_json::Error> for CnResult {
     fn from(e: serde_json::Error) -> Self {
         tracing::error!("JSON deserialization error: {}", e);

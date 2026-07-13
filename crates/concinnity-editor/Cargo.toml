@@ -28,21 +28,12 @@ vulkan = [
 ]
 
 [dependencies]
-# The runtime crate (rlib): the editor drives a live App and the renderer
-# through the runtime's public API.
 concinnity-engine = { path = "../concinnity-engine" }
-# The device backends: the Metal shader-layout contract (shader_reflect) the
-# authoring build installs before compiling shaders.
 concinnity-device = { path = "../concinnity-device" }
-# The asset compile pipeline: the authoring API + in-memory builds. Carries
-# the gltf/png/jpeg decoders; the authoring/hot-reload code calls them through
-# concinnity_cook::{glb,texture,color_lut,mesh_reimport}.
 concinnity-cook = { path = "../concinnity-cook" }
-# Direct core access for the world/geometry/ecs types the editor/debug code
-# names (concinnity_core::{world,build,geometry,ecs}).
 concinnity-core = { path = "../concinnity-core" }
-# Engine-owned content templates the editor's Templates dropdown applies.
 concinnity-templates = { path = "../concinnity-templates" }
+
 argon2 = "0.5"
 async-stream = "0.3.6"
 ciborium = "0.2"
