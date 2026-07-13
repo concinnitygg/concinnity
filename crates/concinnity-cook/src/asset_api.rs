@@ -2,7 +2,7 @@
 //
 // This module is the single place where "type name + JSON args → BlobAssetDef"
 // is implemented.
-use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef, RecordKind};
+use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef};
 use crate::registry::ComponentType;
 use crate::registry::Registration;
 use crate::result::CnResult;
@@ -44,21 +44,18 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
             return Err(CnResult::InvalidArgument);
         }
         let args = resolve_args(&reg, &req.args);
-        // A type that has migrated to the baked path emits a `Baked` record. For
-        // a pass-through leaf the baked component is its authored args, so the
-        // bytes are the same reserialization; only the record kind differs, and
-        // the runtime reconstructs it identically via `from_baked`.
-        let record = if ct.baked() {
-            RecordKind::Baked
-        } else {
-            RecordKind::Authored
+        // Every record is baked. For a pass-through type the baked component is
+        // its reserialized args (the component IS its args); a divergent type
+        // (`Args != Self`) bakes the translated component instead.
+        let args_bytes = match crate::registry::bake_divergent(ct, &args)? {
+            Some(bytes) => bytes,
+            None => ct.reserialize_args(&args)?,
         };
         return Ok(BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
-            record,
             discriminant: ct.discriminant(),
-            args_bytes: ct.reserialize_args(&args)?,
+            args_bytes,
             payload: None,
         });
     }
@@ -191,14 +188,16 @@ mod tests {
     #[test]
     fn create_asset_def_builds_a_component_def() {
         let req = AssetRequest {
-            asset_type: "Mesh".to_string(),
+            asset_type: "ProceduralMesh".to_string(),
             args: None,
         };
         let def = create_asset_def(&req).unwrap();
         assert_eq!(def.kind, AssetKind::Component);
         assert_eq!(
             def.discriminant,
-            ComponentType::parse("Mesh").unwrap().discriminant()
+            ComponentType::parse("ProceduralMesh")
+                .unwrap()
+                .discriminant()
         );
         assert!(def.name.is_none());
         assert!(def.payload.is_none());
@@ -206,51 +205,41 @@ mod tests {
         assert!(args.is_object());
     }
 
-    // The record kind a def gets follows the type's `baked()` flag, so a
-    // migrated type emits `Baked` and an unmigrated one stays `Authored`. Driven
-    // by the flag rather than a hard-coded type list, so it stays correct as
-    // more types migrate. PointLight is pinned as an already-migrated leaf.
+    // Every addable type builds a baked def from its default args: the def's
+    // bytes reconstruct through `from_baked` at load. A new type whose baked
+    // form cannot round-trip its defaults fails here.
     #[test]
-    fn create_asset_def_record_kind_follows_baked_flag() {
+    fn every_addable_type_builds_a_baked_def() {
         for (ct, _) in ComponentType::addable_types() {
             let def = create_asset_def(&AssetRequest {
                 asset_type: ct.as_str().to_string(),
                 args: None,
             })
             .unwrap();
-            let expected = if ct.baked() {
-                RecordKind::Baked
-            } else {
-                RecordKind::Authored
-            };
-            assert_eq!(
-                def.record,
-                expected,
-                "{} record kind must follow its baked() flag",
-                ct.as_str()
-            );
+            assert_eq!(def.kind, AssetKind::Component, "{}", ct.as_str());
+            assert!(!def.args_bytes.is_empty(), "{}", ct.as_str());
         }
-        assert!(ComponentType::PointLight.baked());
     }
 
     #[test]
     fn create_asset_def_merges_supplied_args_over_defaults() {
         let req = AssetRequest {
-            asset_type: "Mesh".to_string(),
-            args: Some(serde_json::json!({ "source": "a.glb" })),
+            asset_type: "ProceduralMesh".to_string(),
+            args: Some(serde_json::json!({ "generator": "box" })),
         };
         let def = create_asset_def(&req).unwrap();
         let args: serde_json::Value = serde_json::from_slice(&def.args_bytes).unwrap();
-        assert_eq!(args["source"], "a.glb");
+        assert_eq!(args["generator"], "box");
         // Defaults fill the fields the caller omitted.
-        assert_eq!(args["lod_levels"], 1);
+        assert!(args.get("half_width").is_some());
+        assert!(args.get("ceiling_height").is_some());
     }
 
     #[test]
     fn create_asset_def_rejects_mistyped_args() {
         let req = AssetRequest {
-            asset_type: "Mesh".to_string(),
-            args: Some(serde_json::json!({ "source": 42 })),
+            asset_type: "ProceduralMesh".to_string(),
+            args: Some(serde_json::json!({ "generator": 42 })),
         };
         assert_eq!(
             create_asset_def(&req).unwrap_err(),
@@ -272,7 +261,7 @@ mod tests {
                 .iter()
                 .all(|e| e.registration.origin == AssetOrigin::External)
         );
-        assert!(entries.iter().any(|e| e.asset_type == "Mesh"));
+        assert!(entries.iter().any(|e| e.asset_type == "ProceduralMesh"));
         assert!(entries.iter().all(|e| e.asset_type != "Transform"));
     }
 }

@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 
 use crate::assets::{AnimGraph, AnimParams};
-use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::anim_graph::{CompiledGraph, GraphCursor};
 
 use super::{TargetMode, TargetState};
@@ -39,17 +39,16 @@ pub(super) struct GraphTarget {
 // failure here (blob/clip-list disagreement) downgrades the bucket to its
 // flat drive with a warning rather than dropping the world.
 pub(super) fn install_graphs(
-    targets: &mut HashMap<AssetId, TargetState>,
+    targets: &mut HashMap<SkinnedMeshHandle, TargetState>,
     ctx: &mut PipelineContext,
-    clip_slots: &HashMap<AssetId, (AssetId, usize)>,
-    skinned_map: &crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap,
+    clip_slots: &HashMap<AssetId, (SkinnedMeshHandle, usize)>,
 ) -> usize {
     let mut installed = 0usize;
     for g in ctx.drain::<AnimGraph>() {
-        // Resolve the authored SkinnedMesh handle to the mesh's asset id, which
-        // keys the target bucket (shared with the clip drain) and the runtime
-        // `AnimParams` / `SkeletonPose` / `GroundProbes` this publishes below.
-        let Some(target) = g.target.map(|h| skinned_map.get(h)) else {
+        // The authored SkinnedMesh handle keys the target bucket (shared with
+        // the clip drain) and the runtime `AnimParams` / `SkeletonPose` /
+        // `GroundProbes` this publishes below.
+        let Some(target) = g.target else {
             tracing::warn!(
                 "AnimationSystem: AnimGraph {} has no target, ignored",
                 g.asset_id
@@ -58,9 +57,9 @@ pub(super) fn install_graphs(
         };
         let Some(bucket) = targets.get_mut(&target) else {
             tracing::warn!(
-                "AnimationSystem: AnimGraph {} targets {} which has no clips, ignored",
+                "AnimationSystem: AnimGraph {} targets handle {} which has no clips, ignored",
                 g.asset_id,
-                target
+                target.index()
             );
             continue;
         };
@@ -90,10 +89,10 @@ pub(super) fn install_graphs(
                     super::ik::resolve_chains(g.asset_id, &g.ik_chains, &g.parameters, &skeleton)
                 } else {
                     tracing::warn!(
-                        "AnimationSystem: AnimGraph {} has ik_chains but target {} has no \
-                         skeleton pose; IK disabled",
+                        "AnimationSystem: AnimGraph {} has ik_chains but target handle {} has \
+                         no skeleton pose; IK disabled",
                         g.asset_id,
-                        target
+                        target.index()
                     );
                     Vec::new()
                 };
@@ -122,7 +121,7 @@ pub(super) fn install_graphs(
 // `AnimParams` component, snapshot its values, and advance the cursor.
 pub(super) fn step_target(
     g: &mut GraphTarget,
-    target: AssetId,
+    target: SkinnedMeshHandle,
     ctx: &mut PipelineContext,
     dt_secs: f32,
 ) {

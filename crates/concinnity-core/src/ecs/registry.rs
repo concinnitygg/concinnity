@@ -26,7 +26,7 @@
 // `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
 use crate::define_components;
-use crate::ecs::{AssetKind, BlobAssetDef, Component, PayloadLocator, RecordKind};
+use crate::ecs::{BlobAssetDef, Component, PayloadLocator};
 use crate::result::CnResult;
 
 // The one component list. `$cb` is a macro that receives the `Variant => Type`
@@ -38,16 +38,15 @@ macro_rules! for_each_component {
         $cb! {
             Window            => $crate::assets::Window { gen, external },
             GraphicsConfig    => $crate::assets::GraphicsConfig { gen, external },
-            ShaderStage       => $crate::assets::ShaderStage { manual },
-            Camera3D          => $crate::assets::Camera3D { manual },
-            Mesh              => $crate::assets::Mesh { gen, external, compiled, id },
+            ShaderStage       => $crate::assets::ShaderStage { manual, external, compiled },
+            Camera3D          => $crate::assets::Camera3D { manual, external, args: Camera3DArgs },
             FrameInput        => $crate::assets::FrameInput { gen, runtime },
             Prop              => $crate::assets::Prop { gen, external, id, validate: prop },
             RigidBody         => $crate::assets::RigidBody { gen, external, validate: rigid_body },
             PropBody          => $crate::assets::PropBody { gen, external },
-            Room              => $crate::assets::Room { manual },
-            DirectionalLight  => $crate::assets::DirectionalLight { gen, external, baked, validate: directional_light },
-            PointLight        => $crate::assets::PointLight { gen, external, baked, validate: point_light },
+            Room              => $crate::assets::Room { manual, external, compiled, args: RoomArgs, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")] },
+            DirectionalLight  => $crate::assets::DirectionalLight { gen, external, validate: directional_light },
+            PointLight        => $crate::assets::PointLight { gen, external, validate: point_light },
             ProceduralMesh    => $crate::assets::ProceduralMesh { gen, external, compiled, id },
             Model             => $crate::assets::Model { gen, external, id },
             Scene             => $crate::assets::Scene { gen, external, id },
@@ -58,12 +57,11 @@ macro_rules! for_each_component {
             CameraShot        => $crate::assets::CameraShot { gen, build_only },
             Prefab            => $crate::assets::Prefab { gen, build_only },
             HitRegion         => $crate::assets::HitRegion { gen, external, refs: [("label", "TextLabel"), ("view", "View")] },
-            File              => $crate::assets::File { manual },
+            File              => $crate::assets::File { manual, external, compiled, args: FileArgs },
             BlockType         => $crate::assets::BlockType { gen, external, id },
             VoxelChunk        => $crate::assets::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk },
             InstancedProp     => $crate::assets::InstancedProp { gen, external, id, validate: instanced_prop },
-            PostProcessConfig => $crate::assets::PostProcessConfig { manual },
-            SkinnedMesh       => $crate::assets::SkinnedMesh { manual },
+            PostProcessConfig => $crate::assets::PostProcessConfig { manual, external },
             Animation         => $crate::assets::Animation { gen, external, id },
             SkeletonPose      => $crate::assets::SkeletonPose { runtime, build: skeleton_pose },
             StreamingConfig   => $crate::assets::StreamingConfig { gen, external },
@@ -73,11 +71,11 @@ macro_rules! for_each_component {
             KeyBinding        => $crate::assets::KeyBinding { gen, external },
             View              => $crate::assets::View { gen, external, id },
             Decal             => $crate::assets::Decal { gen, external, id, validate: decal, refs: [("texture", "Texture")] },
-            VolumetricFog     => $crate::assets::VolumetricFog { gen, external, baked, validate: volumetric_fog },
+            VolumetricFog     => $crate::assets::VolumetricFog { gen, external, validate: volumetric_fog },
             Joint             => $crate::assets::Joint { gen, external, id, validate: joint },
             ParticleEmitter   => $crate::assets::ParticleEmitter { gen, external, id, validate: particle_emitter, refs: [("texture", "Texture")] },
             WaterSurface      => $crate::assets::WaterSurface { gen, external, id, validate: water_surface },
-            SdfVolume         => $crate::assets::SdfVolume { manual },
+            SdfVolume         => $crate::assets::SdfVolume { manual, external, compiled, validate: sdf_volume },
             GlassPanel        => $crate::assets::GlassPanel { gen, external, id, validate: glass_panel },
             LayoutContainer   => $crate::assets::LayoutContainer { gen, external },
             PhysicsConfig     => $crate::assets::PhysicsConfig { gen, external },
@@ -88,7 +86,7 @@ macro_rules! for_each_component {
             OptionSelect      => $crate::assets::OptionSelect { gen, build_only },
             Slider            => $crate::assets::Slider { gen, build_only },
             ScrollPanel       => $crate::assets::ScrollPanel { gen, external },
-            ReflectionProbe   => $crate::assets::ReflectionProbe { gen, external, baked, validate: reflection_probe },
+            ReflectionProbe   => $crate::assets::ReflectionProbe { gen, external, validate: reflection_probe },
             Transform         => $crate::assets::Transform { runtime },
             MeshRenderer      => $crate::assets::MeshRenderer { runtime },
             ModelRenderer     => $crate::assets::ModelRenderer { runtime },
@@ -102,7 +100,7 @@ macro_rules! for_each_component {
             RenderHandle      => $crate::assets::RenderHandle { runtime },
             Held              => $crate::assets::Held { runtime },
             Lifetime          => $crate::assets::Lifetime { runtime },
-            Spawner           => $crate::assets::Spawner { manual },
+            Spawner           => $crate::assets::Spawner { manual, external, args: SpawnerArgs },
             DebugHud          => $crate::assets::DebugHud { gen, external },
             EngineDefaults    => $crate::assets::EngineDefaults { gen, build_only },
             StoryImport       => $crate::assets::StoryImport { gen, build_only },
@@ -144,6 +142,8 @@ macro_rules! for_each_resource_asset {
             ColorLut => $crate::assets::ColorLut { resource: ColorLut, compiled },
             Font => $crate::assets::Font { resource: Font, compiled },
             Material => $crate::assets::Material { resource: Material, data },
+            Mesh => $crate::assets::Mesh { resource: Mesh, compiled },
+            SkinnedMesh => $crate::assets::SkinnedMesh { resource: SkinnedMesh, compiled },
         }
     };
 }
@@ -155,163 +155,88 @@ crate::for_each_component!(define_components);
 
 // Generate the trivial `impl Component` blocks from the shared component list.
 //
-// Most components are pure data whose `Component` impl is mechanical: a NAME
-// equal to the type name, `Args = Self`, `to_args` = clone, an identity (or
-// named-validator) `from_args`, and the optional payload / identity / reference
-// hooks. Runtime-only components are just as mechanical the other way: an empty
-// `Args` and a placeholder `from_args`. Rather than hand-write one such block
-// per file, each list entry in `for_each_component!` carries a compact `{ ... }`
-// metadata block and this macro expands it into the impl. Entries whose impl is
-// genuinely bespoke (a distinct authored `Args`, an extension trait, or a real
-// `from_args` translation) mark themselves `{ manual }` and keep their impl.
+// The runtime trait is small: a NAME, a `from_baked` blob loader, and the
+// optional identity / payload injection hooks. Most components are pure data
+// whose impl is mechanical, generated here from each list entry's compact
+// `{ ... }` metadata block. Entries whose impl is bespoke mark themselves
+// `manual` and keep their impl; their trailing flags (origin, args type, refs)
+// are authoring metadata consumed only by the build-side registry in
+// concinnity-world.
 //
 // Metadata grammar (inside the braces):
-//   manual                      -- skip; the impl is hand-written elsewhere
-//   gen, <flags...>             -- pass-through (`Args = Self`) impl from flags:
-//     external | build_only | runtime -- the `ORIGIN`
-//     compiled                  -- `PAYLOAD = Compiled` + an `inject_locator`
-//                                  that stores into `self.locator`
-//     baked                     -- `BAKED = true`
+//   manual, <flags...>          -- skip; the impl is hand-written elsewhere
+//   gen, <flags...>             -- generated impl:
+//     external | build_only | runtime -- the authoring origin (world-side only)
+//     compiled                  -- an `inject_locator` that stores into
+//                                  `self.locator` (and marks the payload
+//                                  world-side)
 //     id                        -- an `inject_name` that stores into
 //                                  `self.asset_id`
-//     validate: <fn>            -- `from_args` calls `assets::validate::<fn>`
-//                                  (defaults to identity)
-//     refs: [ ("field", "Type"), ... ] -- the `ref_fields` list
-//   runtime                     -- RuntimeOnly impl: empty `RuntimeArgs`,
-//                                  `from_args` = `Self::default()`
-//   runtime, build: <fn>        -- as `runtime` but `from_args` calls
-//                                  `assets::runtime_component::<fn>` (for the
-//                                  few RuntimeOnly types without `Default`)
+//     validate: <fn>            -- the bake-time validator (world-side only)
+//     refs: [ ("field", "Type"), ... ] -- the reference fields (world-side only)
+//     args: <Type>              -- the authored args schema when it differs
+//                                  from the component (world-side only)
+//   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
+//                                  blob; the impl is NAME + the default
+//                                  (rejecting) `from_baked`.
 macro_rules! cn_impl_components {
     // Entry point: expand one impl per list entry.
     ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
         $( cn_impl_components!(@one $variant $ty { $($meta)* }); )+
     };
 
-    // Bespoke impls opt out here.
-    (@one $variant:ident $ty:path { manual }) => {};
+    // Bespoke impls opt out here; trailing flags are world-side metadata.
+    (@one $variant:ident $ty:path { manual $($rest:tt)* }) => {};
 
-    // Generated impls: seed an empty method accumulator and the default
-    // (`identity`) from_args marker, then consume the flag list one token at a
-    // time. The from_args marker travels as `identity` or `validate $fn` rather
-    // than as an expanded expression so the eventual `args` in the body is
-    // written in the same expansion as the `from_args(args)` parameter (macro
-    // hygiene ties a name to the expansion that wrote it).
+    // Generated impls: seed an empty method accumulator, then consume the flag
+    // list one token at a time. Only `compiled` and `id` contribute runtime
+    // code; the authoring flags are consumed (and used) by the world registry.
     (@one $variant:ident $ty:path { gen $($flags:tt)* }) => {
-        cn_impl_components!(@munch $variant $ty [] { identity } $($flags)*);
+        cn_impl_components!(@munch $variant $ty [] $($flags)*);
     };
 
-    // RuntimeOnly components: never authored in a world and never round-tripped
-    // through a blob (their owning systems build the real instances). They all
-    // share the empty `RuntimeArgs`, so `from_args` only needs to yield a valid
-    // placeholder -- `Self::default()`, or a named constructor for the few types
-    // that do not derive `Default`.
-    (@one $variant:ident $ty:path { runtime }) => {
+    // RuntimeOnly components: never authored in a world and never stored in a
+    // blob, so the default (rejecting) `from_baked` is correct.
+    (@one $variant:ident $ty:path { runtime $($rest:tt)* }) => {
         impl $crate::ecs::Component for $ty {
             const NAME: &'static str = stringify!($variant);
-            const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;
-            type Args = $crate::assets::RuntimeArgs;
-            fn to_args(&self) -> Self::Args {
-                $crate::assets::RuntimeArgs::default()
-            }
-            fn from_args(_: Self::Args) -> Self {
-                Self::default()
-            }
-        }
-    };
-    (@one $variant:ident $ty:path { runtime, build: $f:ident }) => {
-        impl $crate::ecs::Component for $ty {
-            const NAME: &'static str = stringify!($variant);
-            const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;
-            type Args = $crate::assets::RuntimeArgs;
-            fn to_args(&self) -> Self::Args {
-                $crate::assets::RuntimeArgs::default()
-            }
-            fn from_args(_: Self::Args) -> Self {
-                $crate::assets::runtime_component::$f()
-            }
         }
     };
 
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , external $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::External;]
-            { $($fa)* } $($rest)*);
-    };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , build_only $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::BuildOnly;]
-            { $($fa)* } $($rest)*);
-    };
-    // A pass-through (`Args = Self`) component that is nonetheless RuntimeOnly,
-    // e.g. the per-frame input snapshot: keeps clone/identity but is never
-    // authored.
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , runtime $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* const ORIGIN: $crate::ecs::AssetOrigin = $crate::ecs::AssetOrigin::RuntimeOnly;]
-            { $($fa)* } $($rest)*);
-    };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , compiled $($rest:tt)*) => {
+    (@munch $variant:ident $ty:path [$($body:tt)*] , compiled $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty
             [$($body)*
-             const PAYLOAD: $crate::ecs::AssetPayload = $crate::ecs::AssetPayload::Compiled;
              fn inject_locator(&mut self, locator: $crate::ecs::PayloadLocator) {
                  self.locator = Some(locator);
              }]
-            { $($fa)* } $($rest)*);
+            $($rest)*);
     };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , baked $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* const BAKED: bool = true;]
-            { $($fa)* } $($rest)*);
-    };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , id $($rest:tt)*) => {
+    (@munch $variant:ident $ty:path [$($body:tt)*] , id $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty
             [$($body)* fn inject_name(&mut self, id: $crate::ecs::asset_id::AssetId) {
                  self.asset_id = id;
              }]
-            { $($fa)* } $($rest)*);
+            $($rest)*);
     };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , validate: $f:ident $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)*]
-            { validate $f } $($rest)*);
+    // Authoring-only flags: consumed here, used by the world registry.
+    (@munch $variant:ident $ty:path [$($body:tt)*] , validate: $f:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { $($fa:tt)* } , refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* fn ref_fields() -> &'static [(&'static str, &'static str)] {
-                 &[ $( ($fld, $tgt) ),+ ]
-             }]
-            { $($fa)* } $($rest)*);
+    (@munch $variant:ident $ty:path [$($body:tt)*] , refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , $flag:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
 
-    // No flags left: emit the impl. Two terminal arms select the from_args body
-    // by marker. Each writes the `from_args(args)` parameter and its body in the
-    // same arm, so the body's `args` binds to that parameter (writing `args` in
-    // a separate expansion would leave it unresolved).
-    (@munch $variant:ident $ty:path [$($body:tt)*] { identity }) => {
+    // No flags left: emit the impl. The baked blob record carries the
+    // serialized component itself.
+    (@munch $variant:ident $ty:path [$($body:tt)*]) => {
         impl $crate::ecs::Component for $ty {
             const NAME: &'static str = stringify!($variant);
-            type Args = Self;
             $($body)*
-            fn to_args(&self) -> Self {
-                self.clone()
-            }
-            fn from_args(args: Self) -> Self {
-                args
-            }
-        }
-    };
-    (@munch $variant:ident $ty:path [$($body:tt)*] { validate $f:ident }) => {
-        impl $crate::ecs::Component for $ty {
-            const NAME: &'static str = stringify!($variant);
-            type Args = Self;
-            $($body)*
-            fn to_args(&self) -> Self {
-                self.clone()
-            }
-            fn from_args(args: Self) -> Self {
-                $crate::assets::validate::$f(args)
+            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::result::CnResult> {
+                Ok(serde_json::from_slice(bytes)?)
             }
         }
     };

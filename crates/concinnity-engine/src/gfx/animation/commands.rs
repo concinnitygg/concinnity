@@ -8,7 +8,7 @@
 // blocked on a reply is never starved while a menu pauses playback.
 
 use crate::app::anim_runtime::{AnimCommand, GraphStateReport};
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 use crate::gfx::anim_graph::normalized_time;
 
 use super::flat::Transition;
@@ -35,20 +35,26 @@ impl AnimationSystem {
     // one; a command that does not fit its target's mode fails without
     // touching anything.
     fn drain_runtime_commands(&mut self, now_secs: f32) {
+        // Commands address a mesh by its interned NAME id (the WS server
+        // resolves the typed name against the interner); the buckets are keyed
+        // by handle, so translate through the name index captured at init.
         for cmd in crate::app::anim_runtime::drain() {
             match cmd {
                 AnimCommand::Crossfade { req, reply } => {
+                    let target = self.name_index.get(req.target);
                     let _ = reply.send(self.apply_crossfade(
-                        req.target,
+                        target,
                         req.weights,
                         req.duration_secs,
                         now_secs,
                     ));
                 }
                 AnimCommand::SetParam { req, reply } => {
-                    let _ = reply.send(self.queue_param(req.target, &req.name, req.value));
+                    let target = self.name_index.get(req.target);
+                    let _ = reply.send(self.queue_param(target, &req.name, req.value));
                 }
                 AnimCommand::QueryState { target, reply } => {
+                    let target = self.name_index.get(target);
                     let _ = reply.send(self.graph_report(target));
                 }
             }
@@ -60,25 +66,25 @@ impl AnimationSystem {
     // without the process-wide command queue.
     pub(super) fn apply_crossfade(
         &mut self,
-        target: AssetId,
+        target: SkinnedMeshHandle,
         weights: Vec<f32>,
         duration_secs: f32,
         now_secs: f32,
     ) -> Result<(), String> {
         let Some(state) = self.targets.get_mut(&target) else {
             return Err(format!(
-                "anim-crossfade: no Animation registered for target {target}"
+                "anim-crossfade: no Animation registered for target {target:?}"
             ));
         };
         let TargetMode::Flat(flat) = &mut state.mode else {
             return Err(format!(
-                "anim-crossfade: target {target} is graph-driven; set a parameter with \
+                "anim-crossfade: target {target:?} is graph-driven; set a parameter with \
                  anim-param instead"
             ));
         };
         if weights.len() != state.clips.len() {
             return Err(format!(
-                "anim-crossfade: weight count {} does not match clip count {} for target {}",
+                "anim-crossfade: weight count {} does not match clip count {} for target {:?}",
                 weights.len(),
                 state.clips.len(),
                 target,
@@ -98,14 +104,14 @@ impl AnimationSystem {
     // `pub(super)` for queue-free tests, like `apply_crossfade`.
     pub(super) fn queue_param(
         &mut self,
-        target: AssetId,
+        target: SkinnedMeshHandle,
         name: &str,
         value: f32,
     ) -> Result<(), String> {
         let g = self.graph_target_mut(&target, "anim-param")?;
         let Some(index) = g.graph.param_index(name) else {
             return Err(format!(
-                "anim-param: graph for target {target} declares no parameter '{name}'"
+                "anim-param: graph for target {target:?} declares no parameter '{name}'"
             ));
         };
         g.pending.push((index, value));
@@ -114,7 +120,10 @@ impl AnimationSystem {
 
     // Snapshot a graph bucket's live state for the `anim-state` command.
     // Parameter values are as of the last completed step. Also serves tests.
-    pub(super) fn graph_report(&mut self, target: AssetId) -> Result<GraphStateReport, String> {
+    pub(super) fn graph_report(
+        &mut self,
+        target: SkinnedMeshHandle,
+    ) -> Result<GraphStateReport, String> {
         let g = self.graph_target_mut(&target, "anim-state")?;
         let state = &g.graph.states[g.cursor.state];
         let fade = g.cursor.fade.as_ref();
@@ -140,18 +149,18 @@ impl AnimationSystem {
 
     fn graph_target_mut(
         &mut self,
-        target: &AssetId,
+        target: &SkinnedMeshHandle,
         cmd: &str,
     ) -> Result<&mut GraphTarget, String> {
         let Some(state) = self.targets.get_mut(target) else {
             return Err(format!(
-                "{cmd}: no animation registered for target {target}"
+                "{cmd}: no animation registered for target {target:?}"
             ));
         };
         match &mut state.mode {
             TargetMode::Graph(g) => Ok(g),
             TargetMode::Flat(_) => Err(format!(
-                "{cmd}: target {target} has no AnimGraph (its clips blend by weight; \
+                "{cmd}: target {target:?} has no AnimGraph (its clips blend by weight; \
                  use anim-crossfade)"
             )),
         }

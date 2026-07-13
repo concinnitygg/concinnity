@@ -260,6 +260,90 @@ impl FontTable {
     }
 }
 
+// The static meshes loaded from the blob's resource stream, indexed by
+// `MeshHandle`. Mesh shares its handle space with the still-component geometry
+// producers (ProceduralMesh, VoxelChunk, mesh-kind File): the Mesh block leads
+// that space, so this table covers handles `0..len` and the runtime appends the
+// component-produced geometry after it in the same block order cook assigned.
+#[derive(Debug, Clone, Default)]
+pub struct MeshTable(pub Vec<ResourceEntry>);
+
+impl MeshTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::Mesh))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // Iterate each mesh's payload locator in handle order (index == the mesh's
+    // `MeshHandle`), skipping any mesh with no payload.
+    pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
+    }
+}
+
+// One file-backed Mesh's re-import inputs, in `MeshHandle` order. Mirrors
+// cook's `MeshSourceInfo`; an inline-authored mesh has an empty `source`.
+#[derive(Debug, Clone, Default)]
+pub struct MeshSource {
+    pub source: String,
+    pub primitive_index: u32,
+    pub lod_levels: u32,
+    pub lod_distances: Vec<f32>,
+}
+
+// Dev-only catalogue of mesh source files, indexed by `MeshHandle`, inserted as
+// a world resource by the in-memory (`cn debug` / editor) build so
+// `GraphicsSystem::init` can seed the hot-reload watcher now that Mesh is a
+// resource without a drained `source` field. Absent in the shipped disk runtime.
+#[derive(Debug, Clone, Default)]
+pub struct MeshSources(pub Vec<MeshSource>);
+
+// The skinned meshes loaded from the blob's resource stream, indexed by
+// `SkinnedMeshHandle`. A hybrid entry: `payload` locates the compiled geometry
+// (vertices + indices + skeleton) while `data_bytes` carries the baked runtime
+// fields (placement, material/texture handles, capsule, spawn reserve) as a
+// `(name_id, SkinnedMesh)` JSON tuple -- `asset_id` is serde-skipped on the
+// schema struct, so the interned name travels beside it for the runtime's
+// spawn-by-name registration.
+#[derive(Debug, Clone, Default)]
+pub struct SkinnedMeshTable(pub Vec<ResourceEntry>);
+
+impl SkinnedMeshTable {
+    pub fn from_records(records: &[ResourceRecord]) -> Self {
+        Self(resource_table(records, ResourceKind::SkinnedMesh))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // Whether any skinned mesh declares a character capsule; gates whether the
+    // world needs a PhysicsSystem. Probes the baked JSON shape rather than
+    // fully deserializing each mesh.
+    pub fn has_capsule(&self) -> bool {
+        self.0.iter().any(|e| {
+            serde_json::from_slice::<serde_json::Value>(&e.data_bytes)
+                .ok()
+                .and_then(|v| v.get(1).and_then(|m| m.get("capsule")).cloned())
+                .is_some_and(|c| !c.is_null())
+        })
+    }
+}
+
 // The materials loaded from the blob's resource stream, indexed by
 // `MaterialHandle`. Unlike the payload-backed tables above, a Material is a DATA
 // resource: cook bakes its validated args into the record's `data_bytes` (no blob
@@ -301,6 +385,8 @@ pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[Resourc
     world.insert_resource(EnvironmentMapTable::from_records(records));
     world.insert_resource(FontTable::from_records(records));
     world.insert_resource(MaterialTable::from_records(records));
+    world.insert_resource(MeshTable::from_records(records));
+    world.insert_resource(SkinnedMeshTable::from_records(records));
 }
 
 #[cfg(test)]

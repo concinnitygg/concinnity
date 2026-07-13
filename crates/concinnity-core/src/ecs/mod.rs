@@ -43,57 +43,31 @@ pub enum AssetPayload {
     Compiled,
 }
 
-// Component -- pure serializable data, no behavior.
+// Component -- pure serializable data, no behavior. The runtime-facing surface
+// only: a component loads from its baked blob bytes and receives its injected
+// identity/payload hooks. All authoring metadata (origin, payload kind,
+// reference fields, args schema, validators) lives in the build-side registry
+// (concinnity-world), derived from the `for_each_component!` metadata blocks.
 pub trait Component: Sized + Send + std::fmt::Debug + 'static {
     const NAME: &'static str;
-    const ORIGIN: AssetOrigin = AssetOrigin::RuntimeOnly;
-    const PAYLOAD: AssetPayload = AssetPayload::None;
 
-    // Transitional: whether cook emits this type as a `RecordKind::Baked` blob
-    // record (loaded via `from_baked`) instead of the authored-args record
-    // (loaded via `from_args`). Set true as each type migrates to the baked
-    // path. Read only by cook when choosing the record kind; the runtime routes
-    // on the record's own `RecordKind`, never on this flag. Removed once every
-    // type is baked and the authored path retires.
-    const BAKED: bool = false;
-
-    type Args: serde::Serialize + serde::de::DeserializeOwned + Default;
-    #[allow(dead_code)]
-    fn to_args(&self) -> Self::Args;
-    fn from_args(args: Self::Args) -> Self;
-
-    // Reconstruct this component from a `RecordKind::Baked` blob record, whose
-    // bytes are the serialized runtime component (cook already ran the
-    // asset -> component translation). The default treats the bytes as the
-    // authored `Args`, which is correct for pass-through types (`Args = Self`,
-    // where the component *is* its args). A type whose baked form differs from
-    // its authored args (a compiled-payload or decomposed component) overrides
-    // this to deserialize its own runtime shape.
-    fn from_baked(bytes: &[u8]) -> Result<Self, CnResult> {
-        let args = serde_json::from_slice::<Self::Args>(bytes)?;
-        Ok(Self::from_args(args))
+    // Reconstruct this component from a blob record, whose bytes are the
+    // serialized runtime component (cook already ran the asset -> component
+    // translation). The default rejects: runtime-only components are never
+    // stored in a blob, so only loadable types provide an implementation.
+    fn from_baked(_bytes: &[u8]) -> Result<Self, CnResult> {
+        Err(CnResult::AssetInvalidType)
     }
 
     // Called after construction to inject the payload locator from the blob def.
-    // Only meaningful for components with `AssetPayload::Compiled`.
+    // Only meaningful for components with a compiled payload.
     // The default implementation does nothing (correct for most components).
     fn inject_locator(&mut self, _locator: PayloadLocator) {}
 
     // Called after construction to inject the asset's identity from the blob
     // def. Only meaningful for components that look themselves up by id at
-    // runtime (Prop, Mesh, Texture, Material, Model, Font, TextLabel, etc.).
-    // The default implementation does nothing.
+    // runtime. The default implementation does nothing.
     fn inject_name(&mut self, _id: AssetId) {}
-
-    // Fields of this asset's `Args` that are asset references, as
-    // `(field_name, target_type_name)`. These are `Option<AssetId>` fields authored
-    // in world.jsonl as the referenced asset's name; the target type is not in the
-    // type system (`AssetId` is type-erased), so an asset that has references
-    // declares them here. Authoring tools use this to offer a picker of existing
-    // assets of the target type instead of a free text box. Default: none.
-    fn ref_fields() -> &'static [(&'static str, &'static str)] {
-        &[]
-    }
 }
 
 // Points to an asset's compiled binary payload within the data blob files.
@@ -117,9 +91,7 @@ pub use concinnity_asset::{
 // owned by the concinnity-blob format crate; re-exported here under its
 // historical path so the runtime, cook, and the registry macros keep naming
 // `ecs::{BlobAssetDef, ResourceKind, ...}` unchanged.
-pub use concinnity_blob::{
-    AssetKind, BlobAssetDef, BlobMeta, RecordKind, ResourceKind, ResourceRecord,
-};
+pub use concinnity_blob::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
 
 // PipelineContext -- systems' view of the world during a tick. Renderer-free:
 // it exposes typed component storage, the in-memory blob payload store, and the
@@ -313,10 +285,9 @@ impl<'a> PipelineContext<'a> {
 // list in the build crate. The runtime `SystemAsset` enum is generated
 // separately, client-side, by `define_system_assets!`.
 
-// Internal helper. Emits the runtime `<Kind>Asset` value enum the ECS stores:
-// its `to_def` blob serialization and the `From<$ty>` conversions. The authoring
-// metadata registry (`<Kind>Type`) is emitted separately by
-// `__define_component_authoring!` so the two can live in different crates.
+// Internal helper. Emits the runtime `<Kind>Asset` value enum the ECS stores
+// and the `From<$ty>` conversions. The authoring metadata registry (`<Kind>Type`)
+// is emitted separately so the two can live in different crates.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __define_asset_kind {
@@ -328,25 +299,6 @@ macro_rules! __define_asset_kind {
         #[derive(Debug)]
         pub enum $asset_enum {
             $( $variant($ty) ),+
-        }
-
-        impl $asset_enum {
-            #[allow(dead_code)]
-            pub fn to_def(&self) -> BlobAssetDef {
-                match self {
-                    $(
-                        $asset_enum::$variant(c) => BlobAssetDef {
-                            name: None,
-                            kind: AssetKind::$kind_variant,
-                            record: RecordKind::Authored,
-                            discriminant: $disc,
-                            args_bytes: serde_json::to_vec(&c.to_args())
-                                .expect(concat!("serialize ", stringify!($variant))),
-                            payload: None,
-                        }
-                    ),+
-                }
-            }
         }
 
         $( impl From<$ty> for $asset_enum { fn from(c: $ty) -> Self { $asset_enum::$variant(c) } } )+
@@ -381,24 +333,10 @@ macro_rules! define_components {
         }
 
         impl ComponentAsset {
-            pub fn from_def(def: &BlobAssetDef) -> Result<Self, CnResult> {
-                $(
-                    if def.discriminant == ComponentTag::$variant as u8 {
-                        let args = serde_json::from_slice::<<$ty as Component>::Args>(&def.args_bytes)?;
-                        let mut c = <$ty as Component>::from_args(args);
-                        if let Some(id) = def.name {
-                            <$ty as Component>::inject_name(&mut c, id);
-                        }
-                        return Ok(ComponentAsset::$variant(c));
-                    }
-                )+
-                Err(CnResult::AssetInvalidType)
-            }
-
-            // Reconstruct a component from a `RecordKind::Baked` def: dispatch on
-            // the tag and deserialize the runtime component via
-            // `Component::from_baked` (rather than the authored `Args` +
-            // `from_args` of `from_def`). Name injection matches `from_def`.
+            // Reconstruct a component from a blob def: dispatch on the tag and
+            // deserialize the runtime component via `Component::from_baked`
+            // (every record is baked -- cook already ran the asset -> component
+            // translation).
             pub fn from_baked(def: &BlobAssetDef) -> Result<Self, CnResult> {
                 $(
                     if def.discriminant == ComponentTag::$variant as u8 {
@@ -442,21 +380,15 @@ macro_rules! define_components {
                 }
             }
 
-            // Re-serialise every stored component as a `BlobAssetDef`.
+            // The component tag of every stored component, one per instance.
+            // The debug WS snapshot reports these; nothing re-serializes stored
+            // components back to defs.
             #[allow(dead_code)]
-            pub fn all_defs(&self) -> Vec<BlobAssetDef> {
+            pub fn component_tags(&self) -> Vec<u8> {
                 let mut out = Vec::new();
                 $(
-                    for c in self.$variant.iter() {
-                        out.push(BlobAssetDef {
-                            name: None,
-                            kind: AssetKind::Component,
-                            record: RecordKind::Authored,
-                            discriminant: ComponentTag::$variant as u8,
-                            args_bytes: serde_json::to_vec(&c.to_args())
-                                .expect(concat!("serialize ", stringify!($variant))),
-                            payload: None,
-                        });
+                    for _ in self.$variant.iter() {
+                        out.push(ComponentTag::$variant as u8);
                     }
                 )+
                 out
@@ -524,64 +456,31 @@ mod tests {
         assert!(ctx.events::<u32>().unwrap().read(&mut cursor).is_empty());
     }
 
+    // A blob record loads through `from_baked`: the bytes are the serialized
+    // runtime component, name injection follows, and an unknown tag is
+    // rejected.
     #[test]
-    fn component_asset_defs_round_trip_through_from_def() {
-        let mut asset: ComponentAsset = crate::assets::Transform::default().into();
-        // A payloadless component accepts a locator injection as a no-op.
-        asset.inject_locator(PayloadLocator {
-            blob_index: 0,
-            offset: 0,
-            len: 0,
-        });
-        let def = asset.to_def();
-        assert_eq!(def.kind, AssetKind::Component);
-        // `to_def` writes the original authored-args path.
-        assert_eq!(def.record, RecordKind::Authored);
-        // The tag is Transform's position in the component list, derived from
-        // `ComponentTag` so this stays correct if the list is reordered.
-        assert_eq!(def.discriminant, ComponentTag::Transform as u8);
-        let back = ComponentAsset::from_def(&def).unwrap();
-        assert!(matches!(back, ComponentAsset::Transform(_)));
-    }
-
-    // A `RecordKind::Baked` record loads through `from_baked`. For a pass-through
-    // type (`Args = Self`) the default `from_baked` reconstructs the same
-    // component the authored path would, so a baked record and the equivalent
-    // authored record are parity: the migration can flip a leaf type with no
-    // observable change.
-    #[test]
-    fn baked_pass_through_record_matches_authored() {
+    fn baked_records_load_through_from_baked() {
         use crate::assets::PointLight;
         let light = PointLight {
             intensity: 3.5,
             range: 12.0,
             ..Default::default()
         };
-        let baked_bytes = serde_json::to_vec(&light).unwrap();
         let baked = BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
-            record: RecordKind::Baked,
             discriminant: ComponentTag::PointLight as u8,
-            args_bytes: baked_bytes.clone(),
+            args_bytes: serde_json::to_vec(&light).unwrap(),
             payload: None,
         };
-        let authored = BlobAssetDef {
-            record: RecordKind::Authored,
-            args_bytes: baked_bytes,
-            ..baked.clone()
-        };
         let from_baked = ComponentAsset::from_baked(&baked).unwrap();
-        let from_authored = ComponentAsset::from_def(&authored).unwrap();
-        let (ComponentAsset::PointLight(b), ComponentAsset::PointLight(a)) =
-            (&from_baked, &from_authored)
-        else {
-            panic!("expected PointLight from both paths");
+        let ComponentAsset::PointLight(b) = &from_baked else {
+            panic!("expected PointLight");
         };
-        assert_eq!(b.intensity, a.intensity);
-        assert_eq!(b.range, a.range);
         assert_eq!(b.intensity, 3.5);
-        // An unknown tag is rejected on the baked path too.
+        assert_eq!(b.range, 12.0);
+        // An unknown tag is rejected.
         let mut bad = baked;
         bad.discriminant = 255;
         assert_eq!(
@@ -591,29 +490,12 @@ mod tests {
     }
 
     #[test]
-    fn from_def_rejects_unknown_discriminants() {
-        let def = BlobAssetDef {
-            name: None,
-            kind: AssetKind::Component,
-            record: RecordKind::Authored,
-            discriminant: 255,
-            args_bytes: b"{}".to_vec(),
-            payload: None,
-        };
-        assert_eq!(
-            ComponentAsset::from_def(&def).unwrap_err(),
-            CnResult::AssetInvalidType
-        );
-    }
-
-    #[test]
     fn storage_push_dispatches_into_the_typed_column() {
         let mut storage = ComponentStorage::default();
         storage.push(crate::assets::Transform::default().into());
-        let defs = storage.all_defs();
-        assert_eq!(defs.len(), 1);
+        let tags = storage.component_tags();
         // Transform's tag is its position in the component list.
-        assert_eq!(defs[0].discriminant, ComponentTag::Transform as u8);
+        assert_eq!(tags, vec![ComponentTag::Transform as u8]);
     }
 
     #[test]

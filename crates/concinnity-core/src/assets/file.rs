@@ -5,13 +5,13 @@
 
 use crate::assets::{FileArgs, FileKind};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator};
+use crate::ecs::{Component, PayloadLocator};
 
 /// References a source file by path.
 ///
 /// For supported kinds the build compiles the file into the world (an `.obj`
 /// becomes mesh data); other kinds are path-only references.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct File {
     pub asset_id: AssetId,
     pub path: String,
@@ -20,21 +20,11 @@ pub struct File {
     pub locator: Option<PayloadLocator>,
 }
 
-impl Component for File {
-    const NAME: &'static str = "File";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    const PAYLOAD: AssetPayload = AssetPayload::Compiled;
-
-    type Args = FileArgs;
-
-    fn to_args(&self) -> FileArgs {
-        FileArgs {
-            path: self.path.clone(),
-            kind: self.kind.clone(),
-        }
-    }
-
-    fn from_args(args: FileArgs) -> Self {
+impl File {
+    // Translate the authored args into the runtime file reference: derive
+    // `kind` from the path extension when unset. Run by cook at build time
+    // (the baked blob record carries the result).
+    pub fn bake(args: FileArgs) -> Self {
         let kind = args.kind.clone().or_else(|| {
             std::path::Path::new(&args.path)
                 .extension()
@@ -47,6 +37,14 @@ impl Component for File {
             kind,
             locator: None,
         }
+    }
+}
+
+impl Component for File {
+    const NAME: &'static str = "File";
+
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
@@ -71,7 +69,6 @@ impl crate::build::SourceBacked for File {
 mod tests {
     use super::*;
     use crate::build::{Platform, SourceBacked};
-    use crate::ecs::Component;
 
     #[test]
     fn from_ext_maps_every_known_extension() {
@@ -100,20 +97,20 @@ mod tests {
     #[test]
     fn from_args_infers_kind_from_the_extension() {
         // No explicit kind -> inferred from the path.
-        let f = File::from_args(FileArgs {
+        let f = File::bake(FileArgs {
             path: "models/box.obj".into(),
             kind: None,
         });
         assert_eq!(f.kind, Some(FileKind::Obj));
         assert_eq!(f.path, "models/box.obj");
         // An explicit kind is kept even when it disagrees with the extension.
-        let g = File::from_args(FileArgs {
+        let g = File::bake(FileArgs {
             path: "data.obj".into(),
             kind: Some(FileKind::Txt),
         });
         assert_eq!(g.kind, Some(FileKind::Txt));
         // An unknown extension leaves the kind unset.
-        let h = File::from_args(FileArgs {
+        let h = File::bake(FileArgs {
             path: "notes.zzz".into(),
             kind: None,
         });
@@ -156,6 +153,6 @@ mod tests {
         // FileKind serializes to its lowercase name.
         assert_eq!(serde_json::to_string(&FileKind::Jpeg).unwrap(), "\"jpeg\"");
         // to_args mirrors the component fields.
-        assert_eq!(File::from_args(args).to_args().kind, Some(FileKind::Png));
+        assert_eq!(File::bake(args).kind, Some(FileKind::Png));
     }
 }

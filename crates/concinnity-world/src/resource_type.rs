@@ -12,16 +12,13 @@ use crate::registry::ComponentType;
 // assigner so both sides agree on the kind and its tag.
 pub use concinnity_core::ecs::ResourceKind;
 
-// The resource kind a *component-registry* asset type is, or `None` if it is not
-// (yet) a resource. These kinds are still stored as ECS components today (they
-// migrate off the registry on Windows); the kinds that have already left are
-// classified through `ResourceAssetType`, not here. `asset_resource_kind` folds
-// the two together for callers that only have the type name.
+// The resource kind a *component-registry* asset type is, or `None` if it is
+// not a resource. Every resource kind has now left the component registry (all
+// classify through `ResourceAssetType`); kept so `asset_resource_kind` retains
+// its two-registry shape until the endgame retires it.
 pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
-    Some(match ct {
-        ComponentType::SkinnedMesh => ResourceKind::SkinnedMesh,
-        _ => return None,
-    })
+    let _ = ct;
+    None
 }
 
 // The mesh-source handle space is shared across every geometry-producing kind
@@ -76,7 +73,15 @@ pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
     if let Some(ct) = ComponentType::parse(asset_type) {
         return resource_kind(ct);
     }
-    ResourceAssetType::parse(asset_type).map(|rt| rt.resource_kind())
+    let rt = ResourceAssetType::parse(asset_type)?;
+    // Mesh draws from the shared mesh-source handle space (assigned by cook's
+    // `assign_mesh_source_handles` in block order across all four geometry
+    // producers), so the per-kind declaration-order classifier must not also
+    // assign it.
+    if rt == ResourceAssetType::Mesh {
+        return None;
+    }
+    Some(rt.resource_kind())
 }
 
 // Generate `ResourceAssetType` from the shared resource-asset list: the enum of
@@ -187,12 +192,17 @@ mod tests {
         );
         assert_eq!(ComponentType::parse("Font"), None);
         assert_eq!(asset_resource_kind("Font"), Some(ResourceKind::Font));
-        // Mesh stays a component but its handle is not assigned through the
-        // type-name classifier: it shares the mesh-source handle space with
-        // ProceduralMesh / VoxelChunk / File, assigned by cook's
-        // `assign_mesh_source_handles`. So the generic classifier does not treat
-        // it as a resource.
-        assert_eq!(resource_kind(ComponentType::Mesh), None);
+        // Mesh has left the component registry, but its handle is still not
+        // assigned through the type-name classifier: it shares the mesh-source
+        // handle space with ProceduralMesh / VoxelChunk / File, assigned by
+        // cook's `assign_mesh_source_handles`. So the generic classifier does
+        // not treat it as a resource, while `ResourceAssetType` still parses it
+        // (compile + record emission go through the resource path).
+        assert_eq!(ComponentType::parse("Mesh"), None);
+        assert_eq!(
+            ResourceAssetType::parse("Mesh"),
+            Some(ResourceAssetType::Mesh)
+        );
         assert_eq!(asset_resource_kind("Mesh"), None);
         assert!(is_mesh_source("Mesh", &serde_json::json!({})));
         // Material has left the component registry: a DATA resource, no longer a
@@ -204,10 +214,15 @@ mod tests {
         );
         assert!(ResourceAssetType::Material.is_data());
         assert!(!ResourceAssetType::Texture.is_data());
-        // The last component-registry resource still classifies through
-        // `resource_kind`.
+        // SkinnedMesh has left the component registry too: it classifies
+        // through `ResourceAssetType` (a compiled payload + inline baked data).
+        assert_eq!(ComponentType::parse("SkinnedMesh"), None);
         assert_eq!(
-            resource_kind(ComponentType::SkinnedMesh),
+            ResourceAssetType::parse("SkinnedMesh"),
+            Some(ResourceAssetType::SkinnedMesh)
+        );
+        assert_eq!(
+            asset_resource_kind("SkinnedMesh"),
             Some(ResourceKind::SkinnedMesh)
         );
         // Pure-data components and containers are not resources.

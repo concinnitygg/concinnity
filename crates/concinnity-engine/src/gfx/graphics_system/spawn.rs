@@ -275,7 +275,6 @@ mod tests {
 
     #[test]
     fn skinned_spawn_claims_and_recycles_a_pooled_slot() {
-        use crate::ecs::asset_id::AssetId;
         use crate::gfx::skinned_pool::SkinnedInstancePool;
         use crate::gfx::skinning::Skeleton;
         run(|ctx| {
@@ -286,7 +285,11 @@ mod tests {
             let template = ctx.components.spawn();
             ctx.insert(
                 template,
-                SkeletonPose::new(AssetId(10), 0, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    crate::ecs::SkinnedMeshHandle(10),
+                    0,
+                    Skeleton::new(Vec::new()),
+                ),
             );
             let mut pool = SkinnedInstancePool::new();
             pool.reserve(0, 1);
@@ -305,7 +308,7 @@ mod tests {
             let first_slot = ctx.get::<SkeletonPose>(first).unwrap().skinned_index;
             assert_eq!(
                 ctx.get::<SkeletonPose>(first).unwrap().mesh_id,
-                AssetId(10),
+                crate::ecs::SkinnedMeshHandle(10),
                 "the instance shares the template's mesh id so it animates with it"
             );
 
@@ -336,14 +339,17 @@ mod tests {
 
     #[test]
     fn skinned_spawn_with_exhausted_pool_returns_none() {
-        use crate::ecs::asset_id::AssetId;
         use crate::gfx::skinned_pool::SkinnedInstancePool;
         use crate::gfx::skinning::Skeleton;
         run(|ctx| {
             let template = ctx.components.spawn();
             ctx.insert(
                 template,
-                SkeletonPose::new(AssetId(10), 0, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    crate::ecs::SkinnedMeshHandle(10),
+                    0,
+                    Skeleton::new(Vec::new()),
+                ),
             );
             // A template that reserved no instances has nothing to claim.
             let mut pool = SkinnedInstancePool::new();

@@ -9,15 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::assets::{
-    Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Mesh, Prop,
-    RenderHandle, Scene, SceneCommand, SceneReel, ShaderKind, ShaderStage, SpawnRequest, Sprite,
-    StreamingConfig, Transform, Window,
+    Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
+    Scene, SceneCommand, SceneReel, ShaderKind, ShaderStage, SpawnRequest, Sprite, StreamingConfig,
+    Transform, Window,
 };
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Component, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources,
-    StepResult, TextureHandle,
+    ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources, StepResult,
+    TextureHandle,
 };
 use crate::gfx::backend::{GpuProfile, GpuTier, GpuVendor};
 use crate::gfx::backend_init::SwapchainConfig;
@@ -63,9 +63,9 @@ struct WorldBuilder {
     // Material data-resource records; each `push_textured_quad` bakes one Material
     // into `data_bytes` at the next handle, mirroring cook.
     material_records: Vec<concinnity_core::ecs::ResourceRecord>,
-    // Mesh sources pushed so far; each `push_textured_quad` Mesh takes the next
+    // Mesh resource records; each `push_textured_quad` Mesh takes the next
     // handle in declaration order, matching the runtime's mesh-source table.
-    mesh_count: u32,
+    mesh_records: Vec<concinnity_core::ecs::ResourceRecord>,
 }
 
 impl WorldBuilder {
@@ -75,7 +75,7 @@ impl WorldBuilder {
             section: Vec::new(),
             texture_records: Vec::new(),
             material_records: Vec::new(),
-            mesh_count: 0,
+            mesh_records: Vec::new(),
         }
     }
 
@@ -113,15 +113,18 @@ impl WorldBuilder {
     // One quad Mesh + a Texture-backed Material + a Prop placing it.
     fn push_textured_quad(&mut self, mesh: AssetId, _tex: AssetId, mat: AssetId, prop: AssetId) {
         let mesh_loc = self.payload(&quad_mesh_payload());
-        // This Mesh is the next mesh source in declaration order; the Prop below
-        // references it by that handle, as cook resolves a `.mesh` name.
-        let mesh_handle = crate::ecs::MeshHandle(self.mesh_count);
-        self.mesh_count += 1;
-        self.push(Mesh {
-            asset_id: mesh,
-            locator: Some(mesh_loc),
-            ..Default::default()
-        });
+        // Meshes are resources now: the payload rides the resource stream at the
+        // next mesh handle; the Prop below references it by that handle, as cook
+        // resolves a `.mesh` name. `mesh`'s asset id is unused.
+        let _ = mesh;
+        let mesh_handle = crate::ecs::MeshHandle(self.mesh_records.len() as u32);
+        self.mesh_records
+            .push(concinnity_core::ecs::ResourceRecord {
+                resource_kind: concinnity_core::ecs::ResourceKind::Mesh as u8,
+                handle: mesh_handle.0,
+                payload: Some(mesh_loc),
+                data_bytes: Vec::new(),
+            });
         let tex_loc = self.payload(&texture_payload(2, 2));
         // Textures are resources now: the payload rides the resource stream at
         // the next texture handle. The Material references `TextureHandle(0)` (the
@@ -170,6 +173,7 @@ impl WorldBuilder {
         resources.insert(crate::resource::MaterialTable::from_records(
             &self.material_records,
         ));
+        resources.insert(crate::resource::MeshTable::from_records(&self.mesh_records));
         TestWorld {
             components: self.components,
             blob: BlobData::new(vec![Some(self.section)]),
@@ -229,7 +233,7 @@ fn titled_scene(title: &str) -> WorldBuilder {
         ..Default::default()
     });
     b.push_shaders();
-    b.push(Camera3D::from_args(Default::default()));
+    b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     b
 }
@@ -900,7 +904,7 @@ fn max_frames_finishes_the_system() {
         ..Default::default()
     });
     b.push_shaders();
-    b.push(Camera3D::from_args(Default::default()));
+    b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     let mut gs = init_graphics(&mut world, hooks);

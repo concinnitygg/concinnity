@@ -201,7 +201,6 @@ mod tests {
     #[test]
     fn despawn_retires_a_skinned_instance_slot() {
         use crate::assets::SkeletonPose;
-        use crate::ecs::asset_id::AssetId;
         use crate::gfx::skinning::Skeleton;
         run(|ctx| {
             // A skinned entity carries a SkeletonPose (no RenderHandle); its
@@ -209,7 +208,11 @@ mod tests {
             let skinned = ctx.components.spawn();
             ctx.insert(
                 skinned,
-                SkeletonPose::new(AssetId(1), 4, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    crate::ecs::SkinnedMeshHandle(1),
+                    4,
+                    Skeleton::new(Vec::new()),
+                ),
             );
 
             let mut retired: Vec<RetiredSlot> = Vec::new();

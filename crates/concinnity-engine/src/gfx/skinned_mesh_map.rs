@@ -1,37 +1,37 @@
-// SkinnedMesh handle -> asset id bridge.
+// SkinnedMesh name -> handle index.
 //
-// A SkinnedMesh's authored references (`Animation.target`, `AnimGraph.target`,
-// `FollowController.target`) bake to the mesh's dense `SkinnedMeshHandle`, while
-// the runtime animation web that correlates against them (`SkeletonPose.mesh_id`,
-// `CharacterRig.target`, `AnimParams.target`, `GroundProbes.target`,
-// `CameraProbe.target`) is keyed by the mesh's `AssetId`. GraphicsSystem drains
-// the SkinnedMesh column first (handle == drain index == cook declaration order)
-// and publishes this map; the animation and third-person systems, which init
-// after it, resolve each authored handle back to the mesh's asset id through it so
-// the correlation web stays comparable.
+// The animation correlation web (`SkeletonPose.mesh_id`, `CharacterRig.target`,
+// `AnimParams.target`, `GroundProbes.target`, `CameraProbe.target`) is keyed by
+// the mesh's dense `SkinnedMeshHandle`, matching the authored references
+// (`Animation.target`, `AnimGraph.target`, `FollowController.target`) directly.
+// The one consumer that still starts from a NAME is the debug WebSocket's
+// animation commands (`anim-crossfade` / `anim-param` / `anim-state`), which
+// resolve the user-typed name to its interned id: this index, published by
+// GraphicsSystem from the baked SkinnedMesh data (which carries each mesh's
+// interned name id), translates that id to the handle keying the web.
+
+use std::collections::HashMap;
 
 use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::asset_id::AssetId;
 
-// Handle-indexed table of each SkinnedMesh's runtime asset id, published as a
-// world resource by GraphicsSystem during its SkinnedMesh drain.
+// Interned-name -> handle index for the skinned meshes, published as a world
+// resource by GraphicsSystem while it loads the SkinnedMesh resource table.
 #[derive(Debug, Default, Clone)]
-pub struct SkinnedMeshHandleMap(pub Vec<AssetId>);
+pub struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
 
-impl SkinnedMeshHandleMap {
-    // The asset id a SkinnedMesh handle addresses. An in-range handle returns the
-    // drained mesh's id. An out-of-range handle falls back to reinterpreting the
-    // handle value as an id: in a valid build a `target` always names a real
-    // SkinnedMesh (cook's cross-reference check rejects the rest) so this never
-    // fires there, and it is the path a unit test that exercises the animation
-    // systems without the renderer takes -- the map is then empty and the handle
-    // carries the interned id from the resolver's validation fallback, so it maps
-    // to itself, matching the pre-handle behaviour.
-    pub fn get(&self, handle: SkinnedMeshHandle) -> AssetId {
+impl SkinnedMeshNameIndex {
+    // The handle for an interned mesh name. Falls back to reinterpreting the
+    // id value as a handle when absent: a unit test that exercises the
+    // animation systems without the renderer deserializes its `target` names
+    // through the resolver's interner fallback, so both sides of the
+    // correlation carry the interned id and the identity mapping matches them.
+    // In a real build every name a debug command can address is in the index.
+    pub fn get(&self, name_id: AssetId) -> SkinnedMeshHandle {
         self.0
-            .get(handle.index())
+            .get(&name_id)
             .copied()
-            .unwrap_or(AssetId(handle.0))
+            .unwrap_or(SkinnedMeshHandle(name_id.0))
     }
 }
 
@@ -40,19 +40,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn in_range_handle_returns_the_drained_id() {
-        let map = SkinnedMeshHandleMap(vec![AssetId(10), AssetId(20), AssetId(30)]);
-        assert_eq!(map.get(SkinnedMeshHandle(0)), AssetId(10));
-        assert_eq!(map.get(SkinnedMeshHandle(2)), AssetId(30));
+    fn known_name_returns_its_handle() {
+        let mut map = HashMap::new();
+        map.insert(AssetId(10), SkinnedMeshHandle(0));
+        map.insert(AssetId(20), SkinnedMeshHandle(1));
+        let index = SkinnedMeshNameIndex(map);
+        assert_eq!(index.get(AssetId(20)), SkinnedMeshHandle(1));
     }
 
     #[test]
-    fn out_of_range_and_empty_map_fall_back_to_the_handle_value() {
-        // The unit-test path: no renderer published a map, so the handle (which
-        // carries the interned id from the resolver fallback) maps to itself.
-        let empty = SkinnedMeshHandleMap::default();
-        assert_eq!(empty.get(SkinnedMeshHandle(42)), AssetId(42));
-        let short = SkinnedMeshHandleMap(vec![AssetId(10)]);
-        assert_eq!(short.get(SkinnedMeshHandle(5)), AssetId(5));
+    fn unknown_name_falls_back_to_the_id_value() {
+        let index = SkinnedMeshNameIndex::default();
+        assert_eq!(index.get(AssetId(42)), SkinnedMeshHandle(42));
     }
 }

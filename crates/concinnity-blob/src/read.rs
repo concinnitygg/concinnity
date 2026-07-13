@@ -296,7 +296,7 @@ pub fn load_raw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{AssetKind, RecordKind, ResourceKind};
+    use crate::schema::{AssetKind, ResourceKind};
 
     // A distinct temp path per test tag so parallel tests never collide.
     fn tmp_path(tag: &str) -> String {
@@ -415,7 +415,6 @@ mod tests {
             defs: vec![BlobAssetDef {
                 name: Some(concinnity_asset::AssetId(1)),
                 kind: AssetKind::Component,
-                record: RecordKind::Authored,
                 discriminant: 7,
                 args_bytes: vec![1, 2, 3],
                 payload: None,
@@ -517,7 +516,6 @@ mod tests {
             defs: vec![BlobAssetDef {
                 name: None,
                 kind: AssetKind::Component,
-                record: RecordKind::Baked,
                 discriminant: 1,
                 args_bytes: Vec::new(),
                 payload: Some(PayloadLocator {

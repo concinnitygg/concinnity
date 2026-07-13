@@ -1,6 +1,6 @@
 // src/assets/character_rig.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 use crate::gfx::skinning::Mat4;
 
 /// Runtime-only link between a skinned mesh and its character capsule.
@@ -16,8 +16,8 @@ use crate::gfx::skinning::Mat4;
 /// Not authored in world files: it has no `args`.
 #[derive(Debug, Clone)]
 pub struct CharacterRig {
-    /// The `SkinnedMesh` asset this rig moves.
-    pub target: AssetId,
+    /// The `SkinnedMesh` resource this rig moves.
+    pub target: SkinnedMeshHandle,
     /// Index of the mesh's skinned draw object in the render backend.
     pub skinned_index: usize,
     /// The mesh's authored model matrix. Root-motion deltas are mapped
@@ -54,7 +54,7 @@ impl CharacterRig {
     /// A rig at its authored placement. `base_model` is the mesh's model
     /// matrix; its translation column doubles as the starting position.
     pub fn new(
-        target: AssetId,
+        target: SkinnedMeshHandle,
         skinned_index: usize,
         base_model: Mat4,
         half_height: f32,
@@ -122,7 +122,7 @@ mod tests {
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [2.0, 2.0, 2.0],
         };
-        let rig = CharacterRig::new(AssetId(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
         assert_eq!(rig.position, [5.0, 0.0, 1.0]);
         let d = rig.world_delta([0.0, 0.0, 1.0]);
         assert!((d[0] - 2.0).abs() < 1e-4, "{d:?}");
@@ -133,7 +133,13 @@ mod tests {
     fn yaw_turns_local_forward_to_the_heading() {
         // Facing yaw pi/2: local -Z travel becomes world -X (the camera
         // convention, where yaw 0 looks down -Z).
-        let mut rig = CharacterRig::new(AssetId(1), 0, crate::gfx::skinning::IDENTITY, 0.5, 0.3);
+        let mut rig = CharacterRig::new(
+            SkinnedMeshHandle(1),
+            0,
+            crate::gfx::skinning::IDENTITY,
+            0.5,
+            0.3,
+        );
         rig.yaw = std::f32::consts::FRAC_PI_2;
         let d = rig.world_delta([0.0, 0.0, -1.0]);
         assert!((d[0] + 1.0).abs() < 1e-4, "{d:?}");
@@ -152,7 +158,7 @@ mod tests {
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [1.0, 1.0, 1.0],
         };
-        let mut rig = CharacterRig::new(AssetId(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let mut rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
         rig.yaw = std::f32::consts::FRAC_PI_2;
         let d = rig.world_delta([0.0, 0.0, -1.0]);
         assert!((d[2] - 1.0).abs() < 1e-4, "{d:?}");
@@ -166,7 +172,7 @@ mod tests {
             rotation_deg: [0.0, 45.0, 0.0],
             scale: [1.0, 1.0, 1.0],
         };
-        let mut rig = CharacterRig::new(AssetId(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let mut rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
         rig.position = [9.0, 2.0, -4.0];
         let m = rig.model();
         assert_eq!([m[3][0], m[3][1], m[3][2]], [9.0, 2.0, -4.0]);

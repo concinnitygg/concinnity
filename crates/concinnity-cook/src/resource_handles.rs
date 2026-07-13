@@ -37,6 +37,15 @@ pub trait ResourceAssetCompile {
     // The source files this resource reads, folded into its payload cache key
     // so an unchanged source is a cache hit.
     fn source_files(self, args: &serde_json::Value) -> Vec<String>;
+    // The baked runtime data that rides the resource record's `data_bytes`
+    // ALONGSIDE a compiled payload, or `None`. SkinnedMesh is the only such
+    // hybrid today: its geometry compiles into a blob payload while its
+    // authored placement/material/capsule fields bake here. (Material, a pure
+    // data resource, routes its bytes through `compile_payload` + `is_data`
+    // instead.) `name` is the asset's declared name, interned into the baked
+    // form where the runtime needs the identity.
+    fn compile_data(self, name: &str, args: &serde_json::Value)
+    -> std::io::Result<Option<Vec<u8>>>;
 }
 
 impl ResourceAssetCompile for ResourceAssetType {
@@ -56,6 +65,9 @@ impl ResourceAssetCompile for ResourceAssetType {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::Mesh => crate::mesh_compile::compile_mesh_payload(args)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::SkinnedMesh => compile_skinned_mesh_payload(args),
         }
     }
 
@@ -65,7 +77,9 @@ impl ResourceAssetCompile for ResourceAssetType {
             | Self::Texture
             | Self::CubemapTexture
             | Self::EnvironmentMap
-            | Self::ColorLut => args
+            | Self::ColorLut
+            | Self::Mesh
+            | Self::SkinnedMesh => args
                 .get("source")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
@@ -85,6 +99,19 @@ impl ResourceAssetCompile for ResourceAssetType {
             Self::Material => Vec::new(),
         }
     }
+
+    fn compile_data(
+        self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        match self {
+            Self::SkinnedMesh => compile_skinned_mesh_data(name, args)
+                .map(Some)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            _ => Ok(None),
+        }
+    }
 }
 
 // Bake a Material into its resource `data_bytes`: resolve its texture references
@@ -95,8 +122,69 @@ impl ResourceAssetCompile for ResourceAssetType {
 fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mat: crate::assets::Material =
         serde_json::from_value(args.clone()).map_err(|e| format!("Material args: {e}"))?;
-    let mat = crate::assets::validate::material(mat);
+    let mat = concinnity_world::validate::material(mat);
     serde_json::to_vec(&mat).map_err(|e| format!("Material serialize: {e}"))
+}
+
+// Compile a SkinnedMesh's geometry payload: vertices + indices + the skeleton
+// the desugar pass wrote into the args, with the LOD trailer. The placement /
+// material fields ride separately in the record's `data_bytes` (see
+// `compile_skinned_mesh_data`).
+fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec<u8>> {
+    let mesh: crate::assets::SkinnedMesh = serde_json::from_value(args.clone())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    // `skeleton` is not a field on the schema struct; the desugar pass writes it
+    // into the args JSON for glTF-sourced meshes, and inline-authored worlds may
+    // carry it directly. Read it straight from the JSON so it can be baked into
+    // the compiled payload alongside vertices and indices.
+    let skeleton: Vec<crate::assets::JointDef> = match args.get("skeleton") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("SkinnedMesh: invalid skeleton args: {e}"),
+            )
+        })?,
+        None => Vec::new(),
+    };
+    let lod_levels = mesh.lod_levels.clamp(1, 8);
+    crate::geometry::compile_skinned_mesh_payload_with_lods(
+        &mesh.vertices,
+        &mesh.indices,
+        &skeleton,
+        lod_levels,
+        &mesh.lod_distances,
+    )
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+// Bake a SkinnedMesh's runtime data (its placement, material/texture handles,
+// capsule, and spawn reserve) into the resource record's `data_bytes`, applying
+// the clamps that used to run in the retired `from_args`. The geometry is
+// dropped from the baked form -- it rides the compiled payload. Serialized as a
+// `(name_id, mesh)` JSON tuple: `asset_id` is `#[serde(skip)]` on the schema
+// struct, so the interned name (which the runtime's spawn-by-name registration
+// still needs) travels beside it.
+fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let mut sm: crate::assets::SkinnedMesh =
+        serde_json::from_value(args.clone()).map_err(|e| format!("SkinnedMesh args: {e}"))?;
+    // A zero scale would collapse the world matrix; clamp to a sane unit.
+    if sm.scale == [0.0, 0.0, 0.0] {
+        sm.scale = [1.0, 1.0, 1.0];
+    }
+    // 0 and 1 are equivalent (no alternates); cap at the 8-level LOD ceiling.
+    if sm.lod_levels == 0 {
+        sm.lod_levels = 1;
+    }
+    sm.lod_levels = sm.lod_levels.min(8);
+    // A runaway reserve would pre-expand the skinned vertex buffer without
+    // bound; cap it. The skinned index buffer is u16, so init applies a further
+    // per-mesh limit when the copies would overflow that.
+    sm.max_instances = sm.max_instances.min(4096);
+    // Geometry rides the compiled payload, not the baked data.
+    sm.vertices = Vec::new();
+    sm.indices = Vec::new();
+    let name_id = crate::ecs::asset_id::intern(name);
+    serde_json::to_vec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
 }
 
 // Per-kind handles assigned to each resource asset, keyed by its identity.

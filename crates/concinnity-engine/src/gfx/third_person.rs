@@ -14,7 +14,6 @@ use crate::assets::{
     AnimGraph, AnimParams, Camera3D, CameraController, CharacterRig, ControlsCommand, FollowDrive,
     FrameInput,
 };
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
 use std::time::Instant;
 
@@ -45,11 +44,9 @@ pub struct ThirdPersonSystem {
     move_speed: f32,
     sprint_multiplier: f32,
     mouse_sensitivity: f32,
-    // From the follow block. `target_handle` is the authored SkinnedMesh handle;
-    // `target` is it bridged to the mesh's asset id at init (the correlation web is
-    // asset-id-keyed), once the renderer has published the handle map.
-    target_handle: Option<SkinnedMeshHandle>,
-    target: Option<AssetId>,
+    // From the follow block: the authored SkinnedMesh handle, which keys the
+    // rig / graph correlation web directly.
+    target: Option<SkinnedMeshHandle>,
     distance: f32,
     height: f32,
     drive: FollowDrive,
@@ -77,8 +74,7 @@ impl ThirdPersonSystem {
             move_speed: controller.move_speed,
             sprint_multiplier: controller.sprint_multiplier,
             mouse_sensitivity: controller.mouse_sensitivity,
-            target_handle: follow.target,
-            target: None,
+            target: follow.target,
             distance: follow.distance.max(0.1),
             height: follow.height,
             drive: follow.drive,
@@ -110,15 +106,6 @@ impl System for ThirdPersonSystem {
             }
         }
 
-        // Bridge the authored SkinnedMesh handle to the mesh's asset id, which the
-        // rig / graph correlation queries below key on. GraphicsSystem published
-        // the map during its SkinnedMesh drain (it inits before this system).
-        let skinned_map = ctx
-            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap>()
-            .cloned()
-            .unwrap_or_default();
-        self.target = self.target_handle.map(|h| skinned_map.get(h));
-
         let Some(target) = self.target else {
             tracing::warn!("ThirdPersonSystem: follow has no target, controller idle");
             return;
@@ -126,12 +113,11 @@ impl System for ThirdPersonSystem {
 
         // Resolve the speed parameter to its declaration index now, while the
         // target's AnimGraph component still exists (AnimationSystem drains
-        // it during its own init, which runs after this one). The graph's own
-        // `target` is a handle too, so bridge it through the same map to compare.
+        // it during its own init, which runs after this one).
         if !self.speed_parameter.is_empty() {
             self.speed_param_index = ctx
                 .query::<AnimGraph>()
-                .find(|g| g.target.map(|h| skinned_map.get(h)) == Some(target))
+                .find(|g| g.target == Some(target))
                 .and_then(|g| {
                     g.parameters
                         .iter()
@@ -139,7 +125,7 @@ impl System for ThirdPersonSystem {
                 });
             if self.speed_param_index.is_none() {
                 tracing::warn!(
-                    "ThirdPersonSystem: no AnimGraph parameter '{}' on follow target {target}, \
+                    "ThirdPersonSystem: no AnimGraph parameter '{}' on follow target {target:?}, \
                      speed writes disabled",
                     self.speed_parameter
                 );
@@ -410,8 +396,11 @@ mod tests {
     // fails the graph install (no clips) and that is fine: the controller
     // resolved its parameter index before the drain, and this test seeds the
     // AnimParams block itself.
-    fn follow_world(drive: FollowDrive, jump_height: f32) -> (World, AssetId) {
-        let target = intern("hero");
+    fn follow_world(drive: FollowDrive, jump_height: f32) -> (World, SkinnedMeshHandle) {
+        // The authored "hero" references below deserialize through the
+        // resolver's interner fallback, so the handle carries the interned id;
+        // the components this seeds must use the same value.
+        let target = SkinnedMeshHandle(intern("hero").0);
         let mut world = World::new_empty();
         world.add_component(follow_camera("hero", drive, jump_height));
         world.add_component(crate::assets::CharacterRig::new(

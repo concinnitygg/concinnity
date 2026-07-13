@@ -4,7 +4,7 @@
 // the schema crate (concinnity_asset::camera3d).
 
 use crate::assets::{Camera3DArgs, CameraController};
-use crate::ecs::{AssetOrigin, Component};
+use crate::ecs::Component;
 
 /// Declares the 3D camera. One per scene.
 ///
@@ -20,7 +20,7 @@ use crate::ecs::{AssetOrigin, Component};
 ///   }
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera3D {
     pub fov_y_degrees: f32,
     pub near: f32,
@@ -46,25 +46,11 @@ pub struct Camera3D {
     pub controller: Option<CameraController>,
 }
 
-impl Component for Camera3D {
-    const NAME: &'static str = "Camera3D";
-
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    type Args = Camera3DArgs;
-
-    fn to_args(&self) -> Camera3DArgs {
-        Camera3DArgs {
-            fov_y_degrees: self.fov_y_degrees,
-            near: self.near,
-            far: self.far,
-            position: self.position,
-            yaw: self.yaw,
-            pitch: self.pitch,
-            controller: self.controller.clone(),
-        }
-    }
-
-    fn from_args(args: Camera3DArgs) -> Self {
+impl Camera3D {
+    // Translate the authored args into the runtime camera: compose the initial
+    // view matrix and zero the runtime state. Run by cook at build time (the
+    // baked blob record carries the result) and by tests that need a camera.
+    pub fn bake(args: Camera3DArgs) -> Self {
         Self {
             fov_y_degrees: args.fov_y_degrees,
             near: args.near,
@@ -78,6 +64,14 @@ impl Component for Camera3D {
             interact_requested: false,
             controller: args.controller,
         }
+    }
+}
+
+impl Component for Camera3D {
+    const NAME: &'static str = "Camera3D";
+
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 }
 

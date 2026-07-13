@@ -111,7 +111,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = World::new(crate::blob::BlobData::new(payload_sections));
     for def in &result.defs {
-        let mut component = ComponentAsset::from_def(def).map_err(|e| {
+        let mut component = ComponentAsset::from_baked(def).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Asset construction failed: {:?}", e),
@@ -142,6 +142,20 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
                 name_id: t.name_id,
                 source: t.source.clone(),
                 image_index: t.image_index,
+            })
+            .collect(),
+    ));
+    // Dev-only: the mesh source catalogue, so the renderer's hot-reload capture
+    // can map a mesh handle back to the `.glb`/`.fbx` that backs it.
+    world.insert_resource(crate::resource::MeshSources(
+        result
+            .mesh_sources
+            .iter()
+            .map(|m| crate::resource::MeshSource {
+                source: m.source.clone(),
+                primitive_index: m.primitive_index,
+                lod_levels: m.lod_levels,
+                lod_distances: m.lod_distances.clone(),
             })
             .collect(),
     ));

@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use crate::assets::{AnimParams, CharacterRig, GraphIkChain, GroundProbe, GroundProbes};
-use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::ik::TwoBoneChain;
 use crate::gfx::skinning::{Mat4, Skeleton, mat4_affine_inverse};
 
@@ -113,9 +113,9 @@ pub(super) struct IkFrame {
 // Serial pre-pass: fold each target's probe answers, rig state, and weight
 // parameters into per-chain pins for the parallel sample loop.
 pub(super) fn frame_inputs(
-    targets: &HashMap<AssetId, super::TargetState>,
+    targets: &HashMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext,
-) -> HashMap<AssetId, IkFrame> {
+) -> HashMap<SkinnedMeshHandle, IkFrame> {
     let mut out = HashMap::new();
     for (&target, state) in targets {
         let super::TargetMode::Graph(g) = &state.mode else {
@@ -204,7 +204,7 @@ pub(super) fn apply_chains(
 // applied to a joint's bind position is its current mesh-space position, so
 // no extra hierarchy walk is needed.
 pub(super) fn refresh_rays(
-    targets: &HashMap<AssetId, super::TargetState>,
+    targets: &HashMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext,
 ) {
     for (&target, state) in targets {

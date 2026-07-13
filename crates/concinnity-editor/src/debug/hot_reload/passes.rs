@@ -33,7 +33,6 @@ pub(super) fn reload_volumetric_fog(
     last_pushed: &mut Option<crate::gfx::volumetric_fog::FogSettings>,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> FogReloadResult {
-    use crate::ecs::Component;
     let mut result = FogReloadResult::default();
 
     let content = match std::fs::read_to_string(path) {
@@ -82,7 +81,8 @@ pub(super) fn reload_volumetric_fog(
                 return result;
             }
         };
-        let clamped = crate::assets::VolumetricFog::from_args(parsed);
+        // Apply the build-side validator, exactly as a rebuild would at bake.
+        let clamped = concinnity_cook::validate::volumetric_fog(parsed);
         if clamped.enabled {
             resolved = Some(crate::gfx::volumetric_fog::FogSettings::resolve(
                 clamped.color,

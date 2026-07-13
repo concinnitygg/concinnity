@@ -6,7 +6,7 @@
 // resolves the authored tunables into the renderer's clamped `gfx` settings.
 
 use crate::assets::{IndirectLighting, PostProcessConfig};
-use crate::ecs::{AssetOrigin, Component};
+use crate::ecs::Component;
 use crate::gfx::render_types::PostProcessParams;
 
 // `exposure_ev` is clamped to this range before resolving to a multiplier so a
@@ -138,17 +138,9 @@ impl PostProcessResolve for PostProcessConfig {
 
 impl Component for PostProcessConfig {
     const NAME: &'static str = "PostProcessConfig";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    // Pass-through leaf: baked component is its authored args (see PointLight).
-    const BAKED: bool = true;
-    type Args = Self;
 
-    fn to_args(&self) -> Self {
-        self.clone()
-    }
-
-    fn from_args(args: Self) -> Self {
-        args
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 }
 
@@ -232,10 +224,7 @@ mod tests {
             aa_mode: AaMode::Taa,
             ..Default::default()
         };
-        assert_eq!(
-            PostProcessConfig::from_args(cfg.to_args()).aa_mode,
-            AaMode::Taa
-        );
+        assert_eq!(cfg.clone().aa_mode, AaMode::Taa);
     }
 
     #[test]
@@ -567,7 +556,7 @@ mod tests {
             hdr_display: true,
             ..Default::default()
         };
-        assert!(PostProcessConfig::from_args(cfg.to_args()).hdr_display);
+        assert!(cfg.clone().hdr_display);
 
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"hdr_display":true}"#).expect("parse");
@@ -600,7 +589,7 @@ mod tests {
             occlusion_two_pass: true,
             ..Default::default()
         };
-        assert!(PostProcessConfig::from_args(cfg.to_args()).occlusion_two_pass);
+        assert!(cfg.clone().occlusion_two_pass);
         // Deserialises from jsonl args; omitting it leaves the feature off.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"occlusion_two_pass":true}"#).expect("parse");
@@ -643,10 +632,7 @@ mod tests {
             upscale_backend: UpscalerBackend::Xess,
             ..Default::default()
         };
-        assert_eq!(
-            PostProcessConfig::from_args(cfg.to_args()).upscale_backend,
-            UpscalerBackend::Xess
-        );
+        assert_eq!(cfg.clone().upscale_backend, UpscalerBackend::Xess);
     }
 
     #[test]

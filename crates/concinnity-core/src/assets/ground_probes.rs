@@ -1,6 +1,6 @@
 // src/assets/ground_probes.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 
 /// One downward ground probe: a ray and, once physics has answered it, the
 /// hit it found.
@@ -26,8 +26,8 @@ pub struct GroundProbe {
 /// Not authored in world files: it has no `args`.
 #[derive(Debug, Clone, Default)]
 pub struct GroundProbes {
-    /// The `SkinnedMesh` asset whose IK chains these probes serve.
-    pub target: AssetId,
+    /// The `SkinnedMesh` resource whose IK chains these probes serve.
+    pub target: SkinnedMeshHandle,
     /// One probe per IK chain, in the graph's `ik_chains` order.
     pub probes: Vec<GroundProbe>,
 }

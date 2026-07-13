@@ -1,6 +1,6 @@
 // src/assets/camera_probe.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 
 /// Runtime-only occlusion probe for the third-person follow camera.
 ///
@@ -16,7 +16,7 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, Default)]
 pub struct CameraProbe {
     /// The followed `SkinnedMesh`, whose rig capsule the ray must ignore.
-    pub target: AssetId,
+    pub target: SkinnedMeshHandle,
     /// Orbit pivot in world space (the ray origin).
     pub pivot: [f32; 3],
     /// Unclamped camera position the controller wants this frame.

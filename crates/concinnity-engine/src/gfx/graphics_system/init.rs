@@ -7,8 +7,8 @@ use crate::assets::{
     ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, StreamingConfig, TextLabel,
     VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
+use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Component, PipelineContext};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::{
     draw_list::{self, MaterialEntry},
@@ -61,7 +61,7 @@ impl GraphicsSystem {
         );
 
         if let Some(w) = ctx.drain::<Window>().into_iter().next() {
-            self.window_args = w.to_args();
+            self.window_args = w;
         }
         // Capture the DebugHud chip ids (cursor, camera, passes stack order) so
         // the frame step can anchor them to the top-right of the window. Passes
@@ -106,7 +106,7 @@ impl GraphicsSystem {
         }
 
         if let Some(c) = ctx.drain::<GraphicsConfig>().into_iter().next() {
-            let args = c.to_args();
+            let args = c;
             self.frames_in_flight = args.frames_in_flight as usize;
             self.vsync = args.vsync;
             self.fps_cap = args.fps_cap;
@@ -693,7 +693,7 @@ impl GraphicsSystem {
             std::collections::HashMap::new()
         };
 
-        let (mesh_geometry, mesh_sources, always_resident_meshes, mesh_handle_to_id) =
+        let (mesh_geometry, mesh_sources, always_resident_meshes, component_mesh_handles) =
             match draw_list::load_mesh_geometry(ctx) {
                 Some(m) => m,
                 None => {
@@ -702,35 +702,59 @@ impl GraphicsSystem {
                 }
             };
 
-        // Drain SkinnedMesh assets and decode their geometry payloads now,
-        // before the shared blob is released. The skeleton, world transform,
-        // and material references travel in the component args; only the
-        // vertex/index geometry lives in the compiled blob.
-        // Decoded geometry for one SkinnedMesh: the asset, its vertices, LOD0
-        // indices, the bind-pose skeleton, and LOD alternates.
+        // Load the SkinnedMesh resource table and decode each entry's geometry
+        // payload now, before the shared blob is released. The placement,
+        // material references, capsule, and spawn reserve travel in the baked
+        // `data_bytes`; the vertex/index geometry + skeleton in the compiled
+        // payload. The table index IS the mesh's `SkinnedMeshHandle`, which keys
+        // the whole animation correlation web.
+        // Decoded geometry for one SkinnedMesh: its handle, interned name id,
+        // the baked data, its vertices, LOD0 indices, the bind-pose skeleton,
+        // and LOD alternates.
         type SkinnedGeometry = (
+            crate::ecs::SkinnedMeshHandle,
+            AssetId,
             crate::assets::SkinnedMesh,
             Vec<crate::gfx::mesh_payload::SkinnedVertex>,
             Vec<u16>,
             Vec<crate::assets::JointDef>,
             Vec<(f32, Vec<u16>)>,
         );
+        let skinned_table = ctx
+            .resource::<crate::resource::SkinnedMeshTable>()
+            .cloned()
+            .unwrap_or_default();
         let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
         let mut skinned_blob_indices: Vec<u32> = Vec::new();
-        // Handle -> asset id for the animation correlation web. The drain yields
-        // SkinnedMeshes in cook declaration order, which is their handle order, so
-        // pushing each mesh's asset id here builds the handle-indexed bridge that
-        // the animation / third-person systems read to resolve their authored
-        // `target` handles back to the mesh's runtime asset id.
-        let mut skinned_handle_ids: Vec<AssetId> = Vec::new();
-        for sm in ctx.drain::<crate::assets::SkinnedMesh>() {
-            skinned_handle_ids.push(sm.asset_id);
-            let locator = match &sm.locator {
+        // Interned name -> handle, published for the debug WS animation
+        // commands, which address a mesh by its typed name.
+        let mut skinned_name_index: std::collections::HashMap<
+            AssetId,
+            crate::ecs::SkinnedMeshHandle,
+        > = std::collections::HashMap::new();
+        for (handle, entry) in skinned_table.0.iter().enumerate() {
+            let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
+            let (name_id, sm): (u32, crate::assets::SkinnedMesh) =
+                match serde_json::from_slice(&entry.data_bytes) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!(
+                            "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
+                            handle.index(),
+                            e
+                        );
+                        self.failed = true;
+                        return;
+                    }
+                };
+            let name_id = AssetId(name_id);
+            skinned_name_index.insert(name_id, handle);
+            let locator = match &entry.payload {
                 Some(l) => l.clone(),
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: SkinnedMesh '{}' has no compiled payload",
-                        sm.asset_id
+                        "GraphicsSystem: SkinnedMesh handle {} has no compiled payload",
+                        handle.index()
                     );
                     self.failed = true;
                     return;
@@ -741,8 +765,8 @@ impl GraphicsSystem {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
                     tracing::error!(
-                        "GraphicsSystem: failed to read SkinnedMesh '{}' payload: {:?}",
-                        sm.asset_id,
+                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {:?}",
+                        handle.index(),
                         e
                     );
                     self.failed = true;
@@ -752,7 +776,7 @@ impl GraphicsSystem {
             match crate::gfx::mesh_payload::deserialise_skinned_with_lods(&bytes) {
                 Ok((v, idx, payload_joints, alternates)) => {
                     let skeleton = crate::geometry::payload_joints_to_defs(payload_joints);
-                    skinned_geometry.push((sm, v, idx, skeleton, alternates));
+                    skinned_geometry.push((handle, name_id, sm, v, idx, skeleton, alternates));
                 }
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
@@ -761,12 +785,11 @@ impl GraphicsSystem {
                 }
             }
         }
-        // Publish the handle -> asset id bridge before AnimationSystem /
-        // ThirdPersonSystem init (both run after GraphicsSystem), which drain the
-        // SkinnedMesh-referencing components and need to correlate their authored
-        // handles with the asset-id-keyed runtime web.
-        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap(
-            skinned_handle_ids,
+        // Publish the name index before AnimationSystem inits (it runs after
+        // GraphicsSystem) so debug WS animation commands can resolve a typed
+        // mesh name to the handle keying the correlation web.
+        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
+            skinned_name_index,
         ));
 
         // drain Model components into a name-keyed map for Prop lookup
@@ -1127,15 +1150,16 @@ impl GraphicsSystem {
         let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
         let mut skinned_indices: Vec<u16> = Vec::new();
         let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
-        // One entry per authored skinned mesh: its asset id, the skinned index of
-        // its (visible) template draw object, and its bind-pose skeleton. The
-        // template index is recorded explicitly rather than inferred from
-        // position because pre-reserved instance copies interleave the draw-object
-        // list (template, copies, template, copies, ...).
-        // (mesh id, draw index, skeleton, authored model, optional capsule)
-        // per skinned mesh; drives the SkeletonPose + CharacterRig publish
-        // after the geometry upload below.
+        // One entry per authored skinned mesh: its handle, interned name id,
+        // the skinned index of its (visible) template draw object, and its
+        // bind-pose skeleton. The template index is recorded explicitly rather
+        // than inferred from position because pre-reserved instance copies
+        // interleave the draw-object list (template, copies, template, ...).
+        // (handle, name id, draw index, skeleton, authored model, optional
+        // capsule) per skinned mesh; drives the SkeletonPose + CharacterRig
+        // publish after the geometry upload below.
         type SkinnedSkeletonEntry = (
+            crate::ecs::SkinnedMeshHandle,
             AssetId,
             usize,
             skinning::Skeleton,
@@ -1152,14 +1176,14 @@ impl GraphicsSystem {
         // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
         // fan-out), so one entry per asset.
         let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
-        for (sm, verts, idxs, joint_defs, lod_alts) in &skinned_geometry {
+        for (handle, name_id, sm, verts, idxs, joint_defs, lod_alts) in &skinned_geometry {
             let (texture_slot, normal_map_slot, material) = if let Some(mat_id) = sm.material {
                 match material_map.get(&mat_id) {
                     Some(&(s, n, u)) => (s, n, u),
                     None => {
                         tracing::error!(
                             "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                            sm.asset_id,
+                            name_id,
                             mat_id.index()
                         );
                         self.failed = true;
@@ -1267,7 +1291,7 @@ impl GraphicsSystem {
                     tracing::warn!(
                         "GraphicsSystem: SkinnedMesh '{}' reserved {} of {} requested instances; \
                          the u16-indexed skinned vertex buffer is full",
-                        sm.asset_id,
+                        name_id,
                         reserved,
                         sm.max_instances
                     );
@@ -1309,7 +1333,8 @@ impl GraphicsSystem {
             }
 
             skinned_skeletons.push((
-                sm.asset_id,
+                *handle,
+                *name_id,
                 skinned_index,
                 skeleton,
                 sm.model_matrix(),
@@ -1717,7 +1742,7 @@ impl GraphicsSystem {
             mut draw_objects,
             instanced_clusters,
             prop_draw_indices,
-            mesh_id_to_draws,
+            mesh_handle_to_draws,
         ) = match draw_list::build_draw_list(draw_list::DrawListInputs {
             items: &items,
             instanced_props: &instanced_props,
@@ -1728,7 +1753,6 @@ impl GraphicsSystem {
             texture_count,
             material_map: &material_map,
             always_resident_meshes: &always_resident_meshes,
-            mesh_handle_to_id: &mesh_handle_to_id,
         }) {
             Some(d) => d,
             None => {
@@ -1757,8 +1781,8 @@ impl GraphicsSystem {
         // .glb change but the reload helper has nothing to push to.
         let mut mesh_source_map = super::hot_reload_sources::MeshSourceMap::new();
         if capture_sources {
-            for (asset_id, meta) in &mesh_sources {
-                if let Some(draws) = mesh_id_to_draws.get(asset_id) {
+            for (handle, meta) in &mesh_sources {
+                if let Some(draws) = mesh_handle_to_draws.get(handle) {
                     if draws.is_empty() {
                         continue;
                     }
@@ -1785,7 +1809,10 @@ impl GraphicsSystem {
             super::hot_reload_sources::ProceduralMeshSourceMap::new();
         if capture_sources {
             for (asset_id, (name, args)) in &proc_mesh_args_snapshot {
-                if let Some(draws) = mesh_id_to_draws.get(asset_id) {
+                let Some(handle) = component_mesh_handles.get(asset_id) else {
+                    continue;
+                };
+                if let Some(draws) = mesh_handle_to_draws.get(handle) {
                     if draws.is_empty() {
                         continue;
                     }
@@ -2413,25 +2440,25 @@ impl GraphicsSystem {
                 backend.seed_skinned_instance_pool(std::mem::take(&mut skinned_pool_reservations));
             }
             let skinned_count = skinned_skeletons.len();
-            for (mesh_id, template_index, skeleton, model, capsule) in skinned_skeletons {
+            for (handle, name_id, template_index, skeleton, model, capsule) in skinned_skeletons {
                 let entity = ctx.components.spawn();
                 ctx.insert(
                     entity,
-                    crate::assets::SkeletonPose::new(mesh_id, template_index, skeleton),
+                    crate::assets::SkeletonPose::new(handle, template_index, skeleton),
                 );
                 // Register the template under its mesh name so a runtime
                 // SpawnRequest can resolve it to this entity, the same way the
                 // static spawn path resolves a named placement. The spawn then
                 // clones this template's skeleton + pose into a pooled slot.
                 if let Some(by_name) = ctx.resource_mut::<crate::ecs::decompose::EntityByName>() {
-                    by_name.0.insert(mesh_id, entity);
+                    by_name.0.insert(name_id, entity);
                 }
                 // A mesh with a capsule gets a character rig: PhysicsSystem
                 // (init runs later this tick) creates the kinematic capsule
                 // from it, and the render transform follows it each frame.
                 if let Some(capsule) = capsule {
                     ctx.push(crate::assets::CharacterRig::new(
-                        mesh_id,
+                        handle,
                         template_index,
                         model,
                         capsule.half_height.max(0.05),

@@ -41,7 +41,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
                 Err(e) => {
                     tracing::error!(
                         "animation hot-reload: failed to parse '{}': {} \
-                         (clip slot {}:{} kept its old keyframes)",
+                         (clip slot {:?}:{} kept its old keyframes)",
                         entry.source,
                         e,
                         entry.target,
@@ -62,7 +62,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
             Err(e) => {
                 tracing::error!(
                     "animation hot-reload: failed to import animation from '{}': {} \
-                     (clip slot {}:{} kept its old keyframes)",
+                     (clip slot {:?}:{} kept its old keyframes)",
                     entry.source,
                     e,
                     entry.target,
@@ -77,7 +77,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
             reloaded += 1;
         } else {
             tracing::error!(
-                "animation hot-reload: target {} clip {} no longer present (skipped)",
+                "animation hot-reload: target {:?} clip {} no longer present (skipped)",
                 entry.target,
                 entry.clip_index
             );

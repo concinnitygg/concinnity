@@ -30,7 +30,7 @@ mod schema;
 mod write;
 
 pub use read::{BlobData, BlobError, load_raw, payload_section_start, read_cnb};
-pub use schema::{AssetKind, BlobAssetDef, BlobMeta, RecordKind, ResourceKind, ResourceRecord};
+pub use schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
 #[cfg(feature = "write")]
 pub use write::write_cnb;
 

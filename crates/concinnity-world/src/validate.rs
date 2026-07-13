@@ -1,11 +1,10 @@
-// src/assets/validate.rs
+// src/validate.rs
 //
-// Named `from_args` validators for the data-only assets whose `Component` impls
-// are generated centrally (see `cn_impl_components!`). Each function clamps or
-// normalizes an asset's authored args into a self-consistent runtime value. The
-// registry entry names the function via `validate: <fn>`; the generated
-// `from_args` calls it. These run at both cook (blob build) and runtime load, so
-// they stay in core.
+// Named bake-time validators for the data-only assets. Each function clamps or
+// normalizes an asset's authored value into a self-consistent runtime value.
+// The registry entry names the function via `validate: <fn>`; the build-side
+// `ComponentType::reserialize_args` applies it while baking the blob record.
+// The runtime never runs these -- a baked record is already validated.
 
 use crate::assets::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
@@ -13,16 +12,23 @@ use crate::assets::{
     VoxelChunk, WaterSurface, WaterWave,
 };
 
-/// Maximum number of waves per water surface.
-pub const MAX_WATER_WAVES: usize = 4;
+// The wave ceiling lives in core (`concinnity_core::assets::MAX_WATER_WAVES`,
+// shared with the render backends); re-imported here for the clamp.
+use crate::assets::MAX_WATER_WAVES;
 
-pub(crate) fn point_light(mut args: PointLight) -> PointLight {
+// SdfVolume's clamp lives beside its platform-source helpers in core; this
+// wrapper gives it the registry's `validate:` shape.
+pub fn sdf_volume(v: crate::assets::SdfVolume) -> crate::assets::SdfVolume {
+    crate::assets::sdf_volume::clamped(v)
+}
+
+pub fn point_light(mut args: PointLight) -> PointLight {
     args.intensity = args.intensity.max(0.0);
     args.range = args.range.max(0.0);
     args
 }
 
-pub(crate) fn directional_light(mut args: DirectionalLight) -> DirectionalLight {
+pub fn directional_light(mut args: DirectionalLight) -> DirectionalLight {
     args.intensity = args.intensity.max(0.0);
     args
 }
@@ -46,7 +52,7 @@ pub fn material(mut args: Material) -> Material {
     args
 }
 
-pub(crate) fn glass_panel(mut args: GlassPanel) -> GlassPanel {
+pub fn glass_panel(mut args: GlassPanel) -> GlassPanel {
     args.normal = args.unit_normal();
     args.half_size[0] = args.half_size[0].max(1e-3);
     args.half_size[1] = args.half_size[1].max(1e-3);
@@ -56,7 +62,7 @@ pub(crate) fn glass_panel(mut args: GlassPanel) -> GlassPanel {
     args
 }
 
-pub(crate) fn water_surface(mut args: WaterSurface) -> WaterSurface {
+pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.subdivisions = args.subdivisions.clamp(8, 255);
     if args.waves.len() > MAX_WATER_WAVES {
         args.waves.truncate(MAX_WATER_WAVES);
@@ -67,7 +73,7 @@ pub(crate) fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args
 }
 
-pub(crate) fn joint(mut args: Joint) -> Joint {
+pub fn joint(mut args: Joint) -> Joint {
     // Normalise the kind string so `to_args` round-trips cleanly.
     if let Some(k) = JointKind::from_str_norm(&args.kind) {
         args.kind = k.as_str().to_string();
@@ -75,7 +81,7 @@ pub(crate) fn joint(mut args: Joint) -> Joint {
     args
 }
 
-pub(crate) fn decal(mut args: Decal) -> Decal {
+pub fn decal(mut args: Decal) -> Decal {
     // Clamp the alpha to [0, 1] so a stray > 1 doesn't blow out the
     // composite. The size components are left as-authored: a non-positive
     // value silently disables the decal in the gfx-side resolver below.
@@ -83,7 +89,7 @@ pub(crate) fn decal(mut args: Decal) -> Decal {
     args
 }
 
-pub(crate) fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
+pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     // Half-extents are sizes: keep them non-negative so the influence box is
     // never inverted.
     for e in &mut args.half_extents {
@@ -92,19 +98,19 @@ pub(crate) fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     args
 }
 
-pub(crate) fn rigid_body(mut args: RigidBody) -> RigidBody {
+pub fn rigid_body(mut args: RigidBody) -> RigidBody {
     // Runtime state is always reset on construction.
     args.is_grounded = true;
     args
 }
 
-pub(crate) fn prop(mut args: Prop) -> Prop {
+pub fn prop(mut args: Prop) -> Prop {
     args.cull_distance = args.cull_distance.max(0.0);
     args.is_held = false;
     args
 }
 
-pub(crate) fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
+pub fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
     // Asset-side floor: keep every authored field in a self-consistent
     // range. The gfx-side `build_particle_records` adds its own clamps
     // for fields that affect GPU buffer sizing.
@@ -131,7 +137,7 @@ pub(crate) fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
     args
 }
 
-pub(crate) fn volumetric_fog(mut args: VolumetricFog) -> VolumetricFog {
+pub fn volumetric_fog(mut args: VolumetricFog) -> VolumetricFog {
     // Density / falloff / ambient floor at 0; max_distance must stay
     // positive so the gfx-side resolver does not divide by zero when
     // computing the per-step length.
@@ -147,12 +153,12 @@ pub(crate) fn volumetric_fog(mut args: VolumetricFog) -> VolumetricFog {
     args
 }
 
-pub(crate) fn instanced_prop(mut args: InstancedProp) -> InstancedProp {
+pub fn instanced_prop(mut args: InstancedProp) -> InstancedProp {
     args.cull_distance = args.cull_distance.max(0.0);
     args
 }
 
-pub(crate) fn voxel_chunk(mut args: VoxelChunk) -> VoxelChunk {
+pub fn voxel_chunk(mut args: VoxelChunk) -> VoxelChunk {
     args.block_size = args.block_size.max(0.0);
     if args.lod_levels == 0 {
         args.lod_levels = 1;
@@ -164,7 +170,6 @@ pub(crate) fn voxel_chunk(mut args: VoxelChunk) -> VoxelChunk {
 #[cfg(test)]
 mod tests {
     use crate::assets::*;
-    use crate::ecs::Component;
 
     mod material {
         use super::*;
@@ -181,7 +186,7 @@ mod tests {
         fn see_through_implies_transparent() {
             // A material that opts into see-through but leaves `transparent` at
             // its default must still route through the transparent pass.
-            let m = crate::assets::validate::material(Material {
+            let m = super::super::material(Material {
                 see_through: true,
                 ..Material::default()
             });
@@ -193,7 +198,7 @@ mod tests {
         fn transparent_without_see_through_stays_opaque_layer() {
             // The importer's glass detection sets `transparent` only; that
             // material stays Layer 1 (opaque reflective) and keeps see-through off.
-            let m = crate::assets::validate::material(Material {
+            let m = super::super::material(Material {
                 transparent: true,
                 ..Material::default()
             });
@@ -239,23 +244,22 @@ mod tests {
         fn clamps_alpha_through_from_args() {
             let json = r#"{"tint":[1,1,1,5.0]}"#;
             let parsed: Decal = serde_json::from_str(json).unwrap();
-            let normalised = Decal::from_args(parsed);
+            let normalised = super::super::decal(parsed);
             assert_eq!(normalised.tint[3], 1.0);
 
             let json = r#"{"tint":[1,1,1,-0.5]}"#;
             let parsed: Decal = serde_json::from_str(json).unwrap();
-            let normalised = Decal::from_args(parsed);
+            let normalised = super::super::decal(parsed);
             assert_eq!(normalised.tint[3], 0.0);
         }
     }
 
     mod glass_panel {
         use super::*;
-        use crate::ecs::Component;
 
         #[test]
         fn from_args_normalizes_normal() {
-            let g = GlassPanel::from_args(GlassPanel {
+            let g = super::super::glass_panel(GlassPanel {
                 normal: [0.0, 0.0, 4.0],
                 ..Default::default()
             });
@@ -266,7 +270,7 @@ mod tests {
 
         #[test]
         fn from_args_falls_back_on_degenerate_normal() {
-            let g = GlassPanel::from_args(GlassPanel {
+            let g = super::super::glass_panel(GlassPanel {
                 normal: [0.0, 0.0, 0.0],
                 ..Default::default()
             });
@@ -275,7 +279,7 @@ mod tests {
 
         #[test]
         fn from_args_clamps_ranges() {
-            let g = GlassPanel::from_args(GlassPanel {
+            let g = super::super::glass_panel(GlassPanel {
                 half_size: [-2.0, 0.0],
                 opacity: 1.5,
                 refraction_strength: -0.1,
@@ -339,7 +343,7 @@ mod tests {
         fn from_args_normalises_kind_string() {
             let json = r#"{"kind":"HINGE"}"#;
             let parsed: Joint = serde_json::from_str(json).unwrap();
-            let normalised = Joint::from_args(parsed);
+            let normalised = super::super::joint(parsed);
             assert_eq!(normalised.kind, "revolute");
         }
 
@@ -398,7 +402,7 @@ mod tests {
                 size_end: -0.1,
                 ..Default::default()
             };
-            let n = ParticleEmitter::from_args(a);
+            let n = super::super::particle_emitter(a);
             assert_eq!(n.spread_deg, 180.0);
             assert_eq!(n.speed_min, 0.0);
             assert_eq!(n.speed_max, 0.0);
@@ -417,7 +421,7 @@ mod tests {
                 speed_max: 2.0,
                 ..Default::default()
             };
-            let n = ParticleEmitter::from_args(a);
+            let n = super::super::particle_emitter(a);
             assert!((n.speed_max - n.speed_min).abs() < 1e-6);
         }
 
@@ -427,7 +431,7 @@ mod tests {
                 max_particles: 200_000,
                 ..Default::default()
             };
-            let n = ParticleEmitter::from_args(a);
+            let n = super::super::particle_emitter(a);
             assert_eq!(n.max_particles, 65_536);
         }
     }
@@ -467,7 +471,7 @@ mod tests {
                 phase_g: 1.4,
                 ..Default::default()
             };
-            let n = VolumetricFog::from_args(a);
+            let n = super::super::volumetric_fog(a);
             assert_eq!(n.density, 0.0);
             assert_eq!(n.height_falloff, 0.0);
             assert_eq!(n.ambient, 0.0);
@@ -482,7 +486,7 @@ mod tests {
                 phase_g: -0.3,
                 ..Default::default()
             };
-            let n = VolumetricFog::from_args(a);
+            let n = super::super::volumetric_fog(a);
             assert!((n.density - 0.08).abs() < 1e-6);
             assert!((n.phase_g - (-0.3)).abs() < 1e-6);
         }
@@ -552,7 +556,7 @@ mod tests {
                 cull_distance: -5.0,
                 ..InstancedProp::default()
             };
-            let p = InstancedProp::from_args(args);
+            let p = super::super::instanced_prop(args);
             assert_eq!(p.cull_distance, 0.0);
         }
     }

@@ -10,7 +10,7 @@
 
 pub use concinnity_asset::{ShaderKind, ShaderStage};
 
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator};
+use crate::ecs::{Component, PayloadLocator};
 
 // Resolve the source filename for the current build platform from a stage's
 // declared `source` / `sources`. Mirrors the build-time
@@ -56,15 +56,9 @@ pub fn resolve_runtime_source_path(raw: &str) -> String {
 
 impl Component for ShaderStage {
     const NAME: &'static str = "ShaderStage";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    const PAYLOAD: AssetPayload = AssetPayload::Compiled;
-    type Args = Self;
 
-    fn to_args(&self) -> Self {
-        self.clone()
-    }
-    fn from_args(args: Self) -> Self {
-        args
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {

@@ -8,8 +8,7 @@
 // the rig component for GraphicsSystem's render follow.
 
 use crate::assets::{CharacterRig, RootMotion};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{EventCursor, PipelineContext};
+use crate::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use crate::gfx::root_motion::add3;
 
 use super::{BodyHandle, PhysicsWorld};
@@ -17,7 +16,7 @@ use super::{BodyHandle, PhysicsWorld};
 // Physics-side state for one rig.
 #[derive(Debug)]
 pub(crate) struct RigPhysics {
-    pub target: AssetId,
+    pub target: SkinnedMeshHandle,
     pub handle: BodyHandle,
     // Current vertical velocity (world units/second).
     pub vy: f32,

@@ -117,8 +117,7 @@ fn main() {
     let struct_file_idx = collect_structs(&files);
     // Manual components keep a literal `impl Component`; the rest come from the
     // concinnity-world registries. A type appears in exactly one of the two.
-    let mut all_components = collect_components(&files, &struct_file_idx);
-    all_components.extend(collect_registry_components(&all_components));
+    let all_components = collect_registry_components();
 
     // Authorable assets only: a RuntimeOnly component is engine-internal, never
     // declared in a world, so it gets no page.
@@ -418,84 +417,26 @@ fn collect_structs(files: &[syn::File]) -> HashMap<String, usize> {
     out
 }
 
-fn collect_components(
-    files: &[syn::File],
-    struct_file_idx: &HashMap<String, usize>,
-) -> Vec<ComponentMeta> {
-    let mut out = Vec::new();
-    for file in files {
-        for item in &file.items {
-            let imp = match item {
-                syn::Item::Impl(i) => i,
-                _ => continue,
-            };
-            let trait_name = match &imp.trait_ {
-                Some((_, p, _)) => p
-                    .segments
-                    .last()
-                    .map(|s| s.ident.to_string())
-                    .unwrap_or_default(),
-                None => continue,
-            };
-            // `Component` is implemented by the data struct itself and carries
-            // the asset metadata surfaced in the reference. Systems are internal
-            // engine code with no declarable asset, so they have no metadata.
-            if trait_name != "Component" {
-                continue;
-            }
-            let struct_ident = match imp.self_ty.as_ref() {
-                syn::Type::Path(tp) => tp
-                    .path
-                    .segments
-                    .last()
-                    .map(|s| s.ident.to_string())
-                    .unwrap_or_default(),
-                _ => continue,
-            };
-            let name = name_const(imp).unwrap_or_else(|| struct_ident.clone());
-            // The field table is built from the asset's `args`, not its runtime
-            // struct. Most assets use `type Args = Self`; a few (Camera3D, Room,
-            // File) keep runtime state on the Component and declare a separate
-            // args struct, document that one when it exists.
-            let args_struct = component_args_struct(imp)
-                .filter(|a| a != "Self" && *a != struct_ident && struct_file_idx.contains_key(a))
-                .unwrap_or_else(|| struct_ident.clone());
-            out.push(ComponentMeta {
-                name,
-                struct_ident,
-                args_struct,
-                // RuntimeOnly is the trait default, used when `ORIGIN` is unset.
-                origin: component_origin(imp).unwrap_or_else(|| "RuntimeOnly".to_string()),
-            });
-        }
-    }
-    out
-}
-
-// Components whose `impl Component` is generated from the registry metadata,
-// read through the concinnity-world authoring registries. `ComponentType::all`
-// covers every component; the ones with a hand-written impl were already
-// collected from source by the pass above (matched by NAME), so they are
-// skipped here. Every generated type is a pass-through (`Args = Self`) whose
-// NAME equals the type name, so `name`, `struct_ident`, and `args_struct` all
-// match. Resource-only assets (`ResourceAssetType`, e.g. AudioClip) still get a
-// doc page: their schema lives in concinnity-asset like every External asset,
-// they have just left the component registry.
-fn collect_registry_components(manual: &[ComponentMeta]) -> Vec<ComponentMeta> {
+// Every documented asset type, read through the concinnity-world authoring
+// registries (the single source of the origin / args-schema metadata now that
+// the runtime `Component` trait carries none). `ComponentType::all` covers
+// every component; `args_struct_name` names the authored args schema (the type
+// itself for pass-through assets, the `args:` override for the divergent
+// ones, whose fields the parameter table renders). Resource-only assets
+// (`ResourceAssetType`, e.g. AudioClip) still get a doc page: their schema
+// lives in concinnity-asset like every External asset, they have just left the
+// component registry.
+fn collect_registry_components() -> Vec<ComponentMeta> {
     use concinnity_world::registry::ComponentType;
     use concinnity_world::resource_type::ResourceAssetType;
 
-    let manual_names: BTreeSet<&str> = manual.iter().map(|c| c.name.as_str()).collect();
     let mut out = Vec::new();
     for &ty in ComponentType::all() {
-        if manual_names.contains(ty.as_str()) {
-            continue;
-        }
         let name = ty.as_str().to_string();
         out.push(ComponentMeta {
             name: name.clone(),
             struct_ident: name.clone(),
-            args_struct: name,
+            args_struct: ty.args_struct_name().to_string(),
             origin: format!("{:?}", ty.registration().origin),
         });
     }
@@ -734,48 +675,6 @@ fn array_len(expr: &syn::Expr) -> Option<usize> {
         return i.base10_parse::<usize>().ok();
     }
     None
-}
-
-// The string literal NAME constant on a Component impl, if any.
-fn name_const(imp: &syn::ItemImpl) -> Option<String> {
-    imp.items.iter().find_map(|it| {
-        let c = match it {
-            syn::ImplItem::Const(c) if c.ident == "NAME" => c,
-            _ => return None,
-        };
-        if let syn::Expr::Lit(lit) = &c.expr
-            && let syn::Lit::Str(s) = &lit.lit
-        {
-            return Some(s.value());
-        }
-        None
-    })
-}
-
-// The `AssetOrigin` variant named by a Component impl's `const ORIGIN`, if set
-// (e.g. "External"). The trait default applies when the impl omits it.
-fn component_origin(imp: &syn::ItemImpl) -> Option<String> {
-    imp.items.iter().find_map(|it| {
-        let c = match it {
-            syn::ImplItem::Const(c) if c.ident == "ORIGIN" => c,
-            _ => return None,
-        };
-        if let syn::Expr::Path(p) = &c.expr {
-            return p.path.segments.last().map(|s| s.ident.to_string());
-        }
-        None
-    })
-}
-
-// The struct named by a Component impl's `type Args = …`, if any.
-fn component_args_struct(imp: &syn::ItemImpl) -> Option<String> {
-    imp.items.iter().find_map(|it| match it {
-        syn::ImplItem::Type(t) if t.ident == "Args" => match &t.ty {
-            syn::Type::Path(tp) => tp.path.segments.last().map(|s| s.ident.to_string()),
-            _ => None,
-        },
-        _ => None,
-    })
 }
 
 // True for fields that carry #[serde(skip)] (exact token, not skip_serializing).

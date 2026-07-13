@@ -1,6 +1,6 @@
 // src/assets/root_motion_event.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 
 /// Per-frame character displacement extracted from root-motion clips.
 ///
@@ -12,8 +12,8 @@ use crate::ecs::asset_id::AssetId;
 /// a missed frame must not accumulate.
 #[derive(Debug, Clone, Copy)]
 pub struct RootMotion {
-    /// The `SkinnedMesh` asset whose animation produced the displacement.
-    pub target: AssetId,
+    /// The `SkinnedMesh` resource whose animation produced the displacement.
+    pub target: SkinnedMeshHandle,
     /// Displacement in the mesh's local space for this frame.
     pub delta: [f32; 3],
 }

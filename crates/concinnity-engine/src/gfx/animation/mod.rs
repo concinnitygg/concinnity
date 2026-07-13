@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use crate::assets::{Animation, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
+use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
 use crate::gfx::skinning::{self, AnimationClip};
 use crate::jobs;
 
@@ -61,9 +61,9 @@ enum TargetMode {
 // editor crate; the runtime crate only stores the catalogue.
 #[derive(Debug, Clone)]
 pub struct AnimationReloadEntry {
-    // Target `SkinnedMesh` asset id, also the key into
+    // Target `SkinnedMesh` handle, also the key into
     // [`AnimationSystem::targets`] where this clip lives.
-    pub target: AssetId,
+    pub target: SkinnedMeshHandle,
     // Position in the target bucket's `clips`. Set at init when the clip is
     // first pushed; stable for the process lifetime since the Vec is
     // neither rebuilt nor trimmed.
@@ -87,9 +87,11 @@ pub struct AnimationReloadEntry {
 // `World::start` when the world declares any `Animation` or `AnimGraph`;
 // never a world-declared asset, so it carries no config.
 pub struct AnimationSystem {
-    // Per-target clip buckets keyed by the `SkinnedMesh` asset id they
-    // animate.
-    targets: HashMap<AssetId, TargetState>,
+    // Per-target clip buckets keyed by the `SkinnedMesh` handle they animate.
+    targets: HashMap<SkinnedMeshHandle, TargetState>,
+    // Interned-name -> handle index snapshotted at init, so the debug WS
+    // animation commands (which address a mesh by name) can find the bucket.
+    name_index: crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex,
     // Wall-clock origin, captured on the first step.
     start: Option<Instant>,
     // Clip time `t` of the previous step, for the graph clocks' delta time.
@@ -125,6 +127,7 @@ impl AnimationSystem {
     pub fn new() -> Self {
         Self {
             targets: HashMap::new(),
+            name_index: Default::default(),
             start: None,
             last_step_secs: None,
             pause_anchor: None,
@@ -152,7 +155,7 @@ impl AnimationSystem {
     #[allow(dead_code)]
     pub fn apply_reloaded_clip(
         &mut self,
-        target: AssetId,
+        target: SkinnedMeshHandle,
         clip_index: usize,
         clip: AnimationClip,
         weight: f32,
@@ -191,20 +194,20 @@ impl System for AnimationSystem {
         // decided below (graph if the world declares one, weighted blend
         // otherwise).
         let capture_sources = crate::app::dev_flags::enabled();
-        // Handle -> asset id bridge published by GraphicsSystem (which drained the
-        // SkinnedMesh column before this system inits). Snapshotted before the
-        // Animation drain so a `target` handle resolves to the mesh's asset id that
-        // keys the correlation web (`SkeletonPose.mesh_id`, `AnimParams.target`).
-        let skinned_map = ctx
-            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap>()
+        // Interned-name -> handle index published by GraphicsSystem (which
+        // loaded the SkinnedMesh table before this system inits), kept for the
+        // debug WS animation commands. The correlation web itself is keyed by
+        // the authored `target` handles directly.
+        self.name_index = ctx
+            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex>()
             .cloned()
             .unwrap_or_default();
         // Animation asset id -> (target bucket, clip slot), for resolving
         // graph clip references onto bucket indices.
-        let mut clip_slots: HashMap<AssetId, (AssetId, usize)> = HashMap::new();
+        let mut clip_slots: HashMap<AssetId, (SkinnedMeshHandle, usize)> = HashMap::new();
         let mut count = 0usize;
         for anim in ctx.drain::<Animation>() {
-            let Some(target) = anim.target.map(|h| skinned_map.get(h)) else {
+            let Some(target) = anim.target else {
                 tracing::warn!("AnimationSystem: Animation has no target SkinnedMesh, ignored");
                 continue;
             };
@@ -243,7 +246,7 @@ impl System for AnimationSystem {
 
         // Graphs take ownership of their target's bucket; each publishes an
         // `AnimParams` component seeded with its declared defaults.
-        let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots, &skinned_map);
+        let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots);
 
         // Build a startup transition for any flat bucket whose clips requested
         // a fade-in. The transition runs from zero to the declared weights over

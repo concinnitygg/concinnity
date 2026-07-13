@@ -1,6 +1,6 @@
 // src/assets/anim_params.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 
 /// Runtime-only parameter block for one animation graph target.
 ///
@@ -15,15 +15,15 @@ use crate::ecs::asset_id::AssetId;
 /// Not authored in world files: it has no `args`.
 #[derive(Debug, Clone)]
 pub struct AnimParams {
-    /// The `SkinnedMesh` asset whose graph these parameters drive.
-    pub target: AssetId,
+    /// The `SkinnedMesh` resource whose graph these parameters drive.
+    pub target: SkinnedMeshHandle,
     /// One value per graph parameter, in declaration order.
     pub values: Vec<f32>,
 }
 
 impl AnimParams {
     /// A parameter block for `target`, seeded with the graph's defaults.
-    pub fn new(target: AssetId, values: Vec<f32>) -> Self {
+    pub fn new(target: SkinnedMeshHandle, values: Vec<f32>) -> Self {
         Self { target, values }
     }
 
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn set_writes_in_range_and_ignores_out_of_range() {
-        let mut p = AnimParams::new(AssetId(1), vec![0.0, 1.0]);
+        let mut p = AnimParams::new(SkinnedMeshHandle(1), vec![0.0, 1.0]);
         p.set(0, 3.5);
         assert_eq!(p.values, vec![3.5, 1.0]);
         p.set(5, 9.0);

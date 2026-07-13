@@ -11,7 +11,7 @@
 pub use concinnity_asset::{SDF_PARAMS_LEN, SdfVolume};
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator};
+use crate::ecs::{Component, PayloadLocator};
 
 /// Hard cap on the per-volume cone-march step count. Matches the
 /// runtime kernel's loop bound; values above this are clamped.
@@ -29,50 +29,42 @@ fn current_platform_source(v: &SdfVolume) -> Option<String> {
     current_platform_source_arg(&args)
 }
 
+// Normalize an authored volume for the runtime: clamp the raymarch knobs to
+// sane bounds, force shadows off for translucent volumetrics (they write no
+// depth), and collapse the per-backend `fragment_shaders` map to the current
+// backend's `fragment_shader` (the DirectX raymarch pass filters volumes by
+// that path's extension). Run by the build-side validator at bake time.
+pub fn clamped(mut v: SdfVolume) -> SdfVolume {
+    // Extents must be positive: a zero or negative extent would produce an
+    // inside-out bounding box no fragment ever enters.
+    for axis in v.extent.iter_mut() {
+        if !axis.is_finite() || *axis <= 0.0 {
+            *axis = 1.0;
+        }
+    }
+    if !v.max_gradient.is_finite() || v.max_gradient <= 0.0 {
+        v.max_gradient = 1.0;
+    }
+    v.max_steps = v
+        .max_steps
+        .clamp(SDF_MAX_STEPS_FLOOR, SDF_MAX_STEPS_CEILING);
+    if !v.max_distance.is_finite() || v.max_distance < 0.1 {
+        v.max_distance = 0.1;
+    }
+    if v.volumetric {
+        v.cast_shadows = false;
+    }
+    if let Some(src) = current_platform_source(&v) {
+        v.fragment_shader = src;
+    }
+    v
+}
+
 impl Component for SdfVolume {
     const NAME: &'static str = "SdfVolume";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    const PAYLOAD: AssetPayload = AssetPayload::Compiled;
-    type Args = Self;
 
-    fn from_args(mut args: Self) -> Self {
-        // Extents must be positive: a zero or negative extent would
-        // produce an inside-out bounding box no fragment ever enters.
-        for axis in args.extent.iter_mut() {
-            if !axis.is_finite() || *axis <= 0.0 {
-                *axis = 1.0;
-            }
-        }
-        if !args.max_gradient.is_finite() || args.max_gradient <= 0.0 {
-            args.max_gradient = 1.0;
-        }
-        args.max_steps = args
-            .max_steps
-            .clamp(SDF_MAX_STEPS_FLOOR, SDF_MAX_STEPS_CEILING);
-        if !args.max_distance.is_finite() || args.max_distance < 0.1 {
-            args.max_distance = 0.1;
-        }
-        // Volumetrics are translucent: they don't write depth, so the
-        // shadow pass has no surface to project. Force the flag off
-        // rather than silently building an unusable shadow PSO.
-        if args.volumetric {
-            args.cast_shadows = false;
-        }
-        // Collapse the per-backend `fragment_shaders` map down to the single
-        // `fragment_shader` for the current backend so the runtime sees a
-        // concrete current-backend source path regardless of how the volume
-        // was authored. In particular the DirectX raymarch pass filters
-        // volumes by this path's extension; keeping it populated lets that
-        // filter work for map-authored volumes without a backend-specific
-        // change. No-op when the map has no entry for this backend.
-        if let Some(src) = current_platform_source(&args) {
-            args.fragment_shader = src;
-        }
-        args
-    }
-
-    fn to_args(&self) -> Self {
-        self.clone()
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 
     fn inject_name(&mut self, id: AssetId) {
@@ -216,12 +208,12 @@ mod tests {
             max_steps: 1,
             ..Default::default()
         };
-        let clamped = SdfVolume::from_args(a.clone());
-        assert_eq!(clamped.max_steps, SDF_MAX_STEPS_FLOOR);
+        let fixed = clamped(a.clone());
+        assert_eq!(fixed.max_steps, SDF_MAX_STEPS_FLOOR);
 
         a.max_steps = 9999;
-        let clamped = SdfVolume::from_args(a);
-        assert_eq!(clamped.max_steps, SDF_MAX_STEPS_CEILING);
+        let fixed = clamped(a);
+        assert_eq!(fixed.max_steps, SDF_MAX_STEPS_CEILING);
     }
 
     #[test]
@@ -230,7 +222,7 @@ mod tests {
             extent: [0.0, -1.0, f32::NAN],
             ..Default::default()
         };
-        let fixed = SdfVolume::from_args(a);
+        let fixed = clamped(a);
         assert_eq!(fixed.extent, [1.0, 1.0, 1.0]);
     }
 
@@ -241,7 +233,7 @@ mod tests {
             max_distance: f32::NAN,
             ..Default::default()
         };
-        let fixed = SdfVolume::from_args(a);
+        let fixed = clamped(a);
         assert_eq!(fixed.max_gradient, 1.0);
         assert_eq!(fixed.max_distance, 0.1);
     }
@@ -357,7 +349,7 @@ mod tests {
             fragment_shaders: Some(map),
             ..Default::default()
         };
-        let resolved = SdfVolume::from_args(a);
+        let resolved = clamped(a);
         assert_eq!(
             resolved.fragment_shader,
             format!("shaders/blob.{}", platform_ext())
@@ -371,7 +363,7 @@ mod tests {
             cast_shadows: true,
             ..Default::default()
         };
-        let fixed = SdfVolume::from_args(a);
+        let fixed = clamped(a);
         assert!(fixed.volumetric);
         assert!(
             !fixed.cast_shadows,
@@ -394,9 +386,9 @@ mod tests {
             ..Default::default()
         };
         v.params[7] = 0.42;
-        let json = serde_json::to_value(v.to_args()).expect("serialises");
+        let json = serde_json::to_value(v.clone()).expect("serialises");
         let back: SdfVolume = serde_json::from_value(json).expect("deserialises");
-        let back = SdfVolume::from_args(back);
+        let back = clamped(back);
         assert_eq!(back.centre, [1.0, 2.0, 3.0]);
         assert_eq!(back.extent, [4.0, 5.0, 6.0]);
         assert_eq!(back.fragment_shader, "shaders/foo.metal");

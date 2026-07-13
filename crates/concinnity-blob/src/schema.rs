@@ -12,12 +12,10 @@ pub struct BlobAssetDef {
     // Injected into the component at load time via `Component::inject_name`.
     pub name: Option<AssetId>,
     pub kind: AssetKind,
-    // How the runtime reconstructs this record: `Authored` deserializes the
-    // component's authored `Args` and runs `from_args`; `Baked` deserializes the
-    // already-baked runtime component directly. Both produce a component; the
-    // dual path lets cook migrate types to the baked form one at a time.
-    pub record: RecordKind,
     pub discriminant: u8,
+    // The serialized runtime component (cook already ran the asset -> component
+    // translation), loaded via `Component::from_baked`. Every record is baked;
+    // the transitional authored-args record kind is retired.
     #[serde(with = "serde_bytes")]
     pub args_bytes: Vec<u8>,
     pub payload: Option<PayloadLocator>,
@@ -29,18 +27,6 @@ pub struct BlobAssetDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetKind {
     Component,
-}
-
-// Which of the two reconstruction paths a blob record takes. `Authored` is the
-// original path (`args_bytes` is the authored `Args` JSON, reconstructed via
-// `Component::from_args`). `Baked` means cook already ran the translation, so
-// `args_bytes` is the serialized runtime component, loaded via
-// `Component::from_baked`. During the asset/component migration a blob may hold
-// both kinds; a fully migrated blob is all `Baked`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RecordKind {
-    Authored,
-    Baked,
 }
 
 // The kinds of resource the runtime keeps in per-kind tables, one dense handle
@@ -99,7 +85,6 @@ mod tests {
             defs: vec![BlobAssetDef {
                 name: Some(AssetId(3)),
                 kind: AssetKind::Component,
-                record: RecordKind::Baked,
                 discriminant: 42,
                 args_bytes: vec![9, 8, 7],
                 payload: Some(PayloadLocator {

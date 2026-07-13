@@ -16,6 +16,12 @@ use crate::ecs::{AssetKind, BlobAssetDef, ResourceRecord};
 use crate::registry::ComponentType;
 use crate::resource_handles::ResourceAssetCompile;
 
+// The mesh kinds' declarable type names. Both are resource assets (no
+// `Component` impl, so no `::NAME` const); the desugar passes and the cache
+// probe match on these.
+const MESH_TYPE: &str = "Mesh";
+const SKINNED_MESH_TYPE: &str = "SkinnedMesh";
+
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
     let loaded = crate::world::prepare_world(&content)
@@ -61,7 +67,12 @@ pub fn write_build_outputs(
         .map(|n| n.as_str())
         .zip(result.defs.iter())
         .collect();
-    crate::blob::write_lock(&named_refs, injected, &pack_result.blob_paths)?;
+    crate::blob::write_lock(
+        &named_refs,
+        &result.resource_locks,
+        injected,
+        &pack_result.blob_paths,
+    )?;
     Ok(pack_result)
 }
 
@@ -86,6 +97,20 @@ pub struct TextureSourceInfo {
     pub image_index: u32,
 }
 
+// A file-backed Mesh's re-import inputs, in `MeshHandle` order (the Mesh block
+// leads the shared mesh-source handle space, so Mesh handles are dense from 0).
+// Now that Mesh is a resource (no `source` on a component the renderer drains),
+// this is how a dev build hands the `cn debug` hot-reload watcher what it needs
+// to re-import a saved `.glb`/`.fbx`. `source` is empty for an inline-authored
+// mesh (nothing to watch).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeshSourceInfo {
+    pub source: String,
+    pub primitive_index: u32,
+    pub lod_levels: u32,
+    pub lod_distances: Vec<f32>,
+}
+
 // The in-memory result of a complete build pipeline run.
 // Defs have payload locators filled in; payloads[i] is the raw bytes for
 // blob i. This can be used directly without touching disk.
@@ -106,6 +131,14 @@ pub struct PipelineResult {
     // File-backed texture sources in `TextureHandle` order, for the `cn debug`
     // hot-reload watcher. Dev-only info; not written to the shipped blob.
     pub texture_sources: Vec<TextureSourceInfo>,
+    // File-backed mesh sources in `MeshHandle` order (dense over the Mesh block
+    // of the shared mesh-source space), for the `cn debug` hot-reload watcher.
+    // Dev-only info; not written to the shipped blob.
+    pub mesh_sources: Vec<MeshSourceInfo>,
+    // Lock-file provenance for the resource stream, index-aligned with
+    // `resources` (records only carry the kind tag + handle; the lock records
+    // the readable name and args hash).
+    pub resource_locks: Vec<crate::blob::LockedResource>,
 }
 
 // Validate a single asset's type and generator without running the full build
@@ -314,6 +347,50 @@ pub fn build_compiled(
         };
     }
 
+    // Dev-only: the file source behind each mesh handle, so `cn debug`'s
+    // hot-reload watcher can re-import a saved `.glb`/`.fbx` into its draw
+    // slots. Mesh handles are dense from 0 (the Mesh block leads the shared
+    // mesh-source space); an inline-authored mesh leaves an empty source.
+    let mesh_count = resource_jobs
+        .iter()
+        .filter(|(_, rt, _)| *rt == ResourceAssetType::Mesh)
+        .map(|(_, _, h)| *h as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut mesh_sources = vec![MeshSourceInfo::default(); mesh_count];
+    for (asset_idx, rt, handle) in &resource_jobs {
+        if *rt != ResourceAssetType::Mesh {
+            continue;
+        }
+        let args = &assets[*asset_idx].args;
+        let str_arg = |key: &str| {
+            args.get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let u32_arg = |key: &str, default: u32| {
+            args.get(key)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(default as u64) as u32
+        };
+        mesh_sources[*handle as usize] = MeshSourceInfo {
+            source: str_arg("source"),
+            primitive_index: u32_arg("primitive_index", 0),
+            lod_levels: u32_arg("lod_levels", 1),
+            lod_distances: args
+                .get("lod_distances")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|d| d.as_f64())
+                        .map(|d| d as f32)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+    }
+
     let compiled = compile_and_pack_payloads(
         &mut named,
         &named_src,
@@ -323,6 +400,23 @@ pub fn build_compiled(
         artifacts_dir,
         &gltf_cache,
     )?;
+
+    // Lock-file provenance for the resource stream: `compiled.resources` is
+    // emitted in `resource_jobs` order, so the two zip index-aligned.
+    let resource_locks: Vec<crate::blob::LockedResource> = resource_jobs
+        .iter()
+        .zip(compiled.resources.iter())
+        .map(|((asset_idx, rt, handle), record)| {
+            let asset = &assets[*asset_idx];
+            crate::blob::LockedResource {
+                name: asset.name.clone(),
+                kind: rt.as_str().to_string(),
+                handle: *handle,
+                args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),
+                payload_blob: record.payload.as_ref().map(|p| p.blob_index),
+            }
+        })
+        .collect();
 
     // The blob carries components (emitted in declaration order) plus the
     // resource stream. (System run order is no longer a build concern: every
@@ -338,6 +432,8 @@ pub fn build_compiled(
         cache_hits: compiled.cache_hits,
         cache_misses: compiled.cache_misses,
         texture_sources,
+        mesh_sources,
+        resource_locks,
     })
 }
 
@@ -362,23 +458,11 @@ fn probe_gltf_cache(
     assets: &[WorldJsonlAsset],
     artifacts_dir: Option<&str>,
 ) -> std::collections::HashMap<String, GltfCacheEntry> {
-    use crate::assets::{Mesh, SkinnedMesh};
-    use crate::ecs::Component;
+    use crate::resource_handles::{ResourceAssetCompile, ResourceAssetType};
 
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
     for asset in assets {
-        let ct = if asset.asset_type == Mesh::NAME {
-            ComponentType::parse(Mesh::NAME)
-        } else if asset.asset_type == SkinnedMesh::NAME {
-            ComponentType::parse(SkinnedMesh::NAME)
-        } else {
-            None
-        };
-        let Some(ct) = ct else {
-            continue;
-        };
-        let discriminant = ct.discriminant();
         let has_source = asset
             .args
             .get("source")
@@ -389,12 +473,22 @@ fn probe_gltf_cache(
             continue;
         }
 
+        // Both mesh kinds are resource assets: their caches key on the
+        // resource discriminant and resource source list.
+        let rt = if asset.asset_type == MESH_TYPE {
+            ResourceAssetType::Mesh
+        } else if asset.asset_type == SKINNED_MESH_TYPE {
+            ResourceAssetType::SkinnedMesh
+        } else {
+            continue;
+        };
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
             artifacts_dir,
             all_assets: &empty,
         };
-        let extra_sources = source_files_by_type(ct, &asset.args, &ctx);
+        let discriminant = RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8;
+        let extra_sources = rt.source_files(&asset.args);
         let key = crate::cache::payload_key(discriminant, &asset.args, &ctx, &extra_sources);
         let bytes = crate::cache::load(&key);
         out.insert(asset.name.clone(), GltfCacheEntry { key, bytes });
@@ -412,11 +506,8 @@ fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
     gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::assets::SkinnedMesh;
-    use crate::ecs::Component;
-
     for asset in assets.iter_mut() {
-        if asset.asset_type != SkinnedMesh::NAME {
+        if asset.asset_type != SKINNED_MESH_TYPE {
             continue;
         }
         let source = asset
@@ -497,8 +588,7 @@ fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
     gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::assets::{Mesh, VertexData};
-    use crate::ecs::Component;
+    use crate::assets::VertexData;
     use std::collections::HashMap;
 
     // One split chunk: its vertices and index buffer.
@@ -510,7 +600,7 @@ fn desugar_gltf_meshes(
     let mut chunk_cache: HashMap<(String, u32), Vec<Chunk>> = HashMap::new();
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != Mesh::NAME {
+        if asset.asset_type != MESH_TYPE {
             continue;
         }
         let source = asset
@@ -660,8 +750,7 @@ fn desugar_fbx_meshes(
     assets: &mut [WorldJsonlAsset],
     gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::assets::{Mesh, VertexData};
-    use crate::ecs::Component;
+    use crate::assets::VertexData;
     use crate::fbx::FbxScene;
     use std::collections::HashMap;
 
@@ -671,7 +760,7 @@ fn desugar_fbx_meshes(
     let mut chunk_cache: HashMap<(String, u32), Vec<Chunk>> = HashMap::new();
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != Mesh::NAME {
+        if asset.asset_type != MESH_TYPE {
             continue;
         }
         let source = asset
@@ -999,6 +1088,19 @@ pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
 // component discriminant (all < 128, the `ComponentMask` ceiling).
 const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 
+// One compiled resource awaiting packing: its kind tag + handle, the compiled
+// bytes, whether those bytes are the record's inline data (a data resource like
+// Material) or a blob payload, and the baked runtime data a hybrid kind
+// (SkinnedMesh) carries alongside its payload (empty for everything else; it
+// bakes from the authored args, so it sits outside the payload cache).
+struct PendingResource {
+    kind: u8,
+    handle: u32,
+    bytes: Vec<u8>,
+    is_data: bool,
+    extra_data: Vec<u8>,
+}
+
 // The output of the compile + pack pass: the packed blob payload sections, the
 // resource-stream records (each with its payload locator), and cache accounting.
 struct CompiledOutput {
@@ -1120,10 +1222,7 @@ fn compile_and_pack_payloads(
     // an unchanged source. Bypasses the `BuildAsset`/`ComponentType` path a
     // component takes -- a resource is no longer a component.
     let mut resource_hits = 0usize;
-    // (resource kind tag, handle, compiled bytes, is_data). A payload resource's
-    // bytes go into a blob payload section; a data resource's bytes go inline in
-    // the record's `data_bytes`.
-    let mut resource_pending: Vec<(u8, u32, Vec<u8>, bool)> = Vec::new();
+    let mut resource_pending: Vec<PendingResource> = Vec::new();
     for (asset_idx, rt, handle) in resource_jobs {
         let asset = &assets[*asset_idx];
         let ctx = crate::asset::BuildCtx {
@@ -1131,6 +1230,30 @@ fn compile_and_pack_payloads(
             artifacts_dir,
             all_assets: assets,
         };
+        let extra_data = rt
+            .compile_data(&asset.name, &asset.args)?
+            .unwrap_or_default();
+        // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
+        // the source parse really is skipped on a hit and the pre-desugar key is
+        // reused at store time (same contract as the component gltf-cache path).
+        if let Some(entry) = gltf_cache.get(&asset.name) {
+            let bytes = if let Some(bytes) = &entry.bytes {
+                resource_hits += 1;
+                bytes.clone()
+            } else {
+                let compiled = rt.compile_payload(&asset.args)?;
+                crate::cache::store(&entry.key, &compiled);
+                compiled
+            };
+            resource_pending.push(PendingResource {
+                kind: rt.resource_kind() as u8,
+                handle: *handle,
+                bytes,
+                is_data: rt.is_data(),
+                extra_data,
+            });
+            continue;
+        }
         let extra_sources = rt.source_files(&asset.args);
         let key = crate::cache::payload_key(
             RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
@@ -1146,7 +1269,13 @@ fn compile_and_pack_payloads(
             crate::cache::store(&key, &compiled);
             compiled
         };
-        resource_pending.push((rt.resource_kind() as u8, *handle, bytes, rt.is_data()));
+        resource_pending.push(PendingResource {
+            kind: rt.resource_kind() as u8,
+            handle: *handle,
+            bytes,
+            is_data: rt.is_data(),
+            extra_data,
+        });
     }
 
     let cache_hits = component_hits + resource_hits;
@@ -1172,17 +1301,21 @@ fn compile_and_pack_payloads(
     }
 
     let mut resources: Vec<ResourceRecord> = Vec::with_capacity(resource_pending.len());
-    for (resource_kind, handle, bytes, is_data) in &resource_pending {
-        // A data resource (Material) carries its bytes inline; a payload resource
-        // parks its bytes in a blob section and records the locator.
-        let (payload, data_bytes) = if *is_data {
-            (None, bytes.clone())
+    for pending in &resource_pending {
+        // A data resource (Material) carries its bytes inline; a payload
+        // resource parks its bytes in a blob section and records the locator,
+        // plus any hybrid baked data (SkinnedMesh) inline beside it.
+        let (payload, data_bytes) = if pending.is_data {
+            (None, pending.bytes.clone())
         } else {
-            (Some(packer.push(bytes)), Vec::new())
+            (
+                Some(packer.push(&pending.bytes)),
+                pending.extra_data.clone(),
+            )
         };
         resources.push(ResourceRecord {
-            resource_kind: *resource_kind,
-            handle: *handle,
+            resource_kind: pending.kind,
+            handle: pending.handle,
             payload,
             data_bytes,
         });
@@ -1209,13 +1342,9 @@ fn compile_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
-    use crate::assets::{
-        File, Mesh, ProceduralMesh, Room, SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
-    };
+    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, ShaderStage, VoxelChunk};
     match ct {
-        ComponentType::Mesh => <Mesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
         ComponentType::File => <File as BuildAsset>::compile_payload(args, ctx),
         ComponentType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
@@ -1241,13 +1370,9 @@ fn source_files_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> Vec<String> {
     use crate::asset::BuildAsset;
-    use crate::assets::{
-        File, Mesh, ProceduralMesh, Room, SdfVolume, ShaderStage, SkinnedMesh, VoxelChunk,
-    };
+    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, ShaderStage, VoxelChunk};
     match ct {
-        ComponentType::Mesh => <Mesh as BuildAsset>::source_files(args, ctx),
         ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::source_files(args, ctx),
-        ComponentType::SkinnedMesh => <SkinnedMesh as BuildAsset>::source_files(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::source_files(args, ctx),
         ComponentType::File => <File as BuildAsset>::source_files(args, ctx),
         ComponentType::Room => <Room as BuildAsset>::source_files(args, ctx),
@@ -1401,6 +1526,35 @@ mod tests {
         assert_eq!(args["mesh"], serde_json::json!(0));
         // The `day_` name prefix resolved to Scene `day`'s id (1).
         assert_eq!(args["scene"], serde_json::json!(1));
+    }
+
+    // A resource asset (here a Font) leaves no component def, so the lock
+    // records it through `resource_locks` instead: name, kind, handle, args
+    // hash, and the blob its payload landed in.
+    #[test]
+    fn build_pipeline_records_resource_lock_provenance() {
+        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let world = concat!(
+            r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
+            "\n",
+            r#"{"name":"pause","type":"View","args":{}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None).expect("build");
+
+        assert_eq!(result.resource_locks.len(), result.resources.len());
+        let font = result
+            .resource_locks
+            .iter()
+            .find(|r| r.name == "f")
+            .expect("font provenance recorded");
+        assert_eq!(font.kind, "Font");
+        assert_eq!(font.handle, 0);
+        assert_eq!(font.args_hash.len(), 64);
+        // A payload resource records which blob holds its bytes.
+        assert!(font.payload_blob.is_some());
+        // The resource is not in the component asset list.
+        assert!(!result.names.iter().any(|n| n == "f"));
     }
 
     // The visual_novel demo world (in concinnity-infra/worlds) exercises
@@ -1706,14 +1860,11 @@ mod tests {
 
     #[test]
     fn desugar_gltf_skinned_meshes_leaves_inline_and_cached_untouched() {
-        use crate::assets::SkinnedMesh;
-        use crate::ecs::Component;
-
         let inline_args = serde_json::json!({"vertices": [], "indices": []});
         let cached_args = serde_json::json!({"source": "/no/such/hero.glb"});
         let mut assets = vec![
-            wja("inline", SkinnedMesh::NAME, inline_args.clone()),
-            wja("cached", SkinnedMesh::NAME, cached_args.clone()),
+            wja("inline", SKINNED_MESH_TYPE, inline_args.clone()),
+            wja("cached", SKINNED_MESH_TYPE, cached_args.clone()),
         ];
         desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
         // No source: untouched. Cache hit: the missing .glb is never parsed
@@ -1724,12 +1875,9 @@ mod tests {
 
     #[test]
     fn desugar_gltf_skinned_meshes_missing_source_errors() {
-        use crate::assets::SkinnedMesh;
-        use crate::ecs::Component;
-
         let mut assets = vec![wja(
             "hero",
-            SkinnedMesh::NAME,
+            SKINNED_MESH_TYPE,
             serde_json::json!({"source": "/no/such/hero.glb"}),
         )];
         let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default())
@@ -1739,16 +1887,13 @@ mod tests {
 
     #[test]
     fn desugar_gltf_meshes_skips_non_glb_sources_and_cache_hits() {
-        use crate::assets::Mesh;
-        use crate::ecs::Component;
-
         let fbx_args = serde_json::json!({"source": "/no/such/scene.fbx"});
         let cached_args = serde_json::json!({"source": "/no/such/scene.glb"});
         let inline_args = serde_json::json!({"vertices": [], "indices": []});
         let mut assets = vec![
-            wja("from_fbx", Mesh::NAME, fbx_args.clone()),
-            wja("cached", Mesh::NAME, cached_args.clone()),
-            wja("inline", Mesh::NAME, inline_args.clone()),
+            wja("from_fbx", MESH_TYPE, fbx_args.clone()),
+            wja("cached", MESH_TYPE, cached_args.clone()),
+            wja("inline", MESH_TYPE, inline_args.clone()),
         ];
         desugar_gltf_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
         assert_eq!(
@@ -1761,12 +1906,9 @@ mod tests {
 
     #[test]
     fn desugar_gltf_meshes_missing_source_errors() {
-        use crate::assets::Mesh;
-        use crate::ecs::Component;
-
         let mut assets = vec![wja(
             "crate_mesh",
-            Mesh::NAME,
+            MESH_TYPE,
             serde_json::json!({"source": "/no/such/scene.glb"}),
         )];
         let err = desugar_gltf_meshes(&mut assets, &Default::default()).expect_err("missing .glb");
@@ -1775,12 +1917,9 @@ mod tests {
 
     #[test]
     fn desugar_fbx_meshes_missing_source_errors() {
-        use crate::assets::Mesh;
-        use crate::ecs::Component;
-
         let mut assets = vec![wja(
             "bistro",
-            Mesh::NAME,
+            MESH_TYPE,
             serde_json::json!({"source": "/no/such/scene.fbx"}),
         )];
         let err = desugar_fbx_meshes(&mut assets, &Default::default()).expect_err("missing .fbx");
@@ -1789,14 +1928,11 @@ mod tests {
 
     #[test]
     fn desugar_fbx_meshes_skips_cache_hits_and_non_fbx_sources() {
-        use crate::assets::Mesh;
-        use crate::ecs::Component;
-
         let cached_args = serde_json::json!({"source": "/no/such/scene.fbx"});
         let glb_args = serde_json::json!({"source": "/no/such/scene.glb"});
         let mut assets = vec![
-            wja("cached", Mesh::NAME, cached_args.clone()),
-            wja("from_glb", Mesh::NAME, glb_args.clone()),
+            wja("cached", MESH_TYPE, cached_args.clone()),
+            wja("from_glb", MESH_TYPE, glb_args.clone()),
         ];
         desugar_fbx_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
         assert_eq!(assets[0].args, cached_args);
@@ -1930,15 +2066,12 @@ mod tests {
 
     #[test]
     fn probe_gltf_cache_probes_only_source_backed_mesh_assets() {
-        use crate::assets::{Mesh, SkinnedMesh};
-        use crate::ecs::Component;
-
         let assets = vec![
-            wja("m", Mesh::NAME, serde_json::json!({"source": "x.glb"})),
-            wja("inline", Mesh::NAME, serde_json::json!({"vertices": []})),
+            wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
+            wja("inline", MESH_TYPE, serde_json::json!({"vertices": []})),
             wja(
                 "s",
-                SkinnedMesh::NAME,
+                SKINNED_MESH_TYPE,
                 serde_json::json!({"source": "y.glb"}),
             ),
             wja(
@@ -2081,11 +2214,14 @@ mod tests {
     // error for the ones that require a source but got none.
     #[test]
     fn compile_by_type_dispatches_deterministic_arms() {
+        // Mesh is a resource asset now: it compiles through
+        // `ResourceAssetType::compile_payload`, not the ComponentType dispatch.
+        let mesh_bytes = crate::resource_handles::ResourceAssetType::Mesh
+            .compile_payload(&serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}))
+            .expect("Mesh compiles through the resource path");
+        assert!(!mesh_bytes.is_empty());
+
         let ok_cases: &[(&str, serde_json::Value)] = &[
-            (
-                "Mesh",
-                serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
-            ),
             (
                 "ProceduralMesh",
                 serde_json::json!({"generator": "sphere", "radius": 1.0}),
@@ -2126,32 +2262,60 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
-    // The SkinnedMesh wrapper deserialises args + an optional skeleton, then
-    // bakes geometry: one vertex is enough for a payload, no vertices and a
-    // malformed skeleton are the two error arms.
+    // The SkinnedMesh resource compiler deserialises args + an optional
+    // skeleton, then bakes geometry: one vertex is enough for a payload, no
+    // vertices and a malformed skeleton are the two error arms. Its baked
+    // data form carries the interned name id and drops the geometry.
     #[test]
-    fn compile_by_type_skinned_mesh_wrapper_paths() {
+    fn skinned_mesh_resource_compile_paths() {
+        use crate::resource_handles::ResourceAssetType;
+        let rt = ResourceAssetType::SkinnedMesh;
+
         let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
-        let bytes = compile_by_type(ct("SkinnedMesh"), &ok, &ctx()).expect("skinned compiles");
+        let bytes = rt.compile_payload(&ok).expect("skinned compiles");
         assert!(!bytes.is_empty());
 
-        let no_verts = compile_by_type(ct("SkinnedMesh"), &serde_json::json!({}), &ctx())
+        let no_verts = rt
+            .compile_payload(&serde_json::json!({}))
             .expect_err("no vertices");
         assert!(
             no_verts.to_string().contains("at least one vertex"),
             "got: {no_verts}"
         );
 
-        let bad_skeleton = compile_by_type(
-            ct("SkinnedMesh"),
-            &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
-            &ctx(),
-        )
-        .expect_err("malformed skeleton");
+        let bad_skeleton = rt
+            .compile_payload(
+                &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
+            )
+            .expect_err("malformed skeleton");
         assert!(
             bad_skeleton.to_string().contains("invalid skeleton args"),
             "got: {bad_skeleton}"
         );
+
+        // The baked data tuple: name id first, then the clamped mesh with its
+        // geometry cleared.
+        crate::ecs::asset_id::reset_interner();
+        let name_id = crate::ecs::asset_id::intern("hero");
+        let data = rt
+            .compile_data(
+                "hero",
+                &serde_json::json!({
+                    "vertices": [{"pos": [0.0, 0.0, 0.0]}],
+                    "scale": [0.0, 0.0, 0.0],
+                    "max_instances": 999999,
+                    "capsule": {"half_height": 0.6, "radius": 0.2},
+                }),
+            )
+            .expect("data bakes")
+            .expect("skinned mesh carries baked data");
+        let (baked_name, sm): (u32, crate::assets::SkinnedMesh) =
+            serde_json::from_slice(&data).unwrap();
+        assert_eq!(baked_name, name_id.0);
+        assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
+        assert_eq!(sm.max_instances, 4096, "reserve caps at 4096");
+        assert!(sm.vertices.is_empty(), "geometry rides the payload");
+        assert!(sm.capsule.is_some());
     }
 
     // The VoxelChunk wrapper resolves its palette from sibling BlockType assets

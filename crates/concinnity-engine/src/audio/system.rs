@@ -430,8 +430,8 @@ mod tests {
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::decompose::EntityByName;
     use crate::ecs::{
-        AudioClipHandle, Component, ComponentSlot, ComponentStorage, PayloadLocator,
-        PipelineContext, Resources, StepResult, System,
+        AudioClipHandle, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext,
+        Resources, StepResult, System,
     };
     use crate::gfx::profile::FrameProfile;
     use crate::resource::AudioClipTable;
@@ -674,7 +674,7 @@ mod tests {
         let mut sealed = AudioWorld::new().seal();
         let entity = {
             let mut ctx = sealed.ctx();
-            ctx.push(Camera3D::from_args(Default::default()));
+            ctx.push(Camera3D::bake(Default::default()));
             let e = ctx.components.spawn();
             ctx.insert(
                 e,

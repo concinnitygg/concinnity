@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::resumed_origin;
 use crate::assets::{AnimGraph, AnimParams, Animation};
 use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::asset_id::{AssetId, intern};
+use crate::ecs::asset_id::intern;
 use crate::ecs::{SystemAsset, World};
 
 // Resuming after a pause must leave clip time `t = now - origin` exactly
@@ -108,8 +108,10 @@ fn graph_world() -> World {
     world
 }
 
-fn hero() -> AssetId {
-    intern("hero")
+fn hero() -> SkinnedMeshHandle {
+    // The authored "hero" references deserialize through the resolver's
+    // interner fallback, so the handle carries the interned id.
+    SkinnedMeshHandle(intern("hero").0)
 }
 
 // Match the system back out of the world for report assertions.
@@ -147,7 +149,7 @@ fn graph_init_seeds_params_and_initial_state() {
 // on the first point at default, split across the bracketing pair mid-range.
 #[test]
 fn blendspace_weights_follow_the_parameter() {
-    let target = intern("hero_blend");
+    let target = SkinnedMeshHandle(intern("hero_blend").0);
     let mut world = World::new_empty();
     for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
         let mut a = clip(name, duration);
@@ -259,7 +261,7 @@ fn mode_mismatched_commands_are_rejected() {
     flat_world.start().unwrap();
     flat_world.step();
     with_anim(&mut flat_world, |anim| {
-        let target = intern("flat_hero");
+        let target = SkinnedMeshHandle(intern("flat_hero").0);
         anim.apply_crossfade(target, vec![0.5], 0.0, 0.0).unwrap();
         let err = anim.queue_param(target, "speed", 1.0).unwrap_err();
         assert!(err.contains("anim-crossfade"));
@@ -272,7 +274,7 @@ fn mode_mismatched_commands_are_rejected() {
 // carrying the mesh-local displacement; clips without one stay silent.
 #[test]
 fn root_motion_clip_publishes_displacement_events() {
-    let target = intern("hero_rm");
+    let target = SkinnedMeshHandle(intern("hero_rm").0);
     let mut world = World::new_empty();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rm",
@@ -323,7 +325,7 @@ fn root_motion_clip_publishes_displacement_events() {
 fn ik_pins_the_foot_to_a_raised_ledge() {
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
-    let target = intern("hero_ik");
+    let target = SkinnedMeshHandle(intern("hero_ik").0);
     let mut world = World::new_empty();
 
     // A leg hanging from x = 0.6: hip at y = 2, knee at y = 1, foot at
@@ -427,7 +429,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 
 #[test]
 fn rig_capsule_follows_root_motion() {
-    let target = intern("hero_rig");
+    let target = SkinnedMeshHandle(intern("hero_rig").0);
     let mut world = World::new_empty();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rig",
@@ -515,7 +517,7 @@ fn runtime_clip(duration: f32) -> crate::gfx::skinning::AnimationClip {
 }
 
 // A single flat clip targeting `target`, weight 1.
-fn flat_clip(name: &str, target: AssetId) -> Animation {
+fn flat_clip(name: &str, target: SkinnedMeshHandle) -> Animation {
     let mut a = clip(name, 1.0);
     a.target = Some(SkinnedMeshHandle(target.0));
     a
@@ -525,7 +527,7 @@ fn flat_clip(name: &str, target: AssetId) -> Animation {
 // target or an out-of-range slot without mutating anything.
 #[test]
 fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
-    let target = intern("flat_reload");
+    let target = SkinnedMeshHandle(intern("flat_reload").0);
     let mut world = World::new_empty();
     world.add_component(flat_clip("fr_solo", target));
     world.start().unwrap();
@@ -537,7 +539,12 @@ fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
             "a valid slot accepts the reload"
         );
         assert!(
-            !anim.apply_reloaded_clip(intern("nobody"), 0, runtime_clip(1.0), 1.0),
+            !anim.apply_reloaded_clip(
+                SkinnedMeshHandle(intern("nobody").0),
+                0,
+                runtime_clip(1.0),
+                1.0
+            ),
             "an unknown target is refused"
         );
         assert!(
@@ -587,7 +594,7 @@ fn debug_impl_summarizes_target_and_reload_counts() {
 }
 
 // A one-joint pose for `target`, used to observe the flat sampling arms.
-fn single_joint_pose(target: AssetId) -> crate::assets::SkeletonPose {
+fn single_joint_pose(target: SkinnedMeshHandle) -> crate::assets::SkeletonPose {
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
     let skeleton = Skeleton::new(vec![Joint {
         name: "root".to_string(),
@@ -601,7 +608,7 @@ fn single_joint_pose(target: AssetId) -> crate::assets::SkeletonPose {
 // matrix per joint, at full strength regardless of the clip's weight.
 #[test]
 fn flat_single_clip_samples_the_pose() {
-    let target = intern("flat_single_pose");
+    let target = SkinnedMeshHandle(intern("flat_single_pose").0);
     let mut world = World::new_empty();
     world.add_component(flat_clip("fs_solo", target));
     world.add_component(single_joint_pose(target));
@@ -621,7 +628,7 @@ fn flat_single_clip_samples_the_pose() {
 // steps and the blended pose is written every frame.
 #[test]
 fn flat_fade_in_blends_multiple_clips_into_the_pose() {
-    let target = intern("flat_blend_pose");
+    let target = SkinnedMeshHandle(intern("flat_blend_pose").0);
     let mut world = World::new_empty();
     // One clip requests a fade-in, so init builds a startup weight ramp.
     let mut faded = flat_clip("fb_a", target);

@@ -4,8 +4,8 @@
 // (concinnity_asset::spawner).
 
 use crate::assets::SpawnerArgs;
+use crate::ecs::Component;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, Component};
 
 /// Periodically instantiates copies of an existing placement at this entity's
 /// position.
@@ -25,7 +25,7 @@ use crate::ecs::{AssetOrigin, Component};
 /// {"name":"fountain","type":"Prop","args":{"mesh":"box_mesh","position":[0.0,1.0,-3.0]}}
 /// {"name":"fountain_spawner","type":"Spawner","args":{"template":"crate","interval":0.5,"lifetime":2.0}}
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Spawner {
     /// Name of the placement to copy on each spawn.
     pub template: AssetId,
@@ -39,12 +39,11 @@ pub struct Spawner {
     pub count: u32,
 }
 
-impl Component for Spawner {
-    const NAME: &'static str = "Spawner";
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    type Args = SpawnerArgs;
-
-    fn from_args(args: SpawnerArgs) -> Self {
+impl Spawner {
+    // Translate the authored args into the runtime spawner: clamp the timing
+    // knobs and zero the runtime counters. Run by cook at build time (the
+    // baked blob record carries the result).
+    pub fn bake(args: SpawnerArgs) -> Self {
         Self {
             template: args.template,
             interval: args.interval.max(0.0),
@@ -53,11 +52,12 @@ impl Component for Spawner {
             count: 0,
         }
     }
-    fn to_args(&self) -> SpawnerArgs {
-        SpawnerArgs {
-            template: self.template,
-            interval: self.interval,
-            lifetime: self.lifetime,
-        }
+}
+
+impl Component for Spawner {
+    const NAME: &'static str = "Spawner";
+
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 }

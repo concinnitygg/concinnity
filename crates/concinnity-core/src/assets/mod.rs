@@ -26,7 +26,6 @@ mod geometry;
 mod ground_probes;
 mod input_key;
 mod lifetime;
-mod mesh;
 mod play_cue;
 mod post_process_config;
 pub mod procedural_mesh;
@@ -59,16 +58,6 @@ mod pickup;
 mod render_handle;
 mod scene_member;
 mod transform;
-
-// Named `from_args` validators referenced by the generated `Component` impls
-// (see `cn_impl_components!`, invoked in `ecs::registry`). One free function per
-// asset that clamps or normalizes its authored args at load time.
-pub mod validate;
-
-// The shared empty `RuntimeArgs` and placeholder constructors used by the
-// generated impls of RuntimeOnly components.
-pub(crate) mod runtime_component;
-pub use runtime_component::RuntimeArgs;
 
 // Serde / default / round-trip coverage for the generated data-only
 // components, gathered here after their per-type modules were removed.
@@ -202,7 +191,9 @@ pub use view_shown::ViewShown;
 // through the asset crate.
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
-pub use validate::MAX_WATER_WAVES;
+/// Maximum number of waves per water surface. Shared by the render backends'
+/// wave uniforms and the build-side water validator.
+pub const MAX_WATER_WAVES: usize = 4;
 
 // Per-instance components an entity is composed from.
 pub use children::Children;
@@ -230,33 +221,25 @@ mod tests {
     // source_path branches, and cross-reference declarations. Kept in one place
     // because the checks are identical in shape across many one-file components.
     use super::*;
-    use crate::build::{Platform, SourceBacked};
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::{Component, PayloadLocator};
-    use serde_json::json;
 
-    // Round-trip an asset's default args through JSON and its Component hooks.
-    // One call executes the type's Default, from_args, to_args, inject_name,
-    // and inject_locator. (The authoring Registration record lives in
-    // concinnity-world now, built from these same trait consts.)
-    fn exercise<C: Component>() {
-        let args = <C::Args as Default>::default();
-        let value = serde_json::to_value(&args).expect("default args serialize");
-        let back: C::Args = serde_json::from_value(value).expect("default args deserialize");
-        let mut comp = C::from_args(back);
+    // Round-trip an asset's defaults through its baked form and the Component
+    // hooks. One call executes the type's Default, serialization, `from_baked`,
+    // `inject_name`, and `inject_locator`.
+    fn exercise<C: Component + Default + serde::Serialize>() {
+        let bytes = serde_json::to_vec(&C::default()).expect("default serializes");
+        let mut comp = C::from_baked(&bytes).expect("baked bytes deserialize");
         comp.inject_name(AssetId::default());
         comp.inject_locator(PayloadLocator {
             blob_index: 0,
             offset: 0,
             len: 0,
         });
-        serde_json::to_value(comp.to_args()).expect("to_args serialize");
     }
 
     #[test]
     fn simple_assets_round_trip_defaults() {
-        exercise::<Mesh>();
-        exercise::<Room>();
         exercise::<Scene>();
         exercise::<Model>();
         exercise::<ProceduralMesh>();
@@ -267,15 +250,5 @@ mod tests {
         exercise::<VoxelWorld>();
         exercise::<VoxelChunk>();
         exercise::<SceneReel>();
-    }
-
-    #[test]
-    fn source_backed_source_path_branches() {
-        // Mesh keys its source under `source`: present -> Some, absent -> None.
-        assert_eq!(
-            Mesh::source_path(&json!({"source": "m.obj"}), Platform::Metal),
-            Some("m.obj".to_string())
-        );
-        assert_eq!(Mesh::source_path(&json!({}), Platform::Metal), None);
     }
 }

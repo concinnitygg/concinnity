@@ -7,10 +7,8 @@
 // These are trait impls only, so the modules need no re-exports.
 
 mod file;
-mod mesh;
 mod procedural_mesh;
 mod room;
 mod sdf_volume;
 mod shader_stage;
-mod skinned_mesh;
 mod voxel_chunk;

@@ -42,7 +42,7 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
     let mut world = World::new(BlobData::new(payload_sections));
 
     for def in &result.defs {
-        let mut component = ComponentAsset::from_def(def).map_err(|e| {
+        let mut component = ComponentAsset::from_baked(def).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("asset construction failed: {e:?}"),

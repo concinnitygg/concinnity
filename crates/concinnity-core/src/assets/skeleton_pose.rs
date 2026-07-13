@@ -1,6 +1,6 @@
 // src/assets/skeleton_pose.rs
 
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::SkinnedMeshHandle;
 use crate::gfx::skinning::{Mat4, Skeleton};
 
 /// Runtime-only link between a skinned mesh and its animation state.
@@ -16,9 +16,9 @@ use crate::gfx::skinning::{Mat4, Skeleton};
 /// Not authored in world files: it has no `args`.
 #[derive(Debug)]
 pub struct SkeletonPose {
-    /// The `SkinnedMesh` asset this pose belongs to. Used by `AnimationSystem`
-    /// to match an `Animation` clip to its target.
-    pub mesh_id: AssetId,
+    /// The `SkinnedMesh` resource this pose belongs to. Used by
+    /// `AnimationSystem` to match an `Animation` clip to its target.
+    pub mesh_id: SkinnedMeshHandle,
     /// Index of this mesh's skinned draw object in the render backend.
     /// Read only by the Metal skinned pipeline for now.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -33,7 +33,7 @@ pub struct SkeletonPose {
 impl SkeletonPose {
     /// Build a pose for `mesh_id`'s skinned draw object, seeded to the bind
     /// pose so the mesh renders undeformed until an animation drives it.
-    pub fn new(mesh_id: AssetId, skinned_index: usize, skeleton: Skeleton) -> Self {
+    pub fn new(mesh_id: SkinnedMeshHandle, skinned_index: usize, skeleton: Skeleton) -> Self {
         let joint_matrices = skeleton.bind_skinning_matrices();
         Self {
             mesh_id,

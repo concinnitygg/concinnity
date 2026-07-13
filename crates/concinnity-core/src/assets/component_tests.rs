@@ -7,7 +7,6 @@
 // modules are gone. One submodule per component.
 
 use crate::assets::*;
-use crate::ecs::Component;
 
 mod graphics_config {
     use super::*;
@@ -96,7 +95,9 @@ mod graphics_config {
             ..Default::default()
         };
         assert_eq!(
-            GraphicsConfig::from_args(cfg.to_args()).shadow_update,
+            serde_json::from_value::<GraphicsConfig>(serde_json::to_value(&cfg).unwrap())
+                .unwrap()
+                .shadow_update,
             ShadowUpdate::EveryFrame
         );
     }
@@ -331,7 +332,8 @@ mod streaming_config {
             mesh_budget: 3,
             mesh_cap: 64,
         };
-        let back = StreamingConfig::from_args(c.to_args());
+        let back: StreamingConfig =
+            serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
         assert_eq!(back.texture_budget, 7);
         assert_eq!(back.texture_cap, 32);
         assert_eq!(back.mesh_budget, 3);
@@ -414,7 +416,7 @@ mod voxel_world {
             palette: Vec::new(),
             material: None,
         };
-        let back = VoxelWorld::from_args(w.to_args());
+        let back: VoxelWorld = serde_json::from_value(serde_json::to_value(&w).unwrap()).unwrap();
         assert_eq!(back.seed, 99);
         assert_eq!(back.chunk_blocks, [8, 32, 8]);
         assert_eq!(back.block_size, 2.0);

@@ -45,6 +45,10 @@ pub struct BlobLock {
     pub built_at: String,
     pub blobs: Vec<BlobEntry>,
     pub assets: Vec<LockedAsset>,
+    // Assets compiled into the blob's resource stream (addressed by a per-kind
+    // handle) rather than the component def table.
+    #[serde(default)]
+    pub resources: Vec<LockedResource>,
     // Assets the build added that have no world.jsonl line (companions and
     // engine defaults). Each entry carries its full args so it can be copied
     // into world.jsonl verbatim as an override.
@@ -71,6 +75,21 @@ pub struct LockedInjection {
     pub asset_type: String,
     pub args: serde_json::Value,
     pub injected_by: String,
+}
+
+// One resource-stream asset as recorded in the lock file. Resource assets have
+// left the component def table, so they are recorded with their per-kind handle
+// instead of a component discriminant. `payload_blob` is None for a data
+// resource (bytes ride inline in the record).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockedResource {
+    pub name: String,
+    pub kind: String,
+    pub handle: u32,
+    // sha-256 of the asset's authored args JSON
+    pub args_hash: String,
+    // which blob holds this resource's payload, if any
+    pub payload_blob: Option<u32>,
 }
 
 // The result of a build pack: the blobs written and the path of each
@@ -161,6 +180,7 @@ impl PayloadPacker {
 // Lock file
 pub fn write_lock(
     named_defs: &[(&str, &BlobAssetDef)],
+    resources: &[LockedResource],
     injected: &[crate::world::InjectedAsset],
     blob_paths: &[String],
 ) -> std::io::Result<()> {
@@ -197,6 +217,7 @@ pub fn write_lock(
         built_at: now_iso8601(),
         blobs,
         assets,
+        resources: resources.to_vec(),
         injected: injected
             .iter()
             .map(|i| LockedInjection {
@@ -212,7 +233,7 @@ pub fn write_lock(
 }
 
 // Helpers
-fn checksum(data: &[u8]) -> String {
+pub(crate) fn checksum(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
     format!("{:x}", h.finalize())
@@ -309,6 +330,13 @@ mod tests {
                 payload_bytes: 4,
             }],
             assets: vec![],
+            resources: vec![LockedResource {
+                name: "clip".to_string(),
+                kind: "AudioClip".to_string(),
+                handle: 0,
+                args_hash: "00".to_string(),
+                payload_blob: Some(0),
+            }],
             injected: vec![LockedInjection {
                 name: "debug_hud".to_string(),
                 asset_type: "DebugHud".to_string(),
@@ -323,5 +351,21 @@ mod tests {
         let back: BlobLock = serde_json::from_value(json).unwrap();
         assert_eq!(back.injected[0].asset_type, "DebugHud");
         assert_eq!(back.blobs[0].payload_bytes, 4);
+        assert_eq!(back.resources[0].kind, "AudioClip");
+    }
+
+    #[test]
+    fn blob_lock_reads_a_lock_without_a_resources_field() {
+        // Locks written before resource provenance landed have no `resources`
+        // key; reading one must not fail.
+        let json = serde_json::json!({
+            "engine_version": "0.0.0",
+            "built_at": "2026-01-01T00:00:00Z",
+            "blobs": [],
+            "assets": [],
+            "injected": [],
+        });
+        let back: BlobLock = serde_json::from_value(json).unwrap();
+        assert!(back.resources.is_empty());
     }
 }

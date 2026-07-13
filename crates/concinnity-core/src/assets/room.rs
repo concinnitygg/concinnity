@@ -5,7 +5,7 @@
 
 use crate::assets::RoomArgs;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator, TextureHandle};
+use crate::ecs::{Component, PayloadLocator, TextureHandle};
 
 /// A self-contained room (floor, ceiling, four walls), with optional texturing.
 ///
@@ -23,7 +23,7 @@ use crate::ecs::{AssetOrigin, AssetPayload, Component, PayloadLocator, TextureHa
 /// ```jsonl
 /// {"name":"room","type":"Room","args":{"size":[16,20,3.5],"texture":"tex_plaster"}}
 /// ```
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Room {
     pub asset_id: AssetId,
     pub half_width: f32,
@@ -51,39 +51,11 @@ impl Room {
     }
 }
 
-impl Component for Room {
-    const NAME: &'static str = "Room";
-
-    const ORIGIN: AssetOrigin = AssetOrigin::External;
-    const PAYLOAD: AssetPayload = AssetPayload::Compiled;
-    type Args = RoomArgs;
-
-    fn ref_fields() -> &'static [(&'static str, &'static str)] {
-        &[
-            ("texture", "Texture"),
-            ("wall_texture", "Texture"),
-            ("floor_texture", "Texture"),
-            ("ceiling_texture", "Texture"),
-        ]
-    }
-
-    fn to_args(&self) -> RoomArgs {
-        RoomArgs {
-            half_width: self.half_width,
-            half_depth: self.half_depth,
-            ceiling_height: self.ceiling_height,
-            size: None,
-            texture: self.texture,
-            wall_texture: self.wall_texture,
-            floor_texture: self.floor_texture,
-            ceiling_texture: self.ceiling_texture,
-            lod_levels: 1,
-            lod_distances: Vec::new(),
-        }
-    }
-
-    fn from_args(args: RoomArgs) -> Self {
-        // Resolve size shorthand into half_width / half_depth / ceiling_height.
+impl Room {
+    // Translate the authored args into the runtime room: resolve the `size`
+    // shorthand into half extents. Run by cook at build time (the baked blob
+    // record carries the result).
+    pub fn bake(args: RoomArgs) -> Self {
         let (half_width, half_depth, ceiling_height) = if let Some([w, d, h]) = args.size {
             (w / 2.0, d / 2.0, h)
         } else {
@@ -100,6 +72,14 @@ impl Component for Room {
             ceiling_texture: args.ceiling_texture,
             locator: None,
         }
+    }
+}
+
+impl Component for Room {
+    const NAME: &'static str = "Room";
+
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+        Ok(serde_json::from_slice(bytes)?)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
@@ -149,7 +129,7 @@ mod tests {
 
     #[test]
     fn effective_texture_returns_none_when_all_unset() {
-        let room = Room::from_args(RoomArgs::default());
+        let room = Room::bake(RoomArgs::default());
         assert_eq!(room.effective_texture(), None);
     }
 
@@ -159,7 +139,7 @@ mod tests {
             size: Some([16.0, 20.0, 3.5]),
             ..RoomArgs::default()
         };
-        let room = Room::from_args(args);
+        let room = Room::bake(args);
         assert_eq!(room.half_width, 8.0);
         assert_eq!(room.half_depth, 10.0);
         assert_eq!(room.ceiling_height, 3.5);
@@ -174,7 +154,7 @@ mod tests {
             size: None,
             ..RoomArgs::default()
         };
-        let room = Room::from_args(args);
+        let room = Room::bake(args);
         assert_eq!(room.half_width, 5.0);
         assert_eq!(room.half_depth, 7.0);
         assert_eq!(room.ceiling_height, 4.0);

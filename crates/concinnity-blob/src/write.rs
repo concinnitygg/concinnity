@@ -29,14 +29,13 @@ pub fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result
 mod tests {
     use super::*;
     use crate::read::{payload_section_start, read_cnb};
-    use crate::schema::{AssetKind, BlobAssetDef, RecordKind, ResourceKind, ResourceRecord};
+    use crate::schema::{AssetKind, BlobAssetDef, ResourceKind, ResourceRecord};
     use concinnity_asset::PayloadLocator;
 
     fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
         BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
-            record: RecordKind::Authored,
             discriminant,
             args_bytes,
             payload: None,

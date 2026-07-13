@@ -5,19 +5,19 @@
 // over it (name parsing, arg reserialization, enum-field probing, and
 // reference-field listing). Consumed by the build pipeline and the in-engine
 // editor; never by the runtime ECS, which loads components straight from their
-// blob discriminants (`concinnity_core::ecs::ComponentAsset::from_def`).
+// blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
 //
 // The component list itself is the single source of truth in
 // `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
 // module instantiates the authoring half of it.
 
-use crate::ecs::{AssetOrigin, AssetPayload, Component};
+use crate::ecs::{AssetOrigin, AssetPayload};
 use crate::result::CnResult;
 
 // Static authoring metadata for an asset type: how it is declared, whether it
-// compiles a payload, and its default args JSON. Constructed here from the
-// runtime `Component` trait's metadata consts -- the runtime itself never
-// builds one (blob records carry everything a shipped game loads).
+// compiles a payload, and its default args JSON. Derived from the registry
+// entry's metadata block -- the runtime `Component` trait carries none of it
+// (blob records carry everything a shipped game loads).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Registration {
     pub type_name: &'static str,
@@ -66,12 +66,72 @@ pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+// The empty args schema of a runtime-only component: never authored, so its
+// registration carries an empty default and its reserialize accepts `{}`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct NoArgs {}
+
+// Metadata scanners over a registry entry's `{ ... }` flag tokens. Each walks
+// the token stream for its key and falls back to a default when absent; the
+// generic `$t:tt` arm skips unrecognized tokens (other flags, `,`, `:`, and
+// bracketed lists are each one token tree).
+
+// The authoring origin: `external` / `build_only` / `runtime` (RuntimeOnly is
+// also the fallback for entries with no origin flag).
+macro_rules! __meta_origin {
+    () => { AssetOrigin::RuntimeOnly };
+    (external $($r:tt)*) => { AssetOrigin::External };
+    (build_only $($r:tt)*) => { AssetOrigin::BuildOnly };
+    (runtime $($r:tt)*) => { AssetOrigin::RuntimeOnly };
+    ($t:tt $($r:tt)*) => { __meta_origin!($($r)*) };
+}
+
+// Whether the type compiles a blob payload (`compiled`).
+macro_rules! __meta_payload {
+    () => { AssetPayload::None };
+    (compiled $($r:tt)*) => { AssetPayload::Compiled };
+    ($t:tt $($r:tt)*) => { __meta_payload!($($r)*) };
+}
+
+// The authored args schema TYPE: the component itself by default, `NoArgs` for
+// runtime-only entries, or the `args: <Type>` override for the types whose
+// authored shape diverges from the runtime component.
+macro_rules! __meta_args_ty {
+    ($default:path;) => { $default };
+    ($default:path; runtime $($r:tt)*) => { NoArgs };
+    ($default:path; args: $a:ident $($r:tt)*) => { crate::assets::$a };
+    ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
+}
+
+// The args schema's NAME, for the docs pipeline (which renders the args
+// struct's fields).
+macro_rules! __meta_args_name {
+    ($default:ident;) => { stringify!($default) };
+    ($default:ident; args: $a:ident $($r:tt)*) => { stringify!($a) };
+    ($default:ident; $t:tt $($r:tt)*) => { __meta_args_name!($default; $($r)*) };
+}
+
+// Apply the entry's bake-time validator (`validate: <fn>`, from
+// `crate::validate`) to a typed value; identity when the entry declares none.
+macro_rules! __meta_validate {
+    ($val:expr;) => { $val };
+    ($val:expr; validate: $f:ident $($r:tt)*) => { crate::validate::$f($val) };
+    ($val:expr; $t:tt $($r:tt)*) => { __meta_validate!($val; $($r)*) };
+}
+
+// The `refs: [ ... ]` reference-field list; empty when absent.
+macro_rules! __meta_refs {
+    () => { &[] };
+    (refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($r:tt)*) => { &[ $( ($fld, $tgt) ),+ ] };
+    ($t:tt $($r:tt)*) => { __meta_refs!($($r)*) };
+}
+
 // Generate `ComponentType` and its authoring methods from the shared component
-// list. Invoked once, below, via `concinnity_core::for_each_component!`.
+// list. Invoked once, below, via `concinnity_core::for_each_component!`. All
+// authoring metadata (origin, payload, args schema, validators, reference
+// fields) derives from each entry's `{ ... }` metadata block; the runtime
+// `Component` trait carries none of it.
 macro_rules! define_component_type {
-    // Each entry carries a `{ ... }` metadata block used by `cn_impl_components!`
-    // to generate the trivial `Component` impls; the authoring registry only
-    // needs the `Variant => Type` pair and ignores the block.
     ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum ComponentType {
@@ -80,7 +140,7 @@ macro_rules! define_component_type {
 
         impl ComponentType {
             pub fn as_str(self) -> &'static str {
-                match self { $( Self::$variant => <$ty as Component>::NAME ),+ }
+                match self { $( Self::$variant => stringify!($variant) ),+ }
             }
             // The on-disk blob tag / in-memory `ComponentId`, derived from the
             // shared `ComponentTag` enum (list position) so it matches the
@@ -95,38 +155,45 @@ macro_rules! define_component_type {
                 $( if val == crate::ecs::ComponentTag::$variant as u8 { return Some(Self::$variant); } )+
                 None
             }
-            // Whether cook emits this type on the baked record path
-            // (`RecordKind::Baked`). Reads the type's `Component::BAKED` flag.
-            pub fn baked(self) -> bool {
-                match self { $( Self::$variant => <$ty as Component>::BAKED ),+ }
-            }
             // A name either matches a known type or it does not; callers that
             // want a message supply their own via `ok_or`/`ok_or_else`.
             pub fn parse(s: &str) -> Option<Self> {
                 $(
-                    if s == <$ty as Component>::NAME { return Some(Self::$variant); }
+                    if s == stringify!($variant) { return Some(Self::$variant); }
                 )+
                 None
+            }
+            // The name of this type's authored args schema struct: the
+            // component itself for pass-through types, the `args:` override
+            // for the divergent ones. The docs pipeline renders that struct's
+            // fields as the asset's parameters.
+            #[allow(dead_code)]
+            pub fn args_struct_name(self) -> &'static str {
+                match self {
+                    $( Self::$variant => __meta_args_name!($variant; $($meta)*) ),+
+                }
             }
             pub fn registration(self) -> Registration {
                 match self {
                     $(
                         Self::$variant => Registration {
-                            type_name: <$ty as Component>::NAME,
-                            origin: <$ty as Component>::ORIGIN,
-                            payload: <$ty as Component>::PAYLOAD,
+                            type_name: stringify!($variant),
+                            origin: __meta_origin!($($meta)*),
+                            payload: __meta_payload!($($meta)*),
                             default_args: serde_json::to_value(
-                                <<$ty as Component>::Args as Default>::default(),
+                                <__meta_args_ty!($ty; $($meta)*) as Default>::default(),
                             )
                             .ok(),
                         }
                     ),+
                 }
             }
-            // Re-serialize a JSON args value through the typed `Args` struct.
-            // With the build interner active, name-string cross-references in
-            // the args are interned to `AssetId` integers; the returned bytes
-            // are the JSON `args_bytes` stored in the blob.
+            // Bake a JSON args value into the blob record's component bytes:
+            // deserialize through the typed args schema (interning name-string
+            // cross-references), apply the type's bake-time validator, and
+            // serialize the runtime component. For a pass-through type the
+            // args ARE the component; a divergent type (`args:` metadata)
+            // routes through its `bake` translation in `bake_divergent`.
             pub fn reserialize_args(self, args: &serde_json::Value) -> Result<Vec<u8>, CnResult> {
                 // Deserializing the args interns any name-string cross-reference,
                 // which needs the name resolver installed. The build pipeline
@@ -137,17 +204,17 @@ macro_rules! define_component_type {
                 match self {
                     $(
                         Self::$variant => {
-                            let typed = serde_json::from_value::<<$ty as Component>::Args>(
+                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
                                 args.clone(),
                             )?;
-                            Ok(serde_json::to_vec(&typed)?)
+                            Ok(serde_json::to_vec(&__meta_validate!(typed; $($meta)*))?)
                         }
                     ),+
                 }
             }
-            // The allowed values of a string-enum `Args` field (in declaration
+            // The allowed values of a string-enum args field (in declaration
             // order), or `None` if `field` is a free-form string / absent / not a
-            // string-enum. Probes the typed `Args` by deserializing the defaults
+            // string-enum. Probes the typed args by deserializing the defaults
             // with `field` set to a sentinel: a string-enum yields serde's
             // "unknown variant ..., expected ..." which `parse_expected_variants`
             // reads; a free string accepts the sentinel and yields `None`. Used by
@@ -159,7 +226,7 @@ macro_rules! define_component_type {
                     $(
                         Self::$variant => {
                             let mut probe = match serde_json::to_value(
-                                <<$ty as Component>::Args as Default>::default(),
+                                <__meta_args_ty!($ty; $($meta)*) as Default>::default(),
                             ) {
                                 Ok(serde_json::Value::Object(m)) => m,
                                 _ => return None,
@@ -169,7 +236,7 @@ macro_rules! define_component_type {
                                 field.to_string(),
                                 serde_json::Value::String(SENTINEL.to_string()),
                             );
-                            match serde_json::from_value::<<$ty as Component>::Args>(
+                            match serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
                                 serde_json::Value::Object(probe),
                             ) {
                                 Ok(_) => None,
@@ -179,12 +246,12 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // The asset-reference fields of this type, as (field, target_type).
-            // See `Component::ref_fields`.
+            // The asset-reference fields of this type, as (field, target_type),
+            // from the entry's `refs:` metadata.
             pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
                 match self {
                     $(
-                        Self::$variant => <$ty as Component>::ref_fields()
+                        Self::$variant => __meta_refs!($($meta)*)
                     ),+
                 }
             }
@@ -206,6 +273,35 @@ macro_rules! define_component_type {
 }
 
 concinnity_core::for_each_component!(define_component_type);
+
+// Bake the runtime component for the asset types whose baked form diverges
+// from their authored args (the entries with `args:` metadata): run the type's
+// `bake` translation at build time and serialize the component itself, which
+// the type's `from_baked` deserializes at load. Pass-through types return
+// `None`; cook reserializes their args (which ARE the component).
+pub fn bake_divergent(
+    ct: ComponentType,
+    args: &serde_json::Value,
+) -> Result<Option<Vec<u8>>, CnResult> {
+    // Deserializing the args interns name-string cross-references, exactly as
+    // `reserialize_args` does.
+    crate::ecs::asset_id::ensure_name_resolver();
+    macro_rules! bake {
+        ($ty:ty, $args_ty:ty) => {{
+            let typed = serde_json::from_value::<$args_ty>(args.clone())?;
+            Ok(Some(serde_json::to_vec(&<$ty>::bake(typed))?))
+        }};
+    }
+    match ct {
+        ComponentType::Camera3D => {
+            bake!(crate::assets::Camera3D, crate::assets::Camera3DArgs)
+        }
+        ComponentType::Room => bake!(crate::assets::Room, crate::assets::RoomArgs),
+        ComponentType::File => bake!(crate::assets::File, crate::assets::FileArgs),
+        ComponentType::Spawner => bake!(crate::assets::Spawner, crate::assets::SpawnerArgs),
+        _ => Ok(None),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -236,6 +332,64 @@ mod tests {
         assert!(build.serializable());
         assert!(!build.runtime_present());
         assert!(!build.needs_compilation());
+    }
+
+    // The divergent bake produces bytes the type's `from_baked` reconstructs
+    // to the same component `from_args` builds at runtime: the baked path and
+    // the authored path converge on identical components.
+    #[test]
+    fn bake_divergent_round_trips_through_from_baked() {
+        use crate::ecs::Component;
+        use crate::ecs::asset_id;
+
+        let args = serde_json::json!({"size": [16.0, 20.0, 3.5]});
+        let bytes = bake_divergent(ComponentType::Room, &args)
+            .unwrap()
+            .expect("Room bakes divergently");
+        let baked = crate::assets::Room::from_baked(&bytes).unwrap();
+        // The size shorthand resolved at bake time.
+        assert_eq!(baked.half_width, 8.0);
+        assert_eq!(baked.half_depth, 10.0);
+        assert_eq!(baked.ceiling_height, 3.5);
+
+        let args = serde_json::json!({"position": [1.0, 2.0, 3.0], "yaw": 0.5});
+        let bytes = bake_divergent(ComponentType::Camera3D, &args)
+            .unwrap()
+            .expect("Camera3D bakes divergently");
+        let baked = crate::assets::Camera3D::from_baked(&bytes).unwrap();
+        assert_eq!(baked.position, [1.0, 2.0, 3.0]);
+        // The view matrix composed at bake time.
+        let expected = crate::assets::Camera3D::bake(
+            serde_json::from_value(serde_json::json!({"position": [1.0, 2.0, 3.0], "yaw": 0.5}))
+                .unwrap(),
+        );
+        assert_eq!(baked.view_matrix, expected.view_matrix);
+
+        let args = serde_json::json!({"path": "tri.obj"});
+        let bytes = bake_divergent(ComponentType::File, &args)
+            .unwrap()
+            .expect("File bakes divergently");
+        let baked = crate::assets::File::from_baked(&bytes).unwrap();
+        // The kind derived from the extension at bake time.
+        assert!(baked.kind.is_some());
+
+        asset_id::reset_interner();
+        let args = serde_json::json!({"template": "crate", "interval": -1.0, "lifetime": 2.0});
+        let bytes = bake_divergent(ComponentType::Spawner, &args)
+            .unwrap()
+            .expect("Spawner bakes divergently");
+        let baked = crate::assets::Spawner::from_baked(&bytes).unwrap();
+        // The interval clamped and the runtime counters zeroed at bake time.
+        assert_eq!(baked.interval, 0.0);
+        assert_eq!(baked.elapsed, 0.0);
+        assert_eq!(baked.count, 0);
+
+        // A pass-through type does not bake divergently.
+        assert!(
+            bake_divergent(ComponentType::PointLight, &serde_json::json!({}))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -271,7 +425,7 @@ mod tests {
 
     #[test]
     fn reserialize_args_round_trips_and_rejects_bad_types() {
-        let ty = ComponentType::parse("Mesh").unwrap();
+        let ty = ComponentType::parse("ProceduralMesh").unwrap();
         let bytes = ty
             .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
             .unwrap();

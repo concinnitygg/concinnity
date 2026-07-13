@@ -27,4 +27,5 @@ pub mod check;
 pub mod registry;
 pub mod resource_type;
 pub mod template_spec;
+pub mod validate;
 pub mod world;

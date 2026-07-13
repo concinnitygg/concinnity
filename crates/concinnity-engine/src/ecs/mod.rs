@@ -22,8 +22,7 @@ mod registry;
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
     Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshHandle,
-    PayloadLocator, PipelineContext, RecordKind, Resources, SkinnedMeshHandle, TextureHandle,
-    asset_id,
+    PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's
@@ -406,8 +405,8 @@ impl World {
     // Re-serialize the world's components as blob defs. Systems are internal
     // and never serialized, so they do not appear here.
     #[allow(dead_code)]
-    pub fn all_defs(&self) -> Vec<BlobAssetDef> {
-        self.components.all_defs()
+    pub fn component_tags(&self) -> Vec<u8> {
+        self.components.component_tags()
     }
 
     pub fn start(&mut self) -> Result<(), CnResult> {
@@ -503,10 +502,11 @@ impl World {
             || self.query::<crate::assets::PropBody>().next().is_some()
             // A skinned mesh with a character capsule needs the rig drive
             // (the CharacterRig itself is published later, by GraphicsSystem
-            // init, so gate on the authored asset).
+            // init, so gate on the baked resource data).
             || self
-                .query::<crate::assets::SkinnedMesh>()
-                .any(|sm| sm.capsule.is_some());
+                .resources
+                .get::<crate::resource::SkinnedMeshTable>()
+                .is_some_and(|t| t.has_capsule());
         if !needs {
             return None;
         }
