@@ -283,7 +283,7 @@ impl<'a> PipelineContext<'a> {
 // `ComponentAsset` value enum via `__define_asset_kind!`, plus the blob loader
 // and ECS storage. The authoring `ComponentType` registry is built from the same
 // list in the build crate. The runtime `SystemAsset` enum is generated
-// separately, client-side, by `define_system_assets!`.
+// separately, client-side, by the `define_systems!` table.
 
 // Internal helper. Emits the runtime `<Kind>Asset` value enum the ECS stores
 // and the `From<$ty>` conversions. The authoring metadata registry (`<Kind>Type`)

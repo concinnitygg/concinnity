@@ -65,11 +65,13 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
-    // Fresh audio engine with no live emitters or cues. Emitters and cues are
-    // bound from the world's components in [`System::init`].
+    // Fresh system with no device, live emitters, or cues. The output device
+    // is acquired and the emitters / cues are bound from the world's
+    // components in [`System::init`], so construction is side-effect-free
+    // (required by the `World::system_manifest` gate probe).
     pub fn new() -> Self {
         Self {
-            engine: AudioEngine::new(),
+            engine: AudioEngine::disabled(),
             emitters: Vec::new(),
             cues: HashMap::new(),
             cue_clip_bytes: HashMap::new(),
@@ -83,6 +85,9 @@ impl AudioSystem {
 
 impl System for AudioSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
+        // Acquire the output device (a disabled no-op engine when none is
+        // available), deferred out of `new` so construction stays cheap.
+        self.engine = AudioEngine::new();
         // Snapshot the emitters, then the clip payload locators indexed by
         // AudioClipHandle. The `AudioClipTable` resource is built from the blob's
         // resource stream, dense in handle order, so index N is the clip with

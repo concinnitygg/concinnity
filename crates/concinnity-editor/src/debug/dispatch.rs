@@ -523,8 +523,8 @@ mod tests {
 
     #[test]
     fn shutdown_cancels_the_attached_token() {
-        use tokio_util::sync::CancellationToken;
-        let token = CancellationToken::new();
+        use concinnity_core::shutdown::ShutdownToken;
+        let token = ShutdownToken::new();
         let st = DebugState {
             shutdown_token: Some(token.clone()),
             ..Default::default()

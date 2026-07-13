@@ -9,12 +9,13 @@
 //
 // TO ADD A NEW COMPONENT: register it in concinnity-core's `ecs::registry`
 // (`define_components!`). TO ADD A NEW SYSTEM: implement the `System` behavior
-// trait on it, register it in this crate's `ecs::registry`
-// (`define_system_assets!`), and add a gated entry to the
-// `World::build_internal_systems` schedule below.
+// trait on it, write its gate in this crate's `ecs::schedule`, and add one
+// entry to the `define_systems!` table in `ecs::registry` -- the table is the
+// registry AND the schedule (table order is run order).
 
 pub(crate) mod decompose;
 mod registry;
+pub mod schedule;
 
 // Renderer-free metadata, registry types, the asset-construction API, and the
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
@@ -25,9 +26,9 @@ pub use concinnity_core::ecs::{
     PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, asset_id,
 };
 
-// The `SystemAsset` value enum is generated client-side from each system's
-// `System` behavior impl (see `registry`).
-pub use registry::SystemAsset;
+// The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
+// generated client-side from the system table (see `registry`).
+pub use registry::{SYSTEMS, SystemAsset};
 
 use crate::blob::BlobData;
 use crate::gfx::profile::FrameProfile;
@@ -150,17 +151,22 @@ pub trait System: Sized + std::fmt::Debug + 'static {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult;
 }
 
-// System runtime registry. Generates the `SystemAsset` value enum that holds a
-// constructed system and dispatches `init` / `step`.
+// The system table. Generates the `SystemAsset` value enum that holds a
+// constructed system and dispatches `init` / `step`, plus the `SYSTEMS`
+// schedule manifest (`&[schedule::SystemEntry]`); table order is run order.
 //
 // Every system is internal: it has no declarable asset, is never parsed from a
-// world or written to a blob, and is constructed by
-// `World::build_internal_systems` from world content. Each entry maps a variant
-// name to the behavior type that implements `System`; the variant name doubles
-// as the system's stable display name (`name()`) for profiling and logging.
+// world or written to a blob, and is constructed by its gate from world
+// content. Each entry maps a variant name to the behavior type that implements
+// `System`, the gate that builds it, and a human-readable gate description;
+// the variant name doubles as the system's stable display name (`name()`) for
+// profiling and logging.
 #[macro_export]
-macro_rules! define_system_assets {
-    ( $( $variant:ident => $behavior:path ),* $(,)? ) => {
+macro_rules! define_systems {
+    ( $( $variant:ident => $behavior:path {
+            gate: $gate:path,
+            present_when: $present_when:literal $(,)?
+        } ),* $(,)? ) => {
         // Variant sizes follow the behavior types; boxing them would only move
         // the per-system state behind a pointer for no real gain here.
         #[allow(clippy::large_enum_variant)]
@@ -192,6 +198,16 @@ macro_rules! define_system_assets {
         }
 
         $( impl From<$behavior> for SystemAsset { fn from(s: $behavior) -> Self { SystemAsset::$variant(s) } } )*
+
+        // The schedule manifest: one entry per system, in run order. Drives
+        // `World::build_internal_systems` and `World::system_manifest`.
+        pub const SYSTEMS: &[$crate::ecs::schedule::SystemEntry] = &[
+            $( $crate::ecs::schedule::SystemEntry {
+                name: stringify!($variant),
+                present_when: $present_when,
+                gate: $gate,
+            }, )*
+        ];
     };
 }
 
@@ -430,192 +446,36 @@ impl World {
     // Construct the internal systems implied by the world's content, in their
     // fixed run order, just before `init`. Internal systems are not declarable
     // assets: each is present only when its gating components are, and is built
-    // from them. Runs at most once per world (guarded by
-    // `internal_systems_built`) so a system whose gating components survive
-    // `init` is not built twice.
-    //
-    // `SCHEDULE` is the single source of run order. The order encodes the
-    // cross-system constraints:
-    //   * GraphicsSystem first: it deposits `FrameInput`, publishes
-    //     `SkeletonPose`, and makes payloads resident: everything below
-    //     consumes these.
-    //   * StatHud *queries* (does not drain) `FrameInput`, so it precedes the
-    //     `FrameInput` drainers (Camera3DSystem / UiInputSystem).
-    //   * PhysicsSystem before Camera3DSystem: physics consumes the camera's
-    //     previous-frame `desired_move` (a one-frame-lagged resolution).
-    //   * Camera3DSystem before AudioSystem: the audio listener reads the camera.
+    // from them by its gate in the `SYSTEMS` table (see `registry` for the
+    // schedule and its ordering constraints). Runs at most once per world
+    // (guarded by `internal_systems_built`) so a system whose gating components
+    // survive `init` is not built twice.
     fn build_internal_systems(&mut self) {
         if self.internal_systems_built {
             return;
         }
         self.internal_systems_built = true;
-
-        // Each builder gates on world content and returns its system when
-        // present. The array order is the run order.
-        const SCHEDULE: &[fn(&World) -> Option<SystemAsset>] = &[
-            World::build_graphics,
-            World::build_stat_hud,
-            World::build_debug_hud,
-            World::build_physics,
-            World::build_camera,
-            World::build_fps_counter,
-            World::build_animation,
-            World::build_story,
-            World::build_audio,
-            World::build_ui_input,
-            World::build_text_input,
-        ];
-        for build in SCHEDULE {
-            if let Some(system) = build(&*self) {
+        for entry in SYSTEMS {
+            if let Some(system) = (entry.gate)(&*self) {
                 self.systems.push(system);
             }
         }
     }
 
-    // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
-    // (the render marker).
-    fn build_graphics(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::GraphicsConfig>()
-            .next()
-            .map(|_| crate::gfx::graphics_system::GraphicsSystem::new().into())
-    }
-
-    // StatHud: present whenever the world declares a `StatHud`; built from that
-    // component (the HUD's TextLabel refs).
-    fn build_stat_hud(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::StatHud>()
-            .next()
-            .cloned()
-            .map(|cfg| crate::hud::stat_hud::StatHudSystem::new(cfg).into())
-    }
-
-    // PhysicsSystem: present whenever the world has physics content, namely a
-    // `PhysicsConfig` (optional floor / terrain tuning), a `RigidBody` (character
-    // capsule), or a `PropBody` (dynamic prop). Reads the `PhysicsConfig` if
-    // present, otherwise a flat-floor default.
-    fn build_physics(&self) -> Option<SystemAsset> {
-        let needs = self
-            .query::<crate::assets::PhysicsConfig>()
-            .next()
-            .is_some()
-            || self.query::<crate::assets::RigidBody>().next().is_some()
-            || self.query::<crate::assets::PropBody>().next().is_some()
-            // A skinned mesh with a character capsule needs the rig drive
-            // (the CharacterRig itself is published later, by GraphicsSystem
-            // init, so gate on the baked resource data).
-            || self
-                .resources
-                .get::<crate::resource::SkinnedMeshTable>()
-                .is_some_and(|t| t.has_capsule());
-        if !needs {
-            return None;
-        }
-        let config = self
-            .query::<crate::assets::PhysicsConfig>()
-            .next()
-            .cloned()
-            .unwrap_or_default();
-        Some(crate::physics::system::PhysicsSystem::new(config).into())
-    }
-
-    // Camera controller: present whenever a `Camera3D` has a `controller`
-    // (the default; `null` opts out for cutscene cameras). Built from the
-    // first controlled camera's settings: a `follow` block selects the
-    // third-person controller, otherwise the first-person / fly one.
-    fn build_camera(&self) -> Option<SystemAsset> {
-        let ctrl = self
-            .query::<crate::assets::Camera3D>()
-            .find_map(|c| c.controller.clone())?;
-        Some(if ctrl.follow.is_some() {
-            crate::gfx::third_person::ThirdPersonSystem::new(&ctrl).into()
-        } else {
-            crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into()
-        })
-    }
-
-    // FpsCounter: present whenever the world declares an `FpsCounter`; built from
-    // that component (its optional TextLabel ref).
-    fn build_fps_counter(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::FpsCounter>()
-            .next()
-            .cloned()
-            .map(|cfg| crate::hud::fps_counter::FpsCounterSystem::new(cfg).into())
-    }
-
-    // DebugHud: present whenever the world declares a `DebugHud`, but only in
-    // developer contexts. Blobs are profile-agnostic (the build injects a
-    // DebugHud into every rendering world), so the running binary is the one
-    // place its own profile is knowable: a debug build or a `cn debug` session
-    // activates the HUD, a release `cn run` leaves it inert.
-    fn build_debug_hud(&self) -> Option<SystemAsset> {
-        if !(cfg!(debug_assertions) || crate::app::dev_flags::enabled()) {
-            return None;
-        }
-        self.query::<crate::assets::DebugHud>()
-            .next()
-            .cloned()
-            .map(|cfg| crate::hud::debug_hud::DebugHudSystem::new(cfg).into())
-    }
-
-    // AnimationSystem: present whenever the world declares any `Animation` or
-    // `AnimGraph`. It drains both at init and writes `SkeletonPose` each
-    // frame. (A graph without clips is a build error, so the second check
-    // only matters for hand-assembled worlds.)
-    fn build_animation(&self) -> Option<SystemAsset> {
-        let declared = self.query::<crate::assets::Animation>().next().is_some()
-            || self.query::<crate::assets::AnimGraph>().next().is_some();
-        declared.then(|| crate::gfx::animation::AnimationSystem::new().into())
-    }
-
-    // StorySystem: present whenever the world declares a `Story` (a compiled
-    // story graph). It runs before AudioSystem so its page-audio requests are
-    // heard the same tick, and before UiInputSystem like every other event
-    // producer (its view commands apply next frame).
-    fn build_story(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::Story>()
-            .next()
-            .cloned()
-            .map(|story| crate::story::StorySystem::new(story).into())
-    }
-
-    // AudioSystem: present whenever the world declares any `AudioEmitter`
-    // (positional sound), `AudioCue` (view-triggered sound), or `Story`
-    // (page-triggered sound). Building it opens an audio device, so a world
-    // with none of them stays silent and device-free.
-    fn build_audio(&self) -> Option<SystemAsset> {
-        let needs = self.query::<crate::assets::AudioEmitter>().next().is_some()
-            || self.query::<crate::assets::AudioCue>().next().is_some()
-            || self
-                .query::<crate::assets::Story>()
-                .next()
-                .is_some_and(|s| {
-                    s.nodes.iter().any(|n| {
-                        n.choice_music.is_some()
-                            || !n.choice_sounds.is_empty()
-                            || n.pages
-                                .iter()
-                                .any(|p| p.music.is_some() || !p.sounds.is_empty())
-                    })
-                });
-        needs.then(|| crate::audio::system::AudioSystem::new().into())
-    }
-
-    // UiInputSystem: present whenever the world declares any `HitRegion`, `View`,
-    // or `KeyBinding`. It drains all three at init.
-    fn build_ui_input(&self) -> Option<SystemAsset> {
-        let needs = self.query::<crate::assets::HitRegion>().next().is_some()
-            || self.query::<crate::assets::View>().next().is_some()
-            || self.query::<crate::assets::KeyBinding>().next().is_some();
-        needs.then(|| crate::ui::UiInputSystem::new().into())
-    }
-
-    // TextInputSystem: present whenever the world declares any `TextInput`. It
-    // edits the focused field in place from the frame's typed character and
-    // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
-    fn build_text_input(&self) -> Option<SystemAsset> {
-        self.query::<crate::assets::TextInput>()
-            .next()
-            .map(|_| crate::text_input_system::TextInputSystem::new().into())
+    // The system names the gated schedule would build for this world's current
+    // content, in run order. Runs the same `SYSTEMS` gates `start()` runs, so
+    // cook / editor / CLI reporting cannot drift from the runtime; the probe
+    // constructs and discards each gated system, which is why constructors
+    // must stay cheap and side-effect-free (see `schedule`). Reflects the
+    // running binary (DebugHud gates on the dev profile) and the pre-`start`
+    // content: after `start` drains gating components, it reports the systems
+    // a rebuild of the CURRENT content would get, not the built set.
+    pub fn system_manifest(&self) -> Vec<&'static str> {
+        SYSTEMS
+            .iter()
+            .filter(|entry| (entry.gate)(self).is_some())
+            .map(|entry| entry.name)
+            .collect()
     }
 
     // Per-frame profiling data: system CPU timings and render-backend stats
@@ -706,6 +566,91 @@ mod tests {
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["StatHud", "DebugHud", "FpsCounter"]);
+    }
+
+    // The manifest reports exactly the systems `start()` builds, in the same
+    // order, for a world gating several table entries. Audio is left ungated
+    // so `start()` opens no device here.
+    #[test]
+    fn system_manifest_matches_started_systems() {
+        use crate::assets::{DebugHud, FpsCounter, StatHud, Story, TextInput};
+
+        let mut world = World::new_empty();
+        world.add_component(StatHud::default());
+        world.add_component(DebugHud::default());
+        world.add_component(FpsCounter::default());
+        world.add_component(Story::default());
+        world.add_component(TextInput::default());
+
+        let manifest = world.system_manifest();
+        world.start().unwrap();
+        let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(manifest, built);
+    }
+
+    // Manifest names come out in table order, and every name is a real table
+    // entry (the manifest is a filtered view of `SYSTEMS`, nothing else).
+    #[test]
+    fn system_manifest_is_a_table_order_subset() {
+        use crate::assets::{FpsCounter, StatHud};
+
+        let mut world = World::new_empty();
+        world.add_component(FpsCounter::default());
+        world.add_component(StatHud::default());
+
+        let table: Vec<&str> = SYSTEMS.iter().map(|e| e.name).collect();
+        let manifest = world.system_manifest();
+        let mut cursor = table.iter();
+        for name in &manifest {
+            assert!(
+                cursor.any(|t| t == name),
+                "'{name}' out of table order or unknown: {manifest:?}"
+            );
+        }
+    }
+
+    // The two camera-controller entries are mutually exclusive: the first
+    // controlled camera's `follow` block picks exactly one of them.
+    #[test]
+    fn camera_controller_gates_are_exclusive() {
+        use crate::assets::{Camera3D, CameraController, FollowController};
+
+        let mut fly_cam = Camera3D::bake(Default::default());
+        fly_cam.controller = Some(CameraController::default());
+        let mut fly = World::new_empty();
+        fly.add_component(fly_cam);
+        assert_eq!(fly.system_manifest(), ["Camera3DSystem"]);
+
+        let mut follow_cam = Camera3D::bake(Default::default());
+        follow_cam.controller = Some(CameraController {
+            follow: Some(FollowController::default()),
+            ..Default::default()
+        });
+        let mut follow = World::new_empty();
+        follow.add_component(follow_cam);
+        assert_eq!(follow.system_manifest(), ["ThirdPersonSystem"]);
+    }
+
+    // An audio-gating component is visible in the manifest without a device:
+    // the gate probe constructs the system, and device acquisition waits for
+    // `System::init`.
+    #[test]
+    fn audio_gate_probes_without_a_device() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::AudioEmitter::default());
+        assert_eq!(world.system_manifest(), ["AudioSystem"]);
+    }
+
+    // Every table entry carries a non-empty human-readable gate description.
+    #[test]
+    fn every_system_entry_documents_its_gate() {
+        for entry in SYSTEMS {
+            assert!(
+                !entry.present_when.is_empty(),
+                "{} has no present_when",
+                entry.name
+            );
+        }
     }
 
     // A Story gates the StorySystem. An empty-node story pulls in no audio

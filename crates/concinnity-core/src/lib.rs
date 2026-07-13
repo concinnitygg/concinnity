@@ -16,3 +16,4 @@ pub mod geometry;
 pub mod gfx;
 pub mod paths;
 pub mod result;
+pub mod shutdown;

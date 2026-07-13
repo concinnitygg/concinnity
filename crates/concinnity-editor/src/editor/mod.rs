@@ -24,8 +24,8 @@ use crate::app::state::App;
 use crate::debug_hook::DebugHook;
 use crate::ecs::World;
 use crate::world::{WORLD_JSONL, find_world_jsonl};
+use concinnity_core::shutdown::ShutdownToken;
 use hook::EditorHook;
-use tokio_util::sync::CancellationToken;
 
 // A minimal renderable world: a lone GraphicsConfig, which the cook pipeline
 // expands into a Window plus default shaders. Booted in memory when there is
@@ -180,7 +180,7 @@ impl DebugHook for MultiHook {
         }
     }
 
-    fn attach_shutdown(&mut self, shutdown: CancellationToken) {
+    fn attach_shutdown(&mut self, shutdown: ShutdownToken) {
         for hook in &mut self.hooks {
             hook.attach_shutdown(shutdown.clone());
         }

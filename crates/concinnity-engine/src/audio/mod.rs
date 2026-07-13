@@ -80,8 +80,10 @@ impl AudioEngine {
         }
     }
 
-    // An engine with no output device. Every method is a no-op.
-    fn disabled() -> AudioEngine {
+    // An engine with no output device. Every method is a no-op. Also the
+    // pre-init state of a constructed AudioSystem: acquiring the device waits
+    // for `System::init`, so constructing the system has no side effects.
+    pub(crate) fn disabled() -> AudioEngine {
         AudioEngine {
             active: None,
             last_master_volume: 1.0,

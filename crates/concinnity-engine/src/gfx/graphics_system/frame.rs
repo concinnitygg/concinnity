@@ -1133,7 +1133,16 @@ impl GraphicsSystem {
                         .collect(),
                     None => Vec::new(),
                 };
+                // One settings snapshot serves the whole command batch: loaded
+                // lazily (from the in-memory cache after the first change, so a
+                // queued-but-unflushed background write is never re-read stale
+                // from disk), mutated by the commands below, then queued once to
+                // the background writer -- the render thread never blocks on
+                // settings disk I/O.
+                let mut cfg = self.settings_cache.take();
+                let mut cfg_dirty = false;
                 for cmd in setting_cmds {
+                    let cfg = cfg.get_or_insert_with(crate::config::Settings::load);
                     // Key-rebind settings (Controls tab) take a Rebind op: bind
                     // the named action to the captured key, swapping with whatever
                     // action held it, push the map to the backend, persist, and
@@ -1151,11 +1160,8 @@ impl GraphicsSystem {
                         let victim = self.keymap.action_for_key(key).filter(|&a| a != action);
                         self.keymap.rebind(action, key);
                         backend.set_keymap(&self.keymap);
-                        let mut cfg = crate::config::Settings::load();
                         cfg.controls.keymap = Some(self.keymap);
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!("GraphicsSystem: persist keymap: {}", e);
-                        }
+                        cfg_dirty = true;
                         // Refresh the rebound row label and any swap victim's,
                         // reading the registry by direct field access (disjoint
                         // from the `backend` borrow).
@@ -1276,7 +1282,6 @@ impl GraphicsSystem {
                         // Persist only on release (the in-progress frames apply
                         // live but skip the disk write).
                         if cmd.persist {
-                            let mut cfg = crate::config::Settings::load();
                             match cmd.setting.as_str() {
                                 "exposure" => cfg.graphics.exposure_ev = Some(value),
                                 "bloom_intensity" => cfg.graphics.bloom_intensity = Some(value),
@@ -1310,13 +1315,7 @@ impl GraphicsSystem {
                                 "fov" => cfg.graphics.fov = Some(stored),
                                 _ => {}
                             }
-                            if let Err(e) = cfg.save() {
-                                tracing::warn!(
-                                    "GraphicsSystem: persist setting '{}': {}",
-                                    cmd.setting,
-                                    e
-                                );
-                            }
+                            cfg_dirty = true;
                         }
                         continue;
                     }
@@ -1419,7 +1418,6 @@ impl GraphicsSystem {
                         // Persist the preset and drop the per-row quality overrides,
                         // so the next launch re-resolves them from the world +
                         // ceiling exactly as this live re-derive did.
-                        let mut cfg = crate::config::Settings::load();
                         cfg.graphics.quality_preset = Some(preset);
                         cfg.graphics.aa_mode = None;
                         cfg.graphics.ssao = None;
@@ -1437,9 +1435,7 @@ impl GraphicsSystem {
                         cfg.graphics.shadow_cascades = None;
                         cfg.graphics.anisotropy = None;
                         cfg.graphics.render_scale = None;
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!("GraphicsSystem: persist preset: {e}");
-                        }
+                        cfg_dirty = true;
 
                         // Refresh the dependent rows (quality toggles + render
                         // scale) from the init-captured value-label ids -- the
@@ -1540,15 +1536,8 @@ impl GraphicsSystem {
                         let mode = self.display_modes[next];
                         self.resolution = Some(mode);
                         backend.set_display_mode(mode);
-                        let mut cfg = crate::config::Settings::load();
                         cfg.graphics.resolution = Some([mode.width, mode.height, mode.refresh_hz]);
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!(
-                                "GraphicsSystem: persist setting '{}': {}",
-                                cmd.setting,
-                                e
-                            );
-                        }
+                        cfg_dirty = true;
                         if let Some(label_id) = cmd.value_label {
                             set_label_content(ctx, label_id, &mode.label());
                         }
@@ -1561,7 +1550,6 @@ impl GraphicsSystem {
                     // Apply per setting: cycle the value, apply it (live for
                     // window/vsync; render_scale is restart-required so it only
                     // persists), then persist and refresh the value label.
-                    let mut cfg = crate::config::Settings::load();
                     let new_text: Option<&str> = match cmd.setting.as_str() {
                         "vsync" => {
                             let next = settings::cycle(self.vsync as usize, opts.len(), cmd.op);
@@ -1964,17 +1952,23 @@ impl GraphicsSystem {
                         _ => None,
                     };
                     if let Some(text) = new_text {
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!(
-                                "GraphicsSystem: persist setting '{}': {}",
-                                cmd.setting,
-                                e
-                            );
-                        }
+                        cfg_dirty = true;
                         if let Some(label_id) = cmd.value_label {
                             set_label_content(ctx, label_id, text);
                         }
                     }
+                }
+                // Hand the batch's snapshot to the background writer (spawned on
+                // the first persisted change) and keep it as the cache the next
+                // change starts from. Field access, not a &mut self helper: the
+                // `backend` borrow above lives to the end of this scope.
+                if let Some(cfg) = cfg {
+                    if cfg_dirty {
+                        self.settings_writer
+                            .get_or_insert_with(settings_writer::SettingsWriter::spawn)
+                            .save(cfg.clone());
+                    }
+                    self.settings_cache = Some(cfg);
                 }
 
                 // Publish the stats-HUD state for the systems that run after

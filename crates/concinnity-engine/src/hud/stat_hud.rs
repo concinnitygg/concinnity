@@ -65,9 +65,9 @@ fn edr_text(max_edr: Option<f32>) -> String {
 //
 // `VRAM` is the render device's current allocation; on Apple Silicon's
 // unified memory that is its share of system RAM. Filled on Metal
-// (`MTLDevice.currentAllocatedSize`) and DirectX
-// (`IDXGIAdapter3::QueryVideoMemoryInfo(LOCAL).CurrentUsage`); Vulkan
-// still reads `0 MB`.
+// (`MTLDevice.currentAllocatedSize`), DirectX
+// (`IDXGIAdapter3::QueryVideoMemoryInfo(LOCAL).CurrentUsage`), and Vulkan
+// (`VK_EXT_memory_budget`).
 //
 // `EV` is the adapted exposure value the auto-exposure EMA settled on for
 // the most recent frame (the multiplier the post-process stack uses is

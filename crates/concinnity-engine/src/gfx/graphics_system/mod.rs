@@ -42,10 +42,11 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 //   slot. One implicit DrawObject is also created for any Mesh that has no Prop
 //   referencing it (e.g. the room itself), placed at the world origin.
 //
-// GraphicsSystem deposits a FrameInput component each step after polling the
-// backend window. Camera3DSystem drains it to update Camera3D, then writes
-// the new view matrix back in time for the next frame.
-// Camera3DSystem must run after GraphicsSystem so FrameInput is present.
+// GraphicsSystem deposits a FrameInput component at the end of each step after
+// polling the backend window, replacing the previous frame's (no other system
+// drains it). Camera3DSystem queries it to update Camera3D, then writes the
+// new view matrix back in time for the next frame, so it must run after
+// GraphicsSystem.
 pub struct GraphicsSystem {
     window_args: WindowArgs,
     clear_color: [f32; 4],
@@ -315,6 +316,13 @@ pub struct GraphicsSystem {
     occlusion_two_pass: bool,
     texture_cap: u32,
     texture_budget: u32,
+    // In-memory copy of the persisted settings store, loaded once on the first
+    // settings change and mutated in place from then on, so a queued (not yet
+    // flushed) background write is never re-read stale from disk.
+    settings_cache: Option<crate::config::Settings>,
+    // Background disk writer for settings changes; spawned on the first
+    // persisted change so an unchanged session never starts the thread.
+    settings_writer: Option<settings_writer::SettingsWriter>,
     // Test-only injection seam: pre-resolved settings, a fabricated GPU
     // profile, and a mock backend factory, so unit tests can drive
     // run_init / run_step without a GPU device or the on-disk settings store.
@@ -508,6 +516,8 @@ impl GraphicsSystem {
             occlusion_two_pass: false,
             texture_cap: 96,
             texture_budget: 4,
+            settings_cache: None,
+            settings_writer: None,
             #[cfg(test)]
             test_hooks: None,
         }
@@ -782,6 +792,7 @@ mod helpers;
 pub mod hot_reload_sources;
 mod init;
 mod scene;
+mod settings_writer;
 mod spawn;
 mod streaming;
 #[cfg(test)]

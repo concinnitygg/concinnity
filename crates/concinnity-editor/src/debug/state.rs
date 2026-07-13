@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use tokio_util::sync::CancellationToken;
+use concinnity_core::shutdown::ShutdownToken;
 
 use crate::gfx::graphics_system::StreamingStats;
 
@@ -33,7 +33,7 @@ pub(crate) struct DebugState {
     pub(super) profile_render: crate::gfx::profile::RenderStats,
     // App shutdown token, set once via `DebugHook::attach_shutdown`. The
     // `shutdown` command cancels it to exit the engine cleanly.
-    pub(super) shutdown_token: Option<CancellationToken>,
+    pub(super) shutdown_token: Option<ShutdownToken>,
     // Shared shader-reload flag captured from the active graphics backend.
     // `Some` once `tick` has seen a `GraphicsSystem` whose backend opted into
     // hot-reload (Metal under `cn debug`); `None` otherwise. The

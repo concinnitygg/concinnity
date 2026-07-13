@@ -2,7 +2,7 @@
 use crate::blob;
 use crate::ecs::{StepResult, World};
 use crate::result::CnResult;
-use tokio_util::sync::CancellationToken;
+use concinnity_core::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppStatus {
@@ -16,7 +16,7 @@ pub enum AppStatus {
 pub struct App {
     status: AppStatus,
     world: World,
-    shutdown: CancellationToken,
+    shutdown: ShutdownToken,
 }
 
 impl Default for App {
@@ -30,11 +30,11 @@ impl App {
         Self {
             status: AppStatus::Created,
             world: World::new_empty(),
-            shutdown: CancellationToken::new(),
+            shutdown: ShutdownToken::new(),
         }
     }
 
-    pub fn new_with_token(shutdown: CancellationToken) -> Self {
+    pub fn new_with_token(shutdown: ShutdownToken) -> Self {
         Self {
             status: AppStatus::Created,
             world: World::new_empty(),
@@ -70,7 +70,7 @@ impl App {
 
     // clone of the root cancellation token. Pass this to systems or the
     // ctrl+c handler so they all share a single cancellation source
-    pub fn shutdown_token(&self) -> CancellationToken {
+    pub fn shutdown_token(&self) -> ShutdownToken {
         self.shutdown.clone()
     }
 

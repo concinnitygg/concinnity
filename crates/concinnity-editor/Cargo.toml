@@ -57,7 +57,6 @@ slotmap = "1.1.1"
 thiserror = "2.0.18"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
-tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 ureq = { version = "3.2.0", features = ["json"] }

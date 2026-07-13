@@ -12,7 +12,7 @@ use crate::ecs::{SystemAsset, World};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
-use tokio_util::sync::CancellationToken;
+use concinnity_core::shutdown::ShutdownToken;
 
 use tokio_tungstenite::tungstenite::{Message, accept};
 
@@ -331,7 +331,7 @@ impl DebugHook for DebugServer {
         }
     }
 
-    fn attach_shutdown(&mut self, shutdown: CancellationToken) {
+    fn attach_shutdown(&mut self, shutdown: ShutdownToken) {
         let mut state = match self.shared.lock() {
             Ok(s) => s,
             Err(poisoned) => poisoned.into_inner(),

@@ -8,7 +8,7 @@
 
 use crate::app::state::App;
 use crate::ecs::World;
-use tokio_util::sync::CancellationToken;
+use concinnity_core::shutdown::ShutdownToken;
 
 pub(crate) trait DebugHook: Send {
     // Called once per frame on the main thread, just before the world step.
@@ -27,5 +27,5 @@ pub(crate) trait DebugHook: Send {
     // shutdown token. A hook can cancel it to ask the engine to exit cleanly
     // (the run loop checks the token every iteration), e.g. a debug client
     // issuing a `shutdown` command. Default: ignore the token.
-    fn attach_shutdown(&mut self, _shutdown: CancellationToken) {}
+    fn attach_shutdown(&mut self, _shutdown: ShutdownToken) {}
 }
