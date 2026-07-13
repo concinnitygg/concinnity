@@ -705,6 +705,7 @@ dependencies = [
 name = "concinnity-docs"
 version = "0.10.1"
 dependencies = [
+ "concinnity-world",
  "syn",
 ]
 

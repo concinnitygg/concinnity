@@ -49,13 +49,6 @@ use render::{
 const ASSET_SCHEMA_DIR: &str = "../concinnity-asset/src";
 const ASSET_IMPL_DIR: &str = "../concinnity-core/src/assets";
 
-// Most components no longer carry a hand-written `impl Component`: the trivial
-// impls are generated from the metadata in the `for_each_component!` registry
-// list (each entry is `Type { gen, <origin>, ... }` or `{ manual }`). Those
-// `gen` types are discovered by reading the list; the remaining `manual` types
-// still keep a literal `impl Component` in the asset files above.
-const REGISTRY_FILE: &str = "../concinnity-core/src/ecs/registry.rs";
-
 // Per-type markdown pages written into the source tree, relative to this crate.
 const PAGES_DIR: &str = "../concinnity-docs/public/assets";
 
@@ -116,17 +109,16 @@ struct Entry {
 fn main() {
     println!("cargo:rerun-if-changed={ASSET_SCHEMA_DIR}");
     println!("cargo:rerun-if-changed={ASSET_IMPL_DIR}");
-    println!("cargo:rerun-if-changed={REGISTRY_FILE}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/render.rs");
 
     let files = parse_asset_files();
     let enums = collect_enums(&files);
     let struct_file_idx = collect_structs(&files);
-    // Manual components keep a literal `impl Component`; generated ones are read
-    // from the registry list. A type appears in exactly one of the two.
+    // Manual components keep a literal `impl Component`; the rest come from the
+    // concinnity-world registries. A type appears in exactly one of the two.
     let mut all_components = collect_components(&files, &struct_file_idx);
-    all_components.extend(collect_generated_components());
+    all_components.extend(collect_registry_components(&all_components));
 
     // Authorable assets only: a RuntimeOnly component is engine-internal, never
     // declared in a world, so it gets no page.
@@ -481,58 +473,39 @@ fn collect_components(
 }
 
 // Components whose `impl Component` is generated from the registry metadata,
-// discovered by reading the `for_each_component!` list. Each `gen` entry looks
-// like `Variant => $crate::assets::Type { gen, external, id, ... }`; the origin
-// flag (`external` / `build_only`) gives the metadata a hand-written impl would
-// have carried. Every generated type is a pass-through (`Args = Self`) and its
+// read through the concinnity-world authoring registries. `ComponentType::all`
+// covers every component; the ones with a hand-written impl were already
+// collected from source by the pass above (matched by NAME), so they are
+// skipped here. Every generated type is a pass-through (`Args = Self`) whose
 // NAME equals the type name, so `name`, `struct_ident`, and `args_struct` all
-// match the type. `manual` entries are skipped: those keep a literal impl the
-// pass above already collected.
-fn collect_generated_components() -> Vec<ComponentMeta> {
-    let src = fs::read_to_string(REGISTRY_FILE)
-        .unwrap_or_else(|e| panic!("build.rs: could not read {REGISTRY_FILE}: {e}"));
-    const MARKER: &str = "=> $crate::assets::";
+// match. Resource-only assets (`ResourceAssetType`, e.g. AudioClip) still get a
+// doc page: their schema lives in concinnity-asset like every External asset,
+// they have just left the component registry.
+fn collect_registry_components(manual: &[ComponentMeta]) -> Vec<ComponentMeta> {
+    use concinnity_world::registry::ComponentType;
+    use concinnity_world::resource_type::ResourceAssetType;
+
+    let manual_names: BTreeSet<&str> = manual.iter().map(|c| c.name.as_str()).collect();
     let mut out = Vec::new();
-    for line in src.lines() {
-        let Some(idx) = line.find(MARKER) else {
+    for &(ty, reg_fn) in ComponentType::all() {
+        if manual_names.contains(ty.as_str()) {
             continue;
-        };
-        let after = &line[idx + MARKER.len()..];
-        let ty: String = after
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        let (Some(open), Some(close)) = (after.find('{'), after.find('}')) else {
-            continue;
-        };
-        let meta = after[open + 1..close].trim();
-        let Some(flags) = meta.strip_prefix("gen") else {
-            // A resource-only asset entry (from `for_each_resource_asset!`, e.g.
-            // `{ resource: AudioClip, ... }`) still gets a doc page: its schema
-            // lives in concinnity-asset like every External asset, it has just
-            // left the component registry.
-            if meta.starts_with("resource") {
-                out.push(ComponentMeta {
-                    name: ty.clone(),
-                    struct_ident: ty.clone(),
-                    args_struct: ty,
-                    origin: "External".to_string(),
-                });
-            }
-            continue; // a `manual` entry: its impl is collected the usual way.
-        };
-        let origin = if flags.contains("build_only") {
-            "BuildOnly"
-        } else if flags.contains("external") {
-            "External"
-        } else {
-            "RuntimeOnly"
-        };
+        }
+        let name = ty.as_str().to_string();
         out.push(ComponentMeta {
-            name: ty.clone(),
-            struct_ident: ty.clone(),
-            args_struct: ty,
-            origin: origin.to_string(),
+            name: name.clone(),
+            struct_ident: name.clone(),
+            args_struct: name,
+            origin: format!("{:?}", reg_fn().origin),
+        });
+    }
+    for &ty in ResourceAssetType::all() {
+        let name = ty.as_str().to_string();
+        out.push(ComponentMeta {
+            name: name.clone(),
+            struct_ident: name.clone(),
+            args_struct: name,
+            origin: format!("{:?}", ty.registration().origin),
         });
     }
     out
