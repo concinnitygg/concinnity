@@ -1,10 +1,10 @@
-// src/gfx/graphics_system/spawn.rs
+// src/spawn/template.rs
 //
 // Runtime entity spawn: instantiate a copy of an existing placement at a new
 // transform and give it the GPU draw slots, components, and (optionally) a
 // Lifetime the copy needs to live in the world. The symmetric counterpart to
-// despawn.rs. Driven by SpawnRequest events the GraphicsSystem drains each step
-// (see frame.rs), and paired with a Lifetime tick that auto-despawns expired
+// despawn.rs. Driven by SpawnRequest events SpawnSystem drains each step (see
+// mod.rs), and paired with a Lifetime tick that auto-despawns expired
 // instances so their freed draw slots can be recycled by the next spawn.
 
 use crate::assets::{

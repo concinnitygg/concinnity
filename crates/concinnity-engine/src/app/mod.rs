@@ -7,6 +7,7 @@
 pub mod anim_runtime;
 
 pub mod dev_flags;
+pub(crate) mod pacing;
 pub mod run;
 pub mod runloop;
 pub mod state;

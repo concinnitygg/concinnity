@@ -41,6 +41,9 @@ pub(crate) mod physics;
 // stream). `pub` so the editor's in-memory build path can construct the tables it
 // inserts into the world, mirroring the shipped-runtime loader.
 pub mod resource;
+// Runtime entity churn (Lifetime/Spawner ticks + spawn/despawn/reparent
+// drains), scheduled immediately before GraphicsSystem.
+pub(crate) mod spawn;
 pub(crate) mod story;
 pub(crate) mod text_input_system;
 pub(crate) mod ui;

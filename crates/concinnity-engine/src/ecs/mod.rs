@@ -55,6 +55,13 @@ pub enum StepResult {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuActive(pub bool);
 
+// The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
+// (from GraphicsConfig at init, refreshed by the settings row's live change)
+// and read by the App-level frame pacer before each world step. Independent of
+// the quality preset (a user/hardware preference, like vsync).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameRateCap(pub u32);
+
 // An external per-frame driver (the `cn editor` HUD) can force the world's
 // "menu active" state through this resource: `Some(true)` frees the cursor and
 // freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
@@ -86,6 +93,61 @@ pub struct HudLayers(pub std::collections::HashMap<asset_id::AssetId, i32>);
 // `init_backend`, so a save applies without recreating the OS window. A shipped
 // runtime never publishes it; it exists only on the editor's live-update path.
 pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
+
+// The world's live render backend, parked here between system steps.
+// GraphicsSystem's init builds it and parks it; each system that drives the
+// GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
+// top of its step and puts it back before returning, so the backend and the
+// `PipelineContext` are never borrowed together. `None` while a step has it
+// taken, or once the editor's live SAVE transplanted it out.
+pub struct ActiveRenderBackend(pub Option<Box<dyn crate::gfx::backend::RenderBackend>>);
+
+impl ActiveRenderBackend {
+    // Take the parked backend for the duration of one system step.
+    pub(crate) fn take(
+        resources: &mut Resources,
+    ) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
+        resources.get_mut::<Self>()?.0.take()
+    }
+
+    // Park the backend again at the end of the step that took it.
+    pub(crate) fn put(
+        resources: &mut Resources,
+        backend: Box<dyn crate::gfx::backend::RenderBackend>,
+    ) {
+        match resources.get_mut::<Self>() {
+            Some(slot) => slot.0 = Some(backend),
+            None => {
+                resources.insert(Self(Some(backend)));
+            }
+        }
+    }
+}
+
+// The active SceneReel bookkeeping, shared between SettingsSystem (which
+// applies imperative scene jumps from `SceneCommand`) and GraphicsSystem
+// (which ticks the timed advance + fades and submits the visibility changes).
+// Published by GraphicsSystem's init when the world declares a `SceneReel`;
+// `reel` is `None` when it declared none, so both systems no-op. `epoch` is the
+// shared clock both derive their `elapsed` from, set to GraphicsSystem's own
+// `start_time` so fade timing matches the render clock.
+pub struct ActiveSceneReel {
+    pub reel: Option<crate::gfx::scene_reel::ReelState>,
+    pub epoch: std::time::Instant,
+}
+
+// The latest sampled cursor state (window pixels, top-left origin), published
+// by InputSystem after each poll. GraphicsSystem reads it when building the
+// next frame's draw list: `follow_cursor` sprites are positioned a frame after
+// the input that moved them, and the in-engine cursor stops drawing once the
+// real cursor has left the window (`outside_window` is false in fullscreen,
+// where the backend confines the cursor, and on backends without window-bounds
+// tracking).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CursorState {
+    pub pos: (f32, f32),
+    pub outside_window: bool,
+}
 
 // Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
 // (which runs first) and read by `StatHudSystem` the same tick. Each field is
@@ -371,18 +433,35 @@ impl World {
         &self.systems
     }
 
-    // Take the live render backend out of this world's GraphicsSystem, leaving
-    // the system backend-less. The `cn editor` live SAVE swap transplants it into
+    // Take the live render backend out of this world's parked slot, leaving
+    // the world backend-less. The `cn editor` live SAVE swap transplants it into
     // the rebuilt world (via a `PendingBackend` resource) so the edit applies
     // without recreating the OS window / re-initialising the GPU device. `None`
-    // when the world has no started GraphicsSystem (or it already yielded its
-    // backend). Cross-crate caller (the editor), so unused from the client itself.
+    // when the world never built a backend (or it was already yielded).
+    // Cross-crate caller (the editor), so unused from the client itself.
     #[allow(dead_code)]
     pub fn take_render_backend(&mut self) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
-        self.systems.iter_mut().find_map(|s| match s {
-            SystemAsset::GraphicsSystem(gs) => gs.take_backend(),
-            _ => None,
-        })
+        ActiveRenderBackend::take(&mut self.resources)
+    }
+
+    // Disjoint mutable borrows of the system list and the parked render
+    // backend, for the `cn debug` hot-reload drive: it applies backend edits
+    // through a system's init-captured bookkeeping, so it needs both at once.
+    // The backend is `None` while a step has it taken (never the case between
+    // ticks, where the drive runs) or when no backend was built.
+    // Cross-crate caller (the editor), so unused from the client itself.
+    #[allow(dead_code)]
+    pub fn systems_and_render_backend(
+        &mut self,
+    ) -> (
+        &mut [SystemAsset],
+        Option<&mut (dyn crate::gfx::backend::RenderBackend + 'static)>,
+    ) {
+        let backend = self
+            .resources
+            .get_mut::<ActiveRenderBackend>()
+            .and_then(|slot| slot.0.as_deref_mut());
+        (&mut self.systems, backend)
     }
 
     // Despawn an entity (all its components, recycling its id). Stands in for the
@@ -402,9 +481,9 @@ impl World {
         self.resources.insert(value);
     }
 
-    // Borrow a resource a system published this run, for assertions in system
-    // tests (e.g. the `OpenDropdown` UiInputSystem publishes each step).
-    #[cfg(test)]
+    // Borrow a published singleton resource. The App-level frame pacer reads
+    // the pacing state through this before each step; system tests use it for
+    // assertions (e.g. the `OpenDropdown` UiInputSystem publishes each step).
     pub fn resource<T: std::any::Any>(&self) -> Option<&T> {
         self.resources.get::<T>()
     }

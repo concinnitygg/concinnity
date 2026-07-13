@@ -332,16 +332,6 @@ impl GraphicsSystem {
             chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
         }
     }
-
-    // Shared atomic flag the active backend polls at frame start to trigger a
-    // shader rebuild. `Some` only under `cn debug` on backends that ship
-    // hot-reload (Metal today); `None` otherwise. The debug server captures
-    // this Arc once and uses it to forward `reload-shaders` requests.
-    // (Consumed only by the `cn debug` binary, so dead in a library build.)
-    #[allow(dead_code)]
-    pub fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.backend.as_ref().and_then(|b| b.shader_reload_flag())
-    }
 }
 
 #[cfg(test)]

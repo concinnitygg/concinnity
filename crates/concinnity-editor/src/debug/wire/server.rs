@@ -77,10 +77,13 @@ impl DebugServer {
         let mut effects = None;
         // ECS-side commands (camera-set / camera-move / camera-stop, plus
         // quality-set) mutate the ECS or this server's motion slot, not the
-        // backend, so they cannot be applied inside the `systems_mut` borrow
+        // backend, so they cannot be applied inside the systems borrow
         // below. Collect them here and apply them once that borrow ends.
         let mut deferred_ecs_cmds: Vec<runtime_spawn::RuntimeCommand> = Vec::new();
-        for system in world.systems_mut() {
+        // The backend lives in the world's parked slot (disjoint from the
+        // system list), so both are borrowed at once for the apply passes.
+        let (systems, mut backend) = world.systems_and_render_backend();
+        for system in systems {
             match system {
                 SystemAsset::GraphicsSystem(gs) => {
                     // Lazily build the reload state from the init-captured
@@ -91,7 +94,8 @@ impl DebugServer {
                         self.hot_reload =
                             Some(hot_reload::AssetHotReloadState::from_sources(sources));
                     }
-                    if let Some(mut apply) = gs.hot_reload_apply_parts() {
+                    if let Some(backend) = backend.take() {
+                        let mut apply = gs.hot_reload_apply_parts(backend);
                         // Runtime decal / emitter spawn: independent of the
                         // hot-reload state, available in any `cn debug` world.
                         // CameraSet is deferred; everything else hits the
@@ -251,25 +255,23 @@ impl DebugHook for DebugServer {
 
         // Streaming counts change every frame in the early load-in, so refresh
         // them every tick -- `streaming_stats` is just two small count loops.
-        // The same scan opportunistically picks up the shader-reload flag the
-        // backend exposes (Some only under `cn debug` on hot-reload backends);
-        // once captured, the `reload-shaders` command can fire the flag.
-        let mut found_shader_flag = None;
         state.streaming = world
             .systems()
             .iter()
             .find_map(|s| match s {
-                SystemAsset::GraphicsSystem(gs) => {
-                    if state.shader_reload.is_none() {
-                        found_shader_flag = gs.shader_reload_flag();
-                    }
-                    Some(gs.streaming_stats())
-                }
+                SystemAsset::GraphicsSystem(gs) => Some(gs.streaming_stats()),
                 _ => None,
             })
             .unwrap_or_default();
+        // Opportunistically pick up the shader-reload flag the backend exposes
+        // (Some only under `cn debug` on hot-reload backends); once captured,
+        // the `reload-shaders` command can fire the flag. The backend sits in
+        // the world's parked slot between ticks.
         if state.shader_reload.is_none()
-            && let Some(flag) = found_shader_flag
+            && let Some(flag) = world
+                .resource::<crate::ecs::ActiveRenderBackend>()
+                .and_then(|slot| slot.0.as_ref())
+                .and_then(|backend| backend.shader_reload_flag())
         {
             state.shader_reload = Some(flag);
         }

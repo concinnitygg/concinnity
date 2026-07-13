@@ -42,23 +42,22 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 //   slot. One implicit DrawObject is also created for any Mesh that has no Prop
 //   referencing it (e.g. the room itself), placed at the world origin.
 //
-// GraphicsSystem deposits a FrameInput component at the end of each step after
-// polling the backend window, replacing the previous frame's (no other system
-// drains it). Camera3DSystem queries it to update Camera3D, then writes the
-// new view matrix back in time for the next frame, so it must run after
-// GraphicsSystem.
+// Input polling + the FrameInput deposit live in InputSystem, scheduled
+// immediately after this system (the OS event pump runs inside draw_frame on
+// Metal, so sampling right after the draw is freshest). Camera3DSystem queries
+// the deposit to update Camera3D, then writes the new view matrix back in time
+// for the next frame, so it runs after both.
 pub struct GraphicsSystem {
     window_args: WindowArgs,
     clear_color: [f32; 4],
     frames_in_flight: usize,
     vsync: bool,
-    // Frame-rate cap in FPS (GraphicsConfig.fps_cap; 0 = unlimited). Applied live
-    // by a CPU frame pacer at the top of each render step, so it is backend-
-    // agnostic and needs no trait method. Independent of the quality preset (a
-    // user/hardware preference, like vsync). `next_frame_deadline` is the pacer's
-    // running target for the next frame's start.
+    // Frame-rate cap in FPS (GraphicsConfig.fps_cap; 0 = unlimited). Applied by
+    // the App-level frame pacer, which reads it through the `FrameRateCap`
+    // resource this system publishes (at init and on the settings row's live
+    // change). Held here so the settings row can cycle from the current value.
+    // Independent of the quality preset (a user/hardware preference, like vsync).
     fps_cap: u32,
-    next_frame_deadline: Option<Instant>,
     // The display modes the Resolution row offers, shaped at init from the
     // backend's enumeration (or the static fallback when it cannot enumerate)
     // and published once as the `DisplayModes` resource for the dropdown list.
@@ -91,11 +90,6 @@ pub struct GraphicsSystem {
     // them (the menu's HitRegions are drained after init, so the row -> label map
     // is captured once rather than re-queried).
     perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
-    // Whether a menu view was open last frame. The pacer runs before this
-    // frame's menu state is known, so it reads the previous frame's value to
-    // clamp the frame rate down to `MENU_FPS_CAP` while a menu is up (no need
-    // to render a paused menu at full speed). One frame of lag is invisible.
-    menu_active_prev: bool,
     max_frames: Option<u64>,
     shadow_map_size: u32,
     shadow_update: crate::assets::ShadowUpdate,
@@ -115,18 +109,6 @@ pub struct GraphicsSystem {
     failed: bool,
     start_time: Option<Instant>,
     frame_count: u64,
-    // Latest mouse position (window pixels, top-left origin), captured from the
-    // backend each frame. Drives `follow_cursor` sprites, which are positioned
-    // a frame after the input that moved them (the draw list is built before
-    // the frame's input is polled).
-    cursor_pos: (f32, f32),
-    // Whether the real cursor has left the window (windowed / borderless), so
-    // the in-engine cursor stops drawing instead of lingering at the edge.
-    // Cached from the backend after each poll (the draw list is built before the
-    // poll), like `cursor_pos`. False (inside) in fullscreen, where the backend
-    // confines the cursor to the screen, and on backends without window-bounds
-    // tracking (DX / Vulkan).
-    cursor_outside_window: bool,
     // A togglable menu (a View) coexists with a controlled Camera3D. When set,
     // cursor capture is driven each frame by whether a menu view is active
     // (release while open, capture otherwise) rather than fixed at startup.
@@ -141,44 +123,26 @@ pub struct GraphicsSystem {
     // render_scale this is restart-required display/persist state (the upscaler
     // is selected + built once at init); DirectX / Vulkan only.
     upscale_backend: crate::assets::UpscalerBackend,
-    // The active render backend, constructed during init() and driven each
-    // step. Boxed `dyn RenderBackend` so the per-frame logic in init.rs /
-    // frame.rs / streaming.rs / scene.rs runs as one cfg-free path across
-    // Metal, DirectX, and Vulkan.
+    // The render backend while init constructs and wires it. Boxed
+    // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
+    // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
+    // At the end of a successful init it is parked in the world's
+    // `ActiveRenderBackend` resource, where every per-step user (this system's
+    // frame encode, InputSystem's poll) takes and returns it; `None` from then
+    // on.
     backend: Option<Box<dyn RenderBackend>>,
-    // active SceneReel bookkeeping; None when no SceneReel was declared.
+    // active SceneReel bookkeeping while init builds it; handed to the shared
+    // `ActiveSceneReel` resource at the end of init (SettingsSystem jumps it,
+    // this system ticks it). None when no SceneReel was declared.
     reel: Option<scene_reel::ReelState>,
-    // Cursor into the Events<SceneCommand> queue, tracking which scene jumps
-    // this system has already applied.
-    scene_cmd_cursor: crate::ecs::EventCursor,
-    // Cursor into the Events<SettingCommand> queue (settings-menu changes:
-    // graphics toggles, sliders, key rebinds, volume).
-    setting_cmd_cursor: crate::ecs::EventCursor,
-    // Cursor into the Events<DespawnRequest> queue (runtime entity despawn:
-    // cn debug `despawn`, and gameplay-driven removal once that path exists).
-    despawn_cmd_cursor: crate::ecs::EventCursor,
-    // Cursor into the Events<ReparentRequest> queue (runtime re-parenting:
-    // cn debug `reparent`, and gameplay-driven moves once that path exists).
-    reparent_cmd_cursor: crate::ecs::EventCursor,
-    // Cursor into the Events<SpawnRequest> queue (runtime entity spawn: cn debug
-    // `spawn`, and gameplay-driven spawning once that path exists).
-    spawn_cmd_cursor: crate::ecs::EventCursor,
-    // Cumulative elapsed seconds at the previous step, so the step can derive a
-    // per-frame dt for the Lifetime countdown.
-    prev_elapsed: f32,
-    // Font atlas data, keyed by asset id, built during init().
+    // Overlay build inputs assembled during init() and handed to OverlaySystem
+    // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
+    // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
+    // texture into the text-atlas pool (appended after the font atlases); the
+    // chip id lists and scroll clip bands drive the per-frame HUD layout.
     loaded_fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
-    // Texture handle -> slot in the text-atlas pool, for Sprites with a
-    // texture. Sprite textures are appended after the font atlases at init.
     sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
-    // DebugHud chip ids in stack order (cursor, camera, passes), captured at
-    // init. The frame step anchors them to the top-right of the window and
-    // stacks them downward; empty when the world has no DebugHud.
     debug_hud_chips: Vec<AssetId>,
-    // StatHud chip ids in strip order (fps, vram, ev, edr), captured at init.
-    // The frame step packs them left-to-right from the top-left of the window
-    // with a small gap, skipping blank chips; empty when the world has no
-    // StatHud.
     stat_hud_chips: Vec<AssetId>,
     // Asset-streaming subsystem for the albedo texture pool. Some only when a
     // StreamingConfig was declared and the backend supports it (Metal); None
@@ -253,7 +217,8 @@ pub struct GraphicsSystem {
     // Per-element clip bands (reference space) captured at init from the world's
     // ScrollPanels: each scroll-content element id maps to its panel's content
     // band, so the draw path scissors it and off-band rows do not bleed over the
-    // panel chrome. Empty when no ScrollPanel was declared.
+    // panel chrome. Empty when no ScrollPanel was declared; handed to
+    // OverlaySystem (inside `OverlayAssets`) at the end of init.
     clip_rects: std::collections::HashMap<AssetId, [f32; 4]>,
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows). Seeded at init from the persisted `ControlsSettings.keymap`
@@ -316,13 +281,6 @@ pub struct GraphicsSystem {
     occlusion_two_pass: bool,
     texture_cap: u32,
     texture_budget: u32,
-    // In-memory copy of the persisted settings store, loaded once on the first
-    // settings change and mutated in place from then on, so a queued (not yet
-    // flushed) background write is never re-read stale from disk.
-    settings_cache: Option<crate::config::Settings>,
-    // Background disk writer for settings changes; spawned on the first
-    // persisted change so an unchanged session never starts the thread.
-    settings_writer: Option<settings_writer::SettingsWriter>,
     // Test-only injection seam: pre-resolved settings, a fabricated GPU
     // profile, and a mock backend factory, so unit tests can drive
     // run_init / run_step without a GPU device or the on-disk settings store.
@@ -331,25 +289,26 @@ pub struct GraphicsSystem {
 }
 
 // One key-rebind row's runtime bookkeeping: the action it rebinds and the value
-// `TextLabel` showing its bound key. Built at init from the row's
-// `setting:key_*:rebind` HitRegion (`action` -> `Bindable`, `label`).
-struct RebindViz {
-    action: crate::gfx::keymap::Bindable,
-    value_id: AssetId,
+// `TextLabel` showing its bound key. Built at init (`init_rebind_rows`) from the
+// row's `setting:key_*:rebind` HitRegion (`action` -> `Bindable`, `label`) and
+// handed to SettingsState, which drives the live rebind drain.
+pub(crate) struct RebindViz {
+    pub(crate) action: crate::gfx::keymap::Bindable,
+    pub(crate) value_id: AssetId,
 }
 
 // One slider row's runtime bookkeeping: the engine setting it controls, the
 // track geometry it maps a fraction onto, and the handle Sprite + value
-// TextLabel it drives. Built at init from the row's `setting:<key>:drag`
-// HitRegion (track `x`/`width`, `label`, `drag_handle`) and the handle Sprite's
-// width.
-struct SliderViz {
-    key: String,
-    track_x: f32,
-    track_w: f32,
-    handle_w: f32,
-    handle_id: AssetId,
-    value_id: AssetId,
+// TextLabel it drives. Built at init (`init_sliders`) from the row's
+// `setting:<key>:drag` HitRegion (track `x`/`width`, `label`, `drag_handle`) and
+// the handle Sprite's width, then handed to SettingsState for the slider drain.
+pub(crate) struct SliderViz {
+    pub(crate) key: String,
+    pub(crate) track_x: f32,
+    pub(crate) track_w: f32,
+    pub(crate) handle_w: f32,
+    pub(crate) handle_id: AssetId,
+    pub(crate) value_id: AssetId,
 }
 
 // Init-time asset-resolution tables consulted by the world.jsonl hot-reload
@@ -450,8 +409,6 @@ impl GraphicsSystem {
             show_fps: true,
             show_vram: true,
             perf_sub_row_labels: Vec::new(),
-            next_frame_deadline: None,
-            menu_active_prev: false,
             max_frames: None,
             shadow_map_size: 2048,
             shadow_update: crate::assets::ShadowUpdate::default(),
@@ -461,19 +418,11 @@ impl GraphicsSystem {
             failed: false,
             start_time: None,
             frame_count: 0,
-            cursor_pos: (0.0, 0.0),
-            cursor_outside_window: false,
             menu_mode: false,
             render_scale: crate::assets::UpscaleQuality::default(),
             upscale_backend: crate::assets::UpscalerBackend::default(),
             backend: None,
             reel: None,
-            scene_cmd_cursor: crate::ecs::EventCursor::default(),
-            setting_cmd_cursor: crate::ecs::EventCursor::default(),
-            despawn_cmd_cursor: crate::ecs::EventCursor::default(),
-            reparent_cmd_cursor: crate::ecs::EventCursor::default(),
-            spawn_cmd_cursor: crate::ecs::EventCursor::default(),
-            prev_elapsed: 0.0,
             loaded_fonts: std::collections::HashMap::new(),
             sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),
@@ -516,8 +465,6 @@ impl GraphicsSystem {
             occlusion_two_pass: false,
             texture_cap: 96,
             texture_budget: 4,
-            settings_cache: None,
-            settings_writer: None,
             #[cfg(test)]
             test_hooks: None,
         }
@@ -590,47 +537,23 @@ impl System for GraphicsSystem {
 }
 
 impl GraphicsSystem {
-    // Return the current logical viewport size for text centering. Returns (0,0)
-    // when the backend is not yet initialised; non-Metal backends default to
-    // (0,0) since they don't implement logical_size.
-    fn viewport_size(&self) -> (f32, f32) {
-        match &self.backend {
-            Some(b) => b.logical_size(),
-            None => (0.0, 0.0),
-        }
-    }
-
-    fn wait_idle(&mut self) {
-        if let Some(b) = &self.backend {
-            b.wait_idle();
-        }
-    }
-
-    // Take the live render backend, leaving `self.backend == None`. The
-    // `cn editor` live SAVE transplants it across a full world rebuild (reusing
-    // the GPU device + window) so a save does not recreate the OS window; the
-    // rebuilt world's GraphicsSystem receives it back via a `PendingBackend`
-    // resource and calls `reload_world` instead of building a new backend.
-    // Reached through `World::take_render_backend`; unused from the client
-    // itself, hence the dead-code allowance.
-    #[allow(dead_code)]
-    pub fn take_backend(&mut self) -> Option<Box<dyn RenderBackend>> {
-        self.backend.take()
-    }
-
     // Disjoint mutable view of the backend + hot-reload bookkeeping the
-    // binary-only `DebugHook::tick` reload drive applies changes through.
-    // `None` until the backend is constructed. The library never calls this
-    // (the asset hot-reload drive lives in the `cn debug` binary), so it reads
-    // as dead code under `cargo check --lib`.
+    // binary-only `DebugHook::tick` reload drive applies changes through. The
+    // caller supplies the backend (borrowed from the world's parked slot via
+    // `World::systems_and_render_backend`) since this system yields it after
+    // init. The library never calls this (the asset hot-reload drive lives in
+    // the `cn debug` binary), so it reads as dead code under
+    // `cargo check --lib`.
     #[allow(dead_code)]
-    pub fn hot_reload_apply_parts(&mut self) -> Option<HotReloadApplyParts<'_>> {
-        let backend = self.backend.as_deref_mut()?;
-        Some(HotReloadApplyParts {
+    pub fn hot_reload_apply_parts<'a>(
+        &'a mut self,
+        backend: &'a mut dyn RenderBackend,
+    ) -> HotReloadApplyParts<'a> {
+        HotReloadApplyParts {
             backend,
             world_reload: &self.world_reload,
             last_fog_settings: &mut self.last_fog_settings,
-        })
+        }
     }
 
     // Take the init-captured hot-reload source catalogues, leaving `None`
@@ -659,7 +582,7 @@ impl GraphicsSystem {
 
 // The current on/off state of quality toggle `key` in `cfg`, or `None` for a
 // key that is not a quality toggle.
-pub(super) fn quality_toggle_on(cfg: &crate::assets::PostProcessConfig, key: &str) -> Option<bool> {
+pub(crate) fn quality_toggle_on(cfg: &crate::assets::PostProcessConfig, key: &str) -> Option<bool> {
     match key {
         "ssao" => Some(cfg.ssao),
         "ssr" => Some(cfg.ssr),
@@ -671,7 +594,7 @@ pub(super) fn quality_toggle_on(cfg: &crate::assets::PostProcessConfig, key: &st
 }
 
 // Flip quality toggle `key` to `on` in `cfg`. Unknown keys are ignored.
-pub(super) fn set_quality_toggle(cfg: &mut crate::assets::PostProcessConfig, key: &str, on: bool) {
+pub(crate) fn set_quality_toggle(cfg: &mut crate::assets::PostProcessConfig, key: &str, on: bool) {
     match key {
         "ssao" => cfg.ssao = on,
         "ssr" => cfg.ssr = on,
@@ -691,13 +614,13 @@ pub(super) fn set_quality_toggle(cfg: &mut crate::assets::PostProcessConfig, key
 // Whether `key` is one of the cycle (dropdown) quality knobs governed by the
 // preset ceiling like the boolean toggles (a manual change flips the preset to
 // Custom). The set lives in `settings::QUALITY_CYCLE_KEYS`.
-pub(super) fn is_quality_cycle(key: &str) -> bool {
+pub(crate) fn is_quality_cycle(key: &str) -> bool {
     crate::gfx::settings::QUALITY_CYCLE_KEYS.contains(&key)
 }
 
 // The current menu option index of cycle quality knob `key` in `cfg`, or `None`
 // for a key that is not a cycle quality knob.
-pub(super) fn quality_cycle_index(
+pub(crate) fn quality_cycle_index(
     cfg: &crate::assets::PostProcessConfig,
     key: &str,
 ) -> Option<usize> {
@@ -716,7 +639,7 @@ pub(super) fn quality_cycle_index(
 
 // Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
 // are ignored.
-pub(super) fn set_quality_cycle(
+pub(crate) fn set_quality_cycle(
     cfg: &mut crate::assets::PostProcessConfig,
     key: &str,
     index: usize,
@@ -738,7 +661,7 @@ pub(super) fn set_quality_cycle(
 // resolution / smaller count; never raises), a no-op when the user explicitly
 // overrode it. Shared by the init clamp and the live preset re-derive so both
 // produce the same result.
-pub(super) fn clamp_quality_cycle(
+pub(crate) fn clamp_quality_cycle(
     cfg: &mut crate::assets::PostProcessConfig,
     key: &str,
     ceiling: &crate::gfx::quality_preset::QualityCeiling,
@@ -771,7 +694,7 @@ pub(super) fn clamp_quality_cycle(
 // Derive the backend's per-feature `QualitySettings` from a resolved config.
 // Mirrors the init-time derivation (the same `*_settings()` methods), so a
 // live rebuild reproduces exactly what a launch with this config would build.
-pub(super) fn derive_quality_settings(
+pub(crate) fn derive_quality_settings(
     cfg: &crate::assets::PostProcessConfig,
 ) -> crate::gfx::backend::QualitySettings {
     crate::gfx::backend::QualitySettings {
@@ -786,14 +709,11 @@ pub(super) fn derive_quality_settings(
     }
 }
 
-mod despawn;
 mod frame;
 mod helpers;
 pub mod hot_reload_sources;
 mod init;
-mod scene;
-mod settings_writer;
-mod spawn;
+pub(crate) mod scene;
 mod streaming;
 #[cfg(test)]
 mod tests;

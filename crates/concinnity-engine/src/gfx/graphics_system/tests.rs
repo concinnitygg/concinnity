@@ -239,7 +239,8 @@ fn titled_scene(title: &str) -> WorldBuilder {
 }
 
 // Run the same pre-init pass World::start performs (Prop decomposition),
-// then GraphicsSystem init with the injected hooks.
+// then GraphicsSystem init with the injected hooks. A successful init parks
+// the built backend in the world's `ActiveRenderBackend` slot.
 fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new();
     gs.test_hooks = Some(hooks);
@@ -249,9 +250,33 @@ fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     gs
 }
 
+// Whether the world's parked backend slot currently holds a backend.
+fn backend_parked(world: &TestWorld) -> bool {
+    world
+        .resources
+        .get::<crate::ecs::ActiveRenderBackend>()
+        .is_some_and(|slot| slot.0.is_some())
+}
+
+// One frame the way the schedule runs it: OverlaySystem builds the draw list,
+// SpawnSystem applies the entity churn, SettingsSystem applies the settings /
+// scene command batches, GraphicsSystem submits, then InputSystem publishes
+// the FrameInput snapshot. A hard Stop from graphics aborts the tick before
+// input, exactly like `World::step`. Fresh overlay / spawn / settings / input
+// instances per step mirror persistent ones here: SettingsSystem and
+// SpawnSystem read their persistent state / cursors from parked resources, and
+// these tests never leave a drained event in retention across a second step.
 fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
+    use crate::ecs::System;
     let mut ctx = world.ctx();
-    gs.run_step(&mut ctx)
+    crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
+    crate::spawn::SpawnSystem::new().step(&mut ctx);
+    crate::gfx::settings_system::SettingsSystem::new().step(&mut ctx);
+    let result = gs.run_step(&mut ctx);
+    if result != StepResult::Stop {
+        crate::gfx::input_system::InputSystem::new().step(&mut ctx);
+    }
+    result
 }
 
 fn lock(state: &Arc<Mutex<MockState>>) -> std::sync::MutexGuard<'_, MockState> {
@@ -265,7 +290,7 @@ fn init_builds_draw_list_and_render_handles() {
     let gs = init_graphics(&mut world, hooks);
 
     assert!(!gs.failed, "init must succeed");
-    assert!(gs.backend.is_some(), "mock backend installed");
+    assert!(backend_parked(&world), "mock backend parked in the slot");
 
     let s = lock(&state);
     let init = s.init.as_ref().expect("factory captured the BackendInit");
@@ -314,9 +339,15 @@ fn init_builds_draw_list_and_render_handles() {
 fn take_backend_yields_the_backend_once() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    let mut gs = init_graphics(&mut world, hooks);
-    assert!(gs.take_backend().is_some(), "the built backend is taken");
-    assert!(gs.take_backend().is_none(), "and only once");
+    let _gs = init_graphics(&mut world, hooks);
+    assert!(
+        crate::ecs::ActiveRenderBackend::take(&mut world.resources).is_some(),
+        "the built backend is taken"
+    );
+    assert!(
+        crate::ecs::ActiveRenderBackend::take(&mut world.resources).is_none(),
+        "and only once"
+    );
 }
 
 // A world carrying a transplanted backend whose swapchain config matches reuses
@@ -328,8 +359,9 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     // World A builds its own backend (the factory records into state_a).
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = titled_scene("world A").build();
-    let mut gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = gs_a.take_backend().expect("world A built a backend");
+    let _gs_a = init_graphics(&mut world_a, hooks_a);
+    let backend_a = crate::ecs::ActiveRenderBackend::take(&mut world_a.resources)
+        .expect("world A built a backend");
 
     // Transplant it into world B (a different world, same swapchain config).
     let (state_b, hooks_b) = recording_hooks();
@@ -340,7 +372,7 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(!gs_b.failed);
-    assert!(gs_b.backend.is_some(), "the reused backend is installed");
+    assert!(backend_parked(&world_b), "the reused backend is installed");
     let a = lock(&state_a);
     assert!(
         a.saw(&Call::ReloadWorld),
@@ -380,7 +412,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
-    assert!(gs.backend.is_some());
+    assert!(backend_parked(&world));
     let t = lock(&state_t);
     assert!(
         t.saw(&Call::WaitIdle),
@@ -440,8 +472,8 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
 fn reload_world_failure_marks_graphics_failed() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = scene_builder().build();
-    let mut gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = gs_a.take_backend().unwrap();
+    let _gs_a = init_graphics(&mut world_a, hooks_a);
+    let backend_a = crate::ecs::ActiveRenderBackend::take(&mut world_a.resources).unwrap();
     state_a.lock().unwrap().fail_reload = Some("boom".to_string());
 
     let (_state_b, hooks_b) = recording_hooks();
@@ -452,7 +484,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(gs_b.failed, "a failed reload marks the system failed");
-    assert!(gs_b.backend.is_none());
+    assert!(!backend_parked(&world_b));
     assert!(state_a.lock().unwrap().saw(&Call::ReloadWorld));
 }
 
@@ -578,7 +610,7 @@ fn missing_shader_stage_fails_init() {
     let gs = init_graphics(&mut world, hooks);
 
     assert!(gs.failed, "no vertex ShaderStage: init must fail");
-    assert!(gs.backend.is_none());
+    assert!(!backend_parked(&world));
     assert!(lock(&state).init.is_none(), "backend never constructed");
 }
 
@@ -776,9 +808,9 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
         // Menu open: the camera capture is released each frame.
         assert!(s.saw(&Call::SetCameraCapture(false)));
     }
-    assert!(gs.menu_active_prev, "pacer sees the menu next frame");
     {
         let ctx = world.ctx();
+        // The App-level pacer clamps from this same resource next step.
         assert!(ctx.resource::<crate::ecs::MenuActive>().unwrap().0);
         let input = ctx.resource::<FrameInput>().unwrap();
         assert!(!input.forward, "gameplay input frozen behind the menu");

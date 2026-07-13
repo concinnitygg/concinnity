@@ -24,6 +24,38 @@ pub struct SystemEntry {
     pub gate: fn(&World) -> Option<SystemAsset>,
 }
 
+// OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the
+// overlay draw list graphics submits. Scheduled first so the menu state it
+// publishes gates every later system this same tick.
+pub(crate) fn overlay(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::gfx::overlay::OverlaySystem::new().into())
+}
+
+// SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
+// clones the GPU draw slots graphics owns. Scheduled immediately before it so
+// a despawn is applied before the transform push and a spawn reuses slots
+// freed this same frame.
+pub(crate) fn spawn(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::spawn::SpawnSystem::new().into())
+}
+
+// SettingsSystem: paired with GraphicsSystem (same gate) -- it applies the
+// settings/scene command batches against the backend graphics owns and holds
+// the settings snapshot GraphicsSystem's init resolves. Scheduled just before
+// GraphicsSystem so a change lands for this frame's submit.
+pub(crate) fn settings(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::gfx::settings_system::SettingsSystem::new().into())
+}
+
 // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
 // (the render marker).
 pub(crate) fn graphics(world: &World) -> Option<SystemAsset> {
@@ -31,6 +63,17 @@ pub(crate) fn graphics(world: &World) -> Option<SystemAsset> {
         .query::<crate::assets::GraphicsConfig>()
         .next()
         .map(|_| crate::gfx::graphics_system::GraphicsSystem::new().into())
+}
+
+// InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
+// backend graphics drives. Scheduled immediately after it so the snapshot is
+// taken right after the draw (the OS event pump on Metal runs inside
+// draw_frame) and is fresh for every consumer below.
+pub(crate) fn input(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::gfx::input_system::InputSystem::new().into())
 }
 
 // StatHud: present whenever the world declares a `StatHud`; built from that

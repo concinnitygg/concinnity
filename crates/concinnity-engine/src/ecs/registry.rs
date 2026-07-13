@@ -10,10 +10,21 @@
 // entry here in its run position.
 //
 // The order encodes the cross-system constraints:
-//   * GraphicsSystem first: it deposits `FrameInput` (drained by no one --
-//     GraphicsSystem itself replaces it at the end of the next frame), makes
-//     payloads resident, and publishes the menu state; everything below
-//     consumes these.
+//   * OverlaySystem first: it shapes the overlay draw list (from the HUD
+//     content written last tick) and publishes the menu state (`MenuActive`)
+//     that gates simulation, input, and the draw this same tick.
+//   * SpawnSystem before GraphicsSystem: a despawned entity must be gone from
+//     the transform push (it contributes nothing to any pass this frame), and
+//     a spawn reuses draw slots freed this same frame.
+//   * SettingsSystem before GraphicsSystem: a SettingCommand applied here lands
+//     on the backend before this frame's submit (visible the same frame), and
+//     a SceneCommand's jump primes the reel GraphicsSystem ticks below.
+//   * GraphicsSystem right after them: makes payloads resident, uploads
+//     transforms, and submits the frame (consuming the overlay build).
+//   * InputSystem immediately after GraphicsSystem: on Metal the OS event pump
+//     runs inside draw_frame, so sampling right after the draw snapshots the
+//     freshest events. It deposits `FrameInput` (drained by no one -- the next
+//     sample replaces it) for every consumer below.
 //   * PhysicsSystem before the camera controllers: physics consumes the
 //     camera's previous-frame `desired_move` (a one-frame-lagged resolution).
 //   * Camera3DSystem / ThirdPersonSystem before AudioSystem: the audio
@@ -27,8 +38,24 @@
 use crate::ecs::{PipelineContext, StepResult, System, schedule};
 
 crate::define_systems! {
+    OverlaySystem => crate::gfx::overlay::OverlaySystem {
+        gate: schedule::overlay,
+        present_when: "the world declares a GraphicsConfig",
+    },
+    SpawnSystem => crate::spawn::SpawnSystem {
+        gate: schedule::spawn,
+        present_when: "the world declares a GraphicsConfig",
+    },
+    SettingsSystem => crate::gfx::settings_system::SettingsSystem {
+        gate: schedule::settings,
+        present_when: "the world declares a GraphicsConfig",
+    },
     GraphicsSystem => crate::gfx::graphics_system::GraphicsSystem {
         gate: schedule::graphics,
+        present_when: "the world declares a GraphicsConfig",
+    },
+    InputSystem => crate::gfx::input_system::InputSystem {
+        gate: schedule::input,
         present_when: "the world declares a GraphicsConfig",
     },
     StatHud => crate::hud::stat_hud::StatHudSystem {

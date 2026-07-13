@@ -58,6 +58,16 @@ pub mod draw_list;
 // The renderer driver. An internal system (not a declarable asset), constructed
 // by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;
+// Per-frame input sampling + FrameInput publish. Internal system, constructed
+// alongside GraphicsSystem (same gate) and scheduled immediately after it.
+pub(crate) mod input_system;
+// 2D overlay draw-list build + menu-state publish. Internal system,
+// constructed alongside GraphicsSystem (same gate) and scheduled first.
+pub(crate) mod overlay;
+// SettingCommand / SceneCommand application + settings snapshot ownership.
+// Internal system, constructed alongside GraphicsSystem (same gate) and
+// scheduled just before it.
+pub(crate) mod settings_system;
 // Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
 // compiled only into the unit-test binary. Implements concinnity-render's
 // RenderBackend seam on a client-local type and carries a `config::Settings`,

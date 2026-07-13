@@ -2321,6 +2321,9 @@ impl GraphicsSystem {
             }
         }
         ctx.insert_resource(crate::ecs::DisplayModes(self.display_modes.clone()));
+        // The resolved frame-rate cap (world value or persisted override) for
+        // the App-level pacer; the settings row's live change republishes it.
+        ctx.insert_resource(crate::ecs::FrameRateCap(self.fps_cap));
         let idx =
             crate::gfx::display_mode::index_of(&self.display_modes, self.effective_resolution());
         if let Some(m) = self.display_modes.get(idx) {
@@ -2533,7 +2536,105 @@ impl GraphicsSystem {
 
         self.setup_scene_reel(ctx);
 
-        self.start_time = Some(Instant::now());
+        // Hand the overlay build inputs assembled above (font atlases, sprite
+        // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
+        // draw list from them each frame before this system submits it.
+        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
+            fonts: std::mem::take(&mut self.loaded_fonts),
+            sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
+            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
+            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
+            clip_rects: std::mem::take(&mut self.clip_rects),
+            initial_viewport: self
+                .backend
+                .as_ref()
+                .map(|b| b.logical_size())
+                .unwrap_or((0.0, 0.0)),
+        });
+
+        // Hand the resolved settings snapshot to SettingsSystem, which owns the
+        // live SettingCommand / SceneCommand drain against the backend. This
+        // system resolves the values (world config + persisted overrides +
+        // device capabilities) at init; SettingsState owns them from here (the
+        // row bookkeeping is moved out, the render config is copied -- this
+        // system never re-reads its copies after init).
+        ctx.insert_resource(crate::gfx::settings_system::SettingsState {
+            keymap: self.keymap,
+            rebind_rows: std::mem::take(&mut self.rebind_rows),
+            sliders: std::mem::take(&mut self.sliders),
+            cycle_value_labels: std::mem::take(&mut self.cycle_value_labels),
+            post_process: self.post_process,
+            post_config: self.post_config.clone(),
+            authored_post_config: self.authored_post_config.clone(),
+            ambient_intensity: self.ambient_intensity,
+            quality_preset: self.quality_preset,
+            gpu_profile: self.gpu_profile,
+            render_scale: self.render_scale,
+            upscale_backend: self.upscale_backend,
+            temporal_upscaling: self.temporal_upscaling,
+            hdr_display: self.hdr_display,
+            hdr_pq: self.hdr_pq,
+            shadow_map_size: self.shadow_map_size,
+            shadow_update: self.shadow_update,
+            shadow_distance: self.shadow_distance,
+            shadow_cascades: self.shadow_cascades,
+            anisotropy: self.anisotropy,
+            authored_shadow_map_size: self.authored_shadow_map_size,
+            authored_shadow_update: self.authored_shadow_update,
+            authored_shadow_distance: self.authored_shadow_distance,
+            authored_shadow_cascades: self.authored_shadow_cascades,
+            authored_anisotropy: self.authored_anisotropy,
+            vsync: self.vsync,
+            fps_cap: self.fps_cap,
+            perf_stats: self.perf_stats,
+            show_fps: self.show_fps,
+            show_vram: self.show_vram,
+            perf_sub_row_labels: std::mem::take(&mut self.perf_sub_row_labels),
+            window_args: self.window_args.clone(),
+            display_modes: std::mem::take(&mut self.display_modes),
+            resolution: self.resolution,
+            current_mode: self.current_mode,
+            resolution_row_labels: std::mem::take(&mut self.resolution_row_labels),
+            frames_in_flight: self.frames_in_flight,
+            occlusion_two_pass: self.occlusion_two_pass,
+            texture_cap: self.texture_cap,
+            texture_budget: self.texture_budget,
+            settings_cache: None,
+            settings_writer: None,
+            scene_cmd_cursor: crate::ecs::EventCursor::default(),
+            setting_cmd_cursor: crate::ecs::EventCursor::default(),
+        });
+
+        // Hand the overlay build inputs assembled above (font atlases, sprite
+        // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
+        // draw list from them each frame before this system submits it.
+        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
+            fonts: std::mem::take(&mut self.loaded_fonts),
+            sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
+            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
+            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
+            clip_rects: std::mem::take(&mut self.clip_rects),
+            initial_viewport: self
+                .backend
+                .as_ref()
+                .map(|b| b.logical_size())
+                .unwrap_or((0.0, 0.0)),
+        });
+
+        // Init-time wiring is done: park the backend in the world's shared
+        // slot, where each per-step user (this system's frame encode,
+        // InputSystem's poll) takes and returns it.
+        ctx.insert_resource(crate::ecs::ActiveRenderBackend(self.backend.take()));
+
+        let start = Instant::now();
+        self.start_time = Some(start);
+        // Hand the SceneReel to the shared slot SettingsSystem jumps and this
+        // system ticks. `epoch` shares this system's start clock so a jump's
+        // fade timing matches the render clock.
+        ctx.insert_resource(crate::ecs::ActiveSceneReel {
+            reel: self.reel.take(),
+            epoch: start,
+        });
         tracing::info!(
             "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
             self.window_args.width,

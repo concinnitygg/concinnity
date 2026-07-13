@@ -1,9 +1,9 @@
-// src/gfx/graphics_system/despawn.rs
+// src/spawn/despawn.rs
 //
 // Runtime entity despawn: remove an authored placement (and its descendants)
 // from the live world and reclaim the GPU draw slots it occupied, so nothing it
-// contributed lingers in any pass. Driven by DespawnRequest events the
-// GraphicsSystem drains each step (see frame.rs).
+// contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
+// drains each step (see mod.rs), and by the Lifetime expiries it ticks.
 
 use crate::assets::{Children, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, PipelineContext};

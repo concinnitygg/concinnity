@@ -12,7 +12,7 @@ use super::*;
 // tagged with the SceneMember scene it belongs to (None = always visible),
 // consumed by the scene_reel visibility functions. The two returned vectors are
 // index-aligned: pair i is one entity's draws and its scene.
-pub(super) fn decomposed_visibility_snapshot(
+pub(crate) fn decomposed_visibility_snapshot(
     ctx: &PipelineContext,
 ) -> (Vec<Vec<usize>>, Vec<Option<AssetId>>) {
     let scene_of: std::collections::HashMap<crate::ecs::Entity, AssetId> = ctx

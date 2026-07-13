@@ -17,6 +17,9 @@ pub struct App {
     status: AppStatus,
     world: World,
     shutdown: ShutdownToken,
+    // FPS-cap pacer, run before each world step so no system pays the sleep
+    // inside its own step time (see `app::pacing`).
+    pacer: crate::app::pacing::FramePacer,
 }
 
 impl Default for App {
@@ -31,6 +34,7 @@ impl App {
             status: AppStatus::Created,
             world: World::new_empty(),
             shutdown: ShutdownToken::new(),
+            pacer: Default::default(),
         }
     }
 
@@ -39,6 +43,7 @@ impl App {
             status: AppStatus::Created,
             world: World::new_empty(),
             shutdown,
+            pacer: Default::default(),
         }
     }
 
@@ -93,8 +98,10 @@ impl App {
     }
 
     // single world step, for callers that drive their own outer loop
-    // (e.g. run_loop_macos in crate::app::run, which interleaves CFRunLoop pumps)
+    // (e.g. run_loop_macos in crate::app::run, which interleaves CFRunLoop pumps).
+    // The FPS-cap pacer holds the step's start to its target interval first.
     pub fn world_step(&mut self) -> StepResult {
+        self.pacer.pace(&self.world);
         self.world.step()
     }
 }

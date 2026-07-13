@@ -186,11 +186,9 @@ pub use spawner::Spawner;
 pub use story_command::StoryCommand;
 pub use view_command::ViewCommand;
 pub use view_shown::ViewShown;
-// `MAX_WATER_WAVES` stays in core (used by the water-surface validator);
-// re-exported for the Metal water encoder, which also reaches `WaterWave`
-// through the asset crate.
-#[cfg(backend_metal)]
-#[allow(unused_imports)]
+// `MAX_WATER_WAVES` stays in core: the build-side water-surface validator
+// (concinnity-world) reaches it on every backend, and the Metal water encoder
+// also reaches `WaterWave` through the asset crate.
 /// Maximum number of waves per water surface. Shared by the render backends'
 /// wave uniforms and the build-side water validator.
 pub const MAX_WATER_WAVES: usize = 4;

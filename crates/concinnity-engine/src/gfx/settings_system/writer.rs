@@ -1,4 +1,4 @@
-// src/gfx/graphics_system/settings_writer.rs
+// src/gfx/settings_system/writer.rs
 //
 // Background writer for the persisted `Settings` file. Settings changes are
 // applied live on the render thread, but the disk write is handed to this
