@@ -287,7 +287,7 @@ mod tests {
             for &(field, target) in ty.ref_fields() {
                 assert!(
                     ComponentType::parse(target).is_some()
-                        || crate::resource_handles::ResourceAssetType::parse(target).is_some(),
+                        || crate::resource_type::ResourceAssetType::parse(target).is_some(),
                     "{}.{field} targets unknown type {target}",
                     ty.as_str()
                 );

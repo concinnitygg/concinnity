@@ -25,6 +25,7 @@
 // validated by the caller via `ComponentType::reserialize_args`.
 
 use concinnity_cook::ComponentType;
+use concinnity_cook::resource_handles::ResourceAssetCompile;
 use serde_json::{Map, Value};
 
 // The number of physical form-control slots the edit panel injects (checkboxes,

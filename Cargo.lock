@@ -633,6 +633,7 @@ dependencies = [
  "concinnity-blob",
  "concinnity-core",
  "concinnity-templates",
+ "concinnity-world",
  "fbxcel",
  "fontdue",
  "gltf",
@@ -829,6 +830,17 @@ name = "concinnity-toolchain"
 version = "0.10.1"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "concinnity-world"
+version = "0.10.1"
+dependencies = [
+ "concinnity-core",
+ "concinnity-templates",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

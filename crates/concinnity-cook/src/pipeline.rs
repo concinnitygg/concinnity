@@ -14,6 +14,7 @@ use crate::blob::PayloadPacker;
 use crate::ecs::asset_id;
 use crate::ecs::{AssetKind, BlobAssetDef, ResourceRecord};
 use crate::registry::ComponentType;
+use crate::resource_handles::ResourceAssetCompile;
 
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;

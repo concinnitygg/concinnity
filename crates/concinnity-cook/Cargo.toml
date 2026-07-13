@@ -22,6 +22,7 @@ vulkan = ["dep:shaderc", "concinnity-core/vulkan"]
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
 concinnity-blob = { path = "../concinnity-blob", features = ["write"] }
+concinnity-world = { path = "../concinnity-world" }
 concinnity-templates = { path = "../concinnity-templates" }
 
 serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,30 @@
+[package]
+name = "concinnity-world"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The build-side world front half: the authored world model (world.jsonl
+# parse/write, WorldJsonlAsset), the authoring type vocabulary (ComponentType,
+# ResourceAssetType), asset cross-reference metadata, and semantic validation.
+# Consumed by concinnity-cook, the editor, the CLI, and docs. The runtime tier
+# (core/render/device/engine/runtime) must NEVER depend on this crate: a
+# shipped game plays compiled blobs and never sees authored input. Links no
+# importers, encoders, or compilers -- those stay in concinnity-cook, which
+# composes its compile-backed checks through this crate's hooks.
+[lib]
+name = "concinnity_world"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+concinnity-core = { path = "../concinnity-core" }
+concinnity-templates = { path = "../concinnity-templates" }
+
+tracing = "0.1.44"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3.25.0"

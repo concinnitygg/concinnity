@@ -12,6 +12,13 @@
 // modules call back into them.
 pub use concinnity_core::{assets, ecs, gfx, paths, result};
 
+// The world front half -- the authored model, the type vocabulary
+// (`ComponentType` / `ResourceAssetType`), and the pure semantic checks --
+// lives in concinnity-world; re-exported so cook code and downstream consumers
+// keep resolving `crate::{registry,template_spec}` paths. cook composes its
+// compile-backed checks on top (crate::check) and owns expansion (crate::world).
+pub use concinnity_world::{registry, template_spec};
+
 pub mod asset;
 pub mod asset_api;
 pub mod asset_impls;
@@ -43,10 +50,8 @@ pub mod import;
 pub mod mesh_compile;
 pub mod mesh_reimport;
 pub mod pipeline;
-pub mod registry;
 pub mod resource_handles;
 pub mod shader;
-pub mod template_spec;
 pub mod texture;
 pub mod tga;
 pub mod wavefront;

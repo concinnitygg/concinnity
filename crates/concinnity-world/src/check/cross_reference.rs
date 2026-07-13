@@ -79,7 +79,7 @@ impl<'a> RefScope<'a> {
         // resolve to.
         let mesh_sources = assets
             .iter()
-            .filter(|a| crate::resource_handles::is_mesh_source(&a.asset_type, &a.args))
+            .filter(|a| crate::resource_type::is_mesh_source(&a.asset_type, &a.args))
             .map(|a| a.name.as_str())
             .collect();
 
