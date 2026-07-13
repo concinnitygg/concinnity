@@ -860,13 +860,14 @@ mod tests {
     #[test]
     fn third_person_camera_gets_no_player_capsule() {
         use crate::assets::{CameraController, FollowController};
+        use crate::ecs::SkinnedMeshHandle;
 
         let mut world = World::new_empty();
         world.add_component(PhysicsConfig::default());
         let mut camera = controlled_camera();
         camera.controller = Some(CameraController {
             follow: Some(FollowController {
-                target: Some(AssetId(1)),
+                target: Some(SkinnedMeshHandle(1)),
                 ..FollowController::default()
             }),
             ..CameraController::default()

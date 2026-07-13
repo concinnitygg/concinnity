@@ -42,10 +42,14 @@ pub(super) fn install_graphs(
     targets: &mut HashMap<AssetId, TargetState>,
     ctx: &mut PipelineContext,
     clip_slots: &HashMap<AssetId, (AssetId, usize)>,
+    skinned_map: &crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap,
 ) -> usize {
     let mut installed = 0usize;
     for g in ctx.drain::<AnimGraph>() {
-        let Some(target) = g.target else {
+        // Resolve the authored SkinnedMesh handle to the mesh's asset id, which
+        // keys the target bucket (shared with the clip drain) and the runtime
+        // `AnimParams` / `SkeletonPose` / `GroundProbes` this publishes below.
+        let Some(target) = g.target.map(|h| skinned_map.get(h)) else {
             tracing::warn!(
                 "AnimationSystem: AnimGraph {} has no target, ignored",
                 g.asset_id

@@ -332,6 +332,10 @@ pub fn ensure_resource_handle_resolvers() {
             let id = crate::ecs::asset_id::intern(name);
             RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Material, id))
         });
+        crate::ecs::set_skinned_mesh_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::SkinnedMesh, id))
+        });
     });
 }
 

@@ -66,6 +66,9 @@ pub mod graphics_system;
 pub(crate) mod mock_backend;
 pub(crate) mod quality_preset;
 pub(crate) mod settings;
+// Handle -> asset id bridge for SkinnedMesh correlation references, published by
+// GraphicsSystem and read by the animation / third-person systems.
+pub(crate) mod skinned_mesh_map;
 // Third-person character controller. Internal system, constructed instead of
 // Camera3DSystem when the controlling camera's controller has a `follow` block.
 pub(crate) mod third_person;

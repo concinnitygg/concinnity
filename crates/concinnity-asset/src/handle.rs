@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 
 use crate::resolver::{
     resolve_audio_clip_handle, resolve_font_handle, resolve_material_handle, resolve_mesh_handle,
-    resolve_name, resolve_texture_handle,
+    resolve_name, resolve_skinned_mesh_handle, resolve_texture_handle,
 };
 
 macro_rules! resource_handles {
@@ -192,6 +192,15 @@ fn resolve_material_ref(name: &str) -> Option<u32> {
     resolve_material_handle(name).or_else(|| resolve_name(name))
 }
 
+// Resolve a skinned-mesh reference name to its handle, with the same build /
+// fallback behaviour as [`resolve_texture_ref`]. Used by the SkinnedMesh
+// correlation references (`Animation.target`, `AnimGraph.target`,
+// `FollowController.target`): a SkinnedMesh stays an ECS component, but its
+// authored references bake to its dense handle instead of an interned id.
+fn resolve_skinned_mesh_ref(name: &str) -> Option<u32> {
+    resolve_skinned_mesh_handle(name).or_else(|| resolve_name(name))
+}
+
 /// `serde` `deserialize_with` helper for an optional material reference field.
 ///
 /// The material analogue of [`de_opt_texture_handle`]: an integer is an
@@ -295,6 +304,62 @@ where
             self,
             v: alloc::string::String,
         ) -> Result<Option<MeshHandle>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
+}
+
+/// `serde` `deserialize_with` helper for an optional skinned-mesh reference field.
+///
+/// The skinned-mesh analogue of [`de_opt_texture_handle`]: an integer is an
+/// already-resolved [`SkinnedMeshHandle`]; a name string is resolved through the
+/// installed skinned-mesh-handle resolver; an empty string or null is `None`. Used
+/// by the SkinnedMesh correlation references (`Animation.target`,
+/// `AnimGraph.target`, `FollowController.target`). Apply with `#[serde(default,
+/// deserialize_with = "concinnity_asset::de_opt_skinned_mesh_handle")]`.
+pub fn de_opt_skinned_mesh_handle<'de, D>(d: D) -> Result<Option<SkinnedMeshHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<SkinnedMeshHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a skinned-mesh handle integer, reference name string, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<SkinnedMeshHandle>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<SkinnedMeshHandle>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<SkinnedMeshHandle>, E> {
+            Ok(Some(SkinnedMeshHandle(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<SkinnedMeshHandle>, E> {
+            Ok(Some(SkinnedMeshHandle(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<SkinnedMeshHandle>, E> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            resolve_skinned_mesh_ref(v)
+                .map(|h| Some(SkinnedMeshHandle(h)))
+                .ok_or_else(|| {
+                    E::custom(format!(
+                        "no skinned-mesh-handle resolver installed to resolve reference {v:?}"
+                    ))
+                })
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<SkinnedMeshHandle>, E> {
             self.visit_str(&v)
         }
     }
@@ -585,6 +650,36 @@ mod tests {
                 .unwrap()
                 .sounds
                 .is_empty()
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TargetHolder {
+        #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
+        target: Option<SkinnedMeshHandle>,
+    }
+
+    #[test]
+    fn de_opt_skinned_mesh_handle_reads_integers_and_resolves_names() {
+        // The correlation-reference seam (Animation/AnimGraph/FollowController
+        // `target`): an already-resolved integer passes through, a name resolves
+        // through the installed skinned-mesh resolver, empty/null/missing are None.
+        crate::set_skinned_mesh_handle_resolver(len_texture_resolver);
+        let h: TargetHolder = serde_json::from_str("{\"target\":3}").unwrap();
+        assert_eq!(h.target, Some(SkinnedMeshHandle(3)));
+        let h: TargetHolder = serde_json::from_str("{\"target\":\"hero\"}").unwrap();
+        assert_eq!(h.target, Some(SkinnedMeshHandle(4)));
+        assert!(
+            serde_json::from_str::<TargetHolder>("{\"target\":\"\"}")
+                .unwrap()
+                .target
+                .is_none()
+        );
+        assert!(
+            serde_json::from_str::<TargetHolder>("{}")
+                .unwrap()
+                .target
+                .is_none()
         );
     }
 }

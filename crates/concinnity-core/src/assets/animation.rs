@@ -1,6 +1,7 @@
 // src/assets/animation.rs
 
-use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 use crate::gfx::skinning::{self, JointPose};
 
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
@@ -57,8 +58,8 @@ pub struct Animation {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [SkinnedMesh](#skinnedmesh) asset this clip animates.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub target: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
+    pub target: Option<SkinnedMeshHandle>,
     /// Optional path to a `.glb` file. When set, the build imports
     /// `duration` + `tracks` from it; inline-authored clips leave this empty.
     pub source: String,

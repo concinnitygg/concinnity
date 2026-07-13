@@ -225,7 +225,7 @@ mod tests {
     fn file_backed_animation(source: &str, animation_name: &str) -> crate::assets::Animation {
         crate::assets::Animation {
             asset_id: intern("reload_clip"),
-            target: Some(intern("reload_hero")),
+            target: Some(crate::ecs::SkinnedMeshHandle(intern("reload_hero").0)),
             source: source.to_string(),
             animation_name: animation_name.to_string(),
             ..Default::default()

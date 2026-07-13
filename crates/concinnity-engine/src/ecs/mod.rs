@@ -22,7 +22,8 @@ mod registry;
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
     Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshHandle,
-    PayloadLocator, PipelineContext, RecordKind, Resources, TextureHandle, asset_id,
+    PayloadLocator, PipelineContext, RecordKind, Resources, SkinnedMeshHandle, TextureHandle,
+    asset_id,
 };
 
 // The `SystemAsset` value enum is generated client-side from each system's

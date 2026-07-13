@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::resumed_origin;
 use crate::assets::{AnimGraph, AnimParams, Animation};
+use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::asset_id::{AssetId, intern};
 use crate::ecs::{SystemAsset, World};
 
@@ -150,7 +151,7 @@ fn blendspace_weights_follow_the_parameter() {
     let mut world = World::new_empty();
     for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
         let mut a = clip(name, duration);
-        a.target = Some(target);
+        a.target = Some(SkinnedMeshHandle(target.0));
         world.add_component(a);
     }
     let mut g: AnimGraph = serde_json::from_value(serde_json::json!({
@@ -253,7 +254,7 @@ fn mode_mismatched_commands_are_rejected() {
 
     let mut flat_world = World::new_empty();
     let mut a = clip("solo_clip", 1.0);
-    a.target = Some(intern("flat_hero"));
+    a.target = Some(SkinnedMeshHandle(intern("flat_hero").0));
     flat_world.add_component(a);
     flat_world.start().unwrap();
     flat_world.step();
@@ -516,7 +517,7 @@ fn runtime_clip(duration: f32) -> crate::gfx::skinning::AnimationClip {
 // A single flat clip targeting `target`, weight 1.
 fn flat_clip(name: &str, target: AssetId) -> Animation {
     let mut a = clip(name, 1.0);
-    a.target = Some(target);
+    a.target = Some(SkinnedMeshHandle(target.0));
     a
 }
 

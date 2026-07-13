@@ -15,7 +15,7 @@ use crate::assets::{
     FrameInput,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
+use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
 use std::time::Instant;
 
 // Seconds for the smoothed travel speed to close half the gap to its target.
@@ -45,7 +45,10 @@ pub struct ThirdPersonSystem {
     move_speed: f32,
     sprint_multiplier: f32,
     mouse_sensitivity: f32,
-    // From the follow block.
+    // From the follow block. `target_handle` is the authored SkinnedMesh handle;
+    // `target` is it bridged to the mesh's asset id at init (the correlation web is
+    // asset-id-keyed), once the renderer has published the handle map.
+    target_handle: Option<SkinnedMeshHandle>,
     target: Option<AssetId>,
     distance: f32,
     height: f32,
@@ -74,7 +77,8 @@ impl ThirdPersonSystem {
             move_speed: controller.move_speed,
             sprint_multiplier: controller.sprint_multiplier,
             mouse_sensitivity: controller.mouse_sensitivity,
-            target: follow.target,
+            target_handle: follow.target,
+            target: None,
             distance: follow.distance.max(0.1),
             height: follow.height,
             drive: follow.drive,
@@ -106,6 +110,15 @@ impl System for ThirdPersonSystem {
             }
         }
 
+        // Bridge the authored SkinnedMesh handle to the mesh's asset id, which the
+        // rig / graph correlation queries below key on. GraphicsSystem published
+        // the map during its SkinnedMesh drain (it inits before this system).
+        let skinned_map = ctx
+            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap>()
+            .cloned()
+            .unwrap_or_default();
+        self.target = self.target_handle.map(|h| skinned_map.get(h));
+
         let Some(target) = self.target else {
             tracing::warn!("ThirdPersonSystem: follow has no target, controller idle");
             return;
@@ -113,11 +126,12 @@ impl System for ThirdPersonSystem {
 
         // Resolve the speed parameter to its declaration index now, while the
         // target's AnimGraph component still exists (AnimationSystem drains
-        // it during its own init, which runs after this one).
+        // it during its own init, which runs after this one). The graph's own
+        // `target` is a handle too, so bridge it through the same map to compare.
         if !self.speed_parameter.is_empty() {
             self.speed_param_index = ctx
                 .query::<AnimGraph>()
-                .find(|g| g.target == Some(target))
+                .find(|g| g.target.map(|h| skinned_map.get(h)) == Some(target))
                 .and_then(|g| {
                     g.parameters
                         .iter()
@@ -364,7 +378,7 @@ mod tests {
         let controller = CameraController {
             move_speed: 2.0,
             follow: Some(FollowController {
-                target: Some(intern(target)),
+                target: Some(SkinnedMeshHandle(intern(target).0)),
                 distance: 4.0,
                 height: 1.5,
                 drive,

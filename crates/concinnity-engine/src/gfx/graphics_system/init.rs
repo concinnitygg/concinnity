@@ -717,7 +717,14 @@ impl GraphicsSystem {
         );
         let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
         let mut skinned_blob_indices: Vec<u32> = Vec::new();
+        // Handle -> asset id for the animation correlation web. The drain yields
+        // SkinnedMeshes in cook declaration order, which is their handle order, so
+        // pushing each mesh's asset id here builds the handle-indexed bridge that
+        // the animation / third-person systems read to resolve their authored
+        // `target` handles back to the mesh's runtime asset id.
+        let mut skinned_handle_ids: Vec<AssetId> = Vec::new();
         for sm in ctx.drain::<crate::assets::SkinnedMesh>() {
+            skinned_handle_ids.push(sm.asset_id);
             let locator = match &sm.locator {
                 Some(l) => l.clone(),
                 None => {
@@ -754,6 +761,13 @@ impl GraphicsSystem {
                 }
             }
         }
+        // Publish the handle -> asset id bridge before AnimationSystem /
+        // ThirdPersonSystem init (both run after GraphicsSystem), which drain the
+        // SkinnedMesh-referencing components and need to correlate their authored
+        // handles with the asset-id-keyed runtime web.
+        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap(
+            skinned_handle_ids,
+        ));
 
         // drain Model components into a name-keyed map for Prop lookup
         let models = ctx.drain::<Model>();

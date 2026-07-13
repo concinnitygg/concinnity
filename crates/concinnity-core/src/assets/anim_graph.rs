@@ -1,6 +1,7 @@
 // src/assets/anim_graph.rs
 
 use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
+use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 use crate::gfx::anim_graph::{
     Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
     CompiledTransition, ParamSpec, StatePlay,
@@ -235,8 +236,8 @@ pub struct AnimGraph {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [SkinnedMesh](#skinnedmesh) asset this graph animates.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub target: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
+    pub target: Option<SkinnedMeshHandle>,
     /// Named float parameters transitions compare against.
     pub parameters: Vec<GraphParam>,
     /// Name of the state the graph starts in. Defaults to the first state.

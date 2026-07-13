@@ -85,7 +85,7 @@ impl Component for Camera3D {
 mod tests {
     use super::*;
     use crate::assets::FollowDrive;
-    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::SkinnedMeshHandle;
 
     #[test]
     fn follow_block_deserializes_names_and_defaults() {
@@ -96,7 +96,9 @@ mod tests {
         }))
         .unwrap();
         let follow = args.controller.unwrap().follow.unwrap();
-        assert_eq!(follow.target, Some(AssetId(0)));
+        // "hero" interns to id 0, and with no SkinnedMesh handle resolver installed
+        // the reference falls back to that interned value as its handle.
+        assert_eq!(follow.target, Some(SkinnedMeshHandle(0)));
         assert_eq!(follow.drive, FollowDrive::Direct);
         // Omitted fields keep the documented defaults.
         assert_eq!(follow.speed_parameter, "speed");

@@ -191,12 +191,20 @@ impl System for AnimationSystem {
         // decided below (graph if the world declares one, weighted blend
         // otherwise).
         let capture_sources = crate::app::dev_flags::enabled();
+        // Handle -> asset id bridge published by GraphicsSystem (which drained the
+        // SkinnedMesh column before this system inits). Snapshotted before the
+        // Animation drain so a `target` handle resolves to the mesh's asset id that
+        // keys the correlation web (`SkeletonPose.mesh_id`, `AnimParams.target`).
+        let skinned_map = ctx
+            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshHandleMap>()
+            .cloned()
+            .unwrap_or_default();
         // Animation asset id -> (target bucket, clip slot), for resolving
         // graph clip references onto bucket indices.
         let mut clip_slots: HashMap<AssetId, (AssetId, usize)> = HashMap::new();
         let mut count = 0usize;
         for anim in ctx.drain::<Animation>() {
-            let Some(target) = anim.target else {
+            let Some(target) = anim.target.map(|h| skinned_map.get(h)) else {
                 tracing::warn!("AnimationSystem: Animation has no target SkinnedMesh, ignored");
                 continue;
             };
@@ -235,7 +243,7 @@ impl System for AnimationSystem {
 
         // Graphs take ownership of their target's bucket; each publishes an
         // `AnimParams` component seeded with its declared defaults.
-        let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots);
+        let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots, &skinned_map);
 
         // Build a startup transition for any flat bucket whose clips requested
         // a fade-in. The transition runs from zero to the declared weights over

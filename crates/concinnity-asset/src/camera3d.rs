@@ -1,7 +1,7 @@
 // Camera authoring schema: the 3D camera's authored args and controller config.
 // The runtime `Camera3D` component (view matrix, per-frame intent) lives in core.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 use alloc::string::{String, ToString};
 
 /// How a followed character converts movement input into displacement.
@@ -32,8 +32,8 @@ pub enum FollowDrive {
 pub struct FollowController {
     /// Name of the followed [SkinnedMesh](skinned_mesh.md). It must declare a
     /// `capsule`.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub target: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
+    pub target: Option<SkinnedMeshHandle>,
     /// Orbit distance from the pivot to the camera, in world units.
     pub distance: f32,
     /// Pivot height above the character's feet, in world units.
