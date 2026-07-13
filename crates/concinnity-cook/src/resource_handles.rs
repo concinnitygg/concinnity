@@ -123,7 +123,7 @@ fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mat: crate::assets::Material =
         serde_json::from_value(args.clone()).map_err(|e| format!("Material args: {e}"))?;
     let mat = concinnity_world::validate::material(mat);
-    serde_json::to_vec(&mat).map_err(|e| format!("Material serialize: {e}"))
+    postcard::to_allocvec(&mat).map_err(|e| format!("Material serialize: {e}"))
 }
 
 // Compile a SkinnedMesh's geometry payload: vertices + indices + the skeleton
@@ -184,7 +184,7 @@ fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec
     sm.vertices = Vec::new();
     sm.indices = Vec::new();
     let name_id = crate::ecs::asset_id::intern(name);
-    serde_json::to_vec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
+    postcard::to_allocvec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
 }
 
 // Per-kind handles assigned to each resource asset, keyed by its identity.
@@ -451,26 +451,27 @@ mod tests {
         // bakes albedo == 0. A Decal (single texture ref) resolves the same way.
         // Material is a resource now, so it bakes through `compile_payload` (its
         // `data_bytes` is the serialized Material) rather than `reserialize_args`.
-        let bake = |field_json: serde_json::Value| -> serde_json::Value {
+        let bake = |field_json: serde_json::Value| -> crate::assets::Material {
             let bytes = ResourceAssetType::Material
                 .compile_payload(&field_json)
                 .unwrap();
-            serde_json::from_slice(&bytes).unwrap()
+            postcard::from_bytes(&bytes).unwrap()
         };
+        use crate::ecs::TextureHandle;
         assert_eq!(
-            bake(serde_json::json!({"albedo": "tex_b"}))["albedo"],
-            serde_json::json!(1)
+            bake(serde_json::json!({"albedo": "tex_b"})).albedo,
+            Some(TextureHandle(1))
         );
         assert_eq!(
-            bake(serde_json::json!({"albedo": "tex_a"}))["albedo"],
-            serde_json::json!(0)
+            bake(serde_json::json!({"albedo": "tex_a"})).albedo,
+            Some(TextureHandle(0))
         );
 
         let decal_bytes = ComponentType::Decal
             .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
             .unwrap();
-        let decal: serde_json::Value = serde_json::from_slice(&decal_bytes).unwrap();
-        assert_eq!(decal["texture"], serde_json::json!(1));
+        let decal: crate::assets::Decal = postcard::from_bytes(&decal_bytes).unwrap();
+        assert_eq!(decal.texture, Some(TextureHandle(1)));
 
         // The legacy texture-on-mesh path (Prop / InstancedProp / SkinnedMesh
         // `texture`) resolves the same declaration-order handle. SkinnedMesh
@@ -478,14 +479,14 @@ mod tests {
         let prop_bytes = ComponentType::Prop
             .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
             .unwrap();
-        let prop: serde_json::Value = serde_json::from_slice(&prop_bytes).unwrap();
-        assert_eq!(prop["texture"], serde_json::json!(1));
+        let prop: crate::assets::Prop = postcard::from_bytes(&prop_bytes).unwrap();
+        assert_eq!(prop.texture, Some(TextureHandle(1)));
 
         let inst_bytes = ComponentType::InstancedProp
             .reserialize_args(&serde_json::json!({"texture": "tex_a"}))
             .unwrap();
-        let inst: serde_json::Value = serde_json::from_slice(&inst_bytes).unwrap();
-        assert_eq!(inst["texture"], serde_json::json!(0));
+        let inst: crate::assets::InstancedProp = postcard::from_bytes(&inst_bytes).unwrap();
+        assert_eq!(inst.texture, Some(TextureHandle(0)));
     }
 
     // The same invariant for audio clips: an audio-clip reference name resolves
@@ -512,24 +513,36 @@ mod tests {
         ]));
 
         // An AudioEmitter / AudioCue referencing a clip bakes that clip's handle.
-        let clip_field = |ct: ComponentType, name: &str| -> serde_json::Value {
+        use crate::ecs::AudioClipHandle;
+        let clip_field = |ct: ComponentType, name: &str| -> Option<AudioClipHandle> {
             let bytes = ct
                 .reserialize_args(&serde_json::json!({ "clip": name }))
                 .unwrap();
-            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            v["clip"].clone()
+            match ct {
+                ComponentType::AudioEmitter => {
+                    postcard::from_bytes::<crate::assets::AudioEmitter>(&bytes)
+                        .unwrap()
+                        .clip
+                }
+                ComponentType::AudioCue => {
+                    postcard::from_bytes::<crate::assets::AudioCue>(&bytes)
+                        .unwrap()
+                        .clip
+                }
+                other => panic!("unexpected type {other:?}"),
+            }
         };
         assert_eq!(
             clip_field(ComponentType::AudioEmitter, "clip_a"),
-            serde_json::json!(0)
+            Some(AudioClipHandle(0))
         );
         assert_eq!(
             clip_field(ComponentType::AudioEmitter, "clip_b"),
-            serde_json::json!(1)
+            Some(AudioClipHandle(1))
         );
         assert_eq!(
             clip_field(ComponentType::AudioCue, "clip_b"),
-            serde_json::json!(1)
+            Some(AudioClipHandle(1))
         );
     }
 }

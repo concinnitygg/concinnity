@@ -1,13 +1,10 @@
 // src/build/asset.rs
 //
-// The shader `Platform` selector and the `SourceBacked` trait. These stay in
-// the runtime foundation because the engine reads a `ShaderStage`'s
-// current-platform source at runtime (e.g. the DirectX backend checks whether
-// the main shader is the built-in default before choosing its bindless path).
+// The shader `Platform` selector. It stays in the runtime foundation because
+// the engine selects a `ShaderStage`'s current-platform source at runtime.
 // The build-time context `BuildCtx` and the `BuildAsset` compile trait live in
-// `concinnity-cook`.
-
-use crate::ecs::Component;
+// `concinnity-cook`; the JSON-args source selection lives in concinnity-world
+// (`source_args`).
 
 // Shader source language families supported by the engine. Each variant
 // matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).
@@ -69,18 +66,6 @@ impl Platform {
             _ => true,
         }
     }
-}
-
-// A component that points at a source file on disk. Implementations expose
-// "here's my source path for this platform" without the build pipeline
-// having to know which JSON key the asset uses to store it (`source` vs
-// `path` vs the per-platform `sources` map).
-//
-// Returns `None` when the asset has no source on the given platform: for
-// example, a `Texture` that uses a procedural generator instead of a file,
-// or a `ShaderStage` whose `sources` map has no entry for the platform.
-pub trait SourceBacked: Component {
-    fn source_path(args: &serde_json::Value, platform: Platform) -> Option<String>;
 }
 
 #[cfg(test)]

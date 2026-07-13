@@ -83,6 +83,12 @@ pub fn de_opt_asset_ref<'de, D>(d: D) -> Result<Option<AssetId>, D::Error>
 where
     D: Deserializer<'de>,
 {
+    // A non-self-describing format (postcard, the baked blob form) carries the
+    // already-resolved id; names only appear in human-readable input.
+    if !d.is_human_readable() {
+        return Option::<AssetId>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -175,6 +181,26 @@ mod tests {
             serde_json::from_str::<Holder>("{\"r\":5}").unwrap().r,
             Some(AssetId(5))
         );
+    }
+
+    #[test]
+    fn opt_ref_round_trips_through_postcard() {
+        // The baked blob form: not self-describing, carries the resolved id.
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Holder {
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            r: Option<AssetId>,
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            none: Option<AssetId>,
+        }
+        let h = Holder {
+            r: Some(AssetId(7)),
+            none: None,
+        };
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        let back: Holder = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.r, Some(AssetId(7)));
+        assert_eq!(back.none, None);
     }
 
     #[test]

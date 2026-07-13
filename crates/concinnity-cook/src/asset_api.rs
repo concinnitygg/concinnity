@@ -201,8 +201,8 @@ mod tests {
         );
         assert!(def.name.is_none());
         assert!(def.payload.is_none());
-        let args: serde_json::Value = serde_json::from_slice(&def.args_bytes).unwrap();
-        assert!(args.is_object());
+        // The baked bytes decode as the component (postcard).
+        postcard::from_bytes::<crate::assets::ProceduralMesh>(&def.args_bytes).unwrap();
     }
 
     // Every addable type builds a baked def from its default args: the def's
@@ -228,11 +228,12 @@ mod tests {
             args: Some(serde_json::json!({ "generator": "box" })),
         };
         let def = create_asset_def(&req).unwrap();
-        let args: serde_json::Value = serde_json::from_slice(&def.args_bytes).unwrap();
-        assert_eq!(args["generator"], "box");
+        let baked: crate::assets::ProceduralMesh = postcard::from_bytes(&def.args_bytes).unwrap();
+        assert_eq!(baked.generator, "box");
         // Defaults fill the fields the caller omitted.
-        assert!(args.get("half_width").is_some());
-        assert!(args.get("ceiling_height").is_some());
+        let defaults = crate::assets::ProceduralMesh::default();
+        assert_eq!(baked.half_width, defaults.half_width);
+        assert_eq!(baked.ceiling_height, defaults.ceiling_height);
     }
 
     #[test]

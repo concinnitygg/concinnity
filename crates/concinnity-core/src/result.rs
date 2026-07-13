@@ -35,10 +35,13 @@ impl From<concinnity_blob::BlobError> for CnResult {
     }
 }
 
-impl From<serde_json::Error> for CnResult {
-    fn from(e: serde_json::Error) -> Self {
-        tracing::error!("JSON deserialization error: {}", e);
-        CnResult::InvalidArgument // or better: CnResult::JsonError (see note below)
+// Baked blob records are postcard; a decode failure means the record and the
+// component schema disagree (a stale blob survives the version check instead
+// of reaching here).
+impl From<postcard::Error> for CnResult {
+    fn from(e: postcard::Error) -> Self {
+        tracing::error!("postcard deserialization error: {}", e);
+        CnResult::InvalidArgument
     }
 }
 
@@ -62,8 +65,8 @@ mod tests {
     }
 
     #[test]
-    fn json_errors_map_to_invalid_argument() {
-        let e = serde_json::from_str::<u32>("not json").unwrap_err();
+    fn postcard_errors_map_to_invalid_argument() {
+        let e = postcard::from_bytes::<String>(&[0xff]).unwrap_err();
         assert_eq!(CnResult::from(e), CnResult::InvalidArgument);
     }
 }

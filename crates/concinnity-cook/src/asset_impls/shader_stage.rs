@@ -3,9 +3,8 @@
 use crate::asset::BuildCtx;
 use concinnity_core::assets::ShaderKind;
 use concinnity_core::assets::ShaderStage;
-use concinnity_core::assets::shader_stage::{
-    declares_only_builtin_sources, platform_key, resolve_source_from_args,
-};
+use concinnity_core::assets::shader_stage::platform_key;
+use concinnity_world::source_args::{declares_only_builtin_sources, resolve_source_from_args};
 
 // Resolve a raw per-platform source string to the on-disk path the build will
 // read. A bare filename is looked up recursively under `.concinnity/assets/`

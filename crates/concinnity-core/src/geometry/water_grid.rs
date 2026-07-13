@@ -12,20 +12,12 @@
 
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
-pub fn build_water_grid(args: &serde_json::Value) -> Result<(Verts, Vec<u16>), String> {
-    let half_width = args
-        .get("half_width")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(10.0) as f32;
-    let half_depth = args
-        .get("half_depth")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(10.0) as f32;
-    let subdivisions = args
-        .get("subdivisions")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(64)
-        .clamp(8, 255) as usize;
+pub fn build_water_grid(
+    half_width: f32,
+    half_depth: f32,
+    subdivisions: u32,
+) -> Result<(Verts, Vec<u16>), String> {
+    let subdivisions = subdivisions.clamp(8, 255) as usize;
 
     let cols = subdivisions + 1;
     let rows = subdivisions + 1;
@@ -71,12 +63,7 @@ mod tests {
 
     #[test]
     fn vertex_and_index_counts_match_grid() {
-        let args = serde_json::json!({
-            "half_width": 5.0,
-            "half_depth": 5.0,
-            "subdivisions": 8,
-        });
-        let (verts, idxs) = build_water_grid(&args).expect("builds");
+        let (verts, idxs) = build_water_grid(5.0, 5.0, 8).expect("builds");
         assert_eq!(verts.len(), 9 * 9);
         assert_eq!(idxs.len(), 8 * 8 * 6);
         // All vertices on Y = 0.
@@ -96,8 +83,7 @@ mod tests {
 
     #[test]
     fn subdivisions_clamps_to_minimum() {
-        let args = serde_json::json!({"subdivisions": 2});
-        let (verts, _) = build_water_grid(&args).expect("builds");
+        let (verts, _) = build_water_grid(10.0, 10.0, 2).expect("builds");
         // Clamped to 8 → 9x9 grid.
         assert_eq!(verts.len(), 9 * 9);
     }

@@ -6,8 +6,8 @@
 // blob writing) lives in the `concinnity-cook` crate; this module keeps only
 // what a running engine needs: the pre-compiled payload `deserialise` family,
 // the payload-format types and consts, the built-in shader sources, and the
-// `Platform` / `SourceBacked` types (the engine selects a stage's
-// current-platform source at runtime). Submodules stay `pub` so both the client
+// `Platform` type (the engine selects a stage's current-platform source at
+// runtime). Submodules stay `pub` so both the client
 // runtime and the build crate can reach them across the workspace split.
 pub mod asset;
 pub mod color_lut;
@@ -16,4 +16,4 @@ pub mod font;
 pub mod shader;
 pub mod texture;
 
-pub use asset::{Platform, SourceBacked};
+pub use asset::Platform;

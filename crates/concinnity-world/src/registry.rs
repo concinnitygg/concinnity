@@ -191,9 +191,10 @@ macro_rules! define_component_type {
             // Bake a JSON args value into the blob record's component bytes:
             // deserialize through the typed args schema (interning name-string
             // cross-references), apply the type's bake-time validator, and
-            // serialize the runtime component. For a pass-through type the
-            // args ARE the component; a divergent type (`args:` metadata)
-            // routes through its `bake` translation in `bake_divergent`.
+            // serialize the runtime component as postcard. For a pass-through
+            // type the args ARE the component; a divergent type (`args:`
+            // metadata) routes through its `bake` translation in
+            // `bake_divergent`.
             pub fn reserialize_args(self, args: &serde_json::Value) -> Result<Vec<u8>, CnResult> {
                 // Deserializing the args interns any name-string cross-reference,
                 // which needs the name resolver installed. The build pipeline
@@ -206,8 +207,32 @@ macro_rules! define_component_type {
                         Self::$variant => {
                             let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
                                 args.clone(),
-                            )?;
-                            Ok(serde_json::to_vec(&__meta_validate!(typed; $($meta)*))?)
+                            )
+                            .map_err(json_args_err)?;
+                            Ok(postcard::to_allocvec(&__meta_validate!(typed; $($meta)*))?)
+                        }
+                    ),+
+                }
+            }
+            // Normalize a JSON args value through the typed args schema: the
+            // same deserialize + validate as `reserialize_args`, but back to
+            // JSON with defaults filled and references resolved. Authoring
+            // tools (`cn add`, the editor form) write this into world.jsonl;
+            // the baked postcard bytes cannot round-trip to JSON.
+            pub fn normalized_args(
+                self,
+                args: &serde_json::Value,
+            ) -> Result<serde_json::Value, CnResult> {
+                crate::ecs::asset_id::ensure_name_resolver();
+                match self {
+                    $(
+                        Self::$variant => {
+                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
+                                args.clone(),
+                            )
+                            .map_err(json_args_err)?;
+                            serde_json::to_value(&__meta_validate!(typed; $($meta)*))
+                                .map_err(json_args_err)
                         }
                     ),+
                 }
@@ -274,6 +299,14 @@ macro_rules! define_component_type {
 
 concinnity_core::for_each_component!(define_component_type);
 
+// JSON args that fail the typed schema are an authoring error. Core dropped
+// its `From<serde_json::Error>` conversion along with runtime JSON parsing,
+// so the build side maps the error here.
+fn json_args_err(e: serde_json::Error) -> CnResult {
+    tracing::error!("JSON args error: {}", e);
+    CnResult::InvalidArgument
+}
+
 // Bake the runtime component for the asset types whose baked form diverges
 // from their authored args (the entries with `args:` metadata): run the type's
 // `bake` translation at build time and serialize the component itself, which
@@ -288,8 +321,8 @@ pub fn bake_divergent(
     crate::ecs::asset_id::ensure_name_resolver();
     macro_rules! bake {
         ($ty:ty, $args_ty:ty) => {{
-            let typed = serde_json::from_value::<$args_ty>(args.clone())?;
-            Ok(Some(serde_json::to_vec(&<$ty>::bake(typed))?))
+            let typed = serde_json::from_value::<$args_ty>(args.clone()).map_err(json_args_err)?;
+            Ok(Some(postcard::to_allocvec(&<$ty>::bake(typed))?))
         }};
     }
     match ct {
@@ -429,10 +462,25 @@ mod tests {
         let bytes = ty
             .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
             .unwrap();
-        let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back["source"], "a.glb");
+        let back: crate::assets::ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.source.as_deref(), Some("a.glb"));
         assert_eq!(
             ty.reserialize_args(&serde_json::json!({ "source": 42 }))
+                .unwrap_err(),
+            CnResult::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn normalized_args_fills_defaults_and_rejects_bad_types() {
+        let ty = ComponentType::parse("ProceduralMesh").unwrap();
+        let back = ty
+            .normalized_args(&serde_json::json!({ "generator": "box" }))
+            .unwrap();
+        assert_eq!(back["generator"], "box");
+        assert!(back.get("half_width").is_some(), "defaults fill in");
+        assert_eq!(
+            ty.normalized_args(&serde_json::json!({ "generator": 42 }))
                 .unwrap_err(),
             CnResult::InvalidArgument
         );

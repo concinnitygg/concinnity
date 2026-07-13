@@ -63,13 +63,8 @@ pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
     surface: &WaterSurface,
 ) -> Result<WaterSurfaceRecord, String> {
-    // Synthesise the args the shared generator consumes from the asset.
-    let args = serde_json::json!({
-        "half_width": surface.extent[0],
-        "half_depth": surface.extent[1],
-        "subdivisions": surface.subdivisions,
-    });
-    let (verts, idxs) = build_water_grid(&args)?;
+    let (verts, idxs) =
+        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
 
     // Flatten into the standard Vertex layout. Tangent + colour are filled
     // with placeholders since the water shader rebuilds the normal frame

@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 /// {"name":"sky_mesh","type":"ProceduralMesh","args":{"generator":"skybox","size":490.0}}
 /// {"name":"plus_mesh","type":"ProceduralMesh","args":{"generator":"extrude","profile":[[-1,-3],[1,-3],[1,-1],[3,-1],[3,1],[1,1],[1,3],[-1,3],[-1,1],[-3,1],[-3,-1],[-1,-1]],"height":0.5,"corner_radius":0.2}}
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProceduralMesh {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

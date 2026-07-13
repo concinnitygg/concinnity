@@ -1,37 +1,19 @@
-// src/config.rs: persistent client state, split by lifetime and ownership.
+// src/config.rs: the persistent runtime settings store.
 //
-// - `Config` (login / connection: server URL + account) lives in the OS
-//   user-config dir as JSON (e.g.
-//   ~/Library/Application Support/com.Concinnity.Concinnity/config.json on
-//   macOS, ~/.config/concinnity/config.json on Linux). It is per-developer-
-//   machine and stays out of the project tree.
-//
-// - `Settings` (runtime choices made in the in-engine settings menu: graphics,
-//   audio, controls) lives in the project at `.concinnity/settings` (the
-//   `settings` file under the state directory), the mutable sibling of the
-//   build-regenerated `.concinnity/data`. It is
-//   stored as CBOR: binary like the data blobs, but self-describing, so adding
-//   or removing a setting never invalidates an existing file (a missing field
-//   falls back to its default, an unknown field is ignored). bincode, which the
-//   data blobs use, would be wrong here: it is positional, so it is safe only
-//   because the data blobs are regenerated each build, whereas settings persist.
+// `Settings` (runtime choices made in the in-engine settings menu: graphics,
+// audio, controls) lives in the project at `.concinnity/settings` (the
+// `settings` file under the state directory), the mutable sibling of the
+// build-regenerated `.concinnity/data`. It is
+// stored as CBOR: binary like the data blobs, but self-describing, so adding
+// or removing a setting never invalidates an existing file (a missing field
+// falls back to its default, an unknown field is ignored). bincode, which the
+// data blobs use, would be wrong here: it is positional, so it is safe only
+// because the data blobs are regenerated each build, whereas settings persist.
 //
 // Unknown fields are ignored on load so future additions are forwards-compatible.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-const DEFAULT_SERVER: &str = "http://127.0.0.1:8080";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    // Base HTTP URL of the concinnity-infra server.
-    #[serde(default = "default_server")]
-    pub server: String,
-
-    // Account ID used for ?account_id= authenticated endpoints.
-    pub user: Option<String>,
-}
+use std::path::Path;
 
 // The runtime settings store: choices made in the in-engine settings menu.
 // Persisted as CBOR at `.concinnity/settings`. Each field is
@@ -280,42 +262,6 @@ pub struct ControlsSettings {
     pub keymap: Option<crate::gfx::keymap::KeyMap>,
 }
 
-fn default_server() -> String {
-    DEFAULT_SERVER.to_string()
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: default_server(),
-            user: None,
-        }
-    }
-}
-
-impl Config {
-    // Used by the CLI binary (main.rs, cli/login.rs), not lib code.
-    #[allow(dead_code)]
-    pub fn load() -> Self {
-        let path = config_path();
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    }
-
-    // Persist the current config to disk. Creates parent directories as needed.
-    #[allow(dead_code)]
-    pub fn save(&self) -> std::io::Result<()> {
-        let path = config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(&path, json)
-    }
-}
-
 impl Settings {
     // Load from the `settings` file (CBOR). When the file is absent, fall back
     // to migrating any graphics/audio/controls choices from the legacy
@@ -343,8 +289,8 @@ impl Settings {
                 tracing::warn!("settings store unreadable, using defaults: {e}");
                 Settings::default()
             }),
-            // No settings file yet: try a one-time read-fallback migration.
-            Err(_) => migrate_from_legacy().unwrap_or_default(),
+            // No settings file yet: start from defaults.
+            Err(_) => Settings::default(),
         }
     }
 
@@ -360,90 +306,9 @@ impl Settings {
     }
 }
 
-// Read the legacy `config.json` and lift any graphics/audio/controls sections
-// it still carries into a `Settings`, or `None` when it has none of them. Used
-// once, when no `settings.bin` exists yet.
-fn migrate_from_legacy() -> Option<Settings> {
-    let text = std::fs::read_to_string(config_path()).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    settings_from_legacy_value(&value)
-}
-
-// Pure mapping from a legacy config JSON value to a `Settings`. Returns `None`
-// when none of the three sections are present (nothing to migrate).
-fn settings_from_legacy_value(value: &serde_json::Value) -> Option<Settings> {
-    let present = ["graphics", "audio", "controls"]
-        .iter()
-        .any(|k| value.get(k).is_some());
-    if !present {
-        return None;
-    }
-    Some(Settings {
-        graphics: legacy_section(value, "graphics"),
-        audio: legacy_section(value, "audio"),
-        controls: legacy_section(value, "controls"),
-    })
-}
-
-// Deserialize one section of a legacy config JSON value, falling back to the
-// type's default when the section is absent or malformed.
-fn legacy_section<T: serde::de::DeserializeOwned + Default>(
-    value: &serde_json::Value,
-    key: &str,
-) -> T {
-    value
-        .get(key)
-        .cloned()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
-fn config_path() -> PathBuf {
-    directories::ProjectDirs::from("com", "Concinnity", "Concinnity")
-        .map(|dirs| dirs.config_dir().join("config.json"))
-        .unwrap_or_else(|| {
-            directories::BaseDirs::new()
-                .map(|b| b.home_dir().join(".concinnity").join("config.json"))
-                .unwrap_or_else(|| PathBuf::from(".concinnity-config.json"))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_has_correct_server() {
-        let cfg = Config::default();
-        assert_eq!(cfg.server, DEFAULT_SERVER);
-        assert!(cfg.user.is_none());
-    }
-
-    #[test]
-    fn config_login_roundtrip_through_json() {
-        let cfg = Config {
-            server: "http://10.0.0.1:9090".to_string(),
-            user: Some("alice".to_string()),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let loaded: Config = serde_json::from_str(&json).unwrap();
-        assert_eq!(loaded.server, cfg.server);
-        assert_eq!(loaded.user, cfg.user);
-    }
-
-    #[test]
-    fn missing_user_field_uses_none() {
-        let json = r#"{"server":"http://localhost:8080"}"#;
-        let cfg: Config = serde_json::from_str(json).unwrap();
-        assert!(cfg.user.is_none());
-    }
-
-    #[test]
-    fn missing_server_field_uses_default() {
-        let json = r#"{"user":"bob"}"#;
-        let cfg: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.server, DEFAULT_SERVER);
-    }
 
     #[test]
     fn settings_cbor_roundtrip() {
@@ -549,26 +414,6 @@ mod tests {
         assert_eq!(loaded.graphics.vsync, Some(false));
         assert_eq!(loaded.audio, AudioSettings::default());
         assert_eq!(loaded.controls, ControlsSettings::default());
-    }
-
-    #[test]
-    fn migrates_legacy_settings_sections() {
-        let value = serde_json::json!({
-            "server": "http://x",
-            "user": null,
-            "graphics": { "vsync": true },
-            "controls": { "mouse_sensitivity": 0.0025 },
-        });
-        let s = settings_from_legacy_value(&value).unwrap();
-        assert_eq!(s.graphics.vsync, Some(true));
-        assert_eq!(s.controls.mouse_sensitivity, Some(0.0025));
-        assert_eq!(s.audio.master_volume, None);
-    }
-
-    #[test]
-    fn no_legacy_sections_means_no_migration() {
-        let value = serde_json::json!({ "server": "http://x", "user": "bob" });
-        assert!(settings_from_legacy_value(&value).is_none());
     }
 
     // Regression guard: the on-disk `save`/`load` path must stay sandboxable so a

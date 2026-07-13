@@ -107,10 +107,10 @@ pub struct ShaderStage {
     /// Which stage this shader drives.
     pub kind: ShaderKind,
     /// Single-platform source path; used when `sources` is absent or lacks the current platform key.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     pub source: String,
     /// Per-platform source paths keyed by `"metal"`, `"hlsl"`, or `"glsl"`. Takes priority over `source`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub sources: Option<BTreeMap<String, String>>,
     /// Injected at load time from BlobAssetDef::payload.
     #[serde(skip)]

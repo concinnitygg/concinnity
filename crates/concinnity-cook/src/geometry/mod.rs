@@ -72,7 +72,25 @@ pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
         }
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.
-        "water_grid" => concinnity_core::geometry::water_grid::build_water_grid(args)?,
+        "water_grid" => {
+            let half_width = args
+                .get("half_width")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(10.0) as f32;
+            let half_depth = args
+                .get("half_depth")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(10.0) as f32;
+            let subdivisions = args
+                .get("subdivisions")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(64) as u32;
+            concinnity_core::geometry::water_grid::build_water_grid(
+                half_width,
+                half_depth,
+                subdivisions,
+            )?
+        }
         "skybox" => skybox::build_skybox(args)?,
         "extrude" => extrude::build_extrude(args)?,
         // empty generator string = inline vertex data supplied directly in the blob

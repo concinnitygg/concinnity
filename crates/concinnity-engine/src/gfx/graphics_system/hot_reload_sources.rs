@@ -127,12 +127,10 @@ pub struct ProceduralMeshSourceEntry {
     // renamed-or-replaced mesh trips the same "unknown" log as any other
     // add; we never have to round-trip AssetIds through the interner here.
     pub name: String,
-    // Last-applied generator args (the `args` object from `world.jsonl`),
-    // normalised through `ProceduralMesh::deserialize → serialize` so
-    // default-filled fields match what `parse_world_jsonl` produces at
-    // reload time. Deep [`serde_json::Value`] equality classifies whether
-    // to regenerate.
-    pub args: serde_json::Value,
+    // Last-applied generator args as the parsed component, so default-filled
+    // fields match what a reload-time parse of `world.jsonl` produces.
+    // Typed equality classifies whether to regenerate.
+    pub args: crate::assets::ProceduralMesh,
     // Every draw slot that received this mesh's geometry at init.
     pub draw_indices: Vec<usize>,
 }

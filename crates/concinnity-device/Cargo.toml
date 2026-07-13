@@ -32,7 +32,6 @@ concinnity-render = { path = "../concinnity-render" }
 libloading = "0.9.0"
 png = "0.18.1"
 rayon = "1"
-serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1.44"
 # Backend shader hot-reload watches each backend's shader dir for edits.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }

@@ -1521,11 +1521,11 @@ mod tests {
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
             .expect("day_crate def present with interned id 2");
 
-        let args: serde_json::Value = serde_json::from_slice(&prop.args_bytes).unwrap();
-        // The `mesh` reference resolved to box's id (0).
-        assert_eq!(args["mesh"], serde_json::json!(0));
+        let baked: crate::assets::Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
+        // The `mesh` reference resolved to box's handle (0).
+        assert_eq!(baked.mesh, Some(crate::ecs::MeshHandle(0)));
         // The `day_` name prefix resolved to Scene `day`'s id (1).
-        assert_eq!(args["scene"], serde_json::json!(1));
+        assert_eq!(baked.scene, Some(crate::ecs::asset_id::AssetId(1)));
     }
 
     // A resource asset (here a Font) leaves no component def, so the lock
@@ -1602,16 +1602,16 @@ mod tests {
             .iter()
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(1)))
             .expect("HitRegion def");
-        let args: serde_json::Value = serde_json::from_slice(&btn.args_bytes).unwrap();
-        assert_eq!(args["action"], serde_json::json!("view:toggle:0"));
+        let baked: crate::assets::HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
+        assert_eq!(baked.action, "view:toggle:0");
 
         let esc = result
             .defs
             .iter()
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
             .expect("KeyBinding def");
-        let args: serde_json::Value = serde_json::from_slice(&esc.args_bytes).unwrap();
-        assert_eq!(args["action"], serde_json::json!("view:toggle:0"));
+        let baked: crate::assets::KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
+        assert_eq!(baked.action, "view:toggle:0");
     }
 
     // A Sprite/TextLabel/HitRegion named `<view>_*` has its `view` arg
@@ -1632,17 +1632,44 @@ mod tests {
             "\n",
         );
         let result = build_pipeline_from_str(world, None).expect("build");
-        // pause_menu interned id = 0.
-        for name in ["pause_menu_dim", "pause_menu_title", "pause_menu_btn"] {
+        // pause_menu interned id = 0; the UI assets intern in declaration order.
+        let baked_view = |id: u32, expect: &str| {
             let def = result
                 .defs
                 .iter()
-                .find(|d| {
-                    let args: serde_json::Value = serde_json::from_slice(&d.args_bytes).unwrap();
-                    args.get("view") == Some(&serde_json::json!(0)) && d.name.map(|n| n.0).is_some()
-                })
-                .unwrap_or_else(|| panic!("expected {name} to have view=0"));
-            let _ = def;
+                .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(id)))
+                .unwrap_or_else(|| panic!("expected a def for {expect}"));
+            let ct = crate::registry::ComponentType::from_discriminant(def.discriminant)
+                .unwrap_or_else(|| panic!("{expect}: unknown discriminant"));
+            match ct {
+                crate::registry::ComponentType::Sprite => {
+                    postcard::from_bytes::<crate::assets::Sprite>(&def.args_bytes)
+                        .unwrap()
+                        .view
+                }
+                crate::registry::ComponentType::TextLabel => {
+                    postcard::from_bytes::<crate::assets::TextLabel>(&def.args_bytes)
+                        .unwrap()
+                        .view
+                }
+                crate::registry::ComponentType::HitRegion => {
+                    postcard::from_bytes::<crate::assets::HitRegion>(&def.args_bytes)
+                        .unwrap()
+                        .view
+                }
+                other => panic!("{expect}: unexpected type {other:?}"),
+            }
+        };
+        for (id, name) in [
+            (1, "pause_menu_dim"),
+            (2, "pause_menu_title"),
+            (3, "pause_menu_btn"),
+        ] {
+            assert_eq!(
+                baked_view(id, name),
+                Some(crate::ecs::asset_id::AssetId(0)),
+                "expected {name} to have view=0"
+            );
         }
     }
 
@@ -2310,7 +2337,7 @@ mod tests {
             .expect("data bakes")
             .expect("skinned mesh carries baked data");
         let (baked_name, sm): (u32, crate::assets::SkinnedMesh) =
-            serde_json::from_slice(&data).unwrap();
+            postcard::from_bytes(&data).unwrap();
         assert_eq!(baked_name, name_id.0);
         assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
         assert_eq!(sm.max_instances, 4096, "reserve caps at 4096");

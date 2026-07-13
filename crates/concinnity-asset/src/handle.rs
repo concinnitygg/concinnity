@@ -78,6 +78,12 @@ pub fn de_opt_texture_handle<'de, D>(d: D) -> Result<Option<TextureHandle>, D::E
 where
     D: Deserializer<'de>,
 {
+    // A non-self-describing format (postcard, the baked blob form) carries the
+    // already-resolved handle; names only appear in human-readable input.
+    if !d.is_human_readable() {
+        return Option::<TextureHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -133,6 +139,10 @@ pub fn de_texture_handle<'de, D>(d: D) -> Result<TextureHandle, D::Error>
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return TextureHandle::deserialize(d);
+    }
+
     struct HandleVisitor;
 
     impl Visitor<'_> for HandleVisitor {
@@ -211,6 +221,10 @@ pub fn de_opt_material_handle<'de, D>(d: D) -> Result<Option<MaterialHandle>, D:
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Option::<MaterialHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -267,6 +281,10 @@ pub fn de_opt_mesh_handle<'de, D>(d: D) -> Result<Option<MeshHandle>, D::Error>
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Option::<MeshHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -323,6 +341,10 @@ pub fn de_opt_skinned_mesh_handle<'de, D>(d: D) -> Result<Option<SkinnedMeshHand
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Option::<SkinnedMeshHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -377,6 +399,10 @@ pub fn de_opt_font_handle<'de, D>(d: D) -> Result<Option<FontHandle>, D::Error>
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Option::<FontHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -432,6 +458,10 @@ pub fn de_opt_audio_clip_handle<'de, D>(d: D) -> Result<Option<AudioClipHandle>,
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Option::<AudioClipHandle>::deserialize(d);
+    }
+
     struct OptVisitor;
 
     impl Visitor<'_> for OptVisitor {
@@ -487,6 +517,10 @@ pub fn de_audio_clip_handle_vec<'de, D>(d: D) -> Result<Vec<AudioClipHandle>, D:
 where
     D: Deserializer<'de>,
 {
+    if !d.is_human_readable() {
+        return Vec::<AudioClipHandle>::deserialize(d);
+    }
+
     struct VecVisitor;
 
     impl<'de> Visitor<'de> for VecVisitor {
@@ -657,6 +691,51 @@ mod tests {
     struct TargetHolder {
         #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
         target: Option<SkinnedMeshHandle>,
+    }
+
+    // The baked blob form: postcard is not self-describing, so every helper
+    // must read the plain resolved value instead of probing with a visitor.
+    #[test]
+    fn handle_helpers_round_trip_through_postcard() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct BakedHolder {
+            #[serde(default, deserialize_with = "de_opt_texture_handle")]
+            tex: Option<TextureHandle>,
+            #[serde(deserialize_with = "de_texture_handle")]
+            stage: TextureHandle,
+            #[serde(default, deserialize_with = "de_opt_mesh_handle")]
+            mesh: Option<MeshHandle>,
+            #[serde(default, deserialize_with = "de_opt_material_handle")]
+            material: Option<MaterialHandle>,
+            #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
+            target: Option<SkinnedMeshHandle>,
+            #[serde(default, deserialize_with = "de_opt_font_handle")]
+            font: Option<FontHandle>,
+            #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
+            clip: Option<AudioClipHandle>,
+            #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
+            sounds: Vec<AudioClipHandle>,
+        }
+        let holder = BakedHolder {
+            tex: Some(TextureHandle(3)),
+            stage: TextureHandle(9),
+            mesh: None,
+            material: Some(MaterialHandle(1)),
+            target: Some(SkinnedMeshHandle(2)),
+            font: None,
+            clip: Some(AudioClipHandle(4)),
+            sounds: alloc::vec![AudioClipHandle(5), AudioClipHandle(6)],
+        };
+        let bytes = postcard::to_allocvec(&holder).unwrap();
+        let back: BakedHolder = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.tex, holder.tex);
+        assert_eq!(back.stage, holder.stage);
+        assert_eq!(back.mesh, holder.mesh);
+        assert_eq!(back.material, holder.material);
+        assert_eq!(back.target, holder.target);
+        assert_eq!(back.font, holder.font);
+        assert_eq!(back.clip, holder.clip);
+        assert_eq!(back.sounds, holder.sounds);
     }
 
     #[test]

@@ -39,5 +39,10 @@ pub use write::write_cnb;
 pub use concinnity_asset::{AssetId, PayloadLocator};
 
 pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
-pub const BLOB_VERSION: u32 = 1;
+// Bump on any postcard-visible schema change so a stale blob fails the version
+// check with a clear "rebuild" error instead of mis-decoding. v2: every record
+// is baked -- `RecordKind` and BlobAssetDef's `record` field left the schema.
+// v3: `args_bytes` / resource `data_bytes` are postcard-encoded components, not
+// JSON.
+pub const BLOB_VERSION: u32 = 3;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)

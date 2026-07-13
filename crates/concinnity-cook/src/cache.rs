@@ -68,7 +68,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 //    hot texels, so every cached envmap must rebake (build::environment_map).
 // 3: Font payload header gained the rasterisation size (size_px) after
 //    supersample, shifting the atlas offset 12 -> 16 (build::font).
-const CACHE_FORMAT_VERSION: u32 = 3;
+// 4: baked resource data (`Material` data_bytes, the SkinnedMesh data tuple)
+//    switched JSON -> postcard alongside BLOB_VERSION 3; cached JSON bytes
+//    must not be replayed into a postcard blob.
+const CACHE_FORMAT_VERSION: u32 = 4;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the active backend's shader platform, the component

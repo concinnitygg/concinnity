@@ -1,10 +1,11 @@
 // src/assets/sdf_volume.rs
 //
-// Runtime + build behavior for the SdfVolume asset. The authored schema (the
+// Runtime behavior for the SdfVolume asset. The authored schema (the
 // SdfVolume struct, its Default, `cone_ratio`, and `SDF_PARAMS_LEN`) lives in
-// concinnity-asset; this file keeps the `Component` impl, the `SourceBacked`
-// impl, the build-time validation cook calls, the blob-residency helper the
-// engine init uses, and the runtime step-count clamp bounds. The schema type +
+// concinnity-asset; this file keeps the `Component` impl, the bake-time clamp,
+// the blob-residency helper the engine init uses, and the runtime step-count
+// clamp bounds. The JSON-args source selection and validation live in
+// concinnity-world (`source_args`, `check::sdf_volume`). The schema type +
 // `SDF_PARAMS_LEN` are re-exported so `crate::assets::sdf_volume::*` paths (the
 // render backends' uniform structs) keep resolving.
 
@@ -23,10 +24,26 @@ pub const SDF_MAX_STEPS_FLOOR: u32 = 8;
 
 // Resolve the fragment shader source path for the current build backend from a
 // volume's `fragment_shaders` map (preferred) or its `fragment_shader`
-// fallback. Mirrors the build-time `SourceBacked::source_path` selection.
+// fallback. Mirrors the build-time selection (concinnity-world `source_args`).
 fn current_platform_source(v: &SdfVolume) -> Option<String> {
-    let args = serde_json::to_value(v).ok()?;
-    current_platform_source_arg(&args)
+    let platform = crate::build::Platform::current();
+    if let Some(map) = &v.fragment_shaders
+        && let Some(src) = map.get(platform.key()).filter(|s| !s.is_empty())
+    {
+        return Some(src.clone());
+    }
+    if v.fragment_shader.is_empty() {
+        return None;
+    }
+    let ext = std::path::Path::new(&v.fragment_shader)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if platform.accepts_ext(ext) {
+        Some(v.fragment_shader.clone())
+    } else {
+        None
+    }
 }
 
 // Normalize an authored volume for the runtime: clamp the raymarch knobs to
@@ -64,7 +81,7 @@ impl Component for SdfVolume {
     const NAME: &'static str = "SdfVolume";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     fn inject_name(&mut self, id: AssetId) {
@@ -74,42 +91,6 @@ impl Component for SdfVolume {
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
     }
-}
-
-impl crate::build::SourceBacked for SdfVolume {
-    fn source_path(args: &serde_json::Value, platform: crate::build::Platform) -> Option<String> {
-        // Prefer the per-backend map entry for this platform.
-        if let Some(obj) = args.get("fragment_shaders").and_then(|v| v.as_object())
-            && let Some(src) = obj
-                .get(platform.key())
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-        {
-            return Some(src.to_string());
-        }
-        // Fall back to the single path, but only when its extension matches
-        // this backend: a `.hlsl` path is not a source the Metal build needs.
-        let src = args
-            .get("fragment_shader")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())?;
-        let ext = std::path::Path::new(src)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if platform.accepts_ext(ext) {
-            Some(src.to_string())
-        } else {
-            None
-        }
-    }
-}
-
-/// Resolve the raw fragment shader source declared for the current build
-/// backend, applying the `fragment_shaders` map / `fragment_shader` fallback.
-pub fn current_platform_source_arg(args: &serde_json::Value) -> Option<String> {
-    use crate::build::SourceBacked;
-    <SdfVolume as SourceBacked>::source_path(args, crate::build::Platform::current())
 }
 
 /// Blob indices that hold an `SdfVolume` fragment-shader payload.
@@ -151,29 +132,6 @@ pub fn resolve_runtime_source_path(raw: &str) -> String {
             .into_owned();
     }
     raw.to_string()
-}
-
-/// Validate `SdfVolume` args without compiling. Called by the check pass.
-pub fn check(args: &serde_json::Value) -> Result<(), String> {
-    if current_platform_source_arg(args).is_none() {
-        let platform_key = crate::build::Platform::current().key();
-        return Err(format!(
-            "SdfVolume requires a `fragment_shader` or a `fragment_shaders` \
-             entry for backend \"{platform_key}\" (a path to a shader file \
-             declaring map + shade)"
-        ));
-    }
-    if let Some(params) = args.get("params").and_then(|v| v.as_array())
-        && params.len() > SDF_PARAMS_LEN
-    {
-        return Err(format!(
-            "SdfVolume `params` is {} entries; max is {} \
-                 (extra entries would be ignored)",
-            params.len(),
-            SDF_PARAMS_LEN
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -245,93 +203,6 @@ mod tests {
             ..Default::default()
         };
         assert!((v.cone_ratio() - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn check_requires_fragment_shader() {
-        let args = serde_json::json!({});
-        assert!(check(&args).is_err());
-
-        let args = serde_json::json!({"fragment_shader": ""});
-        assert!(check(&args).is_err());
-
-        let args =
-            serde_json::json!({"fragment_shader": format!("shaders/blob.{}", platform_ext())});
-        assert!(check(&args).is_ok());
-    }
-
-    #[test]
-    fn check_rejects_oversized_params() {
-        let mut params = vec![0.0; SDF_PARAMS_LEN + 1];
-        params[0] = 1.0;
-        let args = serde_json::json!({
-            "fragment_shader": format!("shaders/blob.{}", platform_ext()),
-            "params": params,
-        });
-        assert!(check(&args).is_err());
-    }
-
-    #[test]
-    fn check_accepts_short_params() {
-        // Less than SDF_PARAMS_LEN is fine: the rest defaults to 0.
-        let args = serde_json::json!({
-            "fragment_shader": format!("shaders/blob.{}", platform_ext()),
-            "params": [1.0, 2.0, 3.0],
-        });
-        assert!(check(&args).is_ok());
-    }
-
-    #[test]
-    fn check_rejects_source_for_other_backend_only() {
-        // A single path whose extension targets a different backend is "no
-        // source for this platform": the build needs a current-backend
-        // shader, so validation fails rather than trying to read it.
-        let other_ext = match platform_ext() {
-            "metal" => "hlsl",
-            _ => "metal",
-        };
-        let args = serde_json::json!({ "fragment_shader": format!("shaders/blob.{other_ext}") });
-        assert!(check(&args).is_err());
-    }
-
-    #[test]
-    fn check_accepts_sources_map_with_current_backend() {
-        // A per-backend map that includes the current backend validates even
-        // when it also lists other backends the build won't compile here.
-        let args = serde_json::json!({
-            "fragment_shaders": {
-                "metal": "shaders/blob.metal",
-                "hlsl": "shaders/blob.hlsl",
-                "glsl": "shaders/blob.glsl",
-            }
-        });
-        assert!(check(&args).is_ok());
-    }
-
-    #[test]
-    fn check_rejects_sources_map_without_current_backend() {
-        // A map lacking the current backend's entry has nothing to build here.
-        let other_ext = match platform_ext() {
-            "metal" => "hlsl",
-            _ => "metal",
-        };
-        let args = serde_json::json!({
-            "fragment_shaders": { other_ext: format!("shaders/blob.{other_ext}") }
-        });
-        assert!(check(&args).is_err());
-    }
-
-    #[test]
-    fn source_path_prefers_map_over_single() {
-        use crate::build::{Platform, SourceBacked};
-        let args = serde_json::json!({
-            "fragment_shader": "shaders/single.metal",
-            "fragment_shaders": { "metal": "shaders/from_map.metal" },
-        });
-        assert_eq!(
-            <SdfVolume as SourceBacked>::source_path(&args, Platform::Metal).as_deref(),
-            Some("shaders/from_map.metal")
-        );
     }
 
     #[test]

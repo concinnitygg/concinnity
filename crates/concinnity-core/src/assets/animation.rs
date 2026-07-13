@@ -7,13 +7,66 @@ use crate::gfx::skinning::{self, JointPose};
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
 /// The pose fields (`translation`, `rotation_deg`, `scale`) are given directly
 /// on the keyframe, each defaulting to the identity transform when omitted.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Keyframe {
     /// Time of this keyframe in seconds from the clip start.
     pub time: f32,
     /// The joint's transform at this keyframe.
-    #[serde(flatten)]
     pub pose: JointPose,
+}
+
+// The authored JSON shape flattens the pose onto the keyframe object
+// (`{"time":0,"translation":[..]}`), but `serde(flatten)` needs a
+// self-describing format, which the baked postcard form is not. Serde impls
+// branch on the format: human-readable keeps the flattened schema, binary
+// nests the pose as a plain field.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KeyframeFlat {
+    time: f32,
+    #[serde(flatten)]
+    pose: JointPose,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KeyframePlain {
+    time: f32,
+    pose: JointPose,
+}
+
+impl serde::Serialize for Keyframe {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            KeyframeFlat {
+                time: self.time,
+                pose: self.pose,
+            }
+            .serialize(s)
+        } else {
+            KeyframePlain {
+                time: self.time,
+                pose: self.pose,
+            }
+            .serialize(s)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Keyframe {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if d.is_human_readable() {
+            let k = KeyframeFlat::deserialize(d)?;
+            Ok(Self {
+                time: k.time,
+                pose: k.pose,
+            })
+        } else {
+            let k = KeyframePlain::deserialize(d)?;
+            Ok(Self {
+                time: k.time,
+                pose: k.pose,
+            })
+        }
+    }
 }
 
 /// An animation channel: a time-ordered list of keyframes for one joint.
@@ -172,21 +225,9 @@ impl Animation {
     }
 }
 
-impl crate::build::SourceBacked for Animation {
-    // A glTF-sourced Animation needs its `.glb` fetched before the build's
-    // desugar pass can expand it; an inline-authored clip has no source.
-    fn source_path(args: &serde_json::Value, _platform: crate::build::Platform) -> Option<String> {
-        args.get("source")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::{Platform, SourceBacked};
 
     #[test]
     fn deserialises_with_defaults() {
@@ -229,19 +270,6 @@ mod tests {
         assert_eq!(a.duration, 2.0);
         assert_eq!(a.tracks.len(), 1);
         assert_eq!(a.tracks[0].joint, 0);
-    }
-
-    #[test]
-    fn source_backed_returns_path_only_when_set() {
-        let with = serde_json::json!({"source": "x.glb"});
-        let without = serde_json::json!({"source": ""});
-        let missing = serde_json::json!({});
-        assert_eq!(
-            <Animation as SourceBacked>::source_path(&with, Platform::Metal),
-            Some("x.glb".to_string())
-        );
-        assert!(<Animation as SourceBacked>::source_path(&without, Platform::Metal).is_none());
-        assert!(<Animation as SourceBacked>::source_path(&missing, Platform::Metal).is_none());
     }
 
     #[test]

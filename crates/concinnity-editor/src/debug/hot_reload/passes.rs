@@ -170,12 +170,14 @@ pub(super) fn reload_procedural_meshes(
         }
     };
 
-    // Build a name -> args map from the new JSONL for O(N) per-entry lookup.
-    // Normalised by `ProceduralMesh::deserialize → serialize` so the diff
-    // against the captured args (which went through the same round-trip at
-    // init) sees identical filled-in defaults.
-    let mut new_args_by_name: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
+    // Build a name -> entry map from the new JSONL for O(N) per-entry lookup:
+    // the parsed component (typed equality against the captured init state,
+    // so both sides see identical filled-in defaults) plus the raw args JSON
+    // the regen compile consumes.
+    let mut new_args_by_name: std::collections::HashMap<
+        String,
+        (crate::assets::ProceduralMesh, serde_json::Value),
+    > = std::collections::HashMap::new();
     for entry in &entries {
         let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if asset_type != "ProceduralMesh" {
@@ -200,19 +202,7 @@ pub(super) fn reload_procedural_meshes(
                 continue;
             }
         };
-        let normalised = match serde_json::to_value(&parsed) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    "ProceduralMesh hot-reload: failed to re-serialise '{}' args: {} \
-                     (kept old geometry)",
-                    name,
-                    e
-                );
-                continue;
-            }
-        };
-        new_args_by_name.insert(name.to_string(), normalised);
+        new_args_by_name.insert(name.to_string(), (parsed, raw_args));
     }
 
     // Collect rebuild changes batched into a single rebuild call (mirrors the
@@ -223,10 +213,10 @@ pub(super) fn reload_procedural_meshes(
     // Args to write back into the source map after a successful update,
     // staged here so a failed regen / rebuild doesn't clobber the captured
     // value (the diff next reload would then miss the still-pending edit).
-    let mut staged_args: Vec<(usize, serde_json::Value)> = Vec::new();
+    let mut staged_args: Vec<(usize, crate::assets::ProceduralMesh)> = Vec::new();
 
     for (entry_idx, entry) in procedural_meshes.entries.iter().enumerate() {
-        let Some(new_args) = new_args_by_name.get(&entry.name) else {
+        let Some((new_args, raw_args)) = new_args_by_name.get(&entry.name) else {
             // No matching entry in the new JSONL: treat as removed-from-jsonl.
             // We deliberately do not destroy the existing draws here: a Prop
             // referencing this mesh is still rendering through its draw slot.
@@ -241,7 +231,7 @@ pub(super) fn reload_procedural_meshes(
         // Regenerate from the new args. Routed through the build wrapper so a
         // live-edited `heightfield` ProceduralMesh still decodes its source
         // image (core's compile_mesh_payload links no image decoders).
-        let payload = match concinnity_cook::mesh_compile::compile_mesh_payload(new_args) {
+        let payload = match concinnity_cook::mesh_compile::compile_mesh_payload(raw_args) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(

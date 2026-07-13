@@ -228,7 +228,7 @@ mod tests {
     // hooks. One call executes the type's Default, serialization, `from_baked`,
     // `inject_name`, and `inject_locator`.
     fn exercise<C: Component + Default + serde::Serialize>() {
-        let bytes = serde_json::to_vec(&C::default()).expect("default serializes");
+        let bytes = postcard::to_allocvec(&C::default()).expect("default serializes");
         let mut comp = C::from_baked(&bytes).expect("baked bytes deserialize");
         comp.inject_name(AssetId::default());
         comp.inject_locator(PayloadLocator {

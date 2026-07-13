@@ -1,20 +1,21 @@
 // src/assets/shader_stage.rs
 //
-// Runtime + build behavior for the ShaderStage asset. The authored schema
+// Runtime behavior for the ShaderStage asset. The authored schema
 // (ShaderKind, the ShaderStage struct, and its Default) lives in
-// concinnity-asset; this file keeps the `Component` impl, the `SourceBacked`
-// impl, the build-time validation helpers cook calls, and the
-// `ShaderStageExt::current_platform_source` extension the hot-reload path uses.
-// The schema types are re-exported so `crate::assets::shader_stage::ShaderKind`
-// paths keep resolving.
+// concinnity-asset; this file keeps the `Component` impl and the
+// `ShaderStageExt::current_platform_source` extension the engine init and
+// hot-reload paths use. The JSON-args source selection and validation live in
+// concinnity-world (`source_args`, `check::shader`). The schema types are
+// re-exported so `crate::assets::shader_stage::ShaderKind` paths keep
+// resolving.
 
 pub use concinnity_asset::{ShaderKind, ShaderStage};
 
 use crate::ecs::{Component, PayloadLocator};
 
 // Resolve the source filename for the current build platform from a stage's
-// declared `source` / `sources`. Mirrors the build-time
-// `SourceBacked::source_path` selection so the hot-reload subsystem picks the
+// declared `source` / `sources`. Mirrors the build-time selection
+// (concinnity-world `source_args`) so the hot-reload subsystem picks the
 // same per-platform source the build read at compile time. Returns `None` when
 // no current-platform source is declared (e.g. a stage that only declares `glsl`
 // running on the Metal backend, which loads the embedded GLSL fallback at init
@@ -26,9 +27,24 @@ pub trait ShaderStageExt {
 
 impl ShaderStageExt for ShaderStage {
     fn current_platform_source(&self) -> Option<String> {
-        use crate::build::SourceBacked;
-        let args = serde_json::to_value(self).ok()?;
-        <Self as SourceBacked>::source_path(&args, crate::build::Platform::current())
+        let platform = crate::build::Platform::current();
+        if let Some(sources) = &self.sources
+            && let Some(src) = sources.get(platform.key())
+        {
+            return Some(src.clone());
+        }
+        if self.source.is_empty() {
+            return None;
+        }
+        let ext = std::path::Path::new(&self.source)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if platform.accepts_ext(ext) {
+            Some(self.source.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -58,7 +74,7 @@ impl Component for ShaderStage {
     const NAME: &'static str = "ShaderStage";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
@@ -66,145 +82,14 @@ impl Component for ShaderStage {
     }
 }
 
-/// Validate ShaderStage args without compiling.
-pub fn check(args: &serde_json::Value) -> Result<(), String> {
-    if resolve_source_from_args(args).is_none() {
-        // On Linux/Vulkan, missing sources are non-fatal: the runtime falls
-        // back to built-in GLSL. See `compile_payload` for the matching carve-out.
-        if platform_key() == "glsl" {
-            return Ok(());
-        }
-        return Err(format!(
-            "ShaderStage requires a `source` or a `sources` entry for platform \"{}\"",
-            platform_key()
-        ));
-    }
-    Ok(())
-}
-
 /// Returns the platform key used to look up entries in the `sources` map.
 pub fn platform_key() -> &'static str {
     crate::build::Platform::current().key()
 }
 
-/// Resolves the shader source filename for the current platform from raw asset args.
-///
-/// Convenience wrapper over the `SourceBacked` impl that resolves against
-/// `Platform::current()`. New code should prefer
-/// `<ShaderStage as SourceBacked>::source_path(args, platform)` directly.
-pub fn resolve_source_from_args(args: &serde_json::Value) -> Option<String> {
-    use crate::build::SourceBacked;
-    <ShaderStage as SourceBacked>::source_path(args, crate::build::Platform::current())
-}
-
-// True when this stage declares at least one source and every declared source
-// (in `sources` and `source`) is an engine built-in shader. The bundled
-// default shader set declares only `metal` + `hlsl` built-ins and no `glsl`,
-// so on the Vulkan/GLSL backend it resolves to no source and renders via the
-// backend's inline GLSL by design -- not a user mistake. A custom stage that
-// merely forgot its `glsl` variant has at least one non-built-in source and is
-// not covered, so the missing-source path still flags it.
-pub fn declares_only_builtin_sources(args: &serde_json::Value) -> bool {
-    use crate::build::shader::builtin_shader_source;
-    let mut saw_any = false;
-    let mut check = |name: &str| {
-        if name.is_empty() {
-            return true;
-        }
-        saw_any = true;
-        builtin_shader_source(name).is_some()
-    };
-    if let Some(obj) = args.get("sources").and_then(|v| v.as_object()) {
-        for v in obj.values() {
-            if let Some(s) = v.as_str()
-                && !check(s)
-            {
-                return false;
-            }
-        }
-    }
-    if let Some(s) = args.get("source").and_then(|v| v.as_str())
-        && !check(s)
-    {
-        return false;
-    }
-    saw_any
-}
-
-impl crate::build::SourceBacked for ShaderStage {
-    fn source_path(args: &serde_json::Value, platform: crate::build::Platform) -> Option<String> {
-        if let Some(obj) = args.get("sources").and_then(|v| v.as_object())
-            && let Some(src) = obj.get(platform.key()).and_then(|v| v.as_str())
-        {
-            return Some(src.to_string());
-        }
-        let src = args
-            .get("source")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())?;
-        let ext = std::path::Path::new(src)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if platform.accepts_ext(ext) {
-            Some(src.to_string())
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-mod builtin_source_tests {
-    use super::declares_only_builtin_sources;
-
-    #[test]
-    fn bundled_default_set_is_all_builtin() {
-        // The vertex + fragment defaults the GraphicsConfig companion injects
-        // declare only built-in metal/hlsl sources, so the GLSL fallback is
-        // expected and must not be flagged.
-        let vert = serde_json::json!({
-            "kind": "vertex",
-            "sources": {"metal": "default.metal", "hlsl": "default_vert.hlsl"}
-        });
-        let frag = serde_json::json!({
-            "kind": "fragment",
-            "sources": {"metal": "default.metal", "hlsl": "default_frag.hlsl"}
-        });
-        assert!(declares_only_builtin_sources(&vert));
-        assert!(declares_only_builtin_sources(&frag));
-    }
-
-    #[test]
-    fn custom_source_is_not_builtin() {
-        // A custom stage that forgot its glsl variant has a non-built-in
-        // source and stays flagged.
-        let mixed = serde_json::json!({
-            "kind": "fragment",
-            "sources": {"metal": "default.metal", "hlsl": "my_custom.hlsl"}
-        });
-        let custom = serde_json::json!({"kind": "vertex", "source": "my_custom.metal"});
-        assert!(!declares_only_builtin_sources(&mixed));
-        assert!(!declares_only_builtin_sources(&custom));
-    }
-
-    #[test]
-    fn no_declared_source_is_not_builtin() {
-        // A stage declaring nothing is malformed, not an engine default.
-        assert!(!declares_only_builtin_sources(
-            &serde_json::json!({"kind": "vertex"})
-        ));
-        assert!(!declares_only_builtin_sources(
-            &serde_json::json!({"kind": "vertex", "source": ""})
-        ));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::{Platform, SourceBacked};
-    use serde_json::json;
 
     #[test]
     fn compile_kind_maps_each_stage() {
@@ -230,39 +115,6 @@ mod tests {
     }
 
     #[test]
-    fn source_path_selects_per_platform() {
-        // A sources-map entry for the requested platform wins.
-        let args = json!({"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
-        assert_eq!(
-            ShaderStage::source_path(&args, Platform::Metal),
-            Some("a.metal".to_string())
-        );
-        assert_eq!(
-            ShaderStage::source_path(&args, Platform::Hlsl),
-            Some("a.hlsl".to_string())
-        );
-        assert_eq!(
-            ShaderStage::source_path(&args, Platform::Glsl),
-            Some("a.glsl".to_string())
-        );
-
-        // A single `source` is accepted when its extension matches the
-        // platform, rejected when it is another backend's shader extension.
-        let metal_only = json!({"source": "s.metal"});
-        assert_eq!(
-            ShaderStage::source_path(&metal_only, Platform::Metal),
-            Some("s.metal".to_string())
-        );
-        assert_eq!(ShaderStage::source_path(&metal_only, Platform::Hlsl), None);
-
-        // No source at all -> None.
-        assert_eq!(
-            ShaderStage::source_path(&json!({"kind": "vertex"}), Platform::Metal),
-            None
-        );
-    }
-
-    #[test]
     fn current_platform_source_resolves_for_any_backend() {
         // Declaring every platform source resolves on whichever backend the
         // test build targets.
@@ -278,24 +130,6 @@ mod tests {
             locator: None,
         };
         assert!(stage.current_platform_source().is_some());
-    }
-
-    #[test]
-    fn check_requires_a_current_platform_source() {
-        // With every platform declared, check passes on any backend.
-        let ok = json!({"kind": "vertex", "sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
-        assert!(check(&ok).is_ok());
-        assert!(resolve_source_from_args(&ok).is_some());
-
-        // With nothing declared, GLSL/Vulkan is a non-fatal fallback while the
-        // other backends flag the missing source. Only one arm runs per build,
-        // so branch on the active platform key to stay deterministic.
-        let missing = check(&json!({"kind": "vertex"}));
-        if platform_key() == "glsl" {
-            assert!(missing.is_ok());
-        } else {
-            assert!(missing.is_err());
-        }
     }
 
     #[test]

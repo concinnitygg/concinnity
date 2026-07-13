@@ -140,7 +140,7 @@ impl Component for PostProcessConfig {
     const NAME: &'static str = "PostProcessConfig";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(postcard::from_bytes(bytes)?)
     }
 }
 

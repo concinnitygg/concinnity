@@ -368,18 +368,37 @@ fn validated_entry(
 
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
-        args: Some(args),
+        args: Some(args.clone()),
     };
-    let def = create_asset_def(&req)
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let resolved_args: serde_json::Value = serde_json::from_slice(&def.args_bytes)
-        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    let resolved_args = normalized_args_value(asset_type, &args);
 
     Ok(serde_json::json!({
         "name": name,
         "type": asset_type,
         "args": resolved_args,
     }))
+}
+
+// The args JSON written into world.jsonl for a validated add: the supplied
+// args merged over the type's defaults (as `create_asset_def` resolves them)
+// and normalized through the typed schema. The def's baked bytes are postcard
+// and cannot round-trip to JSON.
+fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_json::Value {
+    let empty = || serde_json::Value::Object(Default::default());
+    let Some(ct) = ComponentType::parse(asset_type) else {
+        return empty();
+    };
+    let mut merged = ct.registration().default_args.unwrap_or_else(empty);
+    if let (serde_json::Value::Object(base), serde_json::Value::Object(supplied)) =
+        (&mut merged, args)
+    {
+        for (k, v) in supplied {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    ct.normalized_args(&merged).unwrap_or_else(|_| empty())
 }
 
 // Build an entry for a build-time (BuildOnly) import asset that expands from
@@ -763,16 +782,18 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
         .map(str::to_string)
         .unwrap_or_else(|| asset_type.to_lowercase());
 
-    let args = json.get("args").cloned();
+    let args = json
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
 
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
-        args,
+        args: Some(args.clone()),
     };
-    let def = create_asset_def(&req)
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let resolved_args: serde_json::Value = serde_json::from_slice(&def.args_bytes)
-        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    let resolved_args = normalized_args_value(asset_type, &args);
 
     Ok(serde_json::json!({
         "name": name,
@@ -831,10 +852,9 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
         asset_type: type_str.to_string(),
         args: None,
     };
-    let def = create_asset_def(&req)
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let args: serde_json::Value = serde_json::from_slice(&def.args_bytes)
-        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
 
     let name = type_str.to_lowercase();
 

@@ -44,7 +44,7 @@ impl Component for File {
     const NAME: &'static str = "File";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
@@ -56,19 +56,9 @@ impl Component for File {
     }
 }
 
-impl crate::build::SourceBacked for File {
-    fn source_path(args: &serde_json::Value, _platform: crate::build::Platform) -> Option<String> {
-        args.get("path")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::{Platform, SourceBacked};
 
     #[test]
     fn from_ext_maps_every_known_extension() {
@@ -122,22 +112,6 @@ mod tests {
         assert!(FileKind::Obj.is_mesh());
         assert!(!FileKind::Png.is_mesh());
         assert!(!FileKind::Ttf.is_mesh());
-    }
-
-    #[test]
-    fn source_path_reads_the_path_field() {
-        assert_eq!(
-            File::source_path(&serde_json::json!({"path": "a.obj"}), Platform::Metal),
-            Some("a.obj".to_string())
-        );
-        assert_eq!(
-            File::source_path(&serde_json::json!({"path": ""}), Platform::Metal),
-            None
-        );
-        assert_eq!(
-            File::source_path(&serde_json::json!({}), Platform::Metal),
-            None
-        );
     }
 
     #[test]

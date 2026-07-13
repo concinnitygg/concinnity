@@ -471,7 +471,7 @@ mod tests {
             name: None,
             kind: AssetKind::Component,
             discriminant: ComponentTag::PointLight as u8,
-            args_bytes: serde_json::to_vec(&light).unwrap(),
+            args_bytes: postcard::to_allocvec(&light).unwrap(),
             payload: None,
         };
         let from_baked = ComponentAsset::from_baked(&baked).unwrap();

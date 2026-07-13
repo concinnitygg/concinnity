@@ -78,12 +78,12 @@ pub struct SdfVolume {
     /// the building backend; the file extension must match the backend
     /// (`.metal` / `.hlsl`). The file defines the SDF's `map` and `shade`
     /// functions.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     pub fragment_shader: String,
     /// Per-backend fragment shader source paths keyed by `"metal"`, `"hlsl"`,
     /// or `"glsl"`. Takes priority over `fragment_shader`, letting one volume
     /// target multiple backends from a single declaration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub fragment_shaders: Option<BTreeMap<String, String>>,
     /// Worst-case gradient of the SDF, used to size the cone-march step. `1.0`
     /// is correct for any well-formed SDF; higher values shorten the step but

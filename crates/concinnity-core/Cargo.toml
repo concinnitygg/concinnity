@@ -26,11 +26,11 @@ concinnity-blob = { path = "../concinnity-blob" }
 
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
-serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 rayon = "1"
 
 [dev-dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3.25.0"

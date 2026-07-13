@@ -492,7 +492,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     let mut proc = ProceduralMeshSourceMap::new();
     proc.entries.push(ProceduralMeshSourceEntry {
         name: "box_mesh".to_string(),
-        args: serde_json::json!({"generator": "box"}),
+        args: serde_json::from_value(serde_json::json!({"generator": "box"})).unwrap(),
         draw_indices: vec![0],
     });
     let state = AssetHotReloadState::from_sources(HotReloadSources {
@@ -1808,16 +1808,15 @@ fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
 
 // reload_procedural_meshes
 
-fn normalised_box_args(half: f32) -> serde_json::Value {
-    let pm: crate::assets::ProceduralMesh = serde_json::from_value(serde_json::json!({
+fn normalised_box_args(half: f32) -> crate::assets::ProceduralMesh {
+    serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [half, half, half],
     }))
-    .unwrap();
-    serde_json::to_value(&pm).unwrap()
+    .unwrap()
 }
 
-fn one_proc_mesh_map(name: &str, args: serde_json::Value) -> ProceduralMeshSourceMap {
+fn one_proc_mesh_map(name: &str, args: crate::assets::ProceduralMesh) -> ProceduralMeshSourceMap {
     let mut map = ProceduralMeshSourceMap::new();
     map.entries.push(ProceduralMeshSourceEntry {
         name: name.to_string(),

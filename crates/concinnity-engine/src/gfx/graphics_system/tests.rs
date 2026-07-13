@@ -142,7 +142,7 @@ impl WorldBuilder {
         // handle. `mat`'s asset id is unused now that the reference is a handle.
         let _ = mat;
         let mat_handle = self.material_records.len() as u32;
-        let mat_bytes = serde_json::to_vec(&Material {
+        let mat_bytes = postcard::to_allocvec(&Material {
             albedo: Some(TextureHandle(0)),
             ..Default::default()
         })

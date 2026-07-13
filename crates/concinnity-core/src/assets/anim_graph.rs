@@ -38,8 +38,7 @@ pub struct GraphBlendPoint {
 /// and a run cycle stay foot-aligned while the blend moves between them, so
 /// speed changes do not slide the feet. Leave it false for members that are
 /// not cyclic gaits.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[derive(Debug, Clone)]
 pub enum GraphBlend {
     /// Clips along one parameter. The parameter picks the two neighbouring
     /// `points` (by ascending `value`) and blends them; outside the range
@@ -50,7 +49,6 @@ pub enum GraphBlend {
         /// Members in ascending `value` order.
         points: Vec<GraphBlendPoint>,
         /// Phase-sync the members (see above).
-        #[serde(default)]
         sync: bool,
     },
     /// Clips on a regular grid over two parameters, blended bilinearly
@@ -69,9 +67,104 @@ pub enum GraphBlend {
         /// entry, each row holding one clip per `x_values` entry.
         rows: Vec<Vec<AssetId>>,
         /// Phase-sync the members (see above).
+        sync: bool,
+    },
+}
+
+// The authored JSON shape is internally tagged (`{"kind":"blend1d",...}`),
+// which serde can only deserialize from a self-describing format; the baked
+// postcard form is not one. Serde impls branch on the format through two
+// derived mirrors: human-readable keeps the `kind`-tagged schema, binary uses
+// the plain externally-indexed enum encoding.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum GraphBlendTagged {
+    Blend1d {
+        parameter: String,
+        points: Vec<GraphBlendPoint>,
         #[serde(default)]
         sync: bool,
     },
+    Blend2d {
+        parameter_x: String,
+        parameter_y: String,
+        x_values: Vec<f32>,
+        y_values: Vec<f32>,
+        rows: Vec<Vec<AssetId>>,
+        #[serde(default)]
+        sync: bool,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum GraphBlendPlain {
+    Blend1d {
+        parameter: String,
+        points: Vec<GraphBlendPoint>,
+        sync: bool,
+    },
+    Blend2d {
+        parameter_x: String,
+        parameter_y: String,
+        x_values: Vec<f32>,
+        y_values: Vec<f32>,
+        rows: Vec<Vec<AssetId>>,
+        sync: bool,
+    },
+}
+
+macro_rules! graph_blend_from {
+    ($src:ident, $dst:ident, $value:expr) => {
+        match $value {
+            $src::Blend1d {
+                parameter,
+                points,
+                sync,
+            } => $dst::Blend1d {
+                parameter,
+                points,
+                sync,
+            },
+            $src::Blend2d {
+                parameter_x,
+                parameter_y,
+                x_values,
+                y_values,
+                rows,
+                sync,
+            } => $dst::Blend2d {
+                parameter_x,
+                parameter_y,
+                x_values,
+                y_values,
+                rows,
+                sync,
+            },
+        }
+    };
+}
+
+impl serde::Serialize for GraphBlend {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let cloned = self.clone();
+        if s.is_human_readable() {
+            graph_blend_from!(GraphBlend, GraphBlendTagged, cloned).serialize(s)
+        } else {
+            graph_blend_from!(GraphBlend, GraphBlendPlain, cloned).serialize(s)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for GraphBlend {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if d.is_human_readable() {
+            let b = GraphBlendTagged::deserialize(d)?;
+            Ok(graph_blend_from!(GraphBlendTagged, GraphBlend, b))
+        } else {
+            let b = GraphBlendPlain::deserialize(d)?;
+            Ok(graph_blend_from!(GraphBlendPlain, GraphBlend, b))
+        }
+    }
 }
 
 /// One state of the graph: while active it plays either a single
@@ -618,6 +711,42 @@ mod tests {
         assert_eq!((b.param_x, b.param_y), (0, 1));
         assert_eq!(b.plays.len(), 4);
         assert!(!b.sync);
+    }
+
+    // The authored JSON schema tags a blend with `kind`; the baked binary form
+    // uses the plain enum encoding. Both shapes must keep working.
+    #[test]
+    fn graph_blend_keeps_the_tagged_json_shape_and_round_trips_through_postcard() {
+        crate::ecs::asset_id::reset_interner();
+        let g: AnimGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["states"][0]["blend"]["kind"],
+            serde_json::json!("blend1d"),
+            "authored JSON stays kind-tagged"
+        );
+
+        let bytes = postcard::to_allocvec(&g).unwrap();
+        let back: AnimGraph = postcard::from_bytes(&bytes).unwrap();
+        let Some(GraphBlend::Blend1d {
+            parameter,
+            points,
+            sync,
+        }) = &back.states[0].blend
+        else {
+            panic!("expected a 1D blendspace after the round trip");
+        };
+        assert_eq!(parameter, "speed");
+        assert_eq!(points.len(), 3);
+        assert!(sync);
+
+        let g2: AnimGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
+        let bytes = postcard::to_allocvec(&g2).unwrap();
+        let back: AnimGraph = postcard::from_bytes(&bytes).unwrap();
+        let Some(GraphBlend::Blend2d { rows, .. }) = &back.states[0].blend else {
+            panic!("expected a 2D blendspace after the round trip");
+        };
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

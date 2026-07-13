@@ -669,24 +669,22 @@ impl GraphicsSystem {
         // payload source so streamed bytes need not stay RAM-resident.
         let blob_disk_backed = ctx.blob.disk_backed();
 
-        // Snapshot each ProceduralMesh's args before `load_mesh_geometry`
-        // drains them, so the world.jsonl hot-reload pass can diff a fresh
-        // on-disk args object against the init state and re-run the generator
-        // when they differ. Captured as a `serde_json::Value` keyed by AssetId;
-        // a `None` here (hot-reload off) keeps the captured set empty so the
-        // reload pass has nothing to inspect on `cn run`. Names come from the
-        // interner so the reload log can read "regenerated 'box_mesh'" instead
-        // of an opaque id.
+        // Snapshot each ProceduralMesh before `load_mesh_geometry` drains
+        // them, so the world.jsonl hot-reload pass can diff a freshly parsed
+        // on-disk entry against the init state and re-run the generator when
+        // they differ. A `None` here (hot-reload off) keeps the captured set
+        // empty so the reload pass has nothing to inspect on `cn run`. Names
+        // come from the interner so the reload log can read "regenerated
+        // 'box_mesh'" instead of an opaque id.
         let proc_mesh_args_snapshot: std::collections::HashMap<
             AssetId,
-            (String, serde_json::Value),
+            (String, crate::assets::ProceduralMesh),
         > = if crate::app::dev_flags::enabled() {
             let name_table = crate::ecs::asset_id::name_table();
             ctx.query::<crate::assets::ProceduralMesh>()
                 .filter_map(|pm| {
                     let name = name_table.get(pm.asset_id.0 as usize).cloned()?;
-                    let v = serde_json::to_value(pm).ok()?;
-                    Some((pm.asset_id, (name, v)))
+                    Some((pm.asset_id, (name, pm.clone())))
                 })
                 .collect()
         } else {
@@ -735,7 +733,7 @@ impl GraphicsSystem {
         for (handle, entry) in skinned_table.0.iter().enumerate() {
             let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
             let (name_id, sm): (u32, crate::assets::SkinnedMesh) =
-                match serde_json::from_slice(&entry.data_bytes) {
+                match postcard::from_bytes(&entry.data_bytes) {
                     Ok(t) => t,
                     Err(e) => {
                         tracing::error!(
@@ -990,7 +988,7 @@ impl GraphicsSystem {
         let mut material_map: std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry> =
             std::collections::HashMap::with_capacity(material_table.len());
         for (material_handle, entry) in material_table.0.iter().enumerate() {
-            let mat: Material = match serde_json::from_slice(&entry.data_bytes) {
+            let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::error!(

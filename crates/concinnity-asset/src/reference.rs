@@ -180,6 +180,12 @@ pub fn de_opt_asset_ref_typed<'de, D, T>(d: D) -> Result<Option<AssetRef<T>>, D:
 where
     D: Deserializer<'de>,
 {
+    // A non-self-describing format (postcard, the baked blob form) carries the
+    // already-resolved id; names only appear in human-readable input.
+    if !d.is_human_readable() {
+        return Option::<AssetRef<T>>::deserialize(d);
+    }
+
     struct OptVisitor<T>(PhantomData<fn() -> T>);
 
     impl<'de, T> Visitor<'de> for OptVisitor<T> {

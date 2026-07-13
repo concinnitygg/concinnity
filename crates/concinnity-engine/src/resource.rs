@@ -312,7 +312,7 @@ pub struct MeshSources(pub Vec<MeshSource>);
 // `SkinnedMeshHandle`. A hybrid entry: `payload` locates the compiled geometry
 // (vertices + indices + skeleton) while `data_bytes` carries the baked runtime
 // fields (placement, material/texture handles, capsule, spawn reserve) as a
-// `(name_id, SkinnedMesh)` JSON tuple -- `asset_id` is serde-skipped on the
+// `(name_id, SkinnedMesh)` postcard tuple -- `asset_id` is serde-skipped on the
 // schema struct, so the interned name travels beside it for the runtime's
 // spawn-by-name registration.
 #[derive(Debug, Clone, Default)]
@@ -332,14 +332,11 @@ impl SkinnedMeshTable {
     }
 
     // Whether any skinned mesh declares a character capsule; gates whether the
-    // world needs a PhysicsSystem. Probes the baked JSON shape rather than
-    // fully deserializing each mesh.
+    // world needs a PhysicsSystem.
     pub fn has_capsule(&self) -> bool {
         self.0.iter().any(|e| {
-            serde_json::from_slice::<serde_json::Value>(&e.data_bytes)
-                .ok()
-                .and_then(|v| v.get(1).and_then(|m| m.get("capsule")).cloned())
-                .is_some_and(|c| !c.is_null())
+            postcard::from_bytes::<(u32, crate::assets::SkinnedMesh)>(&e.data_bytes)
+                .is_ok_and(|(_, sm)| sm.capsule.is_some())
         })
     }
 }
