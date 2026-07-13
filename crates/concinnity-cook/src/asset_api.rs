@@ -2,8 +2,9 @@
 //
 // This module is the single place where "type name + JSON args → BlobAssetDef"
 // is implemented.
-use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef, RecordKind, Registration};
+use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef, RecordKind};
 use crate::registry::ComponentType;
+use crate::registry::Registration;
 use crate::result::CnResult;
 
 // Incoming request to construct an asset from an external caller

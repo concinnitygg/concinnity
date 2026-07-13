@@ -3,8 +3,9 @@
 // Renderer-free ecs metadata + identity layer shared by the build / validate
 // pipeline and the client runtime: the asset-identity interner (`asset_id`),
 // the `Component` metadata trait, and the plain data types the registry and
-// blob format are built from (`Registration`, `AssetOrigin`, `AssetPayload`,
-// `PayloadLocator`, `BlobAssetDef`, `AssetKind`).
+// blob format are built from (`AssetOrigin`, `AssetPayload`, `PayloadLocator`,
+// `BlobAssetDef`, `AssetKind`). The authoring `Registration` record lives in
+// concinnity-world, constructed from the trait's metadata consts.
 //
 // The runtime half (the `System` behavior trait, `PipelineContext`, `World`,
 // the value enums (`ComponentAsset` / `SystemAsset`), and the registry macros)
@@ -40,35 +41,6 @@ pub enum AssetOrigin {
 pub enum AssetPayload {
     None,
     Compiled,
-}
-
-// Static metadata for a Component or System type.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Registration {
-    pub type_name: &'static str,
-    pub origin: AssetOrigin,
-    pub payload: AssetPayload,
-    pub default_args: Option<serde_json::Value>,
-}
-
-impl Registration {
-    pub fn addable(&self) -> bool {
-        self.origin == AssetOrigin::External
-    }
-
-    #[allow(dead_code)]
-    pub fn serializable(&self) -> bool {
-        self.origin != AssetOrigin::RuntimeOnly
-    }
-
-    #[allow(dead_code)]
-    pub fn runtime_present(&self) -> bool {
-        self.origin != AssetOrigin::BuildOnly
-    }
-
-    pub fn needs_compilation(&self) -> bool {
-        self.payload == AssetPayload::Compiled
-    }
 }
 
 // Component -- pure serializable data, no behavior.
@@ -112,15 +84,6 @@ pub trait Component: Sized + Send + std::fmt::Debug + 'static {
     // runtime (Prop, Mesh, Texture, Material, Model, Font, TextLabel, etc.).
     // The default implementation does nothing.
     fn inject_name(&mut self, _id: AssetId) {}
-
-    fn registration() -> Registration {
-        Registration {
-            type_name: Self::NAME,
-            origin: Self::ORIGIN,
-            payload: Self::PAYLOAD,
-            default_args: serde_json::to_value(Self::Args::default()).ok(),
-        }
-    }
 
     // Fields of this asset's `Args` that are asset references, as
     // `(field_name, target_type_name)`. These are `Option<AssetId>` fields authored
@@ -559,32 +522,6 @@ mod tests {
         assert_eq!(seen, vec![1, 2]);
         // The same cursor sees nothing new on a second read.
         assert!(ctx.events::<u32>().unwrap().read(&mut cursor).is_empty());
-    }
-
-    #[test]
-    fn registration_predicates_follow_origin_and_payload() {
-        let reg = |origin, payload| Registration {
-            type_name: "T",
-            origin,
-            payload,
-            default_args: None,
-        };
-        let external = reg(AssetOrigin::External, AssetPayload::Compiled);
-        assert!(external.addable());
-        assert!(external.serializable());
-        assert!(external.runtime_present());
-        assert!(external.needs_compilation());
-
-        let runtime = reg(AssetOrigin::RuntimeOnly, AssetPayload::None);
-        assert!(!runtime.addable());
-        assert!(!runtime.serializable());
-        assert!(runtime.runtime_present());
-        assert!(!runtime.needs_compilation());
-
-        let build = reg(AssetOrigin::BuildOnly, AssetPayload::None);
-        assert!(!build.addable());
-        assert!(build.serializable());
-        assert!(!build.runtime_present());
     }
 
     #[test]

@@ -237,10 +237,9 @@ mod tests {
 
     // Round-trip an asset's default args through JSON and its Component hooks.
     // One call executes the type's Default, from_args, to_args, inject_name,
-    // inject_locator, and registration.
+    // and inject_locator. (The authoring Registration record lives in
+    // concinnity-world now, built from these same trait consts.)
     fn exercise<C: Component>() {
-        let reg = C::registration();
-        assert_eq!(reg.type_name, C::NAME);
         let args = <C::Args as Default>::default();
         let value = serde_json::to_value(&args).expect("default args serialize");
         let back: C::Args = serde_json::from_value(value).expect("default args deserialize");

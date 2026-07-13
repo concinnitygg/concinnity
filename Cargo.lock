@@ -839,6 +839,7 @@ version = "0.10.1"
 dependencies = [
  "concinnity-core",
  "concinnity-templates",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",

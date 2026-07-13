@@ -11,8 +11,40 @@
 // `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
 // module instantiates the authoring half of it.
 
-use crate::ecs::{Component, Registration};
+use crate::ecs::{AssetOrigin, AssetPayload, Component};
 use crate::result::CnResult;
+
+// Static authoring metadata for an asset type: how it is declared, whether it
+// compiles a payload, and its default args JSON. Constructed here from the
+// runtime `Component` trait's metadata consts -- the runtime itself never
+// builds one (blob records carry everything a shipped game loads).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Registration {
+    pub type_name: &'static str,
+    pub origin: AssetOrigin,
+    pub payload: AssetPayload,
+    pub default_args: Option<serde_json::Value>,
+}
+
+impl Registration {
+    pub fn addable(&self) -> bool {
+        self.origin == AssetOrigin::External
+    }
+
+    #[allow(dead_code)]
+    pub fn serializable(&self) -> bool {
+        self.origin != AssetOrigin::RuntimeOnly
+    }
+
+    #[allow(dead_code)]
+    pub fn runtime_present(&self) -> bool {
+        self.origin != AssetOrigin::BuildOnly
+    }
+
+    pub fn needs_compilation(&self) -> bool {
+        self.payload == AssetPayload::Compiled
+    }
+}
 
 // Extract the allowed enum variants from a serde "unknown variant" error
 // message, coping with the count-dependent phrasing: "expected one of `a`, `b`,
@@ -77,7 +109,19 @@ macro_rules! define_component_type {
                 None
             }
             pub fn registration(self) -> Registration {
-                match self { $( Self::$variant => <$ty as Component>::registration() ),+ }
+                match self {
+                    $(
+                        Self::$variant => Registration {
+                            type_name: <$ty as Component>::NAME,
+                            origin: <$ty as Component>::ORIGIN,
+                            payload: <$ty as Component>::PAYLOAD,
+                            default_args: serde_json::to_value(
+                                <<$ty as Component>::Args as Default>::default(),
+                            )
+                            .ok(),
+                        }
+                    ),+
+                }
             }
             // Re-serialize a JSON args value through the typed `Args` struct.
             // With the build interner active, name-string cross-references in
@@ -148,15 +192,13 @@ macro_rules! define_component_type {
             pub fn addable(self) -> bool {
                 self.registration().addable()
             }
-            pub fn all() -> &'static [(ComponentType, fn() -> Registration)] {
-                &[
-                    $( (Self::$variant, <$ty as Component>::registration as fn() -> Registration) ),+
-                ]
+            pub fn all() -> &'static [ComponentType] {
+                &[ $( Self::$variant ),+ ]
             }
             pub fn addable_types() -> impl Iterator<Item = (ComponentType, Registration)> {
                 Self::all()
                     .iter()
-                    .map(|(t, reg_fn)| (*t, reg_fn()))
+                    .map(|t| (*t, t.registration()))
                     .filter(|(_, reg)| reg.addable())
             }
         }
@@ -170,8 +212,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registration_predicates_follow_origin_and_payload() {
+        let reg = |origin, payload| Registration {
+            type_name: "T",
+            origin,
+            payload,
+            default_args: None,
+        };
+        let external = reg(AssetOrigin::External, AssetPayload::Compiled);
+        assert!(external.addable());
+        assert!(external.serializable());
+        assert!(external.runtime_present());
+        assert!(external.needs_compilation());
+
+        let runtime = reg(AssetOrigin::RuntimeOnly, AssetPayload::None);
+        assert!(!runtime.addable());
+        assert!(!runtime.serializable());
+        assert!(runtime.runtime_present());
+        assert!(!runtime.needs_compilation());
+
+        let build = reg(AssetOrigin::BuildOnly, AssetPayload::None);
+        assert!(!build.addable());
+        assert!(build.serializable());
+        assert!(!build.runtime_present());
+        assert!(!build.needs_compilation());
+    }
+
+    #[test]
     fn component_types_round_trip_name_and_discriminant() {
-        for &(ty, _) in ComponentType::all() {
+        for &ty in ComponentType::all() {
             assert_eq!(ComponentType::parse(ty.as_str()), Some(ty));
             assert_eq!(
                 ComponentType::from_discriminant(ty.discriminant()),
@@ -188,7 +257,7 @@ mod tests {
     #[test]
     fn component_discriminants_are_unique_and_in_range() {
         let mut seen = std::collections::HashSet::new();
-        for &(ty, _) in ComponentType::all() {
+        for &ty in ComponentType::all() {
             let d = ty.discriminant();
             assert!(
                 d < 128,
@@ -222,8 +291,8 @@ mod tests {
     // cleanly. Internal/runtime-only assets (e.g. command enums) are exempt.
     #[test]
     fn declarable_assets_have_object_args_schemas() {
-        for &(ty, reg_fn) in ComponentType::all() {
-            let reg = reg_fn();
+        for &ty in ComponentType::all() {
+            let reg = ty.registration();
             if !reg.addable() {
                 continue;
             }
@@ -282,8 +351,8 @@ mod tests {
         // Every declared ref field names an existing arg key and a real target
         // type -- either a component or a resource-only asset (e.g. AudioClip,
         // which has left the component registry).
-        for &(ty, reg_fn) in ComponentType::all() {
-            let default_args = reg_fn().default_args;
+        for &ty in ComponentType::all() {
+            let default_args = ty.registration().default_args;
             for &(field, target) in ty.ref_fields() {
                 assert!(
                     ComponentType::parse(target).is_some()

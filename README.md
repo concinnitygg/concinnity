@@ -56,15 +56,18 @@ cargo run -p bistro --release
 
 | Crate                                                |      no_std?       | Description                                                          |
 | ---------------------------------------------------- | :----------------: | -------------------------------------------------------------------- |
-| [concinnity-cli](crates/concinnity-cli/)             |                    | The `concinnity` CLI binary (thin frontend)                          |
+| [concinnity-cli](crates/concinnity-cli/)             |                    | The `concinnity` dev CLI binary: command tree + subcommands          |
 | [concinnity-editor](crates/concinnity-editor/)       |                    | Dev tooling library: world authoring, in-engine editor, debug server |
 | [concinnity-ffi](crates/concinnity-ffi/)             |                    | General-purpose C-ABI cdylib for embedding in a host app             |
 | [concinnity-runtime](crates/concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs                   |
 | [concinnity-engine](crates/concinnity-engine/)       |                    | Runtime engine: world loop, ECS, renderer, audio, physics            |
 | [concinnity-cook](crates/concinnity-cook/)           |                    | Asset compile pipeline: world.jsonl + sources -> blobs               |
+| [concinnity-world](crates/concinnity-world/)         |                    | Build-side world model: authoring vocabulary, parsing, validation    |
 | [concinnity-render](crates/concinnity-render/)       |                    | Backend-agnostic, GPU-free render preparation                        |
 | [concinnity-device](crates/concinnity-device/)       |                    | GPU backends: Metal / DirectX 12 / Vulkan (+ Win32)                  |
 | [concinnity-core](crates/concinnity-core/)           |                    | Renderer-free foundation: assets, GPU layouts, math                  |
+| [concinnity-blob](crates/concinnity-blob/)           |                    | The .cnb blob container format (read-only; write is cook-gated)      |
+| [concinnity-asset](crates/concinnity-asset/)         | :white_check_mark: | Authored-data schema: asset structs, identity + handle primitives    |
 | [concinnity-eas](crates/concinnity-eas/)             |                    | Entity-Asset-System: the engine's generic ECS                        |
 | [concinnity-templates](crates/concinnity-templates/) | :white_check_mark: | Engine-owned world/asset templates (static data)                     |
 | [concinnity-docs](crates/concinnity-docs/)           |                    | Asset + API reference documentation generator                        |

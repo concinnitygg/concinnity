@@ -104,9 +104,9 @@ macro_rules! define_resource_asset_type {
             }
             // Authoring metadata: a resource asset is External with a compiled
             // payload; its default args come from the schema struct's `Default`.
-            pub fn registration(self) -> crate::ecs::Registration {
+            pub fn registration(self) -> crate::registry::Registration {
                 match self {
-                    $( Self::$variant => crate::ecs::Registration {
+                    $( Self::$variant => crate::registry::Registration {
                         type_name: stringify!($variant),
                         origin: crate::ecs::AssetOrigin::External,
                         payload: crate::ecs::AssetPayload::Compiled,

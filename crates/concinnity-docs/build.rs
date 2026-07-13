@@ -487,7 +487,7 @@ fn collect_registry_components(manual: &[ComponentMeta]) -> Vec<ComponentMeta> {
 
     let manual_names: BTreeSet<&str> = manual.iter().map(|c| c.name.as_str()).collect();
     let mut out = Vec::new();
-    for &(ty, reg_fn) in ComponentType::all() {
+    for &ty in ComponentType::all() {
         if manual_names.contains(ty.as_str()) {
             continue;
         }
@@ -496,7 +496,7 @@ fn collect_registry_components(manual: &[ComponentMeta]) -> Vec<ComponentMeta> {
             name: name.clone(),
             struct_ident: name.clone(),
             args_struct: name,
-            origin: format!("{:?}", reg_fn().origin),
+            origin: format!("{:?}", ty.registration().origin),
         });
     }
     for &ty in ResourceAssetType::all() {
