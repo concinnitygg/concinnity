@@ -1,6 +1,17 @@
 // src/cli/list.rs
 use concinnity_cook::ComponentType;
+use concinnity_cook::resource_handles::ResourceAssetType;
 use concinnity_cook::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
+
+// Authoring metadata for a type name, whether it is a registry component or a
+// resource asset (AudioClip, Texture, ...) that lives outside the component
+// registry.
+fn registration_for(type_str: &str) -> Option<concinnity_cook::ecs::Registration> {
+    if let Some(ct) = ComponentType::parse(type_str) {
+        return Some(ct.registration());
+    }
+    ResourceAssetType::parse(type_str).map(|rt| rt.registration())
+}
 
 // Resolve the world path the same way every other subcommand does: an explicit
 // existing path wins, otherwise discover from .concinnity/worlds/ or cwd.
@@ -71,8 +82,7 @@ pub fn list(json_path: Option<&str>, expanded: bool) -> std::io::Result<()> {
                 .unwrap_or("?")
                 .to_string();
 
-            let (origin, payload) = if let Some(ct) = ComponentType::parse(&type_str) {
-                let r = ct.registration();
+            let (origin, payload) = if let Some(r) = registration_for(&type_str) {
                 (format!("{:?}", r.origin), format!("{:?}", r.payload))
             } else {
                 ("?".to_string(), "?".to_string())
@@ -243,14 +253,39 @@ mod tests {
 
     #[test]
     fn list_prints_known_and_unknown_types() {
-        // GraphicsConfig resolves through the registry; the made-up type
-        // falls back to "?" origin / payload without erroring.
+        // GraphicsConfig resolves through the component registry, AudioClip
+        // through the resource-asset registry; the made-up type falls back
+        // to "?" origin / payload without erroring.
         let (_dir, path) = write_world(concat!(
             "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n",
+            "{\"name\":\"clip\",\"type\":\"AudioClip\",\"args\":{}}\n",
             "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
             "{\"type\":\"GraphicsConfig\",\"args\":{}}\n",
         ));
         list(Some(&path), false).unwrap();
+    }
+
+    #[test]
+    fn registration_for_resolves_component_types() {
+        let r = registration_for("GraphicsConfig").unwrap();
+        assert_eq!(r.type_name, "GraphicsConfig");
+    }
+
+    #[test]
+    fn registration_for_falls_back_to_resource_assets() {
+        // AudioClip and Texture left the component registry in the resource-table
+        // migration; their metadata now comes from ResourceAssetType.
+        for name in ["AudioClip", "Texture"] {
+            assert!(ComponentType::parse(name).is_none());
+            let r = registration_for(name).unwrap();
+            assert_eq!(r.origin, concinnity_cook::ecs::AssetOrigin::External);
+            assert_eq!(r.payload, concinnity_cook::ecs::AssetPayload::Compiled);
+        }
+    }
+
+    #[test]
+    fn registration_for_unknown_type_is_none() {
+        assert!(registration_for("NotARealAssetType").is_none());
     }
 
     #[test]
