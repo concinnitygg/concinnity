@@ -49,6 +49,22 @@ pub(crate) struct DebugState {
     // `None` until the first tick that finds a `Camera3D` (a world with no
     // camera never sets it).
     pub(super) camera: Option<CameraSnapshot>,
+    // Process thread + memory budgets, refreshed every tick for the `budget`
+    // query. `None` until `App::start` has published them.
+    pub(super) budget: Option<BudgetSnapshot>,
+}
+
+// A read-only snapshot of the process thread + memory budgets (see
+// `concinnity_engine::app::budget`), served by the `budget` query. `rss_mib` is
+// the live resident set size sampled each tick; the rest are fixed at start.
+#[derive(Clone, Default, serde::Serialize)]
+pub(crate) struct BudgetSnapshot {
+    pub(super) total_cores: usize,
+    pub(super) job_threads: usize,
+    pub(super) total_ram_mib: Option<u64>,
+    pub(super) budget_mib: u64,
+    pub(super) overridden: bool,
+    pub(super) rss_mib: Option<u64>,
 }
 
 // A read-only snapshot of the active `Camera3D`, served by `camera-get`. The

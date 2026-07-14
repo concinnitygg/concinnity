@@ -75,6 +75,7 @@
 
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
+- [AppLimits](AppLimits.md) - Optional per-application overrides for the runtime's thread and memory budgets. Each field of `0` means "auto" (the engine picks a value from the host machine); a non-zero value overrides that choice, clamped to what the machine can safely give.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
 - [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.

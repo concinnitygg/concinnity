@@ -81,6 +81,28 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 "chunk": chunk_pool(&state.streaming.chunk),
             })
         }
+        "budget" => match &state.budget {
+            Some(b) => serde_json::json!({
+                "ok": true,
+                "frame": state.frame,
+                "threads": {
+                    "total_cores": b.total_cores,
+                    "job_threads": b.job_threads,
+                },
+                "memory": {
+                    "total_ram_mib": b.total_ram_mib,
+                    "budget_mib": b.budget_mib,
+                    "overridden": b.overridden,
+                    "rss_mib": b.rss_mib,
+                },
+            }),
+            // App::start publishes the budgets before the loop runs, so a None
+            // here means `tick` has not run since startup yet.
+            None => serde_json::json!({
+                "ok": false,
+                "error": "budgets not published yet (App::start has not run)",
+            }),
+        },
         "profile" => {
             let r = &state.profile_render;
             let systems: Vec<_> = state
@@ -323,6 +345,37 @@ mod tests {
         assert_eq!(r["system_count"], 3);
         assert_eq!(r["component_count"], 7);
         assert_eq!(r["systems"][0], "GraphicsSystem");
+    }
+
+    #[test]
+    fn budget_reports_threads_and_memory() {
+        use crate::debug::state::BudgetSnapshot;
+        let st = DebugState {
+            frame: 9,
+            budget: Some(BudgetSnapshot {
+                total_cores: 10,
+                job_threads: 9,
+                total_ram_mib: Some(65536),
+                budget_mib: 16384,
+                overridden: true,
+                rss_mib: Some(512),
+            }),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"budget"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["threads"]["total_cores"], 10);
+        assert_eq!(r["threads"]["job_threads"], 9);
+        assert_eq!(r["memory"]["total_ram_mib"], 65536);
+        assert_eq!(r["memory"]["budget_mib"], 16384);
+        assert_eq!(r["memory"]["overridden"], true);
+        assert_eq!(r["memory"]["rss_mib"], 512);
+    }
+
+    #[test]
+    fn budget_before_start_is_not_ready() {
+        let r = reply(r#"{"cmd":"budget"}"#, DebugState::default());
+        assert_eq!(r["ok"], false);
     }
 
     #[test]

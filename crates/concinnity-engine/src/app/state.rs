@@ -84,9 +84,60 @@ impl App {
             tracing::error!("App must be in Created state to start");
             return Err(CnResult::InvalidState);
         }
+        self.install_budgets();
         self.world.start()?;
         self.status = AppStatus::Started;
         Ok(())
+    }
+
+    // Compute the process thread + memory budgets from the host machine and the
+    // world's `Application` limits, size the shared job pool, and publish both
+    // as world resources (read by the debug server and, later, the streaming
+    // budget enforcement). Runs before `world.start()` so the pool is sized
+    // before the first system uses it. Idempotent: a second start (the editor's
+    // live rebuild) recomputes the same values and the pool sizing no-ops.
+    fn install_budgets(&mut self) {
+        use crate::app::{budget, sysmem};
+
+        let limits = self
+            .world
+            .query::<crate::assets::Application>()
+            .next()
+            .map(|a| a.limits)
+            .unwrap_or_default();
+
+        let threads = budget::ThreadBudget::compute(limits.job_threads);
+        let memory =
+            budget::MemoryBudget::compute(sysmem::total_physical_bytes(), limits.max_memory_mb);
+
+        crate::jobs::configure(threads.job_threads);
+
+        tracing::info!(
+            "Thread budget: {} core(s), {} job worker(s){}",
+            threads.total_cores,
+            threads.job_threads,
+            if limits.job_threads > 0 {
+                " [Application override]"
+            } else {
+                ""
+            }
+        );
+        tracing::info!(
+            "Memory budget: {} MiB{} (total RAM {})",
+            memory.budget_mib(),
+            if memory.overridden {
+                " [Application override]"
+            } else {
+                ""
+            },
+            match memory.total_ram_bytes {
+                Some(bytes) => format!("{} MiB", bytes / (1024 * 1024)),
+                None => "unknown".to_string(),
+            }
+        );
+
+        self.world.insert_resource(threads);
+        self.world.insert_resource(memory);
     }
 
     // Replace the current world and reset to Created so start() can be called again.
@@ -103,5 +154,64 @@ impl App {
     pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
         self.world.step()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::{AppLimits, Application};
+
+    // Starting the app publishes the thread + memory budgets as world resources,
+    // honoring an `Application`'s limits. A world with no GraphicsConfig starts
+    // without building a GPU, so this exercises the budget install in isolation.
+    #[test]
+    fn start_publishes_budgets_honoring_application_limits() {
+        let mut app = App::new();
+        app.world_mut().add_component(Application {
+            limits: AppLimits {
+                max_memory_mb: 512,
+                job_threads: 2,
+            },
+            ..Default::default()
+        });
+        app.start().unwrap();
+
+        let threads = app
+            .world()
+            .thread_budget()
+            .expect("thread budget published");
+        assert_eq!(threads.job_threads, 2.min(threads.total_cores));
+
+        let memory = app
+            .world()
+            .memory_budget()
+            .expect("memory budget published");
+        assert!(memory.overridden, "the Application override is recorded");
+        // 512 MiB is well under 85% of any test machine's RAM, so it passes through.
+        assert_eq!(memory.budget_bytes, 512 * 1024 * 1024);
+    }
+
+    // With no Application declared, the budgets are still published, computed
+    // from the host machine (no override).
+    #[test]
+    fn start_publishes_auto_budgets_without_an_application() {
+        let mut app = App::new();
+        app.start().unwrap();
+
+        let threads = app
+            .world()
+            .thread_budget()
+            .expect("thread budget published");
+        assert_eq!(
+            threads.job_threads,
+            threads.total_cores.saturating_sub(1).max(1)
+        );
+        let memory = app
+            .world()
+            .memory_budget()
+            .expect("memory budget published");
+        assert!(!memory.overridden);
+        assert!(memory.budget_bytes > 0);
     }
 }

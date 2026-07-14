@@ -48,6 +48,20 @@ core-foundation = "0.10.1"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 
+[target.'cfg(unix)'.dependencies]
+# Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`
+# on macOS; `/proc` on Linux only needs the page size from here.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3.25.0"

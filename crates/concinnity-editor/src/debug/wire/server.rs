@@ -257,6 +257,20 @@ impl DebugHook for DebugServer {
         // them every tick -- `streaming_stats` is just a few small count loops
         // over the parked StreamingState (StreamingSystem owns the pools).
         state.streaming = world.streaming_stats().unwrap_or_default();
+
+        // Process thread + memory budgets (fixed at start) plus the live RSS
+        // (one cheap syscall per tick, dev-only), for the `budget` query.
+        if let (Some(threads), Some(memory)) = (world.thread_budget(), world.memory_budget()) {
+            state.budget = Some(crate::debug::state::BudgetSnapshot {
+                total_cores: threads.total_cores,
+                job_threads: threads.job_threads,
+                total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
+                budget_mib: memory.budget_mib(),
+                overridden: memory.overridden,
+                rss_mib: concinnity_engine::app::sysmem::process_resident_bytes()
+                    .map(|b| b / (1024 * 1024)),
+            });
+        }
         // Opportunistically pick up the shader-reload flag the backend exposes
         // (Some only under `cn debug` on hot-reload backends); once captured,
         // the `reload-shaders` command can fire the flag. The backend sits in

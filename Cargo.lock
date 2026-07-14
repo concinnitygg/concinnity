@@ -763,6 +763,7 @@ dependencies = [
  "core-foundation",
  "ctrlc",
  "kira",
+ "libc",
  "mint",
  "objc2 0.6.4",
  "objc2-app-kit",
@@ -773,6 +774,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "windows 0.61.3",
 ]
 
 [[package]]

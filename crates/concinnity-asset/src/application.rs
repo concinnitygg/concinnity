@@ -37,6 +37,27 @@ pub struct Application {
     /// to the world, used to build the platform icon at export time. Empty for
     /// no custom icon.
     pub icon: String,
+    /// Optional overrides for the runtime's process resource budgets. When
+    /// omitted (or left at their defaults) the engine sizes both from the host
+    /// machine.
+    pub limits: AppLimits,
+}
+
+/// Optional per-application overrides for the runtime's thread and memory
+/// budgets. Each field of `0` means "auto" (the engine picks a value from the
+/// host machine); a non-zero value overrides that choice, clamped to what the
+/// machine can safely give.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AppLimits {
+    /// Soft ceiling on host memory the runtime aims to stay under, in
+    /// mebibytes. `0` = auto (a fraction of total RAM, capped by a built-in
+    /// ceiling). A non-zero value is clamped so it never exceeds what the
+    /// machine can safely give.
+    pub max_memory_mb: u32,
+    /// Worker threads for the shared job pool. `0` = auto (one per core, less
+    /// one for the main thread). A non-zero value never exceeds the core count.
+    pub job_threads: u32,
 }
 
 impl Default for Application {
@@ -47,6 +68,7 @@ impl Default for Application {
             version: "0.1.0".to_string(),
             author: String::new(),
             icon: String::new(),
+            limits: AppLimits::default(),
         }
     }
 }

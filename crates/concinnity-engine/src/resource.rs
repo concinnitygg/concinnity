@@ -376,6 +376,7 @@ impl MaterialTable {
 // read their table by handle. Dev-only source catalogues (hot-reload) stay with
 // the debug path that captures them, not here.
 pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[ResourceRecord]) {
+    log_resource_footprint(records);
     world.insert_resource(AudioClipTable::from_records(records));
     world.insert_resource(TextureTable::from_records(records));
     world.insert_resource(ColorLutTable::from_records(records));
@@ -384,6 +385,26 @@ pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[Resourc
     world.insert_resource(MaterialTable::from_records(records));
     world.insert_resource(MeshTable::from_records(records));
     world.insert_resource(SkinnedMeshTable::from_records(records));
+}
+
+// Log the compiled-resource footprint at load: the payload bytes each record
+// references in the blob (resident once the blob's payload section is read) plus
+// the data-resource bytes the tables hold directly. A coarse figure toward the
+// memory budget (see `app::budget`), surfaced at start so the resource load's
+// weight is visible.
+fn log_resource_footprint(records: &[ResourceRecord]) {
+    if records.is_empty() {
+        return;
+    }
+    let total: u64 = records
+        .iter()
+        .map(|r| r.data_bytes.len() as u64 + r.payload.as_ref().map_or(0, |p| p.len))
+        .sum();
+    tracing::info!(
+        "Resource tables: {} record(s), {} MiB compiled",
+        records.len(),
+        total / (1024 * 1024)
+    );
 }
 
 #[cfg(test)]

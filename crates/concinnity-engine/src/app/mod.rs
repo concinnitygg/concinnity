@@ -6,11 +6,15 @@
 // reach these runtime app items through `concinnity_engine::app::*`.
 pub mod anim_runtime;
 
+// Process-level thread + memory budgets computed at App start.
+pub mod budget;
 pub mod dev_flags;
 pub(crate) mod pacing;
 pub mod run;
 pub mod runloop;
 pub mod state;
+// Host-memory queries backing the memory budget + the live-usage readout.
+pub mod sysmem;
 
 // Async asset-streaming drivers. Currently driven only by the Metal
 // backend (Vulkan and DirectX catch-up is a separate follow-up), so on

@@ -22,13 +22,21 @@ pub struct JobPool {
 }
 
 impl JobPool {
-    // Build the pool. One worker per logical core is left for the main
-    // thread, so the count is `available_parallelism() - 1`, clamped to at
-    // least one.
+    // Build the pool at the worker count `configure` set, or the auto default
+    // (`available_parallelism() - 1`) when unconfigured. The App sizes it from
+    // its `ThreadBudget` before the first `pool()` use.
     fn build() -> JobPool {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(1).max(1))
-            .unwrap_or(1);
+        Self::with_threads(
+            CONFIGURED_THREADS
+                .get()
+                .copied()
+                .unwrap_or_else(default_threads),
+        )
+    }
+
+    // Build a pool with an explicit worker count (floored at one).
+    fn with_threads(threads: usize) -> JobPool {
+        let threads = threads.max(1);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|i| format!("cn-job-{i}"))
@@ -36,6 +44,12 @@ impl JobPool {
             .expect("failed to build job thread pool");
         tracing::info!("JobPool: {threads} worker thread(s)");
         JobPool { pool }
+    }
+
+    // Number of worker threads in this pool.
+    #[allow(dead_code)]
+    pub fn thread_count(&self) -> usize {
+        self.pool.current_num_threads()
     }
 
     // Apply `f` to every item in parallel, blocking until all are done.
@@ -73,6 +87,25 @@ impl JobPool {
     }
 }
 
+// Worker count set by `configure`, consulted by `JobPool::build` on first use.
+static CONFIGURED_THREADS: OnceLock<usize> = OnceLock::new();
+
+// Auto worker count: one per logical core, less one for the main thread,
+// floored at one.
+fn default_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
+}
+
+// Set the process-wide job pool's worker count. The App calls this from its
+// `ThreadBudget` at start, before any system uses the pool. It takes effect
+// only if called before the first `pool()` access (the pool is built once);
+// a later call, or a value below one, is ignored/clamped.
+pub fn configure(threads: usize) {
+    let _ = CONFIGURED_THREADS.set(threads.max(1));
+}
+
 // The process-wide job pool, built on first access.
 pub fn pool() -> &'static JobPool {
     static POOL: OnceLock<JobPool> = OnceLock::new();
@@ -86,6 +119,22 @@ mod tests {
     #[test]
     fn pool_is_a_singleton() {
         assert!(std::ptr::eq(pool(), pool()));
+    }
+
+    // An explicit worker count is honored (floored at one). Tested via
+    // `with_threads` directly: the process-wide `pool()` is a `OnceLock` built
+    // once, so its size cannot be asserted deterministically alongside the
+    // other tests that also touch it.
+    #[test]
+    fn with_threads_sets_the_worker_count() {
+        assert_eq!(JobPool::with_threads(3).thread_count(), 3);
+        assert_eq!(JobPool::with_threads(0).thread_count(), 1);
+    }
+
+    // The auto default always leaves at least one worker.
+    #[test]
+    fn default_threads_is_at_least_one() {
+        assert!(default_threads() >= 1);
     }
 
     #[test]

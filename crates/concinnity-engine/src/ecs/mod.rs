@@ -444,6 +444,23 @@ impl World {
             .map(|s| s.streaming_stats())
     }
 
+    // The process thread + memory budgets App published at start. `None` before
+    // `App::start` installs them. Read by the `cn debug` server's `budget`
+    // command; unused from the client itself.
+    #[allow(dead_code)]
+    pub fn thread_budget(&self) -> Option<crate::app::budget::ThreadBudget> {
+        self.resources
+            .get::<crate::app::budget::ThreadBudget>()
+            .copied()
+    }
+
+    #[allow(dead_code)]
+    pub fn memory_budget(&self) -> Option<crate::app::budget::MemoryBudget> {
+        self.resources
+            .get::<crate::app::budget::MemoryBudget>()
+            .copied()
+    }
+
     // Take the live render backend out of this world's parked slot, leaving
     // the world backend-less. The `cn editor` live SAVE swap transplants it into
     // the rebuilt world (via a `PendingBackend` resource) so the edit applies
