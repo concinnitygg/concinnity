@@ -433,6 +433,17 @@ impl World {
         &self.systems
     }
 
+    // Per-pool `(resident, pending, unloaded)` streaming counts from the parked
+    // `StreamingState` (StreamingSystem drives it against the backend each
+    // frame). `None` before graphics init parks it. Read by the `cn debug`
+    // server's `streaming` command; unused from the client itself.
+    #[allow(dead_code)]
+    pub fn streaming_stats(&self) -> Option<crate::gfx::streaming_system::StreamingStats> {
+        self.resources
+            .get::<crate::gfx::streaming_system::StreamingState>()
+            .map(|s| s.streaming_stats())
+    }
+
     // Take the live render backend out of this world's parked slot, leaving
     // the world backend-less. The `cn editor` live SAVE swap transplants it into
     // the rebuilt world (via a `PendingBackend` resource) so the edit applies
@@ -686,6 +697,30 @@ mod tests {
                 "'{name}' out of table order or unknown: {manifest:?}"
             );
         }
+    }
+
+    // A GraphicsConfig world gates the whole render band, and StreamingSystem
+    // runs immediately before GraphicsSystem so its `CameraRelativeView` is
+    // ready for that frame's submit. (Manifest-only: gating a GraphicsConfig
+    // never builds a GPU, unlike `start()`.)
+    #[test]
+    fn streaming_runs_immediately_before_graphics() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::GraphicsConfig::default());
+        let manifest = world.system_manifest();
+        let s = manifest
+            .iter()
+            .position(|n| *n == "StreamingSystem")
+            .expect("StreamingSystem present for a GraphicsConfig world");
+        let g = manifest
+            .iter()
+            .position(|n| *n == "GraphicsSystem")
+            .expect("GraphicsSystem present for a GraphicsConfig world");
+        assert_eq!(
+            g,
+            s + 1,
+            "StreamingSystem is directly before GraphicsSystem: {manifest:?}"
+        );
     }
 
     // The two camera-controller entries are mutually exclusive: the first

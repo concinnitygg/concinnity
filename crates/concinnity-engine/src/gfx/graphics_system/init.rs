@@ -2621,6 +2621,20 @@ impl GraphicsSystem {
                 .unwrap_or((0.0, 0.0)),
         });
 
+        // Hand the streaming pools built above to StreamingSystem: it drives
+        // them each frame (against the parked backend) and publishes the
+        // camera-relative view GraphicsSystem draws with. `frame_count` starts
+        // at 0 in lockstep with this system's own frame clock (both tick once
+        // per world step), so eviction retire-frames match the draw's frame.
+        ctx.insert_resource(crate::gfx::streaming_system::StreamingState {
+            texture_streamer: self.texture_streamer.take(),
+            mesh_streamer: self.mesh_streamer.take(),
+            mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
+            chunk_stream: self.chunk_stream.take(),
+            frame_count: 0,
+            frames_in_flight: self.frames_in_flight,
+        });
+
         // Init-time wiring is done: park the backend in the world's shared
         // slot, where each per-step user (this system's frame encode,
         // InputSystem's poll) takes and returns it.

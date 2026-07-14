@@ -291,8 +291,8 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
-    use crate::gfx::graphics_system::StreamingStats;
     use crate::gfx::profile::RenderStats;
+    use crate::gfx::streaming_system::StreamingStats;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // Run one request against a hand-built snapshot and parse the reply.

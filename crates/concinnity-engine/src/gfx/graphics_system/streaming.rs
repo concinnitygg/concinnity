@@ -306,7 +306,7 @@ impl GraphicsSystem {
             vw.load_budget(),
             (chunk_vtx_bytes + chunk_idx_bytes) / 1024,
         );
-        self.chunk_stream = Some(ChunkStreamState {
+        self.chunk_stream = Some(crate::gfx::streaming_system::ChunkStreamState {
             streamer,
             draws: std::collections::BTreeMap::new(),
             chunk_w,
@@ -319,18 +319,6 @@ impl GraphicsSystem {
             normal_map_slot,
             material,
         });
-    }
-
-    // `(resident, pending, unloaded)` counts for each active streaming pool.
-    // Used by the debug server's `streaming` command for headless checks.
-    // (Consumed only by the `cn debug` binary, so dead in a library build.)
-    #[allow(dead_code)]
-    pub fn streaming_stats(&self) -> StreamingStats {
-        StreamingStats {
-            texture: self.texture_streamer.as_ref().map(|s| s.stats()),
-            mesh: self.mesh_streamer.as_ref().map(|s| s.stats()),
-            chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
-        }
     }
 }
 

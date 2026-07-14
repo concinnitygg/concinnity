@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 use concinnity_core::shutdown::ShutdownToken;
 
-use crate::gfx::graphics_system::StreamingStats;
+use crate::gfx::streaming_system::StreamingStats;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.

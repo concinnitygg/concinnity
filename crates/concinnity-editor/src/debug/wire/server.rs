@@ -254,15 +254,9 @@ impl DebugHook for DebugServer {
         state.frame = self.frame;
 
         // Streaming counts change every frame in the early load-in, so refresh
-        // them every tick -- `streaming_stats` is just two small count loops.
-        state.streaming = world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                SystemAsset::GraphicsSystem(gs) => Some(gs.streaming_stats()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        // them every tick -- `streaming_stats` is just a few small count loops
+        // over the parked StreamingState (StreamingSystem owns the pools).
+        state.streaming = world.streaming_stats().unwrap_or_default();
         // Opportunistically pick up the shader-reload flag the backend exposes
         // (Some only under `cn debug` on hot-reload backends); once captured,
         // the `reload-shaders` command can fire the flag. The backend sits in

@@ -19,6 +19,10 @@
 //   * SettingsSystem before GraphicsSystem: a SettingCommand applied here lands
 //     on the backend before this frame's submit (visible the same frame), and
 //     a SceneCommand's jump primes the reel GraphicsSystem ticks below.
+//   * StreamingSystem immediately before GraphicsSystem: it drives the streaming
+//     pools and publishes the `CameraRelativeView` GraphicsSystem draws with, so
+//     a chunk world's view rebase is ready for this frame's submit and any
+//     texture/mesh upload lands before it.
 //   * GraphicsSystem right after them: makes payloads resident, uploads
 //     transforms, and submits the frame (consuming the overlay build).
 //   * InputSystem immediately after GraphicsSystem: on Metal the OS event pump
@@ -48,6 +52,10 @@ crate::define_systems! {
     },
     SettingsSystem => crate::gfx::settings_system::SettingsSystem {
         gate: schedule::settings,
+        present_when: "the world declares a GraphicsConfig",
+    },
+    StreamingSystem => crate::gfx::streaming_system::StreamingSystem {
+        gate: schedule::streaming,
         present_when: "the world declares a GraphicsConfig",
     },
     GraphicsSystem => crate::gfx::graphics_system::GraphicsSystem {

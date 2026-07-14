@@ -6,8 +6,9 @@
 // system is large enough that splitting it by responsibility is worth it:
 //   mod.rs       struct + System/Debug trait impls (init/step delegate out)
 //   init.rs      run_init: one-time backend + draw-list setup
-//   frame.rs     run_step: the per-frame encode + streaming drive
+//   frame.rs     run_step: the per-frame transform upload + draw submit
 //   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
+//                (the per-frame drive lives in gfx::streaming_system)
 //   scene.rs     scene-reel wiring + scene visibility
 //   helpers.rs   shared free functions
 
@@ -144,28 +145,18 @@ pub struct GraphicsSystem {
     sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
-    // Asset-streaming subsystem for the albedo texture pool. Some only when a
-    // StreamingConfig was declared and the backend supports it (Metal); None
-    // means every texture was uploaded eagerly at init, as before. Read only
-    // by the Metal step path -- dead on backends without streaming yet.
-    // Asset-streaming subsystem for the shared texture pool (albedo and normal
-    // maps alike -- one handle-indexed pool, so one streamer covers both).
-    #[allow(dead_code)]
+    // Streaming pools built during init (shared albedo+normal texture pool,
+    // mesh geometry, and voxel-world chunks), each `Some` only when a
+    // `StreamingConfig` / `VoxelWorld` was declared and the backend supports it
+    // (Metal). Init scratch: they are moved into the parked `StreamingState`
+    // resource at the end of init, where StreamingSystem drives them each frame,
+    // so they are `None` here from then on.
     texture_streamer: Option<crate::app::texture_stream::TextureStreamer>,
-    // Mesh-geometry streaming subsystem. Some only when a StreamingConfig was
-    // declared and the backend supports it (Metal); None means every mesh was
-    // uploaded eagerly at init, as before. Read only by the Metal step path.
-    #[allow(dead_code)]
     mesh_streamer: Option<crate::app::mesh_stream::MeshStreamer>,
     // Maps a streamed mesh's id to its DrawObject index, so completed loads
     // and evictions are applied to the right draw. Empty when not streaming.
-    #[allow(dead_code)]
     mesh_stream_draw_indices: Vec<usize>,
-    // Infinite voxel-world chunk streaming. Some only when a VoxelWorld was
-    // declared and the backend supports it (Metal). Read only by the Metal
-    // step path.
-    #[allow(dead_code)]
-    chunk_stream: Option<ChunkStreamState>,
+    chunk_stream: Option<crate::gfx::streaming_system::ChunkStreamState>,
     // Source catalogues captured at init for asset hot-reload, handed off to
     // the `cn debug` binary's reload machinery (which owns the watcher + the
     // live `AssetHotReloadState`). `Some` only under `cn debug` with at least
@@ -341,43 +332,6 @@ pub struct HotReloadApplyParts<'a> {
     pub backend: &'a mut dyn RenderBackend,
     pub world_reload: &'a Option<WorldReloadState>,
     pub last_fog_settings: &'a mut Option<crate::gfx::volumetric_fog::FogSettings>,
-}
-
-// Runtime state for streaming an infinite `VoxelWorld`: the chunk streamer,
-// the resident chunk-to-draw-index map, and the per-chunk render parameters
-// (chunk size for the camera-to-chunk mapping and model placement, plus the
-// shared material every chunk draws with).
-// Most fields are read only by the Metal chunk-streaming arms of `step` /
-// `setup_*`; on non-macOS builds the struct is still constructed but
-// those fields go unread.
-#[cfg_attr(not(backend_metal), allow(dead_code))]
-struct ChunkStreamState {
-    streamer: crate::app::chunk_stream::ChunkStreamer,
-    // Maps a resident chunk's coordinate to its `DrawObject` index.
-    draws: std::collections::BTreeMap<crate::gfx::chunk_coord::ChunkCoord, usize>,
-    chunk_w: f32,
-    chunk_d: f32,
-    // Render origin for camera-relative rendering: the chunk every resident
-    // chunk's model matrix is currently placed relative to. It follows the
-    // camera's chunk; when it changes the resident chunks are rebased onto the
-    // new origin.
-    origin_chunk: crate::gfx::chunk_coord::ChunkCoord,
-    texture_slot: usize,
-    normal_map_slot: usize,
-    material: crate::gfx::render_types::MaterialUniforms,
-}
-
-// `(resident, pending, unloaded)` counts for each streaming pool, or `None`
-// when that pool is not streaming. Captured by the debug server's `streaming`
-// command for headless verification. Only the `cn debug` binary's `debug`
-// module consumes it, so it reads as dead code in a plain library build.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
-pub struct StreamingStats {
-    pub texture: Option<(usize, usize, usize)>,
-    pub mesh: Option<(usize, usize, usize)>,
-    // `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
-    pub chunk: Option<(usize, usize)>,
 }
 
 impl std::fmt::Debug for GraphicsSystem {

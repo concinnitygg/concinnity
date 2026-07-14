@@ -56,6 +56,17 @@ pub(crate) fn settings(world: &World) -> Option<SystemAsset> {
         .map(|_| crate::gfx::settings_system::SettingsSystem::new().into())
 }
 
+// StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
+// streaming pools and publishes the camera-relative view graphics draws.
+// Scheduled immediately before GraphicsSystem so a chunk world's view rebase is
+// ready for this frame's submit and any texture/mesh upload lands before it.
+pub(crate) fn streaming(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::gfx::streaming_system::StreamingSystem::new().into())
+}
+
 // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
 // (the render marker).
 pub(crate) fn graphics(world: &World) -> Option<SystemAsset> {
