@@ -36,7 +36,6 @@ pub(crate) mod hud;
 // historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps
 // reaching it through `concinnity_engine::jobs`.
 pub use concinnity_render::jobs;
-pub(crate) mod physics;
 // Runtime resource tables (per-kind, handle-indexed views of the blob's resource
 // stream). `pub` so the editor's in-memory build path can construct the tables it
 // inserts into the world, mirroring the shipped-runtime loader.

@@ -1,4 +1,4 @@
-// src/physics/rig.rs
+// concinnity-physics/src/rig.rs
 //
 // The character-rig drive: one kinematic capsule per `CharacterRig`
 // component (a `SkinnedMesh` that declared a `capsule`). Each frame the
@@ -7,9 +7,9 @@
 // scene like the player capsule; the resolved position is written back to
 // the rig component for GraphicsSystem's render follow.
 
-use crate::assets::{CharacterRig, RootMotion};
-use crate::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
-use crate::gfx::root_motion::add3;
+use concinnity_core::assets::{CharacterRig, RootMotion};
+use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
+use concinnity_core::gfx::root_motion::add3;
 
 use super::{BodyHandle, PhysicsWorld};
 

@@ -758,6 +758,7 @@ dependencies = [
  "ciborium",
  "concinnity-core",
  "concinnity-device",
+ "concinnity-physics",
  "concinnity-render",
  "concinnity-toolchain",
  "core-foundation",
@@ -768,7 +769,6 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit",
  "postcard",
- "rapier3d",
  "serde",
  "serde_json",
  "tempfile",
@@ -792,6 +792,15 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "concinnity-physics"
+version = "0.10.1"
+dependencies = [
+ "concinnity-core",
+ "rapier3d",
+ "tracing",
 ]
 
 [[package]]

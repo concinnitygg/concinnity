@@ -1,23 +1,24 @@
-// src/physics/system.rs
+// concinnity-physics/src/system.rs
 //
 // The Rapier rigid-body simulation. An internal system (not a declarable
-// asset): `World::start` constructs one when the world declares a
+// asset): the engine schedule constructs one when the world declares a
 // `PhysicsConfig`, a `RigidBody`, or a `PropBody`, reading the optional
 // `PhysicsConfig` for the floor / terrain.
 
-use crate::assets::{
+use crate::{BodyHandle, ColliderShape, PhysicsWorld};
+use concinnity_core::assets::{
     Camera3D, Collider, Held, Joint, PhysicsConfig, Pickup, PropBody, RigidBody, Transform,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::decompose::EntityByName;
-use crate::ecs::{Entity, PipelineContext, StepResult, System};
-use crate::physics::{BodyHandle, ColliderShape, PhysicsWorld};
+use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{
+    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, StepResult, System,
+};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 // Acceleration due to gravity in world units per second squared. Shared with
 // the third-person controller so its jump takeoff matches the rig's fall.
-pub(crate) const GRAVITY: f32 = 20.0;
+pub const GRAVITY: f32 = 20.0;
 // Friction coefficient for static (non-PropBody) prop colliders.
 const STATIC_FRICTION: f32 = 0.8;
 // Largest physics timestep; longer frames are clamped for solver stability.
@@ -59,7 +60,7 @@ pub struct PhysicsSystem {
     // One capsule per root-motion character rig (see `super::rig`).
     rigs: Vec<super::rig::RigPhysics>,
     // Reader cursor over the `RootMotion` event queue.
-    root_cursor: crate::ecs::EventCursor,
+    root_cursor: EventCursor,
     // One entry per Prop that carries a collider.
     prop_bodies: Vec<PropPhysics>,
     // Index into `prop_bodies` of the prop currently being carried.
@@ -137,7 +138,7 @@ impl PhysicsSystem {
             world: None,
             player: None,
             rigs: Vec::new(),
-            root_cursor: crate::ecs::EventCursor::default(),
+            root_cursor: EventCursor::default(),
             prop_bodies: Vec::new(),
             held: None,
         }
@@ -176,7 +177,7 @@ impl PhysicsSystem {
                 (
                     entity,
                     PropCollSnap {
-                        shape: crate::physics::collider_shape(&collider.0, transform.scale),
+                        shape: crate::collider_shape(&collider.0, transform.scale),
                         position: transform.position,
                         rotation_deg: transform.rotation_deg,
                         pickup: pickup.contains(&entity),
@@ -191,7 +192,7 @@ impl PhysicsSystem {
                     &snap.shape,
                     snap.position,
                     snap.rotation_deg,
-                    crate::physics::dynamic_params(prop_body),
+                    crate::dynamic_params(prop_body),
                 );
                 self.prop_bodies.push(PropPhysics {
                     entity,
@@ -232,7 +233,7 @@ impl System for PhysicsSystem {
         let mut floor_built = false;
         if let Some(mesh_id) = self.terrain_mesh {
             let mesh_snap = ctx
-                .query::<crate::assets::ProceduralMesh>()
+                .query::<concinnity_core::assets::ProceduralMesh>()
                 .find(|m| m.asset_id == mesh_id)
                 .cloned();
             match mesh_snap {
@@ -266,7 +267,7 @@ impl System for PhysicsSystem {
             } else {
                 // A large thin slab whose top face sits at Y = 0.
                 world.add_fixed(
-                    &crate::physics::ColliderShape::Cuboid {
+                    &crate::ColliderShape::Cuboid {
                         half_extents: [500.0, 5.0, 500.0],
                     },
                     [0.0, -5.0, 0.0],
@@ -339,7 +340,7 @@ impl System for PhysicsSystem {
                 handle_b,
                 joint.anchor_a,
                 anchor_b,
-                crate::physics::joint_spec(&joint),
+                crate::joint_spec(&joint),
             );
             wired += 1;
         }
@@ -420,10 +421,7 @@ impl System for PhysicsSystem {
         // one normal interval rather than the whole paused span -- no catch-up
         // burst on resume. The flag is published by GraphicsSystem, which runs
         // first in the schedule, so it reflects this same tick.
-        if ctx
-            .resource::<crate::ecs::MenuActive>()
-            .is_some_and(|m| m.0)
-        {
+        if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }
 
@@ -628,8 +626,11 @@ impl System for PhysicsSystem {
         // write camera position + view matrix
         for camera in ctx.query_mut::<Camera3D>() {
             camera.position = new_cam_pos;
-            camera.view_matrix =
-                crate::gfx::camera::view_matrix(camera.position, camera.yaw, camera.pitch);
+            camera.view_matrix = concinnity_core::gfx::camera::view_matrix(
+                camera.position,
+                camera.yaw,
+                camera.pitch,
+            );
         }
 
         // publish grounded state for jump gating
@@ -643,7 +644,7 @@ impl System for PhysicsSystem {
 
 // A Prop's collider plus transform, snapshotted at init time.
 struct PropCollSnap {
-    shape: crate::physics::ColliderShape,
+    shape: crate::ColliderShape,
     position: [f32; 3],
     rotation_deg: [f32; 3],
     pickup: bool,
@@ -658,7 +659,7 @@ struct PropCollSnap {
 // for exactly this read (see the release sweep in `graphics_system::init`).
 fn build_heightfield_collider(
     world: &mut PhysicsWorld,
-    mesh: &crate::assets::ProceduralMesh,
+    mesh: &concinnity_core::assets::ProceduralMesh,
     offset_y: f32,
     ctx: &mut PipelineContext,
 ) -> Result<(), String> {
@@ -669,7 +670,7 @@ fn build_heightfield_collider(
     let bytes = ctx
         .read_payload(locator)
         .map_err(|e| format!("read terrain payload: {e:?}"))?;
-    let grid = crate::gfx::mesh_payload::deserialise_heightfield(bytes)?
+    let grid = concinnity_core::gfx::mesh_payload::deserialise_heightfield(bytes)?
         .ok_or("terrain mesh payload has no baked heightfield collider")?;
     if grid.rows < 2 || grid.cols < 2 {
         return Err(format!(
@@ -772,8 +773,73 @@ fn lcg_hash(mut v: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{CameraController, Prop};
-    use crate::ecs::World;
+    use concinnity_core::assets::{CameraController, FollowController, PropCollider};
+    use concinnity_core::blob::BlobData;
+    use concinnity_core::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
+    use concinnity_core::gfx::profile::FrameProfile;
+
+    // Hand-assembled stand-in for the engine's `World`: owns the storage a
+    // `PipelineContext` borrows so a `PhysicsSystem` can be init/stepped in
+    // isolation. `World` stays in the engine, so this crate cannot use it.
+    struct TestWorld {
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: FrameProfile,
+        resources: Resources,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            Self {
+                components: ComponentStorage::default(),
+                blob: BlobData::empty(),
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+            }
+        }
+
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+
+        // Push a decomposed prop (Transform + Collider, plus the Pickup tag when
+        // asked) exactly as the load-time decomposition would, and register it in
+        // the name index under `id` so a `PropBody` owner resolves to it.
+        fn spawn_prop(&mut self, id: AssetId, position: [f32; 3], pickup: bool) -> Entity {
+            let entity = self.components.push_typed(Transform {
+                position,
+                ..Default::default()
+            });
+            self.components.insert_typed(
+                entity,
+                Collider(PropCollider {
+                    shape: "ball".to_string(),
+                    half_extents: [0.5; 3],
+                    radius: 0.5,
+                    half_height: 0.0,
+                }),
+            );
+            if pickup {
+                self.components.insert_typed(entity, Pickup);
+            }
+            match self.resources.get_mut::<EntityByName>() {
+                Some(index) => {
+                    index.0.insert(id, entity);
+                }
+                None => {
+                    let mut index = HashMap::new();
+                    index.insert(id, entity);
+                    self.resources.insert(EntityByName(index));
+                }
+            }
+            entity
+        }
+    }
 
     #[test]
     fn flat_terrain_is_zero_height() {
@@ -825,45 +891,15 @@ mod tests {
         }
     }
 
-    // A PhysicsConfig gates the internal physics system on.
-    #[test]
-    fn physics_config_spawns_internal_system() {
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.start().unwrap();
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["PhysicsSystem"]);
-    }
-
-    // A RigidBody (character capsule) gates physics on, even with no config.
-    #[test]
-    fn rigid_body_spawns_internal_system() {
-        let mut world = World::new_empty();
-        world.add_component(RigidBody::default());
-        world.start().unwrap();
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["PhysicsSystem"]);
-    }
-
-    // No physics content (no PhysicsConfig / RigidBody / PropBody) → no system.
-    #[test]
-    fn no_physics_content_no_system() {
-        let mut world = World::new_empty();
-        world.start().unwrap();
-        assert!(world.systems().is_empty());
-    }
-
     // A third-person camera is a virtual orbit: no player capsule is created
     // for it. (Regression: the spectator capsule spawned at the camera eye
     // overlapped the followed rig's capsule and squeezed it through the
-    // floor.) A first-person camera keeps its capsule.
+    // floor.) A first-person camera keeps its capsule. The schedule gate that
+    // builds the system at all is covered by the engine's schedule tests.
     #[test]
     fn third_person_camera_gets_no_player_capsule() {
-        use crate::assets::{CameraController, FollowController};
-        use crate::ecs::SkinnedMeshHandle;
-
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
+        // Third-person (follow) camera: a virtual orbit, so no player capsule.
+        let mut world = TestWorld::new();
         let mut camera = controlled_camera();
         camera.controller = Some(CameraController {
             follow: Some(FollowController {
@@ -872,65 +908,20 @@ mod tests {
             }),
             ..CameraController::default()
         });
-        world.add_component(camera);
-        world.start().unwrap();
-        let physics = world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::PhysicsSystem(p) => Some(p),
-                _ => None,
-            })
-            .expect("physics system present");
+        world.components.push_typed(camera);
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
         assert!(physics.player.is_none(), "no capsule for the orbit camera");
 
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(controlled_camera());
-        world.start().unwrap();
-        let physics = world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::PhysicsSystem(p) => Some(p),
-                _ => None,
-            })
-            .expect("physics system present");
+        // First-person camera keeps its capsule.
+        let mut world = TestWorld::new();
+        world.components.push_typed(controlled_camera());
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
         assert!(
             physics.player.is_some(),
             "first-person camera keeps its capsule"
         );
-    }
-
-    // PhysicsSystem runs before Camera3DSystem: it consumes the camera's
-    // previous-frame movement intent.
-    #[test]
-    fn physics_runs_before_camera_controller() {
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(controlled_camera());
-        world.start().unwrap();
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["PhysicsSystem", "Camera3DSystem"]);
-    }
-
-    use crate::assets::PropCollider;
-    use crate::ecs::asset_id::AssetId;
-
-    // A dynamic, gravity-affected ball prop above the floor.
-    fn ball_prop(id: AssetId, position: [f32; 3], pickup: bool) -> Prop {
-        Prop {
-            asset_id: id,
-            position,
-            pickup,
-            collider: Some(PropCollider {
-                shape: "ball".to_string(),
-                half_extents: [0.5; 3],
-                radius: 0.5,
-                half_height: 0.0,
-            }),
-            ..Default::default()
-        }
     }
 
     fn ball_body(id: AssetId) -> PropBody {
@@ -955,34 +946,26 @@ mod tests {
         }
     }
 
-    // The simulated pose is written to the prop's Transform; the Prop column was
-    // drained at load.
+    // The simulated pose is written back to the prop's Transform.
     #[test]
     fn dynamic_prop_writes_transform() {
         use std::{thread, time::Duration};
         let id = AssetId(1);
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(ball_prop(id, [0.0, 5.0, 0.0], false));
-        world.add_component(ball_body(id));
-        world.start().unwrap();
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        world.components.push_typed(ball_body(id));
 
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
         for _ in 0..3 {
             thread::sleep(Duration::from_millis(20));
-            world.step();
+            physics.step(&mut world.ctx());
         }
 
-        let transform_y = world.query::<Transform>().next().unwrap().position[1];
+        let transform_y = world.components.get::<Transform>(entity).unwrap().position[1];
         assert!(
             transform_y < 5.0,
             "the simulated pose falls the Transform (y={transform_y})"
-        );
-        // The Prop column is drained at load, so the pose can only have gone to
-        // the Transform.
-        assert_eq!(
-            world.query::<Prop>().count(),
-            0,
-            "the Prop column is drained at load"
         );
     }
 
@@ -994,47 +977,36 @@ mod tests {
     fn menu_active_freezes_then_resumes_physics() {
         use std::{thread, time::Duration};
         let id = AssetId(1);
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(ball_prop(id, [0.0, 5.0, 0.0], false));
-        world.add_component(ball_body(id));
-        world.start().unwrap();
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        world.components.push_typed(ball_body(id));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
 
         // Paused: step several frames with real wall-clock dt; the body stays put.
-        world.insert_resource(crate::ecs::MenuActive(true));
+        world.resources.insert(MenuActive(true));
         for _ in 0..5 {
             thread::sleep(Duration::from_millis(20));
-            world.step();
+            physics.step(&mut world.ctx());
         }
-        let y_paused = world.query::<Transform>().next().unwrap().position[1];
+        let y_paused = world.components.get::<Transform>(entity).unwrap().position[1];
         assert!(
             (y_paused - 5.0).abs() < 1e-3,
             "the body must not fall while a menu is active (y={y_paused})"
         );
 
         // Resumed: the body falls again.
-        world.insert_resource(crate::ecs::MenuActive(false));
+        world.resources.insert(MenuActive(false));
         for _ in 0..3 {
             thread::sleep(Duration::from_millis(20));
-            world.step();
+            physics.step(&mut world.ctx());
         }
-        let y_resumed = world.query::<Transform>().next().unwrap().position[1];
+        let y_resumed = world.components.get::<Transform>(entity).unwrap().position[1];
         assert!(
             y_resumed < y_paused - 1e-3,
             "the body must fall once the menu closes (y={y_resumed})"
         );
-    }
-
-    // Bodies held by the active PhysicsSystem's world (test observable).
-    fn body_count(world: &World) -> usize {
-        world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::PhysicsSystem(p) => Some(p.physics_body_count()),
-                _ => None,
-            })
-            .expect("physics system present")
     }
 
     // Despawning a decomposed prop reaps its Rapier body, so it stops simulating
@@ -1043,63 +1015,60 @@ mod tests {
     fn despawning_a_prop_reaps_its_physics_body() {
         use std::{thread, time::Duration};
         let id = AssetId(1);
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(ball_prop(id, [0.0, 5.0, 0.0], false));
-        world.add_component(ball_body(id));
-        world.start().unwrap();
+        let mut world = TestWorld::new();
+        let ball = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        world.components.push_typed(ball_body(id));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
 
         // Settle so the body is live and falling.
         for _ in 0..2 {
             thread::sleep(Duration::from_millis(20));
-            world.step();
+            physics.step(&mut world.ctx());
         }
-        let before = body_count(&world);
-        let ball = world
-            .join2::<crate::assets::Collider, Transform>()
-            .next()
-            .map(|(e, _, _)| e)
-            .expect("ball entity");
+        let before = physics.physics_body_count();
 
         // Despawn the ball (stand-in for GraphicsSystem) and step: PhysicsSystem
         // reaps the orphaned body.
-        world.despawn(ball);
+        world.components.despawn(ball);
         thread::sleep(Duration::from_millis(20));
-        world.step();
-        let after = body_count(&world);
+        physics.step(&mut world.ctx());
+        let after = physics.physics_body_count();
         assert_eq!(after, before - 1, "the despawned prop's body was removed");
 
         // The sim keeps running cleanly with the body gone (no further removals).
         thread::sleep(Duration::from_millis(20));
-        world.step();
-        assert_eq!(body_count(&world), after, "no further bodies removed");
+        physics.step(&mut world.ctx());
+        assert_eq!(
+            physics.physics_body_count(),
+            after,
+            "no further bodies removed"
+        );
     }
 
-    // Picking up a carriable prop tags its entity with Held; the Prop column is
-    // drained, so the carried state lives only on the Held tag.
+    // Picking up a carriable prop tags its entity with Held.
     #[test]
     fn pickup_sets_held_tag() {
         use std::{thread, time::Duration};
         let id = AssetId(1);
-        let mut world = World::new_empty();
-        world.add_component(PhysicsConfig::default());
-        world.add_component(ball_prop(id, [0.0, 1.0, -2.0], true));
-        world.add_component(ball_body(id));
-        world.add_component(interacting_camera([0.0, 1.0, 0.0]));
-        world.start().unwrap();
+        let mut world = TestWorld::new();
+        world.spawn_prop(id, [0.0, 1.0, -2.0], true);
+        world.components.push_typed(ball_body(id));
+        world
+            .components
+            .push_typed(interacting_camera([0.0, 1.0, 0.0]));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
 
         thread::sleep(Duration::from_millis(5));
-        world.step();
+        physics.step(&mut world.ctx());
 
         assert_eq!(
-            world.query::<Held>().count(),
+            world.ctx().query::<Held>().count(),
             1,
             "pickup inserts the Held tag on the entity"
-        );
-        assert_eq!(
-            world.query::<Prop>().count(),
-            0,
-            "the Prop column is drained at load"
         );
     }
 }

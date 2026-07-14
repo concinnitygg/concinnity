@@ -74,7 +74,7 @@ crate::define_systems! {
         gate: schedule::debug_hud,
         present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
     },
-    PhysicsSystem => crate::physics::system::PhysicsSystem {
+    PhysicsSystem => concinnity_physics::PhysicsSystem {
         gate: schedule::physics,
         present_when: "the world declares a PhysicsConfig, RigidBody, or PropBody, or a skinned mesh bakes a character capsule",
     },

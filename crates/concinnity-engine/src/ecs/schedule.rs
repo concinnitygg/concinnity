@@ -139,7 +139,7 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
         .next()
         .cloned()
         .unwrap_or_default();
-    Some(crate::physics::system::PhysicsSystem::new(config).into())
+    Some(concinnity_physics::PhysicsSystem::new(config).into())
 }
 
 // The first controlled `Camera3D` picks the controller flavor: no `follow`
@@ -242,4 +242,66 @@ pub(crate) fn text_input(world: &World) -> Option<SystemAsset> {
         .query::<crate::assets::TextInput>()
         .next()
         .map(|_| crate::text_input_system::TextInputSystem::new().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::assets::{Camera3D, CameraController, PhysicsConfig, RigidBody};
+    use crate::ecs::World;
+
+    fn controlled_camera() -> Camera3D {
+        Camera3D {
+            fov_y_degrees: 75.0,
+            near: 0.05,
+            far: 200.0,
+            view_matrix: [[0.0; 4]; 4],
+            position: [0.0, 1.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            desired_move: [0.0; 3],
+            jump_requested: false,
+            interact_requested: false,
+            controller: Some(CameraController::default()),
+        }
+    }
+
+    // A PhysicsConfig gates the internal physics system on.
+    #[test]
+    fn physics_config_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem"]);
+    }
+
+    // A RigidBody (character capsule) gates physics on, even with no config.
+    #[test]
+    fn rigid_body_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(RigidBody::default());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem"]);
+    }
+
+    // No physics content (no PhysicsConfig / RigidBody / PropBody) → no system.
+    #[test]
+    fn no_physics_content_no_system() {
+        let mut world = World::new_empty();
+        world.start().unwrap();
+        assert!(world.systems().is_empty());
+    }
+
+    // PhysicsSystem runs before Camera3DSystem: it consumes the camera's
+    // previous-frame movement intent.
+    #[test]
+    fn physics_runs_before_camera_controller() {
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        world.add_component(controlled_camera());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem", "Camera3DSystem"]);
+    }
 }

@@ -1,4 +1,4 @@
-// src/physics/convert.rs
+// concinnity-physics/src/convert.rs
 //
 // Conversions between the engine's plain [f32; 3] / Euler-degree representation
 // and the glam-based math types Rapier uses. Keeping these here means no other
@@ -7,8 +7,8 @@
 use rapier3d::glamx::EulerRot;
 use rapier3d::math::{Rotation, Vector};
 
-use crate::assets::{Joint, JointKind, PropBody, PropCollider};
-use crate::physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
+use crate::{ColliderShape, DynamicParams, JointMotor, JointSpec};
+use concinnity_core::assets::{Joint, JointKind, PropBody, PropCollider};
 
 // Convert an engine `[x, y, z]` array into a Rapier vector.
 pub fn to_vec(v: [f32; 3]) -> Vector {

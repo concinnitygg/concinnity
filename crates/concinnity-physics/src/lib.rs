@@ -1,12 +1,14 @@
-// src/physics/mod.rs
+// concinnity-physics/src/lib.rs
 //
 // A thin wrapper around the Rapier rigid-body simulation. Rapier (and its
-// glam-based math) is confined to this module: callers work entirely in the
+// glam-based math) is confined to this crate: callers work entirely in the
 // engine's `[f32; 3]` / Euler-degree representation and only ever see the
 // opaque `BodyHandle`.
 //
 // `PhysicsWorld` owns one Rapier simulation. `PhysicsSystem` builds it once at
-// init from the world's Props / bodies and steps it every frame.
+// init from the world's Props / bodies and steps it every frame. The engine
+// depends on this crate and constructs `PhysicsSystem` through its system
+// registry; the dependency arrow is concinnity-physics <- concinnity-engine.
 
 mod convert;
 // Raycast probe answering for animation IK and the follow camera.
@@ -15,7 +17,11 @@ mod probes;
 mod rig;
 // The internal physics system that builds and steps the simulation from the
 // world's bodies, driven by an optional `PhysicsConfig`.
-pub(crate) mod system;
+mod system;
+
+// The physics system the engine registry wraps, plus the shared gravity
+// constant the third-person controller matches its jump takeoff against.
+pub use system::{GRAVITY, PhysicsSystem};
 
 // Asset-to-physics conversions live with the other Rapier-type conversions so
 // the asset data types (Joint, Prop, PropBody) carry no dependency on the
