@@ -10,19 +10,40 @@
 // Only the non-engine paths are driven here; `cn run` and a bare `cn debug`
 // stand up a renderer + window and are verified by screenshot probes instead.
 
-use std::net::TcpListener;
+use std::io::ErrorKind;
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::process::{Command, Output};
+use std::time::Duration;
 
 // Path to the freshly built binary, provided by Cargo to integration tests.
 const BIN: &str = env!("CARGO_BIN_EXE_concinnity");
 
-// A localhost port with nothing listening: bind an ephemeral port, learn its
-// number, then drop the listener so a connect there is refused immediately.
+// A localhost port that reliably refuses connections. A connect is only refused
+// promptly (ECONNREFUSED) when nothing is bound to the port; the older trick of
+// binding an ephemeral port and dropping it races, because the kernel can hand
+// that just-freed port to a parallel test that then listens on it, so the CLI
+// connects instead of being refused. These candidates sit below every platform's
+// ephemeral range (Linux from 32768, macOS/Windows from 49152), which `bind(:0)`
+// never allocates, so no concurrent test can occupy one. Return the first that is
+// currently refused, both to confirm nothing is listening and to skip a port some
+// unrelated local service happens to hold.
 fn dead_port() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port.to_string()
+    const CANDIDATES: [u16; 4] = [28470, 28471, 28472, 28473];
+    for port in CANDIDATES {
+        if connect_refused(port) {
+            return port.to_string();
+        }
+    }
+    panic!("no refusing localhost port among {CANDIDATES:?}");
+}
+
+// True when connecting to `127.0.0.1:port` is refused, i.e. nothing is listening.
+fn connect_refused(port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+        Ok(_) => false,
+        Err(e) => e.kind() == ErrorKind::ConnectionRefused,
+    }
 }
 
 fn run(args: &[&str]) -> Output {

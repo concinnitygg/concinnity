@@ -318,19 +318,31 @@ pub fn watch(port: u16, target: WatchTarget, interval_ms: u64) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+
+    // A localhost port that reliably refuses connections. Binding an ephemeral
+    // port and dropping it races (the kernel can reassign it to a parallel test
+    // that then listens on it); these candidates sit below every platform's
+    // ephemeral range so `bind(:0)` never hands one out. Return the first that is
+    // currently refused. Same rationale as the helper in concinnity-cli's cli.rs.
+    fn dead_port() -> u16 {
+        const CANDIDATES: [u16; 4] = [28474, 28475, 28476, 28477];
+        for port in CANDIDATES {
+            let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return port,
+                Err(_) => continue,
+            }
+        }
+        panic!("no refusing localhost port among {CANDIDATES:?}");
+    }
 
     #[test]
     fn connect_to_dead_port_errors_fast() {
-        // Bind an ephemeral port, learn its number, then drop the listener so
-        // nothing is accepting there. Connecting must fail promptly with a
+        // Connecting to a port nothing listens on must fail promptly with a
         // clear message rather than hanging.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         let start = Instant::now();
-        let err = connect(port).expect_err("connect to a dead port must fail");
+        let err = connect(dead_port()).expect_err("connect to a dead port must fail");
         assert!(
             start.elapsed() < CONNECT_TIMEOUT,
             "a refused connection should fail well before the connect timeout"
@@ -340,9 +352,6 @@ mod tests {
 
     #[test]
     fn request_to_dead_port_errors() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        assert!(request_cmd(port, "state").is_err());
+        assert!(request_cmd(dead_port(), "state").is_err());
     }
 }
