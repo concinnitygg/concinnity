@@ -1,8 +1,8 @@
-// src/app/mesh_stream.rs
+// src/gfx/streaming/mesh.rs
 //
 // The `std`-side driver for mesh-geometry streaming.
 //
-// This is the geometry counterpart of `crate::app::texture_stream`: it owns a
+// This is the geometry counterpart of `super::texture`: it owns a
 // background payload-fetch thread and the channels that carry work to it, and
 // wraps the `no_std` policy core in `crate::gfx::streaming`. The split:
 // `gfx::streaming::StreamPlanner` decides *what* to stream using only
@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
+use super::{StreamPlanner, StreamState};
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::streaming::{StreamPlanner, StreamState};
 
 // A mesh payload decoded to GPU-ready vertex and index data.
 //

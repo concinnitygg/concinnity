@@ -151,8 +151,8 @@ pub struct GraphicsSystem {
     // (Metal). Init scratch: they are moved into the parked `StreamingState`
     // resource at the end of init, where StreamingSystem drives them each frame,
     // so they are `None` here from then on.
-    texture_streamer: Option<crate::app::texture_stream::TextureStreamer>,
-    mesh_streamer: Option<crate::app::mesh_stream::MeshStreamer>,
+    texture_streamer: Option<crate::gfx::streaming::texture::TextureStreamer>,
+    mesh_streamer: Option<crate::gfx::streaming::mesh::MeshStreamer>,
     // Maps a streamed mesh's id to its DrawObject index, so completed loads
     // and evictions are applied to the right draw. Empty when not streaming.
     mesh_stream_draw_indices: Vec<usize>,

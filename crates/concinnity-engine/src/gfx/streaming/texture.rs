@@ -1,4 +1,4 @@
-// src/app/texture_stream.rs
+// src/gfx/streaming/texture.rs
 //
 // The `std`-side half of the asset-streaming subsystem.
 //
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-use crate::gfx::streaming::{StreamPlanner, StreamState};
+use super::{StreamPlanner, StreamState};
 
 // A texture payload decoded to GPU-ready RGBA8 pixels.
 pub struct DecodedTexture {

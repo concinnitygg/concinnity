@@ -1,8 +1,8 @@
-// src/app/chunk_stream.rs
+// src/gfx/streaming/chunk.rs
 //
 // The `std`-side driver for infinite-world voxel chunk streaming.
 //
-// This is the chunk counterpart of `crate::app::mesh_stream`: it owns a
+// This is the chunk counterpart of `super::mesh`: it owns a
 // background generation thread and the channels that carry work to it, and
 // wraps the `no_std` policy core in `crate::gfx::chunk_window`. The split is
 // the same one the rest of the streaming subsystem uses: `ChunkWindow` decides
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-use crate::app::mesh_stream::DecodedMesh;
+use super::mesh::DecodedMesh;
 use crate::geometry::{
     ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,
 };

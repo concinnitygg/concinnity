@@ -65,7 +65,7 @@ impl GraphicsSystem {
                     return;
                 }
             };
-        let streamer = crate::app::texture_stream::TextureStreamer::new(
+        let streamer = crate::gfx::streaming::texture::TextureStreamer::new(
             source,
             texture_centers,
             config.budget(),
@@ -96,7 +96,7 @@ impl GraphicsSystem {
     pub(super) fn setup_mesh_streaming(
         &mut self,
         config: Option<StreamingConfig>,
-        mesh_payloads: Vec<crate::app::mesh_stream::DecodedMesh>,
+        mesh_payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
         mesh_centers: Vec<Vec<[f32; 3]>>,
         mesh_draw_indices: Vec<usize>,
         disk_backed: bool,
@@ -135,20 +135,22 @@ impl GraphicsSystem {
         // A disk-backed world spills the geometry to a scratch file so the
         // `mesh_payloads` RAM copy can be dropped; `cn debug` keeps it
         // resident since it has no disk artifacts to re-read.
-        let source: std::sync::Arc<dyn crate::app::mesh_stream::MeshPayloadSource> = if disk_backed
-        {
-            let path = crate::app::mesh_stream::default_scratch_path();
-            match crate::app::mesh_stream::write_mesh_scratch(path, &mesh_payloads) {
-                Ok(s) => std::sync::Arc::new(s),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: mesh streaming scratch file: {}", e);
-                    return;
+        let source: std::sync::Arc<dyn crate::gfx::streaming::mesh::MeshPayloadSource> =
+            if disk_backed {
+                let path = crate::gfx::streaming::mesh::default_scratch_path();
+                match crate::gfx::streaming::mesh::write_mesh_scratch(path, &mesh_payloads) {
+                    Ok(s) => std::sync::Arc::new(s),
+                    Err(e) => {
+                        tracing::error!("GraphicsSystem: mesh streaming scratch file: {}", e);
+                        return;
+                    }
                 }
-            }
-        } else {
-            std::sync::Arc::new(crate::app::mesh_stream::MemMeshSource::new(mesh_payloads))
-        };
-        let streamer = crate::app::mesh_stream::MeshStreamer::new(
+            } else {
+                std::sync::Arc::new(crate::gfx::streaming::mesh::MemMeshSource::new(
+                    mesh_payloads,
+                ))
+            };
+        let streamer = crate::gfx::streaming::mesh::MeshStreamer::new(
             source,
             mesh_centers,
             config.mesh_budget(),
@@ -275,14 +277,14 @@ impl GraphicsSystem {
             return;
         }
 
-        let source = std::sync::Arc::new(crate::app::chunk_stream::ProceduralChunkSource::new(
+        let source = std::sync::Arc::new(crate::gfx::streaming::chunk::ProceduralChunkSource::new(
             vw.seed,
             chunk_blocks,
             block_size,
             palette,
             impostor_step,
         ));
-        let streamer = crate::app::chunk_stream::ChunkStreamer::new(
+        let streamer = crate::gfx::streaming::chunk::ChunkStreamer::new(
             source,
             near_radius,
             far_radius,

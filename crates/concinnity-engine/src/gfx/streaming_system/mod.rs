@@ -13,7 +13,7 @@
 // backend, settings, and overlay states use).
 //
 // The streamers themselves (the OS-coupled worker threads + channels) live in
-// `crate::app::{texture_stream, mesh_stream, chunk_stream}`; this module only
+// `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
 // scores, dispatches, and applies their results each frame.
 
 use crate::assets::Camera3D;
@@ -44,7 +44,7 @@ pub struct CameraRelativeView {
 // builds the struct is still constructed but those fields go unread.
 #[cfg_attr(not(backend_metal), allow(dead_code))]
 pub(crate) struct ChunkStreamState {
-    pub(crate) streamer: crate::app::chunk_stream::ChunkStreamer,
+    pub(crate) streamer: crate::gfx::streaming::chunk::ChunkStreamer,
     // Maps a resident chunk's coordinate to its `DrawObject` index.
     pub(crate) draws: std::collections::BTreeMap<crate::gfx::chunk_coord::ChunkCoord, usize>,
     pub(crate) chunk_w: f32,
@@ -81,9 +81,9 @@ pub struct StreamingStats {
 pub(crate) struct StreamingState {
     // Shared albedo + normal-map texture pool streamer. `Some` only when a
     // `StreamingConfig` was declared and the backend supports it (Metal).
-    pub(crate) texture_streamer: Option<crate::app::texture_stream::TextureStreamer>,
+    pub(crate) texture_streamer: Option<crate::gfx::streaming::texture::TextureStreamer>,
     // Mesh-geometry streamer. `Some` under the same conditions as above.
-    pub(crate) mesh_streamer: Option<crate::app::mesh_stream::MeshStreamer>,
+    pub(crate) mesh_streamer: Option<crate::gfx::streaming::mesh::MeshStreamer>,
     // Maps a streamed mesh's id to its DrawObject index, so completed loads and
     // evictions are applied to the right draw. Empty when not streaming.
     pub(crate) mesh_stream_draw_indices: Vec<usize>,

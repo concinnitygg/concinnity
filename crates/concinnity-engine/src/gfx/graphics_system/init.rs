@@ -1864,7 +1864,7 @@ impl GraphicsSystem {
         let (mesh_stream_draw_indices, mesh_centers, mesh_payloads) = {
             let mut draw_indices: Vec<usize> = Vec::new();
             let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
-            let mut payloads: Vec<crate::app::mesh_stream::DecodedMesh> = Vec::new();
+            let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
             for (draw_idx, obj) in draw_objects.iter().enumerate() {
                 if !obj.cullable() {
                     continue;
@@ -1886,7 +1886,7 @@ impl GraphicsSystem {
                 // fits in u16 (the build-time splitter enforces this), so we
                 // narrow back here for DecodedMesh's per-mesh u16 indices.
                 let vbase = vstart as u32;
-                payloads.push(crate::app::mesh_stream::DecodedMesh {
+                payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
                     vertices: all_vertices[vstart..vend].to_vec(),
                     indices: all_indices[obj.index_offset..iend]
                         .iter()

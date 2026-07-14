@@ -111,10 +111,10 @@ pub(super) fn build_texture_payload_source(
     payloads: Vec<Vec<u8>>,
     locators: &[crate::ecs::PayloadLocator],
     disk_backed: bool,
-) -> Result<std::sync::Arc<dyn crate::app::texture_stream::PayloadSource>, String> {
+) -> Result<std::sync::Arc<dyn crate::gfx::streaming::texture::PayloadSource>, String> {
     if !disk_backed {
         return Ok(std::sync::Arc::new(
-            crate::app::texture_stream::MemPayloadSource::new(payloads),
+            crate::gfx::streaming::texture::MemPayloadSource::new(payloads),
         ));
     }
     let mut section_starts: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
@@ -130,14 +130,14 @@ pub(super) fn build_texture_payload_source(
                 s
             }
         };
-        disk_locators.push(crate::app::texture_stream::DiskTextureLocator {
+        disk_locators.push(crate::gfx::streaming::texture::DiskTextureLocator {
             path,
             file_offset: start + loc.offset,
             len: loc.len,
         });
     }
     Ok(std::sync::Arc::new(
-        crate::app::texture_stream::DiskPayloadSource::new(disk_locators),
+        crate::gfx::streaming::texture::DiskPayloadSource::new(disk_locators),
     ))
 }
 
