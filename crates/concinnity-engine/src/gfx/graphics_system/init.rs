@@ -2611,22 +2611,6 @@ impl GraphicsSystem {
             setting_cmd_cursor: crate::ecs::EventCursor::default(),
         });
 
-        // Hand the overlay build inputs assembled above (font atlases, sprite
-        // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
-        // draw list from them each frame before this system submits it.
-        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
-            fonts: std::mem::take(&mut self.loaded_fonts),
-            sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
-            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
-            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
-            clip_rects: std::mem::take(&mut self.clip_rects),
-            initial_viewport: self
-                .backend
-                .as_ref()
-                .map(|b| b.logical_size())
-                .unwrap_or((0.0, 0.0)),
-        });
-
         // Hand the streaming pools built above to StreamingSystem: it drives
         // them each frame (against the parked backend) and publishes the
         // camera-relative view GraphicsSystem draws with. `frame_count` starts
