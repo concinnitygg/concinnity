@@ -43,17 +43,11 @@ use crate::blob::BlobData;
 use crate::gfx::profile::FrameProfile;
 use crate::result::CnResult;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepResult {
-    // Keep running.
-    Continue,
-    // This system is finished -- remove it from the active set.
-    // The world exits naturally when no systems remain.
-    Done,
-    // Hard stop -- halt everything immediately.
-    #[allow(dead_code)]
-    Stop,
-}
+// The `System` behavior trait + its `StepResult` control signal are renderer-free
+// (they name only `PipelineContext`), so they live in concinnity-core; re-export
+// them under the historical `crate::ecs::*` paths for every reader (engine
+// systems, the `define_systems!` table, and the editor's hook drive).
+pub use concinnity_core::ecs::{StepResult, System};
 
 // A render backend transplanted out of a previous world, carried into a freshly
 // built world so its GraphicsSystem reuses the live GPU device + window instead
@@ -121,16 +115,6 @@ pub struct DisabledSettingRows(pub std::collections::HashSet<String>);
 // row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
 #[derive(Debug, Clone, Default)]
 pub struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
-
-// System -- has behavior, receives a PipelineContext each tick. Every system
-// is internal engine code: `World::build_internal_systems` constructs it from
-// world components (via the system's own `new(..)`), so a system is never
-// loaded from or written to a blob. `init` runs once at `World::start`; `step`
-// runs every tick.
-pub trait System: Sized + std::fmt::Debug + 'static {
-    fn init(&mut self, _ctx: &mut PipelineContext) {}
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult;
-}
 
 // The system table. Generates the `SystemAsset` value enum that holds a
 // constructed system and dispatches `init` / `step`, plus the `SYSTEMS`

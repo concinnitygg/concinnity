@@ -15,5 +15,6 @@ pub mod ecs;
 pub mod geometry;
 pub mod gfx;
 pub mod paths;
+pub mod resource;
 pub mod result;
 pub mod shutdown;
