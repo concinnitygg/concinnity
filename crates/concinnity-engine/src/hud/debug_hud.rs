@@ -85,6 +85,25 @@ fn camera_text(pose: Option<([f32; 3], f32, f32)>) -> String {
     }
 }
 
+// Build the system-budget chip text from the process-level thread + memory
+// budgets: the job pool's worker count against the machine's core count, and
+// the process resident set against the memory budget. Each half degrades
+// independently -- a missing `ThreadBudget` / `MemoryBudget` resource (the
+// editor's in-memory preview) or an unavailable RSS query renders `--` rather
+// than a stale or zeroed figure -- so the chip stays informative in any context.
+fn sys_text(threads: Option<(usize, usize)>, rss: Option<u64>, budget_mib: Option<u64>) -> String {
+    let threads_part = match threads {
+        Some((job, cores)) => format!("threads {job}/{cores}"),
+        None => "threads --".to_string(),
+    };
+    let mem_part = match (rss, budget_mib) {
+        (Some(rss), Some(budget)) => format!("mem {}/{} MB", rss / (1024 * 1024), budget),
+        (Some(rss), None) => format!("mem {} MB", rss / (1024 * 1024)),
+        (None, _) => "mem -- MB".to_string(),
+    };
+    format!("{threads_part} | {mem_part}")
+}
+
 /// Draws the developer debug HUD: a multi-line `PASSES` chip listing the top
 /// render-graph passes of the last frame, a `MOUSE` chip with the cursor
 /// position, and a `CAM` chip with the live camera pose. The chips are anchored
@@ -102,6 +121,7 @@ pub struct DebugHudSystem {
     passes_label: Option<AssetId>,
     mouse_label: Option<AssetId>,
     camera_label: Option<AssetId>,
+    sys_label: Option<AssetId>,
     // Whether the HUD is currently shown. Toggled by F1; hidden by default.
     visible: bool,
     // Most recent per-pass GPU microseconds (a snapshot of
@@ -122,6 +142,7 @@ impl DebugHudSystem {
             passes_label: config.passes_label,
             mouse_label: config.mouse_label,
             camera_label: config.camera_label,
+            sys_label: config.sys_label,
             visible: false,
             pass_times: Vec::new(),
             mouse_pos: (0.0, 0.0),
@@ -163,6 +184,7 @@ impl System for DebugHudSystem {
             Self::write_chip(ctx, self.passes_label, String::new());
             Self::write_chip(ctx, self.mouse_label, String::new());
             Self::write_chip(ctx, self.camera_label, String::new());
+            Self::write_chip(ctx, self.sys_label, String::new());
             return StepResult::Continue;
         }
 
@@ -179,6 +201,17 @@ impl System for DebugHudSystem {
             .next()
             .map(|c| (c.position, c.yaw, c.pitch));
 
+        // Process-level thread + memory budgets (published by App::start) and
+        // the live process RSS. Copied out to owned values before the mutable
+        // chip write; each half is optional and renders `--` when absent.
+        let threads = ctx
+            .resource::<crate::app::budget::ThreadBudget>()
+            .map(|t| (t.job_threads, t.total_cores));
+        let budget_mib = ctx
+            .resource::<crate::app::budget::MemoryBudget>()
+            .map(|b| b.budget_mib());
+        let rss = crate::app::sysmem::process_resident_bytes();
+
         Self::write_chip(ctx, self.passes_label, passes_text(&self.pass_times));
         Self::write_chip(
             ctx,
@@ -186,6 +219,7 @@ impl System for DebugHudSystem {
             mouse_text(self.mouse_pos.0, self.mouse_pos.1),
         );
         Self::write_chip(ctx, self.camera_label, camera_text(self.camera_pose));
+        Self::write_chip(ctx, self.sys_label, sys_text(threads, rss, budget_mib));
         StepResult::Continue
     }
 }
@@ -294,6 +328,39 @@ mod tests {
         assert_eq!(camera_text(None), "");
     }
 
+    #[test]
+    fn sys_text_reports_threads_and_memory_when_known() {
+        // Both budgets and the RSS present: the full "threads j/c | mem u/b MB"
+        // line, memory truncated to whole MiB.
+        assert_eq!(
+            sys_text(Some((11, 12)), Some(512 * 1024 * 1024), Some(16384)),
+            "threads 11/12 | mem 512/16384 MB"
+        );
+    }
+
+    #[test]
+    fn sys_text_degrades_each_half_independently() {
+        // No ThreadBudget: the thread half reads `--`; the memory half still
+        // renders from the RSS + budget.
+        assert_eq!(
+            sys_text(None, Some(256 * 1024 * 1024), Some(8192)),
+            "threads -- | mem 256/8192 MB"
+        );
+        // No budget resource: the memory half drops the "/ budget" tail.
+        assert_eq!(
+            sys_text(Some((3, 4)), Some(256 * 1024 * 1024), None),
+            "threads 3/4 | mem 256 MB"
+        );
+        // No RSS query: the memory half reads `--`.
+        assert_eq!(
+            sys_text(Some((3, 4)), None, Some(8192)),
+            "threads 3/4 | mem -- MB"
+        );
+        // Nothing available (the editor's in-memory preview on an unsupported
+        // target): a fully placeholdered line, never a panic.
+        assert_eq!(sys_text(None, None, None), "threads -- | mem -- MB");
+    }
+
     // A DebugHud component spawns the internal debug-HUD system.
     #[test]
     fn debug_hud_component_spawns_internal_system() {
@@ -306,7 +373,7 @@ mod tests {
         assert_eq!(names, ["DebugHud"]);
     }
 
-    // Build a world with a DebugHud wired to three chips, a camera (no
+    // Build a world with a DebugHud wired to four chips, a camera (no
     // controller, so no camera system), and pre-filled chip labels.
     fn hud_world() -> crate::ecs::World {
         let mut world = crate::ecs::World::new_empty();
@@ -314,8 +381,9 @@ mod tests {
             passes_label: Some(AssetId(1)),
             mouse_label: Some(AssetId(2)),
             camera_label: Some(AssetId(3)),
+            sys_label: Some(AssetId(4)),
         });
-        for id in [1u32, 2, 3] {
+        for id in [1u32, 2, 3, 4] {
             world.add_component(TextLabel {
                 asset_id: AssetId(id),
                 content: "stale".to_string(),
@@ -356,6 +424,7 @@ mod tests {
         assert_eq!(chip(&world, 1), "");
         assert_eq!(chip(&world, 2), "");
         assert_eq!(chip(&world, 3), "");
+        assert_eq!(chip(&world, 4), "");
     }
 
     // The F1 toggle (a FrameInput with hud_toggle) reveals the HUD, so the same
@@ -376,5 +445,43 @@ mod tests {
             chip(&world, 3),
             "CAM 1.00 2.00 3.00\nyaw 0.500 pitch -0.200"
         );
+    }
+
+    // With the HUD revealed and both budget resources published, the sys chip
+    // renders the thread + memory line off the live budgets and process RSS.
+    #[test]
+    fn toggle_reveals_sys_chip_from_budgets() {
+        use crate::app::budget::{MemoryBudget, ThreadBudget};
+
+        let mut world = hud_world();
+        world.start().unwrap();
+        world.insert_resource(ThreadBudget {
+            total_cores: 12,
+            job_threads: 11,
+        });
+        // The budget defaults to a fraction of total RAM, so derive the expected
+        // MiB from the same value rather than assuming it equals total RAM.
+        let budget = MemoryBudget::compute(Some(16 * 1024 * 1024 * 1024), 0);
+        world.insert_resource(budget);
+        world.insert_resource(FrameInput {
+            hud_toggle: true,
+            ..Default::default()
+        });
+        world.step();
+        let sys = chip(&world, 4);
+        assert!(sys.starts_with("threads 11/12 | mem "), "{sys}");
+        // RSS is available on macOS / Linux / Windows; elsewhere it reads `--`.
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            assert!(
+                sys.ends_with(&format!("/{} MB", budget.budget_mib())),
+                "{sys}"
+            );
+        } else {
+            assert!(sys.ends_with("mem -- MB"), "{sys}");
+        }
     }
 }

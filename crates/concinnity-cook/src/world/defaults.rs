@@ -59,6 +59,7 @@ pub(crate) fn inject_engine_defaults(
             &[
                 ("fps_label", "fps_chip"),
                 ("vram_label", "vram_chip"),
+                ("ram_label", "ram_chip"),
                 ("ev_label", "ev_chip"),
                 ("edr_label", "edr_chip"),
             ],
@@ -75,6 +76,7 @@ pub(crate) fn inject_engine_defaults(
                 ("passes_label", "passes_chip"),
                 ("mouse_label", "mouse_chip"),
                 ("camera_label", "camera_chip"),
+                ("sys_label", "sys_chip"),
             ],
         )?;
     }
@@ -494,12 +496,12 @@ mod tests {
         assert!(names_of_type(&assets, "stathud").is_empty());
         assert_eq!(names_of_type(&assets, "debughud"), vec!["debug_hud"]);
         let chips = names_of_type(&assets, "textlabel");
-        for chip in ["passes_chip", "mouse_chip", "camera_chip"] {
+        for chip in ["passes_chip", "mouse_chip", "camera_chip", "sys_chip"] {
             assert!(chips.contains(&chip.to_string()), "missing {chip}");
         }
         assert!(!chips.contains(&"fps_chip".to_string()));
         assert_eq!(names_of_type(&assets, "font"), vec![HUD_FONT_NAME]);
-        assert_eq!(report.injected.len(), 1 + 3 + 1);
+        assert_eq!(report.injected.len(), 1 + 4 + 1);
     }
 
     #[test]
@@ -518,16 +520,18 @@ mod tests {
         for chip in [
             "fps_chip",
             "vram_chip",
+            "ram_chip",
             "ev_chip",
             "edr_chip",
             "passes_chip",
             "mouse_chip",
             "camera_chip",
+            "sys_chip",
         ] {
             assert!(chips.contains(&chip.to_string()), "missing {chip}");
         }
         assert_eq!(names_of_type(&assets, "font"), vec![HUD_FONT_NAME]);
-        assert_eq!(report.injected.len(), 2 + 7 + 1);
+        assert_eq!(report.injected.len(), 2 + 9 + 1);
     }
 
     #[test]

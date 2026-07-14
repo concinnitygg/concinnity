@@ -63,33 +63,39 @@ impl GraphicsSystem {
         if let Some(w) = ctx.drain::<Window>().into_iter().next() {
             self.window_args = w;
         }
-        // Capture the DebugHud chip ids (cursor, camera, passes stack order) so
-        // the frame step can anchor them to the top-right of the window. Passes
-        // is last because it grows/shrinks with the frame's step count, so
-        // keeping it at the bottom leaves the fixed-height chips unshifted. The
-        // DebugHud component is queried (not drained) by its system, so it is
-        // still present here; absent fields are skipped.
+        // Capture the DebugHud chip ids (cursor, camera, sys, passes stack
+        // order) so the frame step can anchor them to the top-right of the
+        // window. Passes is last because it grows/shrinks with the frame's step
+        // count, so keeping it at the bottom leaves the fixed-height chips
+        // unshifted. The DebugHud component is queried (not drained) by its
+        // system, so it is still present here; absent fields are skipped.
         self.debug_hud_chips = ctx
             .query::<crate::assets::DebugHud>()
             .next()
             .map(|d| {
-                [d.mouse_label, d.camera_label, d.passes_label]
+                [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
                     .into_iter()
                     .flatten()
                     .collect()
             })
             .unwrap_or_default();
-        // Capture the StatHud chip ids (fps, vram, ev, edr strip order) so the
-        // frame step can pack them tight from the top-left. Like DebugHud the
-        // component is queried (not drained), so it is still present here.
+        // Capture the StatHud chip ids (fps, vram, ram, ev, edr strip order) so
+        // the frame step can pack them tight from the top-left. Like DebugHud
+        // the component is queried (not drained), so it is still present here.
         self.stat_hud_chips = ctx
             .query::<crate::assets::StatHud>()
             .next()
             .map(|s| {
-                [s.fps_label, s.vram_label, s.ev_label, s.edr_label]
-                    .into_iter()
-                    .flatten()
-                    .collect()
+                [
+                    s.fps_label,
+                    s.vram_label,
+                    s.ram_label,
+                    s.ev_label,
+                    s.edr_label,
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
             })
             .unwrap_or_default();
         if let Some(m) = user_graphics.window_mode {
