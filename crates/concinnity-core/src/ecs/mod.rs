@@ -12,7 +12,18 @@
 // lives in the client crate's `ecs` module, which re-exports everything here
 // under the historical `crate::ecs::*` paths.
 pub mod asset_id;
+mod protocol;
 mod registry;
+
+// Renderer-free per-frame protocol resources the runtime systems publish and
+// read to coordinate a tick (menu state, frame-rate cap, HUD prefs, cursor +
+// dropdown views). They name no renderer type, so they live here where the
+// physics / audio subsystem crates can reach them; the client `ecs` module
+// re-exports them under the historical `crate::ecs::*` paths.
+pub use protocol::{
+    CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
+    OpenDropdown,
+};
 
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;

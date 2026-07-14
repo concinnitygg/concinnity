@@ -26,6 +26,15 @@ pub use concinnity_core::ecs::{
     PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, asset_id,
 };
 
+// Renderer-free per-frame protocol resources, moved to concinnity-core so the
+// physics / audio subsystem crates can reach them without a renderer dependency.
+// Re-exported here to keep the historical `crate::ecs::*` paths for every reader
+// (engine systems and the editor's hook drive).
+pub use concinnity_core::ecs::{
+    CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
+    OpenDropdown,
+};
+
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
 // generated client-side from the system table (see `registry`).
 pub use registry::{SYSTEMS, SystemAsset};
@@ -45,45 +54,6 @@ pub enum StepResult {
     #[allow(dead_code)]
     Stop,
 }
-
-// Per-frame menu state, published as a resource by GraphicsSystem (which runs
-// first in the schedule) and read by the simulation systems the same tick.
-// `true` while any menu view is open: physics and animation then freeze so they
-// stop consuming resources behind the menu. Each system keeps its own clock
-// aligned across the freeze, so resuming costs one normal frame -- no catch-up
-// burst, no pose jump.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MenuActive(pub bool);
-
-// The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
-// (from GraphicsConfig at init, refreshed by the settings row's live change)
-// and read by the App-level frame pacer before each world step. Independent of
-// the quality preset (a user/hardware preference, like vsync).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FrameRateCap(pub u32);
-
-// An external per-frame driver (the `cn editor` HUD) can force the world's
-// "menu active" state through this resource: `Some(true)` frees the cursor and
-// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
-// cursor and lets the world run (play mode), both regardless of whether the
-// world has its own menu UI. GraphicsSystem also puts the backend in menu mode
-// while it is set, so a click frees to a UI action instead of re-capturing the
-// camera. `None` (the default absence) leaves the world's own menu logic in
-// charge; a shipped runtime never publishes it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MenuOverride(pub Option<bool>);
-
-// Per-frame draw-layer overrides for HUD Sprites / TextLabels / TextInputs, keyed
-// by asset id and published by the `cn editor` HUD so its floating panels occlude
-// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
-// so two overlapping panels' contents merge -- one panel's text draws over the
-// other's background. GraphicsSystem stable-sorts the overlay calls by this layer
-// (higher draws on top) when the map is non-empty, so the focused panel's whole
-// content sits above the others'. An id absent from the map is layer 0; an empty /
-// absent resource (the shipped runtime) leaves draw order at insertion order,
-// unchanged.
-#[derive(Debug, Clone, Default)]
-pub struct HudLayers(pub std::collections::HashMap<asset_id::AssetId, i32>);
 
 // A render backend transplanted out of a previous world, carried into a freshly
 // built world so its GraphicsSystem reuses the live GPU device + window instead
@@ -136,30 +106,6 @@ pub struct ActiveSceneReel {
     pub epoch: std::time::Instant,
 }
 
-// The latest sampled cursor state (window pixels, top-left origin), published
-// by InputSystem after each poll. GraphicsSystem reads it when building the
-// next frame's draw list: `follow_cursor` sprites are positioned a frame after
-// the input that moved them, and the in-engine cursor stops drawing once the
-// real cursor has left the window (`outside_window` is false in fullscreen,
-// where the backend confines the cursor, and on backends without window-bounds
-// tracking).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CursorState {
-    pub pos: (f32, f32),
-    pub outside_window: bool,
-}
-
-// Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
-// (which runs first) and read by `StatHudSystem` the same tick. Each field is
-// the effective on/off for that chip: the master "Display performance stats"
-// toggle AND the per-readout toggle from the video settings. Absent (a HUD-only
-// unit test with no GraphicsSystem) is treated as both shown.
-#[derive(Debug, Clone, Copy)]
-pub struct HudPrefs {
-    pub show_fps: bool,
-    pub show_vram: bool,
-}
-
 // Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`
 // while "Display performance stats" is off). Published each frame by
 // GraphicsSystem and read by `UiInputSystem`, which makes a matching row inert
@@ -175,33 +121,6 @@ pub struct DisabledSettingRows(pub std::collections::HashSet<String>);
 // row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
 #[derive(Debug, Clone, Default)]
 pub struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
-
-// A settings dropdown's open floating option list, or `None` when none is open.
-// `UiInputSystem` owns the interaction state (open on a `setting:<key>:open`
-// click, close on a pick / outside click / Escape / scroll) and publishes this
-// each frame; GraphicsSystem reads it the next tick to draw the list on top of
-// the menu. GraphicsSystem runs first, so the list appears one frame after the
-// row is clicked (the same lag the cursor + cycle labels already carry).
-#[derive(Debug, Clone, Default)]
-pub struct OpenDropdown(pub Option<DropdownView>);
-
-// What GraphicsSystem needs to draw an open dropdown list: the anchor control
-// rect (reference space), the option labels top-to-bottom, the selected +
-// hovered OPTION indices to highlight, the scroll position (`first`, the top
-// shown option of a list longer than the layout window), and the row value
-// label's font / scale / color so the list text matches the row it drops from.
-#[derive(Debug, Clone)]
-pub struct DropdownView {
-    pub anchor: [f32; 4],
-    pub options: Vec<String>,
-    pub selected: usize,
-    pub first: usize,
-    pub hovered: Option<usize>,
-    pub view: Option<asset_id::AssetId>,
-    pub font: Option<FontHandle>,
-    pub scale: f32,
-    pub color: [f32; 3],
-}
 
 // System -- has behavior, receives a PipelineContext each tick. Every system
 // is internal engine code: `World::build_internal_systems` constructs it from
