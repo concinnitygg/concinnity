@@ -348,7 +348,11 @@ impl MeshStreamer {
             match result.decoded {
                 Ok(mesh) => match upload(result.id, &mesh.vertices, &mesh.indices) {
                     Ok(()) => {
-                        self.planner.mark_resident(result.id, frame);
+                        // Resident footprint is the vertex + index buffer bytes.
+                        let bytes = (mesh.vertices.len() * core::mem::size_of::<Vertex>()
+                            + mesh.indices.len() * core::mem::size_of::<u16>())
+                            as u64;
+                        self.planner.mark_resident(result.id, frame, bytes);
                         applied += 1;
                     }
                     Err(e) => {
@@ -366,8 +370,9 @@ impl MeshStreamer {
                 Err(e) => {
                     tracing::warn!("mesh stream: load of mesh {} failed: {}", result.id, e);
                     // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the mesh keeps its empty region.
-                    self.planner.mark_resident(result.id, frame);
+                    // planner stops retrying; the mesh keeps its empty region,
+                    // which occupies no streamed bytes.
+                    self.planner.mark_resident(result.id, frame, 0);
                 }
             }
         }

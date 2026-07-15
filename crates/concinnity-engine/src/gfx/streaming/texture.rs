@@ -236,14 +236,17 @@ impl TextureStreamer {
             match result.decoded {
                 Ok(tex) => {
                     upload(result.id, tex.width, tex.height, &tex.pixels);
-                    self.planner.mark_resident(result.id, frame);
+                    // Resident footprint is the decoded RGBA8 buffer.
+                    self.planner
+                        .mark_resident(result.id, frame, tex.pixels.len() as u64);
                     applied += 1;
                 }
                 Err(e) => {
                     tracing::warn!("texture stream: load of slot {} failed: {}", result.id, e);
                     // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the slot keeps its placeholder.
-                    self.planner.mark_resident(result.id, frame);
+                    // planner stops retrying; the slot keeps its placeholder,
+                    // which occupies no streamed bytes.
+                    self.planner.mark_resident(result.id, frame, 0);
                 }
             }
         }
