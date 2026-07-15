@@ -288,7 +288,7 @@ pub struct TransparentView {
 
 // One Gerstner wave coefficient set, packed for MSL float4 alignment.
 // Matches `WaterWave` in `shaders/water.metal`. 32 bytes.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct WaterWaveGpu {
     // `[direction.x, direction.y, amplitude, wavelength]`.
@@ -307,7 +307,7 @@ pub const WATER_MAX_WAVES: usize = 4;
 // compiler packs `float3` and adjacent scalars: that packing rule has
 // already bitten this struct once.
 // 48 + 32 + 32 × WATER_MAX_WAVES = 208 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {
     // `[x, y, z, _]`: world-space surface centre.
@@ -340,7 +340,7 @@ pub struct WaterParams {
 // vertex + fragment buffer(6). Vec3-ish fields are `[f32; 4]` so the layout is
 // byte-identical to MSL `float4`. Matches `GlassParams` in
 // `shaders/glass.metal`. 64 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GlassParams {
     // `[x, y, z, _]`: world-space panel centre.
@@ -375,7 +375,7 @@ pub struct GlassParams {
 // fragment uses the interpolated per-vertex world normal. Matches
 // `GlassMeshParams` in `shaders/glass_mesh_rt.metal`. 96 bytes (model is the
 // first field, so its 16-byte GPU alignment is satisfied at offset 0).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GlassMeshParams {
     // Column-major local-to-world model matrix.

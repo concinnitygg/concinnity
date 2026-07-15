@@ -68,14 +68,12 @@ pub(in crate::metal) struct TransparentDraw {
     pub(in crate::metal) sort_distance: f32,
 }
 
-// Copy a `#[repr(C)] Copy` uniform struct into an owned byte buffer for a
+// Copy a `#[repr(C)]` uniform struct into an owned byte buffer for a
 // [`TransparentDraw::params`] blob. The bytes are consumed immediately by
 // `setVertexBytes` / `setFragmentBytes` (which copy into the command buffer),
 // so the buffer's 1-byte alignment is irrelevant to Metal.
-pub(in crate::metal) fn bytes_of<T: Copy>(value: &T) -> Vec<u8> {
-    let ptr = value as *const T as *const u8;
-    // Safety: `T: Copy` is plain old data; we read exactly its size in bytes.
-    unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<T>()) }.to_vec()
+pub(in crate::metal) fn bytes_of<T: bytemuck::NoUninit>(value: &T) -> Vec<u8> {
+    bytemuck::bytes_of(value).to_vec()
 }
 
 impl MtlContext {

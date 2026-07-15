@@ -15,7 +15,7 @@ use objc2_metal::{
     MTLRenderCommandEncoder as _, MTLResourceOptions, MTLScissorRect, MTLStoreAction, MTLTexture,
 };
 
-use crate::gfx::render_types::{TextDrawCall, TextVertex};
+use crate::gfx::render_types::TextDrawCall;
 use crate::metal::context::MtlContext;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
@@ -161,18 +161,8 @@ impl MtlContext {
                     );
                 }
 
-                let vert_bytes_slice = unsafe {
-                    std::slice::from_raw_parts(
-                        call.vertices.as_ptr() as *const u8,
-                        call.vertices.len() * std::mem::size_of::<TextVertex>(),
-                    )
-                };
-                let idx_bytes_slice = unsafe {
-                    std::slice::from_raw_parts(
-                        call.indices.as_ptr() as *const u8,
-                        call.indices.len() * std::mem::size_of::<u16>(),
-                    )
-                };
+                let vert_bytes_slice: &[u8] = bytemuck::cast_slice(&call.vertices);
+                let idx_bytes_slice: &[u8] = bytemuck::cast_slice(&call.indices);
                 let text_vbuf = unsafe {
                     let ptr = std::ptr::NonNull::new(vert_bytes_slice.as_ptr() as *mut _)
                         .ok_or("text vertex slice is empty")?;
