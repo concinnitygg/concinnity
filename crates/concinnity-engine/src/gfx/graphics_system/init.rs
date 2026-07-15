@@ -2621,6 +2621,10 @@ impl GraphicsSystem {
         // can reduce it and the release can restore it exactly.
         let texture_baseline_budget = self.texture_streamer.as_ref().and_then(|s| s.byte_budget());
         let mesh_baseline_budget = self.mesh_streamer.as_ref().and_then(|s| s.byte_budget());
+        let chunk_baseline_budget = self
+            .chunk_stream
+            .as_ref()
+            .and_then(|cs| cs.streamer.byte_budget());
         ctx.insert_resource(crate::gfx::streaming_system::StreamingState {
             texture_streamer: self.texture_streamer.take(),
             mesh_streamer: self.mesh_streamer.take(),
@@ -2630,6 +2634,7 @@ impl GraphicsSystem {
             frames_in_flight: self.frames_in_flight,
             texture_baseline_budget,
             mesh_baseline_budget,
+            chunk_baseline_budget,
             pressure_stage: crate::gfx::streaming_system::pressure::StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,

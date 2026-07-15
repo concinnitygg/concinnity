@@ -82,6 +82,9 @@ pub struct StreamingStats {
     pub texture_bytes: Option<(u64, u64)>,
     // `(resident_bytes, byte_budget)` for the mesh pool when streaming.
     pub mesh_bytes: Option<(u64, u64)>,
+    // `(resident_bytes, byte_budget)` for the chunk pool when a VoxelWorld is
+    // streaming; `byte_budget` is 0 when the GPU reported no memory figure.
+    pub chunk_bytes: Option<(u64, u64)>,
 }
 
 // Live process-RAM pressure on streaming, published by StreamingSystem on each
@@ -122,10 +125,12 @@ pub(crate) struct StreamingState {
     // `frame_count + frames_in_flight`.
     pub(crate) frames_in_flight: usize,
     // Baseline (derived at setup) resident-byte budget for each pool; `None`
-    // when the pool runs count-only. The RAM back-off valve reduces the live
-    // budget below this under deep pressure and restores it exactly on release.
+    // when the pool runs count-only (chunks: when no VoxelWorld streams or the
+    // GPU reports no memory). The RAM back-off valve reduces the live budget
+    // below this under deep pressure and restores it exactly on release.
     pub(crate) texture_baseline_budget: Option<u64>,
     pub(crate) mesh_baseline_budget: Option<u64>,
+    pub(crate) chunk_baseline_budget: Option<u64>,
     // Process-RAM back-off valve state (see `pressure`), re-evaluated on the
     // throttled RSS sample. `pressure_factor` is the byte-budget scale currently
     // applied to the pools (1.0 = baseline); `last_sampled_rss` feeds the
@@ -321,16 +326,23 @@ impl StreamingState {
         if let Some(cs) = &mut self.chunk_stream {
             let camera_chunk = cs.streamer.camera_chunk(cam_pos);
             let retire_frame = self.frame_count + self.frames_in_flight as u64;
-            for coord in cs.streamer.plan_and_dispatch(camera_chunk) {
-                if let Some(draw_idx) = cs.draws.remove(&coord)
-                    && let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame)
-                {
-                    tracing::warn!(
-                        "StreamingSystem: chunk remove ({},{}): {}",
-                        coord.x,
-                        coord.z,
-                        e
-                    );
+            // Stage 1 of the RAM valve freezes chunk residency, mirroring the
+            // texture/mesh gate: skipping plan_and_dispatch stops both new
+            // generation and window eviction, so residency holds steady while
+            // the drain below keeps applying in-flight loads. Stage 2 keeps
+            // planning under a reduced byte budget, so the window clamp evicts.
+            if !loads_frozen {
+                for coord in cs.streamer.plan_and_dispatch(camera_chunk) {
+                    if let Some(draw_idx) = cs.draws.remove(&coord)
+                        && let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame)
+                    {
+                        tracing::warn!(
+                            "StreamingSystem: chunk remove ({},{}): {}",
+                            coord.x,
+                            coord.z,
+                            e
+                        );
+                    }
                 }
             }
             // The camera crossed into a new chunk: move the render origin to it
@@ -448,6 +460,13 @@ impl StreamingState {
         {
             streamer.set_byte_budget(Some(pressure::scale_budget(baseline, factor)));
         }
+        // The chunk pool's byte clamp responds to a reduced budget by shrinking
+        // its effective view radius, dropping the far impostor band first.
+        if let (Some(cs), Some(baseline)) = (self.chunk_stream.as_mut(), self.chunk_baseline_budget)
+        {
+            cs.streamer
+                .set_byte_budget(Some(pressure::scale_budget(baseline, factor)));
+        }
     }
 
     // `(resident, pending, unloaded)` counts for each active streaming pool.
@@ -467,6 +486,12 @@ impl StreamingState {
                 .mesh_streamer
                 .as_ref()
                 .map(|s| (s.resident_bytes(), s.byte_budget().unwrap_or(0))),
+            chunk_bytes: self.chunk_stream.as_ref().map(|cs| {
+                (
+                    cs.streamer.resident_bytes(),
+                    cs.streamer.byte_budget().unwrap_or(0),
+                )
+            }),
         }
     }
 }
@@ -512,6 +537,7 @@ mod tests {
             frames_in_flight: 2,
             texture_baseline_budget: None,
             mesh_baseline_budget: None,
+            chunk_baseline_budget: None,
             pressure_stage: StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,

@@ -14,6 +14,10 @@ use super::*;
 // render targets, the chunk pool, and slack.
 const TEXTURE_VRAM_FRACTION: f64 = 0.50;
 const MESH_VRAM_FRACTION: f64 = 0.30;
+// Infinite voxel-world chunk residency. Chunk streaming is not
+// StreamingConfig-gated, so there is no user override: the budget is always
+// derived from the GPU's reported memory, keeping this pool schema-free.
+const CHUNK_VRAM_FRACTION: f64 = 0.15;
 
 // Resolve a streaming pool's resident-byte budget. A non-zero `override_mb`
 // wins, converted from mebibytes. Otherwise the budget is `fraction` of the
@@ -302,6 +306,14 @@ impl GraphicsSystem {
         let chunk_idx_bytes =
             (near_chunks * full_idx + far_chunks * impostor_idx).min(MAX_HEADROOM) as usize;
 
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = self
+            .backend
+            .as_deref()
+            .map(|b| b.gpu_profile().memory_budget_bytes)
+            .unwrap_or(0);
+
         // Backend-specific buffer growth + SRV/descriptor setup. Metal binds
         // chunk textures per draw and ignores the slot args (its impl drops
         // them); DirectX and Vulkan bake one shared (albedo, normal)
@@ -327,7 +339,7 @@ impl GraphicsSystem {
             palette,
             impostor_step,
         ));
-        let streamer = crate::gfx::streaming::chunk::ChunkStreamer::new(
+        let mut streamer = crate::gfx::streaming::chunk::ChunkStreamer::new(
             source,
             near_radius,
             far_radius,
@@ -335,8 +347,13 @@ impl GraphicsSystem {
             chunk_w,
             chunk_d,
         );
+        // Chunk streaming has no user override (it is not StreamingConfig-gated),
+        // so the byte budget is always the VRAM-derived fraction; a GPU that
+        // reports nothing leaves the pool on its pure radius-only policy.
+        let byte_budget = derive_byte_budget(0, gpu_memory_bytes, CHUNK_VRAM_FRACTION);
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: VoxelWorld streaming enabled (seed {}, {}x{}x{} blocks, near-radius {}, impostor-radius {} (step {}), budget {}/frame, {} KiB chunk headroom)",
+            "GraphicsSystem: VoxelWorld streaming enabled (seed {}, {}x{}x{} blocks, near-radius {}, impostor-radius {} (step {}), budget {}/frame, byte budget {}, {} KiB chunk headroom)",
             vw.seed,
             chunk_blocks[0],
             chunk_blocks[1],
@@ -349,6 +366,10 @@ impl GraphicsSystem {
             },
             impostor_step,
             vw.load_budget(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
             (chunk_vtx_bytes + chunk_idx_bytes) / 1024,
         );
         self.chunk_stream = Some(crate::gfx::streaming_system::ChunkStreamState {
@@ -398,6 +419,11 @@ mod tests {
         assert_eq!(
             derive_byte_budget(0, vram, MESH_VRAM_FRACTION),
             Some((vram as f64 * 0.30) as u64)
+        );
+        // Chunk streaming derives 15% of the GPU's reported memory.
+        assert_eq!(
+            derive_byte_budget(0, vram, CHUNK_VRAM_FRACTION),
+            Some((vram as f64 * 0.15) as u64)
         );
     }
 

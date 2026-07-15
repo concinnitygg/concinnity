@@ -72,12 +72,18 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 None => serde_json::Value::Null,
             };
             // The chunk pool has no `unloaded` count -- an infinite world has
-            // no bounded set of not-yet-loaded chunks.
-            let chunk_pool = |s: &Option<(usize, usize)>| match s {
-                Some((resident, pending)) => serde_json::json!({
-                    "resident": resident,
-                    "pending": pending,
-                }),
+            // no bounded set of not-yet-loaded chunks. Its resident bytes +
+            // byte budget ride alongside so the byte clamp is observable.
+            let chunk_pool = |s: &Option<(usize, usize)>, bytes: &Option<(u64, u64)>| match s {
+                Some((resident, pending)) => {
+                    let (resident_bytes, byte_budget) = bytes.unwrap_or((0, 0));
+                    serde_json::json!({
+                        "resident": resident,
+                        "pending": pending,
+                        "resident_bytes": resident_bytes,
+                        "byte_budget": byte_budget,
+                    })
+                }
                 None => serde_json::Value::Null,
             };
             // The RAM back-off valve reading rides alongside the pool counts,
@@ -95,7 +101,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 "frame": state.frame,
                 "texture": pool(&state.streaming.texture, &state.streaming.texture_bytes),
                 "mesh": pool(&state.streaming.mesh, &state.streaming.mesh_bytes),
-                "chunk": chunk_pool(&state.streaming.chunk),
+                "chunk": chunk_pool(&state.streaming.chunk, &state.streaming.chunk_bytes),
                 "pressure": pressure,
             })
         }
@@ -505,6 +511,7 @@ mod tests {
                 chunk: Some((7, 5)),
                 texture_bytes: Some((2048, 4096)),
                 mesh_bytes: Some((1024, 0)),
+                chunk_bytes: Some((3072, 8192)),
             },
             ..Default::default()
         };
@@ -525,6 +532,9 @@ mod tests {
         assert_eq!(r["chunk"]["resident"], 7);
         assert_eq!(r["chunk"]["pending"], 5);
         assert!(r["chunk"]["unloaded"].is_null());
+        // The chunk byte clamp's resident bytes + derived budget ride alongside.
+        assert_eq!(r["chunk"]["resident_bytes"], 3072);
+        assert_eq!(r["chunk"]["byte_budget"], 8192);
         // No pressure sample published yet: the valve reading is null.
         assert!(r["pressure"].is_null());
     }

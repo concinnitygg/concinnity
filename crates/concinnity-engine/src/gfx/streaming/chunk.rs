@@ -241,8 +241,11 @@ impl ChunkStreamer {
             }
             match result.decoded {
                 Ok(mesh) => {
+                    // Resident GPU footprint: the decoded vertex + index buffers.
+                    let bytes = mesh.vertices.len() * std::mem::size_of::<Vertex>()
+                        + mesh.indices.len() * std::mem::size_of::<u16>();
                     upload(result.coord, &mesh.vertices, &mesh.indices);
-                    self.window.mark_resident(result.coord);
+                    self.window.mark_resident(result.coord, bytes as u64);
                     applied += 1;
                 }
                 Err(e) => {
@@ -252,9 +255,10 @@ impl ChunkStreamer {
                         result.coord.z,
                         e
                     );
-                    // Terminally resident so the planner stops retrying a
-                    // chunk whose generation deterministically fails.
-                    self.window.mark_resident(result.coord);
+                    // Terminally resident (0 bytes -- nothing uploaded) so the
+                    // planner stops retrying a chunk whose generation
+                    // deterministically fails.
+                    self.window.mark_resident(result.coord, 0);
                 }
             }
         }
@@ -270,6 +274,24 @@ impl ChunkStreamer {
     // resident distant impostors, for diagnostics.
     pub fn detail_counts(&self) -> (usize, usize) {
         self.window.counts_by_detail()
+    }
+
+    // Set (or clear with `None`) the resident-chunk-byte budget. When set, the
+    // window clamps its effective view radius down to hold resident chunk bytes
+    // at or under the budget, shedding the far impostor band before the near
+    // full-detail band.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.window.set_byte_budget(budget);
+    }
+
+    // Total resident chunk bytes, for diagnostics.
+    pub fn resident_bytes(&self) -> u64 {
+        self.window.resident_bytes()
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.window.byte_budget()
     }
 }
 
