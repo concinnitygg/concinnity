@@ -228,12 +228,8 @@ impl VkContext {
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(new_vertices.as_ptr() as *const u8, new_v_bytes as usize)
-        };
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(new_indices.as_ptr() as *const u8, new_i_bytes as usize)
-        };
+        let vert_bytes = bytemuck::cast_slice(&new_vertices);
+        let idx_bytes = bytemuck::cast_slice(&new_indices);
         self.write_geometry_region(new_vbuf, 0, vert_bytes)?;
         self.write_geometry_region(new_ibuf, 0, idx_bytes)?;
 
@@ -482,12 +478,8 @@ impl VkContext {
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(new_vertices.as_ptr() as *const u8, new_v_bytes as usize)
-        };
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(new_indices.as_ptr() as *const u8, new_i_bytes as usize)
-        };
+        let vert_bytes = bytemuck::cast_slice(&new_vertices);
+        let idx_bytes = bytemuck::cast_slice(&new_indices);
         self.write_geometry_region(new_vbuf, 0, vert_bytes)?;
         self.write_geometry_region(new_ibuf, 0, idx_bytes)?;
 

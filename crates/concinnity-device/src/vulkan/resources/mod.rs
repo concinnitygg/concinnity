@@ -64,7 +64,7 @@ pub(in crate::vulkan) fn alloc_descriptor_sets(
         .map_err(|e| format!("allocate descriptor sets: {e}"))
 }
 
-pub(in crate::vulkan) fn upload_geometry_buffer<T>(
+pub(in crate::vulkan) fn upload_geometry_buffer<T: bytemuck::NoUninit>(
     instance: &ash::Instance,
     device: &Device,
     pd: vk::PhysicalDevice,
@@ -73,14 +73,13 @@ pub(in crate::vulkan) fn upload_geometry_buffer<T>(
     data: &[T],
     usage: vk::BufferUsageFlags,
 ) -> Result<(vk::Buffer, vk::DeviceMemory), String> {
-    let size = std::mem::size_of_val(data) as u64;
     upload_geometry_buffer_raw(
         instance,
         device,
         pd,
         command_pool,
         queue,
-        unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, size as usize) },
+        bytemuck::cast_slice(data),
         usage,
     )
 }

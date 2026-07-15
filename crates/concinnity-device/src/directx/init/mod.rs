@@ -945,18 +945,8 @@ impl DxContext {
         };
 
         // Geometry buffers
-        let vert_bytes_raw = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
-        let idx_bytes_raw = unsafe {
-            std::slice::from_raw_parts(
-                indices.as_ptr() as *const u8,
-                std::mem::size_of_val(indices),
-            )
-        };
+        let vert_bytes_raw = bytemuck::cast_slice(vertices);
+        let idx_bytes_raw = bytemuck::cast_slice(indices);
         let vertex_buffer = upload_buffer(
             &device,
             &command_queue,

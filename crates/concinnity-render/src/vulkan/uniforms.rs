@@ -100,7 +100,7 @@ pub struct ViewUniforms {
 
 // The Hi-Z build push constant (hiz_init.comp / hiz_downsample.comp): four
 // tightly-packed uints (16 bytes).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct HizParams {
     pub dst_width: u32,

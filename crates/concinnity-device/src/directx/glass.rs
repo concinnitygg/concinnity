@@ -771,18 +771,8 @@ impl GlassResources {
                     uv,
                 });
             }
-            let vbytes = unsafe {
-                std::slice::from_raw_parts(
-                    packed.as_ptr() as *const u8,
-                    std::mem::size_of_val(packed.as_slice()),
-                )
-            };
-            let ibytes = unsafe {
-                std::slice::from_raw_parts(
-                    idxs.as_ptr() as *const u8,
-                    std::mem::size_of_val(idxs.as_slice()),
-                )
-            };
+            let vbytes = bytemuck::cast_slice(&packed);
+            let ibytes = bytemuck::cast_slice(&idxs);
             let vertex_buffer = upload_buffer(
                 device,
                 command_queue,

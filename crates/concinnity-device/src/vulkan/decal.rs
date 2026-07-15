@@ -793,8 +793,8 @@ fn upload_static_buffer(
     Ok((buf, mem))
 }
 
-fn bytemuck_cast<T: Copy>(s: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
+fn bytemuck_cast<T: bytemuck::NoUninit>(s: &[T]) -> &[u8] {
+    bytemuck::cast_slice(s)
 }
 
 // Encoder

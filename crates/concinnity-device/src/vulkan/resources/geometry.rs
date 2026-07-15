@@ -125,12 +125,11 @@ impl VkContext {
 
         self.wait_idle();
 
-        let vert_bytes =
-            unsafe { std::slice::from_raw_parts(vertices.as_ptr() as *const u8, v_len) };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(self.geometry.vertex_buffer, v_off as u64, vert_bytes)?;
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = unsafe { std::slice::from_raw_parts(rebased.as_ptr() as *const u8, i_len) };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(self.geometry.index_buffer, i_off as u64, idx_bytes)?;
 
         let obj = &mut self.draw_objects[draw_idx];
@@ -225,32 +224,17 @@ impl VkContext {
 
         self.wait_idle();
 
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(self.geometry.vertex_buffer, v_off, vert_bytes)?;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                rebased.as_ptr() as *const u8,
-                std::mem::size_of_val(rebased.as_slice()),
-            )
-        };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(self.geometry.index_buffer, i_off_bytes, idx_bytes)?;
         // LOD alternates were laid out at init alongside LOD0 in the same
         // shared IB; each alternate shares LOD0's vertex region, so rebase
         // onto the same `base`.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            let alt_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    alt_rebased.as_ptr() as *const u8,
-                    std::mem::size_of_val(alt_rebased.as_slice()),
-                )
-            };
+            let alt_bytes = bytemuck::cast_slice(&alt_rebased);
             self.write_geometry_region(self.geometry.index_buffer, alt_off_bytes, alt_bytes)?;
         }
         // Refresh per-LOD switch distances so JSON-side tweaks to
