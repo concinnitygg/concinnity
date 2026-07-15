@@ -60,8 +60,9 @@ cargo run -p bistro --release
 | [concinnity-editor](crates/concinnity-editor/)       |                    | Dev tooling library: world authoring, in-engine editor, debug server |
 | [concinnity-ffi](crates/concinnity-ffi/)             |                    | General-purpose C-ABI cdylib for embedding in a host app             |
 | [concinnity-runtime](crates/concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs                   |
-| [concinnity-engine](crates/concinnity-engine/)       |                    | Runtime engine: world loop, ECS, renderer, audio                     |
+| [concinnity-engine](crates/concinnity-engine/)       |                    | Runtime engine: world loop, ECS, renderer                            |
 | [concinnity-physics](crates/concinnity-physics/)     |                    | Rapier rigid-body simulation: props, joints, character rigs          |
+| [concinnity-audio](crates/concinnity-audio/)         |                    | 3D positional audio: emitters, view cues, story playback (kira)      |
 | [concinnity-cook](crates/concinnity-cook/)           |                    | Asset compile pipeline: world.jsonl + sources -> blobs               |
 | [concinnity-world](crates/concinnity-world/)         |                    | Build-side world model: authoring vocabulary, parsing, validation    |
 | [concinnity-render](crates/concinnity-render/)       |                    | Backend-agnostic, GPU-free render preparation                        |

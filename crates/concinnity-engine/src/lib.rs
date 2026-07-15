@@ -27,7 +27,6 @@ pub mod app;
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
 pub use app::run::run_from;
-pub(crate) mod audio;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;

@@ -98,7 +98,7 @@ crate::define_systems! {
         gate: schedule::story,
         present_when: "the world declares a Story",
     },
-    AudioSystem => crate::audio::system::AudioSystem {
+    AudioSystem => concinnity_audio::AudioSystem {
         gate: schedule::audio,
         present_when: "the world declares any AudioEmitter, AudioCue, or a Story page/choice with audio",
     },

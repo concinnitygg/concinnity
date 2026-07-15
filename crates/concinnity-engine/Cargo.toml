@@ -30,12 +30,11 @@ concinnity-core = { path = "../concinnity-core" }
 concinnity-render = { path = "../concinnity-render" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-physics = { path = "../concinnity-physics" }
+concinnity-audio = { path = "../concinnity-audio" }
 
 ciborium = "0.2"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 ctrlc = "3.5.2"
-kira = "0.12"
-mint = "0.5"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

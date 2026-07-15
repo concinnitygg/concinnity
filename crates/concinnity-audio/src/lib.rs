@@ -1,13 +1,15 @@
-// src/audio/mod.rs
+// concinnity-audio/src/lib.rs
 //
 // A thin wrapper around the kira audio engine for 3D positional sound. kira
-// (and its cpal / symphonia dependencies) is confined to this module: callers
+// (and its cpal / symphonia dependencies) is confined to this crate: callers
 // work entirely in the engine's `[f32; 3]` representation and the opaque
 // `EmitterId`.
 //
 // `AudioEngine` owns one kira `AudioManager`, a single listener, and one
 // spatial track per emitter. `AudioSystem` builds it at init and updates the
-// listener / emitter poses every frame.
+// listener / emitter poses every frame. The engine depends on this crate and
+// constructs `AudioSystem` through its system registry; the dependency arrow is
+// concinnity-audio <- concinnity-engine.
 //
 // When no audio output device is available the engine is built in a disabled
 // state and every method becomes a no-op. This keeps headless / CI runs (which
@@ -15,7 +17,10 @@
 
 // The internal positional-audio system that drives `AudioEngine` from the
 // world's `AudioEmitter` / `AudioClip` components.
-pub(crate) mod system;
+mod system;
+
+// The audio system the engine registry wraps.
+pub use system::AudioSystem;
 
 use std::io::Cursor;
 
@@ -24,9 +29,10 @@ use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{SpatialTrackBuilder, SpatialTrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween};
 
-// Opaque handle to a spatial emitter inside an [`AudioEngine`].
+// Opaque handle to a spatial emitter inside an [`AudioEngine`]. Internal to the
+// crate; the engine only ever touches `AudioSystem`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EmitterId(usize);
+pub(crate) struct EmitterId(usize);
 
 // The live kira state. Present only when an output device was acquired.
 struct Active {
@@ -40,8 +46,9 @@ struct Active {
     music: Option<(u64, StaticSoundHandle)>,
 }
 
-// A 3D positional audio engine.
-pub struct AudioEngine {
+// A 3D positional audio engine. Internal to the crate; driven by `AudioSystem`,
+// which is the only type the engine constructs.
+pub(crate) struct AudioEngine {
     // `None` when no output device was available; the engine is then inert.
     active: Option<Active>,
     // The last master gain requested via `set_master_volume` (linear; 1.0 =

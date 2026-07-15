@@ -594,6 +594,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-audio"
+version = "0.10.1"
+dependencies = [
+ "concinnity-core",
+ "kira",
+ "mint",
+ "tracing",
+]
+
+[[package]]
 name = "concinnity-blob"
 version = "0.10.1"
 dependencies = [
@@ -756,6 +766,7 @@ name = "concinnity-engine"
 version = "0.10.1"
 dependencies = [
  "ciborium",
+ "concinnity-audio",
  "concinnity-core",
  "concinnity-device",
  "concinnity-physics",
@@ -763,9 +774,7 @@ dependencies = [
  "concinnity-toolchain",
  "core-foundation",
  "ctrlc",
- "kira",
  "libc",
- "mint",
  "objc2 0.6.4",
  "objc2-app-kit",
  "postcard",
