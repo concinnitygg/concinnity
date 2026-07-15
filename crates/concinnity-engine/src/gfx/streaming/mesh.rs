@@ -296,6 +296,23 @@ impl MeshStreamer {
         self.planner.len()
     }
 
+    // Set (or clear with `None`) the resident-byte budget for this pool. When
+    // set, the planner evicts farther-from-camera meshes to hold resident bytes
+    // at or under the budget, on top of the item-count cap.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.planner.set_byte_budget(budget);
+    }
+
+    // Total resident mesh bytes, for diagnostics.
+    pub fn resident_bytes(&self) -> u64 {
+        self.planner.resident_bytes()
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.planner.byte_budget()
+    }
+
     // Re-score every mesh from the camera position and refresh the LRU
     // timestamp of resident meshes. Call once per frame before
     // [`plan_and_dispatch`](Self::plan_and_dispatch).

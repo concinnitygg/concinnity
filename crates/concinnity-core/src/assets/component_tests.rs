@@ -298,6 +298,7 @@ mod streaming_config {
             texture_cap: 0,
             mesh_budget: 0,
             mesh_cap: 0,
+            ..Default::default()
         };
         // A 0 here would otherwise stall streaming forever.
         assert_eq!(c.budget(), 1);
@@ -322,6 +323,9 @@ mod streaming_config {
         assert_eq!(c.texture_cap, 96);
         assert_eq!(c.mesh_budget, 4);
         assert_eq!(c.mesh_cap, 4096);
+        // The byte-budget fields default to 0 (derive from GPU memory).
+        assert_eq!(c.texture_budget_mb, 0);
+        assert_eq!(c.mesh_budget_mb, 0);
     }
 
     #[test]
@@ -331,6 +335,8 @@ mod streaming_config {
             texture_cap: 32,
             mesh_budget: 3,
             mesh_cap: 64,
+            texture_budget_mb: 512,
+            mesh_budget_mb: 256,
         };
         let back: StreamingConfig =
             serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
@@ -338,6 +344,8 @@ mod streaming_config {
         assert_eq!(back.texture_cap, 32);
         assert_eq!(back.mesh_budget, 3);
         assert_eq!(back.mesh_cap, 64);
+        assert_eq!(back.texture_budget_mb, 512);
+        assert_eq!(back.mesh_budget_mb, 256);
     }
 }
 

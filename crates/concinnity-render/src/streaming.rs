@@ -103,6 +103,12 @@ impl StreamPlanner {
         self.byte_budget = budget;
     }
 
+    // The active resident-byte budget, or `None` when byte accounting is off
+    // (the count-only policy). For diagnostics.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.byte_budget
+    }
+
     // Number of tracked items.
     pub fn len(&self) -> usize {
         self.items.len()
@@ -436,6 +442,16 @@ mod tests {
     fn seed_bytes(p: &mut StreamPlanner, id: usize, bytes: u64) {
         p.mark_resident(id, 0, bytes);
         p.mark_unloaded(id);
+    }
+
+    #[test]
+    fn byte_budget_accessor_reflects_set_and_clear() {
+        let mut p = StreamPlanner::new(1, 4, 8);
+        assert_eq!(p.byte_budget(), None);
+        p.set_byte_budget(Some(4096));
+        assert_eq!(p.byte_budget(), Some(4096));
+        p.set_byte_budget(None);
+        assert_eq!(p.byte_budget(), None);
     }
 
     #[test]

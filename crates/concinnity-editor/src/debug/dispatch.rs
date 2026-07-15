@@ -55,13 +55,20 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         }),
         "streaming" => {
             // Each pool is null when it is not streaming, else its
-            // (resident, pending, unloaded) counts.
-            let pool = |s: &Option<(usize, usize, usize)>| match s {
-                Some((resident, pending, unloaded)) => serde_json::json!({
-                    "resident": resident,
-                    "pending": pending,
-                    "unloaded": unloaded,
-                }),
+            // (resident, pending, unloaded) counts plus resident bytes and the
+            // active byte budget (`byte_budget` is 0 when the pool runs
+            // count-only, with no byte budget).
+            let pool = |s: &Option<(usize, usize, usize)>, bytes: &Option<(u64, u64)>| match s {
+                Some((resident, pending, unloaded)) => {
+                    let (resident_bytes, byte_budget) = bytes.unwrap_or((0, 0));
+                    serde_json::json!({
+                        "resident": resident,
+                        "pending": pending,
+                        "unloaded": unloaded,
+                        "resident_bytes": resident_bytes,
+                        "byte_budget": byte_budget,
+                    })
+                }
                 None => serde_json::Value::Null,
             };
             // The chunk pool has no `unloaded` count -- an infinite world has
@@ -76,8 +83,8 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             serde_json::json!({
                 "ok": true,
                 "frame": state.frame,
-                "texture": pool(&state.streaming.texture),
-                "mesh": pool(&state.streaming.mesh),
+                "texture": pool(&state.streaming.texture, &state.streaming.texture_bytes),
+                "mesh": pool(&state.streaming.mesh, &state.streaming.mesh_bytes),
                 "chunk": chunk_pool(&state.streaming.chunk),
             })
         }
@@ -485,6 +492,8 @@ mod tests {
                 texture: Some((10, 2, 1)),
                 mesh: Some((4, 0, 3)),
                 chunk: Some((7, 5)),
+                texture_bytes: Some((2048, 4096)),
+                mesh_bytes: Some((1024, 0)),
             },
             ..Default::default()
         };
@@ -494,7 +503,13 @@ mod tests {
         assert_eq!(r["texture"]["resident"], 10);
         assert_eq!(r["texture"]["pending"], 2);
         assert_eq!(r["texture"]["unloaded"], 1);
+        // Resident bytes + the derived byte budget ride alongside the counts.
+        assert_eq!(r["texture"]["resident_bytes"], 2048);
+        assert_eq!(r["texture"]["byte_budget"], 4096);
         assert_eq!(r["mesh"]["resident"], 4);
+        // A 0 byte_budget flags a count-only pool (no byte budget set).
+        assert_eq!(r["mesh"]["resident_bytes"], 1024);
+        assert_eq!(r["mesh"]["byte_budget"], 0);
         // The chunk pool reports resident + pending but carries no unloaded count.
         assert_eq!(r["chunk"]["resident"], 7);
         assert_eq!(r["chunk"]["pending"], 5);

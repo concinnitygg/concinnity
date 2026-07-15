@@ -70,6 +70,11 @@ pub struct StreamingStats {
     pub mesh: Option<(usize, usize, usize)>,
     // `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
     pub chunk: Option<(usize, usize)>,
+    // `(resident_bytes, byte_budget)` for the texture pool when streaming;
+    // `byte_budget` is 0 when the pool runs count-only (no byte budget).
+    pub texture_bytes: Option<(u64, u64)>,
+    // `(resident_bytes, byte_budget)` for the mesh pool when streaming.
+    pub mesh_bytes: Option<(u64, u64)>,
 }
 
 // The streaming pools GraphicsSystem's init builds and hands off. Held as a
@@ -347,6 +352,14 @@ impl StreamingState {
             texture: self.texture_streamer.as_ref().map(|s| s.stats()),
             mesh: self.mesh_streamer.as_ref().map(|s| s.stats()),
             chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
+            texture_bytes: self
+                .texture_streamer
+                .as_ref()
+                .map(|s| (s.resident_bytes(), s.byte_budget().unwrap_or(0))),
+            mesh_bytes: self
+                .mesh_streamer
+                .as_ref()
+                .map(|s| (s.resident_bytes(), s.byte_budget().unwrap_or(0))),
         }
     }
 }

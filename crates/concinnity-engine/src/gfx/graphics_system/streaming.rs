@@ -9,6 +9,26 @@ use crate::gfx::mesh_payload::Vertex;
 use super::helpers::*;
 use super::*;
 
+// Default fractions of the GPU's reported memory each streaming pool may hold
+// resident when a world sets no explicit byte budget. The remainder is left for
+// render targets, the chunk pool, and slack.
+const TEXTURE_VRAM_FRACTION: f64 = 0.50;
+const MESH_VRAM_FRACTION: f64 = 0.30;
+
+// Resolve a streaming pool's resident-byte budget. A non-zero `override_mb`
+// wins, converted from mebibytes. Otherwise the budget is `fraction` of the
+// GPU's reported memory; a GPU that reports 0 (no figure available) yields
+// `None`, leaving the pool on its count-only residency policy.
+fn derive_byte_budget(override_mb: u32, gpu_memory_bytes: u64, fraction: f64) -> Option<u64> {
+    if override_mb != 0 {
+        return Some(override_mb as u64 * 1024 * 1024);
+    }
+    if gpu_memory_bytes == 0 {
+        return None;
+    }
+    Some((gpu_memory_bytes as f64 * fraction) as u64)
+}
+
 // Worst-case resident chunk count for a streaming VoxelWorld: the bound the
 // GPU-cull buffers reserve at init so every resident chunk gets a `GpuObjectData`
 // record (chunks fold into the indirect path). The streamer RETAINS a
@@ -50,6 +70,9 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = backend.gpu_profile().memory_budget_bytes;
         // Each backend's update_texture_slot rewrites whichever descriptors,
         // argument-buffers, or per-cluster SRVs sample that slot.
         for slot in 0..slot_count {
@@ -65,18 +88,28 @@ impl GraphicsSystem {
                     return;
                 }
             };
-        let streamer = crate::gfx::streaming::texture::TextureStreamer::new(
+        let mut streamer = crate::gfx::streaming::texture::TextureStreamer::new(
             source,
             texture_centers,
             config.budget(),
             config.cap(),
         );
+        let byte_budget = derive_byte_budget(
+            config.texture_budget_mb,
+            gpu_memory_bytes,
+            TEXTURE_VRAM_FRACTION,
+        );
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: texture streaming enabled ({} textures, {} source, budget {}/frame, cap {})",
+            "GraphicsSystem: texture streaming enabled ({} textures, {} source, budget {}/frame, cap {}, byte budget {})",
             streamer.len(),
             if disk_backed { "disk" } else { "ram" },
             config.budget(),
             config.cap(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
         );
         self.texture_streamer = Some(streamer);
     }
@@ -109,6 +142,9 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = backend.gpu_profile().memory_budget_bytes;
         // Init residency. Two paths:
         //  - Shrinkable seed (`seed_region` present): the streamed geometry was
         //    never baked into the buffers -- compaction already marked each
@@ -150,18 +186,25 @@ impl GraphicsSystem {
                     mesh_payloads,
                 ))
             };
-        let streamer = crate::gfx::streaming::mesh::MeshStreamer::new(
+        let mut streamer = crate::gfx::streaming::mesh::MeshStreamer::new(
             source,
             mesh_centers,
             config.mesh_budget(),
             config.mesh_cap(),
         );
+        let byte_budget =
+            derive_byte_budget(config.mesh_budget_mb, gpu_memory_bytes, MESH_VRAM_FRACTION);
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: mesh streaming enabled ({} meshes, {} source, budget {}/frame, cap {})",
+            "GraphicsSystem: mesh streaming enabled ({} meshes, {} source, budget {}/frame, cap {}, byte budget {})",
             streamer.len(),
             if disk_backed { "disk" } else { "ram" },
             config.mesh_budget(),
             config.mesh_cap(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
         );
         self.mesh_streamer = Some(streamer);
         self.mesh_stream_draw_indices = mesh_draw_indices;
@@ -327,6 +370,43 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An explicit non-zero override is taken verbatim (converted MiB -> bytes),
+    // regardless of what the GPU reports.
+    #[test]
+    fn derive_byte_budget_uses_explicit_override() {
+        // 256 MiB override, GPU memory irrelevant.
+        assert_eq!(
+            derive_byte_budget(256, 8 * 1024 * 1024 * 1024, TEXTURE_VRAM_FRACTION),
+            Some(256 * 1024 * 1024)
+        );
+        // The override wins even when the GPU reports nothing.
+        assert_eq!(
+            derive_byte_budget(64, 0, MESH_VRAM_FRACTION),
+            Some(64 * 1024 * 1024)
+        );
+    }
+
+    // With no override, the budget is the fraction of the reported GPU memory.
+    #[test]
+    fn derive_byte_budget_derives_fraction_of_gpu_memory() {
+        let vram = 8 * 1024 * 1024 * 1024u64; // 8 GiB
+        assert_eq!(
+            derive_byte_budget(0, vram, TEXTURE_VRAM_FRACTION),
+            Some((vram as f64 * 0.50) as u64)
+        );
+        assert_eq!(
+            derive_byte_budget(0, vram, MESH_VRAM_FRACTION),
+            Some((vram as f64 * 0.30) as u64)
+        );
+    }
+
+    // An unreporting GPU (0 bytes) with no override degrades to count-only.
+    #[test]
+    fn derive_byte_budget_is_none_when_gpu_reports_nothing() {
+        assert_eq!(derive_byte_budget(0, 0, TEXTURE_VRAM_FRACTION), None);
+        assert_eq!(derive_byte_budget(0, 0, MESH_VRAM_FRACTION), None);
+    }
 
     // The chunk record reserve must cover the streamer's worst-case
     // residency, or resident chunks past the reserve get no GPU-driven draw record
