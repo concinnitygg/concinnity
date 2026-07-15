@@ -347,6 +347,18 @@ impl World {
             .map(|s| s.streaming_stats())
     }
 
+    // Live process-RAM back-off pressure on streaming, published by
+    // StreamingSystem on its throttled RSS sample. `None` before the first
+    // sample or when no `MemoryBudget` / RSS is available (the valve is inert).
+    // Read by the `cn debug` server's `streaming` command; unused from the
+    // client itself.
+    #[allow(dead_code)]
+    pub fn streaming_pressure(&self) -> Option<crate::gfx::streaming_system::StreamingPressure> {
+        self.resources
+            .get::<crate::gfx::streaming_system::StreamingPressure>()
+            .copied()
+    }
+
     // The process thread + memory budgets App published at start. `None` before
     // `App::start` installs them. Read by the `cn debug` server's `budget`
     // command; unused from the client itself.

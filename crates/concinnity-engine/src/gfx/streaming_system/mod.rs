@@ -21,7 +21,14 @@ use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::{ChunkMesh, RenderBackend};
 use crate::gfx::overlay::OverlayFrame;
 
+pub(crate) mod pressure;
+
 const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
+
+// Throttled RSS sampling cadence for the process-RAM back-off valve. RSS is a
+// syscall, so the valve re-evaluates ~2x/second (every 30 frames near 60 fps)
+// off the frame clock rather than every frame.
+const PRESSURE_SAMPLE_INTERVAL: u64 = 30;
 
 // The camera-relative view + position GraphicsSystem hands to `update_view` /
 // `draw_frame`. Published every frame by StreamingSystem: the world's absolute
@@ -77,6 +84,19 @@ pub struct StreamingStats {
     pub mesh_bytes: Option<(u64, u64)>,
 }
 
+// Live process-RAM pressure on streaming, published by StreamingSystem on each
+// throttled sample when a `MemoryBudget` is present. `under_pressure` is true
+// whenever the back-off valve is engaged (gating loads or evicting). Read by the
+// debug server's `streaming` command for headless verification; harmless (and
+// unread) in a plain `cn run`. Absent entirely when no `MemoryBudget` is
+// published or RSS cannot be queried, in which case the valve is inert.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamingPressure {
+    pub rss_bytes: u64,
+    pub budget_bytes: u64,
+    pub under_pressure: bool,
+}
+
 // The streaming pools GraphicsSystem's init builds and hands off. Held as a
 // parked resource; StreamingSystem takes it each step, drives the pools, and
 // puts it back. `frame_count` is this system's own frame clock, incremented
@@ -101,6 +121,18 @@ pub(crate) struct StreamingState {
     // reused until the command buffers that drew it retire, at
     // `frame_count + frames_in_flight`.
     pub(crate) frames_in_flight: usize,
+    // Baseline (derived at setup) resident-byte budget for each pool; `None`
+    // when the pool runs count-only. The RAM back-off valve reduces the live
+    // budget below this under deep pressure and restores it exactly on release.
+    pub(crate) texture_baseline_budget: Option<u64>,
+    pub(crate) mesh_baseline_budget: Option<u64>,
+    // Process-RAM back-off valve state (see `pressure`), re-evaluated on the
+    // throttled RSS sample. `pressure_factor` is the byte-budget scale currently
+    // applied to the pools (1.0 = baseline); `last_sampled_rss` feeds the
+    // "still rising" escalation from stage 1 to stage 2.
+    pub(crate) pressure_stage: pressure::StreamPressureStage,
+    pub(crate) pressure_factor: f64,
+    pub(crate) last_sampled_rss: Option<u64>,
 }
 
 impl std::fmt::Debug for StreamingState {
@@ -110,6 +142,7 @@ impl std::fmt::Debug for StreamingState {
             .field("texture", &self.texture_streamer.is_some())
             .field("mesh", &self.mesh_streamer.is_some())
             .field("chunk", &self.chunk_stream.is_some())
+            .field("pressure", &self.pressure_stage)
             .finish()
     }
 }
@@ -130,6 +163,23 @@ impl System for StreamingSystem {
         let Some(mut state) = ctx.resources.remove::<StreamingState>() else {
             return StepResult::Continue;
         };
+
+        // Throttled process-RAM back-off sample (~2x/sec). Reads the world's
+        // `MemoryBudget` ceiling and live RSS; when RSS nears the ceiling the
+        // valve engages (stage 1 gates new loads, stage 2 shrinks residency).
+        // Skipped entirely when no `MemoryBudget` is published or RSS is
+        // unavailable, leaving streaming on its byte-budget policy unchanged.
+        if state.frame_count.is_multiple_of(PRESSURE_SAMPLE_INTERVAL) {
+            let budget = ctx
+                .resource::<crate::app::budget::MemoryBudget>()
+                .map(|b| b.budget_bytes);
+            if let Some(budget) = budget {
+                let rss = crate::app::sysmem::process_resident_bytes();
+                if let Some(pressure) = state.sample_pressure(rss, budget) {
+                    ctx.insert_resource(pressure);
+                }
+            }
+        }
 
         // The camera the draw will use (written by the camera controller last
         // tick) is the absolute fallback when no chunk streaming rebases it.
@@ -177,6 +227,11 @@ impl StreamingState {
         view_matrix: [[f32; 4]; 4],
         world_hidden: bool,
     ) -> ([[f32; 4]; 4], [f32; 3]) {
+        // Stage 1 of the RAM back-off valve freezes new load dispatch: the pools
+        // keep their current residency but stop growing. Stage 2 keeps
+        // dispatching (under a reduced byte budget) so the planner can evict.
+        let loads_frozen = self.pressure_stage.freezes_loads();
+
         // Drive albedo-texture streaming: re-score every slot by camera
         // distance, dispatch this frame's background loads within budget, then
         // apply completed uploads + evictions. Each backend's
@@ -184,9 +239,11 @@ impl StreamingState {
         // sample that slot so it takes effect on this same draw_frame.
         if !world_hidden && let Some(streamer) = &mut self.texture_streamer {
             streamer.update_scores(cam_pos, self.frame_count);
-            for slot in streamer.plan_and_dispatch() {
-                if let Err(e) = backend.evict_texture_slot(slot) {
-                    tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
+            if !loads_frozen {
+                for slot in streamer.plan_and_dispatch() {
+                    if let Err(e) = backend.evict_texture_slot(slot) {
+                        tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
+                    }
                 }
             }
             streamer.drain_completed(self.frame_count, |slot, w, h, px| {
@@ -213,14 +270,16 @@ impl StreamingState {
         // its geometry region is resident.
         if !world_hidden && let Some(streamer) = &mut self.mesh_streamer {
             streamer.update_scores(cam_pos, self.frame_count);
-            // A runtime eviction's freed space must not be reused until the
-            // in-flight command buffers that drew it retire.
-            let retire_frame = self.frame_count + self.frames_in_flight as u64;
-            for stream_id in streamer.plan_and_dispatch() {
-                if let Some(&draw_idx) = self.mesh_stream_draw_indices.get(stream_id)
-                    && let Err(e) = backend.evict_mesh(draw_idx, retire_frame)
-                {
-                    tracing::warn!("StreamingSystem: mesh evict draw {}: {}", draw_idx, e);
+            if !loads_frozen {
+                // A runtime eviction's freed space must not be reused until the
+                // in-flight command buffers that drew it retire.
+                let retire_frame = self.frame_count + self.frames_in_flight as u64;
+                for stream_id in streamer.plan_and_dispatch() {
+                    if let Some(&draw_idx) = self.mesh_stream_draw_indices.get(stream_id)
+                        && let Err(e) = backend.evict_mesh(draw_idx, retire_frame)
+                    {
+                        tracing::warn!("StreamingSystem: mesh evict draw {}: {}", draw_idx, e);
+                    }
                 }
             }
             let draw_indices = &self.mesh_stream_draw_indices;
@@ -343,6 +402,54 @@ impl StreamingState {
         (final_view, final_cam_pos)
     }
 
+    // Re-evaluate the process-RAM back-off valve from a fresh RSS sample and
+    // apply its decision to the texture + mesh pools. Returns the pressure
+    // reading to publish, or `None` when RSS is unavailable (the valve stays
+    // inert and nothing is published). `budget` is the `MemoryBudget` ceiling.
+    fn sample_pressure(&mut self, rss: Option<u64>, budget: u64) -> Option<StreamingPressure> {
+        let rss = rss?;
+        let rising = self.last_sampled_rss.is_some_and(|prev| rss > prev);
+        let prev_stage = self.pressure_stage;
+        let decision =
+            pressure::step_pressure(rss, budget, rising, prev_stage, self.pressure_factor);
+
+        // Re-apply the pool byte budgets only when the reduced-budget state
+        // actually needs it: while evicting (the factor may have tightened) or
+        // on the transition out of eviction (restore the baseline exactly).
+        // Staying at None/Gate leaves the budgets at their baseline untouched,
+        // so a world never under pressure behaves exactly as before.
+        use pressure::StreamPressureStage::Evict;
+        match (prev_stage, decision.stage) {
+            (_, Evict) => self.apply_byte_factor(decision.budget_factor),
+            (Evict, _) => self.apply_byte_factor(1.0),
+            _ => {}
+        }
+
+        self.pressure_stage = decision.stage;
+        self.pressure_factor = decision.budget_factor;
+        self.last_sampled_rss = Some(rss);
+        Some(StreamingPressure {
+            rss_bytes: rss,
+            budget_bytes: budget,
+            under_pressure: decision.stage != pressure::StreamPressureStage::None,
+        })
+    }
+
+    // Scale each pool's byte budget to `factor` of its captured baseline. Pools
+    // with no baseline (count-only) are left alone; there is nothing to reduce.
+    fn apply_byte_factor(&mut self, factor: f64) {
+        if let (Some(streamer), Some(baseline)) =
+            (self.texture_streamer.as_mut(), self.texture_baseline_budget)
+        {
+            streamer.set_byte_budget(Some(pressure::scale_budget(baseline, factor)));
+        }
+        if let (Some(streamer), Some(baseline)) =
+            (self.mesh_streamer.as_mut(), self.mesh_baseline_budget)
+        {
+            streamer.set_byte_budget(Some(pressure::scale_budget(baseline, factor)));
+        }
+    }
+
     // `(resident, pending, unloaded)` counts for each active streaming pool.
     // Consumed only by the `cn debug` binary's `streaming` command, so it reads
     // as dead code in a plain library build.
@@ -389,6 +496,74 @@ pub(crate) fn chunk_model_matrix(
 mod tests {
     use super::*;
     use crate::gfx::chunk_coord::ChunkCoord;
+    use pressure::StreamPressureStage;
+
+    // A bare StreamingState with no pools: enough to exercise the RAM valve's
+    // sampling + stage machine without standing up the streamer worker threads.
+    // `apply_byte_factor` is a no-op with no baselines, so the transitions run
+    // exactly as they would with pools attached.
+    fn empty_state() -> StreamingState {
+        StreamingState {
+            texture_streamer: None,
+            mesh_streamer: None,
+            mesh_stream_draw_indices: Vec::new(),
+            chunk_stream: None,
+            frame_count: 0,
+            frames_in_flight: 2,
+            texture_baseline_budget: None,
+            mesh_baseline_budget: None,
+            pressure_stage: StreamPressureStage::None,
+            pressure_factor: 1.0,
+            last_sampled_rss: None,
+        }
+    }
+
+    #[test]
+    fn sample_pressure_engages_and_publishes() {
+        let mut s = empty_state();
+        // RSS at 92% of a 1000-byte budget: stage 1 engages.
+        let p = s.sample_pressure(Some(920), 1000).expect("published");
+        assert_eq!(s.pressure_stage, StreamPressureStage::Gate);
+        assert!(p.under_pressure);
+        assert_eq!(p.rss_bytes, 920);
+        assert_eq!(p.budget_bytes, 1000);
+    }
+
+    #[test]
+    fn sample_pressure_escalates_when_rss_keeps_rising() {
+        let mut s = empty_state();
+        s.sample_pressure(Some(910), 1000);
+        assert_eq!(s.pressure_stage, StreamPressureStage::Gate);
+        // Still above engage and climbing: escalate to eviction.
+        s.sample_pressure(Some(925), 1000);
+        assert_eq!(s.pressure_stage, StreamPressureStage::Evict);
+        assert!(s.pressure_factor < 1.0);
+    }
+
+    #[test]
+    fn sample_pressure_releases_with_hysteresis() {
+        let mut s = empty_state();
+        s.sample_pressure(Some(970), 1000); // straight to evict
+        assert_eq!(s.pressure_stage, StreamPressureStage::Evict);
+        // In the hysteresis band (85%): still latched.
+        s.sample_pressure(Some(850), 1000);
+        assert_eq!(s.pressure_stage, StreamPressureStage::Evict);
+        // Below the release mark: valve releases and restores the baseline.
+        let p = s.sample_pressure(Some(700), 1000).expect("published");
+        assert_eq!(s.pressure_stage, StreamPressureStage::None);
+        assert_eq!(s.pressure_factor, 1.0);
+        assert!(!p.under_pressure);
+    }
+
+    #[test]
+    fn sample_pressure_is_inert_without_rss() {
+        let mut s = empty_state();
+        s.sample_pressure(Some(970), 1000);
+        let stage_before = s.pressure_stage;
+        // A failed RSS query publishes nothing and leaves the stage untouched.
+        assert!(s.sample_pressure(None, 1000).is_none());
+        assert_eq!(s.pressure_stage, stage_before);
+    }
 
     // The translation column is the integer chunk delta scaled by chunk size;
     // the basis stays identity.

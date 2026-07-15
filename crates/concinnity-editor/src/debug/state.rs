@@ -52,6 +52,10 @@ pub(crate) struct DebugState {
     // Process thread + memory budgets, refreshed every tick for the `budget`
     // query. `None` until `App::start` has published them.
     pub(super) budget: Option<BudgetSnapshot>,
+    // Live RAM back-off pressure on streaming, refreshed every tick for the
+    // `streaming` query. `None` until StreamingSystem publishes its first sample
+    // (or when the valve is inert: no `MemoryBudget` / RSS available).
+    pub(super) streaming_pressure: Option<PressureSnapshot>,
 }
 
 // A read-only snapshot of the process thread + memory budgets (see
@@ -65,6 +69,16 @@ pub(crate) struct BudgetSnapshot {
     pub(super) budget_mib: u64,
     pub(super) overridden: bool,
     pub(super) rss_mib: Option<u64>,
+}
+
+// A read-only snapshot of the streaming RAM back-off valve (see
+// `concinnity_engine::gfx::streaming_system::StreamingPressure`), served
+// alongside the `streaming` query so the valve is headless-verifiable.
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub(crate) struct PressureSnapshot {
+    pub(super) rss_bytes: u64,
+    pub(super) budget_bytes: u64,
+    pub(super) under_pressure: bool,
 }
 
 // A read-only snapshot of the active `Camera3D`, served by `camera-get`. The

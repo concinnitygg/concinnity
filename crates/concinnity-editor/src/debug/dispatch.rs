@@ -80,12 +80,23 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 }),
                 None => serde_json::Value::Null,
             };
+            // The RAM back-off valve reading rides alongside the pool counts,
+            // or null before StreamingSystem's first sample / when inert.
+            let pressure = match &state.streaming_pressure {
+                Some(p) => serde_json::json!({
+                    "rss_bytes": p.rss_bytes,
+                    "budget_bytes": p.budget_bytes,
+                    "under_pressure": p.under_pressure,
+                }),
+                None => serde_json::Value::Null,
+            };
             serde_json::json!({
                 "ok": true,
                 "frame": state.frame,
                 "texture": pool(&state.streaming.texture, &state.streaming.texture_bytes),
                 "mesh": pool(&state.streaming.mesh, &state.streaming.mesh_bytes),
                 "chunk": chunk_pool(&state.streaming.chunk),
+                "pressure": pressure,
             })
         }
         "budget" => match &state.budget {
@@ -514,6 +525,26 @@ mod tests {
         assert_eq!(r["chunk"]["resident"], 7);
         assert_eq!(r["chunk"]["pending"], 5);
         assert!(r["chunk"]["unloaded"].is_null());
+        // No pressure sample published yet: the valve reading is null.
+        assert!(r["pressure"].is_null());
+    }
+
+    #[test]
+    fn streaming_reports_ram_back_off_pressure() {
+        let st = DebugState {
+            frame: 3,
+            streaming_pressure: Some(crate::debug::state::PressureSnapshot {
+                rss_bytes: 900,
+                budget_bytes: 1000,
+                under_pressure: true,
+            }),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"streaming"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["pressure"]["rss_bytes"], 900);
+        assert_eq!(r["pressure"]["budget_bytes"], 1000);
+        assert_eq!(r["pressure"]["under_pressure"], true);
     }
 
     #[test]

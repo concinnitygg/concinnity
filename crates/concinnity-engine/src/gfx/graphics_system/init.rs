@@ -2616,6 +2616,11 @@ impl GraphicsSystem {
         // camera-relative view GraphicsSystem draws with. `frame_count` starts
         // at 0 in lockstep with this system's own frame clock (both tick once
         // per world step), so eviction retire-frames match the draw's frame.
+        // Capture each pool's derived byte budget as the back-off valve's
+        // baseline before the streamers move into the parked state, so stage 2
+        // can reduce it and the release can restore it exactly.
+        let texture_baseline_budget = self.texture_streamer.as_ref().and_then(|s| s.byte_budget());
+        let mesh_baseline_budget = self.mesh_streamer.as_ref().and_then(|s| s.byte_budget());
         ctx.insert_resource(crate::gfx::streaming_system::StreamingState {
             texture_streamer: self.texture_streamer.take(),
             mesh_streamer: self.mesh_streamer.take(),
@@ -2623,6 +2628,11 @@ impl GraphicsSystem {
             chunk_stream: self.chunk_stream.take(),
             frame_count: 0,
             frames_in_flight: self.frames_in_flight,
+            texture_baseline_budget,
+            mesh_baseline_budget,
+            pressure_stage: crate::gfx::streaming_system::pressure::StreamPressureStage::None,
+            pressure_factor: 1.0,
+            last_sampled_rss: None,
         });
 
         // Init-time wiring is done: park the backend in the world's shared

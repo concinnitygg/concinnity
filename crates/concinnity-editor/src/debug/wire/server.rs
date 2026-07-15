@@ -257,6 +257,15 @@ impl DebugHook for DebugServer {
         // them every tick -- `streaming_stats` is just a few small count loops
         // over the parked StreamingState (StreamingSystem owns the pools).
         state.streaming = world.streaming_stats().unwrap_or_default();
+        // Live RAM back-off pressure, refreshed alongside the streaming counts.
+        state.streaming_pressure =
+            world
+                .streaming_pressure()
+                .map(|p| crate::debug::state::PressureSnapshot {
+                    rss_bytes: p.rss_bytes,
+                    budget_bytes: p.budget_bytes,
+                    under_pressure: p.under_pressure,
+                });
 
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
