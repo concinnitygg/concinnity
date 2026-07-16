@@ -33,6 +33,8 @@
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
+use super::lighting;
+use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
@@ -87,6 +89,12 @@ pub(crate) struct EditorHook {
     open_template: Option<usize>,
     // First visible row of the Template detail panel's asset list.
     template_list_scroll: usize,
+    // Whether the Lighting panel is shown (toggled from the View panel), which
+    // text binding holds keyboard focus, and the message from the last rejected
+    // Apply.
+    lighting_open: bool,
+    lighting_focus: Option<usize>,
+    lighting_status: Option<String>,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // Whether the Preview panel is shown (starts shown; toggled from the View
@@ -163,6 +171,13 @@ struct TemplateDetailData {
     rows: Vec<ListRow>,
 }
 
+// Owned per-tick data backing a `LightingView` (the row list and the
+// per-binding fields derived from the current entries).
+struct LightingData {
+    rows: Vec<lighting::Row>,
+    fields: Vec<Option<FormField>>,
+}
+
 // Move a scroll offset one row toward the wheel direction, clamped to `max`.
 fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
     if delta > 0.0 {
@@ -212,6 +227,8 @@ mod browse;
 mod editing;
 mod edits;
 mod layout;
+// Named to avoid colliding with the `use super::lighting` module import.
+mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
@@ -230,6 +247,9 @@ impl EditorHook {
             templates_open: false,
             open_template: None,
             template_list_scroll: 0,
+            lighting_open: false,
+            lighting_focus: None,
+            lighting_status: None,
             panel_open: false,
             preview_open: true,
             view_open: false,

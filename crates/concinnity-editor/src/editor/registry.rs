@@ -29,10 +29,13 @@ pub(crate) enum PanelKey {
     Preview,
     View,
     Templates,
+    Lighting,
+    // Last (default frontmost), so the detail floats over the Templates list
+    // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 6;
+pub(crate) const PANEL_COUNT: usize = 7;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -41,6 +44,7 @@ impl PanelKey {
         PanelKey::Preview,
         PanelKey::View,
         PanelKey::Templates,
+        PanelKey::Lighting,
         PanelKey::TemplateDetail,
     ];
 
@@ -62,6 +66,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::View => 0x500,
             PanelKey::Templates => 0x600,
             PanelKey::TemplateDetail => 0x700,
+            PanelKey::Lighting => 0x800,
         }
 }
 
@@ -79,8 +84,9 @@ pub(crate) trait Panel: Sync {
     // Whether the panel is shown and interactive this frame, compound gates
     // included (e.g. the edit form requires the Assets UI to be on).
     fn is_open(&self, hook: &EditorHook) -> bool;
-    // Flip the panel's shown state (its View-panel toggle row).
-    fn toggle(&self, _hook: &mut EditorHook) {}
+    // Flip the panel's shown state (its View-panel toggle row). Opening may
+    // seed the panel's typed controls from the world, hence the world access.
+    fn toggle(&self, _hook: &mut EditorHook, _world: &mut World) {}
     // The title-bar "X".
     fn close(&self, hook: &mut EditorHook, world: &mut World);
     // The panel footprint this frame (it may track dynamic content), for the
@@ -132,6 +138,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::PreviewPanel,
     &panels::ViewPanel,
     &panels::TemplatesPanel,
+    &panels::LightingPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -198,6 +205,6 @@ mod tests {
     #[test]
     fn view_toggles_lists_the_toggleable_panels() {
         let rows: Vec<&'static str> = view_toggles().map(|p| p.view_row().unwrap()).collect();
-        assert_eq!(rows, ["Assets", "Preview", "Templates"]);
+        assert_eq!(rows, ["Assets", "Preview", "Templates", "Lighting"]);
     }
 }

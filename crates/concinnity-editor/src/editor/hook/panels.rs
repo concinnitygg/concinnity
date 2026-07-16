@@ -21,7 +21,7 @@ impl Panel for AssetsPanel {
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.panel_open
     }
-    fn toggle(&self, hook: &mut EditorHook) {
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.toggle_assets();
     }
     // Closing keeps the browse state (like a View-checkbox untick); only the
@@ -172,7 +172,7 @@ impl Panel for PreviewPanel {
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.preview_open
     }
-    fn toggle(&self, hook: &mut EditorHook) {
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.preview_open = !hook.preview_open;
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -248,10 +248,9 @@ impl Panel for ViewPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        let _ = world;
         match view::hit_test(mx, my, o) {
             Some(ViewAction::Toggle(i)) => {
-                hook.toggle_view_row(i);
+                hook.toggle_view_row(i, world);
                 true
             }
             Some(ViewAction::Consume) => true,
@@ -278,7 +277,7 @@ impl Panel for TemplatesPanel {
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.templates_open
     }
-    fn toggle(&self, hook: &mut EditorHook) {
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.templates_open = !hook.templates_open;
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -397,5 +396,79 @@ impl Panel for TemplateDetailPanel {
     }
     fn hide(&self, world: &mut World) {
         template_panel::apply(world, None, [0.0, 0.0]);
+    }
+}
+
+pub(crate) struct LightingPanel;
+
+impl Panel for LightingPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Lighting
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Lighting")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.lighting_open
+    }
+    // Opening (re)seeds the text controls from the current entries and drops
+    // any stale focus / status from the last session.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.lighting_open = !hook.lighting_open;
+        if hook.lighting_open {
+            hook.lighting_focus = None;
+            hook.lighting_status = None;
+            hook.seed_lighting(world);
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.lighting_open = false;
+    }
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        lighting_panel::size(lighting::rows(&hook.lighting_present()).len())
+    }
+    fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
+        lighting_panel::default_origin()
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        lighting_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        lighting_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        lighting_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, ""))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let action = {
+            let data = hook.lighting_data();
+            let view = hook.make_lighting_view(&data, [mx, my]);
+            lighting_panel::hit_test(&view, mx, my, o)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_lighting_action(a, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let data = hook.lighting_data();
+        let view = hook.make_lighting_view(&data, mouse);
+        lighting_panel::apply(world, Some(&view), o);
+    }
+    fn hide(&self, world: &mut World) {
+        lighting_panel::apply(world, None, [0.0, 0.0]);
     }
 }

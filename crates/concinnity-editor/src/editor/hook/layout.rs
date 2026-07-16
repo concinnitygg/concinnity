@@ -83,9 +83,9 @@ impl EditorHook {
     }
 
     // Flip the panel behind View-panel toggle row `i`.
-    pub(super) fn toggle_view_row(&mut self, i: usize) {
+    pub(super) fn toggle_view_row(&mut self, i: usize, world: &mut World) {
         if let Some(p) = registry::view_toggles().nth(i) {
-            p.toggle(self);
+            p.toggle(self, world);
         }
     }
 }

@@ -12,6 +12,8 @@ mod form_panel;
 mod hook;
 mod hud;
 mod inject;
+mod lighting;
+mod lighting_panel;
 mod list_panel;
 mod panel;
 mod preview;
