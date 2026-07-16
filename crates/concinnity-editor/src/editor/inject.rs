@@ -12,7 +12,7 @@
 // is real runtime code, not editor-only.)
 
 use super::{form_panel, hud, panel, preview, template_panel, templates, view};
-use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -26,12 +26,33 @@ const SAVE_W: f32 = 88.0;
 const VIEW_W: f32 = 132.0;
 const GAP: f32 = 8.0;
 
-// Reuse an existing HUD label's font for the button + field text. Every
-// rendering world carries an injected `hud_font` (via the engine-default
-// DebugHud) unless it explicitly opted out; falling back to `None` leaves the
-// text to the renderer's default font.
+// Reuse the engine HUD font for the button + field text. Every rendering
+// world carries an injected `hud_font` through the engine-default DebugHud /
+// StatHud chip labels unless it explicitly opted out. Resolving through the
+// chip ids keeps a user world's display font (e.g. the oversized default-font
+// fallback on a font-less label) from restyling the editor. A chip-less world
+// falls back to any label's font: a label with no loaded font is not drawn at
+// all, so a mis-sized HUD still beats an invisible one.
 fn hud_font(world: &World) -> Option<FontHandle> {
-    world.query::<TextLabel>().find_map(|l| l.font)
+    let chips: Vec<AssetId> = world
+        .query::<DebugHud>()
+        .flat_map(|d| [d.mouse_label, d.camera_label, d.sys_label, d.passes_label])
+        .chain(world.query::<StatHud>().flat_map(|s| {
+            [
+                s.fps_label,
+                s.vram_label,
+                s.ram_label,
+                s.ev_label,
+                s.edr_label,
+            ]
+        }))
+        .flatten()
+        .collect();
+    world
+        .query::<TextLabel>()
+        .filter(|l| chips.contains(&l.asset_id))
+        .find_map(|l| l.font)
+        .or_else(|| world.query::<TextLabel>().find_map(|l| l.font))
 }
 
 // Inject the editor HUD: the floating Assets, edit-form, Preview, View, and
@@ -45,6 +66,10 @@ fn hud_font(world: &World) -> Option<FontHandle> {
 // injection order is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
+    // The editor HUD replaces the baked-in debug HUD (both would answer F1):
+    // resolve the HUD font from its chips above, then drop the DebugHud so
+    // build_internal_systems never constructs its system.
+    world.remove_all::<DebugHud>();
     inject_panel(world, font);
     inject_form_panel(world, font);
     inject_preview(world, font);
@@ -310,13 +335,25 @@ mod tests {
         assert!(world.query::<TextInput>().all(|t| t.view.is_none()));
     }
 
-    // The button + field text reuses whatever font an existing HUD label carries.
+    // The button + field text reuses the font of the engine HUD chip labels,
+    // resolved through the DebugHud's chip ids -- NOT the first label in the
+    // world, whose font may be a user world's oversized display face. The
+    // DebugHud itself is dropped by the injection (the editor takes over F1).
     #[test]
-    fn reuses_an_existing_label_font() {
+    fn prefers_the_hud_chip_font_over_the_first_label() {
         let mut world = World::new_empty();
+        world.add_component(TextLabel {
+            asset_id: AssetId(0),
+            font: Some(FontHandle(99)),
+            ..Default::default()
+        });
         world.add_component(TextLabel {
             asset_id: AssetId(7),
             font: Some(FontHandle(42)),
+            ..Default::default()
+        });
+        world.add_component(DebugHud {
+            mouse_label: Some(AssetId(7)),
             ..Default::default()
         });
         editor_hud(&mut world);
@@ -330,6 +367,52 @@ mod tests {
             .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
         assert_eq!(field.font, Some(FontHandle(42)));
+        assert_eq!(world.query::<DebugHud>().count(), 0, "DebugHud dropped");
+    }
+
+    // The StatHud chips also resolve the font (e.g. a world that opted out of
+    // the debug HUD only).
+    #[test]
+    fn resolves_the_font_from_stat_hud_chips() {
+        let mut world = World::new_empty();
+        world.add_component(TextLabel {
+            asset_id: AssetId(0),
+            font: Some(FontHandle(99)),
+            ..Default::default()
+        });
+        world.add_component(TextLabel {
+            asset_id: AssetId(3),
+            font: Some(FontHandle(9)),
+            ..Default::default()
+        });
+        world.add_component(StatHud {
+            fps_label: Some(AssetId(3)),
+            ..Default::default()
+        });
+        editor_hud(&mut world);
+        let save = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == hud::SAVE_LABEL)
+            .unwrap();
+        assert_eq!(save.font, Some(FontHandle(9)));
+    }
+
+    // A world with no HUD chips at all still gets a font: any label's font
+    // beats none, because a label without a loaded font is not drawn.
+    #[test]
+    fn falls_back_to_any_label_font_without_hud_chips() {
+        let mut world = World::new_empty();
+        world.add_component(TextLabel {
+            asset_id: AssetId(0),
+            font: Some(FontHandle(42)),
+            ..Default::default()
+        });
+        editor_hud(&mut world);
+        let save = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == hud::SAVE_LABEL)
+            .unwrap();
+        assert_eq!(save.font, Some(FontHandle(42)));
     }
 
     // The templates-spec-driven constructors materialize the same components the

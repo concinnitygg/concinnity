@@ -69,13 +69,9 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     let mut app = App::new();
     boot_world(&mut app, &world_path, world_exists)?;
 
-    // The editor HUD replaces the baked-in debug HUD (both would answer F1), so
-    // drop the world's DebugHud before start -- build_internal_systems then never
-    // constructs its system, leaving F1 to the editor.
-    app.world_mut().remove_all::<crate::assets::DebugHud>();
-
-    // Inject the editor HUD elements before start; the editor's DebugHook tick
-    // drives them each frame.
+    // Inject the editor HUD elements before start (this also drops the world's
+    // DebugHud, whose F1 role the editor takes over); the editor's DebugHook
+    // tick drives them each frame.
     inject::editor_hud(app.world_mut());
 
     let editor_hook = EditorHook::new(world_path, entries);

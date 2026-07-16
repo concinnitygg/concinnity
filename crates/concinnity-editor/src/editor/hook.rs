@@ -461,7 +461,6 @@ impl DebugHook for EditorHook {
         };
         let mut staged = App::new();
         staged.load_world(world);
-        staged.world_mut().remove_all::<crate::assets::DebugHud>();
         // Carry the editor's typed text (an open form's name + fields, the combo
         // filter) across the fresh HUD injection so it is not blanked.
         let fields = Self::field_snapshot(app.world());
