@@ -1,11 +1,13 @@
-// HitRegion / View / KeyBinding input dispatch. An internal system (not a
+// HitRegion / Screen / KeyBinding input dispatch. An internal system (not a
 // declarable asset): `World::start` constructs one whenever the world contains
-// any `HitRegion`, `View`, or `KeyBinding`, then it processes hover/click,
-// view overlays, and key bindings each frame.
+// any `HitRegion`, `Screen`, or `KeyBinding`, then it processes hover/click,
+// screen overlays, and key bindings each frame.
+
+mod screen;
 
 use crate::assets::{
-    FrameInput, HitRegion, Key, KeyBinding, SceneCommand, ScrollPanel, SettingCommand, SettingOp,
-    Sprite, SpriteFit, StoryCommand, TextLabel, View, ViewCommand, ViewShown,
+    FrameInput, HitRegion, Key, KeyBinding, SceneCommand, Screen, ScreenCommand, ScreenShown,
+    ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand, TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -13,6 +15,7 @@ use crate::gfx::settings;
 use concinnity_core::gfx::dropdown;
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use concinnity_core::gfx::scroll_layout::{self, RowSpec};
+use screen::{ScreenMeta, ScreenRegistry};
 use std::collections::HashMap;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
@@ -30,11 +33,11 @@ struct RegionEntry {
     original_scale: Option<f32>,
     // Whether this region was hovered last frame (to detect transitions).
     was_hovered: bool,
-    // The view this region belongs to (derived from its name prefix at
-    // init()), or `None` if it belongs to no view. Regions in a view only
-    // fire while that view is active; regions outside any view only fire
-    // when no view is active.
-    view: Option<AssetId>,
+    // The screen this region belongs to (derived from its name prefix at
+    // init()), or `None` if it belongs to no screen. Regions in a screen only
+    // fire while that screen is active; regions outside any screen only fire
+    // when no screen is active.
+    screen: Option<AssetId>,
     // For a slider drag region (action `setting:<key>:drag`), the setting key.
     // `None` for an ordinary click region. A slider region is driven by the
     // drag pass, not the click-to-fire path.
@@ -65,22 +68,6 @@ struct RegionEntry {
     fit: SpriteFit,
 }
 
-// Per-view bookkeeping.
-#[derive(Debug, Default)]
-struct ViewRegistry {
-    // Every declared View id. The dispatch path warns when a `view:*` action
-    // resolves to an id not in this set.
-    known: std::collections::HashSet<AssetId>,
-    // Currently-active view (single slot, no stacking).
-    active: Option<AssetId>,
-    // The view to return to when the active view is dismissed (a Hide, or a
-    // Toggle of the already-active view). Navigation (Show, and a Toggle that
-    // opens a view) clears it rather than saving the outgoing view, so a
-    // dismiss returns to the world (no active view) instead of a sub-view the
-    // user navigated through.
-    prev: Option<AssetId>,
-}
-
 // One row of a scroll panel: the elements that move together, their authored
 // y's (snapshot at init so the reflow is `base + dy`), the row's top + height
 // (for bucketing regions to rows), and the collapsible group it belongs to.
@@ -105,7 +92,7 @@ struct GroupState {
 // Runtime state for one scroll panel, drained from a `ScrollPanel` at init.
 #[derive(Debug)]
 struct PanelState {
-    view: Option<AssetId>,
+    screen: Option<AssetId>,
     // Content band [x, y, width, height] in reference space.
     band: [f32; 4],
     rows: Vec<RowState>,
@@ -137,7 +124,7 @@ struct OpenDropdownState {
     // it.
     value_label: Option<AssetId>,
     // The control button's rect `[x, y, w, h]` the list anchors to (reference
-    // space for a view-owned row, window pixels otherwise).
+    // space for a screen-owned row, window pixels otherwise).
     anchor: [f32; 4],
     // Option labels, top to bottom.
     options: Vec<String>,
@@ -153,9 +140,9 @@ struct OpenDropdownState {
     // thumb is being dragged, or `None`. Keeps the thumb from jumping under
     // the cursor on grab; a drag suppresses hover and the pick/dismiss click.
     thumb_drag: Option<f32>,
-    // The view the row belongs to (drives reference-space vs window hit-testing
-    // and rendering), or `None` for a view-less row.
-    view: Option<AssetId>,
+    // The screen the row belongs to (drives reference-space vs window hit-testing
+    // and rendering), or `None` for a screen-less row.
+    screen: Option<AssetId>,
     // Font / scale / color copied from the row's value label so the list text
     // matches the row (the un-hovered style, captured at open).
     font: Option<crate::ecs::FontHandle>,
@@ -179,7 +166,7 @@ struct OpenRequest {
     setting: String,
     value_label: Option<AssetId>,
     anchor: [f32; 4],
-    view: Option<AssetId>,
+    screen: Option<AssetId>,
     color: Option<[f32; 3]>,
     scale: Option<f32>,
 }
@@ -198,20 +185,20 @@ struct Capture {
     prev_text: String,
 }
 
-// HitRegion / View / KeyBinding input dispatch behavior. Constructed
+// HitRegion / Screen / KeyBinding input dispatch behavior. Constructed
 // internally by `World::start` when the world declares any `HitRegion`,
-// `View`, or `KeyBinding`; never a world-declared asset, so it carries no
+// `Screen`, or `KeyBinding`; never a world-declared asset, so it carries no
 // config.
 #[derive(Debug)]
 pub struct UiInputSystem {
     regions: Vec<RegionEntry>,
     bindings: Vec<KeyBinding>,
-    views: ViewRegistry,
-    // asset_id of UI elements (Sprite, TextLabel) by their owning view.
-    // Built at init() from `<view_name>_*` name prefixes.
-    sprites_by_view: HashMap<AssetId, Vec<AssetId>>,
-    labels_by_view: HashMap<AssetId, Vec<AssetId>>,
-    text_inputs_by_view: HashMap<AssetId, Vec<AssetId>>,
+    screens: ScreenRegistry,
+    // asset_id of UI elements (Sprite, TextLabel) by their owning screen.
+    // Built at init() from `<screen_name>_*` name prefixes.
+    sprites_by_screen: HashMap<AssetId, Vec<AssetId>>,
+    labels_by_screen: HashMap<AssetId, Vec<AssetId>>,
+    text_inputs_by_screen: HashMap<AssetId, Vec<AssetId>>,
     // Index (into `regions`) of the slider currently being dragged, or `None`.
     // Set on the press edge over a slider track, cleared on button release.
     dragging: Option<usize>,
@@ -229,42 +216,43 @@ pub struct UiInputSystem {
     // The open settings dropdown, or `None`. While set, its floating list
     // overlays the menu and consumes input until a pick / dismiss.
     open_dropdown: Option<OpenDropdownState>,
-    // Cursor into the Events<ViewCommand> queue. This system both sends (when a
-    // `view:*` action fires) and reads ViewCommands, so a command fired this
+    // Cursor into the Events<ScreenCommand> queue. This system both sends (when a
+    // `screen:*` action fires) and reads ScreenCommands, so a command fired this
     // frame is applied on the next, the same one-frame lag the old drain had.
-    view_cmd_cursor: crate::ecs::EventCursor,
+    screen_cmd_cursor: crate::ecs::EventCursor,
 }
 
 impl UiInputSystem {
-    // Empty dispatch state. The world's `HitRegion` / `View` / `KeyBinding`
+    // Empty dispatch state. The world's `HitRegion` / `Screen` / `KeyBinding`
     // components are drained into it in [`System::init`].
     pub fn new() -> Self {
         Self {
             regions: Vec::new(),
             bindings: Vec::new(),
-            views: ViewRegistry::default(),
-            sprites_by_view: HashMap::new(),
-            labels_by_view: HashMap::new(),
-            text_inputs_by_view: HashMap::new(),
+            screens: ScreenRegistry::default(),
+            sprites_by_screen: HashMap::new(),
+            labels_by_screen: HashMap::new(),
+            text_inputs_by_screen: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
             thumb_drag: None,
             capturing: None,
             open_dropdown: None,
-            view_cmd_cursor: crate::ecs::EventCursor::default(),
+            screen_cmd_cursor: crate::ecs::EventCursor::default(),
         }
     }
 }
 
 impl System for UiInputSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        // Drain View assets, record every id, and pick the one flagged
-        // `initial` as the active view at world start.
+        // Drain Screen assets, record each one's policies, and pick the one
+        // flagged `initial` to open at world start.
         let mut initial: Option<AssetId> = None;
-        for v in ctx.drain::<View>() {
-            self.views.known.insert(v.asset_id);
-            if v.initial && initial.is_none() {
-                initial = Some(v.asset_id);
+        for s in ctx.drain::<Screen>() {
+            self.screens
+                .register(s.asset_id, ScreenMeta::from_asset(&s));
+            if s.initial && initial.is_none() {
+                initial = Some(s.asset_id);
             }
         }
 
@@ -273,8 +261,8 @@ impl System for UiInputSystem {
         self.bindings = ctx.drain::<KeyBinding>();
 
         // Drain HitRegions, capture per-region hover restore state, and
-        // assign each region to a view (or none) based on the resolved
-        // `view` field that the build pipeline writes from the name prefix.
+        // assign each region to a screen (or none) based on the resolved
+        // `screen` field that the build pipeline writes from the name prefix.
         let hit_regions = ctx.drain::<HitRegion>();
         for region in hit_regions {
             // A region disabled by the engine (e.g. a capability-gated settings
@@ -292,7 +280,7 @@ impl System for UiInputSystem {
                     .map(|l| (Some(l.color), Some(l.scale)))
                     .unwrap_or((None, None)),
             };
-            let view = region.view;
+            let screen = region.screen;
             let slider_key = slider_key_from_action(&region.action);
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
@@ -313,7 +301,7 @@ impl System for UiInputSystem {
                 original_color,
                 original_scale,
                 was_hovered: false,
-                view,
+                screen,
                 slider_key,
                 scroll_row: None,
                 region_base_y,
@@ -324,29 +312,29 @@ impl System for UiInputSystem {
             });
         }
 
-        // Build view → UI-element maps by reading each Sprite/TextLabel's
-        // resolved `view` field (the build pipeline writes it from the
-        // <view>_* name prefix).
+        // Build screen → UI-element maps by reading each Sprite/TextLabel's
+        // resolved `screen` field (the build pipeline writes it from the
+        // <screen>_* name prefix).
         for s in ctx.query::<Sprite>() {
-            if let Some(view_id) = s.view {
-                self.sprites_by_view
-                    .entry(view_id)
+            if let Some(screen_id) = s.screen {
+                self.sprites_by_screen
+                    .entry(screen_id)
                     .or_default()
                     .push(s.asset_id);
             }
         }
         for l in ctx.query::<TextLabel>() {
-            if let Some(view_id) = l.view {
-                self.labels_by_view
-                    .entry(view_id)
+            if let Some(screen_id) = l.screen {
+                self.labels_by_screen
+                    .entry(screen_id)
                     .or_default()
                     .push(l.asset_id);
             }
         }
         for t in ctx.query::<crate::assets::TextInput>() {
-            if let Some(view_id) = t.view {
-                self.text_inputs_by_view
-                    .entry(view_id)
+            if let Some(screen_id) = t.screen {
+                self.text_inputs_by_screen
+                    .entry(screen_id)
                     .or_default()
                     .push(t.asset_id);
             }
@@ -356,9 +344,9 @@ impl System for UiInputSystem {
         // their rows (uses the regions drained just above).
         self.init_panels(ctx);
 
-        // Views start hidden: zero out the visibility of every view-owned
+        // Screens start hidden: zero out the visibility of every screen-owned
         // Sprite and TextLabel.
-        for ids in self.sprites_by_view.values() {
+        for ids in self.sprites_by_screen.values() {
             for &id in ids {
                 for sp in ctx.query_mut::<Sprite>() {
                     if sp.asset_id == id {
@@ -368,7 +356,7 @@ impl System for UiInputSystem {
                 }
             }
         }
-        for ids in self.labels_by_view.values() {
+        for ids in self.labels_by_screen.values() {
             for &id in ids {
                 for lbl in ctx.query_mut::<TextLabel>() {
                     if lbl.asset_id == id {
@@ -378,7 +366,7 @@ impl System for UiInputSystem {
                 }
             }
         }
-        for ids in self.text_inputs_by_view.values() {
+        for ids in self.text_inputs_by_screen.values() {
             for &id in ids {
                 for ti in ctx.query_mut::<crate::assets::TextInput>() {
                     if ti.asset_id == id {
@@ -389,14 +377,17 @@ impl System for UiInputSystem {
             }
         }
 
-        // Activate the initial view (if any) by showing its elements. The
-        // activation is announced like any navigation so view-triggered
-        // consumers (AudioCue music) fire for the first screen too.
-        if let Some(id) = initial {
-            self.set_view_visibility(id, true, ctx);
-            self.views.active = Some(id);
-            ctx.events_mut::<ViewShown>().send(ViewShown { view: id });
+        // Open the initial screen (if any) through the same transition path as
+        // any navigation, so its elements show, its focus field focuses, and
+        // the activation is announced (AudioCue music fires for the first
+        // screen too). Publish the stack resource either way so the overlay
+        // reads a fresh state from frame 0.
+        if let Some(id) = initial
+            && let Some(transition) = self.screens.apply(ScreenCommand::Show(id))
+        {
+            self.apply_transition(transition, ctx);
         }
+        self.publish_screen_stack(ctx);
 
         // Solve the initial scroll layout so frame 0 already shows the right
         // collapsed/scrolled positions (a default-collapsed group starts shut).
@@ -404,20 +395,20 @@ impl System for UiInputSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Apply ViewCommands sent last frame first, so a click last frame takes
+        // Apply ScreenCommands sent last frame first, so a click last frame takes
         // effect before this frame's hit-testing reads `active`. Clone them out
-        // of the queue to release the ctx borrow before apply_view_command,
+        // of the queue to release the ctx borrow before apply_screen_command,
         // which needs &mut ctx.
-        let view_cmds: Vec<ViewCommand> = match ctx.events::<ViewCommand>() {
+        let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
             Some(events) => events
-                .read(&mut self.view_cmd_cursor)
+                .read(&mut self.screen_cmd_cursor)
                 .into_iter()
                 .cloned()
                 .collect(),
             None => Vec::new(),
         };
-        for cmd in view_cmds {
-            self.apply_view_command(cmd, ctx);
+        for cmd in screen_cmds {
+            self.apply_screen_command(cmd, ctx);
         }
 
         // Read (not drain) the per-frame input snapshot so this system can
@@ -461,30 +452,48 @@ impl System for UiInputSystem {
             return StepResult::Continue;
         }
 
-        // Handle KeyBindings before HitRegion clicks so an Esc-toggle-pause
-        // beats a click that landed on the same frame.
-        if input.escape {
-            for kb in &self.bindings {
-                if kb.key == "Escape" && !kb.action.is_empty() {
-                    // KeyBindings carry no label (no settings row binds a key).
-                    if let Some(result) = fire_action(&kb.action, None, ctx) {
-                        return result;
-                    }
-                    break;
-                }
+        // A Screen's `toggle_key` opens / closes it from anywhere, ahead of
+        // ordinary KeyBindings and immune to the typing suppression below (so
+        // a console screen's own key still closes it while its field has
+        // focus). A matched toggle consumes the key press.
+        let pressed_key = if input.escape {
+            Some("Escape".to_string())
+        } else {
+            input.captured_key.map(|k| k.name().to_string())
+        };
+        let toggled_key = pressed_key.as_deref().is_some_and(|name| {
+            let toggles = self.screens.toggles_for_key(name);
+            for id in &toggles {
+                ctx.events_mut::<ScreenCommand>()
+                    .send(ScreenCommand::Toggle(*id));
             }
-        }
+            !toggles.is_empty()
+        });
 
-        // Any other KeyBinding fires when its key is pressed this frame. Escape
-        // is handled above (it is not a `Key` variant, so it never arrives as a
-        // `captured_key`); every other binding matches the one-frame pressed key
-        // by its canonical name -- e.g. a story's Space / Enter advance bindings.
-        // Rebind capture and an open dropdown already returned above, so this
-        // cannot steal a key those flows want.
-        if let Some(key) = input.captured_key {
-            let name = key.name();
+        // While any visible TextInput has keyboard focus, typed keys belong to
+        // the field: ordinary KeyBindings are suspended so typing cannot fire
+        // actions (screen toggles above stay live).
+        let typing = ctx
+            .query::<crate::assets::TextInput>()
+            .any(|t| t.visible && t.focused);
+
+        // Handle KeyBindings before HitRegion clicks so an Esc-toggle-pause
+        // beats a click that landed on the same frame. A binding scoped to a
+        // screen only fires while that screen is on top of the stack. Escape is
+        // matched separately (it is not a `Key` variant, so it never arrives as
+        // a `captured_key`); every other binding matches the one-frame pressed
+        // key by its canonical name -- e.g. a story's Space / Enter advance
+        // bindings. Rebind capture and an open dropdown already returned above,
+        // so this cannot steal a key those flows want.
+        if !toggled_key
+            && !typing
+            && let Some(name) = pressed_key.as_deref()
+        {
+            let top = self.screens.top();
             for kb in &self.bindings {
-                if kb.key == name && !kb.action.is_empty() {
+                let scoped_out = kb.screen.is_some() && kb.screen != top;
+                if kb.key == name && !kb.action.is_empty() && !scoped_out {
+                    // KeyBindings carry no label (no settings row binds a key).
                     if let Some(result) = fire_action(&kb.action, None, ctx) {
                         return result;
                     }
@@ -497,10 +506,13 @@ impl System for UiInputSystem {
         let my = input.mouse_y;
         let clicked = input.left_click;
         let down = input.left_button_down;
-        let active_view = self.views.active;
-        // View-owned regions are overlay UI authored in the reference canvas and
+        // Regions gate on the topmost input-capturing screen (a passthrough
+        // screen above it only draws): its regions fire; with no capturing
+        // screen active, screen-less regions fire.
+        let active_screen = self.screens.top_capture();
+        // Screen-owned regions are overlay UI authored in the reference canvas and
         // scaled onto the window; map the live cursor back into reference space
-        // before testing it against their (reference-space) rects. View-less
+        // before testing it against their (reference-space) rects. Screen-less
         // regions stay in window pixels (see crate::gfx::overlay).
         let overlay = OverlayTransform::from_viewport(input.viewport);
         // Alternate mappings a region may opt into via `fit` (bottom-anchored
@@ -509,11 +521,11 @@ impl System for UiInputSystem {
         let overlay_cover = OverlayTransform::cover_from_viewport(input.viewport);
         let [vw, vh] = input.viewport;
 
-        // Scroll-wheel + scrollbar-thumb input for the active view's panel; both
+        // Scroll-wheel + scrollbar-thumb input for the active screen's panel; both
         // adjust the panel's scroll offset (clamped later in the apply pass). A
         // thumb drag suppresses the slider + click passes so the gutter doesn't
         // double as a control.
-        let thumb_active = self.handle_scroll_input(&input, mx, my, active_view, &overlay);
+        let thumb_active = self.handle_scroll_input(&input, mx, my, active_screen, &overlay);
 
         // Per-panel bands (reference space), so a scroll-content region only
         // fires while the cursor is inside its panel window.
@@ -527,7 +539,7 @@ impl System for UiInputSystem {
         if !thumb_active && !down {
             // Release: commit the dragged slider's final position (persists).
             if let Some(i) = self.dragging.take()
-                && self.regions[i].view == active_view
+                && self.regions[i].screen == active_screen
                 && let Some(key) = self.regions[i].slider_key.clone()
             {
                 // Slider tracks are overlay UI: map the cursor to reference space.
@@ -546,7 +558,7 @@ impl System for UiInputSystem {
             // Slider tracks are overlay UI: map the cursor to reference space.
             let (qx, qy) = overlay.inverse(mx, my);
             for i in 0..self.regions.len() {
-                if self.regions[i].view != active_view {
+                if self.regions[i].screen != active_screen {
                     continue;
                 }
                 let Some(key) = self.regions[i].slider_key.clone() else {
@@ -596,12 +608,12 @@ impl System for UiInputSystem {
             // A region is inert this frame when it cannot hover or fire:
             //   - the scrollbar thumb is being dragged (no region reacts),
             //   - it is a slider track (driven by the drag pass above),
-            //   - its view is not the active one (behind an overlay, or view-less
-            //     while a view is shown),
+            //   - its screen is not the active one (behind an overlay, or screen-less
+            //     while a screen is shown),
             //   - its scroll-content row is collapsed, or
             //   - the engine disabled its setting row at runtime (grayed).
             // Restore any hover styling first so a region hovered when it goes
-            // inert (e.g. the clicked button whose view is being hidden) does not
+            // inert (e.g. the clicked button whose screen is being hidden) does not
             // strand its hover color, then clear the hover flag and skip it.
             let disabled = !disabled_rows.is_empty()
                 && entry
@@ -630,7 +642,7 @@ impl System for UiInputSystem {
             };
             let inert = thumb_active
                 || entry.slider_key.is_some()
-                || entry.view != active_view
+                || entry.screen != active_screen
                 || (entry.scroll_row.is_some() && entry.hidden)
                 || disabled
                 || follow_inert;
@@ -647,12 +659,12 @@ impl System for UiInputSystem {
                 continue;
             }
 
-            // Overlay (view-owned) regions hit-test in reference space (through
+            // Overlay (screen-owned) regions hit-test in reference space (through
             // the region's own `fit`); HUD regions in window pixels. A region
             // spanning the whole reference canvas covers the full window (so a
             // full-canvas advance region catches clicks in the letterbox too).
-            let full_window = entry.view.is_some() && region_covers_canvas(&entry.region);
-            let (qx, qy) = if entry.view.is_none() {
+            let full_window = entry.screen.is_some() && region_covers_canvas(&entry.region);
+            let (qx, qy) = if entry.screen.is_none() {
                 (mx, my)
             } else {
                 match entry.fit {
@@ -703,7 +715,7 @@ impl System for UiInputSystem {
                         setting: key.to_string(),
                         value_label: r.label,
                         anchor: [r.x, r.y, r.width, r.height],
-                        view: entry.view,
+                        screen: entry.screen,
                         color: entry.original_color,
                         scale: entry.original_scale,
                     });
@@ -742,10 +754,10 @@ impl System for UiInputSystem {
             self.open_dropdown = Self::build_open_dropdown(req, ctx);
         }
 
-        // Apply a recorded group toggle to the active view's panel, then solve
+        // Apply a recorded group toggle to the active screen's panel, then solve
         // every panel so the next frame draws + hit-tests the reflowed layout.
         if let Some(gid) = toggle_group
-            && let Some(panel) = self.panels.iter_mut().find(|p| p.view == active_view)
+            && let Some(panel) = self.panels.iter_mut().find(|p| p.screen == active_screen)
             && let Some(g) = panel.groups.get_mut(gid)
         {
             g.collapsed = !g.collapsed;
@@ -772,10 +784,10 @@ impl UiInputSystem {
             return;
         };
         let count = state.options.len();
-        // View-owned rows hit-test in reference space; a view-less row in window
+        // Screen-owned rows hit-test in reference space; a screen-less row in window
         // pixels (matches the region hit-test in `step`).
         let overlay = OverlayTransform::from_viewport(input.viewport);
-        let (qx, qy) = if state.view.is_some() {
+        let (qx, qy) = if state.screen.is_some() {
             overlay.inverse(input.mouse_x, input.mouse_y)
         } else {
             (input.mouse_x, input.mouse_y)
@@ -902,7 +914,7 @@ impl UiInputSystem {
             selected,
             hovered: None,
             thumb_drag: None,
-            view: req.view,
+            screen: req.screen,
             font,
             scale: req.scale.unwrap_or(1.0),
             color: req.color.unwrap_or([1.0, 1.0, 1.0]),
@@ -912,7 +924,7 @@ impl UiInputSystem {
     // Publish the current dropdown state as an `OpenDropdown` resource for
     // GraphicsSystem to draw next tick (`None` while closed).
     fn publish_dropdown(&self, ctx: &mut PipelineContext) {
-        let view = self
+        let screen = self
             .open_dropdown
             .as_ref()
             .map(|s| crate::ecs::DropdownView {
@@ -921,69 +933,65 @@ impl UiInputSystem {
                 selected: s.selected,
                 first: s.first(),
                 hovered: s.hovered,
-                view: s.view,
+                screen: s.screen,
                 font: s.font,
                 scale: s.scale,
                 color: s.color,
             });
-        ctx.insert_resource(crate::ecs::OpenDropdown(view));
+        ctx.insert_resource(crate::ecs::OpenDropdown(screen));
     }
 
-    fn apply_view_command(&mut self, cmd: ViewCommand, ctx: &mut PipelineContext) {
-        // A navigation away from the current page dismisses any open dropdown so
-        // its list never lingers over a different view.
-        self.open_dropdown = None;
-        // Semantics:
-        //   Show(X)     : navigate to X.
-        //   Hide        : dismiss the active view, returning to `prev`.
-        //   Toggle(X)   : if X is active, dismiss it (returning to `prev`);
-        //                 otherwise navigate to X.
-        //
-        // Navigation (Show, and a Toggle that opens a view) never records the
-        // outgoing view as `prev`, so dismissing a view never walks back into
-        // one the user navigated away from. This keeps an Escape-toggled menu
-        // dismissing to the world: pressing Escape from a Settings sub-view up
-        // to the menu, then Escape again, returns to the world rather than back
-        // into Settings.
-        let (new_active, new_prev) = match cmd {
-            ViewCommand::Hide => (self.views.prev, None),
-            ViewCommand::Show(id) => {
-                if !self.views.known.contains(&id) {
-                    tracing::warn!("ViewCommand::Show: unknown view {}", id);
-                    return;
-                }
-                if self.views.active == Some(id) {
-                    return;
-                }
-                (Some(id), None)
-            }
-            ViewCommand::Toggle(id) => {
-                if !self.views.known.contains(&id) {
-                    tracing::warn!("ViewCommand::Toggle: unknown view {}", id);
-                    return;
-                }
-                if self.views.active == Some(id) {
-                    (self.views.prev, None)
-                } else {
-                    (Some(id), None)
-                }
-            }
-        };
-
-        if new_active == self.views.active {
+    fn apply_screen_command(&mut self, cmd: ScreenCommand, ctx: &mut PipelineContext) {
+        let Some(transition) = self.screens.apply(cmd) else {
             return;
-        }
+        };
+        // A stack change dismisses any open dropdown so its list never lingers
+        // over a different screen.
+        self.open_dropdown = None;
+        self.apply_transition(transition, ctx);
+        self.publish_screen_stack(ctx);
+    }
 
-        if let Some(prev) = self.views.active {
-            self.set_view_visibility(prev, false, ctx);
+    // Enact one stack transition on the world: flip the entering / leaving
+    // screens' element visibility, move keyboard focus to the new top's
+    // `focus` field, and announce the newly-topmost screen (AudioCue).
+    fn apply_transition(
+        &mut self,
+        transition: screen::ScreenTransition,
+        ctx: &mut PipelineContext,
+    ) {
+        for id in &transition.hidden {
+            self.set_screen_visibility(*id, false, ctx);
         }
-        if let Some(next) = new_active {
-            self.set_view_visibility(next, true, ctx);
-            // Announce the activation for view-triggered consumers (AudioCue).
-            ctx.events_mut::<ViewShown>().send(ViewShown { view: next });
+        for id in &transition.shown {
+            self.set_screen_visibility(*id, true, ctx);
         }
-        self.views.active = new_active;
-        self.views.prev = new_prev;
+        if transition.top_changed {
+            // Focus follows the top of the stack: blur every field, then focus
+            // the new top's `focus` target (if it names one).
+            let focus = transition
+                .new_top
+                .and_then(|id| self.screens.meta(id))
+                .and_then(|m| m.focus);
+            for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                ti.focused = Some(ti.asset_id) == focus;
+            }
+        }
+        if let Some(top) = transition.new_top {
+            ctx.events_mut::<ScreenShown>()
+                .send(ScreenShown { screen: top });
+        }
+    }
+
+    // Publish the stack's derived per-frame state (draw layers, world-pause,
+    // input capture) for the overlay build and InputSystem, which read it a
+    // frame later -- the same one-frame lag the visibility flips have.
+    fn publish_screen_stack(&self, ctx: &mut PipelineContext) {
+        ctx.insert_resource(crate::ecs::ScreenStack {
+            layers: self.screens.layers(),
+            pauses_world: self.screens.pauses_world(),
+            captures_input: self.screens.captures_input(),
+        });
     }
 
     // Cancel a pending rebind capture, restoring the row's previous value text.
@@ -1006,8 +1014,8 @@ impl UiInputSystem {
         }
     }
 
-    fn set_view_visibility(&self, view_id: AssetId, visible: bool, ctx: &mut PipelineContext) {
-        if let Some(ids) = self.sprites_by_view.get(&view_id) {
+    fn set_screen_visibility(&self, screen_id: AssetId, visible: bool, ctx: &mut PipelineContext) {
+        if let Some(ids) = self.sprites_by_screen.get(&screen_id) {
             for &id in ids {
                 for s in ctx.query_mut::<Sprite>() {
                     if s.asset_id == id {
@@ -1017,7 +1025,7 @@ impl UiInputSystem {
                 }
             }
         }
-        if let Some(ids) = self.labels_by_view.get(&view_id) {
+        if let Some(ids) = self.labels_by_screen.get(&screen_id) {
             for &id in ids {
                 for l in ctx.query_mut::<TextLabel>() {
                     if l.asset_id == id {
@@ -1027,7 +1035,7 @@ impl UiInputSystem {
                 }
             }
         }
-        if let Some(ids) = self.text_inputs_by_view.get(&view_id) {
+        if let Some(ids) = self.text_inputs_by_screen.get(&screen_id) {
             for &id in ids {
                 for ti in ctx.query_mut::<crate::assets::TextInput>() {
                     if ti.asset_id == id {
@@ -1095,7 +1103,7 @@ impl UiInputSystem {
                 })
                 .collect();
             self.panels.push(PanelState {
-                view: p.view,
+                screen: p.screen,
                 band: [p.x, p.y, p.width, p.height],
                 rows,
                 groups,
@@ -1113,7 +1121,7 @@ impl UiInputSystem {
 
         // Bucket each panel-content region into its row by centre y. Only
         // content regions (a settings action or a group toggle) are bucketed;
-        // chrome regions (tabs, Back -- `view:show`) are left fixed even when an
+        // chrome regions (tabs, Back -- `screen:show`) are left fixed even when an
         // overflow row's authored y reaches their position. Panels read
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
@@ -1125,7 +1133,7 @@ impl UiInputSystem {
             }
             let cy = entry.region.y + entry.region.height * 0.5;
             'find: for (pi, panel) in panels.iter().enumerate() {
-                if panel.view != entry.view {
+                if panel.screen != entry.screen {
                     continue;
                 }
                 for (ri, row) in panel.rows.iter().enumerate() {
@@ -1150,7 +1158,7 @@ impl UiInputSystem {
     }
 
     // Apply scroll-wheel + arrow-key + scrollbar-thumb input to the active
-    // view's panel. Returns true while the thumb is being dragged so the caller
+    // screen's panel. Returns true while the thumb is being dragged so the caller
     // suppresses the slider + click passes. The solver clamps the resulting
     // scroll offset.
     fn handle_scroll_input(
@@ -1158,11 +1166,11 @@ impl UiInputSystem {
         input: &FrameInput,
         mx: f32,
         my: f32,
-        active_view: Option<AssetId>,
+        active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
     ) -> bool {
         let (qx, qy) = overlay.inverse(mx, my);
-        let active_panel = self.panels.iter().position(|p| p.view == active_view);
+        let active_panel = self.panels.iter().position(|p| p.screen == active_screen);
 
         // Wheel: scroll the active panel while the cursor is over its band.
         if input.scroll_delta != 0.0
@@ -1216,15 +1224,15 @@ impl UiInputSystem {
 
     // Solve every panel's vertical layout and write the result back: element y +
     // visibility, region reflow + hidden flag, the scrollbar thumb position +
-    // size, and each group header's `+`/`-` prefix. Only the active view's panel
-    // writes (an inactive view's elements stay hidden by the view system). Runs
+    // size, and each group header's `+`/`-` prefix. Only the active screen's panel
+    // writes (an inactive screen's elements stay hidden by the screen system). Runs
     // at init and at the end of each step so the next frame draws + hit-tests the
     // reflowed positions consistently.
     fn apply_scroll_layout(&mut self, ctx: &mut PipelineContext) {
         if self.panels.is_empty() {
             return;
         }
-        let active = self.views.active;
+        let active = self.screens.top_capture();
 
         // Accumulate component writes, then apply in single passes.
         let mut sprite_updates: HashMap<AssetId, (f32, Option<f32>, bool)> = HashMap::new();
@@ -1236,7 +1244,7 @@ impl UiInputSystem {
             Vec::with_capacity(self.panels.len());
 
         for panel in self.panels.iter_mut() {
-            let panel_active = panel.view == active;
+            let panel_active = panel.screen == active;
             let collapsed: Vec<bool> = panel.groups.iter().map(|g| g.collapsed).collect();
             let specs: Vec<RowSpec> = panel
                 .rows
@@ -1377,7 +1385,7 @@ fn region_covers_canvas(r: &HitRegion) -> bool {
 
 // Write the given color + scale onto a region's referenced label, if any.
 // Drives hover-in (hover style), hover-out (captured style), and the restore
-// applied when a hovered region goes inert (its view hides, its row collapses,
+// applied when a hovered region goes inert (its screen hides, its row collapses,
 // or it is disabled) so its hover styling never strands on the label.
 fn set_label_style(
     ctx: &mut PipelineContext,
@@ -1422,33 +1430,42 @@ fn fire_action(
                     scene: AssetId(id),
                     transition: "FadeBlack".to_string(),
                 });
-                // Hide any active view on a scene change: the user has
-                // chosen a new context, so the overlay is dismissed.
-                ctx.events_mut::<ViewCommand>().send(ViewCommand::Hide);
+                // Dismiss every open screen on a scene change: the user has
+                // chosen a new context, so the whole overlay stack clears.
+                ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Clear);
             }
             Err(_) => tracing::warn!("UiInputSystem: unresolved scene action '{}'", action),
         }
         return None;
     }
-    if action == "view:hide" {
-        ctx.events_mut::<ViewCommand>().send(ViewCommand::Hide);
+    if action == "screen:hide" {
+        ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Hide);
         return None;
     }
-    if let Some(view_ref) = action.strip_prefix("view:show:") {
-        match view_ref.parse::<u32>() {
+    if let Some(screen_ref) = action.strip_prefix("screen:show:") {
+        match screen_ref.parse::<u32>() {
             Ok(id) => ctx
-                .events_mut::<ViewCommand>()
-                .send(ViewCommand::Show(AssetId(id))),
-            Err(_) => tracing::warn!("UiInputSystem: unresolved view action '{}'", action),
+                .events_mut::<ScreenCommand>()
+                .send(ScreenCommand::Show(AssetId(id))),
+            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
         }
         return None;
     }
-    if let Some(view_ref) = action.strip_prefix("view:toggle:") {
-        match view_ref.parse::<u32>() {
+    if let Some(screen_ref) = action.strip_prefix("screen:toggle:") {
+        match screen_ref.parse::<u32>() {
             Ok(id) => ctx
-                .events_mut::<ViewCommand>()
-                .send(ViewCommand::Toggle(AssetId(id))),
-            Err(_) => tracing::warn!("UiInputSystem: unresolved view action '{}'", action),
+                .events_mut::<ScreenCommand>()
+                .send(ScreenCommand::Toggle(AssetId(id))),
+            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
+        }
+        return None;
+    }
+    if let Some(screen_ref) = action.strip_prefix("screen:push:") {
+        match screen_ref.parse::<u32>() {
+            Ok(id) => ctx
+                .events_mut::<ScreenCommand>()
+                .send(ScreenCommand::Push(AssetId(id))),
+            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
         }
         return None;
     }
@@ -1516,7 +1533,7 @@ fn fire_action(
 #[cfg(test)]
 mod tests {
     // UiInputSystem is internal: each test seeds the gating components
-    // (HitRegion / View / KeyBinding) before `world.start()`, which constructs
+    // (HitRegion / Screen / KeyBinding) before `world.start()`, which constructs
     // the system from them via the build schedule.
     use super::*;
     use crate::assets::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
@@ -1531,13 +1548,13 @@ mod tests {
         }
     }
 
-    // The ViewCommand UiInputSystem sent this step, read with a fresh cursor so
+    // The ScreenCommand UiInputSystem sent this step, read with a fresh cursor so
     // the system's own cursor (which applies them a frame later) is untouched.
     // Returns the first if several were sent.
-    fn produced_view_command(world: &World) -> Option<ViewCommand> {
+    fn produced_screen_command(world: &World) -> Option<ScreenCommand> {
         let mut cursor = crate::ecs::EventCursor::default();
         world
-            .events::<ViewCommand>()
+            .events::<ScreenCommand>()
             .and_then(|e| e.read(&mut cursor).into_iter().next().cloned())
     }
 
@@ -1552,8 +1569,8 @@ mod tests {
             .unwrap_or_default()
     }
 
-    // A view-owned TextLabel used as a scroll-panel element.
-    fn panel_label(id: u32, y: f32, view: AssetId, content: &str) -> TextLabel {
+    // A screen-owned TextLabel used as a scroll-panel element.
+    fn panel_label(id: u32, y: f32, screen: AssetId, content: &str) -> TextLabel {
         TextLabel {
             asset_id: AssetId(id),
             font: None,
@@ -1568,7 +1585,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: Some(view),
+            screen: Some(screen),
         }
     }
 
@@ -1598,7 +1615,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: None,
+            screen: None,
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -1610,7 +1627,7 @@ mod tests {
             hover_scale: Some(2.0),
             action: String::new(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -1642,25 +1659,27 @@ mod tests {
     }
 
     // Clicking a menu button hovers its label (hover color) and switches away to
-    // another view the same frame. The next frame the button's view is hidden;
+    // another screen the same frame. The next frame the button's screen is hidden;
     // its hover color must be restored, not stranded, so it is not still
-    // highlighted when its view is shown again.
+    // highlighted when its screen is shown again.
     #[test]
-    fn hover_style_restored_when_region_view_is_hidden() {
+    fn hover_style_restored_when_region_screen_is_hidden() {
         let mut world = World::new_empty();
         let menu = AssetId(80);
         let settings = AssetId(81);
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: menu,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: settings,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        // The menu's "Settings" label + its hit region (view-owned).
+        // The menu's "Settings" label + its hit region (screen-owned).
         world.add_component(TextLabel {
             asset_id: AssetId(1),
             font: None,
@@ -1675,7 +1694,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: Some(menu),
+            screen: Some(menu),
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -1685,9 +1704,9 @@ mod tests {
             label: Some(AssetId(1)),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: "view:show:81".to_string(),
+            action: "screen:show:81".to_string(),
             drag_handle: None,
-            view: Some(menu),
+            screen: Some(menu),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -1710,29 +1729,29 @@ mod tests {
         );
 
         // Next frame applies Show(settings): the menu (and its Settings label) is
-        // hidden. The hover color must be restored despite the view being hidden.
+        // hidden. The hover color must be restored despite the screen being hidden.
         world.add_component(FrameInput::default());
         world.step();
         assert_eq!(
             label_field(&world, AssetId(1), |l| l.color),
             [1.0, 1.0, 1.0],
-            "hover color restored when the region's view is hidden"
+            "hover color restored when the region's screen is hidden"
         );
     }
 
-    // A view-owned dropdown row (window_mode has three options, so its
+    // A screen-owned dropdown row (window_mode has three options, so its
     // `:open` region opens a floating list). Clicking the control opens the list
     // (published as an OpenDropdown resource, no command yet); clicking an option
     // sends a SetIndex command and closes.
     fn dropdown_world() -> (World, AssetId) {
-        let view = AssetId(9);
+        let screen = AssetId(9);
         let mut world = World::new_empty();
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             ..Default::default()
         });
-        // The row's value label (view-owned), currently "Windowed" (option 0).
+        // The row's value label (screen-owned), currently "Windowed" (option 0).
         world.add_component(TextLabel {
             asset_id: AssetId(1),
             font: None,
@@ -1747,7 +1766,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: Some(view),
+            screen: Some(screen),
         });
         // The control button whose click opens the list.
         world.add_component(HitRegion {
@@ -1760,13 +1779,13 @@ mod tests {
             hover_scale: Some(1.0),
             action: "setting:window_mode:open".to_string(),
             drag_handle: None,
-            view: Some(view),
+            screen: Some(screen),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
-        (world, view)
+        (world, screen)
     }
 
     fn dropdown_is_open(world: &World) -> bool {
@@ -1806,10 +1825,10 @@ mod tests {
     // selection, the wheel scrolls the window instead of dismissing, and a
     // click picks the OPTION under the row (not the raw row index).
     fn scrolled_dropdown_world() -> World {
-        let view = AssetId(9);
+        let screen = AssetId(9);
         let mut world = World::new_empty();
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             ..Default::default()
         });
@@ -1836,7 +1855,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: Some(view),
+            screen: Some(screen),
         });
         world.add_component(HitRegion {
             x: 400.0,
@@ -1848,7 +1867,7 @@ mod tests {
             hover_scale: Some(1.0),
             action: "setting:resolution:open".to_string(),
             drag_handle: None,
-            view: Some(view),
+            screen: Some(screen),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2046,7 +2065,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: None,
+            screen: None,
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -2059,7 +2078,7 @@ mod tests {
             hover_scale: Some(0.66),
             action: String::new(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2092,7 +2111,7 @@ mod tests {
             hover_scale: None,
             action: "scene:3".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2122,7 +2141,7 @@ mod tests {
             hover_scale: None,
             action: "quit".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2134,16 +2153,17 @@ mod tests {
         assert_eq!(result, StepResult::Stop);
     }
 
-    // Showing a view makes its sprites visible and hides them again on Hide.
+    // Showing a screen makes its sprites visible and hides them again on Hide.
     #[test]
-    fn view_show_and_hide_toggles_sprite_visibility() {
+    fn screen_show_and_hide_toggles_sprite_visibility() {
         let mut world = World::new_empty();
 
-        let view_id = AssetId(10);
-        world.add_component(View {
-            asset_id: view_id,
+        let screen_id = AssetId(10);
+        world.add_component(Screen {
+            asset_id: screen_id,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         world.add_component(Sprite {
             asset_id: AssetId(11),
@@ -2155,24 +2175,24 @@ mod tests {
             tint: [0.0, 0.0, 0.0, 0.5],
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
-            view: Some(view_id),
+            screen: Some(screen_id),
             fit: crate::assets::SpriteFit::Fit,
             corner_radius: 0.0,
         });
         world.start().unwrap();
 
-        // init() hides view elements.
+        // init() hides screen elements.
         let visible_after_init = world
             .query::<Sprite>()
             .find(|s| s.asset_id == AssetId(11))
             .map(|s| s.visible)
             .unwrap();
-        assert!(!visible_after_init, "view starts hidden after init");
+        assert!(!visible_after_init, "screen starts hidden after init");
 
-        // Show the view.
+        // Show the screen.
         world
-            .events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(view_id));
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(screen_id));
         world.add_component(FrameInput::default());
         world.step();
 
@@ -2181,10 +2201,12 @@ mod tests {
             .find(|s| s.asset_id == AssetId(11))
             .map(|s| s.visible)
             .unwrap();
-        assert!(visible_after_show, "view sprite is visible after Show");
+        assert!(visible_after_show, "screen sprite is visible after Show");
 
         // Hide it again.
-        world.events_mut::<ViewCommand>().send(ViewCommand::Hide);
+        world
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Hide);
         world.add_component(FrameInput::default());
         world.step();
 
@@ -2193,10 +2215,10 @@ mod tests {
             .find(|s| s.asset_id == AssetId(11))
             .map(|s| s.visible)
             .unwrap();
-        assert!(!visible_after_hide, "view sprite is hidden after Hide");
+        assert!(!visible_after_hide, "screen sprite is hidden after Hide");
     }
 
-    // A view-owned region is overlay UI authored in the reference canvas; when
+    // A screen-owned region is overlay UI authored in the reference canvas; when
     // the window differs from the reference the region is scaled, and the live
     // cursor must be mapped back into reference space to hit it. At a 2x
     // viewport, a click at the scaled on-screen rect fires; a click at the raw
@@ -2213,11 +2235,12 @@ mod tests {
 
     fn overlay_region_world() -> World {
         let mut world = World::new_empty();
-        let view_id = AssetId(30);
-        world.add_component(View {
-            asset_id: view_id,
+        let screen_id = AssetId(30);
+        world.add_component(Screen {
+            asset_id: screen_id,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         // Reference-space rect [200,400] x [200,260].
         world.add_component(HitRegion {
@@ -2230,7 +2253,7 @@ mod tests {
             hover_scale: None,
             action: "scene:7".to_string(),
             drag_handle: None,
-            view: Some(view_id),
+            screen: Some(screen_id),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2240,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn view_owned_region_hit_tests_in_reference_space_when_scaled() {
+    fn screen_owned_region_hit_tests_in_reference_space_when_scaled() {
         // 2x reference viewport: the reference center (300,230) maps on-screen
         // to (600,460). A click there inverse-maps back inside the rect → fires.
         let mut world = overlay_region_world();
@@ -2264,18 +2287,19 @@ mod tests {
         );
     }
 
-    // While a view is active, underlying scene HitRegions don't fire.
+    // While a screen is active, underlying scene HitRegions don't fire.
     #[test]
     fn hit_region_filtered_when_view_is_active() {
         let mut world = World::new_empty();
 
-        let view_id = AssetId(20);
-        world.add_component(View {
-            asset_id: view_id,
+        let screen_id = AssetId(20);
+        world.add_component(Screen {
+            asset_id: screen_id,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        // A scene-level region (no view) that would normally fire.
+        // A scene-level region (no screen) that would normally fire.
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2286,17 +2310,17 @@ mod tests {
             hover_scale: None,
             action: "scene:7".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
         });
         world.start().unwrap();
 
-        // Show the view, then click where the scene-region is.
+        // Show the screen, then click where the scene-region is.
         world
-            .events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(view_id));
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(screen_id));
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
 
@@ -2305,13 +2329,13 @@ mod tests {
             .is_some_and(|e| !e.is_empty());
         assert!(
             !has_cmd,
-            "scene-level region should not fire while view is active"
+            "scene-level region should not fire while screen is active"
         );
     }
 
     #[test]
     fn fire_action_dispatches_view_variants() {
-        // view:hide → ViewCommand::Hide
+        // screen:hide → ScreenCommand::Hide
         let mut world = World::new_empty();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2321,9 +2345,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "view:hide".to_string(),
+            action: "screen:hide".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2332,11 +2356,11 @@ mod tests {
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
         assert!(matches!(
-            produced_view_command(&world),
-            Some(ViewCommand::Hide)
+            produced_screen_command(&world),
+            Some(ScreenCommand::Hide)
         ));
 
-        // view:show:42 → ViewCommand::Show(42)
+        // screen:show:42 → ScreenCommand::Show(42)
         let mut world = World::new_empty();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2346,9 +2370,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "view:show:42".to_string(),
+            action: "screen:show:42".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2356,10 +2380,10 @@ mod tests {
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
-        let cmd = produced_view_command(&world);
-        assert!(matches!(cmd, Some(ViewCommand::Show(AssetId(42)))));
+        let cmd = produced_screen_command(&world);
+        assert!(matches!(cmd, Some(ScreenCommand::Show(AssetId(42)))));
 
-        // view:toggle:43 → ViewCommand::Toggle(43)
+        // screen:toggle:43 → ScreenCommand::Toggle(43)
         let mut world = World::new_empty();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2369,9 +2393,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "view:toggle:43".to_string(),
+            action: "screen:toggle:43".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2379,8 +2403,8 @@ mod tests {
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
-        let cmd = produced_view_command(&world);
-        assert!(matches!(cmd, Some(ViewCommand::Toggle(AssetId(43)))));
+        let cmd = produced_screen_command(&world);
+        assert!(matches!(cmd, Some(ScreenCommand::Toggle(AssetId(43)))));
     }
 
     #[test]
@@ -2399,7 +2423,7 @@ mod tests {
             hover_scale: None,
             action: "setting:vsync:next".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2447,7 +2471,7 @@ mod tests {
             hover_scale: None,
             action: "setting:ray_traced_reflections:next".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: true,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2479,7 +2503,7 @@ mod tests {
             hover_scale: None,
             action: "setting:show_fps:next".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2513,7 +2537,7 @@ mod tests {
             hover_scale: None,
             action: "setting:exposure:drag".to_string(),
             drag_handle: Some(AssetId(8)),
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2565,15 +2589,16 @@ mod tests {
     #[test]
     fn group_toggle_collapses_body_and_updates_header() {
         let mut world = World::new_empty();
-        let view = AssetId(50);
+        let screen = AssetId(50);
         let (header, body) = (AssetId(51), AssetId(52));
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        world.add_component(panel_label(51, 100.0, view, "- Adv"));
-        world.add_component(panel_label(52, 140.0, view, "Body"));
+        world.add_component(panel_label(51, 100.0, screen, "- Adv"));
+        world.add_component(panel_label(52, 140.0, screen, "Body"));
         // Header click region (toggles group 0).
         world.add_component(HitRegion {
             x: 0.0,
@@ -2585,7 +2610,7 @@ mod tests {
             hover_scale: None,
             action: "group:toggle:0".to_string(),
             drag_handle: None,
-            view: Some(view),
+            screen: Some(screen),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2602,13 +2627,13 @@ mod tests {
             hover_scale: None,
             action: "setting:vsync:next".to_string(),
             drag_handle: None,
-            view: Some(view),
+            screen: Some(screen),
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
-            view: Some(view),
+            screen: Some(screen),
             x: 0.0,
             y: 100.0,
             width: 300.0,
@@ -2665,17 +2690,18 @@ mod tests {
     #[test]
     fn wheel_scrolls_panel_content() {
         let mut world = World::new_empty();
-        let view = AssetId(60);
+        let screen = AssetId(60);
         let e0 = AssetId(61);
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        world.add_component(panel_label(61, 0.0, view, "Row0"));
+        world.add_component(panel_label(61, 0.0, screen, "Row0"));
         // Three 40px rows (120px) in a 60px band -> overflows by 60px.
         world.add_component(ScrollPanel {
-            view: Some(view),
+            screen: Some(screen),
             x: 0.0,
             y: 0.0,
             width: 300.0,
@@ -2738,16 +2764,17 @@ mod tests {
     // track beside it (thumb = 30px, travel = 30px, max scroll = 60px).
     fn scrollbar_panel_world() -> (World, AssetId) {
         let mut world = World::new_empty();
-        let view = AssetId(60);
+        let screen = AssetId(60);
         let e0 = AssetId(61);
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        world.add_component(panel_label(61, 0.0, view, "Row0"));
+        world.add_component(panel_label(61, 0.0, screen, "Row0"));
         world.add_component(ScrollPanel {
-            view: Some(view),
+            screen: Some(screen),
             x: 0.0,
             y: 0.0,
             width: 300.0,
@@ -2876,7 +2903,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: None,
+            screen: None,
         });
         world.add_component(HitRegion {
             x: 0.0,
@@ -2888,7 +2915,7 @@ mod tests {
             hover_scale: None,
             action: "setting:key_forward:rebind".to_string(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: crate::assets::SpriteFit::Fit,
@@ -2967,28 +2994,29 @@ mod tests {
         assert!(produced_setting_commands(&world).is_empty());
     }
 
-    // The ViewShown announcements the cursor has not yet consumed, read the
+    // The ScreenShown announcements the cursor has not yet consumed, read the
     // way a real consumer (AudioCue) does: incrementally, before the queue's
     // two-frame retention retires them.
     fn shown_views(world: &World, cursor: &mut crate::ecs::EventCursor) -> Vec<AssetId> {
         world
-            .events::<ViewShown>()
-            .map(|e| e.read(cursor).into_iter().map(|s| s.view).collect())
+            .events::<ScreenShown>()
+            .map(|e| e.read(cursor).into_iter().map(|s| s.screen).collect())
             .unwrap_or_default()
     }
 
-    // Both the initial view at start and a Show navigation announce the newly
-    // active view, so view-triggered consumers (AudioCue) hear every screen.
+    // Both the initial screen at start and a Show navigation announce the newly
+    // active screen, so screen-triggered consumers (AudioCue) hear every screen.
     #[test]
     fn view_activation_emits_view_shown() {
         let mut world = World::new_empty();
         let first = AssetId(80);
         let second = AssetId(81);
         for (id, initial) in [(first, true), (second, false)] {
-            world.add_component(View {
+            world.add_component(Screen {
                 asset_id: id,
                 initial,
                 fade_in_secs: 0.0,
+                ..Default::default()
             });
         }
         world.start().unwrap();
@@ -2996,15 +3024,15 @@ mod tests {
         assert_eq!(shown_views(&world, &mut cursor), vec![first]);
 
         world
-            .events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(second));
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(second));
         world.step();
         assert_eq!(shown_views(&world, &mut cursor), vec![second]);
 
-        // Showing the already-active view is a no-op: no repeat announcement.
+        // Showing the already-active screen is a no-op: no repeat announcement.
         world
-            .events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(second));
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(second));
         world.step();
         assert!(shown_views(&world, &mut cursor).is_empty());
     }
@@ -3013,15 +3041,17 @@ mod tests {
     fn escape_key_binding_fires_action() {
         let mut world = World::new_empty();
 
-        let view_id = AssetId(50);
-        world.add_component(View {
-            asset_id: view_id,
+        let screen_id = AssetId(50);
+        world.add_component(Screen {
+            asset_id: screen_id,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "view:toggle:50".to_string(),
+            action: "screen:toggle:50".to_string(),
+            ..Default::default()
         });
         world.start().unwrap();
 
@@ -3032,8 +3062,8 @@ mod tests {
         });
         world.step();
 
-        let cmd = produced_view_command(&world);
-        assert!(matches!(cmd, Some(ViewCommand::Toggle(AssetId(50)))));
+        let cmd = produced_screen_command(&world);
+        assert!(matches!(cmd, Some(ScreenCommand::Toggle(AssetId(50)))));
     }
 
     // Every StoryCommand the system sent this step, in send order.
@@ -3054,6 +3084,7 @@ mod tests {
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
                 action: "story:advance".to_string(),
+                ..Default::default()
             });
             world.start().unwrap();
 
@@ -3079,6 +3110,7 @@ mod tests {
         world.add_component(KeyBinding {
             key: "Space".to_string(),
             action: "story:advance".to_string(),
+            ..Default::default()
         });
         world.start().unwrap();
 
@@ -3091,27 +3123,29 @@ mod tests {
         assert!(produced_story_commands(&world).is_empty());
     }
 
-    // Escape toggles the menu; Settings is reached by a Show (a sub-view). After
+    // Escape toggles the menu; Settings is reached by a Show (a sub-screen). After
     // visiting Settings, escaping back to the menu and escaping again must return
-    // to the world, not back into Settings: a Toggle that opens a view must not
-    // record the outgoing view as the dismiss target.
+    // to the world, not back into Settings: a Toggle that opens a screen must not
+    // record the outgoing screen as the dismiss target.
     #[test]
     fn escape_from_menu_returns_to_world_after_visiting_a_subview() {
         let mut world = World::new_empty();
         let menu = AssetId(60);
         let settings = AssetId(61);
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: menu,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: settings,
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
-        // One sprite per view, to observe which view is active by visibility.
-        for (id, view) in [(70u32, menu), (71u32, settings)] {
+        // One sprite per screen, to observe which screen is active by visibility.
+        for (id, screen) in [(70u32, menu), (71u32, settings)] {
             world.add_component(Sprite {
                 asset_id: AssetId(id),
                 x: 0.0,
@@ -3122,14 +3156,15 @@ mod tests {
                 tint: [0.0, 0.0, 0.0, 1.0],
                 follow_cursor: false,
                 visible: false,
-                view: Some(view),
+                screen: Some(screen),
                 fit: crate::assets::SpriteFit::Fit,
                 corner_radius: 0.0,
             });
         }
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "view:toggle:60".to_string(),
+            action: "screen:toggle:60".to_string(),
+            ..Default::default()
         });
         world.start().unwrap();
 
@@ -3147,7 +3182,7 @@ mod tests {
             });
             w.step();
         }
-        // A frame that applies the view command queued the previous frame.
+        // A frame that applies the screen command queued the previous frame.
         fn settle(w: &mut World) {
             w.add_component(FrameInput::default());
             w.step();
@@ -3158,10 +3193,10 @@ mod tests {
         settle(&mut world);
         assert!(shown(&world, 70) && !shown(&world, 71), "menu opens");
 
-        // Menu -> click Settings (a Show) -> settings sub-view.
+        // Menu -> click Settings (a Show) -> settings sub-screen.
         world
-            .events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(settings));
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(settings));
         settle(&mut world);
         assert!(!shown(&world, 70) && shown(&world, 71), "settings shown");
 
@@ -3179,14 +3214,256 @@ mod tests {
         );
     }
 
-    // A gating component (here a View) spawns the internal UiInputSystem.
+    // A Screen's `toggle_key` opens it from anywhere and closes it again,
+    // without any KeyBinding.
+    #[test]
+    fn toggle_key_opens_and_closes_a_screen() {
+        let mut world = World::new_empty();
+        world.add_component(Screen {
+            asset_id: AssetId(80),
+            toggle_key: "Backtick".to_string(),
+            ..Default::default()
+        });
+        world.add_component(Sprite {
+            asset_id: AssetId(81),
+            width: 10.0,
+            height: 10.0,
+            visible: true,
+            screen: Some(AssetId(80)),
+            ..Default::default()
+        });
+        world.start().unwrap();
+        let shown = |w: &World| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == AssetId(81))
+                .unwrap()
+                .visible
+        };
+        assert!(!shown(&world), "screens start hidden");
+
+        let backtick = |w: &mut World| {
+            w.add_component(FrameInput {
+                captured_key: Some(Key::Backtick),
+                ..Default::default()
+            });
+            w.step();
+            // Settle frame: apply the command queued above.
+            w.add_component(FrameInput::default());
+            w.step();
+        };
+        backtick(&mut world);
+        assert!(shown(&world), "toggle key opens the screen");
+        backtick(&mut world);
+        assert!(!shown(&world), "toggle key closes it again");
+    }
+
+    // A screen's `focus` TextInput gains keyboard focus when the screen
+    // reaches the top of the stack, and loses it when the screen closes.
+    #[test]
+    fn focus_field_follows_the_top_screen() {
+        let mut world = World::new_empty();
+        world.add_component(Screen {
+            asset_id: AssetId(90),
+            toggle_key: "Backtick".to_string(),
+            focus: Some(AssetId(91)),
+            ..Default::default()
+        });
+        world.add_component(crate::assets::TextInput {
+            asset_id: AssetId(91),
+            visible: true,
+            screen: Some(AssetId(90)),
+            ..Default::default()
+        });
+        world.start().unwrap();
+        let focused = |w: &World| {
+            w.query::<crate::assets::TextInput>()
+                .find(|t| t.asset_id == AssetId(91))
+                .map(|t| (t.visible, t.focused))
+                .unwrap()
+        };
+        assert_eq!(focused(&world), (false, false), "hidden until shown");
+
+        let backtick = |w: &mut World| {
+            w.add_component(FrameInput {
+                captured_key: Some(Key::Backtick),
+                ..Default::default()
+            });
+            w.step();
+            w.add_component(FrameInput::default());
+            w.step();
+        };
+        backtick(&mut world);
+        assert_eq!(focused(&world), (true, true), "shown and focused");
+        backtick(&mut world);
+        assert_eq!(focused(&world), (false, false), "blurred on close");
+    }
+
+    // While a visible TextInput has keyboard focus, ordinary KeyBindings are
+    // suspended so typing cannot fire actions.
+    #[test]
+    fn keybindings_are_suspended_while_typing() {
+        let mut world = World::new_empty();
+        world.add_component(Screen {
+            asset_id: AssetId(100),
+            ..Default::default()
+        });
+        world.add_component(KeyBinding {
+            key: "T".to_string(),
+            action: "screen:toggle:100".to_string(),
+            ..Default::default()
+        });
+        let mut field = crate::assets::TextInput {
+            asset_id: AssetId(101),
+            visible: true,
+            ..Default::default()
+        };
+        field.focused = true;
+        world.add_component(field);
+        world.start().unwrap();
+
+        world.add_component(FrameInput {
+            captured_key: Some(Key::T),
+            ..Default::default()
+        });
+        world.step();
+        assert!(
+            produced_screen_command(&world).is_none(),
+            "typed key does not fire the binding"
+        );
+
+        // Blur the field: the same key now fires the binding.
+        for ti in world.query_mut::<crate::assets::TextInput>() {
+            ti.focused = false;
+        }
+        world.add_component(FrameInput {
+            captured_key: Some(Key::T),
+            ..Default::default()
+        });
+        world.step();
+        assert!(matches!(
+            produced_screen_command(&world),
+            Some(ScreenCommand::Toggle(AssetId(100)))
+        ));
+    }
+
+    // A KeyBinding scoped to a screen fires only while that screen is on top.
+    #[test]
+    fn scoped_keybinding_fires_only_while_its_screen_is_top() {
+        let mut world = World::new_empty();
+        world.add_component(Screen {
+            asset_id: AssetId(110),
+            ..Default::default()
+        });
+        world.add_component(Screen {
+            asset_id: AssetId(111),
+            ..Default::default()
+        });
+        world.add_component(KeyBinding {
+            key: "Space".to_string(),
+            action: "screen:show:111".to_string(),
+            screen: Some(AssetId(110)),
+        });
+        world.start().unwrap();
+
+        // No screen on top: the scoped binding stays quiet.
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Space),
+            ..Default::default()
+        });
+        world.step();
+        assert!(produced_screen_command(&world).is_none());
+
+        // Open its screen; the binding now fires.
+        world
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(AssetId(110)));
+        world.add_component(FrameInput::default());
+        world.step();
+        world.add_component(FrameInput {
+            captured_key: Some(Key::Space),
+            ..Default::default()
+        });
+        world.step();
+        let mut cursor = crate::ecs::EventCursor::default();
+        let sent: Vec<ScreenCommand> = world
+            .events::<ScreenCommand>()
+            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .unwrap_or_default();
+        assert!(
+            sent.iter()
+                .any(|c| matches!(c, ScreenCommand::Show(AssetId(111)))),
+            "scoped binding fires on top: {sent:?}"
+        );
+    }
+
+    // `screen:push:` stacks a screen over the current one: both stay visible,
+    // and hiding the pushed screen reveals the one beneath.
+    #[test]
+    fn push_stacks_over_the_current_screen() {
+        let mut world = World::new_empty();
+        for (screen, sprite) in [(120u32, 130u32), (121, 131)] {
+            world.add_component(Screen {
+                asset_id: AssetId(screen),
+                ..Default::default()
+            });
+            world.add_component(Sprite {
+                asset_id: AssetId(sprite),
+                width: 10.0,
+                height: 10.0,
+                visible: true,
+                screen: Some(AssetId(screen)),
+                ..Default::default()
+            });
+        }
+        world.start().unwrap();
+        let shown = |w: &World, id: u32| {
+            w.query::<Sprite>()
+                .find(|s| s.asset_id == AssetId(id))
+                .unwrap()
+                .visible
+        };
+        let settle = |w: &mut World| {
+            w.add_component(FrameInput::default());
+            w.step();
+        };
+        world
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(AssetId(120)));
+        settle(&mut world);
+        world
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Push(AssetId(121)));
+        settle(&mut world);
+        assert!(
+            shown(&world, 130) && shown(&world, 131),
+            "both screens visible while stacked"
+        );
+        // The stack resource carries both layers, in stack order.
+        {
+            let stack = world.resource::<crate::ecs::ScreenStack>().unwrap();
+            assert_eq!(stack.layers[&AssetId(120)], 1);
+            assert_eq!(stack.layers[&AssetId(121)], 2);
+            assert!(stack.pauses_world && stack.captures_input);
+        }
+        world
+            .events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Hide);
+        settle(&mut world);
+        assert!(
+            shown(&world, 130) && !shown(&world, 131),
+            "hide pops the pushed screen, revealing the one beneath"
+        );
+    }
+
+    // A gating component (here a Screen) spawns the internal UiInputSystem.
     #[test]
     fn ui_component_spawns_internal_system() {
         let mut world = World::new_empty();
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: AssetId(1),
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         world.start().unwrap();
 
@@ -3194,7 +3471,7 @@ mod tests {
         assert_eq!(names, ["UiInputSystem"]);
     }
 
-    // No HitRegion / View / KeyBinding means no UiInputSystem.
+    // No HitRegion / Screen / KeyBinding means no UiInputSystem.
     #[test]
     fn no_ui_components_means_no_system() {
         let mut world = World::new_empty();

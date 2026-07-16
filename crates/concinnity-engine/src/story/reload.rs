@@ -7,7 +7,7 @@ impl StorySystem {
     // matched by node slug; a deleted node restarts the story.
     pub(super) fn reload(&mut self, new: Story, ctx: &mut PipelineContext) {
         // A multi-story world reloads every story; only ours applies.
-        if new.scaffold.view != self.story.scaffold.view {
+        if new.scaffold.screen != self.story.scaffold.screen {
             return;
         }
         // The re-rendered page would draw over an open overlay's dim.
@@ -61,7 +61,7 @@ impl StorySystem {
         self.auto = false;
         self.skip = false;
         let ids = self.ids.as_ref().expect("resolved at init");
-        ctx.events_mut::<ViewCommand>()
-            .send(ViewCommand::Show(ids.ending_view));
+        ctx.events_mut::<ScreenCommand>()
+            .send(ScreenCommand::Show(ids.ending_screen));
     }
 }

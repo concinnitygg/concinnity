@@ -6,7 +6,7 @@ impl StorySystem {
         self.started
             && !self.in_choice
             && self.overlay == Overlay::None
-            && self.active_view == self.ids.as_ref().map(|i| i.view)
+            && self.active_screen == self.ids.as_ref().map(|i| i.screen)
     }
 
     pub(super) fn toggle_auto(&mut self, ctx: &mut PipelineContext) {

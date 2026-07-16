@@ -71,7 +71,7 @@ pub struct TextLabel {
     /// Horizontal alignment relative to `x` (measured with the real font
     /// metrics). Ignored when `centered` is set.
     pub align: TextAlign,
-    /// How a view-owned label maps from the reference canvas to the window when
+    /// How a screen-owned label maps from the reference canvas to the window when
     /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`). `Bottom`
     /// keeps a label flush with a bottom-anchored sprite it labels.
     pub fit: SpriteFit,
@@ -83,11 +83,11 @@ pub struct TextLabel {
     pub padding: f32,
     /// When false, the label is hidden.
     pub visible: bool,
-    /// [View](#view) this label belongs to. Resolved automatically from the
-    /// naming convention (`<view>_*`); you don't set this directly. `None` means
-    /// the label is always visible.
+    /// [Screen](#screen) this label belongs to. Resolved automatically from
+    /// the naming convention (`<screen>_*`); you don't set this directly.
+    /// `None` means the label is always visible.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
+    pub screen: Option<AssetId>,
 }
 
 impl Default for TextLabel {
@@ -106,7 +106,7 @@ impl Default for TextLabel {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: None,
+            screen: None,
         }
     }
 }

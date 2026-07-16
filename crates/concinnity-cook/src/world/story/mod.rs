@@ -1,8 +1,8 @@
 // src/world/story.rs
-// Build-time expansion: StoryImport -> Font / View / Sprite / TextLabel /
+// Build-time expansion: StoryImport -> Font / Screen / Sprite / TextLabel /
 // HitRegion. A Markdown story file (frontmatter + headings + paragraphs +
 // link lists) becomes a click-through, branching flow built entirely from
-// existing UI assets: one View per page, a full-canvas HitRegion advancing to
+// existing UI assets: one Screen per page, a full-canvas HitRegion advancing to
 // the next page, and choice buttons targeting other nodes. The whole graph is
 // validated here, so a dangling jump or an undeclared speaker fails the build
 // rather than the playthrough.

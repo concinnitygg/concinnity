@@ -1382,19 +1382,20 @@ fn source_files_by_type(
     }
 }
 
-// Resolve scene + view associations that the runtime can no longer derive
+// Resolve scene + screen associations that the runtime can no longer derive
 // from name strings, baking them into the asset args so they survive as
 // AssetId ids.
 //
 // Naming-convention relationships handled:
 //   - A Prop named `<scene>_*` belongs to Scene `<scene>`. The matched scene
 //     name is written into the prop's `scene` arg.
-//   - A Sprite, TextLabel, or HitRegion named `<view>_*` belongs to View
-//     `<view>`. The matched view name is written into the asset's `view` arg.
+//   - A Sprite, TextLabel, TextInput, or HitRegion named `<screen>_*` belongs
+//     to Screen `<screen>`. The matched screen name is written into the
+//     asset's `screen` arg.
 //   - A HitRegion or KeyBinding `action` of the form `scene:<name>`,
-//     `view:show:<name>`, or `view:toggle:<name>` has its `<name>` part
-//     rewritten to the interned id, so `UiInputSystem` can parse an integer
-//     at runtime instead of a name.
+//     `screen:show:<name>`, `screen:push:<name>`, or `screen:toggle:<name>`
+//     has its `<name>` part rewritten to the interned id, so `UiInputSystem`
+//     can parse an integer at runtime instead of a name.
 fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
     let norm = |s: &str| s.to_lowercase().replace('_', "");
 
@@ -1404,9 +1405,9 @@ fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
         .map(|a| a.name.clone())
         .collect();
 
-    let view_names: Vec<String> = assets
+    let screen_names: Vec<String> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "view")
+        .filter(|a| norm(&a.asset_type) == "screen")
         .map(|a| a.name.clone())
         .collect();
 
@@ -1414,7 +1415,7 @@ fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
     // given action prefix with its interned id. Returns Some(new_action) when
     // the action used the prefix with an unresolved name; None otherwise.
     let resolve_action = |action: &str| -> Option<String> {
-        for prefix in ["scene:", "view:show:", "view:toggle:"] {
+        for prefix in ["scene:", "screen:show:", "screen:push:", "screen:toggle:"] {
             if let Some(rest) = action.strip_prefix(prefix) {
                 if !rest.is_empty() && rest.parse::<u32>().is_err() {
                     return Some(format!("{prefix}{}", asset_id::intern(rest).0));
@@ -1444,23 +1445,24 @@ fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
                     m.insert("scene".to_string(), serde_json::Value::String(sn));
                 }
             }
-            "sprite" | "imageoverlay" | "textlabel" | "text" | "hitregion" | "scrollpanel" => {
-                // Resolve view prefix association. Longest matching prefix wins
-                // so a nested view name (e.g. `main_menu_settings_*` under both
-                // `main_menu` and `main_menu_settings`) binds to the most
-                // specific view. Equivalent to first-match when no view name
-                // prefixes another.
-                if asset.args.get("view").is_none() {
-                    let matched = view_names
+            "sprite" | "imageoverlay" | "textlabel" | "text" | "textinput" | "hitregion"
+            | "scrollpanel" => {
+                // Resolve screen prefix association. Longest matching prefix
+                // wins so a nested screen name (e.g. `main_menu_settings_*`
+                // under both `main_menu` and `main_menu_settings`) binds to the
+                // most specific screen. Equivalent to first-match when no
+                // screen name prefixes another.
+                if asset.args.get("screen").is_none() {
+                    let matched = screen_names
                         .iter()
-                        .filter(|vn| asset.name.starts_with(&format!("{vn}_")))
-                        .max_by_key(|vn| vn.len())
+                        .filter(|sn| asset.name.starts_with(&format!("{sn}_")))
+                        .max_by_key(|sn| sn.len())
                         .cloned();
-                    if let (Some(vn), serde_json::Value::Object(m)) = (matched, &mut asset.args) {
-                        m.insert("view".to_string(), serde_json::Value::String(vn));
+                    if let (Some(sn), serde_json::Value::Object(m)) = (matched, &mut asset.args) {
+                        m.insert("screen".to_string(), serde_json::Value::String(sn));
                     }
                 }
-                // Resolve view:* / scene:* action targets to interned ids.
+                // Resolve screen:* / scene:* action targets to interned ids.
                 if matches!(norm(&asset.asset_type).as_str(), "hitregion") {
                     let new_action = asset
                         .args
@@ -1537,7 +1539,7 @@ mod tests {
         let world = concat!(
             r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
             "\n",
-            r#"{"name":"pause","type":"View","args":{}}"#,
+            r#"{"name":"pause","type":"Screen","args":{}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None).expect("build");
@@ -1558,41 +1560,41 @@ mod tests {
     }
 
     // The visual_novel demo world (in concinnity-infra/worlds) exercises
-    // Sprite + View + KeyBinding together. Validating it here catches asset
+    // Sprite + Screen + KeyBinding together. Validating it here catches asset
     // registration / pipeline regressions before we ship the world.
     #[test]
     fn visual_novel_world_validates() {
         // Inline a representative subset of the world so the test stays
-        // hermetic (no infra path lookup needed). Covers: an initial View,
-        // a Sprite under that view's prefix, a TextLabel under it, a
-        // HitRegion firing view:show on another View, and a KeyBinding to
-        // toggle a third (modal) View.
+        // hermetic (no infra path lookup needed). Covers: an initial Screen,
+        // a Sprite under that screen's prefix, a TextLabel under it, a
+        // HitRegion firing screen:show on another Screen, and a KeyBinding to
+        // toggle a third (modal) Screen.
         let world = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}
 {"name":"f","type":"Font","args":{"size_px":20}}
-{"name":"title_menu","type":"View","args":{"initial":true}}
+{"name":"title_menu","type":"Screen","args":{"initial":true}}
 {"name":"title_menu_bg","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}}
 {"name":"title_menu_lbl","type":"TextLabel","args":{"font":"f","content":"Start","x":260,"y":160}}
-{"name":"title_menu_btn","type":"HitRegion","args":{"x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"view:show:vn_page_1"}}
-{"name":"vn_page_1","type":"View","args":{}}
+{"name":"title_menu_btn","type":"HitRegion","args":{"x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}}
+{"name":"vn_page_1","type":"Screen","args":{}}
 {"name":"vn_page_1_text","type":"TextLabel","args":{"font":"f","content":"hello","x":40,"y":40}}
-{"name":"vn_page_1_next","type":"HitRegion","args":{"x":0,"y":0,"width":640,"height":360,"action":"view:show:title_menu"}}
-{"name":"pause_menu","type":"View","args":{}}
+{"name":"vn_page_1_next","type":"HitRegion","args":{"x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}}
+{"name":"pause_menu","type":"Screen","args":{}}
 {"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
-{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"view:toggle:pause_menu"}}
+{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
 "#;
         validate_world_jsonl(world).expect("visual_novel-shaped world should validate");
     }
 
-    // `view:show:<name>` / `view:toggle:<name>` action targets are
+    // `screen:show:<name>` / `screen:toggle:<name>` action targets are
     // rewritten to interned ids at build time, like `scene:<name>`.
     #[test]
-    fn build_pipeline_resolves_view_action_refs() {
+    fn build_pipeline_resolves_screen_action_refs() {
         let world = concat!(
-            r#"{"name":"pause_menu","type":"View","args":{}}"#,
+            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
             "\n",
-            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"view:toggle:pause_menu"}}"#,
+            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}}"#,
             "\n",
-            r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"view:toggle:pause_menu"}}"#,
+            r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None).expect("build");
@@ -1603,7 +1605,7 @@ mod tests {
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(1)))
             .expect("HitRegion def");
         let baked: crate::assets::HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
-        assert_eq!(baked.action, "view:toggle:0");
+        assert_eq!(baked.action, "screen:toggle:0");
 
         let esc = result
             .defs
@@ -1611,22 +1613,22 @@ mod tests {
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
             .expect("KeyBinding def");
         let baked: crate::assets::KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
-        assert_eq!(baked.action, "view:toggle:0");
+        assert_eq!(baked.action, "screen:toggle:0");
     }
 
-    // A Sprite/TextLabel/HitRegion named `<view>_*` has its `view` arg
+    // A Sprite/TextLabel/HitRegion named `<screen>_*` has its `screen` arg
     // resolved from the prefix at build time, mirroring Prop scene refs.
     #[test]
-    fn build_pipeline_resolves_view_prefix_on_ui_assets() {
+    fn build_pipeline_resolves_screen_prefix_on_ui_assets() {
         let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let world = concat!(
-            r#"{"name":"pause_menu","type":"View","args":{}}"#,
+            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
             "\n",
             r#"{"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":10,"height":10}}"#,
             "\n",
             r#"{"name":"pause_menu_title","type":"TextLabel","args":{"font":"f","content":"x","x":0,"y":0}}"#,
             "\n",
-            r#"{"name":"pause_menu_btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"view:hide"}}"#,
+            r#"{"name":"pause_menu_btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:hide"}}"#,
             "\n",
             r#"{"name":"f","type":"Font","args":{"size_px":16}}"#,
             "\n",
@@ -1645,17 +1647,17 @@ mod tests {
                 crate::registry::ComponentType::Sprite => {
                     postcard::from_bytes::<crate::assets::Sprite>(&def.args_bytes)
                         .unwrap()
-                        .view
+                        .screen
                 }
                 crate::registry::ComponentType::TextLabel => {
                     postcard::from_bytes::<crate::assets::TextLabel>(&def.args_bytes)
                         .unwrap()
-                        .view
+                        .screen
                 }
                 crate::registry::ComponentType::HitRegion => {
                     postcard::from_bytes::<crate::assets::HitRegion>(&def.args_bytes)
                         .unwrap()
-                        .view
+                        .screen
                 }
                 other => panic!("{expect}: unexpected type {other:?}"),
             }
@@ -1668,25 +1670,25 @@ mod tests {
             assert_eq!(
                 baked_view(id, name),
                 Some(crate::ecs::asset_id::AssetId(0)),
-                "expected {name} to have view=0"
+                "expected {name} to have screen=0"
             );
         }
     }
 
-    // Nested view names resolve by longest prefix: `<menu>_settings_*` binds
-    // to the `<menu>_settings` view, not the enclosing `<menu>` view that is
+    // Nested screen names resolve by longest prefix: `<menu>_settings_*` binds
+    // to the `<menu>_settings` screen, not the enclosing `<menu>` screen that is
     // declared first. (Regression: first-match claimed the nested elements,
-    // so a MainMenu's settings sub-view rendered on top of the main menu.)
+    // so a MainMenu's settings sub-screen rendered on top of the main menu.)
     #[test]
-    fn resolve_scene_refs_picks_longest_view_prefix() {
+    fn resolve_scene_refs_picks_longest_screen_prefix() {
         let mk = |name: &str, ty: &str| crate::world::WorldJsonlAsset {
             name: name.to_string(),
             asset_type: ty.to_string(),
             args: serde_json::json!({}),
         };
         let mut assets = vec![
-            mk("menu", "View"),
-            mk("menu_settings", "View"),
+            mk("menu", "Screen"),
+            mk("menu_settings", "Screen"),
             mk("menu_title", "TextLabel"),
             mk("menu_settings_title", "TextLabel"),
         ];
@@ -1695,7 +1697,7 @@ mod tests {
             assets
                 .iter()
                 .find(|a| a.name == n)
-                .and_then(|a| a.args.get("view"))
+                .and_then(|a| a.args.get("screen"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         };
@@ -2055,7 +2057,7 @@ mod tests {
             wja(
                 "btn",
                 "HitRegion",
-                serde_json::json!({"action": "view:show:pause"}),
+                serde_json::json!({"action": "screen:show:pause"}),
             ),
             wja(
                 "key",
@@ -2067,7 +2069,7 @@ mod tests {
 
         // Names intern in resolution order on this thread's fresh interner:
         // "pause" -> 0, "day" -> 1.
-        assert_eq!(assets[0].args["action"], "view:show:0");
+        assert_eq!(assets[0].args["action"], "screen:show:0");
         assert_eq!(assets[1].args["action"], "scene:1");
     }
 
@@ -2077,7 +2079,7 @@ mod tests {
             wja(
                 "a",
                 "HitRegion",
-                serde_json::json!({"action": "view:toggle:3"}),
+                serde_json::json!({"action": "screen:toggle:3"}),
             ),
             wja("b", "HitRegion", serde_json::json!({"action": "quit"})),
             wja("c", "KeyBinding", serde_json::json!({"action": "scene:"})),
@@ -2086,7 +2088,7 @@ mod tests {
 
         // Already an id, not a recognised prefix, and an empty target: all
         // pass through unchanged.
-        assert_eq!(assets[0].args["action"], "view:toggle:3");
+        assert_eq!(assets[0].args["action"], "screen:toggle:3");
         assert_eq!(assets[1].args["action"], "quit");
         assert_eq!(assets[2].args["action"], "scene:");
     }

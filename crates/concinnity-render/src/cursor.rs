@@ -150,7 +150,7 @@ mod tests {
             tint,
             follow_cursor: true,
             visible: true,
-            view: None,
+            screen: None,
             fit: crate::assets::SpriteFit::Fit,
             corner_radius: 0.0,
         }

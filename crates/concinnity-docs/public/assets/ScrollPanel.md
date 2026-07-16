@@ -14,12 +14,12 @@ body rows hide and the rows below them move up; when the visible stack is
 taller than the band it scrolls (mouse wheel or thumb drag) and rows outside
 the band are clipped.
 
-All pixel fields are in the same reference-space coordinates as the View's
+All pixel fields are in the same reference-space coordinates as the Screen's
 other UI (see the overlay scaling notes on [MainMenu](MainMenu.md)).
 
 ## Parameters
 
-- `view`: A string. [View](View.md) this panel belongs to. Resolved automatically from the `<view>_*` naming convention; you don't set this directly. The panel is only live while its view is active. Optional.
+- `screen`: A string. [Screen](Screen.md) this panel belongs to. Resolved automatically from the `<screen>_*` naming convention; you don't set this directly. The panel is only live while its screen is active. Optional.
 - `x`: A float. Left edge of the content band in reference pixels.
 - `y`: A float. Top edge of the content band in reference pixels.
 - `width`: A float. Width of the content band in reference pixels.

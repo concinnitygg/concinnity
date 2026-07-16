@@ -6,7 +6,7 @@
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
 - [Application](Application.md) - Names and identifies the application for distribution.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
-- [AudioCue](AudioCue.md) - Plays audio when a [View](View.md) is shown.
+- [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
@@ -50,6 +50,7 @@
 - [Scene](Scene.md) - A named group marker with timing and transition settings for [SceneReel](SceneReel.md).
 - [SceneImport](SceneImport.md) - Imports a 3D scene file as a single declaration.
 - [SceneReel](SceneReel.md) - An ordered playlist of named [Scene](Scene.md)s.
+- [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
 - [ShaderStage](ShaderStage.md) - Declares a compiled shader stage.
@@ -64,7 +65,6 @@
 - [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
-- [View](View.md) - A named overlay layer drawn on top of the active [Scene](Scene.md).
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
 - [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
@@ -99,13 +99,14 @@
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
 - [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
+- [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [ScrollPanel](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [ScrollPanel](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [MainMenu](MainMenu.md)'s `"settings"` item builds.
 - [ShaderKind](ShaderKind.md) - Which stage in the render pipeline this shader drives.
 - [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
-- [SpriteFit](SpriteFit.md) - How a view-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
+- [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
 - [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
@@ -114,7 +115,7 @@
 - [StoryNode](StoryNode.md) - One jump target in a [Story](Story.md): a run of pages optionally ending in a choice menu.
 - [StoryOp](StoryOp.md) - One variable operation in a [Story](Story.md)'s script. All story state is named integer variables, starting at `0` each playthrough: a plain flag is a variable set to `1` and cleared to `0`.
 - [StoryPage](StoryPage.md) - One click-through page of a [StoryNode](StoryNode.md).
-- [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [View](View.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
+- [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [Screen](Screen.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
 - [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).
 - [StoryStage](StoryStage.md) - The stage dressing current at a page or choice menu: the backdrop and the character portraits standing on stage.
 - [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.

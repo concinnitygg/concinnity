@@ -6,7 +6,7 @@ Imports a Markdown story file as a single declaration.
 
 One `StoryImport` stands in for a whole branching, click-through story (a
 visual-novel flow). The build parses the Markdown and expands the import
-into the UI assets that play it: a [View](View.md) per page with a backdrop
+into the UI assets that play it: a [Screen](Screen.md) per page with a backdrop
 [Sprite](Sprite.md), [TextLabel](TextLabel.md)s for narration and speaker
 names, and [HitRegion](HitRegion.md)s wiring page to page, so `world.jsonl`
 stays a single readable line while the story lives in the Markdown file.
@@ -107,5 +107,5 @@ You wake at a roadside inn. A note rests on the pillow.
 ## Parameters
 
 - `source`: A string. Path to the Markdown story file, relative to the project root.
-- `title_screen`: A boolean. Whether to generate a title screen (story title, Start and Quit buttons) as the initial view. When `false`, the story's first page is the initial view and the generated ending offers a Restart instead of Back to title. Defaults to `true`.
+- `title_screen`: A boolean. Whether to generate a title screen (story title, Start and Quit buttons) as the initial screen. When `false`, the story's first page is the initial screen and the generated ending offers a Restart instead of Back to title. Defaults to `true`.
 - `text_speed`: A float. Dialogue reveal speed in characters per second. `0` shows each page instantly. Defaults to `45.0`.

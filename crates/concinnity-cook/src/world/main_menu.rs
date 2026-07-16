@@ -1,10 +1,10 @@
-// Build-time expansion: MainMenu -> View + Sprite (backdrop) + TextLabel +
+// Build-time expansion: MainMenu -> Screen + Sprite (backdrop) + TextLabel +
 // HitRegion per item + an optional Escape KeyBinding + an optional in-engine
-// cursor Sprite, plus a generated settings sub-view when an item asks for one.
+// cursor Sprite, plus a generated settings sub-screen when an item asks for one.
 //
 // Everything is prefixed with the menu's own name so the build pipeline's
-// `<view>_*` rule scopes each generated UI element to the menu's View. The menu
-// shows/hides at runtime purely as a View visibility flip; this pass adds no
+// `<screen>_*` rule scopes each generated UI element to the menu's Screen. The menu
+// shows/hides at runtime purely as a Screen visibility flip; this pass adds no
 // runtime behaviour, only the assets the existing UI systems already drive.
 
 use std::collections::HashSet;
@@ -22,9 +22,9 @@ use concinnity_templates::asset;
 // tab row). The built-in font is proportional, so this is an approximation.
 const AVG_ADVANCE_RATIO: f32 = 0.5;
 
-// Settings tabs, left to right: (view-name suffix, tab label). Each tab is its
-// own View; the active tab bakes its own highlight, so switching tabs needs no
-// runtime state, only a view:show.
+// Settings tabs, left to right: (screen-name suffix, tab label). Each tab is its
+// own Screen; the active tab bakes its own highlight, so switching tabs needs no
+// runtime state, only a screen:show.
 const SETTINGS_TABS: [(&str, &str); 3] = [
     ("video", "Video"),
     ("audio", "Audio"),
@@ -275,9 +275,9 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
     Ok(())
 }
 
-// Generate every asset for one menu: the main view and its buttons, an optional
+// Generate every asset for one menu: the main screen and its buttons, an optional
 // Escape key binding, and (when an item resolves to the settings convenience) a
-// settings sub-view with a Back button.
+// settings sub-screen with a Back button.
 fn expand_one(
     menu_name: &str,
     menu: &MainMenu,
@@ -307,10 +307,10 @@ fn expand_one(
         .iter()
         .map(|item| {
             let action = match item.action.trim().to_lowercase().as_str() {
-                "return" | "close" => "view:hide".to_string(),
+                "return" | "close" => "screen:hide".to_string(),
                 "settings" => {
                     wants_settings = true;
-                    format!("view:show:{}_settings_video", menu_name)
+                    format!("screen:show:{}_settings_video", menu_name)
                 }
                 _ => item.action.clone(),
             };
@@ -318,7 +318,7 @@ fn expand_one(
         })
         .collect();
 
-    out.extend(emit_menu_view(
+    out.extend(emit_menu_screen(
         menu_name,
         &menu.title,
         &items,
@@ -336,7 +336,7 @@ fn expand_one(
         out.push(serde_json::json!({
             "name": format!("{}_toggle", menu_name),
             "type": "KeyBinding",
-            "args": { "key": menu.toggle_key, "action": format!("view:toggle:{}", menu_name) }
+            "args": { "key": menu.toggle_key, "action": format!("screen:toggle:{}", menu_name) }
         }));
     }
 
@@ -354,10 +354,10 @@ fn expand_one(
     out
 }
 
-// Emit one settings tab as its own View: a "Settings" heading, the tab bar
+// Emit one settings tab as its own Screen: a "Settings" heading, the tab bar
 // (this tab highlighted, the others clickable), the tab's setting rows, an
 // optional read-only key reference, and a Back button. Each tab is a separate
-// View so the active-tab highlight is baked in; switching tabs is a view:show.
+// Screen so the active-tab highlight is baked in; switching tabs is a screen:show.
 fn emit_settings_tab(
     menu_name: &str,
     active: &str,
@@ -367,14 +367,14 @@ fn emit_settings_tab(
     win_h: f32,
     font_px: f32,
 ) -> Vec<serde_json::Value> {
-    let view = format!("{}_settings_{}", menu_name, active);
+    let screen = format!("{}_settings_{}", menu_name, active);
     let mut out = Vec::new();
 
-    out.push(spec_to_value(&asset::view(&view, false)));
+    out.push(spec_to_value(&asset::screen(&screen, false)));
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
-            &format!("{}_dim", view),
+            &format!("{}_dim", screen),
             0.0,
             0.0,
             win_w,
@@ -421,7 +421,7 @@ fn emit_settings_tab(
 
     // Row 0: tab bar, laid out as a centered horizontal row. The active tab is
     // accent-colored with an underline marker and has no button (you are
-    // already here); every other tab is a button that switches to its view.
+    // already here); every other tab is a button that switches to its screen.
     // There is no "Settings" heading -- the tabs already name the screen, and
     // dropping it gives the body band an extra row of space.
     let tabs = settings_tabs(style.settings_profile);
@@ -441,7 +441,7 @@ fn emit_settings_tab(
         } else {
             style.text_color
         };
-        let label_name = format!("{}_tab_{}", view, suffix);
+        let label_name = format!("{}_tab_{}", screen, suffix);
         out.push(label_value(
             &label_name,
             label,
@@ -455,7 +455,7 @@ fn emit_settings_tab(
             // Underline marker just below the active tab's text.
             let mark_h = (font_px * tab_scale * 0.08).max(2.0);
             out.push(sprite(
-                &format!("{}_tabmark", view),
+                &format!("{}_tabmark", screen),
                 tab_x,
                 tab_text_y + font_px * tab_scale + mark_h,
                 *w,
@@ -465,9 +465,9 @@ fn emit_settings_tab(
         } else {
             out.push(spec_to_value(
                 &asset::hit_region(
-                    format!("{}_tabbtn_{}", view, suffix),
+                    format!("{}_tabbtn_{}", screen, suffix),
                     [tab_x, row_y(0), *w, style.button_height],
-                    format!("view:show:{}_settings_{}", menu_name, suffix),
+                    format!("screen:show:{}_settings_{}", menu_name, suffix),
                 )
                 .set("label", label_name)
                 .set("hover_color", style.hover_color)
@@ -496,7 +496,7 @@ fn emit_settings_tab(
         // row's content and listed first in the row's elements, so it sits behind
         // the row and reflows / clips / hides with it when scrolled or collapsed.
         let is_header = matches!(*row, BodyRow::GroupHeader(..));
-        let bg_name = format!("{}_bg_{}", view, j);
+        let bg_name = format!("{}_bg_{}", screen, j);
         out.push(sprite(
             &bg_name,
             row_x,
@@ -511,7 +511,7 @@ fn emit_settings_tab(
         ));
         let (mut elements, group): (Vec<String>, i32) = match *row {
             BodyRow::Option(setting, label, group) => {
-                let name = format!("{}_opt_{}", view, setting);
+                let name = format!("{}_opt_{}", screen, setting);
                 out.push(option_select_row(&SettingsRow {
                     name: &name,
                     setting,
@@ -526,7 +526,7 @@ fn emit_settings_tab(
                 (super::option_select::element_names(&name, setting), group)
             }
             BodyRow::Slider(setting, label, group) => {
-                let name = format!("{}_sld_{}", view, setting);
+                let name = format!("{}_sld_{}", screen, setting);
                 out.push(slider_row(&SettingsRow {
                     name: &name,
                     setting,
@@ -541,8 +541,8 @@ fn emit_settings_tab(
                 (super::slider::element_names(&name), group)
             }
             BodyRow::Key(action_label, key, idx, group) => {
-                let name = format!("{}_keyname_{}", view, idx);
-                let val = format!("{}_keyval_{}", view, idx);
+                let name = format!("{}_keyname_{}", screen, idx);
+                let val = format!("{}_keyval_{}", screen, idx);
                 out.push(label_value(
                     &name,
                     action_label,
@@ -564,8 +564,8 @@ fn emit_settings_tab(
                 (vec![name, val], group)
             }
             BodyRow::Rebind(action_label, setting, idx, group) => {
-                let name = format!("{}_rebind_name_{}", view, idx);
-                let val = format!("{}_rebind_val_{}", view, idx);
+                let name = format!("{}_rebind_name_{}", screen, idx);
+                let val = format!("{}_rebind_val_{}", screen, idx);
                 out.push(label_value(
                     &name,
                     action_label,
@@ -593,7 +593,7 @@ fn emit_settings_tab(
                 let ctrl_w = (content_x + content_w - control_x).max(0.0);
                 out.push(spec_to_value(
                     &asset::hit_region(
-                        format!("{}_rebind_btn_{}", view, idx),
+                        format!("{}_rebind_btn_{}", screen, idx),
                         [control_x, base_y, ctrl_w, style.button_height],
                         format!("setting:{}:rebind", setting),
                     )
@@ -605,7 +605,7 @@ fn emit_settings_tab(
             }
             BodyRow::GroupHeader(gid, title) => {
                 let collapsed = groups.iter().any(|g| g.gid == gid && g.collapsed);
-                let header = format!("{}_grphdr_{}", view, gid);
+                let header = format!("{}_grphdr_{}", screen, gid);
                 let header_scale = row_scale * 1.05;
                 out.push(label_value(
                     &header,
@@ -618,7 +618,7 @@ fn emit_settings_tab(
                 ));
                 out.push(spec_to_value(
                     &asset::hit_region(
-                        format!("{}_grpbtn_{}", view, gid),
+                        format!("{}_grpbtn_{}", screen, gid),
                         [row_x, base_y, row_width, style.button_height],
                         format!("group:toggle:{}", gid),
                     )
@@ -649,7 +649,7 @@ fn emit_settings_tab(
         0.25,
     ];
     out.push(sprite(
-        &format!("{}_scrolltrack", view),
+        &format!("{}_scrolltrack", screen),
         track_x,
         band_top,
         SCROLLBAR_WIDTH,
@@ -657,7 +657,7 @@ fn emit_settings_tab(
         track_tint,
     ));
     out.push(sprite(
-        &format!("{}_scrollthumb", view),
+        &format!("{}_scrollthumb", screen),
         track_x,
         band_top,
         SCROLLBAR_WIDTH,
@@ -670,32 +670,32 @@ fn emit_settings_tab(
         .map(|g| {
             serde_json::json!({
                 "collapsed": g.collapsed,
-                "header": format!("{}_grphdr_{}", view, g.gid),
+                "header": format!("{}_grphdr_{}", screen, g.gid),
                 "title": g.title,
             })
         })
         .collect();
     out.push(serde_json::json!({
-        "name": format!("{}_scroll", view),
+        "name": format!("{}_scroll", screen),
         "type": "ScrollPanel",
         "args": {
             "x": row_x, "y": band_top, "width": row_width, "height": band_h,
             "rows": scroll_rows,
             "groups": scroll_groups,
-            "thumb": format!("{}_scrollthumb", view),
-            "track": format!("{}_scrolltrack", view),
+            "thumb": format!("{}_scrollthumb", screen),
+            "track": format!("{}_scrolltrack", screen),
             "track_x": track_x, "track_y": band_top,
             "track_w": SCROLLBAR_WIDTH, "track_h": band_h,
         }
     }));
 
-    // Back button: fixed chrome below the band. Returns to the menu view by
+    // Back button: fixed chrome below the band. Returns to the menu screen by
     // default, or fires the menu's Back-action override (so a caller that owns
     // the settings navigation, e.g. a story, can route it).
     let back_y = band_top + band_h + BACK_GAP;
-    let back_label = format!("{}_label_back", view);
+    let back_label = format!("{}_label_back", screen);
     let back_action = if style.settings_back_action.is_empty() {
-        format!("view:show:{}", menu_name)
+        format!("screen:show:{}", menu_name)
     } else {
         style.settings_back_action.clone()
     };
@@ -710,7 +710,7 @@ fn emit_settings_tab(
     ));
     out.push(spec_to_value(
         &asset::hit_region(
-            format!("{}_btn_back", view),
+            format!("{}_btn_back", screen),
             [
                 center_x - style.button_width / 2.0,
                 back_y,
@@ -725,7 +725,7 @@ fn emit_settings_tab(
     ));
 
     if style.cursor {
-        out.push(cursor_sprite(&format!("{}_cursor", view), style));
+        out.push(cursor_sprite(&format!("{}_cursor", screen), style));
     }
 
     out
@@ -939,7 +939,7 @@ fn slider_row(row: &SettingsRow) -> serde_json::Value {
     })
 }
 
-// Window dimensions and font pixel size used to lay out a menu view.
+// Window dimensions and font pixel size used to lay out a menu screen.
 #[derive(Clone, Copy)]
 struct MenuMetrics {
     win_w: f32,
@@ -947,10 +947,10 @@ struct MenuMetrics {
     font_px: f32,
 }
 
-// Emit the assets for one menu layer: a View, an optional dim backdrop, an
+// Emit the assets for one menu layer: a Screen, an optional dim backdrop, an
 // optional heading, a TextLabel + HitRegion per item, and an optional cursor.
-fn emit_menu_view(
-    view: &str,
+fn emit_menu_screen(
+    screen: &str,
     title: &str,
     items: &[(String, String)],
     style: &MainMenu,
@@ -965,11 +965,11 @@ fn emit_menu_view(
     } = metrics;
     let mut out = Vec::new();
 
-    out.push(spec_to_value(&asset::view(view, initial)));
+    out.push(spec_to_value(&asset::screen(screen, initial)));
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
-            &format!("{}_dim", view),
+            &format!("{}_dim", screen),
             0.0,
             0.0,
             win_w,
@@ -995,7 +995,7 @@ fn emit_menu_view(
     if has_title {
         let title_scale = style.text_scale * 1.4;
         out.push(centered_label(
-            &format!("{}_title", view),
+            &format!("{}_title", screen),
             title,
             font,
             center_x,
@@ -1008,7 +1008,7 @@ fn emit_menu_view(
 
     for (i, (label, action)) in items.iter().enumerate() {
         let row_y = start_y + row as f32 * pitch;
-        let label_name = format!("{}_label_{}", view, i);
+        let label_name = format!("{}_label_{}", screen, i);
 
         out.push(centered_label(
             &label_name,
@@ -1022,7 +1022,7 @@ fn emit_menu_view(
 
         out.push(spec_to_value(
             &asset::hit_region(
-                format!("{}_btn_{}", view, i),
+                format!("{}_btn_{}", screen, i),
                 [
                     center_x - style.button_width / 2.0,
                     row_y,
@@ -1039,7 +1039,7 @@ fn emit_menu_view(
     }
 
     if style.cursor {
-        out.push(cursor_sprite(&format!("{}_cursor", view), style));
+        out.push(cursor_sprite(&format!("{}_cursor", screen), style));
     }
 
     out
@@ -1067,7 +1067,7 @@ mod tests {
     // the screen from `CN_PROBE_TAB` (`menu` for the button list, else a settings
     // tab: video | audio | controls, default controls) and the settings breadth
     // from `CN_PROBE_PROFILE` (full | minimal, default full). It expands a
-    // MainMenu, then flips the chosen View to `initial` so it shows at launch.
+    // MainMenu, then flips the chosen Screen to `initial` so it shows at launch.
     // `#[ignore]`d: run explicitly, e.g.
     //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
     //       dump_settings_tab_probe_world -- --ignored
@@ -1101,15 +1101,15 @@ mod tests {
             serde_json::json!({"name":"main_menu","type":"MainMenu","args": menu_args}),
         ];
         expand_main_menus(&mut assets).unwrap();
-        // Show the chosen screen at launch (the menu view for `menu`, else the
-        // named settings tab); every other View is off.
+        // Show the chosen screen at launch (the menu screen for `menu`, else the
+        // named settings tab); every other Screen is off.
         let target = if tab == "menu" {
             "main_menu".to_string()
         } else {
             format!("main_menu_settings_{tab}")
         };
         for v in &mut assets {
-            if type_norm(v) == "view" {
+            if type_norm(v) == "screen" {
                 v["args"]["initial"] = serde_json::json!(asset_name(v) == target);
             }
         }
@@ -1148,14 +1148,14 @@ mod tests {
         // No MainMenu survives.
         assert!(!assets.iter().any(|v| type_norm(v) == "mainmenu"));
 
-        // The main view and a toggle binding exist. The view starts closed by
+        // The main screen and a toggle binding exist. The screen starts closed by
         // default: the scene shows first and the toggle key opens the menu.
-        assert_eq!(by_name(&assets, "main_menu")["type"], "View");
+        assert_eq!(by_name(&assets, "main_menu")["type"], "Screen");
         assert_eq!(by_name(&assets, "main_menu")["args"]["initial"], false);
         assert_eq!(by_name(&assets, "main_menu_toggle")["type"], "KeyBinding");
         assert_eq!(
             by_name(&assets, "main_menu_toggle")["args"]["action"],
-            "view:toggle:main_menu"
+            "screen:toggle:main_menu"
         );
 
         // Three items -> three label/button pairs.
@@ -1165,32 +1165,35 @@ mod tests {
             assert!(ns.contains(&format!("main_menu_btn_{i}")));
         }
 
-        // Return resolves to view:hide, Quit passes through, Settings opens the
-        // generated sub-view.
+        // Return resolves to screen:hide, Quit passes through, Settings opens the
+        // generated sub-screen.
         assert_eq!(
             by_name(&assets, "main_menu_btn_0")["args"]["action"],
-            "view:hide"
+            "screen:hide"
         );
         assert_eq!(
             by_name(&assets, "main_menu_btn_1")["args"]["action"],
-            "view:show:main_menu_settings_video"
+            "screen:show:main_menu_settings_video"
         );
         assert_eq!(
             by_name(&assets, "main_menu_btn_2")["args"]["action"],
             "quit"
         );
 
-        // The default-tab (video) settings view and its Back button exist.
-        assert_eq!(by_name(&assets, "main_menu_settings_video")["type"], "View");
+        // The default-tab (video) settings screen and its Back button exist.
+        assert_eq!(
+            by_name(&assets, "main_menu_settings_video")["type"],
+            "Screen"
+        );
         assert_eq!(
             by_name(&assets, "main_menu_settings_video")["args"]["initial"],
             false
         );
-        // Back returns to the menu view (not view:hide, since tabs navigate
+        // Back returns to the menu screen (not screen:hide, since tabs navigate
         // explicitly rather than as a restore-prev modal).
         assert_eq!(
             by_name(&assets, "main_menu_settings_video_btn_back")["args"]["action"],
-            "view:show:main_menu"
+            "screen:show:main_menu"
         );
         // The video tab carries its own (accent) tab header and a vsync row.
         assert_eq!(
@@ -1201,7 +1204,7 @@ mod tests {
         assert_eq!(opt["type"], "OptionSelect");
         assert_eq!(opt["args"]["setting"], "vsync");
 
-        // A follow-cursor sprite and a backdrop exist for the main view.
+        // A follow-cursor sprite and a backdrop exist for the main screen.
         assert_eq!(
             by_name(&assets, "main_menu_cursor")["args"]["follow_cursor"],
             true
@@ -1272,17 +1275,17 @@ mod tests {
     }
 
     #[test]
-    fn settings_emits_a_view_per_tab() {
+    fn settings_emits_a_screen_per_tab() {
         let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
         expand_main_menus(&mut assets).unwrap();
         for suffix in ["video", "audio", "controls"] {
-            let view = by_name(&assets, &format!("m_settings_{suffix}"));
-            assert_eq!(view["type"], "View", "tab view {suffix} missing");
-            assert_eq!(view["args"]["initial"], false);
-            // Every tab returns to the menu view via Back.
+            let screen = by_name(&assets, &format!("m_settings_{suffix}"));
+            assert_eq!(screen["type"], "Screen", "tab screen {suffix} missing");
+            assert_eq!(screen["args"]["initial"], false);
+            // Every tab returns to the menu screen via Back.
             assert_eq!(
                 by_name(&assets, &format!("m_settings_{suffix}_btn_back"))["args"]["action"],
-                "view:show:m"
+                "screen:show:m"
             );
         }
     }
@@ -1365,7 +1368,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
         expand_main_menus(&mut assets).unwrap();
         // The active tab gets an accent label + underline marker and NO button;
-        // the other tabs are buttons that switch to their view.
+        // the other tabs are buttons that switch to their screen.
         assert_eq!(
             by_name(&assets, "m_settings_video_tabmark")["type"],
             "Sprite"
@@ -1377,16 +1380,16 @@ mod tests {
         );
         assert_eq!(
             by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["action"],
-            "view:show:m_settings_audio"
+            "screen:show:m_settings_audio"
         );
         assert_eq!(
             by_name(&assets, "m_settings_video_tabbtn_controls")["args"]["action"],
-            "view:show:m_settings_controls"
+            "screen:show:m_settings_controls"
         );
         // From the controls tab you can hop back to video.
         assert_eq!(
             by_name(&assets, "m_settings_controls_tabbtn_video")["args"]["action"],
-            "view:show:m_settings_video"
+            "screen:show:m_settings_video"
         );
     }
 
@@ -1413,7 +1416,7 @@ mod tests {
             "scene:level_1"
         );
         assert_eq!(by_name(&assets, "title_btn_1")["args"]["action"], "quit");
-        // No settings item -> no settings sub-view.
+        // No settings item -> no settings sub-screen.
         assert!(!assets.iter().any(|v| asset_name(v) == "title_settings"));
     }
 
@@ -1496,7 +1499,7 @@ mod tests {
         // No `path` means the menu font compiles from the bundled default font.
         assert!(font["args"].get("path").is_none());
         assert_eq!(by_name(&assets, "m_label_0")["args"]["font"], "m_font");
-        // The generated settings sub-view shares the same font.
+        // The generated settings sub-screen shares the same font.
         assert_eq!(
             by_name(&assets, "m_settings_video_label_back")["args"]["font"],
             "m_font"
@@ -1551,28 +1554,28 @@ mod tests {
         // The Controls tab is the tallest chrome (it carries the most rows under
         // the band); its band + Back must clear the canvas.
         for suffix in ["video", "audio", "controls"] {
-            let view = format!("m_settings_{suffix}");
+            let screen = format!("m_settings_{suffix}");
             // The ScrollPanel's band fits.
-            let panel = by_name(&assets, &format!("{view}_scroll"));
+            let panel = by_name(&assets, &format!("{screen}_scroll"));
             let by = panel["args"]["y"].as_f64().unwrap();
             let bh = panel["args"]["height"].as_f64().unwrap();
             assert!(
                 by >= 0.0 && by + bh <= ref_h as f64,
-                "{view} band off-screen"
+                "{screen} band off-screen"
             );
             // Back sits below the band but on screen.
-            let back = by_name(&assets, &format!("{view}_btn_back"));
+            let back = by_name(&assets, &format!("{screen}_btn_back"));
             let back_y = back["args"]["y"].as_f64().unwrap();
             let back_h = back["args"]["height"].as_f64().unwrap();
-            assert!(back_y >= by + bh, "{view} Back overlaps the band");
-            assert!(back_y + back_h <= ref_h as f64, "{view} Back off-screen");
+            assert!(back_y >= by + bh, "{screen} Back overlaps the band");
+            assert!(back_y + back_h <= ref_h as f64, "{screen} Back off-screen");
             // The scrollbar gutter stays inside the canvas width.
-            let track = by_name(&assets, &format!("{view}_scrolltrack"));
+            let track = by_name(&assets, &format!("{screen}_scrolltrack"));
             let tx = track["args"]["x"].as_f64().unwrap();
             let tw = track["args"]["width"].as_f64().unwrap();
             assert!(
                 tx + tw <= ref_w as f64,
-                "{view} scrollbar off the right edge"
+                "{screen} scrollbar off the right edge"
             );
         }
     }
@@ -1923,7 +1926,7 @@ mod tests {
     }
 
     // The Minimal profile emits only a Video and an Audio tab; there is no
-    // Controls tab view and no tab button pointing at one.
+    // Controls tab screen and no tab button pointing at one.
     #[test]
     fn minimal_profile_emits_only_video_and_audio_tabs() {
         let mut assets = vec![serde_json::json!({
@@ -1931,18 +1934,18 @@ mod tests {
         })];
         expand_main_menus(&mut assets).unwrap();
 
-        assert_eq!(by_name(&assets, "m_settings_video")["type"], "View");
-        assert_eq!(by_name(&assets, "m_settings_audio")["type"], "View");
+        assert_eq!(by_name(&assets, "m_settings_video")["type"], "Screen");
+        assert_eq!(by_name(&assets, "m_settings_audio")["type"], "Screen");
         assert!(
             !assets
                 .iter()
                 .any(|v| asset_name(v) == "m_settings_controls"),
-            "Minimal must not emit a Controls tab view"
+            "Minimal must not emit a Controls tab screen"
         );
         // The Video tab bar switches to Audio but offers no Controls button.
         assert_eq!(
             by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["action"],
-            "view:show:m_settings_audio"
+            "screen:show:m_settings_audio"
         );
         assert!(
             !assets
@@ -2001,7 +2004,7 @@ mod tests {
 
     // A `settings_back_action` generates the settings screen even with no
     // "settings" item and routes the Back button through it (rather than the
-    // default view:show:<menu>).
+    // default screen:show:<menu>).
     #[test]
     fn settings_back_action_generates_screen_and_overrides_back() {
         let mut assets = vec![serde_json::json!({
@@ -2016,7 +2019,7 @@ mod tests {
         expand_main_menus(&mut assets).unwrap();
         // The screen is generated despite no item using the "settings"
         // convenience.
-        assert_eq!(by_name(&assets, "m_settings_video")["type"], "View");
+        assert_eq!(by_name(&assets, "m_settings_video")["type"], "Screen");
         // Both tabs' Back buttons fire the override.
         for suffix in ["video", "audio"] {
             assert_eq!(
@@ -2047,7 +2050,7 @@ mod tests {
     fn full_profile_still_emits_controls_and_quality() {
         let mut assets = vec![serde_json::json!({"name": "m", "type": "MainMenu"})];
         expand_main_menus(&mut assets).unwrap();
-        assert_eq!(by_name(&assets, "m_settings_controls")["type"], "View");
+        assert_eq!(by_name(&assets, "m_settings_controls")["type"], "Screen");
         assert_eq!(
             by_name(&assets, "m_settings_video_opt_graphics_quality")["type"],
             "OptionSelect"

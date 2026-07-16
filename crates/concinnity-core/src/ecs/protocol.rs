@@ -11,7 +11,7 @@ use concinnity_asset::FontHandle;
 
 // Per-frame menu state, published as a resource by the overlay build (which runs
 // first in the schedule) and read by the simulation systems the same tick.
-// `true` while any menu view is open: physics and animation then freeze so they
+// `true` while any world-pausing screen is open: physics and animation then freeze so they
 // stop consuming resources behind the menu. Each system keeps its own clock
 // aligned across the freeze, so resuming costs one normal frame -- no catch-up
 // burst, no pose jump.
@@ -47,6 +47,22 @@ pub struct MenuOverride(pub Option<bool>);
 // unchanged.
 #[derive(Debug, Clone, Default)]
 pub struct HudLayers(pub std::collections::HashMap<AssetId, i32>);
+
+// The active screen stack, published by UiInputSystem at init and whenever the
+// stack changes, and read a frame later (the same one-frame lag screen
+// visibility flips already have). `layers` maps each active Screen's id to its
+// computed draw layer (authored layer band + stack position; screen-less HUD
+// elements sit at 0); the overlay build spreads these onto the elements each
+// screen owns. `pauses_world` is true while any active screen pauses the
+// world; `captures_input` is true while any active screen captures input
+// (gameplay keys are suppressed even when the world keeps simulating).
+// Absent / empty in a world with no active screen.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenStack {
+    pub layers: std::collections::HashMap<AssetId, i32>,
+    pub pauses_world: bool,
+    pub captures_input: bool,
+}
 
 // The latest sampled cursor state (window pixels, top-left origin), published
 // by InputSystem after each poll. GraphicsSystem reads it when building the
@@ -93,7 +109,7 @@ pub struct DropdownView {
     pub selected: usize,
     pub first: usize,
     pub hovered: Option<usize>,
-    pub view: Option<AssetId>,
+    pub screen: Option<AssetId>,
     pub font: Option<FontHandle>,
     pub scale: f32,
     pub color: [f32; 3],

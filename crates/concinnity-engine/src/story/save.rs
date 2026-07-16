@@ -10,10 +10,10 @@ impl StorySystem {
         self.hold_skip = false;
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
-        let view = self.ids.as_ref().expect("resolved at init").view;
-        if self.active_view != Some(view) {
-            ctx.events_mut::<ViewCommand>()
-                .send(ViewCommand::Show(view));
+        let screen = self.ids.as_ref().expect("resolved at init").screen;
+        if self.active_screen != Some(screen) {
+            ctx.events_mut::<ScreenCommand>()
+                .send(ScreenCommand::Show(screen));
         }
         self.enter_node(0, ctx);
     }
@@ -48,10 +48,10 @@ impl StorySystem {
         self.history.clear();
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
-        let view = self.ids.as_ref().expect("resolved at init").view;
-        if self.active_view != Some(view) {
-            ctx.events_mut::<ViewCommand>()
-                .send(ViewCommand::Show(view));
+        let screen = self.ids.as_ref().expect("resolved at init").screen;
+        if self.active_screen != Some(screen) {
+            ctx.events_mut::<ScreenCommand>()
+                .send(ScreenCommand::Show(screen));
         }
         self.node = node;
         self.page = (save.page as usize).min(self.story.nodes[node].pages.len() - 1);

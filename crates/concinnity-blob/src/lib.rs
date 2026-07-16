@@ -43,6 +43,7 @@ pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
 // check with a clear "rebuild" error instead of mis-decoding. v2: every record
 // is baked -- `RecordKind` and BlobAssetDef's `record` field left the schema.
 // v3: `args_bytes` / resource `data_bytes` are postcard-encoded components, not
-// JSON.
-pub const BLOB_VERSION: u32 = 3;
+// JSON. v4: View became Screen (stack, input policy, layer fields) and element
+// `view` refs became `screen`.
+pub const BLOB_VERSION: u32 = 4;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)

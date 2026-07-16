@@ -7,13 +7,13 @@ A compiled branching story graph, played at runtime by the story system.
 A `Story` is normally produced by a [StoryImport](StoryImport.md) expansion
 at build time rather than written by hand: the Markdown source compiles
 into this graph plus the stage scaffolding (a single dialogue
-[View](View.md) whose labels and sprites the story system mutates page by
+[Screen](Screen.md) whose labels and sprites the story system mutates page by
 page). All references are pre-resolved: dialog text is pre-wrapped,
 speakers carry their display name and color, stage images carry their
 on-canvas rectangle, and jump / choice targets are node indices into
 `nodes`.
 
-The story system reads the graph and drives the stage view named
+The story system reads the graph and drives the stage screen named
 `<name>_stage`: it fills the dialogue and name-plate labels (revealing
 text at `text_speed`), swaps the backdrop and portrait sprite textures,
 shows the choice menu when a node ends in one, and plays page audio.

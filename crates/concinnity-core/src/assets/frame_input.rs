@@ -48,7 +48,7 @@ pub struct FrameInput {
     /// UI drag (e.g. a slider) can track the cursor for its whole duration.
     pub left_button_down: bool,
     /// Live logical viewport size in pixels `[width, height]`. Used to map
-    /// overlay (View-owned) UI between its fixed reference resolution and the
+    /// overlay (Screen-owned) UI between its fixed reference resolution and the
     /// window, so menus scale with the window and the cursor still hit-tests
     /// against the scaled controls. `[0.0, 0.0]` before the backend is ready.
     pub viewport: [f32; 2],

@@ -25,7 +25,7 @@ mod system;
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
     CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
-    OpenDropdown,
+    OpenDropdown, ScreenStack,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

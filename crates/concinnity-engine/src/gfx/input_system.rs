@@ -43,14 +43,20 @@ impl System for InputSystem {
             outside_window: cursor_outside,
         });
 
-        // While a menu view is open (GraphicsSystem published the state
-        // earlier this tick), freeze gameplay input so the camera does not
-        // drift behind the menu; the UI still gets the cursor position,
-        // clicks, and Escape.
-        let gameplay = !ctx
+        // While a world-pausing screen is open (the overlay build published
+        // the state earlier this tick), freeze gameplay input so the camera
+        // does not drift behind the menu; the UI still gets the cursor
+        // position, clicks, and Escape. A non-pausing screen that captures
+        // input (a live console) also suppresses gameplay keys -- the world
+        // keeps simulating, but keystrokes belong to the screen.
+        let menu_active = ctx
             .resource::<crate::ecs::MenuActive>()
             .map(|m| m.0)
             .unwrap_or(false);
+        let screen_captures = ctx
+            .resource::<crate::ecs::ScreenStack>()
+            .is_some_and(|s| s.captures_input);
+        let gameplay = !menu_active && !screen_captures;
 
         // Both readers query (not drain) the snapshot, so clear the previous
         // frame's first.

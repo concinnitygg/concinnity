@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 /// A ready-made menu declared in a single line.
 ///
 /// `MainMenu` is a build-time shorthand. It expands into the assets a menu is
-/// built from: a [View](#view) layer, a dim backdrop [Sprite](#sprite), a
+/// built from: a [Screen](#screen) layer, a dim backdrop [Sprite](#sprite), a
 /// [TextLabel](#textlabel) and [HitRegion](#hitregion) for each item, an
 /// optional [KeyBinding](#keybinding) that toggles the menu, and an optional
 /// in-engine mouse cursor [Sprite](#sprite). So `world.jsonl` stays small.
@@ -26,9 +26,9 @@ use alloc::vec::Vec;
 ///
 /// **Items.** Each item has a `label` (the text) and an `action` fired on
 /// click. `action` takes the same vocabulary as [HitRegion](#hitregion)
-/// (`"scene:<name>"`, `"quit"`, `"view:show:<name>"`, `"view:hide"`,
-/// `"view:toggle:<name>"`) plus two conveniences resolved against this menu:
-/// - `"return"`: hide this menu (the same as `"view:hide"`).
+/// (`"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
+/// `"screen:toggle:<name>"`) plus two conveniences resolved against this menu:
+/// - `"return"`: hide this menu (the same as `"screen:hide"`).
 /// - `"settings"`: open a generated settings sub-menu that has a Back button.
 ///
 /// ```jsonl

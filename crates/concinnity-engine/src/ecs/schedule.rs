@@ -57,8 +57,8 @@ pub(crate) fn settings(world: &World) -> Option<SystemAsset> {
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
-// streaming pools and publishes the camera-relative view graphics draws.
-// Scheduled immediately before GraphicsSystem so a chunk world's view rebase is
+// streaming pools and publishes the camera-relative screen graphics draws.
+// Scheduled immediately before GraphicsSystem so a chunk world's screen rebase is
 // ready for this frame's submit and any texture/mesh upload lands before it.
 pub(crate) fn streaming(world: &World) -> Option<SystemAsset> {
     world
@@ -191,7 +191,7 @@ pub(crate) fn animation(world: &World) -> Option<SystemAsset> {
 // StorySystem: present whenever the world declares a `Story` (a compiled
 // story graph). It runs before AudioSystem so its page-audio requests are
 // heard the same tick, and before UiInputSystem like every other event
-// producer (its view commands apply next frame).
+// producer (its screen commands apply next frame).
 pub(crate) fn story(world: &World) -> Option<SystemAsset> {
     world
         .query::<crate::assets::Story>()
@@ -201,7 +201,7 @@ pub(crate) fn story(world: &World) -> Option<SystemAsset> {
 }
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
-// (positional sound), `AudioCue` (view-triggered sound), or `Story`
+// (positional sound), `AudioCue` (screen-triggered sound), or `Story`
 // (page-triggered sound). Its init opens an audio device, so a world with
 // none of them stays silent and device-free.
 pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
@@ -232,11 +232,11 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
     Some(concinnity_audio::AudioSystem::new(master).into())
 }
 
-// UiInputSystem: present whenever the world declares any `HitRegion`, `View`,
+// UiInputSystem: present whenever the world declares any `HitRegion`, `Screen`,
 // or `KeyBinding`. It drains all three at init.
 pub(crate) fn ui_input(world: &World) -> Option<SystemAsset> {
     let needs = world.query::<crate::assets::HitRegion>().next().is_some()
-        || world.query::<crate::assets::View>().next().is_some()
+        || world.query::<crate::assets::Screen>().next().is_some()
         || world.query::<crate::assets::KeyBinding>().next().is_some();
     needs.then(|| crate::ui::UiInputSystem::new().into())
 }
@@ -333,7 +333,7 @@ mod tests {
     }
 
     // An `AudioCue` alone (no emitter) also spawns the audio system: a UI-only
-    // world can play view-triggered audio.
+    // world can play screen-triggered audio.
     #[test]
     fn audio_cue_spawns_internal_system() {
         let mut world = World::new_empty();
@@ -344,28 +344,29 @@ mod tests {
         assert!(names.contains(&"AudioSystem"), "{names:?}");
     }
 
-    // The full trigger chain: the initial view's activation (announced by
+    // The full trigger chain: the initial screen's activation (announced by
     // UiInputSystem at init) reaches the audio system, which matches the
-    // view's cue on the first step. Playback itself needs a device and a
+    // screen's cue on the first step. Playback itself needs a device and a
     // compiled payload, so the test observes the match counter.
     #[test]
     fn initial_view_fires_its_cue() {
-        use crate::assets::{AudioCue, View};
+        use crate::assets::{AudioCue, Screen};
         use crate::ecs::AudioClipHandle;
         use crate::ecs::asset_id::AssetId;
 
         let mut world = World::new_empty();
-        let view = AssetId(90);
-        // The cue references its clip by handle. Matching (view + clip present)
+        let screen = AssetId(90);
+        // The cue references its clip by handle. Matching (screen + clip present)
         // is independent of the clip payload, so no `AudioClipTable` is needed
         // here -- the counter observes the match, not playback.
-        world.add_component(View {
-            asset_id: view,
+        world.add_component(Screen {
+            asset_id: screen,
             initial: true,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         world.add_component(AudioCue {
-            view: Some(view),
+            screen: Some(screen),
             clip: Some(AudioClipHandle(0)),
             ..Default::default()
         });
@@ -380,6 +381,6 @@ mod tests {
                 _ => None,
             })
             .expect("world has an AudioSystem");
-        assert_eq!(matched, 1, "the initial view's cue should have matched");
+        assert_eq!(matched, 1, "the initial screen's cue should have matched");
     }
 }

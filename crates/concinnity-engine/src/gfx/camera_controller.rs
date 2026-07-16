@@ -155,7 +155,7 @@ impl System for Camera3DSystem {
                 self.move_speed
             };
 
-            // Two movement modes share the same input/decay/view-matrix
+            // Two movement modes share the same input/decay/screen-matrix
             // outer loop; only the basis vectors and how velocity is
             // committed differ. Free-fly drives the camera position
             // directly and adds a vertical component; the FPS walker keeps
@@ -417,26 +417,28 @@ mod tests {
         );
     }
 
-    // With both a controlled camera and a UiInputSystem (View + KeyBinding),
+    // With both a controlled camera and a UiInputSystem (Screen + KeyBinding),
     // both systems read the same per-frame FrameInput: Camera3DSystem runs
     // first but no longer consumes it, so UiInputSystem still receives Escape
     // and toggles the menu. (Regression: Camera3DSystem drained the input,
     // starving the menu, so Escape did nothing over a captured camera.)
     #[test]
     fn camera_and_ui_share_frame_input() {
-        use crate::assets::{FrameInput, KeyBinding, View, ViewCommand};
+        use crate::assets::{FrameInput, KeyBinding, Screen, ScreenCommand};
         use crate::ecs::asset_id::AssetId;
 
         let mut world = World::new_empty();
         world.add_component(camera(Some(CameraController::default())));
-        world.add_component(View {
+        world.add_component(Screen {
             asset_id: AssetId(50),
             initial: false,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "view:toggle:50".to_string(),
+            action: "screen:toggle:50".to_string(),
+            ..Default::default()
         });
         world.start().unwrap();
 
@@ -452,10 +454,10 @@ mod tests {
 
         let mut cursor = crate::ecs::EventCursor::default();
         let cmd = world
-            .events::<ViewCommand>()
+            .events::<ScreenCommand>()
             .and_then(|e| e.read(&mut cursor).into_iter().next().cloned());
         assert!(
-            matches!(cmd, Some(ViewCommand::Toggle(AssetId(50)))),
+            matches!(cmd, Some(ScreenCommand::Toggle(AssetId(50)))),
             "UiInputSystem must still process Escape when a camera is present"
         );
     }

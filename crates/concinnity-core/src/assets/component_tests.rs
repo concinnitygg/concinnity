@@ -108,10 +108,10 @@ mod key_binding {
 
     #[test]
     fn deserializes_escape_to_view_toggle() {
-        let json = r#"{"key":"Escape","action":"view:toggle:pause_menu"}"#;
+        let json = r#"{"key":"Escape","action":"screen:toggle:pause_menu"}"#;
         let kb: KeyBinding = serde_json::from_str(json).unwrap();
         assert_eq!(kb.key, "Escape");
-        assert_eq!(kb.action, "view:toggle:pause_menu");
+        assert_eq!(kb.action, "screen:toggle:pause_menu");
     }
 
     #[test]
@@ -122,20 +122,32 @@ mod key_binding {
     }
 }
 
-mod view {
+mod screen {
     use super::*;
 
     #[test]
     fn deserializes_with_defaults() {
-        let v: View = serde_json::from_str("{}").unwrap();
-        assert_eq!(v.fade_in_secs, 0.0);
-        assert!(!v.initial);
+        let s: Screen = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.fade_in_secs, 0.0);
+        assert!(!s.initial);
+        assert!(s.toggle_key.is_empty());
+        assert_eq!(s.input, ScreenInput::Capture);
+        assert!(s.pauses_world);
+        assert!(s.focus.is_none());
+        assert_eq!(s.layer, 0);
     }
 
     #[test]
-    fn deserializes_with_initial_true() {
-        let v: View = serde_json::from_str(r#"{"initial":true}"#).unwrap();
-        assert!(v.initial);
+    fn deserializes_with_authored_fields() {
+        let s: Screen = serde_json::from_str(
+            r#"{"initial":true,"toggle_key":"Backtick","input":"passthrough","pauses_world":false,"layer":-2}"#,
+        )
+        .unwrap();
+        assert!(s.initial);
+        assert_eq!(s.toggle_key, "Backtick");
+        assert_eq!(s.input, ScreenInput::Passthrough);
+        assert!(!s.pauses_world);
+        assert_eq!(s.layer, -2);
     }
 }
 
@@ -156,7 +168,7 @@ mod story {
                 "title": "T",
                 "text_speed": 30.0,
                 "scaffold": {
-                    "view": "s_stage",
+                    "screen": "s_stage",
                     "ending": "s_ending",
                     "bg": "s_stage_bg",
                     "text_label": "s_stage_text",
@@ -190,7 +202,7 @@ mod story {
         // Name-string references resolved to ids through the interner (the
         // build-time path); the omitted dialog_box stays unset.
         use crate::ecs::asset_id::intern;
-        assert_eq!(s.scaffold.view, Some(intern("s_stage")));
+        assert_eq!(s.scaffold.screen, Some(intern("s_stage")));
         assert_eq!(s.scaffold.options, vec![intern("s_stage_opt0_lbl")]);
         assert_eq!(s.scaffold.option_boxes, vec![intern("s_stage_opt0_box")]);
         assert_eq!(s.scaffold.dialog_box, None);
@@ -766,7 +778,7 @@ mod scroll_panel {
     #[test]
     fn bare_args_deserialize_with_defaults() {
         let p: ScrollPanel = serde_json::from_str("{}").unwrap();
-        assert!(p.view.is_none());
+        assert!(p.screen.is_none());
         assert!(p.rows.is_empty());
         assert!(p.groups.is_empty());
         assert!(p.thumb.is_none());
@@ -779,7 +791,7 @@ mod scroll_panel {
         // thumb=4, track=5, view=6.
         intern_all(&["row0a", "row0b", "hdr", "body", "thumb", "track", "menu"]);
         let json = r#"{
-                "view": "menu",
+                "screen": "menu",
                 "x": 10, "y": 20, "width": 300, "height": 200,
                 "rows": [
                     {"elements": ["row0a", "row0b"], "base_y": 20, "height": 40, "group": -1},
@@ -790,7 +802,7 @@ mod scroll_panel {
                 "track_x": 305, "track_y": 20, "track_w": 6, "track_h": 200
             }"#;
         let p: ScrollPanel = serde_json::from_str(json).unwrap();
-        assert_eq!(p.view, Some(AssetId(6)));
+        assert_eq!(p.screen, Some(AssetId(6)));
         assert_eq!(p.rows.len(), 2);
         assert_eq!(p.rows[0].elements, vec![AssetId(0), AssetId(1)]);
         assert_eq!(p.rows[0].group, -1);
@@ -807,7 +819,7 @@ mod scroll_panel {
     #[test]
     fn round_trips_through_serde() {
         let p = ScrollPanel {
-            view: Some(AssetId(2)),
+            screen: Some(AssetId(2)),
             x: 1.0,
             y: 2.0,
             width: 3.0,

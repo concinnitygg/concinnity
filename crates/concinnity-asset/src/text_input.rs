@@ -12,8 +12,8 @@ use alloc::string::String;
 /// Backspace / Delete keys. Read `content` back to use what the player typed;
 /// set it to pre-fill the field.
 ///
-/// Like other overlay elements it belongs to a [View](#view) resolved from the
-/// naming convention (`<view>_*`), or is always shown when it has none.
+/// Like other overlay elements it belongs to a [Screen](#screen) resolved from the
+/// naming convention (`<screen>_*`), or is always shown when it has none.
 ///
 /// ```jsonl
 /// {
@@ -67,14 +67,14 @@ pub struct TextInput {
     pub max_len: u32,
     /// When false the field is skipped each frame and cannot take focus.
     pub visible: bool,
-    /// How a view-owned field maps from the reference canvas to the window when
+    /// How a screen-owned field maps from the reference canvas to the window when
     /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
     pub fit: SpriteFit,
-    /// [View](#view) this field belongs to. Resolved automatically from the
-    /// naming convention (`<view>_*`); you don't set this directly. `None` means
-    /// the field is always visible.
+    /// [Screen](#screen) this field belongs to. Resolved automatically from
+    /// the naming convention (`<screen>_*`); you don't set this directly.
+    /// `None` means the field is always visible.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
+    pub screen: Option<AssetId>,
     /// Runtime keyboard-focus flag, set by the engine while this is the active
     /// field. Not authored and not serialized to a blob.
     #[serde(skip)]
@@ -106,7 +106,7 @@ impl Default for TextInput {
             max_len: 0,
             visible: true,
             fit: SpriteFit::Fit,
-            view: None,
+            screen: None,
             focused: false,
             caret: 0,
         }

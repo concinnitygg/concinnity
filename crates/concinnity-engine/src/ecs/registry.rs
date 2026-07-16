@@ -21,7 +21,7 @@
 //     a SceneCommand's jump primes the reel GraphicsSystem ticks below.
 //   * StreamingSystem immediately before GraphicsSystem: it drives the streaming
 //     pools and publishes the `CameraRelativeView` GraphicsSystem draws with, so
-//     a chunk world's view rebase is ready for this frame's submit and any
+//     a chunk world's screen rebase is ready for this frame's submit and any
 //     texture/mesh upload lands before it.
 //   * GraphicsSystem right after them: makes payloads resident, uploads
 //     transforms, and submits the frame (consuming the overlay build).
@@ -104,7 +104,7 @@ crate::define_systems! {
     },
     UiInputSystem => crate::ui::UiInputSystem {
         gate: schedule::ui_input,
-        present_when: "the world declares any HitRegion, View, or KeyBinding",
+        present_when: "the world declares any HitRegion, Screen, or KeyBinding",
     },
     TextInputSystem => crate::text_input_system::TextInputSystem {
         gate: schedule::text_input,

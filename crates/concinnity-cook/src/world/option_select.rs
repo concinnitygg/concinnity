@@ -10,8 +10,8 @@
 //
 // The value label shows a placeholder here; the runtime corrects it to the live
 // value on the first frame. Names are prefixed with the OptionSelect's own name
-// so generated elements stay scoped to its View via the build pipeline's
-// `<view>_*` rule and never collide with hand-authored assets.
+// so generated elements stay scoped to its Screen via the build pipeline's
+// `<screen>_*` rule and never collide with hand-authored assets.
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{font_sizes, label_value};

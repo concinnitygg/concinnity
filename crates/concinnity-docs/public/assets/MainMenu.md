@@ -5,7 +5,7 @@
 A ready-made menu declared in a single line.
 
 `MainMenu` is a build-time shorthand. It expands into the assets a menu is
-built from: a [View](View.md) layer, a dim backdrop [Sprite](Sprite.md), a
+built from: a [Screen](Screen.md) layer, a dim backdrop [Sprite](Sprite.md), a
 [TextLabel](TextLabel.md) and [HitRegion](HitRegion.md) for each item, an
 optional [KeyBinding](KeyBinding.md) that toggles the menu, and an optional
 in-engine mouse cursor [Sprite](Sprite.md). So `world.jsonl` stays small.
@@ -24,9 +24,9 @@ performance-stats toggles have chips to drive.
 
 **Items.** Each item has a `label` (the text) and an `action` fired on
 click. `action` takes the same vocabulary as [HitRegion](HitRegion.md)
-(`"scene:<name>"`, `"quit"`, `"view:show:<name>"`, `"view:hide"`,
-`"view:toggle:<name>"`) plus two conveniences resolved against this menu:
-- `"return"`: hide this menu (the same as `"view:hide"`).
+(`"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
+`"screen:toggle:<name>"`) plus two conveniences resolved against this menu:
+- `"return"`: hide this menu (the same as `"screen:hide"`).
 - `"settings"`: open a generated settings sub-menu that has a Back button.
 
 ```jsonl

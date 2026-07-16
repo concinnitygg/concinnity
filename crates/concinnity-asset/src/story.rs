@@ -12,13 +12,13 @@ use alloc::vec::Vec;
 /// A `Story` is normally produced by a [StoryImport](#storyimport) expansion
 /// at build time rather than written by hand: the Markdown source compiles
 /// into this graph plus the stage scaffolding (a single dialogue
-/// [View](#view) whose labels and sprites the story system mutates page by
+/// [Screen](#screen) whose labels and sprites the story system mutates page by
 /// page). All references are pre-resolved: dialog text is pre-wrapped,
 /// speakers carry their display name and color, stage images carry their
 /// on-canvas rectangle, and jump / choice targets are node indices into
 /// `nodes`.
 ///
-/// The story system reads the graph and drives the stage view named
+/// The story system reads the graph and drives the stage screen named
 /// `<name>_stage`: it fills the dialogue and name-plate labels (revealing
 /// text at `text_speed`), swaps the backdrop and portrait sprite textures,
 /// shows the choice menu when a node ends in one, and plays page audio.
@@ -49,15 +49,15 @@ pub struct Story {
 }
 
 /// The stage scaffolding a [Story](#story)'s build expansion generated: the
-/// [View](#view)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
+/// [Screen](#screen)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
 /// story system mutates page by page.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StoryScaffold {
-    /// The stage [View](#view) the story plays inside.
+    /// The stage [Screen](#screen) the story plays inside.
     #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
-    /// The [View](#view) shown when the story ends.
+    pub screen: Option<AssetId>,
+    /// The [Screen](#screen) shown when the story ends.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub ending: Option<AssetId>,
     /// Backdrop [Sprite](#sprite).
@@ -98,7 +98,7 @@ pub struct StoryScaffold {
     /// save exists.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub continue_label: Option<AssetId>,
-    /// The title screen [View](#view), returned to when the load overlay is
+    /// The title screen [Screen](#screen), returned to when the load overlay is
     /// dismissed before play started.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub title: Option<AssetId>,
@@ -106,12 +106,12 @@ pub struct StoryScaffold {
     /// slot save exists.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub load_label: Option<AssetId>,
-    /// The pause-menu [View](#view) (the injected Escape overlay), shown over
+    /// The pause-menu [Screen](#screen) (the injected Escape overlay), shown over
     /// the stage and returned from to the stage. Unset when the world declares
     /// no pause menu.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub pause: Option<AssetId>,
-    /// The settings-screen entry [View](#view) opened by the pause menu's and
+    /// The settings-screen entry [Screen](#screen) opened by the pause menu's and
     /// the title screen's Settings items. Unset when there is no pause menu.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub settings: Option<AssetId>,
@@ -354,6 +354,6 @@ impl Default for Story {
 #[derive(Debug, Clone)]
 pub struct StoryReload {
     /// The replacement graph. Matched to its story system by the scaffold's
-    /// stage view reference.
+    /// stage screen reference.
     pub story: Story,
 }

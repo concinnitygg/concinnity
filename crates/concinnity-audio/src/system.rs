@@ -1,6 +1,6 @@
 // concinnity-audio/src/system.rs
 //
-// Audio playback: 3D positional emitters and view-triggered cues. An internal
+// Audio playback: 3D positional emitters and screen-triggered cues. An internal
 // system (not a declarable asset): the engine schedule constructs one whenever
 // the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 // never opens an audio device.
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::{AudioEngine, EmitterId};
 use concinnity_core::assets::{
-    AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
+    AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -29,19 +29,19 @@ pub struct AudioSystem {
     master_volume: Option<f32>,
     // One entry per `AudioEmitter` that became a live engine emitter.
     emitters: Vec<EmitterBinding>,
-    // View-triggered cues, keyed by the View whose activation fires them.
+    // Screen-triggered cues, keyed by the Screen whose activation fires them.
     cues: HashMap<AssetId, Vec<CueBinding>>,
     // Encoded clip payloads for the cue and story clips, keyed by the clip's
     // AudioClipHandle.
     cue_clip_bytes: HashMap<AudioClipHandle, Vec<u8>>,
     // Cursor into the Events<AudioCommand> queue (live master-volume changes).
     audio_cmd_cursor: EventCursor,
-    // Cursor into the Events<ViewShown> queue (cue triggers).
+    // Cursor into the Events<ScreenShown> queue (cue triggers).
     view_shown_cursor: EventCursor,
     // Cursor into the Events<PlayCue> queue (direct play requests, e.g. the
     // story system's page audio).
     play_cue_cursor: EventCursor,
-    // Cues that matched a shown view so far; observable engine-independent
+    // Cues that matched a shown screen so far; observable engine-independent
     // progress for headless tests (playback needs a device and a payload).
     cues_matched: usize,
 }
@@ -145,12 +145,12 @@ impl System for AudioSystem {
             });
         }
 
-        // Bind the view-triggered cues and cache their clip payloads (keyed by
+        // Bind the screen-triggered cues and cache their clip payloads (keyed by
         // handle), so firing a cue never touches the blob mid-frame.
         let cue_snaps: Vec<AudioCue> = ctx.query::<AudioCue>().cloned().collect();
         for cue in cue_snaps {
-            let (Some(view), Some(clip)) = (cue.view, cue.clip) else {
-                tracing::warn!("AudioSystem: cue without a view and a clip, ignored");
+            let (Some(screen), Some(clip)) = (cue.screen, cue.clip) else {
+                tracing::warn!("AudioSystem: cue without a screen and a clip, ignored");
                 continue;
             };
             if let std::collections::hash_map::Entry::Vacant(slot) = self.cue_clip_bytes.entry(clip)
@@ -167,7 +167,7 @@ impl System for AudioSystem {
                     }
                 }
             }
-            self.cues.entry(view).or_default().push(CueBinding {
+            self.cues.entry(screen).or_default().push(CueBinding {
                 clip,
                 kind: cue.kind,
                 volume: cue.volume,
@@ -175,7 +175,7 @@ impl System for AudioSystem {
         }
 
         // A story plays clips by direct PlayCue request rather than through
-        // view-keyed cues, so cache every clip payload up front, keyed by handle.
+        // screen-keyed cues, so cache every clip payload up front, keyed by handle.
         if ctx.query::<Story>().next().is_some() {
             let uncached: Vec<(AudioClipHandle, PayloadLocator)> = clip_locators
                 .iter()
@@ -194,7 +194,7 @@ impl System for AudioSystem {
         }
 
         tracing::info!(
-            "AudioSystem: {} emitter(s), {} cue view(s), engine {}",
+            "AudioSystem: {} emitter(s), {} cue screen(s), engine {}",
             self.emitters.len(),
             self.cues.len(),
             if self.engine.is_enabled() {
@@ -214,18 +214,18 @@ impl System for AudioSystem {
             }
         }
 
-        // Fire cues for views shown since the last step. UiInputSystem runs
+        // Fire cues for screens shown since the last step. UiInputSystem runs
         // after this system, so a navigation is heard one tick later.
         if !self.cues.is_empty()
-            && let Some(events) = ctx.events::<ViewShown>()
+            && let Some(events) = ctx.events::<ScreenShown>()
         {
             let shown: Vec<AssetId> = events
                 .read(&mut self.view_shown_cursor)
                 .into_iter()
-                .map(|e| e.view)
+                .map(|e| e.screen)
                 .collect();
-            for view in shown {
-                let Some(bindings) = self.cues.get(&view) else {
+            for screen in shown {
+                let Some(bindings) = self.cues.get(&screen) else {
                     continue;
                 };
                 self.cues_matched += bindings.len();
@@ -308,7 +308,7 @@ mod tests {
     use super::{AudioSystem, EmitterBinding};
     use crate::EmitterId;
     use concinnity_core::assets::{
-        AudioCommand, AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
+        AudioCommand, AudioCue, Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
     };
     use concinnity_core::blob::BlobData;
     use concinnity_core::ecs::asset_id::AssetId;
@@ -398,17 +398,17 @@ mod tests {
         }
     }
 
-    // init binds a view-triggered cue and caches its clip payload up front, so
+    // init binds a screen-triggered cue and caches its clip payload up front, so
     // firing the cue later never touches the blob.
     #[test]
     fn init_binds_cue_and_caches_its_payload() {
-        let view = AssetId(90);
+        let screen = AssetId(90);
         let bytes = b"cue-clip-bytes";
 
         let mut w = AudioWorld::new();
         let clip = w.clip(bytes);
         w.push(AudioCue {
-            view: Some(view),
+            screen: Some(screen),
             clip: Some(clip),
             kind: CueKind::Music,
             volume: 0.7,
@@ -419,7 +419,7 @@ mod tests {
         let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
 
-        let bindings = sys.cues.get(&view).expect("cue bound to its view");
+        let bindings = sys.cues.get(&screen).expect("cue bound to its screen");
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].clip, clip);
         assert_eq!(bindings[0].kind, CueKind::Music);
@@ -430,13 +430,13 @@ mod tests {
         );
     }
 
-    // A cue missing its view or its clip is ignored: nothing is bound and no
+    // A cue missing its screen or its clip is ignored: nothing is bound and no
     // payload is cached.
     #[test]
     fn init_ignores_cue_without_clip() {
         let mut w = AudioWorld::new();
         w.push(AudioCue {
-            view: Some(AssetId(90)),
+            screen: Some(AssetId(90)),
             clip: None,
             ..Default::default()
         });
@@ -450,7 +450,7 @@ mod tests {
     }
 
     // A story caches every clip payload up front (it plays them by direct
-    // PlayCue request, not through view-keyed cues).
+    // PlayCue request, not through screen-keyed cues).
     #[test]
     fn init_caches_story_clip_payloads() {
         let bytes = b"story-page-audio";
@@ -470,24 +470,24 @@ mod tests {
         );
     }
 
-    // A shown view fires each of its cues once, across both playback kinds; the
+    // A shown screen fires each of its cues once, across both playback kinds; the
     // engine-independent match counter tracks the progress.
     #[test]
     fn step_fires_cued_view_across_both_kinds() {
-        let view = AssetId(90);
+        let screen = AssetId(90);
 
         let mut w = AudioWorld::new();
         let music_clip = w.clip(b"music");
         let sound_clip = w.clip(b"sound");
         w.push(AudioCue {
-            view: Some(view),
+            screen: Some(screen),
             clip: Some(music_clip),
             kind: CueKind::Music,
             volume: 1.0,
             ..Default::default()
         });
         w.push(AudioCue {
-            view: Some(view),
+            screen: Some(screen),
             clip: Some(sound_clip),
             kind: CueKind::Sound,
             volume: 1.0,
@@ -497,20 +497,21 @@ mod tests {
 
         let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
-        assert_eq!(sys.cues.get(&view).map(Vec::len), Some(2));
+        assert_eq!(sys.cues.get(&screen).map(Vec::len), Some(2));
 
         {
             let mut ctx = sealed.ctx();
-            ctx.events_mut::<ViewShown>().send(ViewShown { view });
+            ctx.events_mut::<ScreenShown>().send(ScreenShown { screen });
         }
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
-        assert_eq!(sys.cues_matched, 2, "both the view's cues matched");
+        assert_eq!(sys.cues_matched, 2, "both the screen's cues matched");
 
-        // A view with no cue leaves the counter untouched.
+        // A screen with no cue leaves the counter untouched.
         {
             let mut ctx = sealed.ctx();
-            ctx.events_mut::<ViewShown>()
-                .send(ViewShown { view: AssetId(999) });
+            ctx.events_mut::<ScreenShown>().send(ScreenShown {
+                screen: AssetId(999),
+            });
         }
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
         assert_eq!(sys.cues_matched, 2);

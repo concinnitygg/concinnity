@@ -163,7 +163,7 @@ pub fn build_text_calls(
     clips: &std::collections::HashMap<AssetId, [f32; 4]>,
     layers: &std::collections::HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
-    // View-owned labels are overlay UI authored in the reference canvas; map
+    // Screen-owned labels are overlay UI authored in the reference canvas; map
     // them to the live window so menus scale with the window. HUD labels
     // (view == None) keep literal window pixels.
     let overlay = OverlayTransform::from_viewport([win_w, win_h]);
@@ -201,7 +201,7 @@ pub fn build_text_calls(
         } else {
             // The anchor point and scale: a view-owned label maps through its
             // `fit` transform, a HUD label stays in literal window pixels.
-            let (ax, ay, scale) = if label.view.is_some() {
+            let (ax, ay, scale) = if label.screen.is_some() {
                 let t = match label.fit {
                     SpriteFit::Bottom => bottom,
                     SpriteFit::Cover => cover,
@@ -423,7 +423,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: None,
+            screen: None,
         }
     }
 
@@ -628,7 +628,7 @@ mod tests {
         let hud = make_label(FontHandle(0), "A", 100.0); // view == None
         let mut overlay_label = make_label(FontHandle(0), "A", 100.0);
         overlay_label.y = 100.0;
-        overlay_label.view = Some(AssetId(5));
+        overlay_label.screen = Some(AssetId(5));
 
         // 2x reference viewport (1280x720 -> 2560x1440): scale 2, centered.
         let vp = (2560.0, 1440.0);
@@ -756,7 +756,7 @@ mod tests {
         let first_y = |fit: SpriteFit| {
             let mut l = make_label(FontHandle(0), "A", 100.0);
             l.y = 600.0;
-            l.view = Some(AssetId(5));
+            l.screen = Some(AssetId(5));
             l.fit = fit;
             build_text_calls(&[&l], &fonts, vp.0, vp.1, &no_clips(), &no_layers())[0].vertices[0]
                 .pos[1]

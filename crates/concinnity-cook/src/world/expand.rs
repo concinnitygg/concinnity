@@ -83,7 +83,7 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
     expand_scene_imports(assets)?;
-    // Stories expand to External UI assets (Views, TextLabels, HitRegions)
+    // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
     // injection so their TextLabels pull in GraphicsConfig + Font companions.
     expand_stories(assets)?;
@@ -105,12 +105,12 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // does not declare (MainMenu, HUDs + chips + font, sky mesh). Runs before
     // menu expansion so an injected MainMenu expands like an authored one.
     inject_engine_defaults(assets, &mut report)?;
-    // Menus expand to External UI assets (View / Sprite / TextLabel /
+    // Menus expand to External UI assets (Screen / Sprite / TextLabel /
     // HitRegion / KeyBinding) that need no further expansion, but whose
     // TextLabels must still pull in their GraphicsConfig + Font companions, so
     // this runs before the second companion round.
     expand_main_menus(assets)?;
-    // Menus emit OptionSelect rows for their settings sub-view; expand those to
+    // Menus emit OptionSelect rows for their settings sub-screen; expand those to
     // their primitives (TextLabels + HitRegion) before companion injection so
     // the generated TextLabels pull in their Font.
     expand_option_selects(assets)?;
@@ -190,7 +190,7 @@ mod tests {
         let assets = expand_world_from_str(content).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
         assert!(!assets.iter().any(|v| type_norm(v) == "mainmenu"));
-        assert!(assets.iter().any(|v| type_norm(v) == "view"));
+        assert!(assets.iter().any(|v| type_norm(v) == "screen"));
         assert!(assets.iter().any(|v| type_norm(v) == "hitregion"));
         // The generated TextLabels pull in GraphicsConfig + a Font companion.
         assert!(assets.iter().any(|v| type_norm(v) == "textlabel"));

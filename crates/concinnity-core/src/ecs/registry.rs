@@ -51,12 +51,12 @@ macro_rules! for_each_component {
             Model             => $crate::assets::Model { gen, external, id },
             Scene             => $crate::assets::Scene { gen, external, id },
             SceneReel         => $crate::assets::SceneReel { gen, external, id },
-            TextLabel         => $crate::assets::TextLabel { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
+            TextLabel         => $crate::assets::TextLabel { gen, external, id, refs: [("font", "Font"), ("screen", "Screen")] },
             LightRig          => $crate::assets::LightRig { gen, build_only },
             MaterialPalette   => $crate::assets::MaterialPalette { gen, build_only },
             CameraShot        => $crate::assets::CameraShot { gen, build_only },
             Prefab            => $crate::assets::Prefab { gen, build_only },
-            HitRegion         => $crate::assets::HitRegion { gen, external, refs: [("label", "TextLabel"), ("view", "View")] },
+            HitRegion         => $crate::assets::HitRegion { gen, external, refs: [("label", "TextLabel"), ("screen", "Screen")] },
             File              => $crate::assets::File { manual, external, compiled, args: FileArgs },
             BlockType         => $crate::assets::BlockType { gen, external, id },
             VoxelChunk        => $crate::assets::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk },
@@ -67,9 +67,9 @@ macro_rules! for_each_component {
             StreamingConfig   => $crate::assets::StreamingConfig { gen, external },
             VoxelWorld        => $crate::assets::VoxelWorld { gen, external },
             AudioEmitter      => $crate::assets::AudioEmitter { gen, external, refs: [("clip", "AudioClip"), ("prop", "Prop")] },
-            Sprite            => $crate::assets::Sprite { gen, external, id, refs: [("texture", "Texture"), ("view", "View")] },
-            KeyBinding        => $crate::assets::KeyBinding { gen, external },
-            View              => $crate::assets::View { gen, external, id },
+            Sprite            => $crate::assets::Sprite { gen, external, id, refs: [("texture", "Texture"), ("screen", "Screen")] },
+            KeyBinding        => $crate::assets::KeyBinding { gen, external, refs: [("screen", "Screen")] },
+            Screen            => $crate::assets::Screen { gen, external, id, refs: [("focus", "TextInput")] },
             Decal             => $crate::assets::Decal { gen, external, id, validate: decal, refs: [("texture", "Texture")] },
             VolumetricFog     => $crate::assets::VolumetricFog { gen, external, validate: volumetric_fog },
             Joint             => $crate::assets::Joint { gen, external, id, validate: joint },
@@ -104,7 +104,7 @@ macro_rules! for_each_component {
             DebugHud          => $crate::assets::DebugHud { gen, external },
             EngineDefaults    => $crate::assets::EngineDefaults { gen, build_only },
             StoryImport       => $crate::assets::StoryImport { gen, build_only },
-            AudioCue          => $crate::assets::AudioCue { gen, external, refs: [("clip", "AudioClip"), ("view", "View")] },
+            AudioCue          => $crate::assets::AudioCue { gen, external, refs: [("clip", "AudioClip"), ("screen", "Screen")] },
             Story             => $crate::assets::Story { gen, external, id },
             Application       => $crate::assets::Application { gen, external },
             AnimGraph         => $crate::assets::AnimGraph { gen, external, id },
@@ -112,7 +112,7 @@ macro_rules! for_each_component {
             CharacterRig      => $crate::assets::CharacterRig { runtime, build: character_rig },
             GroundProbes      => $crate::assets::GroundProbes { runtime },
             CameraProbe       => $crate::assets::CameraProbe { runtime },
-            TextInput         => $crate::assets::TextInput { gen, external, id, refs: [("font", "Font"), ("view", "View")] },
+            TextInput         => $crate::assets::TextInput { gen, external, id, refs: [("font", "Font"), ("screen", "Screen")] },
             Panel             => $crate::assets::Panel { gen, build_only },
         }
     };
@@ -249,7 +249,7 @@ macro_rules! cn_impl_components {
 crate::for_each_component!(cn_impl_components);
 
 // Retired discriminants that must not be reintroduced as components. Each is now
-// an Events<T> queue: SceneCommand, ViewCommand, SettingCommand, ControlsCommand,
+// an Events<T> queue: SceneCommand, ScreenCommand (once ViewCommand), SettingCommand, ControlsCommand,
 // AudioCommand. Systems (once declarable, discriminants 128..255) are all
 // internal now: GraphicsSystem, FpsCounter, Camera3DSystem, PhysicsSystem,
 // UiInputSystem, AnimationSystem, AudioSystem, StatHud. FpsCounter / StatHud

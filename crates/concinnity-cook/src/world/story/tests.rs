@@ -147,7 +147,7 @@ fn emits_the_compiled_graph_and_stage() {
     assert_eq!(nodes[2]["pages"][1]["text"], "The morning comes.");
     assert_eq!(nodes[2]["pages"][1]["jump"], 3);
 
-    // One stage view carries the whole story: backdrop, portrait slots,
+    // One stage screen carries the whole story: backdrop, portrait slots,
     // dialog furniture, the advance region, and one button per option of
     // the widest choice menu (disabled until the story reaches one).
     assert_eq!(find(&entries, "story_stage")["args"]["initial"], false);
@@ -184,7 +184,7 @@ fn emits_the_compiled_graph_and_stage() {
     // The scaffold block names the generated stage assets; the build
     // resolves these to ids so the compiled blob never needs the names.
     let scaffold = &graph["scaffold"];
-    assert_eq!(scaffold["view"], "story_stage");
+    assert_eq!(scaffold["screen"], "story_stage");
     assert_eq!(scaffold["ending"], "story_ending");
     assert_eq!(scaffold["text_label"], "story_stage_text");
     assert_eq!(scaffold["option_boxes"][0], "story_stage_opt0_box");
@@ -254,14 +254,14 @@ fn emits_the_compiled_graph_and_stage() {
             .any(|e| asset_name(e) == "story_stage_opt2_btn")
     );
 
-    // No per-page views or audio cues remain.
+    // No per-page screens or audio cues remain.
     assert!(!entries.iter().any(|e| asset_name(e).contains("_n_")));
     assert!(!entries.iter().any(|e| type_norm(e) == "audiocue"));
 
     // The ending returns to the title screen.
     assert_eq!(
         action(find(&entries, "story_ending_back_btn")),
-        "view:show:story_title"
+        "screen:show:story_title"
     );
 }
 
@@ -362,7 +362,7 @@ fn expands_from_file_and_replaces_the_import() {
     })];
     expand_stories(&mut assets).unwrap();
     assert!(!assets.iter().any(|v| type_norm(v) == "storyimport"));
-    assert!(assets.iter().any(|v| type_norm(v) == "view"));
+    assert!(assets.iter().any(|v| type_norm(v) == "screen"));
     assert!(assets.iter().any(|v| type_norm(v) == "hitregion"));
     assert!(assets.iter().any(|v| type_norm(v) == "font"));
 }
@@ -377,7 +377,7 @@ fn generated_name_collision_is_an_error() {
             "name": "story", "type": "StoryImport",
             "args": {"source": path.to_str().unwrap()}
         }),
-        serde_json::json!({"name":"story_title","type":"View","args":{}}),
+        serde_json::json!({"name":"story_title","type":"Screen","args":{}}),
     ];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("collides"));
@@ -876,21 +876,21 @@ fn script_state_compiles_into_the_graph() {
 }
 
 #[test]
-fn heading_names_cannot_collide_with_generated_views() {
-    // Node names no longer mint views (the whole story plays inside one
-    // stage view), so headings named after the scaffolding are fine.
+fn heading_names_cannot_collide_with_generated_screens() {
+    // Node names no longer mint screens (the whole story plays inside one
+    // stage screen), so headings named after the scaffolding are fine.
     let src = "---\ntitle: T\n---\n\n# title\n\nhi\n\n# stage\n\nbye\n\n# ending\n\nfin\n";
     let story = parse_story(src).unwrap();
     let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
     let nodes = &find(&entries, "s")["args"]["nodes"];
     assert_eq!(nodes.as_array().unwrap().len(), 3);
-    // Exactly the three scaffolding views exist.
-    let views: Vec<String> = entries
+    // Exactly the three scaffolding screens exist.
+    let screens: Vec<String> = entries
         .iter()
-        .filter(|e| type_norm(e) == "view")
+        .filter(|e| type_norm(e) == "screen")
         .map(asset_name)
         .collect();
-    assert_eq!(views, ["s_title", "s_stage", "s_ending"]);
+    assert_eq!(screens, ["s_title", "s_stage", "s_ending"]);
 }
 
 #[test]

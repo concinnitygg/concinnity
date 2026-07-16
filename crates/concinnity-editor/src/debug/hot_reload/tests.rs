@@ -287,7 +287,7 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
     assert_eq!(stories.len(), 1);
     assert_eq!(stories[0].title, "Tale");
     assert_eq!(stories[0].nodes[0].pages[0].text, "Hello there.");
-    assert!(stories[0].scaffold.view.is_some());
+    assert!(stories[0].scaffold.screen.is_some());
 
     // Unchanged source: the snapshot filters it out.
     let unchanged = reload_stories(world.to_str().unwrap(), &mut snapshots);

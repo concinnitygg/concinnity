@@ -9,10 +9,10 @@ use crate::gfx::text;
 // Build the transient overlay Sprites + TextLabels for an open dropdown list.
 // These are fed through the same sprite / text shapers as the menu but with no
 // clip bands, so the list draws unclipped on top of the menu (escaping the
-// scroll band's scissor). Geometry is reference space for a view-owned row (and
+// scroll band's scissor). Geometry is reference space for a screen-owned row (and
 // window pixels otherwise), matching the input hit-test in `ui`.
 pub(super) fn build_dropdown_overlay(
-    view: &crate::ecs::DropdownView,
+    screen: &crate::ecs::DropdownView,
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
 ) -> (Vec<Sprite>, Vec<TextLabel>) {
     // Panel fill (near-opaque so rows behind it do not show through), a framing
@@ -27,12 +27,12 @@ pub(super) fn build_dropdown_overlay(
     const BORDER_PX: f32 = 2.0;
 
     use concinnity_core::gfx::dropdown;
-    let count = view.options.len();
-    let layout = dropdown::layout(view.anchor, count);
+    let count = screen.options.len();
+    let layout = dropdown::layout(screen.anchor, count);
     // The layout windows a long list; rows show options `first..`, so the
     // selected / hovered option indices map to row indices (off-window ones
     // simply draw no highlight).
-    let first = view.first.min(dropdown::max_first(count));
+    let first = screen.first.min(dropdown::max_first(count));
     let row_of = |option: usize| {
         option
             .checked_sub(first)
@@ -49,7 +49,7 @@ pub(super) fn build_dropdown_overlay(
         tint,
         follow_cursor: false,
         visible: true,
-        view: view.view,
+        screen: screen.screen,
         fit: crate::assets::SpriteFit::Fit,
         corner_radius: 0.0,
     };
@@ -68,10 +68,10 @@ pub(super) fn build_dropdown_overlay(
     sprites.push(mk_sprite(layout.list, PANEL_BG));
     // The currently-applied option, then the hovered one on top of it (each
     // only when its option is inside the shown window).
-    if let Some(rect) = row_of(view.selected).and_then(|r| layout.items.get(r)) {
+    if let Some(rect) = row_of(screen.selected).and_then(|r| layout.items.get(r)) {
         sprites.push(mk_sprite(*rect, SELECTED_BG));
     }
-    if let Some(rect) = view
+    if let Some(rect) = screen
         .hovered
         .and_then(row_of)
         .and_then(|r| layout.items.get(r))
@@ -89,31 +89,31 @@ pub(super) fn build_dropdown_overlay(
 
     // One text label per SHOWN option, vertically centered in its row (the text
     // draws after the sprites, so it sits over the highlights).
-    let line_h = view
+    let line_h = screen
         .font
         .and_then(|f| loaded_fonts.get(&f))
-        .map(|f| f.size_px * view.scale)
+        .map(|f| f.size_px * screen.scale)
         .unwrap_or(0.0);
-    let labels: Vec<TextLabel> = view
+    let labels: Vec<TextLabel> = screen
         .options
         .iter()
         .skip(first)
         .zip(&layout.items)
         .map(|(opt, rect)| TextLabel {
             asset_id: AssetId::default(),
-            font: view.font,
+            font: screen.font,
             content: opt.clone(),
             x: rect[0] + TEXT_PAD,
             y: rect[1] + (rect[3] - line_h) / 2.0,
-            color: view.color,
-            scale: view.scale,
+            color: screen.color,
+            scale: screen.scale,
             centered: false,
             align: crate::assets::TextAlign::Left,
             fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            view: view.view,
+            screen: screen.screen,
         })
         .collect();
 
@@ -126,7 +126,7 @@ pub(super) fn build_dropdown_overlay(
 // to the field's left text edge (always >= 0, so nothing bleeds left), and the
 // caret's x offset from that same edge. A field that fits is returned untouched;
 // one that overflows is truncated from the head with an ellipsis while unfocused,
-// or horizontally scrolled to keep the caret in view while focused.
+// or horizontally scrolled to keep the caret in screen while focused.
 fn fit_line(
     content: &str,
     caret_byte: usize,
@@ -185,7 +185,7 @@ fn fit_line(
 // Synthesise the transient Sprites + TextLabels that draw a TextInput field: a
 // background box, the typed content (or the dimmer placeholder while empty and
 // unfocused), and a caret bar while focused. Fed through the same shapers as the
-// authored overlay elements, carrying the field's `view` / `fit` so view mapping
+// authored overlay elements, carrying the field's `screen` / `fit` so screen mapping
 // and visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
 // box (`fit_line`) so a long value never bleeds past the field's edges.
 pub(super) fn build_text_input_overlay(
@@ -212,7 +212,7 @@ pub(super) fn build_text_input_overlay(
         tint: ti.background,
         follow_cursor: false,
         visible: true,
-        view: ti.view,
+        screen: ti.screen,
         fit: ti.fit,
         corner_radius: ti.corner_radius,
     };
@@ -259,7 +259,7 @@ pub(super) fn build_text_input_overlay(
         background: [0.0, 0.0, 0.0, 0.0],
         padding: 0.0,
         visible: true,
-        view: ti.view,
+        screen: ti.screen,
     };
 
     // Caret: a thin bar at the caret's fit position, only while the field holds
@@ -276,7 +276,7 @@ pub(super) fn build_text_input_overlay(
             tint: [ti.caret_color[0], ti.caret_color[1], ti.caret_color[2], 1.0],
             follow_cursor: false,
             visible: true,
-            view: ti.view,
+            screen: ti.screen,
             fit: ti.fit,
             corner_radius: 0.0,
         });

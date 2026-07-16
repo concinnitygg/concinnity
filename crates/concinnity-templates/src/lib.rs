@@ -4,7 +4,7 @@
 // Two namespaces:
 //
 //   * `asset`  -- reusable element constructors (Sprite, TextLabel, TextInput,
-//                 Panel, HitRegion, View, and the scene lighting / atmosphere
+//                 Panel, HitRegion, Screen, and the scene lighting / atmosphere
 //                 pieces). Each builder returns an `AssetSpec`: a `{name, type,
 //                 args}` world-line entry as data.
 //   * `world`  -- named bundles (`cn add --template <name>`) composed from the

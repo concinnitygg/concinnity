@@ -40,8 +40,8 @@ useful for HUD chips.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px`. 1.0 = native size. Defaults to `1.0`.
 - `centered`: A boolean. When true, center the label in the viewport each frame; x and y are ignored. Defaults to `false`.
 - `align`: A string (see [TextAlign](TextAlign.md)). Horizontal alignment relative to `x` (measured with the real font metrics). Ignored when `centered` is set.
-- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a view-owned label maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). `Bottom` keeps a label flush with a bottom-anchored sprite it labels.
+- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned label maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). `Bottom` keeps a label flush with a bottom-anchored sprite it labels.
 - `background`: An array of 4 floats. RGBA fill of a box drawn behind the text. An alpha of 0 (the default) draws no box; any alpha > 0 draws the box at that opacity.
 - `padding`: A float. Pixels the background box extends past the text on every side. Only meaningful when `background` is visible. Defaults to `0.0`.
 - `visible`: A boolean. When false, the label is hidden. Defaults to `true`.
-- `view`: A string. [View](View.md) this label belongs to. Resolved automatically from the naming convention (`<view>_*`); you don't set this directly. `None` means the label is always visible. Optional.
+- `screen`: A string. [Screen](Screen.md) this label belongs to. Resolved automatically from the naming convention (`<screen>_*`); you don't set this directly. `None` means the label is always visible. Optional.

@@ -13,7 +13,7 @@ mod sprite;
 mod text;
 
 pub use interaction::hit_region;
-pub use layout::{panel, view};
+pub use layout::{panel, screen};
 pub use scene::{
     camera, directional_light, environment_map_sky, point_light, post_process, room, volumetric_fog,
 };

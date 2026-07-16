@@ -6,7 +6,7 @@
 // The handle and value label show a placeholder position here; the runtime
 // corrects them to the live value on the first frame and while dragging. Names
 // are prefixed with the Slider's own name so generated elements stay scoped to
-// its View via the build pipeline's `<view>_*` rule and never collide with
+// its Screen via the build pipeline's `<screen>_*` rule and never collide with
 // hand-authored assets.
 
 use super::expand::{asset_name, type_norm};

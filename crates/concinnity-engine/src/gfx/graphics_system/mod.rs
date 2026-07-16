@@ -110,8 +110,8 @@ pub struct GraphicsSystem {
     failed: bool,
     start_time: Option<Instant>,
     frame_count: u64,
-    // A togglable menu (a View) coexists with a controlled Camera3D. When set,
-    // cursor capture is driven each frame by whether a menu view is active
+    // A togglable menu (a Screen) coexists with a controlled Camera3D. When set,
+    // cursor capture is driven each frame by whether a menu screen is active
     // (release while open, capture otherwise) rather than fixed at startup.
     menu_mode: bool,
     // Current render-scale (upscaling) quality, seeded at init from the world's
@@ -317,7 +317,7 @@ pub struct WorldReloadState {
     pub texture_name_to_slot: std::collections::HashMap<AssetId, usize>,
 }
 
-// Disjoint mutable view of the `GraphicsSystem` fields the hot-reload passes
+// Disjoint mutable screen of the `GraphicsSystem` fields the hot-reload passes
 // edit in one tick: the active backend, the texture-name map for runtime
 // decal / emitter spawn, and the fog bookkeeping the world.jsonl reload pass
 // dedupes against. Returned by [`GraphicsSystem::hot_reload_apply_parts`] so the
@@ -491,7 +491,7 @@ impl System for GraphicsSystem {
 }
 
 impl GraphicsSystem {
-    // Disjoint mutable view of the backend + hot-reload bookkeeping the
+    // Disjoint mutable screen of the backend + hot-reload bookkeeping the
     // binary-only `DebugHook::tick` reload drive applies changes through. The
     // caller supplies the backend (borrowed from the world's parked slot via
     // `World::systems_and_render_backend`) since this system yields it after

@@ -1432,7 +1432,7 @@ mod tests {
                 "background": [0.0, 0.0, 0.0, 0.0],
                 "padding": 0.0,
                 "visible": true,
-                "view": null,
+                "screen": null,
             }
         })];
         let entries = vec![serde_json::json!({

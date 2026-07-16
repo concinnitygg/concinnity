@@ -2,10 +2,10 @@ use super::*;
 
 impl StorySystem {
     pub(super) fn advance(&mut self, ctx: &mut PipelineContext) {
-        let Some((view, text_id)) = self.ids.as_ref().map(|i| (i.view, i.text)) else {
+        let Some((screen, text_id)) = self.ids.as_ref().map(|i| (i.screen, i.text)) else {
             return;
         };
-        if !self.started || self.in_choice || self.active_view != Some(view) {
+        if !self.started || self.in_choice || self.active_screen != Some(screen) {
             return;
         }
         // A click mid-reveal completes the page instead of leaving it.
@@ -42,10 +42,10 @@ impl StorySystem {
     }
 
     pub(super) fn choose(&mut self, option: usize, ctx: &mut PipelineContext) {
-        let Some(view) = self.ids.as_ref().map(|i| i.view) else {
+        let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
             return;
         };
-        if !self.started || !self.in_choice || self.active_view != Some(view) {
+        if !self.started || !self.in_choice || self.active_screen != Some(screen) {
             return;
         }
         let Some(choice) = self

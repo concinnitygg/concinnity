@@ -1033,8 +1033,8 @@ mod tests {
     // one field is its declared `label` reference (a picker, not free text).
     #[test]
     fn newly_offered_types_derive_expected_fields() {
-        let view = fields_for("View", None);
-        let vk = |k: &str| view.iter().find(|f| f.key == k).map(|f| f.kind);
+        let screen = fields_for("Screen", None);
+        let vk = |k: &str| screen.iter().find(|f| f.key == k).map(|f| f.kind);
         assert_eq!(vk("initial"), Some(FieldKind::Bool));
         assert_eq!(vk("fade_in_secs"), Some(FieldKind::Float));
 
@@ -1611,7 +1611,7 @@ mod tests {
                 target: "TextLabel"
             })
         );
-        assert_eq!(field("view"), Some(FieldKind::Ref { target: "View" }));
+        assert_eq!(field("screen"), Some(FieldKind::Ref { target: "Screen" }));
         // Null Option fields the type does NOT declare as references are still left
         // at their defaults, not offered.
         for skipped in ["hover_color", "hover_scale", "drag_handle"] {

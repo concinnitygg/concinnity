@@ -6,7 +6,7 @@ use alloc::string::String;
 ///
 /// One `StoryImport` stands in for a whole branching, click-through story (a
 /// visual-novel flow). The build parses the Markdown and expands the import
-/// into the UI assets that play it: a [View](#view) per page with a backdrop
+/// into the UI assets that play it: a [Screen](#screen) per page with a backdrop
 /// [Sprite](#sprite), [TextLabel](#textlabel)s for narration and speaker
 /// names, and [HitRegion](#hitregion)s wiring page to page, so `world.jsonl`
 /// stays a single readable line while the story lives in the Markdown file.
@@ -109,8 +109,8 @@ pub struct StoryImport {
     /// Path to the Markdown story file, relative to the project root.
     pub source: String,
     /// Whether to generate a title screen (story title, Start and Quit
-    /// buttons) as the initial view. When `false`, the story's first page is
-    /// the initial view and the generated ending offers a Restart instead of
+    /// buttons) as the initial screen. When `false`, the story's first page is
+    /// the initial screen and the generated ending offers a Restart instead of
     /// Back to title.
     pub title_screen: bool,
     /// Dialogue reveal speed in characters per second. `0` shows each page

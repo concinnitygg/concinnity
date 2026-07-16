@@ -1,5 +1,7 @@
 use super::*;
-use crate::assets::{Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker, View};
+use crate::assets::{
+    Screen, Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker,
+};
 use crate::ecs::World;
 use crate::ecs::asset_id::intern;
 use crate::ecs::{AudioClipHandle, TextureHandle};
@@ -28,7 +30,7 @@ fn sprite_named(name: &str) -> Sprite {
 // The build-resolved scaffold references for a story named "s".
 fn scaffold() -> StoryScaffold {
     StoryScaffold {
-        view: Some(intern("s_stage")),
+        screen: Some(intern("s_stage")),
         ending: Some(intern("s_ending")),
         bg: Some(intern("s_stage_bg")),
         left: Some(intern("s_stage_left")),
@@ -61,7 +63,7 @@ fn scaffold() -> StoryScaffold {
 }
 
 // Add the stage sprites and labels the scaffold references, all on the
-// stage view, so `StageIds::from_scaffold` resolves for any story world.
+// stage screen, so `StageIds::from_scaffold` resolves for any story world.
 fn add_stage_furniture(world: &mut World) {
     for sprite in [
         "s_stage_bg",
@@ -75,7 +77,7 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_slot0_box",
     ] {
         world.add_component(Sprite {
-            view: Some(intern("s_stage")),
+            screen: Some(intern("s_stage")),
             ..sprite_named(sprite)
         });
     }
@@ -92,7 +94,7 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_slot0_lbl",
     ] {
         world.add_component(TextLabel {
-            view: Some(intern("s_stage")),
+            screen: Some(intern("s_stage")),
             ..label_named(label)
         });
     }
@@ -106,11 +108,12 @@ fn story_world(story: Story) -> World {
     story.asset_id = intern("s");
     story.scaffold = scaffold();
     world.add_component(story);
-    for view in ["s_stage", "s_ending"] {
-        world.add_component(View {
-            asset_id: intern(view),
-            initial: view == "s_stage",
+    for screen in ["s_stage", "s_ending"] {
+        world.add_component(Screen {
+            asset_id: intern(screen),
+            initial: screen == "s_stage",
             fade_in_secs: 0.0,
+            ..Default::default()
         });
     }
     add_stage_furniture(&mut world);
@@ -133,32 +136,33 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
         .collect();
     story.scaffold = sc;
     world.add_component(story);
-    for view in ["s_stage", "s_ending"] {
-        world.add_component(View {
-            asset_id: intern(view),
-            initial: view == "s_stage",
+    for screen in ["s_stage", "s_ending"] {
+        world.add_component(Screen {
+            asset_id: intern(screen),
+            initial: screen == "s_stage",
             fade_in_secs: 0.0,
+            ..Default::default()
         });
     }
     add_stage_furniture(&mut world);
     // Extra rows beyond slot0, which `add_stage_furniture` already provides.
     for i in 1..rows {
         world.add_component(Sprite {
-            view: Some(intern("s_stage")),
+            screen: Some(intern("s_stage")),
             ..sprite_named(&format!("s_stage_slot{i}_box"))
         });
         world.add_component(TextLabel {
-            view: Some(intern("s_stage")),
+            screen: Some(intern("s_stage")),
             ..label_named(&format!("s_stage_slot{i}_lbl"))
         });
     }
     world
 }
 
-// A world whose initial view is the generated title menu. The four menu
+// A world whose initial screen is the generated title menu. The four menu
 // button labels start at distinct emitted positions; the story lays them out
 // (contiguous, centered, only the applicable buttons) from the save state on
-// the first `ViewShown`. Mirrors the title-screen scaffold the build produces.
+// the first `ScreenShown`. Mirrors the title-screen scaffold the build produces.
 fn title_menu_world(story: Story) -> World {
     let mut world = World::new_empty();
     let mut story = story;
@@ -172,11 +176,12 @@ fn title_menu_world(story: Story) -> World {
     story.scaffold = sc;
     world.add_component(story);
     // The title menu is the initial screen; the stage and ending are inactive.
-    for (view, initial) in [("s_title", true), ("s_stage", false), ("s_ending", false)] {
-        world.add_component(View {
-            asset_id: intern(view),
+    for (screen, initial) in [("s_title", true), ("s_stage", false), ("s_ending", false)] {
+        world.add_component(Screen {
+            asset_id: intern(screen),
             initial,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
     }
     add_stage_furniture(&mut world);
@@ -189,7 +194,7 @@ fn title_menu_world(story: Story) -> World {
         ("s_title_quit_lbl", 400.0, "Quit"),
     ] {
         world.add_component(TextLabel {
-            view: Some(intern("s_title")),
+            screen: Some(intern("s_title")),
             content: text.to_string(),
             y,
             ..label_named(name)
@@ -199,9 +204,9 @@ fn title_menu_world(story: Story) -> World {
 }
 
 // A story world with the pause menu + settings + title screens the engine
-// defaults inject, each with a member sprite the view system can show/hide so
+// defaults inject, each with a member sprite the screen system can show/hide so
 // the active screen is observable. Mirrors the scaffold the build produces once
-// the pause menu is injected and its views are threaded into the story.
+// the pause menu is injected and its screens are threaded into the story.
 fn story_world_with_pause(story: Story) -> World {
     let mut world = World::new_empty();
     let mut story = story;
@@ -215,28 +220,29 @@ fn story_world_with_pause(story: Story) -> World {
     sc.settings_label = Some(intern("s_title_settings_lbl"));
     story.scaffold = sc;
     world.add_component(story);
-    for (view, initial) in [
+    for (screen, initial) in [
         ("s_stage", true),
         ("s_ending", false),
         ("s_pause", false),
         ("s_settings", false),
         ("s_title", false),
     ] {
-        world.add_component(View {
-            asset_id: intern(view),
+        world.add_component(Screen {
+            asset_id: intern(screen),
             initial,
             fade_in_secs: 0.0,
+            ..Default::default()
         });
     }
     // One member sprite per menu screen, so its visibility tracks whether the
-    // screen is the active view.
-    for (name, view) in [
+    // screen is the active screen.
+    for (name, screen) in [
         ("s_pause_dim", "s_pause"),
         ("s_settings_dim", "s_settings"),
         ("s_title_bg", "s_title"),
     ] {
         world.add_component(Sprite {
-            view: Some(intern(view)),
+            screen: Some(intern(screen)),
             ..sprite_named(name)
         });
     }
@@ -246,7 +252,7 @@ fn story_world_with_pause(story: Story) -> World {
         "s_title_settings_lbl",
     ] {
         world.add_component(TextLabel {
-            view: Some(intern("s_title")),
+            screen: Some(intern("s_title")),
             ..label_named(lbl)
         });
     }
@@ -312,7 +318,7 @@ fn two_page_story() -> Story {
     }
 }
 
-// The stage being the world's initial view auto-starts the story: the
+// The stage being the world's initial screen auto-starts the story: the
 // first page and its name plate appear without any command.
 #[test]
 fn initial_stage_view_auto_starts() {
@@ -338,8 +344,8 @@ fn advance_walks_pages_to_the_ending() {
     // The narration page has no speaker: the plate empties.
     assert_eq!(label_content(&world, "s_stage_name"), "");
 
-    // Advancing past the last page shows the ending view; once the
-    // active view moves off the stage, further advances are ignored.
+    // Advancing past the last page shows the ending screen; once the
+    // active screen moves off the stage, further advances are ignored.
     world
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Advance);
@@ -417,7 +423,7 @@ fn choices_fill_buttons_and_choose_jumps() {
         .send(StoryCommand::Choose(0));
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
-    // Hidden furniture goes transparent (view re-activation force-shows
+    // Hidden furniture goes transparent (screen re-activation force-shows
     // members, so `visible` cannot carry menu state).
     let alpha = world
         .query::<Sprite>()
@@ -1175,9 +1181,9 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
 }
 
 // Saving from a menu shown over the story (the injected pause menu) raises the
-// hidden stage and opens the slot overlay on it, even though a different view
+// hidden stage and opens the slot overlay on it, even though a different screen
 // -- not the stage -- is active. Without the raise the slot furniture (all
-// stage-view members) would stay hidden behind the menu.
+// stage-screen members) would stay hidden behind the menu.
 #[test]
 fn pause_menu_save_raises_stage_and_opens_slots() {
     let dir = tempfile::tempdir().unwrap();
@@ -1191,9 +1197,9 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
         }
     }
     world.step();
-    // A pause menu becomes the active view over the started story.
-    world.events_mut::<ViewShown>().send(ViewShown {
-        view: intern("s_pause"),
+    // A pause menu becomes the active screen over the started story.
+    world.events_mut::<ScreenShown>().send(ScreenShown {
+        screen: intern("s_pause"),
     });
     world.step();
 
@@ -1214,7 +1220,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
 }
 
 // Escape opens the pause over the stage; Escape (or Resume) again returns to
-// the stage rather than dismissing to no view (which would render nothing).
+// the stage rather than dismissing to no screen (which would render nothing).
 #[test]
 fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
     let mut world = story_world_with_pause(two_page_story());
@@ -1245,7 +1251,7 @@ fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
     world.step();
     assert!(
         sprite_visible(&world, "s_stage_bg"),
-        "resume returns to the stage, not a blank view"
+        "resume returns to the stage, not a blank screen"
     );
     assert!(!sprite_visible(&world, "s_pause_dim"));
 }
@@ -1282,8 +1288,8 @@ fn settings_back_returns_to_the_opener() {
 
     // Title -> Settings -> Back returns to the title.
     world
-        .events_mut::<ViewCommand>()
-        .send(ViewCommand::Show(intern("s_title")));
+        .events_mut::<ScreenCommand>()
+        .send(ScreenCommand::Show(intern("s_title")));
     world.step();
     world.step();
     world
@@ -1326,10 +1332,10 @@ fn title_load_works_after_returning_to_the_title() {
     };
     write_save(&slot_file(dir.path(), 0), &save).unwrap();
 
-    // Quit to the title (a plain view:show the pause menu's Quit fires).
+    // Quit to the title (a plain screen:show the pause menu's Quit fires).
     world
-        .events_mut::<ViewCommand>()
-        .send(ViewCommand::Show(intern("s_title")));
+        .events_mut::<ScreenCommand>()
+        .send(ScreenCommand::Show(intern("s_title")));
     world.step();
     world.step();
     assert!(sprite_visible(&world, "s_title_bg"), "title shown");
@@ -1400,7 +1406,7 @@ fn choice_survives_a_spurious_slot_click() {
 // at its emitted position instead of tracking the runtime layout (the cursor
 // would then hit each button in the wrong place). Guard both halves: init
 // leaves the emitted label positions untouched, and the first title
-// `ViewShown` (announced during that same init) lays out only the applicable
+// `ScreenShown` (announced during that same init) lays out only the applicable
 // buttons.
 #[test]
 fn title_menu_lays_out_on_first_shown_not_at_init() {
@@ -1422,7 +1428,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
         }
     }
 
-    // The first step consumes the initial title `ViewShown` and lays the menu
+    // The first step consumes the initial title `ScreenShown` and lays the menu
     // out: with no save data, only Start and Quit, stacked contiguously and
     // centered (no gap where Continue and Load would sit).
     world.step();
@@ -1471,21 +1477,22 @@ fn two_option_world(story: Story) -> World {
     sc.options = vec![intern("s_stage_opt0_lbl"), intern("s_stage_opt1_lbl")];
     story.scaffold = sc;
     world.add_component(story);
-    for view in ["s_stage", "s_ending"] {
-        world.add_component(View {
-            asset_id: intern(view),
-            initial: view == "s_stage",
+    for screen in ["s_stage", "s_ending"] {
+        world.add_component(Screen {
+            asset_id: intern(screen),
+            initial: screen == "s_stage",
             fade_in_secs: 0.0,
+            ..Default::default()
         });
     }
     add_stage_furniture(&mut world);
     // The second option slot beyond slot0 that add_stage_furniture provides.
     world.add_component(Sprite {
-        view: Some(intern("s_stage")),
+        screen: Some(intern("s_stage")),
         ..sprite_named("s_stage_opt1_box")
     });
     world.add_component(TextLabel {
-        view: Some(intern("s_stage")),
+        screen: Some(intern("s_stage")),
         ..label_named("s_stage_opt1_lbl")
     });
     world

@@ -21,7 +21,7 @@ use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 // than uniform-scaled, and an opaque one hides the scene behind it.
 pub fn covers_canvas(s: &Sprite) -> bool {
     let [ref_w, ref_h] = UI_REFERENCE_SIZE;
-    s.view.is_some()
+    s.screen.is_some()
         && s.x <= 0.0
         && s.y <= 0.0
         && s.x + s.width >= ref_w
@@ -63,7 +63,7 @@ pub fn build_sprite_calls(
         if a <= 0.0 {
             continue;
         }
-        let (x0, y0, x1, y1) = if s.view.is_some() {
+        let (x0, y0, x1, y1) = if s.screen.is_some() {
             if s.fit == SpriteFit::Cover {
                 // Full-bleed stage imagery: uniform fill, centered crop. The
                 // canvas edges map at or beyond the window edges, so edge-
@@ -226,7 +226,7 @@ mod tests {
             tint,
             follow_cursor: false,
             visible: true,
-            view: None,
+            screen: None,
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
         }
@@ -345,7 +345,7 @@ mod tests {
         // sits at the transformed rect's left edge, and the top-left corner
         // arc starts (2 * radius) transformed pixels down from the rect top.
         let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
-        s.view = Some(AssetId(7));
+        s.screen = Some(AssetId(7));
         s.corner_radius = 20.0;
         let calls = build_sprite_calls(
             &[&s],
@@ -423,7 +423,7 @@ mod tests {
         // uniformly scaled onto the window. At twice the reference size the
         // rect doubles and stays centered.
         let mut s = sprite(100.0, 100.0, 200.0, 100.0, [1.0, 1.0, 1.0, 1.0]);
-        s.view = Some(AssetId(7));
+        s.screen = Some(AssetId(7));
         let calls = build_sprite_calls(
             &[&s],
             Some(0),
@@ -442,7 +442,7 @@ mod tests {
         // A view-owned sprite spanning the whole reference canvas is a
         // full-screen backdrop: it fills the live window rather than letterboxing.
         let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [0.0, 0.0, 0.0, 0.5]);
-        s.view = Some(AssetId(7));
+        s.screen = Some(AssetId(7));
         let calls = build_sprite_calls(
             &[&s],
             Some(0),
@@ -462,7 +462,7 @@ mod tests {
         // (768/720): vertical edges land exactly on the window edges,
         // horizontal overflow is cropped equally on both sides.
         let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [1.0, 1.0, 1.0, 1.0]);
-        s.view = Some(AssetId(7));
+        s.screen = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
         let calls = build_sprite_calls(
             &[&s],
@@ -495,7 +495,7 @@ mod tests {
         // bottom edge maps exactly to the window bottom on a window taller
         // than the reference aspect.
         let mut s = sprite(400.0, 100.0, 480.0, 620.0, [1.0, 1.0, 1.0, 1.0]);
-        s.view = Some(AssetId(7));
+        s.screen = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
         let calls = build_sprite_calls(
             &[&s],
@@ -532,7 +532,7 @@ mod tests {
         // the map stays unclipped.
         let mut s = sprite(100.0, 100.0, 50.0, 50.0, [1.0, 1.0, 1.0, 1.0]);
         s.asset_id = AssetId(7);
-        s.view = Some(AssetId(1));
+        s.screen = Some(AssetId(1));
         let mut clips = no_clips();
         // Reference band [200,200] size [200,60] at a 2x viewport (1280x720 ->
         // 2560x1440, scale 2 about the centre): forward(200,200)=(400,400),
@@ -555,7 +555,7 @@ mod tests {
         // A sprite not in the clips map is unclipped.
         let mut other = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         other.asset_id = AssetId(9);
-        other.view = Some(AssetId(1));
+        other.screen = Some(AssetId(1));
         let calls = build_sprite_calls(
             &[&other],
             Some(0),

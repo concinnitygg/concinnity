@@ -2,13 +2,13 @@
 //
 // Screen-overlay scaling math shared by the build pipeline (which lays menus
 // out against a fixed reference canvas) and the client renderer (which scales
-// that canvas to the live window). View-owned UI (menus, settings) is authored
+// that canvas to the live window). Screen-owned UI (menus, settings) is authored
 // in a fixed reference resolution; at runtime the whole overlay is uniformly
 // scaled to fit the window, preserving aspect and staying centered, so a menu
 // looks the same proportion of the screen at any window size.
 
 // Reference resolution menus are authored against. Window-pixel coordinates of
-// view-owned UI are interpreted in this space and scaled to the live window.
+// screen-owned UI are interpreted in this space and scaled to the live window.
 pub const UI_REFERENCE_SIZE: [f32; 2] = [1280.0, 720.0];
 
 // A uniform similarity transform mapping the reference canvas to the live

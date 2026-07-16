@@ -24,6 +24,11 @@ use std::time::Instant;
 mod hud_layout;
 mod widgets;
 
+// Reserved draw-layer range for the `cn editor` HUD's per-frame overrides:
+// far above any screen-stack layer (authored layer band ~4M at most), so the
+// editor panels always occlude world screens while keeping their own order.
+const EDITOR_LAYER_BASE: i32 = i32::MAX / 2;
+
 // Everything the overlay build needs from GraphicsSystem's init: the loaded
 // font atlases, the sprite-texture slot map, the HUD chip id lists, and the
 // scroll-panel clip bands. Parked as a resource at the end of graphics init;
@@ -135,15 +140,46 @@ fn build_overlay_frame(
     let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
         sprites.into_iter().partition(|s| s.follow_cursor);
 
-    // Draw-layer overrides for HUD occlusion (the `cn editor` panels): an
-    // id maps to a layer, and the overlay calls are stable-sorted by it
-    // below. Absent (a shipped game) leaves everything at layer 0, so the
-    // sort is skipped and draw order is unchanged.
+    // Per-element draw layers, from two sources merged into one map:
+    //   - the screen stack: every element of an active Screen takes its
+    //     screen's computed layer (stack position within the authored layer
+    //     band), so screens draw in stack order and above the layer-0 HUD;
+    //   - the `cn editor` HUD's per-frame overrides, lifted into a reserved
+    //     top range so the editor panels always occlude world screens while
+    //     keeping their own focus order.
+    // An id absent from the map is layer 0. When the map ends up empty (no
+    // active screen, no editor), the sort below is skipped and draw order is
+    // pure insertion order, as before.
     let empty_layers = std::collections::HashMap::new();
-    let hud_layers = ctx
-        .resource::<crate::ecs::HudLayers>()
-        .map(|h| &h.0)
-        .unwrap_or(&empty_layers);
+    let screen_layers = ctx
+        .resource::<crate::ecs::ScreenStack>()
+        .map(|s| s.layers.clone())
+        .unwrap_or_default();
+    let mut effective_layers: std::collections::HashMap<AssetId, i32> =
+        std::collections::HashMap::new();
+    if !screen_layers.is_empty() {
+        for s in ctx.query::<Sprite>() {
+            if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id)) {
+                effective_layers.insert(s.asset_id, *layer);
+            }
+        }
+        for l in ctx.query::<TextLabel>() {
+            if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id)) {
+                effective_layers.insert(l.asset_id, *layer);
+            }
+        }
+        for t in ctx.query::<TextInput>() {
+            if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id)) {
+                effective_layers.insert(t.asset_id, *layer);
+            }
+        }
+    }
+    if let Some(overrides) = ctx.resource::<crate::ecs::HudLayers>() {
+        for (id, layer) in &overrides.0 {
+            effective_layers.insert(*id, EDITOR_LAYER_BASE + layer);
+        }
+    }
+    let hud_layers = &effective_layers;
 
     let mut calls = gfx_sprite::build_sprite_calls(
         &scene_sprites,
@@ -167,12 +203,12 @@ fn build_overlay_frame(
     // clipped row text, before the cursor) and unclipped, so it escapes
     // the scroll band's scissor. Built as transient overlay Sprites +
     // TextLabels fed through the same shapers (with no clip bands).
-    if let Some(view) = ctx
+    if let Some(screen) = ctx
         .resource::<crate::ecs::OpenDropdown>()
         .and_then(|d| d.0.clone())
     {
         let no_clips = std::collections::HashMap::new();
-        let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&view, &assets.fonts);
+        let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
         let sprite_refs: Vec<&Sprite> = dd_sprites.iter().collect();
         calls.extend(gfx_sprite::build_sprite_calls(
             &sprite_refs,
@@ -250,12 +286,13 @@ fn build_overlay_frame(
             [win_w, win_h],
         ));
     }
-    // A menu is "active" when any view-owned UI element is visible; used
-    // to drive cursor capture and to freeze gameplay input + simulation.
-    let menu_active = labels.iter().any(|l| l.visible && l.view.is_some())
-        || scene_sprites.iter().any(|s| s.visible && s.view.is_some())
-        || cursor_sprites.iter().any(|s| s.visible && s.view.is_some())
-        || text_inputs.iter().any(|t| t.visible && t.view.is_some());
+    // A menu is "active" while any active screen pauses the world (the
+    // screen stack publishes the flag); used to drive cursor capture and to
+    // freeze gameplay input + simulation. A screen with `pauses_world` off
+    // (a passthrough overlay, a live console) shows without pausing.
+    let menu_active = ctx
+        .resource::<crate::ecs::ScreenStack>()
+        .is_some_and(|s| s.pauses_world);
     // The whole world render can be skipped when an opaque full-canvas
     // backdrop covers the scene (a menu authored with its dim alpha at
     // 1.0): nothing of the scene is visible, so every world pass is
@@ -265,11 +302,12 @@ fn build_overlay_frame(
         && scene_sprites
             .iter()
             .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
-    // Reorder the overlay by layer when a HUD-layer override is active (the
-    // editor's focus stack): a stable sort keeps same-layer order (so the
-    // sprites-then-text order within a panel is intact) while lifting the
-    // focused panel's whole content above the others'. Skipped entirely when
-    // no override is set, so a shipped game's draw order is untouched.
+    // Reorder the overlay by layer when any layer is assigned (an active
+    // screen stack, or the editor's focus-stack overrides): a stable sort
+    // keeps same-layer order (so the sprites-then-text order within a panel
+    // is intact) while lifting a screen's or focused panel's whole content
+    // above the others'. Skipped entirely when no layer is set, so draw order
+    // stays pure insertion order.
     if !hud_layers.is_empty() {
         calls.sort_by_key(|c| c.layer);
     }

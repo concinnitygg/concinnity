@@ -1,9 +1,9 @@
 // src/story.rs
 //
-// Story playback: drives a compiled `Story` graph through the stage view its
+// Story playback: drives a compiled `Story` graph through the stage screen its
 // build expansion generated. An internal system (not a declarable asset):
 // `World::start` constructs one whenever the world contains a `Story`. The
-// whole story plays inside one view: this system fills the dialogue and
+// whole story plays inside one screen: this system fills the dialogue and
 // name-plate labels (revealing text at the story's speed), swaps the backdrop
 // and portrait sprite textures, shows the choice menu when a node ends in
 // one, and asks the audio system to play page music and one-shots.
@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CmpOp, CueKind, FrameInput, Key, PlayCue, Sprite, Story, StoryCommand, StoryGate, StoryImage,
-    StoryOp, StoryReload, StoryScaffold, StoryStage, TextLabel, ViewCommand, ViewShown,
+    CmpOp, CueKind, FrameInput, Key, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
+    StoryCommand, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold, StoryStage,
+    TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};
@@ -41,7 +42,7 @@ const TITLE_MENU_CENTER_Y: f32 = 500.0;
 const TITLE_MENU_SPACING: f32 = 62.0;
 // Shown tint of a choice option's box; matches the color the build authors
 // (with zero alpha) on the generated `_opt<N>_box` sprites. An occupied menu
-// slot re-tints its box to this; hiding is alpha zero, never `visible` (view
+// slot re-tints its box to this; hiding is alpha zero, never `visible` (screen
 // re-activation force-shows every member).
 const CHOICE_BOX_TINT: [f32; 4] = [0.16, 0.20, 0.35, 0.92];
 // Quick-row toggle colors: an engaged mode reads gold, the rest gray.
@@ -71,8 +72,8 @@ const SLOT_SCROLL_UNIT: f32 = 20.0;
 // build-resolved scaffold references. An unset optional slot (e.g. a story
 // with no dialog box) makes its mutations a no-op.
 struct StageIds {
-    view: AssetId,
-    ending_view: AssetId,
+    screen: AssetId,
+    ending_screen: AssetId,
     bg: Option<AssetId>,
     left: Option<AssetId>,
     center: Option<AssetId>,
@@ -93,15 +94,15 @@ struct StageIds {
     start_label: Option<AssetId>,
     quit_label: Option<AssetId>,
     continue_label: Option<AssetId>,
-    // The title screen view (returned to when a load overlay opened from the
+    // The title screen screen (returned to when a load overlay opened from the
     // title is dismissed) and its Load label, hidden while no slot exists.
-    title_view: Option<AssetId>,
+    title_screen_id: Option<AssetId>,
     load_label: Option<AssetId>,
-    // The pause menu view (the injected Escape overlay), the settings-screen
-    // entry view it and the title open, and the title's Settings label. All
+    // The pause menu screen (the injected Escape overlay), the settings-screen
+    // entry screen it and the title open, and the title's Settings label. All
     // unset when the world declares no pause menu.
     pause_view: Option<AssetId>,
-    settings_view: Option<AssetId>,
+    settings_screen: Option<AssetId>,
     settings_label: Option<AssetId>,
     // The pulsing waiting-for-input marker.
     marker: Option<AssetId>,
@@ -121,11 +122,11 @@ struct StageIds {
 
 impl StageIds {
     // The stage references out of a build-resolved scaffold; `None` when the
-    // scaffold is missing its stage or ending view (a story with no stage).
+    // scaffold is missing its stage or ending screen (a story with no stage).
     fn from_scaffold(scaffold: &StoryScaffold) -> Option<Self> {
         Some(Self {
-            view: scaffold.view?,
-            ending_view: scaffold.ending?,
+            screen: scaffold.screen?,
+            ending_screen: scaffold.ending?,
             bg: scaffold.bg,
             left: scaffold.left,
             center: scaffold.center,
@@ -138,10 +139,10 @@ impl StageIds {
             start_label: scaffold.start_label,
             quit_label: scaffold.quit_label,
             continue_label: scaffold.continue_label,
-            title_view: scaffold.title,
+            title_screen_id: scaffold.title,
             load_label: scaffold.load_label,
             pause_view: scaffold.pause,
-            settings_view: scaffold.settings,
+            settings_screen: scaffold.settings,
             settings_label: scaffold.settings_label,
             marker: scaffold.advance_marker,
             log_label: scaffold.log_label,
@@ -269,10 +270,10 @@ pub struct StorySystem {
     // Recent dialogue for the backlog overlay, one pre-wrapped entry per
     // page shown.
     history: Vec<String>,
-    // The active view as announced by UiInputSystem; stage input (advance,
+    // The active screen as announced by UiInputSystem; stage input (advance,
     // choose) is ignored while a menu or the title screen is up.
-    active_view: Option<AssetId>,
-    // The view the settings screen returns to on Back (the pause menu or the
+    active_screen: Option<AssetId>,
+    // The screen the settings screen returns to on Back (the pause menu or the
     // title, whichever opened it).
     settings_return: Option<AssetId>,
     command_cursor: crate::ecs::EventCursor,
@@ -314,7 +315,7 @@ impl StorySystem {
             slot_scroll: 0,
             slot_scroll_accum: 0.0,
             history: Vec::new(),
-            active_view: None,
+            active_screen: None,
             settings_return: None,
             command_cursor: crate::ecs::EventCursor::default(),
             view_shown_cursor: crate::ecs::EventCursor::default(),
@@ -331,7 +332,7 @@ impl System for StorySystem {
         match StageIds::from_scaffold(&self.story.scaffold) {
             Some(ids) => {
                 self.ids = Some(ids);
-                // The title menu is laid out on the first `ViewShown` (in
+                // The title menu is laid out on the first `ScreenShown` (in
                 // `step`), not here. Each menu button's hit region captures its
                 // fixed vertical offset to its label in `UiInputSystem::init`,
                 // which runs after this one. Relaying the labels now would move
@@ -339,7 +340,7 @@ impl System for StorySystem {
                 // in the wrong offset and stick at its emitted position instead
                 // of tracking the runtime layout. Leaving the emitted positions
                 // untouched lets the capture read the authored region-to-label
-                // gap; the first title `ViewShown` (announced by that same init)
+                // gap; the first title `ScreenShown` (announced by that same init)
                 // then drives the real layout before the first frame renders.
             }
             None => {
@@ -380,29 +381,29 @@ impl System for StorySystem {
             self.reload(story, ctx);
         }
 
-        // Track the active view; auto-start when the stage itself is the
-        // world's initial view (no title screen).
-        let shown: Vec<AssetId> = match ctx.events::<ViewShown>() {
+        // Track the active screen; auto-start when the stage itself is the
+        // world's initial screen (no title screen).
+        let shown: Vec<AssetId> = match ctx.events::<ScreenShown>() {
             Some(events) => events
                 .read(&mut self.view_shown_cursor)
                 .into_iter()
-                .map(|e| e.view)
+                .map(|e| e.screen)
                 .collect(),
             None => Vec::new(),
         };
-        for view in shown {
-            self.active_view = Some(view);
+        for screen in shown {
+            self.active_screen = Some(screen);
             // The load overlay shows the stage without starting play.
             if !self.started
                 && self.overlay == Overlay::None
-                && Some(view) == self.ids.as_ref().map(|i| i.view)
+                && Some(screen) == self.ids.as_ref().map(|i| i.screen)
             {
                 self.start(ctx);
             }
             // Re-lay the title menu each time the title is shown: the save
             // state may have changed while a story played (a fresh auto-save,
             // a new slot, or a finished story clearing its auto-save).
-            if Some(view) == self.ids.as_ref().and_then(|i| i.title_view) {
+            if Some(screen) == self.ids.as_ref().and_then(|i| i.title_screen_id) {
                 // Returning to the title (Quit-to-Title, or the ending's Back)
                 // ends the playthrough, so Start / Continue / Load behave as a
                 // fresh entry -- in particular Load routes through the
@@ -555,7 +556,7 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
                 s.height = h;
             });
         }
-        // An empty slot goes fully transparent rather than invisible: view
+        // An empty slot goes fully transparent rather than invisible: screen
         // re-activation force-shows member sprites.
         None => set_sprite(ctx, slot, |s| s.tint = [1.0, 1.0, 1.0, 0.0]),
     }

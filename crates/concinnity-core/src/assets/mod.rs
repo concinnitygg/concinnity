@@ -33,6 +33,8 @@ mod reparent_request;
 mod room;
 mod root_motion_event;
 mod scene_command;
+mod screen_command;
+mod screen_shown;
 pub mod sdf_volume;
 mod setting_command;
 pub mod shader_stage;
@@ -41,8 +43,6 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
-mod view_command;
-mod view_shown;
 
 // Per-instance components an entity is composed from: its placement, render
 // description, collision, hierarchy, and gameplay tags.
@@ -162,7 +162,6 @@ pub use concinnity_asset::StoryImport;
 pub use concinnity_asset::StreamingConfig;
 pub use concinnity_asset::TextInput;
 pub use concinnity_asset::Texture;
-pub use concinnity_asset::View;
 pub use concinnity_asset::VolumetricFog;
 pub use concinnity_asset::VoxelChunk;
 pub use concinnity_asset::VoxelWorld;
@@ -171,10 +170,13 @@ pub use concinnity_asset::{
     CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
+pub use concinnity_asset::{Screen, ScreenInput};
 pub use concinnity_asset::{Sprite, SpriteFit};
 pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{WaterSurface, WaterWave};
 pub use concinnity_asset::{Window, WindowArgs, WindowMode};
+pub use screen_command::ScreenCommand;
+pub use screen_shown::ScreenShown;
 #[cfg(backend_metal)]
 #[allow(unused_imports)]
 pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
@@ -184,8 +186,6 @@ pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;
-pub use view_command::ViewCommand;
-pub use view_shown::ViewShown;
 // `MAX_WATER_WAVES` stays in core: the build-side water-surface validator
 // (concinnity-world) reaches it on every backend, and the Metal water encoder
 // also reaches `WaterWave` through the asset crate.

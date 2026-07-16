@@ -51,7 +51,7 @@ const PORTRAIT_RIGHT_CENTER_X: f32 = 960.0;
 
 // Emit the runtime assets for one parsed story: the compiled Story graph
 // plus the stage scaffolding the story system drives at runtime. Instead of
-// a View per page, the whole story plays inside one stage view whose labels
+// a Screen per page, the whole story plays inside one stage screen whose labels
 // and sprites are mutated page by page; the title and ending screens stay
 // build-generated. `prefix` is the sanitized import name; every generated
 // name starts with it. `image_dims` reads an image file's pixel size
@@ -69,9 +69,9 @@ pub(crate) fn emit_story(
     let font_title = format!("{}_font_title", prefix);
     let font_menu = format!("{}_font_menu", prefix);
     let font_dialog = format!("{}_font_dialog", prefix);
-    let title_view = format!("{}_title", prefix);
-    let stage_view = format!("{}_stage", prefix);
-    let ending_view = format!("{}_ending", prefix);
+    let title_name = format!("{}_title", prefix);
+    let stage_name = format!("{}_stage", prefix);
+    let ending_name = format!("{}_ending", prefix);
 
     let mut out = vec![
         font(&font_title, TITLE_FONT_PX),
@@ -87,7 +87,7 @@ pub(crate) fn emit_story(
     let mut images: Vec<(String, String)> = Vec::new();
 
     if title_screen {
-        out.push(view(&title_view, true));
+        out.push(screen(&title_name, true));
         // The menu backdrop: a full-bleed image when the frontmatter set one,
         // else a flat dark fill.
         match &story.background {
@@ -98,14 +98,14 @@ pub(crate) fn emit_story(
                 // photo. The image still shows through; the flat-fill case
                 // below is already dark enough to need no dimming.
                 out.push(textured_cover_sprite(
-                    &format!("{}_bg", title_view),
+                    &format!("{}_bg", title_name),
                     [0.0, 0.0, win_w, win_h],
                     &texture,
                     TITLE_BACKDROP_DIM,
                 ));
             }
             None => out.push(sprite(
-                &format!("{}_bg", title_view),
+                &format!("{}_bg", title_name),
                 0.0,
                 0.0,
                 win_w,
@@ -114,7 +114,7 @@ pub(crate) fn emit_story(
             )),
         }
         out.push(label(
-            &format!("{}_heading", title_view),
+            &format!("{}_heading", title_name),
             &font_title,
             &story.title,
             LabelStyle {
@@ -137,7 +137,7 @@ pub(crate) fn emit_story(
             ("quit", "Quit", 608.0, "quit"),
         ] {
             out.extend(title_button(
-                &format!("{}_{}", title_view, key),
+                &format!("{}_{}", title_name, key),
                 &font_menu,
                 text,
                 y,
@@ -235,21 +235,21 @@ pub(crate) fn emit_story(
         .max()
         .unwrap_or(0);
     let option_labels: Vec<String> = (0..max_choices)
-        .map(|i| format!("{}_opt{}_lbl", stage_view, i))
+        .map(|i| format!("{}_opt{}_lbl", stage_name, i))
         .collect();
     let option_boxes: Vec<String> = (0..max_choices)
-        .map(|i| format!("{}_opt{}_box", stage_view, i))
+        .map(|i| format!("{}_opt{}_box", stage_name, i))
         .collect();
-    let start_label = title_screen.then(|| format!("{}_start_lbl", title_view));
-    let quit_label = title_screen.then(|| format!("{}_quit_lbl", title_view));
-    let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_view));
-    let load_label = title_screen.then(|| format!("{}_load_lbl", title_view));
-    let settings_label = title_screen.then(|| format!("{}_settings_lbl", title_view));
+    let start_label = title_screen.then(|| format!("{}_start_lbl", title_name));
+    let quit_label = title_screen.then(|| format!("{}_quit_lbl", title_name));
+    let continue_label = title_screen.then(|| format!("{}_continue_lbl", title_name));
+    let load_label = title_screen.then(|| format!("{}_load_lbl", title_name));
+    let settings_label = title_screen.then(|| format!("{}_settings_lbl", title_name));
     let slot_boxes: Vec<String> = (0..VISIBLE_SLOTS)
-        .map(|i| format!("{}_slot{}_box", stage_view, i))
+        .map(|i| format!("{}_slot{}_box", stage_name, i))
         .collect();
     let slot_labels: Vec<String> = (0..VISIBLE_SLOTS)
-        .map(|i| format!("{}_slot{}_lbl", stage_view, i))
+        .map(|i| format!("{}_slot{}_lbl", stage_name, i))
         .collect();
     out.push(serde_json::json!({
         "name": prefix,
@@ -260,50 +260,50 @@ pub(crate) fn emit_story(
             "text_speed": text_speed,
             "save_key": prefix,
             "scaffold": {
-                "view": &stage_view,
-                "ending": &ending_view,
-                "bg": format!("{}_bg", stage_view),
-                "left": format!("{}_left", stage_view),
-                "center": format!("{}_center", stage_view),
-                "right": format!("{}_right", stage_view),
-                "dialog_box": format!("{}_box", stage_view),
-                "name_label": format!("{}_name", stage_view),
-                "text_label": format!("{}_text", stage_view),
+                "screen": &stage_name,
+                "ending": &ending_name,
+                "bg": format!("{}_bg", stage_name),
+                "left": format!("{}_left", stage_name),
+                "center": format!("{}_center", stage_name),
+                "right": format!("{}_right", stage_name),
+                "dialog_box": format!("{}_box", stage_name),
+                "name_label": format!("{}_name", stage_name),
+                "text_label": format!("{}_text", stage_name),
                 "option_boxes": option_boxes,
                 "options": option_labels,
                 "start_label": start_label,
                 "quit_label": quit_label,
                 "continue_label": continue_label,
-                "title": title_screen.then(|| title_view.clone()),
+                "title": title_screen.then(|| title_name.clone()),
                 "load_label": load_label,
                 "settings_label": settings_label,
-                "advance_marker": format!("{}_marker", stage_view),
-                "log_label": format!("{}_qlog_lbl", stage_view),
-                "auto_label": format!("{}_qauto_lbl", stage_view),
-                "skip_label": format!("{}_qskip_lbl", stage_view),
-                "save_label": format!("{}_qsave_lbl", stage_view),
-                "overlay_dim": format!("{}_dim", stage_view),
-                "backlog_label": format!("{}_history", stage_view),
-                "slot_title": format!("{}_slot_title", stage_view),
+                "advance_marker": format!("{}_marker", stage_name),
+                "log_label": format!("{}_qlog_lbl", stage_name),
+                "auto_label": format!("{}_qauto_lbl", stage_name),
+                "skip_label": format!("{}_qskip_lbl", stage_name),
+                "save_label": format!("{}_qsave_lbl", stage_name),
+                "overlay_dim": format!("{}_dim", stage_name),
+                "backlog_label": format!("{}_history", stage_name),
+                "slot_title": format!("{}_slot_title", stage_name),
                 "slot_boxes": slot_boxes,
                 "slot_labels": slot_labels,
             },
         }
     }));
 
-    // The stage: one view the story system drives. Sprites and labels are
+    // The stage: one screen the story system drives. Sprites and labels are
     // placeholders here; the system fills text, swaps textures, and toggles
     // visibility page by page. Declaration order is draw order.
-    out.push(view(&stage_view, !title_screen));
+    out.push(screen(&stage_name, !title_screen));
     out.push(stage_sprite(
-        &format!("{}_bg", stage_view),
+        &format!("{}_bg", stage_name),
         [0.0, 0.0, win_w, win_h],
         [0.05, 0.06, 0.09, 1.0],
         true,
     ));
     for side in ["left", "center", "right"] {
         out.push(stage_sprite(
-            &format!("{}_{}", stage_view, side),
+            &format!("{}_{}", stage_name, side),
             [0.0, 0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0, 0.0],
             false,
@@ -313,7 +313,7 @@ pub(crate) fn emit_story(
     // pinned to the window bottom) so the box hugs the bottom edge at any
     // aspect ratio instead of floating above the letterbox margin.
     out.push(rounded_sprite_fit(
-        &format!("{}_box", stage_view),
+        &format!("{}_box", stage_name),
         DIALOG_BOX,
         [0.0, 0.0, 0.0, 0.55],
         DIALOG_BOX_RADIUS,
@@ -322,7 +322,7 @@ pub(crate) fn emit_story(
     // The name plate sits inside the dialog box so the speaker reads against
     // its dark backdrop, with the dialogue below it.
     out.push(label(
-        &format!("{}_name", stage_view),
+        &format!("{}_name", stage_name),
         &font_menu,
         "",
         LabelStyle {
@@ -334,7 +334,7 @@ pub(crate) fn emit_story(
         },
     ));
     out.push(label(
-        &format!("{}_text", stage_view),
+        &format!("{}_text", stage_name),
         &font_dialog,
         "",
         LabelStyle {
@@ -346,7 +346,7 @@ pub(crate) fn emit_story(
         },
     ));
     out.push(hit_region(
-        &format!("{}_advance", stage_view),
+        &format!("{}_advance", stage_name),
         (0.0, 0.0, win_w, win_h),
         None,
         "story:advance",
@@ -365,7 +365,7 @@ pub(crate) fn emit_story(
     // right that the story system pulses while a fully revealed page waits
     // for a click.
     out.push(rounded_sprite_fit(
-        &format!("{}_marker", stage_view),
+        &format!("{}_marker", stage_name),
         (
             DIALOG_BOX.0 + DIALOG_BOX.2 - 50.0,
             DIALOG_BOX.1 + DIALOG_BOX.3 - 70.0,
@@ -394,7 +394,7 @@ pub(crate) fn emit_story(
     let quick_x0 = DIALOG_BOX.0 + DIALOG_BOX.2 - 30.0 - quick.len() as f32 * 90.0;
     for (i, (key, action)) in quick.iter().enumerate() {
         let x = quick_x0 + i as f32 * 90.0;
-        let lbl = format!("{}_{}_lbl", stage_view, key);
+        let lbl = format!("{}_{}_lbl", stage_name, key);
         out.push(hidden_label(
             &lbl,
             &font_dialog,
@@ -404,7 +404,7 @@ pub(crate) fn emit_story(
             Some("bottom"),
         ));
         out.push(hit_region_fit(
-            &format!("{}_{}_btn", stage_view, key),
+            &format!("{}_{}_btn", stage_name, key),
             (x, quick_y, quick_w, 30.0),
             Some(&lbl),
             action,
@@ -421,10 +421,10 @@ pub(crate) fn emit_story(
     if max_choices > 0 {
         let y0 = win_h / 2.0 - max_choices as f32 * 30.0;
         for ci in 0..max_choices {
-            let lbl = format!("{}_opt{}_lbl", stage_view, ci);
+            let lbl = format!("{}_opt{}_lbl", stage_name, ci);
             let y = y0 + ci as f32 * 60.0;
             out.push(rounded_sprite(
-                &format!("{}_opt{}_box", stage_view, ci),
+                &format!("{}_opt{}_box", stage_name, ci),
                 (280.0, y, win_w - 560.0, 44.0),
                 [
                     CHOICE_BOX_COLOR[0],
@@ -444,7 +444,7 @@ pub(crate) fn emit_story(
             ));
             out.push(spec_to_value(
                 &asset::hit_region(
-                    format!("{}_opt{}_btn", stage_view, ci),
+                    format!("{}_opt{}_btn", stage_name, ci),
                     [280.0, y, win_w - 560.0, 44.0],
                     format!("story:choose:{}", ci),
                 )
@@ -460,7 +460,7 @@ pub(crate) fn emit_story(
     // and the save/load slot rows. All hidden by rendering nothing (zero
     // alpha, empty content); the story system fills them per overlay.
     out.push(sprite(
-        &format!("{}_dim", stage_view),
+        &format!("{}_dim", stage_name),
         0.0,
         0.0,
         win_w,
@@ -468,7 +468,7 @@ pub(crate) fn emit_story(
         [0.02, 0.02, 0.04, 0.0],
     ));
     out.push(label(
-        &format!("{}_history", stage_view),
+        &format!("{}_history", stage_name),
         &font_dialog,
         "",
         LabelStyle {
@@ -479,7 +479,7 @@ pub(crate) fn emit_story(
         },
     ));
     out.push(label(
-        &format!("{}_slot_title", stage_view),
+        &format!("{}_slot_title", stage_name),
         &font_menu,
         "",
         LabelStyle {
@@ -492,9 +492,9 @@ pub(crate) fn emit_story(
     ));
     for i in 0..VISIBLE_SLOTS {
         let y = 230.0 + i as f32 * 80.0;
-        let lbl = format!("{}_slot{}_lbl", stage_view, i);
+        let lbl = format!("{}_slot{}_lbl", stage_name, i);
         out.push(rounded_sprite(
-            &format!("{}_slot{}_box", stage_view, i),
+            &format!("{}_slot{}_box", stage_name, i),
             (280.0, y, win_w - 560.0, 56.0),
             [
                 CHOICE_BOX_COLOR[0],
@@ -513,7 +513,7 @@ pub(crate) fn emit_story(
             None,
         ));
         out.push(hit_region(
-            &format!("{}_slot{}_btn", stage_view, i),
+            &format!("{}_slot{}_btn", stage_name, i),
             (280.0, y, win_w - 560.0, 56.0),
             Some(&lbl),
             &format!("story:slot:{}", i),
@@ -522,9 +522,9 @@ pub(crate) fn emit_story(
 
     // The ending screen, shown by the story system when the last node runs
     // out of pages.
-    out.push(view(&ending_view, false));
+    out.push(screen(&ending_name, false));
     out.push(sprite(
-        &format!("{}_bg", ending_view),
+        &format!("{}_bg", ending_name),
         0.0,
         0.0,
         win_w,
@@ -532,7 +532,7 @@ pub(crate) fn emit_story(
         [0.03, 0.03, 0.05, 1.0],
     ));
     out.push(label(
-        &format!("{}_fin", ending_view),
+        &format!("{}_fin", ending_name),
         &font_title,
         "~ fin ~",
         LabelStyle {
@@ -544,12 +544,12 @@ pub(crate) fn emit_story(
         },
     ));
     let (back_label, back_action) = if title_screen {
-        ("Back to title", format!("view:show:{}", title_view))
+        ("Back to title", format!("screen:show:{}", title_name))
     } else {
         ("Restart", "story:start".to_string())
     };
     out.extend(button(
-        &format!("{}_back", ending_view),
+        &format!("{}_back", ending_name),
         &font_menu,
         back_label,
         win_w / 2.0 - 160.0,
@@ -573,18 +573,18 @@ pub(crate) fn emit_story(
         }));
     }
 
-    // UI assets attach to a View by name prefix, so one generated view name
+    // UI assets attach to a Screen by name prefix, so one generated screen name
     // must never be a `_`-extension of another or the members of the longer
-    // view would be ambiguous.
-    let mut view_names = vec![stage_view, ending_view];
+    // screen would be ambiguous.
+    let mut screen_names = vec![stage_name, ending_name];
     if title_screen {
-        view_names.push(title_view);
+        screen_names.push(title_name);
     }
-    view_names.sort();
-    for pair in view_names.windows(2) {
+    screen_names.sort();
+    for pair in screen_names.windows(2) {
         if pair[1].starts_with(&format!("{}_", pair[0])) {
             return Err(format!(
-                "generated view '{}' is a name-prefix of '{}'",
+                "generated screen '{}' is a name-prefix of '{}'",
                 pair[0], pair[1]
             ));
         }
@@ -690,8 +690,8 @@ fn font(name: &str, size_px: u32) -> serde_json::Value {
     spec_to_value(&asset::font(name, size_px))
 }
 
-fn view(name: &str, initial: bool) -> serde_json::Value {
-    spec_to_value(&asset::view(name, initial))
+fn screen(name: &str, initial: bool) -> serde_json::Value {
+    spec_to_value(&asset::screen(name, initial))
 }
 
 fn rounded_sprite(

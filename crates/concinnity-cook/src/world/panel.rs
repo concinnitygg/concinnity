@@ -1,8 +1,8 @@
 // src/world/panel.rs
 // Build-time expansion: Panel -> a background Sprite + (when a title is set) a
 // heading TextLabel inset from the top-left. Names are prefixed with the Panel's
-// own name so generated elements stay scoped to its View via the build
-// pipeline's `<view>_*` rule and never collide with hand-authored assets.
+// own name so generated elements stay scoped to its Screen via the build
+// pipeline's `<screen>_*` rule and never collide with hand-authored assets.
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::label_value;

@@ -83,7 +83,7 @@ pub(crate) const ADD_TYPES: &[&str] = &[
     "Font",
     "BlockType",
     // UI structure + widgets.
-    "View",
+    "Screen",
     "Sprite",
     "TextLabel",
     "TextInput",

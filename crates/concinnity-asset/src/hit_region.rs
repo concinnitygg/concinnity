@@ -42,20 +42,21 @@ pub struct HitRegion {
     /// Scale applied to the label while hovered. None = no change.
     pub hover_scale: Option<f32>,
     /// Action to fire on click. Recognised forms:
-    /// `"scene:<name>"`, `"quit"`, `"view:show:<name>"`, `"view:hide"`,
-    /// `"view:toggle:<name>"`.
+    /// `"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
+    /// `"screen:toggle:<name>"`.
     pub action: String,
     /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
     /// track. `None` for ordinary regions. Set automatically when a `Slider`
     /// expands; you don't set this directly.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub drag_handle: Option<AssetId>,
-    /// [View](#view) this region belongs to. Resolved automatically from the
-    /// naming convention (a region named `<view>_*` belongs to view `<view>`);
-    /// you don't set this directly. While a view is active, only its regions
-    /// fire; when no view is active, only view-less regions fire.
+    /// [Screen](#screen) this region belongs to. Resolved automatically from the
+    /// naming convention (a region named `<screen>_*` belongs to screen
+    /// `<screen>`); you don't set this directly. While a screen is active,
+    /// only the top capturing screen's regions fire; with no screen active,
+    /// only screen-less regions fire.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
+    pub screen: Option<AssetId>,
     /// Whether this region is inert. A disabled region never hovers or fires.
     /// Set by the engine at runtime (e.g. a settings row whose feature the GPU
     /// cannot provide is disabled and grayed out); you don't set this directly.
@@ -68,7 +69,7 @@ pub struct HitRegion {
     /// `label`.
     #[serde(default)]
     pub follow_label: bool,
-    /// How a view-owned region maps from the reference canvas to the window
+    /// How a screen-owned region maps from the reference canvas to the window
     /// when their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
     /// `Bottom` keeps a region aligned with bottom-anchored furniture it
     /// covers. A region spanning the whole reference canvas always covers the
@@ -89,7 +90,7 @@ impl Default for HitRegion {
             hover_scale: None,
             action: String::new(),
             drag_handle: None,
-            view: None,
+            screen: None,
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,

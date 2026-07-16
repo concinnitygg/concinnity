@@ -71,7 +71,7 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // 4: baked resource data (`Material` data_bytes, the SkinnedMesh data tuple)
 //    switched JSON -> postcard alongside BLOB_VERSION 3; cached JSON bytes
 //    must not be replayed into a postcard blob.
-const CACHE_FORMAT_VERSION: u32 = 4;
+const CACHE_FORMAT_VERSION: u32 = 5;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the active backend's shader platform, the component

@@ -455,7 +455,7 @@ pub trait RenderBackend: SceneControl + Send {
         false
     }
 
-    // Tell the backend a togglable menu (a View toggled by an Escape KeyBinding)
+    // Tell the backend a togglable menu (a Screen toggled by an Escape KeyBinding)
     // coexists with a captured camera. In this mode Escape routes to the ECS
     // (so the menu shows/hides) instead of releasing the cursor inline, and a
     // click never recaptures the cursor (it fires a UI action). Set once at

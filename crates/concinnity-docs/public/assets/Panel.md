@@ -11,8 +11,8 @@ overlay elements over it to frame a group (a settings card, a dialog body).
 
 Like the other build-time UI shorthands, generated names are prefixed with
 this asset's `name` (`<name>_bg`, `<name>_title`), so a panel named with a
-view prefix (`pause_card`) puts its children in that [View](View.md)
-(`pause`) via the `<view>_*` rule and they never clash with hand-authored
+screen prefix (`pause_card`) puts its children in that [Screen](Screen.md)
+(`pause`) via the `<screen>_*` rule and they never clash with hand-authored
 assets.
 
 ```jsonl

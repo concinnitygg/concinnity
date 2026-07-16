@@ -11,8 +11,8 @@ frame, and moves or edits at the caret with the arrow / Home / End /
 Backspace / Delete keys. Read `content` back to use what the player typed;
 set it to pre-fill the field.
 
-Like other overlay elements it belongs to a [View](View.md) resolved from the
-naming convention (`<view>_*`), or is always shown when it has none.
+Like other overlay elements it belongs to a [Screen](Screen.md) resolved from the
+naming convention (`<screen>_*`), or is always shown when it has none.
 
 ```jsonl
 {
@@ -45,5 +45,5 @@ naming convention (`<view>_*`), or is always shown when it has none.
 - `padding`: A float. Inner horizontal inset from the box edge to the text, in pixels. Defaults to `8.0`.
 - `max_len`: An integer. Maximum number of characters accepted. 0 means no limit. Defaults to `0`.
 - `visible`: A boolean. When false the field is skipped each frame and cannot take focus. Defaults to `true`.
-- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a view-owned field maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`).
-- `view`: A string. [View](View.md) this field belongs to. Resolved automatically from the naming convention (`<view>_*`); you don't set this directly. `None` means the field is always visible. Optional.
+- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned field maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`).
+- `screen`: A string. [Screen](Screen.md) this field belongs to. Resolved automatically from the naming convention (`<screen>_*`); you don't set this directly. `None` means the field is always visible. Optional.

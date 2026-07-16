@@ -1,4 +1,4 @@
-// UI structure builders: a Panel container and a View layer.
+// UI structure builders: a Panel container and a Screen layer.
 
 use crate::spec::AssetSpec;
 use alloc::string::String;
@@ -14,9 +14,9 @@ pub fn panel(name: impl Into<String>, rect: [f32; 4], title: impl Into<String>) 
         .set("title", title.into())
 }
 
-// A View (a UI layer), shown at start when `initial` is set.
-pub fn view(name: impl Into<String>, initial: bool) -> AssetSpec {
-    AssetSpec::new(name, "View").set("initial", initial)
+// A Screen (a UI layer), shown at start when `initial` is set.
+pub fn screen(name: impl Into<String>, initial: bool) -> AssetSpec {
+    AssetSpec::new(name, "Screen").set("initial", initial)
 }
 
 #[cfg(test)]
@@ -35,9 +35,9 @@ mod tests {
     }
 
     #[test]
-    fn view_sets_initial() {
-        let v = view("menu_root", true);
-        assert_eq!(v.asset_type, "View");
+    fn screen_sets_initial() {
+        let v = screen("menu_root", true);
+        assert_eq!(v.asset_type, "Screen");
         assert_eq!(
             v.fields
                 .iter()

@@ -833,10 +833,17 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
         height: 720.0,
         tint: [0.0, 0.0, 0.0, 1.0],
         visible: true,
-        view: Some(AssetId(41)),
+        screen: Some(AssetId(41)),
         ..Default::default()
     });
     let mut world = b.build();
+    // The active-screen state UiInputSystem publishes when a world-pausing
+    // screen (id 41) is open; the overlay derives menu_active from it.
+    world.ctx().insert_resource(crate::ecs::ScreenStack {
+        layers: [(AssetId(41), 1)].into_iter().collect(),
+        pauses_world: true,
+        captures_input: true,
+    });
     let mut gs = init_graphics(&mut world, hooks);
     assert!(lock(&state).saw(&Call::SetMenuMode(true)));
 

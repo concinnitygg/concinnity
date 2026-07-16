@@ -1,5 +1,5 @@
 // GraphicsSystem per-frame step: transform/pose upload, scene-reel ticking, and
-// the backend draw call. Asset streaming + the camera-relative view rebase run
+// the backend draw call. Asset streaming + the camera-relative screen rebase run
 // in StreamingSystem, scheduled just before this system.
 
 use super::*;
@@ -43,7 +43,7 @@ impl GraphicsSystem {
             .map(|t| t.elapsed().as_secs_f32())
             .unwrap_or(0.0);
 
-        // read projection from Camera3D; the view + camera position for the
+        // read projection from Camera3D; the screen + camera position for the
         // draw come from StreamingSystem's `CameraRelativeView` (published just
         // before this system: the absolute values from Camera3D when no chunk
         // world is streaming, or both rebased onto the chunk render origin when
@@ -198,7 +198,7 @@ impl GraphicsSystem {
                 }
 
                 // Asset streaming (texture / mesh / voxel-world chunk pools)
-                // and the camera-relative view rebase run in StreamingSystem,
+                // and the camera-relative screen rebase run in StreamingSystem,
                 // scheduled immediately before this system; the rebased
                 // `final_view` / `final_cam_pos` were read from its
                 // `CameraRelativeView` at the top of this step.
@@ -254,7 +254,7 @@ impl GraphicsSystem {
     // Capture each slider row's runtime bookkeeping from its drag HitRegion +
     // handle Sprite, then sync the handle position and value label to the live
     // value. Runs once at init, before UiInputSystem drains the HitRegions and
-    // hides the view elements. The HitRegions / Sprites are still present here.
+    // hides the screen elements. The HitRegions / Sprites are still present here.
     pub(super) fn init_sliders(&mut self, ctx: &mut PipelineContext) {
         let sprite_w: std::collections::HashMap<AssetId, f32> = ctx
             .query::<Sprite>()

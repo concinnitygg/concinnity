@@ -16,16 +16,16 @@ use alloc::vec::Vec;
 /// taller than the band it scrolls (mouse wheel or thumb drag) and rows outside
 /// the band are clipped.
 ///
-/// All pixel fields are in the same reference-space coordinates as the View's
+/// All pixel fields are in the same reference-space coordinates as the Screen's
 /// other UI (see the overlay scaling notes on [MainMenu](#mainmenu)).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ScrollPanel {
-    /// [View](#view) this panel belongs to. Resolved automatically from the
-    /// `<view>_*` naming convention; you don't set this directly. The panel is
-    /// only live while its view is active.
+    /// [Screen](#screen) this panel belongs to. Resolved automatically from
+    /// the `<screen>_*` naming convention; you don't set this directly. The
+    /// panel is only live while its screen is active.
     #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
+    pub screen: Option<AssetId>,
     /// Left edge of the content band in reference pixels.
     pub x: f32,
     /// Top edge of the content band in reference pixels.

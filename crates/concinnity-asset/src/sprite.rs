@@ -48,12 +48,12 @@ pub struct Sprite {
     pub follow_cursor: bool,
     /// When false the sprite is skipped each frame.
     pub visible: bool,
-    /// [View](#view) this sprite belongs to. Resolved automatically from the
-    /// naming convention (`<view>_*`); you don't set this directly. `None`
-    /// means the sprite is always visible (e.g. a scene background).
+    /// [Screen](#screen) this sprite belongs to. Resolved automatically from
+    /// the naming convention (`<screen>_*`); you don't set this directly.
+    /// `None` means the sprite is always visible (e.g. a scene background).
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub view: Option<AssetId>,
-    /// How a view-owned sprite maps from the reference canvas to the window
+    pub screen: Option<AssetId>,
+    /// How a screen-owned sprite maps from the reference canvas to the window
     /// when their aspect ratios differ.
     pub fit: SpriteFit,
     /// Corner rounding radius in the sprite's own pixel space. `0` keeps
@@ -63,11 +63,11 @@ pub struct Sprite {
     pub corner_radius: f32,
 }
 
-/// How a view-owned overlay element (a [Sprite](#sprite), [TextLabel](#textlabel),
+/// How a screen-owned overlay element (a [Sprite](#sprite), [TextLabel](#textlabel),
 /// or [HitRegion](#hitregion)) maps from the 1280x720 reference canvas to the
 /// live window when their aspect ratios differ.
 ///
-/// View-owned UI is authored against a fixed reference canvas and uniformly
+/// Screen-owned UI is authored against a fixed reference canvas and uniformly
 /// scaled to the window at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -102,7 +102,7 @@ impl Default for Sprite {
             tint: [1.0, 1.0, 1.0, 1.0],
             follow_cursor: false,
             visible: true,
-            view: None,
+            screen: None,
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
         }

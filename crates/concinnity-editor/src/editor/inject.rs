@@ -255,9 +255,9 @@ mod tests {
         assert!(world.query::<TextInput>().all(|t| !t.visible));
 
         // View-less: window space, never overlay-scaled.
-        assert!(world.query::<Sprite>().all(|s| s.view.is_none()));
-        assert!(world.query::<TextLabel>().all(|l| l.view.is_none()));
-        assert!(world.query::<TextInput>().all(|t| t.view.is_none()));
+        assert!(world.query::<Sprite>().all(|s| s.screen.is_none()));
+        assert!(world.query::<TextLabel>().all(|l| l.screen.is_none()));
+        assert!(world.query::<TextInput>().all(|t| t.screen.is_none()));
     }
 
     // The button + field text reuses the font of the engine HUD chip labels,

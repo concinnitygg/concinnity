@@ -79,12 +79,12 @@ fn apply_edit(content: &mut String, caret: &mut usize, edit: Edit, max_len: usiz
     }
 }
 
-// Whether the cursor is inside a field's rect. A view-owned field is authored in
-// the reference canvas, so the cursor is mapped back through the view's `fit`
-// (matching the region hit-test in `UiInputSystem`); a HUD field (no view) uses
+// Whether the cursor is inside a field's rect. A screen-owned field is authored in
+// the reference canvas, so the cursor is mapped back through the screen's `fit`
+// (matching the region hit-test in `UiInputSystem`); a HUD field (no screen) uses
 // window pixels directly.
 fn cursor_in_field(ti: &TextInput, mx: f32, my: f32, viewport: [f32; 2]) -> bool {
-    let (qx, qy) = if ti.view.is_none() {
+    let (qx, qy) = if ti.screen.is_none() {
         (mx, my)
     } else {
         let overlay = match ti.fit {
@@ -262,7 +262,7 @@ mod tests {
             y: 50.0,
             width: 200.0,
             height: 40.0,
-            view: None,
+            screen: None,
             ..Default::default()
         };
         assert!(cursor_in_field(&ti, 150.0, 60.0, [1280.0, 720.0]));
@@ -280,7 +280,7 @@ mod tests {
         world.add_component(TextInput {
             asset_id: AssetId(1),
             focused: true,
-            view: None,
+            screen: None,
             ..Default::default()
         });
         world.start().unwrap();
@@ -301,7 +301,7 @@ mod tests {
             y: 0.0,
             width: 100.0,
             height: 40.0,
-            view: None,
+            screen: None,
             ..Default::default()
         });
         world.add_component(TextInput {
@@ -310,7 +310,7 @@ mod tests {
             y: 0.0,
             width: 100.0,
             height: 40.0,
-            view: None,
+            screen: None,
             ..Default::default()
         });
         world.start().unwrap();
