@@ -12,6 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::assets::WindowMode;
 
+use super::chrome::windowed_style;
 use super::input::*;
 
 //  Parked window for editor live-swap reuse
@@ -82,6 +83,10 @@ pub(crate) struct WindowState {
     // leave (Windowed / Borderless). The window is always created windowed;
     // `do_set_window_mode` keeps this in sync as the settings menu cycles it.
     pub(crate) window_mode: WindowMode,
+    // The world's authored `Window.title_bar`. Held because `do_set_window_mode`
+    // rebuilds the style every time the settings menu cycles back to Windowed
+    // and has to reinstate the authored chrome, not a standard caption.
+    pub(crate) title_bar: bool,
     // Whether the real cursor has left the window content area while the cursor
     // is free (windowed / borderless). Recomputed each frame by
     // `update_ui_cursor_confinement`; the renderer hides the in-engine cursor
@@ -301,7 +306,8 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
     unsafe {
         match mode {
             WindowMode::Windowed => {
-                SetWindowLongPtrW(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW.0 as isize);
+                let style = windowed_style(state.title_bar);
+                SetWindowLongPtrW(hwnd, GWL_STYLE, style.0 as isize);
                 let w = state.width.max(640);
                 let h = state.height.max(480);
                 let mut rect = RECT {
@@ -310,7 +316,7 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
                     right: w,
                     bottom: h,
                 };
-                let _ = AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false);
+                let _ = AdjustWindowRect(&mut rect, style, false);
                 let _ = SetWindowPos(
                     hwnd,
                     None,
@@ -352,7 +358,7 @@ pub(crate) fn do_set_window_size(state: &mut WindowState, width: u32, height: u3
             right: width as i32,
             bottom: height as i32,
         };
-        let _ = AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false);
+        let _ = AdjustWindowRect(&mut rect, windowed_style(state.title_bar), false);
         let _ = SetWindowPos(
             hwnd,
             None,
@@ -546,9 +552,10 @@ unsafe extern "system" fn wnd_proc(
 
 // Build a fresh `WindowState` for `hwnd` at its default (uncaptured, windowed)
 // state. Shared by fresh window creation and parked-window adoption.
-fn fresh_window_state(hwnd: HWND, width: i32, height: i32) -> Box<WindowState> {
+fn fresh_window_state(hwnd: HWND, width: i32, height: i32, title_bar: bool) -> Box<WindowState> {
     Box::new(WindowState {
         hwnd,
+        title_bar,
         key: KeyState::default(),
         mouse_dx: 0.0,
         mouse_dy: 0.0,
@@ -599,7 +606,7 @@ fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
 // matches a window the user may have resized. The window is already shown +
 // focused, so no ShowWindow / SetForegroundWindow is needed (and skipping them
 // avoids a flicker).
-fn adopt_parked_window(hwnd: HWND) -> (HWND, Box<WindowState>) {
+fn adopt_parked_window(hwnd: HWND, title_bar: bool) -> (HWND, Box<WindowState>) {
     let (width, height) = {
         let mut rect = RECT::default();
         if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() {
@@ -611,7 +618,7 @@ fn adopt_parked_window(hwnd: HWND) -> (HWND, Box<WindowState>) {
             (1, 1)
         }
     };
-    let mut win_state = fresh_window_state(hwnd, width, height);
+    let mut win_state = fresh_window_state(hwnd, width, height, title_bar);
     install_window_state(hwnd, &mut win_state);
     (hwnd, win_state)
 }
@@ -620,11 +627,30 @@ pub(crate) fn create_window(
     title: &str,
     width: u32,
     height: u32,
+    title_bar: bool,
 ) -> Result<(HWND, Box<WindowState>), String> {
     // Reuse a window parked by a prior backend's drop (editor live-swap) rather
     // than popping a new one, so a world reload keeps the same OS window.
     if let Some(hwnd) = take_parked_window() {
-        return Ok(adopt_parked_window(hwnd));
+        let (hwnd, state) = adopt_parked_window(hwnd, title_bar);
+        // The adopted window carries the outgoing world's style, and the state
+        // it is adopted into is Windowed. Restyle in place -- SWP_NOMOVE |
+        // SWP_NOSIZE keeps the reposition-free reuse parking exists for -- so a
+        // reload that flipped `title_bar` (or parked while borderless) lands on
+        // the style the state claims.
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, windowed_style(title_bar).0 as isize);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+        }
+        return Ok((hwnd, state));
     }
 
     let class_name: Vec<u16> = "ConcinnityWindow\0".encode_utf16().collect();
@@ -644,7 +670,7 @@ pub(crate) fn create_window(
     };
     unsafe { RegisterClassExW(&wc) };
 
-    let style = WS_OVERLAPPEDWINDOW;
+    let style = windowed_style(title_bar);
     let mut rect = windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
@@ -683,7 +709,7 @@ pub(crate) fn create_window(
         let _ = SetFocus(Some(hwnd));
     };
 
-    let mut win_state = fresh_window_state(hwnd, width as i32, height as i32);
+    let mut win_state = fresh_window_state(hwnd, width as i32, height as i32, title_bar);
 
     // Register for raw mouse input (the captured-cursor camera delta arrives
     // via WM_INPUT, not WM_MOUSEMOVE) and point the wnd_proc at the state.

@@ -227,11 +227,17 @@ impl GlfwWindow {
         height: u32,
         mode: &WindowMode,
         resizable: bool,
+        title_bar: bool,
     ) -> Result<Self, String> {
         let mut glfw = glfw::init(glfw::fail_on_errors).map_err(|e| format!("glfw init: {e}"))?;
 
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         glfw.window_hint(glfw::WindowHint::Resizable(resizable));
+        // An undecorated window loses the whole frame, close button included:
+        // X11/Wayland draw their controls in the title bar, unlike macOS where
+        // the traffic lights float over the content and survive. The Borderless
+        // arm below re-hints this for its own creation.
+        glfw.window_hint(glfw::WindowHint::Decorated(title_bar));
 
         // The Resolution row's mode list + the desktop mode. Queried before
         // the window exists so a fullscreen creation never reports its own

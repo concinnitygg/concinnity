@@ -3,6 +3,7 @@
 
 mod auto_exposure;
 mod backend;
+mod chrome;
 mod context;
 mod cull;
 mod decal;

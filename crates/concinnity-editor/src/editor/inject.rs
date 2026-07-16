@@ -13,7 +13,7 @@
 
 use super::hud;
 use super::registry::{self, PanelKey};
-use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel};
+use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -68,6 +68,7 @@ fn hud_font(world: &World) -> Option<FontHandle> {
 // is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
+    hide_title_bar(world);
     // The editor HUD replaces the baked-in debug HUD (both would answer F1):
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.
@@ -86,6 +87,40 @@ pub(crate) fn editor_hud(world: &mut World) {
         }
     }
     inject_top_bar(world, font);
+}
+
+// Whether the editor drops its window's title bar. macOS keeps the close /
+// minimize / zoom buttons floating over the content without one, so the window
+// stays movable and closable. Windows and Linux draw those controls inside the
+// title bar and leave no drag handle behind it, and the editor's own top bar is
+// not a substitute (no close button, and no OS-level caption hit-testing), so
+// the editor keeps its chrome there rather than strand a window the user cannot
+// move or close.
+const HIDES_TITLE_BAR: bool = cfg!(target_os = "macos");
+
+// Drop the editor window's title bar, letting the world fill the frame, on the
+// platforms where that stays usable (see `HIDES_TITLE_BAR`). Overriding the
+// live component rather than the authored entry keeps it out of the user's
+// world.jsonl on SAVE; being part of this one injection seam means every live
+// preview rebuild re-applies it, so a rebuilt world cannot quietly restore the
+// authored title bar on the next window restyle.
+fn hide_title_bar(world: &mut World) {
+    if !HIDES_TITLE_BAR {
+        return;
+    }
+    let mut authored = false;
+    for w in world.query_mut::<Window>() {
+        w.title_bar = false;
+        authored = true;
+    }
+    // A world with no Window of its own renders through `Window::default()`;
+    // materialize that default so the override has something to sit on.
+    if !authored {
+        world.add_component(Window {
+            title_bar: false,
+            ..Default::default()
+        });
+    }
 }
 
 fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
@@ -174,6 +209,46 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 mod tests {
     use super::super::{form_panel, panel, preview, template_panel, templates, view};
     use super::*;
+
+    // The editor draws its own chrome, so injection turns the world's title bar
+    // off in place -- keeping the rest of the authored window untouched. Where
+    // the title bar is the window's only drag handle and close button, the
+    // authored value stands instead.
+    #[test]
+    fn injection_overrides_an_authored_title_bar_only_where_the_chrome_survives() {
+        let mut world = World::new_empty();
+        world.add_component(Window {
+            title: "My Game".into(),
+            width: 1600,
+            title_bar: true,
+            ..Default::default()
+        });
+        editor_hud(&mut world);
+
+        let w = world.query::<Window>().next().unwrap();
+        assert_eq!(w.title_bar, !HIDES_TITLE_BAR);
+        // Only the chrome is the editor's business; size and title stay authored.
+        assert_eq!(w.title, "My Game");
+        assert_eq!(w.width, 1600);
+        assert_eq!(world.query::<Window>().count(), 1);
+    }
+
+    // A world with no Window of its own would render through Window::default(),
+    // whose title_bar is on -- so injection has to materialize one to override.
+    // With nothing to override there is no reason to synthesize one.
+    #[test]
+    fn injection_materializes_a_window_to_override_only_where_the_chrome_survives() {
+        let mut world = World::new_empty();
+        editor_hud(&mut world);
+
+        let windows: Vec<&Window> = world.query::<Window>().collect();
+        if HIDES_TITLE_BAR {
+            assert_eq!(windows.len(), 1);
+            assert!(!windows[0].title_bar);
+        } else {
+            assert!(windows.is_empty());
+        }
+    }
 
     // Injection adds the top-bar controls (visible) plus the Assets, Preview,
     // View, and Templates panels' chrome, row families, and the typed fields (all

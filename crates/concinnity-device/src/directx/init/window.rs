@@ -47,15 +47,28 @@ pub(super) struct DeviceAndWindow {
     pub hdr_mode: HdrOutputMode,
 }
 
+// The window's own configuration: its title, requested size, and whether the
+// title bar is drawn. Mirrors the Metal backend's `WindowConfig`.
+pub(super) struct WindowConfig<'a> {
+    pub title: &'a str,
+    pub width: u32,
+    pub height: u32,
+    pub title_bar: bool,
+}
+
 pub(super) fn setup(
-    title: &str,
-    width: u32,
-    height: u32,
+    config: WindowConfig,
     validation: bool,
     vsync: bool,
     hdr_display_requested: bool,
     hdr_pq_requested: bool,
 ) -> Result<DeviceAndWindow, String> {
+    let WindowConfig {
+        title,
+        width,
+        height,
+        title_bar,
+    } = config;
     // Validation / debug layer
     if validation
         && let Ok(debug) = unsafe {
@@ -69,7 +82,7 @@ pub(super) fn setup(
 
     // Win32 window (create_window also registers raw mouse input and installs
     // the GWLP_USERDATA state pointer for the wnd_proc).
-    let (hwnd, win_state) = create_window(title, width, height)?;
+    let (hwnd, win_state) = create_window(title, width, height, title_bar)?;
 
     // DXGI factory
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional

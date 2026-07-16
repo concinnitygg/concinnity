@@ -4,6 +4,7 @@
 // window/input implementation with identical behavior. GLFW remains the
 // windowing layer on Linux only.
 
+pub(crate) mod chrome;
 pub(crate) mod display_mode;
 pub(crate) mod input;
 pub(crate) mod window;

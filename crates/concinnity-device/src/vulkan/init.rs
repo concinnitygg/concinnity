@@ -132,7 +132,12 @@ impl VkContext {
                 },
             requirements: _,
         } = init;
-        let (title, width, height) = (window.title.as_str(), window.width, window.height);
+        let (title, width, height, title_bar) = (
+            window.title.as_str(),
+            window.width,
+            window.height,
+            window.title_bar,
+        );
         // Record this (main) thread so the `RenderBackend` mutation entry points
         // can `debug_assert_main_thread` against it; the Send invariant rests on
         // the context being touched from this thread alone.
@@ -185,6 +190,7 @@ impl VkContext {
                     height,
                     &crate::assets::WindowMode::Windowed,
                     true,
+                    title_bar,
                 )?;
 
                 //  Vulkan entry

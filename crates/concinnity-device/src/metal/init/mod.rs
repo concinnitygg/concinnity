@@ -162,7 +162,12 @@ impl MtlContext {
                 },
             requirements,
         } = init;
-        let (title, width, height) = (window.title.as_str(), window.width, window.height);
+        let (title, width, height, title_bar) = (
+            window.title.as_str(),
+            window.width,
+            window.height,
+            window.title_bar,
+        );
         // all Metal and AppKit calls must happen on the main thread
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("MtlContext::new must be called from the main thread")?;
@@ -482,6 +487,7 @@ impl MtlContext {
                 title,
                 width,
                 height,
+                title_bar,
                 geometry_less,
                 capture_enabled: hot_reload,
             },
@@ -1199,6 +1205,7 @@ impl MtlContext {
             // (with its pre-reserved copies) has been uploaded.
             skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             window,
+            title_bar,
             mtk_view,
             // A freshly built context owns its window; a live reload flips the
             // outgoing context's flag off before handing this one the window.

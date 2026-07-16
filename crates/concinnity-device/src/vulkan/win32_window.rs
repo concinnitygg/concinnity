@@ -39,8 +39,9 @@ impl Win32Window {
         height: u32,
         mode: &WindowMode,
         _resizable: bool,
+        title_bar: bool,
     ) -> Result<Self, String> {
-        let (_hwnd, win_state) = create_window(title, width, height)?;
+        let (_hwnd, win_state) = create_window(title, width, height, title_bar)?;
         let mut this = Self {
             win_state,
             fullscreen_display: FullscreenDisplayMode::new(),

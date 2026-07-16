@@ -187,7 +187,18 @@ impl DxContext {
             // (HDR was already negotiated on the unchanged swapchain, so `setup`
             // is skipped). Only the world content below is rebuilt.
             Some(dw) => dw,
-            None => window::setup(title, width, height, validation, vsync, hdr_display, hdr_pq)?,
+            None => window::setup(
+                window::WindowConfig {
+                    title,
+                    width,
+                    height,
+                    title_bar: window.title_bar,
+                },
+                validation,
+                vsync,
+                hdr_display,
+                hdr_pq,
+            )?,
         };
         // The swapchain config the caller's reload gate compares against.
         let swapchain_config = crate::gfx::backend_init::SwapchainConfig {

@@ -3,13 +3,14 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
-    NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
 use crate::assets::{Key, WindowMode};
 use crate::gfx::keymap::KeyMap;
 
+use super::chrome::{apply_title_bar, set_window_buttons_hidden, windowed_style_mask};
 use super::context::MtlContext;
 
 // The previously-duplicated InputState collapsed into the shared
@@ -88,26 +89,6 @@ unsafe extern "C" {
     // movement so deltaX/deltaY in NSEvents are pure hardware deltas with no
     // warp feedback. Part of CoreGraphics (CGRemoteOperation.h).
     fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
-}
-
-// Restore a standard titled window's chrome after leaving borderless mode.
-fn restore_titlebar(window: &NSWindow) {
-    window.setTitlebarAppearsTransparent(false);
-    window.setTitleVisibility(NSWindowTitleVisibility::Visible);
-    set_window_buttons_hidden(window, false);
-}
-
-// Show or hide the close / minimize / zoom traffic-light buttons.
-fn set_window_buttons_hidden(window: &NSWindow, hidden: bool) {
-    for kind in [
-        NSWindowButton::CloseButton,
-        NSWindowButton::MiniaturizeButton,
-        NSWindowButton::ZoomButton,
-    ] {
-        if let Some(button) = window.standardWindowButton(kind) {
-            button.setHidden(hidden);
-        }
-    }
 }
 
 impl MtlContext {
@@ -292,10 +273,6 @@ impl MtlContext {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        let standard = NSWindowStyleMask::Titled
-            | NSWindowStyleMask::Closable
-            | NSWindowStyleMask::Miniaturizable
-            | NSWindowStyleMask::Resizable;
         // Read the fullscreen state from the flag the NSWindowDelegate keeps in
         // sync (it flips at the start of the animation via
         // windowWillEnter/ExitFullScreen). This does not lag the way the
@@ -316,8 +293,8 @@ impl MtlContext {
                 if is_fullscreen {
                     window.toggleFullScreen(None);
                 }
-                window.setStyleMask(standard);
-                restore_titlebar(window);
+                window.setStyleMask(windowed_style_mask(self.title_bar));
+                apply_title_bar(window, self.title_bar);
             }
             WindowMode::Borderless => {
                 if is_fullscreen {
@@ -343,9 +320,14 @@ impl MtlContext {
                 }
             }
             WindowMode::Fullscreen => {
-                // Native fullscreen animates from a standard titled window.
-                window.setStyleMask(standard);
-                restore_titlebar(window);
+                // Native fullscreen animates from a windowed window and keeps
+                // its authored chrome: macOS hides the title bar while
+                // fullscreen regardless, and preserving the style here means an
+                // OS-driven exit (the green button, which set_window_mode never
+                // sees) lands back on the style the world asked for rather than
+                // reinstating a title bar it turned off.
+                window.setStyleMask(windowed_style_mask(self.title_bar));
+                apply_title_bar(window, self.title_bar);
                 if !is_fullscreen {
                     window.toggleFullScreen(None);
                 }

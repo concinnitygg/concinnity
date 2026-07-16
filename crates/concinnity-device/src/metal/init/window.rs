@@ -11,7 +11,6 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSScreen, NSView, NSWindow,
-    NSWindowStyleMask,
 };
 use objc2_core_graphics::{
     CGColorSpace, kCGColorSpaceDisplayP3_PQ, kCGColorSpaceExtendedLinearDisplayP3,
@@ -22,6 +21,7 @@ use objc2_metal_kit::MTKView;
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::gfx::hdr_output::HdrOutputMode;
+use crate::metal::chrome::{apply_title_bar, windowed_style_mask};
 use crate::metal::context::{take_embedded_pump_events, take_embedded_view};
 use crate::metal::pipeline::ns_str;
 
@@ -44,13 +44,15 @@ pub(crate) struct WindowSetup {
     pub hdr_mode: HdrOutputMode,
 }
 
-// The window's own configuration: its title, requested size, whether the world
-// is geometry-less (clamps the initial HDR targets to 1x1), and whether frame
-// capture is enabled (drives `framebufferOnly` on the MTKView).
+// The window's own configuration: its title, requested size, whether the title
+// bar is drawn, whether the world is geometry-less (clamps the initial HDR
+// targets to 1x1), and whether frame capture is enabled (drives
+// `framebufferOnly` on the MTKView).
 pub(crate) struct WindowConfig<'a> {
     pub title: &'a str,
     pub width: u32,
     pub height: u32,
+    pub title_bar: bool,
     pub geometry_less: bool,
     pub capture_enabled: bool,
 }
@@ -88,6 +90,7 @@ pub(crate) fn setup_window_and_view(
         title,
         width,
         height,
+        title_bar,
         geometry_less,
         capture_enabled,
     } = config;
@@ -166,7 +169,7 @@ pub(crate) fn setup_window_and_view(
     let pump_events = embedded_ptr.is_null() || take_embedded_pump_events();
     let (window, mtk_view, fullscreen, window_delegate) = if embedded_ptr.is_null() {
         // Windowed mode: create a new NSWindow containing the MTKView.
-        let window = create_window(mtm, title, width, height)?;
+        let window = create_window(mtm, title, width, height, title_bar)?;
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
@@ -387,23 +390,23 @@ pub(crate) fn create_window(
     title: &str,
     width: u32,
     height: u32,
+    title_bar: bool,
 ) -> Result<Retained<NSWindow>, String> {
     let content_rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(width as f64, height as f64),
     );
-    let style =
-        NSWindowStyleMask::Closable | NSWindowStyleMask::Resizable | NSWindowStyleMask::Titled;
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
             NSWindow::alloc(mtm),
             content_rect,
-            style,
+            windowed_style_mask(title_bar),
             NSBackingStoreType::Buffered,
             false,
         )
     };
     window.setTitle(&ns_str(title));
+    apply_title_bar(&window, title_bar);
     window.center();
     // Prevent AppKit from releasing the window when it is closed. The default
     // is YES for alloc/init-created windows, which causes AppKit to release

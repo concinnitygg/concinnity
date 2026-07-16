@@ -450,6 +450,10 @@ pub struct MtlContext {
     pub(super) skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool,
     // None in embedded mode (no separate NSWindow is created).
     pub(super) window: Option<Retained<NSWindow>>,
+    // The world's authored `Window.title_bar`. Held because `set_window_mode`
+    // restyles the window every time the settings menu cycles back to Windowed
+    // and has to reinstate the authored chrome, not a standard title bar.
+    pub(super) title_bar: bool,
     // MTKView with isPaused=true and enableSetNeedsDisplay=false so its internal
     // display link never fires. draw() is called manually from draw_frame().
     pub(super) mtk_view: Retained<MTKView>,
