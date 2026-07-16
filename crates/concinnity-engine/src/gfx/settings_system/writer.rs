@@ -22,7 +22,9 @@ impl SettingsWriter {
 
     // Writer with an injectable persistence sink, so tests never touch the
     // real settings file.
-    fn with_sink(sink: impl Fn(&Settings) -> std::io::Result<()> + Send + 'static) -> Self {
+    pub(crate) fn with_sink(
+        sink: impl Fn(&Settings) -> std::io::Result<()> + Send + 'static,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<Settings>();
         let thread = std::thread::Builder::new()
             .name("cn-settings-writer".into())

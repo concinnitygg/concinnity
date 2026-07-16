@@ -27,6 +27,8 @@ use crate::gfx::scene_reel;
 
 mod apply;
 pub(crate) mod rows;
+#[cfg(test)]
+mod tests;
 pub(crate) mod writer;
 
 // The live settings state: every value the settings menu displays and cycles,

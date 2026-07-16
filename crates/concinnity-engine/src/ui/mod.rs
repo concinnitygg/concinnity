@@ -3478,4 +3478,89 @@ mod tests {
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
+
+    // A panel whose content fits its track has no thumb to draw.
+    fn scroll_panel(scroll: f32, content_height: f32, thumb_h: f32) -> PanelState {
+        PanelState {
+            screen: None,
+            band: [0.0, 0.0, 100.0, 200.0],
+            rows: Vec::new(),
+            groups: Vec::new(),
+            thumb: None,
+            track: None,
+            track_x: 300.0,
+            track_y: 50.0,
+            track_w: 8.0,
+            track_h: 200.0,
+            scroll,
+            content_height,
+            thumb_h,
+        }
+    }
+
+    // The thumb sits proportionally down its track, at the panel's scroll
+    // fraction of the content.
+    #[test]
+    fn thumb_rect_tracks_the_scroll_fraction() {
+        let top = UiInputSystem::thumb_rect(&scroll_panel(0.0, 400.0, 100.0)).unwrap();
+        assert_eq!(
+            top,
+            [300.0, 50.0, 8.0, 100.0],
+            "unscrolled sits at track top"
+        );
+
+        // Scrolled a quarter of the content: a quarter down the 200px track.
+        let mid = UiInputSystem::thumb_rect(&scroll_panel(100.0, 400.0, 100.0)).unwrap();
+        assert_eq!(mid, [300.0, 100.0, 8.0, 100.0]);
+    }
+
+    // Content that fits (a thumb as tall as its track) draws no thumb, and
+    // neither does a panel that has not been solved yet.
+    #[test]
+    fn thumb_rect_absent_when_there_is_nothing_to_scroll() {
+        assert!(UiInputSystem::thumb_rect(&scroll_panel(0.0, 400.0, 200.0)).is_none());
+        assert!(UiInputSystem::thumb_rect(&scroll_panel(0.0, 0.0, 50.0)).is_none());
+    }
+
+    // A scroll offset past the content pins the thumb to the track's end rather
+    // than sliding it off.
+    #[test]
+    fn thumb_rect_clamps_an_overscrolled_offset() {
+        let rect = UiInputSystem::thumb_rect(&scroll_panel(9999.0, 400.0, 100.0)).unwrap();
+        assert_eq!(rect[1], 250.0, "pinned at track_y + track_h");
+    }
+
+    // Each action parser reads only its own region suffix, so a slider region
+    // never enters rebind capture and a rebind row never drags.
+    #[test]
+    fn action_parsers_read_only_their_own_suffix() {
+        assert_eq!(
+            slider_key_from_action("setting:exposure:drag").as_deref(),
+            Some("exposure")
+        );
+        assert_eq!(slider_key_from_action("setting:exposure:rebind"), None);
+
+        assert_eq!(
+            rebind_key_from_action("setting:key_forward:rebind"),
+            Some("key_forward")
+        );
+        assert_eq!(rebind_key_from_action("setting:key_forward:drag"), None);
+
+        assert_eq!(open_key_from_action("setting:vsync:open"), Some("vsync"));
+        assert_eq!(open_key_from_action("setting:vsync:next"), None);
+    }
+
+    // A non-setting action belongs to no parser, and a suffix with no key in
+    // front of it is rejected rather than parsed as an empty setting.
+    #[test]
+    fn action_parsers_reject_foreign_actions_and_empty_keys() {
+        for action in ["menu:quit", "", "drag", "setting:"] {
+            assert_eq!(slider_key_from_action(action), None, "{action}");
+            assert_eq!(rebind_key_from_action(action), None, "{action}");
+            assert_eq!(open_key_from_action(action), None, "{action}");
+        }
+        assert_eq!(slider_key_from_action("setting::drag"), None);
+        assert_eq!(rebind_key_from_action("setting::rebind"), None);
+        assert_eq!(open_key_from_action("setting::open"), None);
+    }
 }

@@ -460,6 +460,30 @@ mod tests {
         assert_eq!(streamer.stats(), (3, 0, 0));
     }
 
+    // A payload that will never decode.
+    struct FailingSource;
+    impl PayloadSource for FailingSource {
+        fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
+            Err("undecodable payload".to_string())
+        }
+    }
+
+    // A failed fetch is terminal, not transient: the slot is marked resident
+    // (keeping its placeholder, occupying no streamed bytes) so the planner
+    // stops re-dispatching a payload that will never decode.
+    #[test]
+    fn a_failed_fetch_is_not_retried() {
+        let centers = vec![vec![[1.0, 0.0, 0.0]]];
+        let mut streamer = TextureStreamer::new(Arc::new(FailingSource), centers, 4, 8);
+        streamer.update_scores([0.0, 0.0, 0.0], 1);
+        streamer.plan_and_dispatch();
+
+        let uploads = drain_until(&mut streamer, 1, 1);
+        assert_eq!(uploads, 0, "a failed load uploads no pixels");
+        assert_eq!(streamer.stats(), (1, 0, 0));
+        assert_eq!(streamer.resident_bytes(), 0);
+    }
+
     #[test]
     fn upload_callback_receives_decoded_pixels() {
         let centers = vec![vec![[1.0, 0.0, 0.0]]];

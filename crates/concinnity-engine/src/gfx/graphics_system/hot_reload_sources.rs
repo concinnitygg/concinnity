@@ -372,3 +372,193 @@ pub struct HotReloadSources {
     pub shader_stages: ShaderStageSourceMap,
     pub world_jsonl_path: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mesh_entry(source: &str) -> MeshSourceEntry {
+        MeshSourceEntry {
+            source: source.to_string(),
+            primitive_index: 0,
+            lod_levels: 1,
+            lod_distances: Vec::new(),
+            draw_indices: vec![0],
+        }
+    }
+
+    fn skinned_entry(source: &str) -> SkinnedMeshSourceEntry {
+        SkinnedMeshSourceEntry {
+            source: source.to_string(),
+            skinned_index: 0,
+            vertex_base: 0,
+            vertex_count: 3,
+            index_count: 3,
+            joint_count: 1,
+        }
+    }
+
+    fn dirs(paths: &[PathBuf]) -> Vec<String> {
+        paths.iter().map(|p| p.display().to_string()).collect()
+    }
+
+    // A fresh map is empty, and pushing an entry is what gives it a length.
+    #[test]
+    fn texture_map_starts_empty_and_counts_pushed_entries() {
+        let mut map = TextureSourceMap::new();
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+
+        map.push_texture("assets/wall.png".to_string(), 0, 4);
+        map.push_texture("assets/scene.glb".to_string(), 2, 7);
+
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), 2);
+        // Each entry keeps the slot + image index it was pushed with, so a
+        // reload rewrites the right pool slot.
+        assert_eq!(map.entries[0].slot, 4);
+        assert_eq!(map.entries[0].image_index, 0);
+        assert_eq!(map.entries[1].slot, 7);
+        assert_eq!(map.entries[1].image_index, 2);
+    }
+
+    // Entries sharing a directory collapse to one subscription, and the result
+    // is sorted (the watcher subscribes once per directory).
+    #[test]
+    fn texture_watch_dirs_dedups_shared_parents() {
+        let mut map = TextureSourceMap::new();
+        map.push_texture("assets/textures/wall.png".to_string(), 0, 0);
+        map.push_texture("assets/textures/floor.png".to_string(), 0, 1);
+        map.push_texture("assets/models/scene.glb".to_string(), 0, 2);
+
+        assert_eq!(
+            dirs(&map.watch_dirs()),
+            ["assets/models", "assets/textures"],
+            "one entry per unique parent, sorted"
+        );
+    }
+
+    // A bare filename has no parent directory to subscribe to, so it is skipped
+    // rather than watching the process CWD.
+    #[test]
+    fn texture_watch_dirs_skips_bare_filenames() {
+        let mut map = TextureSourceMap::new();
+        map.push_texture("wall.png".to_string(), 0, 0);
+        assert!(map.watch_dirs().is_empty());
+
+        // A rooted sibling still contributes its own directory.
+        map.push_texture("assets/floor.png".to_string(), 0, 1);
+        assert_eq!(dirs(&map.watch_dirs()), ["assets"]);
+    }
+
+    // The Mesh catalogue watches the same way, and one Mesh can own several
+    // draw slots (a mesh shared by many Props).
+    #[test]
+    fn mesh_map_watches_parents_and_keeps_every_draw_slot() {
+        let mut map = MeshSourceMap::new();
+        assert!(map.is_empty());
+
+        let mut shared = mesh_entry("assets/models/prop.glb");
+        shared.draw_indices = vec![3, 9, 12];
+        map.entries.push(shared);
+        map.entries.push(mesh_entry("assets/models/tree.glb"));
+        map.entries.push(mesh_entry("bare.glb"));
+
+        assert_eq!(map.len(), 3);
+        assert_eq!(
+            dirs(&map.watch_dirs()),
+            ["assets/models"],
+            "the two rooted entries share one dir, the bare one is skipped"
+        );
+        assert_eq!(
+            map.entries[0].draw_indices,
+            vec![3, 9, 12],
+            "a reload has to rewrite every slot carrying this mesh"
+        );
+    }
+
+    // The skinned catalogue watches like the static one; a skinned mesh is 1:1
+    // with its draw slot.
+    #[test]
+    fn skinned_mesh_map_watches_parents() {
+        let mut map = SkinnedMeshSourceMap::new();
+        assert!(map.is_empty());
+        map.entries.push(skinned_entry("assets/chars/fox.glb"));
+        map.entries.push(skinned_entry("assets/chars/wolf.glb"));
+        map.entries.push(skinned_entry("fox.glb"));
+
+        assert_eq!(map.len(), 3);
+        assert_eq!(dirs(&map.watch_dirs()), ["assets/chars"]);
+    }
+
+    // Shader stages watch their resolved paths, one entry per kind.
+    #[test]
+    fn shader_stage_map_watches_resolved_parents() {
+        use crate::assets::shader_stage::ShaderKind;
+
+        let mut map = ShaderStageSourceMap::new();
+        assert!(map.is_empty());
+        for (kind, path) in [
+            (ShaderKind::Vertex, "shaders/scene.metal"),
+            (ShaderKind::Fragment, "shaders/scene.metal"),
+            (ShaderKind::VertexInstanced, "shaders/instanced/pass.metal"),
+        ] {
+            map.entries.push(ShaderStageSourceEntry {
+                kind,
+                resolved_path: path.to_string(),
+            });
+        }
+
+        assert_eq!(map.len(), 3);
+        assert_eq!(
+            dirs(&map.watch_dirs()),
+            ["shaders", "shaders/instanced"],
+            "the two stages sharing a file collapse to one dir"
+        );
+    }
+
+    // A stage compiled from the embedded fallback has no on-disk file, so it
+    // contributes no subscription.
+    #[test]
+    fn shader_stage_map_skips_an_empty_resolved_path() {
+        let mut map = ShaderStageSourceMap::new();
+        map.entries.push(ShaderStageSourceEntry {
+            kind: crate::assets::shader_stage::ShaderKind::Fragment,
+            resolved_path: String::new(),
+        });
+        assert!(map.watch_dirs().is_empty());
+    }
+
+    // Procedural meshes have no source file, so the map only counts entries;
+    // their reload trigger is a world.jsonl save, not a watched directory.
+    #[test]
+    fn procedural_mesh_map_counts_entries() {
+        let mut map = ProceduralMeshSourceMap::new();
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+
+        map.entries.push(ProceduralMeshSourceEntry {
+            name: "ground".to_string(),
+            args: Default::default(),
+            draw_indices: vec![0, 1],
+        });
+
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), 1);
+    }
+
+    // The handoff bundle defaults to nothing captured, which is the `cn run`
+    // shape: no watcher, no reloadable sources.
+    #[test]
+    fn bundle_defaults_to_nothing_captured() {
+        let sources = HotReloadSources::default();
+        assert!(sources.map.is_empty());
+        assert!(sources.meshes.is_empty());
+        assert!(sources.skinned_meshes.is_empty());
+        assert!(sources.procedural_meshes.is_empty());
+        assert!(sources.shader_stages.is_empty());
+        assert!(sources.color_lut.is_none());
+        assert!(sources.environment_map.is_none());
+        assert!(sources.world_jsonl_path.is_none());
+    }
+}

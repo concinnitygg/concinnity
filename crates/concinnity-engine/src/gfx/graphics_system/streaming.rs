@@ -390,7 +390,390 @@ impl GraphicsSystem {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use crate::gfx::mock_backend::{Call, MockState, recording_backend};
+    use crate::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+
+    const MIB: u64 = 1024 * 1024;
+
+    // A GraphicsSystem carrying the recording backend, as init has it while the
+    // setup routines wire the pools onto it. The mock reports the UNKNOWN GPU
+    // profile (0 bytes of memory), so a pool with no explicit override lands on
+    // its count-only policy.
+    fn system_with_backend() -> (Arc<Mutex<MockState>>, GraphicsSystem) {
+        let (recorded, backend) = recording_backend();
+        let mut gs = GraphicsSystem::new();
+        gs.backend = Some(Box::new(backend));
+        (recorded, gs)
+    }
+
+    // The payload bytes are never decoded at setup (the streamer's worker does
+    // that later), so any bytes stand in for a compiled texture.
+    fn texture_payloads(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![i as u8; 8]).collect()
+    }
+
+    fn centers(n: usize) -> Vec<Vec<[f32; 3]>> {
+        (0..n).map(|i| vec![[i as f32, 0.0, 0.0]]).collect()
+    }
+
+    fn mesh_payloads(n: usize) -> Vec<crate::gfx::streaming::mesh::DecodedMesh> {
+        (0..n)
+            .map(|_| crate::gfx::streaming::mesh::DecodedMesh {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            })
+            .collect()
+    }
+
+    // A streamable world's texture slots are all evicted to placeholders at
+    // setup; the streamer then brings them back nearest-first.
+    #[test]
+    fn texture_setup_evicts_every_slot_and_builds_the_pool() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_texture_streaming(
+            Some(StreamingConfig::default()),
+            texture_payloads(2),
+            &[],
+            false,
+            centers(2),
+        );
+
+        assert_eq!(gs.texture_streamer.as_ref().map(|s| s.len()), Some(2));
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::EvictTextureSlot(0)));
+        assert!(s.saw(&Call::EvictTextureSlot(1)));
+    }
+
+    // The three guards that leave a world unstreamed: no config declared, no
+    // streamable slot, and no backend to wire the pool onto.
+    #[test]
+    fn texture_setup_is_skipped_without_a_config_slots_or_backend() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_texture_streaming(None, texture_payloads(2), &[], false, centers(2));
+        assert!(gs.texture_streamer.is_none(), "no StreamingConfig declared");
+
+        gs.setup_texture_streaming(
+            Some(StreamingConfig::default()),
+            Vec::new(),
+            &[],
+            false,
+            Vec::new(),
+        );
+        assert!(gs.texture_streamer.is_none(), "no slot to stream");
+        assert!(recorded.lock().unwrap().calls.is_empty());
+
+        let mut headless = GraphicsSystem::new();
+        headless.setup_texture_streaming(
+            Some(StreamingConfig::default()),
+            texture_payloads(1),
+            &[],
+            false,
+            centers(1),
+        );
+        assert!(headless.texture_streamer.is_none(), "no backend");
+    }
+
+    // An explicit texture budget wins over the VRAM-derived fraction; with no
+    // override the mock's unreporting GPU leaves the pool count-only.
+    #[test]
+    fn texture_setup_honors_an_explicit_byte_budget() {
+        let (_recorded, mut gs) = system_with_backend();
+        gs.setup_texture_streaming(
+            Some(StreamingConfig {
+                texture_budget_mb: 8,
+                ..Default::default()
+            }),
+            texture_payloads(1),
+            &[],
+            false,
+            centers(1),
+        );
+        assert_eq!(
+            gs.texture_streamer.as_ref().unwrap().byte_budget(),
+            Some(8 * MIB)
+        );
+
+        let (_r2, mut count_only) = system_with_backend();
+        count_only.setup_texture_streaming(
+            Some(StreamingConfig::default()),
+            texture_payloads(1),
+            &[],
+            false,
+            centers(1),
+        );
+        assert_eq!(
+            count_only.texture_streamer.as_ref().unwrap().byte_budget(),
+            None
+        );
+    }
+
+    // A disk-backed world drops the payload copies, so the streamed slot count
+    // comes from the locators instead.
+    #[test]
+    fn disk_backed_texture_setup_counts_slots_from_the_locators() {
+        let (recorded, mut gs) = system_with_backend();
+        let locators = vec![
+            crate::ecs::PayloadLocator {
+                blob_index: 0,
+                offset: 0,
+                len: 8,
+            },
+            crate::ecs::PayloadLocator {
+                blob_index: 0,
+                offset: 8,
+                len: 8,
+            },
+        ];
+        // Payloads were not retained on this path: the locators alone decide
+        // how many slots are swept.
+        gs.setup_texture_streaming(
+            Some(StreamingConfig::default()),
+            Vec::new(),
+            &locators,
+            true,
+            centers(2),
+        );
+
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::EvictTextureSlot(0)));
+        assert!(s.saw(&Call::EvictTextureSlot(1)));
+    }
+
+    // With a shrinkable seed reserved, the streamed geometry was never baked in:
+    // the sub-allocators are seeded with the headroom block, and evicting here
+    // would free the placeholder region out from under the first resident draw.
+    #[test]
+    fn mesh_setup_seeds_the_reserved_region_instead_of_evicting() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_mesh_streaming(
+            Some(StreamingConfig::default()),
+            mesh_payloads(2),
+            centers(2),
+            vec![4, 7],
+            false,
+            Some(crate::gfx::mesh_seed::MeshSeedRegion {
+                vtx_offset: 0,
+                vtx_bytes: 1024,
+                idx_offset: 0,
+                idx_bytes: 512,
+            }),
+        );
+
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::SeedMeshStreaming));
+        assert!(
+            !s.calls.iter().any(|c| matches!(c, Call::EvictMesh(_))),
+            "evicting would corrupt the placeholder region"
+        );
+    }
+
+    // Without a seed region each streamed mesh's build-time region is freed into
+    // the sub-allocators instead, and the id -> draw map is retained.
+    #[test]
+    fn mesh_setup_frees_each_build_time_region_without_a_seed() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_mesh_streaming(
+            Some(StreamingConfig::default()),
+            mesh_payloads(2),
+            centers(2),
+            vec![4, 7],
+            false,
+            None,
+        );
+
+        assert_eq!(gs.mesh_streamer.as_ref().map(|s| s.len()), Some(2));
+        assert_eq!(gs.mesh_stream_draw_indices, vec![4, 7]);
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::EvictMesh(4)));
+        assert!(s.saw(&Call::EvictMesh(7)));
+        assert!(!s.saw(&Call::SeedMeshStreaming));
+    }
+
+    #[test]
+    fn mesh_setup_is_skipped_without_a_config_payloads_or_backend() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_mesh_streaming(None, mesh_payloads(1), centers(1), vec![0], false, None);
+        assert!(gs.mesh_streamer.is_none(), "no StreamingConfig declared");
+
+        gs.setup_mesh_streaming(
+            Some(StreamingConfig::default()),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        );
+        assert!(gs.mesh_streamer.is_none(), "no mesh to stream");
+        assert!(recorded.lock().unwrap().calls.is_empty());
+
+        let mut headless = GraphicsSystem::new();
+        headless.setup_mesh_streaming(
+            Some(StreamingConfig::default()),
+            mesh_payloads(1),
+            centers(1),
+            vec![0],
+            false,
+            None,
+        );
+        assert!(headless.mesh_streamer.is_none(), "no backend");
+    }
+
+    #[test]
+    fn mesh_setup_honors_an_explicit_byte_budget() {
+        let (_recorded, mut gs) = system_with_backend();
+        gs.setup_mesh_streaming(
+            Some(StreamingConfig {
+                mesh_budget_mb: 16,
+                ..Default::default()
+            }),
+            mesh_payloads(1),
+            centers(1),
+            vec![0],
+            false,
+            None,
+        );
+        assert_eq!(
+            gs.mesh_streamer.as_ref().unwrap().byte_budget(),
+            Some(16 * MIB)
+        );
+    }
+
+    fn solid_block() -> BlockType {
+        BlockType {
+            solid: true,
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            ..Default::default()
+        }
+    }
+
+    // A VoxelWorld resolves its shared material to texture-pool slots + scalars
+    // and stands the chunk pool up on the backend at the world's chunk size.
+    #[test]
+    fn voxel_setup_resolves_the_material_and_builds_the_chunk_pool() {
+        let (recorded, mut gs) = system_with_backend();
+        let air = AssetId(1);
+        let ground = AssetId(2);
+        let handle = crate::ecs::MaterialHandle(0);
+        let mut material = MaterialUniforms::DEFAULT;
+        material.roughness = 0.25;
+
+        let block_types = std::collections::HashMap::from([
+            (
+                air,
+                BlockType {
+                    solid: false,
+                    ..Default::default()
+                },
+            ),
+            (ground, solid_block()),
+        ]);
+        let material_map = std::collections::HashMap::from([(handle, (5usize, 6usize, material))]);
+
+        gs.setup_voxel_world_streaming(
+            Some(VoxelWorld {
+                chunk_blocks: [8, 16, 8],
+                block_size: 2.0,
+                view_radius: 1,
+                palette: vec![air, ground],
+                material: Some(handle),
+                ..Default::default()
+            }),
+            &block_types,
+            &material_map,
+        );
+
+        let cs = gs.chunk_stream.as_ref().expect("chunk pool built");
+        assert_eq!(cs.texture_slot, 5);
+        assert_eq!(cs.normal_map_slot, 6);
+        assert_eq!(cs.material.roughness, 0.25);
+        // 8 blocks of 2 world units on each of X / Z.
+        assert_eq!((cs.chunk_w, cs.chunk_d), (16.0, 16.0));
+        assert!(recorded.lock().unwrap().saw(&Call::SetupChunkStreaming));
+    }
+
+    // A VoxelWorld naming no material renders its chunks with the engine
+    // defaults rather than failing the world.
+    #[test]
+    fn voxel_setup_without_a_material_falls_back_to_the_defaults() {
+        let (_recorded, mut gs) = system_with_backend();
+        gs.setup_voxel_world_streaming(
+            Some(VoxelWorld {
+                view_radius: 1,
+                ..Default::default()
+            }),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+
+        let cs = gs.chunk_stream.as_ref().expect("chunk pool built");
+        assert_eq!(cs.texture_slot, 0);
+        assert_eq!(cs.normal_map_slot, NO_NORMAL_MAP_SLOT);
+        assert_eq!(
+            cs.origin_chunk,
+            crate::gfx::chunk_coord::ChunkCoord::new(0, 0)
+        );
+    }
+
+    // A palette naming an id that is not a BlockType degrades that entry to air:
+    // the world still streams rather than failing over one bad name.
+    #[test]
+    fn an_unknown_palette_entry_degrades_to_air() {
+        let (_recorded, mut gs) = system_with_backend();
+        let known = AssetId(1);
+        gs.setup_voxel_world_streaming(
+            Some(VoxelWorld {
+                view_radius: 1,
+                palette: vec![AssetId(99), known],
+                ..Default::default()
+            }),
+            &std::collections::HashMap::from([(known, solid_block())]),
+            &std::collections::HashMap::new(),
+        );
+        assert!(gs.chunk_stream.is_some(), "the world still streams");
+    }
+
+    #[test]
+    fn voxel_setup_is_skipped_without_a_voxel_world_or_backend() {
+        let (recorded, mut gs) = system_with_backend();
+        gs.setup_voxel_world_streaming(
+            None,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert!(gs.chunk_stream.is_none(), "no VoxelWorld declared");
+        assert!(recorded.lock().unwrap().calls.is_empty());
+
+        let mut headless = GraphicsSystem::new();
+        headless.setup_voxel_world_streaming(
+            Some(VoxelWorld::default()),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert!(headless.chunk_stream.is_none(), "no backend");
+    }
+
+    // Chunk streaming has no user override, so an unreporting GPU leaves the
+    // pool on its pure radius-only policy.
+    #[test]
+    fn chunk_streaming_is_count_only_when_the_gpu_reports_no_memory() {
+        let (_recorded, mut gs) = system_with_backend();
+        gs.setup_voxel_world_streaming(
+            Some(VoxelWorld {
+                view_radius: 1,
+                ..Default::default()
+            }),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(
+            gs.chunk_stream.as_ref().unwrap().streamer.byte_budget(),
+            None
+        );
+    }
 
     // An explicit non-zero override is taken verbatim (converted MiB -> bytes),
     // regardless of what the GPU reports.

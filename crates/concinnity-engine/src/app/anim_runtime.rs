@@ -83,6 +83,12 @@ pub enum AnimCommand {
 
 static QUEUE: Mutex<Vec<AnimCommand>> = Mutex::new(Vec::new());
 
+// Serialises the tests that drive the queue. It is process-wide and `drain`
+// takes all of it, so two tests enqueuing at once would steal each other's
+// commands; every such test holds this for its enqueue + drain.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 // Push a command onto the animation runtime queue. The caller blocks on its
 // own reply receiver to get the result. A poisoned mutex is recovered and
 // used regardless (an unrelated panic must not silently drop commands).
@@ -114,6 +120,7 @@ mod tests {
 
     #[test]
     fn enqueue_drain_round_trip() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         enqueue(AnimCommand::Crossfade {
@@ -127,5 +134,28 @@ mod tests {
         let cmds = drain();
         assert_eq!(cmds.len(), 1);
         assert!(drain().is_empty());
+    }
+
+    // A poisoned queue is recovered rather than swallowing commands: an
+    // unrelated panic must not silently break runtime control.
+    #[test]
+    fn a_poisoned_queue_still_enqueues_and_drains() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = drain();
+        // Poison the queue's own mutex from a panicking thread.
+        let _ = std::thread::spawn(|| {
+            let _held = QUEUE.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        assert!(QUEUE.is_poisoned());
+
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        enqueue(AnimCommand::QueryState {
+            target: AssetId::default(),
+            reply: tx,
+        });
+        assert_eq!(drain().len(), 1);
+        QUEUE.clear_poison();
     }
 }

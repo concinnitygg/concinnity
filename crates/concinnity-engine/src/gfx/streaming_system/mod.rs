@@ -520,8 +520,96 @@ pub(crate) fn chunk_model_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob::BlobData;
+    use crate::ecs::{ActiveRenderBackend, ComponentStorage, Resources};
     use crate::gfx::chunk_coord::ChunkCoord;
+    use crate::gfx::chunk_window::ChunkDetail;
+    use crate::gfx::mesh_payload::Vertex;
+    use crate::gfx::mock_backend::{Call, MockBackend, recording_backend};
+    use crate::gfx::profile::FrameProfile;
+    use crate::gfx::streaming::chunk::{ChunkSource, ChunkStreamer};
+    use crate::gfx::streaming::mesh::{DecodedMesh, MeshPayloadSource, MeshStreamer};
+    use crate::gfx::streaming::texture::{DecodedTexture, PayloadSource, TextureStreamer};
     use pressure::StreamPressureStage;
+    use std::sync::Arc;
+
+    // Upper bound on `drive_until` iterations. The pools decode on their own
+    // worker threads, so a test that waits on one yields rather than sleeps;
+    // the bound turns a regression into a failure instead of a hang.
+    const MAX_DRIVE_SPINS: usize = 100_000;
+
+    fn vtx() -> Vertex {
+        Vertex {
+            pos: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0; 3],
+            uv: [0.0; 2],
+        }
+    }
+
+    fn tri() -> DecodedMesh {
+        DecodedMesh {
+            vertices: vec![vtx(), vtx(), vtx()],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    // Sources yielding a fixed payload for any id, so the streamer workers
+    // complete without the build pipeline.
+    struct ConstTexture;
+    impl PayloadSource for ConstTexture {
+        fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
+            Ok(DecodedTexture {
+                width: 1,
+                height: 1,
+                pixels: vec![1, 2, 3, 4],
+            })
+        }
+    }
+
+    struct ConstMesh;
+    impl MeshPayloadSource for ConstMesh {
+        fn fetch(&self, _id: usize) -> Result<DecodedMesh, String> {
+            Ok(tri())
+        }
+    }
+
+    struct ConstChunk;
+    impl ChunkSource for ConstChunk {
+        fn generate(
+            &self,
+            _coord: ChunkCoord,
+            _detail: ChunkDetail,
+        ) -> Result<DecodedMesh, String> {
+            Ok(tri())
+        }
+    }
+
+    // A source whose generation always fails, so a chunk is tracked by the
+    // window but never uploaded: it keeps the resident-draw map under the
+    // test's control rather than the worker's timing.
+    struct FailingChunk;
+    impl ChunkSource for FailingChunk {
+        fn generate(
+            &self,
+            _coord: ChunkCoord,
+            _detail: ChunkDetail,
+        ) -> Result<DecodedMesh, String> {
+            Err("test source".to_string())
+        }
+    }
+
+    // A view matrix that is a pure translation: enough to tell a rebased view
+    // apart from the absolute one it was derived from.
+    fn translation_view(x: f32, y: f32, z: f32) -> [[f32; 4]; 4] {
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [x, y, z, 1.0],
+        ]
+    }
 
     // A bare StreamingState with no pools: enough to exercise the RAM valve's
     // sampling + stage machine without standing up the streamer worker threads.
@@ -541,6 +629,121 @@ mod tests {
             pressure_stage: StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,
+        }
+    }
+
+    // Texture + mesh pools of two items each: item 0 sits on the camera's
+    // origin and item 1 far out on +X, so a camera at either end orders the two
+    // unambiguously. `resident_cap` chooses whether both fit at once (8) or the
+    // second must displace the first (1). Mesh stream ids map to draw slots
+    // 10 / 11 so an upload's routing is visible in the call log.
+    fn pooled_state(resident_cap: usize) -> StreamingState {
+        let centers = vec![vec![[0.0, 0.0, 0.0]], vec![[100.0, 0.0, 0.0]]];
+        let mut state = empty_state();
+        state.texture_streamer = Some(TextureStreamer::new(
+            Arc::new(ConstTexture),
+            centers.clone(),
+            4,
+            resident_cap,
+        ));
+        state.mesh_streamer = Some(MeshStreamer::new(
+            Arc::new(ConstMesh),
+            centers,
+            4,
+            resident_cap,
+        ));
+        state.mesh_stream_draw_indices = vec![10, 11];
+        state
+    }
+
+    // A chunk pool over 16x16 chunks at the given near / far radii.
+    fn chunk_state(source: Arc<dyn ChunkSource>, near: i32, far: i32) -> ChunkStreamState {
+        ChunkStreamState {
+            streamer: ChunkStreamer::new(source, near, far, 64, 16.0, 16.0),
+            draws: std::collections::BTreeMap::new(),
+            chunk_w: 16.0,
+            chunk_d: 16.0,
+            origin_chunk: ChunkCoord::new(0, 0),
+            texture_slot: 0,
+            normal_map_slot: crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+            material: crate::gfx::render_types::MaterialUniforms::DEFAULT,
+        }
+    }
+
+    // Drive frames until `done` holds. Yields (never sleeps) between frames
+    // while the pools' workers decode; panics rather than hanging if the state
+    // is never reached.
+    fn drive_until(
+        state: &mut StreamingState,
+        backend: &mut MockBackend,
+        cam: [f32; 3],
+        done: impl Fn(&StreamingState) -> bool,
+    ) {
+        for _ in 0..MAX_DRIVE_SPINS {
+            state.drive(backend, cam, IDENTITY4, false);
+            if done(state) {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("streaming never reached the expected state");
+    }
+
+    // Owns the storage a PipelineContext borrows from, for the `step` tests.
+    struct StepWorld {
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: FrameProfile,
+        resources: Resources,
+    }
+
+    impl StepWorld {
+        fn new() -> Self {
+            Self {
+                components: ComponentStorage::default(),
+                blob: BlobData::empty(),
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+            }
+        }
+
+        // Place a camera the step will read the absolute view + position from.
+        fn with_camera(mut self, position: [f32; 3], view_matrix: [[f32; 4]; 4]) -> Self {
+            self.components.push_typed(Camera3D {
+                position,
+                view_matrix,
+                ..Camera3D::bake(Default::default())
+            });
+            self
+        }
+
+        fn park_backend(&mut self) {
+            let (_recorded, backend) = recording_backend();
+            self.resources
+                .insert(ActiveRenderBackend(Some(Box::new(backend))));
+        }
+
+        fn step(&mut self) -> StepResult {
+            let mut ctx = PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            };
+            StreamingSystem::new().step(&mut ctx)
+        }
+
+        fn view(&self) -> CameraRelativeView {
+            *self
+                .resources
+                .get::<CameraRelativeView>()
+                .expect("camera-relative view published")
+        }
+
+        fn parked_state(&self) -> &StreamingState {
+            self.resources
+                .get::<StreamingState>()
+                .expect("state parked again")
         }
     }
 
@@ -607,5 +810,477 @@ mod tests {
         let c = ChunkCoord::new(5, 7);
         let m = chunk_model_matrix(c, c, 16.0, 16.0);
         assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    // Deep pressure scales every pool's budget off its own captured baseline,
+    // and releasing restores each one exactly (not merely approximately).
+    #[test]
+    fn deep_pressure_scales_each_pool_budget_and_release_restores_the_baseline() {
+        let mut state = pooled_state(8);
+        state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
+        state.texture_baseline_budget = Some(4000);
+        state.mesh_baseline_budget = Some(2000);
+        state.chunk_baseline_budget = Some(1000);
+        state.apply_byte_factor(1.0);
+
+        state.sample_pressure(Some(970), 1000);
+        assert_eq!(state.pressure_stage, StreamPressureStage::Evict);
+        let factor = state.pressure_factor;
+        assert!(factor < 1.0);
+        let tex = state.texture_streamer.as_ref().unwrap().byte_budget();
+        let mesh = state.mesh_streamer.as_ref().unwrap().byte_budget();
+        let chunk = state.chunk_stream.as_ref().unwrap().streamer.byte_budget();
+        assert_eq!(tex, Some(pressure::scale_budget(4000, factor)));
+        assert_eq!(mesh, Some(pressure::scale_budget(2000, factor)));
+        assert_eq!(chunk, Some(pressure::scale_budget(1000, factor)));
+
+        state.sample_pressure(Some(100), 1000);
+        assert_eq!(state.pressure_stage, StreamPressureStage::None);
+        assert_eq!(
+            state.texture_streamer.as_ref().unwrap().byte_budget(),
+            Some(4000)
+        );
+        assert_eq!(
+            state.mesh_streamer.as_ref().unwrap().byte_budget(),
+            Some(2000)
+        );
+        assert_eq!(
+            state.chunk_stream.as_ref().unwrap().streamer.byte_budget(),
+            Some(1000)
+        );
+    }
+
+    // A pool with no captured baseline runs count-only: the valve has nothing
+    // to scale, so it must not invent a budget for it.
+    #[test]
+    fn count_only_pools_gain_no_byte_budget_under_pressure() {
+        let mut state = pooled_state(8);
+        state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
+
+        state.sample_pressure(Some(970), 1000);
+        assert_eq!(state.pressure_stage, StreamPressureStage::Evict);
+        assert_eq!(state.texture_streamer.as_ref().unwrap().byte_budget(), None);
+        assert_eq!(state.mesh_streamer.as_ref().unwrap().byte_budget(), None);
+        assert_eq!(
+            state.chunk_stream.as_ref().unwrap().streamer.byte_budget(),
+            None
+        );
+    }
+
+    #[test]
+    fn streaming_stats_reports_every_active_pool() {
+        let mut state = pooled_state(8);
+        state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
+        state
+            .texture_streamer
+            .as_mut()
+            .unwrap()
+            .set_byte_budget(Some(4000));
+
+        let stats = state.streaming_stats();
+        assert_eq!(stats.texture, Some((0, 0, 2)));
+        assert_eq!(stats.mesh, Some((0, 0, 2)));
+        assert_eq!(stats.chunk, Some((0, 0)));
+        assert_eq!(stats.texture_bytes, Some((0, 4000)));
+        // A count-only pool reports a zero budget rather than dropping the row.
+        assert_eq!(stats.mesh_bytes, Some((0, 0)));
+        assert_eq!(stats.chunk_bytes, Some((0, 0)));
+    }
+
+    #[test]
+    fn streaming_stats_reports_nothing_without_pools() {
+        let stats = empty_state().streaming_stats();
+        assert!(stats.texture.is_none());
+        assert!(stats.mesh.is_none());
+        assert!(stats.chunk.is_none());
+        assert!(stats.texture_bytes.is_none());
+        assert!(stats.mesh_bytes.is_none());
+        assert!(stats.chunk_bytes.is_none());
+    }
+
+    // The pools have no Debug of their own, so StreamingState's is hand-written
+    // to report which are active rather than trying to dump them.
+    #[test]
+    fn debug_reports_the_active_pools_and_the_frame_clock() {
+        let mut state = pooled_state(8);
+        state.frame_count = 7;
+        state.pressure_stage = StreamPressureStage::Gate;
+
+        let s = format!("{state:?}");
+        assert!(s.contains("frame_count: 7"), "{s}");
+        assert!(s.contains("texture: true"), "{s}");
+        assert!(s.contains("mesh: true"), "{s}");
+        assert!(s.contains("chunk: false"), "{s}");
+        assert!(s.contains("pressure: Gate"), "{s}");
+    }
+
+    #[test]
+    fn drive_advances_the_frame_clock() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        assert_eq!(state.frame_count, 2);
+    }
+
+    // Behind an opaque menu the world is not drawn, so no pool dispatches: both
+    // stay fully unloaded rather than paying for loads nothing will show.
+    #[test]
+    fn a_hidden_world_dispatches_no_loads() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, true);
+        assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
+        assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
+    }
+
+    #[test]
+    fn a_visible_world_dispatches_texture_and_mesh_loads() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        // Dispatch moves an item off Unloaded the same frame it is planned.
+        assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
+        assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
+    }
+
+    // Stage 1 of the RAM valve holds residency where it is: no new dispatch.
+    #[test]
+    fn the_gate_stage_freezes_new_loads() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
+        state.pressure_stage = StreamPressureStage::Gate;
+
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
+        assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
+        assert_eq!(
+            state.chunk_stream.as_ref().unwrap().streamer.stats(),
+            (0, 0)
+        );
+    }
+
+    // Stage 2 keeps planning under the reduced budget, so the planner can still
+    // shed residents; freezing it instead would strand the pools over budget.
+    #[test]
+    fn the_evict_stage_keeps_planning() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        state.pressure_stage = StreamPressureStage::Evict;
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
+        assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
+    }
+
+    // Completed loads route to the backend: a texture by pool slot, a mesh
+    // through its stream-id -> draw-slot map.
+    #[test]
+    fn completed_loads_are_uploaded_to_the_backend() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        drive_until(&mut state, &mut backend, [0.0; 3], |s| {
+            s.texture_streamer.as_ref().unwrap().stats().0 == 2
+                && s.mesh_streamer.as_ref().unwrap().stats().0 == 2
+        });
+
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::UpdateTextureSlot {
+            slot: 0,
+            w: 1,
+            h: 1
+        }));
+        assert!(s.saw(&Call::UpdateTextureSlot {
+            slot: 1,
+            w: 1,
+            h: 1
+        }));
+        assert!(s.saw(&Call::UploadMesh {
+            draw_idx: 10,
+            vertices: 3,
+            indices: 3,
+        }));
+        assert!(s.saw(&Call::UploadMesh {
+            draw_idx: 11,
+            vertices: 3,
+            indices: 3,
+        }));
+    }
+
+    // A streamed mesh with no draw slot has nowhere to upload to; the drive
+    // must swallow it rather than mis-routing the geometry onto another draw.
+    #[test]
+    fn a_streamed_mesh_without_a_draw_slot_uploads_nothing() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        state.mesh_stream_draw_indices.clear();
+        drive_until(&mut state, &mut backend, [0.0; 3], |s| {
+            s.mesh_streamer.as_ref().unwrap().stats().0 == 2
+        });
+        assert!(
+            !recorded
+                .lock()
+                .unwrap()
+                .calls
+                .iter()
+                .any(|c| matches!(c, Call::UploadMesh { .. }))
+        );
+    }
+
+    // Over the resident cap, the pools shed the item the camera has left
+    // behind so the nearer one can take its place.
+    #[test]
+    fn moving_the_camera_evicts_the_now_distant_item_over_the_cap() {
+        let (recorded, mut backend) = recording_backend();
+        // Cap of 1: only one texture / mesh may be resident at a time.
+        let mut state = pooled_state(1);
+        drive_until(&mut state, &mut backend, [0.0; 3], |s| {
+            s.texture_streamer.as_ref().unwrap().stats().0 == 1
+                && s.mesh_streamer.as_ref().unwrap().stats().0 == 1
+        });
+        recorded.lock().unwrap().calls.clear();
+
+        // Item 1's center is now the near one, so item 0 is displaced.
+        state.drive(&mut backend, [100.0, 0.0, 0.0], IDENTITY4, false);
+        let s = recorded.lock().unwrap();
+        assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
+        assert!(s.saw(&Call::EvictMesh(10)), "{:?}", s.calls);
+    }
+
+    #[test]
+    fn without_chunk_streaming_the_view_and_camera_stay_absolute() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        let view = translation_view(-40.0, -5.0, 40.0);
+        let cam = [40.0, 5.0, -40.0];
+        assert_eq!(state.drive(&mut backend, cam, view, false), (view, cam));
+    }
+
+    // An unbounded world renders from small coordinates: both the view and the
+    // camera are rebased onto the camera's own chunk.
+    #[test]
+    fn chunk_streaming_rebases_the_view_onto_the_camera_chunk() {
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        state.chunk_stream = Some(chunk_state(Arc::new(FailingChunk), 0, 0));
+        // 16-unit chunks: floor(40/16) = 2, floor(-40/16) = -3.
+        let cam = [40.0, 5.0, -40.0];
+        let view = translation_view(-40.0, -5.0, 40.0);
+        let (out_view, out_cam) = state.drive(&mut backend, cam, view, false);
+
+        let origin = [32.0, 0.0, -48.0];
+        assert_eq!(out_cam, [8.0, 5.0, 8.0]);
+        assert_eq!(
+            out_view,
+            crate::gfx::chunk_coord::camera_relative_view(view, cam, origin)
+        );
+        assert_ne!(out_view, view, "the rebase actually rewrote the view");
+        assert_eq!(
+            state.chunk_stream.as_ref().unwrap().origin_chunk,
+            ChunkCoord::new(2, -3)
+        );
+    }
+
+    // Crossing a chunk boundary moves the render origin and re-places every
+    // resident chunk against it; staying put must not re-push identical models.
+    #[test]
+    fn crossing_into_a_new_chunk_rebases_resident_chunk_models() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        let mut cs = chunk_state(Arc::new(FailingChunk), 1, 1);
+        // Stand in for two chunks already uploaded at draw slots 3 and 4.
+        cs.draws.insert(ChunkCoord::new(0, 0), 3);
+        cs.draws.insert(ChunkCoord::new(1, 0), 4);
+        state.chunk_stream = Some(cs);
+
+        state.drive(&mut backend, [20.0, 0.0, 0.0], IDENTITY4, false);
+        {
+            let s = recorded.lock().unwrap();
+            assert!(s.saw(&Call::SetChunkModel(3)));
+            assert!(s.saw(&Call::SetChunkModel(4)));
+        }
+        assert_eq!(
+            state.chunk_stream.as_ref().unwrap().origin_chunk,
+            ChunkCoord::new(1, 0)
+        );
+
+        recorded.lock().unwrap().calls.clear();
+        state.drive(&mut backend, [21.0, 0.0, 0.0], IDENTITY4, false);
+        assert!(
+            !recorded
+                .lock()
+                .unwrap()
+                .calls
+                .iter()
+                .any(|c| matches!(c, Call::SetChunkModel(_)))
+        );
+    }
+
+    // A chunk that leaves the view window releases its draw slot on the
+    // backend and stops being tracked as resident.
+    #[test]
+    fn chunks_leaving_the_view_window_are_removed_from_the_backend() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        let mut cs = chunk_state(Arc::new(FailingChunk), 0, 0);
+        // Stand in for chunk (0, 0) already uploaded at draw slot 9.
+        cs.draws.insert(ChunkCoord::new(0, 0), 9);
+        state.chunk_stream = Some(cs);
+
+        // Frame 1 at the origin puts (0, 0) in the window.
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        // Frame 2 far east: (0, 0) is past the evict band.
+        state.drive(&mut backend, [800.0, 0.0, 0.0], IDENTITY4, false);
+
+        assert!(recorded.lock().unwrap().saw(&Call::RemoveChunkMesh(9)));
+        assert!(
+            !state
+                .chunk_stream
+                .as_ref()
+                .unwrap()
+                .draws
+                .contains_key(&ChunkCoord::new(0, 0))
+        );
+    }
+
+    // A generated chunk is added to the backend and its returned draw slot
+    // recorded, so a later rebase or eviction can find it.
+    #[test]
+    fn a_generated_chunk_is_added_and_its_draw_slot_tracked() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = empty_state();
+        state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
+        drive_until(&mut state, &mut backend, [0.0; 3], |s| {
+            s.chunk_stream.as_ref().unwrap().streamer.stats().0 == 1
+        });
+
+        let cs = state.chunk_stream.as_ref().unwrap();
+        assert_eq!(cs.draws.get(&ChunkCoord::new(0, 0)), Some(&0));
+        assert!(recorded.lock().unwrap().saw(&Call::AddChunkMesh));
+    }
+
+    #[test]
+    fn a_step_without_parked_state_publishes_no_view() {
+        let mut w = StepWorld::new();
+        assert_eq!(w.step(), StepResult::Continue);
+        assert!(w.resources.get::<CameraRelativeView>().is_none());
+    }
+
+    // Init succeeded but the backend is gone: the draw still needs a view, so
+    // the absolute camera is published and the state stays parked.
+    #[test]
+    fn a_step_without_a_backend_still_publishes_the_absolute_view() {
+        let view = translation_view(-1.0, -2.0, -3.0);
+        let mut w = StepWorld::new().with_camera([1.0, 2.0, 3.0], view);
+        w.resources.insert(empty_state());
+
+        assert_eq!(w.step(), StepResult::Continue);
+        assert_eq!(w.view().cam_pos, [1.0, 2.0, 3.0]);
+        assert_eq!(w.view().view, view);
+        assert_eq!(w.parked_state().frame_count, 0, "no frame was driven");
+    }
+
+    #[test]
+    fn a_step_without_a_camera_publishes_the_identity_view() {
+        let mut w = StepWorld::new();
+        w.resources.insert(empty_state());
+        w.park_backend();
+
+        w.step();
+        assert_eq!(w.view().view, IDENTITY4);
+        assert_eq!(w.view().cam_pos, [0.0; 3]);
+    }
+
+    // The backend is taken for the step and parked again for the systems that
+    // follow, and the frame clock ticks once per step.
+    #[test]
+    fn a_step_drives_the_backend_and_parks_it_again() {
+        let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
+        w.resources.insert(pooled_state(8));
+        w.park_backend();
+
+        w.step();
+        assert!(
+            w.resources
+                .get::<ActiveRenderBackend>()
+                .is_some_and(|slot| slot.0.is_some())
+        );
+        assert_eq!(w.parked_state().frame_count, 1);
+        assert!(
+            w.parked_state()
+                .texture_streamer
+                .as_ref()
+                .unwrap()
+                .stats()
+                .2
+                < 2,
+            "the pools were driven"
+        );
+    }
+
+    // The overlay's flag is peeked, not taken: streaming pauses behind an
+    // opaque menu, and GraphicsSystem still finds the frame later this tick.
+    #[test]
+    fn an_opaque_overlay_suspends_streaming_without_consuming_the_frame() {
+        let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
+        w.resources.insert(pooled_state(8));
+        w.park_backend();
+        w.resources.insert(OverlayFrame {
+            world_hidden: true,
+            ..Default::default()
+        });
+
+        w.step();
+        assert_eq!(
+            w.parked_state().texture_streamer.as_ref().unwrap().stats(),
+            (0, 0, 2)
+        );
+        assert!(w.resources.get::<OverlayFrame>().is_some());
+    }
+
+    // RSS is a syscall, so the valve only samples on its throttled cadence.
+    #[test]
+    fn ram_pressure_is_sampled_only_on_the_throttled_cadence() {
+        let mut w = StepWorld::new();
+        let mut state = empty_state();
+        state.frame_count = 1;
+        w.resources.insert(state);
+        // A 1 MiB ceiling is under any real process RSS, so a sample that ran
+        // would certainly engage the valve.
+        w.resources
+            .insert(crate::app::budget::MemoryBudget::compute(None, 1));
+
+        w.step();
+        assert!(w.resources.get::<StreamingPressure>().is_none());
+    }
+
+    // No published ceiling means no valve: streaming stays on its byte-budget
+    // policy and nothing is reported.
+    #[test]
+    fn ram_pressure_is_not_sampled_without_a_memory_budget() {
+        let mut w = StepWorld::new();
+        w.resources.insert(empty_state());
+        w.step();
+        assert!(w.resources.get::<StreamingPressure>().is_none());
+    }
+
+    #[test]
+    fn an_rss_sample_over_the_memory_budget_publishes_engaged_pressure() {
+        let mut w = StepWorld::new();
+        w.resources.insert(empty_state());
+        w.resources
+            .insert(crate::app::budget::MemoryBudget::compute(None, 1));
+
+        w.step();
+        // The valve is inert (and publishes nothing) where RSS cannot be read.
+        match crate::app::sysmem::process_resident_bytes() {
+            Some(_) => {
+                let p = w.resources.get::<StreamingPressure>().expect("published");
+                assert!(p.under_pressure);
+                assert_eq!(p.budget_bytes, 1024 * 1024);
+                assert_ne!(w.parked_state().pressure_stage, StreamPressureStage::None);
+            }
+            None => assert!(w.resources.get::<StreamingPressure>().is_none()),
+        }
     }
 }

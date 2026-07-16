@@ -456,8 +456,8 @@ impl World {
             resources: &mut self.resources,
         };
         // Give each loaded Prop's entity its per-instance components before
-        // systems init. The Prop components remain; the decomposed ones ride
-        // alongside until a consumer switches over.
+        // systems init, draining the Prop itself: the decomposed components are
+        // the only path from here on.
         decompose::run(&mut ctx);
         for system in &mut self.systems {
             system.init(&mut ctx);
@@ -747,5 +747,133 @@ mod tests {
         assert!(text.contains("World"), "{text}");
         assert!(text.contains("components: 2"), "{text}");
         assert!(text.contains("systems: 0"), "{text}");
+    }
+
+    // A fresh world holds nothing; adding a component (through either the blob
+    // path or the typed one) fills it, and `start()` is what gives it systems.
+    #[test]
+    fn empty_world_fills_from_components_then_systems() {
+        use crate::assets::{FpsCounter, TextLabel};
+
+        let mut world = World::new_empty();
+        assert!(world.is_empty());
+        assert_eq!(world.component_count(), 0);
+        assert_eq!(world.system_count(), 0);
+
+        world.add(ComponentAsset::from(TextLabel::default()));
+        assert!(!world.is_empty());
+        assert_eq!(world.component_count(), 1);
+
+        world.add_component(FpsCounter::default());
+        world.start().unwrap();
+        assert_eq!(world.system_count(), 1, "the FpsCounter gate built one");
+    }
+
+    // `push` lands a runtime-produced component in its typed slot, where the
+    // matching query finds it.
+    #[test]
+    fn push_lands_in_the_typed_slot() {
+        use crate::assets::TextLabel;
+
+        let mut world = World::new_empty();
+        world.push(TextLabel {
+            content: "pushed".to_string(),
+            ..Default::default()
+        });
+
+        let found: Vec<&str> = world
+            .query::<TextLabel>()
+            .map(|l| l.content.as_str())
+            .collect();
+        assert_eq!(found, ["pushed"]);
+    }
+
+    // `remove_all` drops every component of one type and leaves the others,
+    // which is how the editor suppresses a world's baked-in HUD before start.
+    #[test]
+    fn remove_all_drops_only_the_named_type() {
+        use crate::assets::{DebugHud, TextLabel};
+
+        let mut world = World::new_empty();
+        world.add_component(TextLabel::default());
+        world.add_component(DebugHud::default());
+        assert_eq!(world.component_count(), 2);
+
+        world.remove_all::<DebugHud>();
+        assert_eq!(world.query::<DebugHud>().count(), 0);
+        assert_eq!(world.query::<TextLabel>().count(), 1, "others survive");
+    }
+
+    // The component tag list carries one tag per stored component, so the debug
+    // server can report the world's makeup without reading their contents.
+    #[test]
+    fn component_tags_report_one_tag_per_component() {
+        use crate::assets::TextLabel;
+
+        let mut world = World::new_empty();
+        assert!(world.component_tags().is_empty());
+
+        world.add_component(TextLabel::default());
+        world.add_component(TextLabel::default());
+        world.add_component(crate::assets::FpsCounter::default());
+
+        let tags = world.component_tags();
+        assert_eq!(tags.len(), 3, "one entry per component, not per type");
+        assert_eq!(
+            tags.iter().collect::<std::collections::HashSet<_>>().len(),
+            2,
+            "the two labels share a tag, the counter has its own"
+        );
+    }
+
+    // Despawning an entity removes every component on it: decompose drains the
+    // authored Prop into per-entity components, and the despawn takes them all.
+    #[test]
+    fn despawn_removes_an_entitys_components() {
+        use crate::assets::{MeshRenderer, Prop, Transform};
+
+        let mut world = World::new_empty();
+        world.add_component(Prop::default());
+        // start() runs decompose, which gives the Prop's entity its Transform +
+        // MeshRenderer.
+        world.start().unwrap();
+        let entity = world
+            .join2::<Transform, MeshRenderer>()
+            .next()
+            .map(|(e, _, _)| e)
+            .expect("the Prop decomposed onto one entity");
+
+        world.despawn(entity);
+        assert_eq!(world.query::<Transform>().count(), 0);
+        assert_eq!(world.query::<MeshRenderer>().count(), 0);
+    }
+
+    // The frame profile is exposed for the debug server's readout and holds no
+    // timings before any step has run.
+    #[test]
+    fn profile_is_exposed_before_any_step() {
+        let world = World::new_empty();
+        assert!(world.profile().system_timings().is_empty());
+    }
+
+    // The streaming readouts are `None` until graphics init parks the state, so
+    // a world that never built a backend reports nothing rather than panicking.
+    #[test]
+    fn streaming_readouts_are_absent_before_graphics_init() {
+        let world = World::new_empty();
+        assert!(world.streaming_stats().is_none());
+        assert!(world.streaming_pressure().is_none());
+    }
+
+    // A world that never built a backend has none to yield, and the disjoint
+    // borrow still hands back the (empty) system list.
+    #[test]
+    fn render_backend_accessors_without_a_backend() {
+        let mut world = World::new_empty();
+        assert!(world.take_render_backend().is_none());
+
+        let (systems, backend) = world.systems_and_render_backend();
+        assert!(systems.is_empty());
+        assert!(backend.is_none());
     }
 }

@@ -142,3 +142,288 @@ pub(super) fn step_target(
     }
     g.cursor.advance(&g.graph, &g.params, dt_secs);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blob::BlobData;
+    use crate::ecs::asset_id::intern;
+    use crate::ecs::{ComponentSlot, ComponentStorage, Resources};
+    use crate::gfx::profile::FrameProfile;
+
+    use super::super::TargetState;
+    use super::super::flat::{ClipEntry, FlatState};
+
+    // A bare clip; installing a graph reads only its duration and loop flag.
+    fn clip_entry() -> ClipEntry {
+        ClipEntry {
+            clip: crate::gfx::skinning::AnimationClip {
+                duration: 1.0,
+                looping: true,
+                tracks: Vec::new(),
+                root: None,
+            },
+            declared_weight: 1.0,
+            fade_in_secs: 0.0,
+        }
+    }
+
+    // A flat bucket for `target`, holding the one clip a graph can claim.
+    fn flat_bucket(target: SkinnedMeshHandle) -> HashMap<SkinnedMeshHandle, TargetState> {
+        HashMap::from([(
+            target,
+            TargetState {
+                clips: vec![clip_entry()],
+                mode: TargetMode::Flat(FlatState {
+                    current_weights: vec![1.0],
+                    transition: None,
+                }),
+            },
+        )])
+    }
+
+    // The handle an authored `"target": "<name>"` reference deserializes to:
+    // the resolver's interner fallback puts the interned id in the handle.
+    fn handle(name: &str) -> SkinnedMeshHandle {
+        SkinnedMeshHandle(intern(name).0)
+    }
+
+    // Owns the storage a PipelineContext borrows from. Graph install reads no
+    // payloads, so the blob stays empty.
+    struct TestWorld {
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: FrameProfile,
+        resources: Resources,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            Self {
+                components: ComponentStorage::default(),
+                blob: BlobData::new(vec![Some(Vec::new())]),
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+            }
+        }
+
+        fn push<C: ComponentSlot>(&mut self, c: C) {
+            self.components.push_typed(c);
+        }
+
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+
+        fn count<C: ComponentSlot>(&mut self) -> usize {
+            self.ctx().query::<C>().count()
+        }
+    }
+
+    fn is_graph(targets: &HashMap<SkinnedMeshHandle, TargetState>, t: SkinnedMeshHandle) -> bool {
+        matches!(targets[&t].mode, TargetMode::Graph(_))
+    }
+
+    // A one-state graph on `target` playing `clip`, plus the slot map resolving
+    // that clip onto the bucket's only entry.
+    fn graph_json(target: &str, clip: &str) -> serde_json::Value {
+        serde_json::json!({
+            "target": target,
+            "parameters": [{"name": "speed", "default": 1.5}],
+            "states": [{"name": "idle", "clip": clip}],
+        })
+    }
+
+    fn parse(v: serde_json::Value) -> AnimGraph {
+        crate::ecs::asset_id::ensure_name_resolver();
+        serde_json::from_value(v).unwrap()
+    }
+
+    // A graph with no target names nothing to own, so it is skipped and the
+    // bucket keeps whatever drive it had.
+    #[test]
+    fn install_graphs_ignores_a_graph_with_no_target() {
+        let mut w = TestWorld::new();
+        w.push(AnimGraph::default());
+        let mut targets = HashMap::new();
+        assert_eq!(
+            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            0
+        );
+    }
+
+    // A graph aimed at a mesh with no clips has nothing to drive: it is skipped
+    // rather than installing an empty bucket.
+    #[test]
+    fn install_graphs_ignores_a_graph_whose_target_has_no_clips() {
+        let target = handle("gi_no_clips");
+        let mut w = TestWorld::new();
+        w.push(parse(graph_json("gi_no_clips", "gi_missing_clip")));
+        let mut targets = HashMap::new();
+        assert_eq!(
+            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            0
+        );
+        assert!(!targets.contains_key(&target));
+        assert_eq!(w.count::<AnimParams>(), 0, "no params published");
+    }
+
+    // A graph the blob and clip list disagree on (here: an unresolvable clip
+    // reference) downgrades its bucket to the weighted blend rather than
+    // dropping the world.
+    #[test]
+    fn install_graphs_falls_back_to_the_blend_when_compile_fails() {
+        let target = handle("gi_bad_compile");
+        let mut w = TestWorld::new();
+        w.push(parse(graph_json("gi_bad_compile", "gi_unresolvable")));
+        let mut targets = flat_bucket(target);
+        // An empty slot map resolves no clip, so the compile fails.
+        assert_eq!(
+            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            0
+        );
+        assert!(
+            !is_graph(&targets, target),
+            "the bucket keeps its flat drive"
+        );
+        assert_eq!(w.count::<AnimParams>(), 0);
+    }
+
+    // A graph claiming a clip that belongs to a different target cannot resolve
+    // it either: ownership is enforced through the slot map.
+    #[test]
+    fn install_graphs_rejects_a_clip_owned_by_another_target() {
+        let target = handle("gi_owner");
+        let clip = intern("gi_owned_clip");
+        let mut w = TestWorld::new();
+        w.push(parse(graph_json("gi_owner", "gi_owned_clip")));
+        let mut targets = flat_bucket(target);
+        // The clip exists, but in someone else's bucket.
+        let slots = HashMap::from([(clip, (handle("gi_stranger"), 0))]);
+        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 0);
+        assert!(!is_graph(&targets, target));
+    }
+
+    // The success path: the graph takes the bucket and publishes one AnimParams
+    // seeded with the declared defaults. No IK chains means no ground probes.
+    #[test]
+    fn install_graphs_takes_the_bucket_and_seeds_params() {
+        let target = handle("gi_ok");
+        let clip = intern("gi_ok_clip");
+        let mut w = TestWorld::new();
+        w.push(parse(graph_json("gi_ok", "gi_ok_clip")));
+        let mut targets = flat_bucket(target);
+        let slots = HashMap::from([(clip, (target, 0usize))]);
+        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 1);
+        assert!(is_graph(&targets, target));
+
+        let ctx = w.ctx();
+        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].target, target);
+        assert_eq!(
+            params[0].values,
+            vec![1.5],
+            "seeded from the declared default"
+        );
+        assert_eq!(
+            w.count::<crate::assets::GroundProbes>(),
+            0,
+            "no chains, no probe exchange"
+        );
+    }
+
+    // IK chains resolve joint names against the target's skeleton. Without a
+    // pose to resolve against the graph still installs, but with IK off and no
+    // probe exchange -- the rest of the machine keeps running.
+    #[test]
+    fn install_graphs_disables_ik_when_the_target_has_no_skeleton() {
+        let target = handle("gi_no_skel");
+        let clip = intern("gi_no_skel_clip");
+        let mut v = graph_json("gi_no_skel", "gi_no_skel_clip");
+        v["ik_chains"] = serde_json::json!([{"joints": ["hip", "knee", "foot"],
+                                             "pole": [0.0, 0.0, 1.0]}]);
+        let mut w = TestWorld::new();
+        w.push(parse(v));
+        let mut targets = flat_bucket(target);
+        let slots = HashMap::from([(clip, (target, 0usize))]);
+        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 1);
+
+        let TargetMode::Graph(g) = &targets[&target].mode else {
+            panic!("graph installed");
+        };
+        assert!(g.chains.is_empty(), "IK disabled without a skeleton");
+        assert_eq!(w.count::<crate::assets::GroundProbes>(), 0);
+    }
+
+    // A graph bucket parked at its initial state, for driving `step_target`.
+    fn graph_target(name: &str) -> GraphTarget {
+        let clip = intern(&format!("{name}_clip"));
+        let g = parse(graph_json(name, &format!("{name}_clip")));
+        let compiled = g
+            .compile(|id| (id == clip).then_some((0, 1.0, true)))
+            .unwrap();
+        GraphTarget {
+            cursor: GraphCursor::start(&compiled),
+            params: compiled.default_params(),
+            graph: compiled,
+            pending: Vec::new(),
+            chains: Vec::new(),
+        }
+    }
+
+    // The component is the authoritative parameter store: a queued debug write
+    // lands in it, and the bucket's snapshot then reads back from it.
+    #[test]
+    fn step_target_flushes_queued_writes_into_the_component() {
+        let target = handle("gs_component");
+        let mut w = TestWorld::new();
+        w.push(AnimParams::new(target, vec![0.0]));
+        let mut g = graph_target("gs_component");
+        g.pending.push((0, 3.0));
+
+        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        assert!(g.pending.is_empty(), "the queue drains");
+        assert_eq!(g.params, vec![3.0], "snapshot taken from the component");
+        let ctx = w.ctx();
+        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        assert_eq!(params[0].values, vec![3.0], "the write landed in the store");
+    }
+
+    // Losing the component (something despawned it) must not wedge the graph:
+    // debug writes still apply to the last snapshot so it stays drivable.
+    #[test]
+    fn step_target_keeps_applying_writes_without_the_component() {
+        let target = handle("gs_orphan");
+        let mut w = TestWorld::new();
+        let mut g = graph_target("gs_orphan");
+        g.pending.push((0, 4.0));
+        // An out-of-range index is dropped rather than panicking.
+        g.pending.push((9, 1.0));
+
+        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        assert!(g.pending.is_empty());
+        assert_eq!(g.params, vec![4.0], "the snapshot took the write");
+    }
+
+    // A component belonging to another target is not this bucket's store.
+    #[test]
+    fn step_target_ignores_another_targets_params() {
+        let target = handle("gs_mine");
+        let mut w = TestWorld::new();
+        w.push(AnimParams::new(handle("gs_theirs"), vec![9.0]));
+        let mut g = graph_target("gs_mine");
+        g.pending.push((0, 2.0));
+
+        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        assert_eq!(g.params, vec![2.0], "the stranger's values are not read");
+        let ctx = w.ctx();
+        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        assert_eq!(params[0].values, vec![9.0], "and are not written either");
+    }
+}

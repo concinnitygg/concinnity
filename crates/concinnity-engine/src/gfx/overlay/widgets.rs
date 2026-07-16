@@ -288,10 +288,82 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::{DropdownView, FontHandle};
 
     // A fixed-width mock metric (every char 10px) makes `fit_line` widths exact.
     fn mock_advance(s: &str) -> f32 {
         s.chars().count() as f32 * 10.0
+    }
+
+    const FONT: FontHandle = FontHandle(0);
+
+    fn make_glyph(advance_px: f32) -> crate::build::font::GlyphMetrics {
+        crate::build::font::GlyphMetrics {
+            char_code: 0,
+            atlas_x: 0,
+            atlas_y: 0,
+            atlas_w: 8,
+            atlas_h: 12,
+            advance_px,
+            bearing_x: 0.0,
+            bearing_y: 12.0,
+        }
+    }
+
+    // A fixed-width synthetic font (every glyph 10px in a 16px em) makes the
+    // built geometry exact.
+    fn loaded_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
+        let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
+            .chain('A'..='Z')
+            .chain('0'..='9')
+            .chain(['.', ' '])
+            .map(|c| (c as u32, make_glyph(10.0)))
+            .collect();
+        let cap_px = text::derive_cap_px(&metrics, 16.0);
+        std::collections::HashMap::from([(
+            FONT,
+            text::LoadedFont {
+                atlas_slot: 0,
+                cap_px,
+                metrics,
+                atlas_w: 128,
+                atlas_h: 128,
+                size_px: 16.0,
+                supersample: 1.0,
+            },
+        )])
+    }
+
+    fn no_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
+        std::collections::HashMap::new()
+    }
+
+    // A list anchored to a 200x40 control at (400, 100), which has room to open
+    // downward from y = 140.
+    fn dropdown_view(options: &[&str]) -> DropdownView {
+        DropdownView {
+            anchor: [400.0, 100.0, 200.0, 40.0],
+            options: options.iter().map(|s| s.to_string()).collect(),
+            selected: 0,
+            first: 0,
+            hovered: None,
+            screen: Some(AssetId(5)),
+            font: Some(FONT),
+            scale: 1.0,
+            color: [1.0, 1.0, 1.0],
+        }
+    }
+
+    fn text_input() -> TextInput {
+        TextInput {
+            font: Some(FONT),
+            placeholder: "type here".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn rect(s: &Sprite) -> [f32; 4] {
+        [s.x, s.y, s.width, s.height]
     }
 
     // Text that fits the box is returned untouched, with the caret at its measured
@@ -333,5 +405,159 @@ mod tests {
         assert_eq!(text, "abcde");
         assert_eq!(xoff, 0.0);
         assert_eq!(caret, 0.0);
+    }
+
+    // The list stacks back to front: the border quad, the panel fill over it, then
+    // the selected row's highlight and the hovered row's on top. The option text
+    // follows the sprites, so it draws over the highlights.
+    #[test]
+    fn build_dropdown_overlay_layers_border_panel_then_highlights() {
+        let mut view = dropdown_view(&["aa", "bb", "cc"]);
+        view.selected = 1;
+        view.hovered = Some(2);
+        let (sprites, labels) = build_dropdown_overlay(&view, &loaded_fonts());
+        assert_eq!(sprites.len(), 4);
+        // The border sits 2px outside the list rect on every side.
+        assert_eq!(rect(&sprites[0]), [398.0, 138.0, 204.0, 124.0]);
+        assert_eq!(rect(&sprites[1]), [400.0, 140.0, 200.0, 120.0]);
+        // Highlights land on the selected row then the hovered one.
+        assert_eq!(rect(&sprites[2]), [400.0, 180.0, 200.0, 40.0]);
+        assert_eq!(rect(&sprites[3]), [400.0, 220.0, 200.0, 40.0]);
+        assert_ne!(sprites[2].tint, sprites[3].tint);
+        // Every sprite carries the view's screen, so it maps like the menu it drops from.
+        assert!(sprites.iter().all(|s| s.screen == view.screen && s.visible));
+        // One label per shown option, inset by the text pad and centred on a 16px line.
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0].content, "aa");
+        assert_eq!((labels[0].x, labels[0].y), (410.0, 152.0));
+        assert_eq!((labels[2].x, labels[2].y), (410.0, 232.0));
+        assert!(labels.iter().all(|l| l.font == view.font && l.visible));
+    }
+
+    // A list longer than the layout window shows options from `first` onward:
+    // selected / hovered options outside that window draw no highlight, and the
+    // scrolled list gains a scrollbar track with its thumb over it.
+    #[test]
+    fn build_dropdown_overlay_windows_a_scrolled_list() {
+        let options: Vec<String> = (0..16).map(|i| format!("o{i}")).collect();
+        let refs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
+        let mut view = dropdown_view(&refs);
+        view.first = 8;
+        view.selected = 0;
+        view.hovered = Some(3);
+        let (sprites, labels) = build_dropdown_overlay(&view, &loaded_fonts());
+        // Border + panel + track + thumb: both highlighted options are off the window.
+        assert_eq!(sprites.len(), 4);
+        assert_eq!(labels.len(), 8);
+        assert_eq!(labels[0].content, "o8");
+        assert_eq!(labels[7].content, "o15");
+        // The track spans the list's full height; the thumb rides inside it, here
+        // at the bottom of its travel.
+        let (track, thumb) = (&sprites[2], &sprites[3]);
+        assert_eq!((track.y, track.height), (140.0, 320.0));
+        assert!(thumb.x >= track.x && thumb.x + thumb.width <= track.x + track.width);
+        assert_eq!(thumb.y + thumb.height, track.y + track.height);
+    }
+
+    // A list that fits needs no scrollbar, and an out-of-range scroll position
+    // clamps rather than windowing rows away.
+    #[test]
+    fn build_dropdown_overlay_fitting_list_has_no_scrollbar() {
+        let mut view = dropdown_view(&["aa", "bb", "cc"]);
+        view.first = 99;
+        let (sprites, labels) = build_dropdown_overlay(&view, &loaded_fonts());
+        // Border + panel + the selected highlight only.
+        assert_eq!(sprites.len(), 3);
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0].content, "aa");
+    }
+
+    // Without a loaded font there is no line height to centre on, so the text
+    // falls back to the row's midpoint.
+    #[test]
+    fn build_dropdown_overlay_without_a_loaded_font_centres_on_a_zero_line() {
+        let view = dropdown_view(&["aa"]);
+        let (_, labels) = build_dropdown_overlay(&view, &no_fonts());
+        assert_eq!(labels[0].y, 160.0);
+    }
+
+    // An empty, unfocused field shows the dimmer placeholder over a box mirroring
+    // the field's geometry, with no caret.
+    #[test]
+    fn build_text_input_overlay_shows_the_placeholder_while_empty_and_unfocused() {
+        let ti = text_input();
+        let (sprites, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        assert_eq!(sprites.len(), 1);
+        assert_eq!(rect(&sprites[0]), [ti.x, ti.y, ti.width, ti.height]);
+        assert_eq!(sprites[0].tint, ti.background);
+        assert_eq!(sprites[0].corner_radius, ti.corner_radius);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].content, "type here");
+        assert_eq!(labels[0].color, ti.placeholder_color);
+        // Text starts at the padding inset; the 16px line centres in the 40px box.
+        assert_eq!((labels[0].x, labels[0].y), (8.0, 12.0));
+    }
+
+    // Content, or focus on an empty field, replaces the placeholder with the live
+    // text in the content colour.
+    #[test]
+    fn build_text_input_overlay_shows_content_over_the_placeholder() {
+        let mut ti = text_input();
+        ti.content = "abc".to_string();
+        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), false);
+        assert_eq!(labels[0].content, "abc");
+        assert_eq!(labels[0].color, ti.text_color);
+        // Focusing an empty field drops the placeholder: it is being typed into.
+        let focused = TextInput {
+            focused: true,
+            ..text_input()
+        };
+        let (_, labels) = build_text_input_overlay(&focused, &loaded_fonts(), false);
+        assert_eq!(labels[0].content, "");
+        assert_eq!(labels[0].color, focused.text_color);
+    }
+
+    // The caret bar draws only while the field holds focus and the blink is on its
+    // visible half, sitting at the caret's fit position.
+    #[test]
+    fn build_text_input_overlay_draws_the_caret_only_on_a_focused_visible_blink() {
+        let mut ti = text_input();
+        ti.content = "abc".to_string();
+        ti.focused = true;
+        ti.caret = 3;
+        let (sprites, _) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        assert_eq!(sprites.len(), 2);
+        // padding (8) + three 10px glyphs; a 2px bar spanning the 16px line box.
+        assert_eq!(rect(&sprites[1]), [38.0, 12.0, 2.0, 16.0]);
+        assert_eq!(sprites[1].tint[3], 1.0, "the caret always draws opaque");
+        // The blink's dark half draws the box alone.
+        assert_eq!(
+            build_text_input_overlay(&ti, &loaded_fonts(), false)
+                .0
+                .len(),
+            1
+        );
+        // So does an unfocused field.
+        ti.focused = false;
+        assert_eq!(
+            build_text_input_overlay(&ti, &loaded_fonts(), true).0.len(),
+            1
+        );
+    }
+
+    // Without a loaded font nothing can be measured: the text passes through
+    // unfit, the line height falls back to a fraction of the field, and no caret
+    // draws even while focused.
+    #[test]
+    fn build_text_input_overlay_without_a_loaded_font_passes_text_through() {
+        let mut ti = text_input();
+        // Long enough that a measured field would scroll or truncate it.
+        ti.content = "abcdefghijklmnopqrstuvwxyz".to_string();
+        ti.focused = true;
+        let (sprites, labels) = build_text_input_overlay(&ti, &no_fonts(), true);
+        assert_eq!(sprites.len(), 1);
+        assert_eq!(labels[0].content, ti.content);
+        // line_h = height * 0.6 = 24, centred in the 40px box.
+        assert_eq!((labels[0].x, labels[0].y), (8.0, 8.0));
     }
 }

@@ -100,7 +100,9 @@ pub(crate) enum Call {
     SetCameraCapture(bool),
     SetReflectionProbes(usize),
     SetVsync(bool),
-    SetWindowMode,
+    SetWindowMode(crate::assets::WindowMode),
+    SetWindowSize(u32, u32),
+    SetDisplayMode(crate::gfx::display_mode::DisplayMode),
     SetAmbientIntensity(f32),
     SetKeymap,
     SetShadowUpdate,
@@ -225,6 +227,18 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         taa_enabled: init.post.taa_enabled,
         ssao_on: init.post.ssao.is_some(),
     });
+}
+
+// A bare recording backend and the state it records into, for tests that drive
+// a system against a backend directly rather than through GraphicsSystem's
+// init. Never hot-swaps (no init ran, so it has no swapchain config to report).
+pub(crate) fn recording_backend() -> (Arc<Mutex<MockState>>, MockBackend) {
+    let state = Arc::new(Mutex::new(MockState::default()));
+    let backend = MockBackend {
+        state: Arc::clone(&state),
+        hot_swap: None,
+    };
+    (state, backend)
 }
 
 // Hooks with default settings (nothing persisted) and an unclassified GPU:
@@ -478,8 +492,16 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetVsync(on));
     }
 
-    fn set_window_mode(&mut self, _mode: crate::assets::WindowMode) {
-        self.record(Call::SetWindowMode);
+    fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+        self.record(Call::SetWindowMode(mode));
+    }
+
+    fn set_window_size(&mut self, width: u32, height: u32) {
+        self.record(Call::SetWindowSize(width, height));
+    }
+
+    fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+        self.record(Call::SetDisplayMode(mode));
     }
 
     fn set_ambient_intensity(&mut self, value: f32) {

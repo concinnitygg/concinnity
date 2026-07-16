@@ -214,4 +214,72 @@ mod tests {
         assert!(!memory.overridden);
         assert!(memory.budget_bytes > 0);
     }
+
+    // Only a Created app starts, and a default-constructed one is Created. The
+    // second call is refused by the status guard rather than re-initing every
+    // system on the running world.
+    #[test]
+    fn start_twice_is_rejected() {
+        let mut app = App::default();
+        assert_eq!(app.start(), Ok(()));
+        assert_eq!(app.start(), Err(CnResult::InvalidState));
+    }
+
+    // load_world swaps in a new world and resets to Created, so a started app
+    // can be started again on the new content (the runtime scene-load path).
+    #[test]
+    fn load_world_replaces_the_world_and_allows_a_restart() {
+        let mut app = App::new();
+        app.start().unwrap();
+        assert!(app.start().is_err(), "the app is Started");
+
+        let mut world = World::new_empty();
+        world.add_component(Application {
+            limits: AppLimits {
+                max_memory_mb: 256,
+                job_threads: 1,
+            },
+            ..Default::default()
+        });
+        app.load_world(world);
+
+        assert!(
+            app.world().query::<Application>().next().is_some(),
+            "the loaded world replaced the empty one"
+        );
+        assert_eq!(app.start(), Ok(()), "the reset status permits a restart");
+        // The restart budgeted against the new world's limits, not the old one's.
+        let memory = app
+            .world()
+            .memory_budget()
+            .expect("memory budget published");
+        assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
+    }
+
+    // The token handed to new_with_token is the same cancellation source
+    // shutdown_token() clones out, so one cancel stops every holder.
+    #[test]
+    fn new_with_token_shares_one_cancellation_source() {
+        let token = ShutdownToken::new();
+        let app = App::new_with_token(token.clone());
+        let handed_out = app.shutdown_token();
+        assert!(!handed_out.is_cancelled());
+
+        token.cancel();
+        assert!(handed_out.is_cancelled(), "the clone observes the cancel");
+    }
+
+    // With no FrameRateCap published the pacer has nothing to hold the frame
+    // to, so the step runs straight through; an empty world reports Done as it
+    // has no systems left to run.
+    #[test]
+    fn world_step_without_a_frame_rate_cap_runs_unpaced() {
+        let mut app = App::new();
+        app.start().unwrap();
+        assert!(
+            app.world().resource::<crate::ecs::FrameRateCap>().is_none(),
+            "no cap is published without a GraphicsConfig"
+        );
+        assert_eq!(app.world_step(), StepResult::Done);
+    }
 }

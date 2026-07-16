@@ -185,4 +185,221 @@ mod tests {
         let gated: HashSet<AssetId> = [AssetId(7)].into_iter().collect();
         assert_eq!(expand_dim_set(&gated, &[]), gated);
     }
+
+    // Owns the storage a PipelineContext borrows from. The helpers under test
+    // only touch components, so the blob / profile / resources stay empty.
+    struct TestWorld {
+        components: crate::ecs::ComponentStorage,
+        blob: crate::blob::BlobData,
+        profile: crate::gfx::profile::FrameProfile,
+        resources: crate::ecs::Resources,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            Self {
+                components: crate::ecs::ComponentStorage::default(),
+                blob: crate::blob::BlobData::new(vec![Some(Vec::new())]),
+                profile: crate::gfx::profile::FrameProfile::default(),
+                resources: crate::ecs::Resources::new(),
+            }
+        }
+
+        fn push<C: crate::ecs::ComponentSlot>(&mut self, c: C) {
+            self.components.push_typed(c);
+        }
+
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+    }
+
+    fn label(id: u32, color: [f32; 3]) -> TextLabel {
+        TextLabel {
+            asset_id: AssetId(id),
+            color,
+            ..Default::default()
+        }
+    }
+
+    fn region(action: &str, label: Option<u32>) -> HitRegion {
+        HitRegion {
+            action: action.to_string(),
+            label: label.map(AssetId),
+            ..Default::default()
+        }
+    }
+
+    // Writing a label's content hits the one matching id and leaves the rest
+    // alone; an id with no label is a no-op rather than a panic.
+    #[test]
+    fn set_label_content_writes_only_the_matching_label() {
+        let mut world = TestWorld::new();
+        world.push(label(1, [1.0; 3]));
+        world.push(label(2, [1.0; 3]));
+        let mut ctx = world.ctx();
+
+        set_label_content(&mut ctx, AssetId(2), "High");
+        let contents: Vec<&str> = ctx
+            .query::<TextLabel>()
+            .map(|l| l.content.as_str())
+            .collect();
+        assert_eq!(contents, ["", "High"]);
+
+        set_label_content(&mut ctx, AssetId(9), "Ultra");
+        let contents: Vec<&str> = ctx
+            .query::<TextLabel>()
+            .map(|l| l.content.as_str())
+            .collect();
+        assert_eq!(contents, ["", "High"], "an absent id changes nothing");
+    }
+
+    // Moving a slider handle hits the one matching sprite; an absent id is a
+    // no-op.
+    #[test]
+    fn set_sprite_x_moves_only_the_matching_sprite() {
+        let mut world = TestWorld::new();
+        world.push(Sprite {
+            asset_id: AssetId(1),
+            x: 0.0,
+            ..Default::default()
+        });
+        world.push(Sprite {
+            asset_id: AssetId(2),
+            x: 0.0,
+            ..Default::default()
+        });
+        let mut ctx = world.ctx();
+
+        set_sprite_x(&mut ctx, AssetId(2), 42.0);
+        assert_eq!(
+            ctx.query::<Sprite>().map(|s| s.x).collect::<Vec<_>>(),
+            [0.0, 42.0]
+        );
+
+        set_sprite_x(&mut ctx, AssetId(9), 99.0);
+        assert_eq!(
+            ctx.query::<Sprite>().map(|s| s.x).collect::<Vec<_>>(),
+            [0.0, 42.0],
+            "an absent id changes nothing"
+        );
+    }
+
+    // Graying a captured row set recolors every listed label, and ungraying
+    // restores each label's own authored color rather than a shared default.
+    #[test]
+    fn set_rows_grayed_grays_then_restores_authored_colors() {
+        let authored = [[0.9, 0.9, 0.9], [0.2, 0.6, 1.0]];
+        let mut world = TestWorld::new();
+        world.push(label(1, authored[0]));
+        world.push(label(2, authored[1]));
+        let rows = [(AssetId(1), authored[0]), (AssetId(2), authored[1])];
+        let mut ctx = world.ctx();
+
+        set_rows_grayed(&mut ctx, &rows, true);
+        assert!(
+            ctx.query::<TextLabel>()
+                .all(|l| l.color == DISABLED_ROW_COLOR)
+        );
+
+        set_rows_grayed(&mut ctx, &rows, false);
+        assert_eq!(
+            ctx.query::<TextLabel>()
+                .map(|l| l.color)
+                .collect::<Vec<_>>(),
+            authored
+        );
+    }
+
+    // A capture keys off the rows' regions and returns the whole scroll row's
+    // labels with their authored colors, skipping unrelated rows, regions with
+    // no label, and non-setting actions.
+    #[test]
+    fn capture_row_labels_returns_a_matching_rows_labels_and_colors() {
+        let mut world = TestWorld::new();
+        for id in [1, 2, 3, 4, 5, 20] {
+            world.push(label(id, [id as f32 / 100.0; 3]));
+        }
+        world.push(region("setting:shadows:next", Some(3)));
+        world.push(region("setting:other:next", Some(20)));
+        world.push(region("quit", Some(1)));
+        world.push(region("setting:shadows:prev", None));
+        world.push(crate::assets::ScrollPanel {
+            rows: vec![
+                crate::assets::ScrollRow {
+                    elements: vec![AssetId(1), AssetId(2), AssetId(3), AssetId(4), AssetId(5)],
+                    ..Default::default()
+                },
+                crate::assets::ScrollRow {
+                    elements: vec![AssetId(20)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let mut ctx = world.ctx();
+
+        let captured = capture_row_labels(&mut ctx, &["shadows"]);
+        let expected: Vec<(AssetId, [f32; 3])> = [1, 2, 3, 4, 5]
+            .into_iter()
+            .map(|id| (AssetId(id), [id as f32 / 100.0; 3]))
+            .collect();
+        assert_eq!(captured, expected);
+    }
+
+    // A key no region carries captures nothing, so a row absent from a world's
+    // menu simply has no gray-out set.
+    #[test]
+    fn capture_row_labels_without_a_matching_key_captures_nothing() {
+        let mut world = TestWorld::new();
+        world.push(label(1, [1.0; 3]));
+        world.push(region("setting:shadows:next", Some(1)));
+        let mut ctx = world.ctx();
+
+        assert!(capture_row_labels(&mut ctx, &["resolution"]).is_empty());
+    }
+
+    // A slider's drag region maps to its setting key. Another action's prefix,
+    // a different suffix, and an empty key all decline.
+    #[test]
+    fn slider_key_of_reads_a_drag_region_only() {
+        assert_eq!(
+            slider_key_of("setting:render_scale:drag"),
+            Some("render_scale")
+        );
+        assert_eq!(slider_key_of("screen:show:pause"), None);
+        assert_eq!(slider_key_of("setting:render_scale:next"), None);
+        assert_eq!(slider_key_of("setting::drag"), None);
+    }
+
+    // A key-rebind region maps to its setting key, under the same three
+    // declines as the slider parser.
+    #[test]
+    fn rebind_key_of_reads_a_rebind_region_only() {
+        assert_eq!(rebind_key_of("setting:jump:rebind"), Some("jump"));
+        assert_eq!(rebind_key_of("quit"), None);
+        assert_eq!(rebind_key_of("setting:jump:drag"), None);
+        assert_eq!(rebind_key_of("setting::rebind"), None);
+    }
+
+    // Both value-carrying cycle regions map: a stepper's `:next` and a
+    // dropdown's `:open`. A stepper's `:prev` does not, so a stepper row maps
+    // its key exactly once.
+    #[test]
+    fn cycle_next_key_of_accepts_a_stepper_next_and_a_dropdown_open() {
+        assert_eq!(cycle_next_key_of("setting:shadows:next"), Some("shadows"));
+        assert_eq!(
+            cycle_next_key_of("setting:resolution:open"),
+            Some("resolution")
+        );
+        assert_eq!(cycle_next_key_of("setting:shadows:prev"), None);
+        assert_eq!(cycle_next_key_of("screen:hide"), None);
+        assert_eq!(cycle_next_key_of("setting::next"), None);
+        assert_eq!(cycle_next_key_of("setting::open"), None);
+    }
 }

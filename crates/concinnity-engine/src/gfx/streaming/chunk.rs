@@ -424,6 +424,43 @@ mod tests {
         assert_eq!(streamer.stats(), (9, 0));
     }
 
+    // Chunks within the near radius carry full geometry; the band out to the
+    // far radius is filled with cheap impostors instead.
+    #[test]
+    fn detail_counts_split_the_near_and_far_bands() {
+        // near 0 -> only the camera's own chunk is full detail; the rest of the
+        // 3x3 far window streams as impostors.
+        let mut streamer = ChunkStreamer::new(Arc::new(ConstSource), 0, 1, 100, 16.0, 16.0);
+        streamer.plan_and_dispatch(cc(0, 0));
+        drain_until(&mut streamer, 9);
+        assert_eq!(streamer.detail_counts(), (1, 8));
+    }
+
+    // A generation that deterministically fails.
+    struct FailingSource;
+    impl ChunkSource for FailingSource {
+        fn generate(
+            &self,
+            _coord: ChunkCoord,
+            _detail: ChunkDetail,
+        ) -> Result<DecodedMesh, String> {
+            Err("no terrain".to_string())
+        }
+    }
+
+    // A chunk whose generation fails is marked terminally resident with no
+    // geometry, so the window stops re-dispatching it every frame.
+    #[test]
+    fn a_failed_generation_is_not_retried() {
+        let mut streamer = ChunkStreamer::new(Arc::new(FailingSource), 0, 0, 4, 16.0, 16.0);
+        streamer.plan_and_dispatch(cc(0, 0));
+
+        let uploaded = drain_until(&mut streamer, 1);
+        assert!(uploaded.is_empty(), "a failed generation uploads nothing");
+        assert_eq!(streamer.stats(), (1, 0));
+        assert_eq!(streamer.resident_bytes(), 0);
+    }
+
     #[test]
     fn moving_far_evicts_the_old_window() {
         let mut streamer = ChunkStreamer::new(Arc::new(ConstSource), 1, 1, 100, 16.0, 16.0);
