@@ -30,6 +30,7 @@ pub(crate) mod scene_import;
 pub(crate) mod shader;
 pub(crate) mod slider;
 pub(crate) mod story;
+pub use story::validate_story_source;
 pub(crate) mod ui_spec;
 
 pub(crate) mod expand;

@@ -18,6 +18,8 @@ mod list_panel;
 mod panel;
 mod preview;
 mod registry;
+mod story;
+mod story_panel;
 mod template_panel;
 mod templates;
 mod view;

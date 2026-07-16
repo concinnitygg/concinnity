@@ -10,6 +10,7 @@
 // none of the shared machinery is touched.
 
 use super::hook::{EditorHook, panels};
+use crate::assets::FrameInput;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -30,12 +31,13 @@ pub(crate) enum PanelKey {
     View,
     Templates,
     Lighting,
+    Story,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 7;
+pub(crate) const PANEL_COUNT: usize = 8;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -45,6 +47,7 @@ impl PanelKey {
         PanelKey::View,
         PanelKey::Templates,
         PanelKey::Lighting,
+        PanelKey::Story,
         PanelKey::TemplateDetail,
     ];
 
@@ -67,6 +70,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::Templates => 0x600,
             PanelKey::TemplateDetail => 0x700,
             PanelKey::Lighting => 0x800,
+            PanelKey::Story => 0x900,
         }
 }
 
@@ -125,6 +129,9 @@ pub(crate) trait Panel: Sync {
     }
     // Move the panel's scroll region one step in the wheel direction.
     fn scroll(&self, _hook: &mut EditorHook, _world: &mut World, _delta: f32) {}
+    // Per-frame editing keys (`FrameInput.captured_key`), delivered to the
+    // frontmost open panel only, so panels never fight over the keyboard.
+    fn frame_keys(&self, _hook: &mut EditorHook, _world: &mut World, _input: &FrameInput) {}
     // Per-frame layout while shown.
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]);
     // Blank every element (toggled off, or the F1-hidden pass).
@@ -139,6 +146,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::ViewPanel,
     &panels::TemplatesPanel,
     &panels::LightingPanel,
+    &panels::StoryPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -205,6 +213,9 @@ mod tests {
     #[test]
     fn view_toggles_lists_the_toggleable_panels() {
         let rows: Vec<&'static str> = view_toggles().map(|p| p.view_row().unwrap()).collect();
-        assert_eq!(rows, ["Assets", "Preview", "Templates", "Lighting"]);
+        assert_eq!(
+            rows,
+            ["Assets", "Preview", "Templates", "Lighting", "Story"]
+        );
     }
 }

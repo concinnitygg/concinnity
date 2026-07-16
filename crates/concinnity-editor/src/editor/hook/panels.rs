@@ -472,3 +472,89 @@ impl Panel for LightingPanel {
         lighting_panel::apply(world, None, [0.0, 0.0]);
     }
 }
+
+pub(crate) struct StoryPanel;
+
+impl Panel for StoryPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Story
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Story")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.story_open
+    }
+    // Opening (re)loads the source file, so the panel always starts from the
+    // on-disk truth.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.story_open = !hook.story_open;
+        if hook.story_open {
+            hook.load_story(world);
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.story_open = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        story_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        story_panel::default_origin(vp[0])
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        story_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        story_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        story_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, ""))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let action = {
+            let view = hook.make_story_view([mx, my]);
+            story_panel::hit_test(&view, mx, my, o)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_story_action(a, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(
+        &self,
+        _hook: &EditorHook,
+        _world: &World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        story_panel::cursor_over_lines(mx, my, o)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_story(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.story_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let view = hook.make_story_view(mouse);
+        story_panel::apply(world, Some(&view), o);
+    }
+    fn hide(&self, world: &mut World) {
+        story_panel::apply(world, None, [0.0, 0.0]);
+    }
+}

@@ -39,6 +39,8 @@ use super::list_panel::Row;
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
+use super::story;
+use super::story_panel::{self, StoryAction, StoryView};
 use super::template_panel::{self, TemplateAction, TemplateView};
 use super::templates::{self, TemplatesAction};
 use super::view::{self, ViewAction};
@@ -95,6 +97,20 @@ pub(crate) struct EditorHook {
     lighting_open: bool,
     lighting_focus: Option<usize>,
     lighting_status: Option<String>,
+    // The Story panel: shown state, the loaded source's lines / edit line /
+    // window scroll, whether the edit line holds keyboard focus, the source
+    // path shown in the header, and the last parse / IO error. `story_blur`
+    // suppresses the edit line's focus for one frame after a Backspace line
+    // join, so the text system does not also apply that Backspace to the
+    // freshly joined content.
+    story_open: bool,
+    story_lines: Vec<String>,
+    story_line: usize,
+    story_scroll: usize,
+    story_focus: bool,
+    story_path: String,
+    story_status: Option<String>,
+    story_blur: bool,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // Whether the Preview panel is shown (starts shown; toggled from the View
@@ -232,6 +248,8 @@ mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
+// Named to avoid colliding with the `use super::story` module import.
+mod story_edit;
 #[cfg(test)]
 mod tests;
 
@@ -250,6 +268,14 @@ impl EditorHook {
             lighting_open: false,
             lighting_focus: None,
             lighting_status: None,
+            story_open: false,
+            story_lines: vec![String::new()],
+            story_line: 0,
+            story_scroll: 0,
+            story_focus: false,
+            story_path: String::new(),
+            story_status: None,
+            story_blur: false,
             panel_open: false,
             preview_open: true,
             view_open: false,
@@ -298,6 +324,16 @@ impl DebugHook for EditorHook {
                 self.drive_drag(input, vp);
                 if input.left_click && self.drag.is_none() {
                     self.route_click(input, vp, world);
+                }
+                // Per-frame editing keys go to the frontmost open panel.
+                let front = self
+                    .panel_order
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|&k| registry::panel(k).is_open(self));
+                if let Some(key) = front {
+                    registry::panel(key).frame_keys(self, world, input);
                 }
                 // Wheel routing: the frontmost scrollable panel under the cursor
                 // takes the wheel. An open value dropdown is modal and can extend
