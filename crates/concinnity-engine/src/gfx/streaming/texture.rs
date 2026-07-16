@@ -1,4 +1,4 @@
-// src/app/texture_stream.rs
+// src/gfx/streaming/texture.rs
 //
 // The `std`-side half of the asset-streaming subsystem.
 //
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-use crate::gfx::streaming::{StreamPlanner, StreamState};
+use super::{StreamPlanner, StreamState};
 
 // A texture payload decoded to GPU-ready RGBA8 pixels.
 pub struct DecodedTexture {
@@ -192,6 +192,23 @@ impl TextureStreamer {
         self.planner.len()
     }
 
+    // Set (or clear with `None`) the resident-byte budget for this pool. When
+    // set, the planner evicts farther-from-camera textures to hold resident
+    // bytes at or under the budget, on top of the item-count cap.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.planner.set_byte_budget(budget);
+    }
+
+    // Total resident texture bytes, for diagnostics.
+    pub fn resident_bytes(&self) -> u64 {
+        self.planner.resident_bytes()
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.planner.byte_budget()
+    }
+
     // Re-score every slot from the camera position and refresh the LRU
     // timestamp of resident slots. Call once per frame before
     // [`plan_and_dispatch`](Self::plan_and_dispatch).
@@ -236,14 +253,17 @@ impl TextureStreamer {
             match result.decoded {
                 Ok(tex) => {
                     upload(result.id, tex.width, tex.height, &tex.pixels);
-                    self.planner.mark_resident(result.id, frame);
+                    // Resident footprint is the decoded RGBA8 buffer.
+                    self.planner
+                        .mark_resident(result.id, frame, tex.pixels.len() as u64);
                     applied += 1;
                 }
                 Err(e) => {
                     tracing::warn!("texture stream: load of slot {} failed: {}", result.id, e);
                     // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the slot keeps its placeholder.
-                    self.planner.mark_resident(result.id, frame);
+                    // planner stops retrying; the slot keeps its placeholder,
+                    // which occupies no streamed bytes.
+                    self.planner.mark_resident(result.id, frame, 0);
                 }
             }
         }

@@ -34,7 +34,7 @@ pub(crate) fn provenance(loaded: &concinnity_cook::world::LoadedWorld, name: &st
     "expanded".to_string()
 }
 
-pub fn list(json_path: Option<&str>, expanded: bool) -> std::io::Result<()> {
+pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
 
     let content = std::fs::read_to_string(&json_path).map_err(|e| {
@@ -42,6 +42,9 @@ pub fn list(json_path: Option<&str>, expanded: bool) -> std::io::Result<()> {
         e
     })?;
 
+    if systems {
+        return list_systems(&content, &json_path);
+    }
     if expanded {
         return list_expanded(&content, &json_path);
     }
@@ -197,6 +200,46 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+// Print the system schedule this world runs: the manifest gates (the same ones
+// `World::start` runs) applied to the built world, each system paired with the
+// condition from its registry entry. The world is built exactly as the runtime
+// would, so the reported schedule cannot drift from what actually runs.
+fn list_systems(content: &str, json_path: &str) -> std::io::Result<()> {
+    let world = concinnity_editor::build_world_from_str(content)?;
+    let lines = manifest_lines(&world);
+
+    if lines.is_empty() {
+        println!("{} runs no systems.", json_path);
+        return Ok(());
+    }
+
+    println!("{} runs {} system(s), in order:", json_path, lines.len());
+    for line in &lines {
+        println!("  {}", line);
+    }
+    Ok(())
+}
+
+// One "<name>  <present_when>" row per system the world's content gates in, in
+// run order. Split out from the printing so it is unit-testable without
+// capturing stdout. The reason column is the `present_when` from the static
+// schedule table (`ecs::SYSTEMS`), keyed by the manifest's system name.
+fn manifest_lines(world: &concinnity_engine::ecs::World) -> Vec<String> {
+    let manifest = world.system_manifest();
+    let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
+    manifest
+        .iter()
+        .map(|name| {
+            let reason = concinnity_engine::ecs::SYSTEMS
+                .iter()
+                .find(|e| e.name == *name)
+                .map(|e| e.present_when)
+                .unwrap_or("");
+            format!("{name:<width$}  {reason}")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +255,32 @@ mod tests {
     fn resolve_world_path_prefers_an_explicit_existing_path() {
         let (_dir, path) = write_world("");
         assert_eq!(resolve_world_path(Some(&path)).unwrap(), path);
+    }
+
+    // A minimal rendering world with a controlled camera gates in the graphics,
+    // overlay, and camera systems; each manifest line names the system and the
+    // condition that includes it.
+    #[test]
+    fn manifest_lines_report_the_world_schedule_with_reasons() {
+        let world = concinnity_editor::build_world_from_str(
+            "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n\
+             {\"name\":\"cam\",\"type\":\"Camera3D\",\"args\":{\"controller\":{\"free_fly\":true}}}\n",
+        )
+        .unwrap();
+        let lines = manifest_lines(&world);
+        let joined = lines.join("\n");
+        assert!(joined.contains("GraphicsSystem"), "{joined}");
+        assert!(joined.contains("Camera3DSystem"), "{joined}");
+        // The reason column is present (GraphicsSystem gates on a GraphicsConfig).
+        assert!(joined.contains("GraphicsConfig"), "{joined}");
+    }
+
+    // The `--systems` path drives end to end on a valid world.
+    #[test]
+    fn list_with_systems_flag_is_ok() {
+        let (_dir, path) =
+            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+        list(Some(&path), false, true).unwrap();
     }
 
     fn loaded_world_fixture() -> concinnity_cook::world::LoadedWorld {
@@ -248,7 +317,7 @@ mod tests {
     #[test]
     fn list_of_an_empty_world_is_ok() {
         let (_dir, path) = write_world("");
-        list(Some(&path), false).unwrap();
+        list(Some(&path), false, false).unwrap();
     }
 
     #[test]
@@ -262,7 +331,7 @@ mod tests {
             "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
             "{\"type\":\"GraphicsConfig\",\"args\":{}}\n",
         ));
-        list(Some(&path), false).unwrap();
+        list(Some(&path), false, false).unwrap();
     }
 
     #[test]
@@ -291,7 +360,7 @@ mod tests {
     #[test]
     fn list_with_invalid_json_errors() {
         let (_dir, path) = write_world("{ not json\n");
-        let err = list(Some(&path), false).unwrap_err();
+        let err = list(Some(&path), false, false).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -299,13 +368,13 @@ mod tests {
     fn list_expanded_runs_the_build_front_half() {
         let (_dir, path) =
             write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
-        list(Some(&path), true).unwrap();
+        list(Some(&path), true, false).unwrap();
     }
 
     #[test]
     fn list_expanded_rejects_an_unknown_asset_type() {
         let (_dir, path) =
             write_world("{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
-        assert!(list(Some(&path), true).is_err());
+        assert!(list(Some(&path), true, false).is_err());
     }
 }

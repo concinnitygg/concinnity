@@ -10,38 +10,18 @@
 // always installed during a build; only an out-of-engine tool reading authoring
 // JSON would hit the unset case).
 //
-// The resolver is a plain function pointer held in an atomic, so this stays
+// Each resolver is a plain function pointer held in an atomic, so this stays
 // `no_std` and thread-safe: the pointer is written once (install) and only read
 // afterward, and the installed function keeps its own (per-thread) state in
-// concinnity-core.
+// concinnity-core. The two slot types below centralize the single unavoidable
+// piece of unsafe -- `core` has no atomic function-pointer type, so reading a
+// `fn` back out of a `usize` requires a `transmute` -- into one audited place
+// per function-pointer shape.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// A name -> dense id resolver.
 pub type ResolveFn = fn(&str) -> u32;
-
-// 0 means "no resolver installed". Any other value is a `ResolveFn` address.
-static RESOLVER: AtomicUsize = AtomicUsize::new(0);
-
-/// Install the name -> id resolver. Called once by concinnity-core, backed by
-/// its build-time interner. Idempotent; the last writer wins.
-pub fn set_name_resolver(f: ResolveFn) {
-    RESOLVER.store(f as usize, Ordering::Release);
-}
-
-/// Resolve a name to a dense id via the installed resolver, or `None` if none is
-/// installed (only expected outside a build).
-pub(crate) fn resolve_name(name: &str) -> Option<u32> {
-    let v = RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `ResolveFn` address stored by
-        // `set_name_resolver`; the transmute reverses that exact `fn as usize`.
-        let f: ResolveFn = unsafe { core::mem::transmute::<usize, ResolveFn>(v) };
-        Some(f(name))
-    }
-}
 
 /// A name -> per-kind resource-handle resolver. Returns the resource's dense
 /// handle, or `None` when the name is not a known resource of that kind in the
@@ -51,14 +31,78 @@ pub(crate) fn resolve_name(name: &str) -> Option<u32> {
 /// no handle.
 pub type HandleResolveFn = fn(&str) -> Option<u32>;
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static TEXTURE_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+// An atomically-installable `ResolveFn` slot. Holds the function pointer as a
+// `usize` (0 = unset): written once at install, only read afterward.
+struct NameResolverSlot(AtomicUsize);
+
+impl NameResolverSlot {
+    const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+
+    fn set(&self, f: ResolveFn) {
+        self.0.store(f as usize, Ordering::Release);
+    }
+
+    fn resolve(&self, name: &str) -> Option<u32> {
+        let v = self.0.load(Ordering::Acquire);
+        if v == 0 {
+            return None;
+        }
+        // SAFETY: `v` is non-zero here, so it is a `ResolveFn` address stored by
+        // `set`; the transmute reverses that exact `fn as usize`.
+        let f: ResolveFn = unsafe { core::mem::transmute::<usize, ResolveFn>(v) };
+        Some(f(name))
+    }
+}
+
+// An atomically-installable `HandleResolveFn` slot. Same install-once /
+// read-many discipline as `NameResolverSlot`; one instance backs each per-kind
+// handle resolver.
+struct HandleResolverSlot(AtomicUsize);
+
+impl HandleResolverSlot {
+    const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+
+    fn set(&self, f: HandleResolveFn) {
+        self.0.store(f as usize, Ordering::Release);
+    }
+
+    fn resolve(&self, name: &str) -> Option<u32> {
+        let v = self.0.load(Ordering::Acquire);
+        if v == 0 {
+            return None;
+        }
+        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address
+        // stored by `set`; the transmute reverses that exact `fn as usize`.
+        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
+        f(name)
+    }
+}
+
+static RESOLVER: NameResolverSlot = NameResolverSlot::new();
+
+/// Install the name -> id resolver. Called once by concinnity-core, backed by
+/// its build-time interner. Idempotent; the last writer wins.
+pub fn set_name_resolver(f: ResolveFn) {
+    RESOLVER.set(f);
+}
+
+/// Resolve a name to a dense id via the installed resolver, or `None` if none is
+/// installed (only expected outside a build).
+pub(crate) fn resolve_name(name: &str) -> Option<u32> {
+    RESOLVER.resolve(name)
+}
+
+static TEXTURE_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> texture-handle resolver. Called by concinnity-cook,
 /// backed by the current build's declaration-ordered texture handle map.
 /// Idempotent; the last writer wins.
 pub fn set_texture_handle_resolver(f: HandleResolveFn) {
-    TEXTURE_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    TEXTURE_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve a texture reference name to its dense `TextureHandle` value via the
@@ -66,26 +110,16 @@ pub fn set_texture_handle_resolver(f: HandleResolveFn) {
 /// is not a declared texture; the caller decides whether to fall back (a
 /// validation context) or to fail (a real build).
 pub(crate) fn resolve_texture_handle(name: &str) -> Option<u32> {
-    let v = TEXTURE_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address
-        // stored by `set_texture_handle_resolver`; the transmute reverses that
-        // exact `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    TEXTURE_HANDLE_RESOLVER.resolve(name)
 }
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static AUDIO_CLIP_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+static AUDIO_CLIP_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> audio-clip-handle resolver. Called by concinnity-cook,
 /// backed by the current build's declaration-ordered audio-clip handle map.
 /// Idempotent; the last writer wins. Mirrors [`set_texture_handle_resolver`].
 pub fn set_audio_clip_handle_resolver(f: HandleResolveFn) {
-    AUDIO_CLIP_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    AUDIO_CLIP_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve an audio-clip reference name to its dense `AudioClipHandle` value via
@@ -93,26 +127,16 @@ pub fn set_audio_clip_handle_resolver(f: HandleResolveFn) {
 /// name is not a declared audio clip; the caller decides whether to fall back
 /// (a validation context) or to fail (a real build).
 pub(crate) fn resolve_audio_clip_handle(name: &str) -> Option<u32> {
-    let v = AUDIO_CLIP_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address
-        // stored by `set_audio_clip_handle_resolver`; the transmute reverses that
-        // exact `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    AUDIO_CLIP_HANDLE_RESOLVER.resolve(name)
 }
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static FONT_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+static FONT_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> font-handle resolver. Called by concinnity-cook, backed by
 /// the current build's declaration-ordered font handle map. Idempotent; the last
 /// writer wins. Mirrors [`set_texture_handle_resolver`].
 pub fn set_font_handle_resolver(f: HandleResolveFn) {
-    FONT_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    FONT_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve a font reference name to its dense `FontHandle` value via the installed
@@ -120,20 +144,10 @@ pub fn set_font_handle_resolver(f: HandleResolveFn) {
 /// declared font; the caller decides whether to fall back (a validation context)
 /// or to fail (a real build).
 pub(crate) fn resolve_font_handle(name: &str) -> Option<u32> {
-    let v = FONT_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address stored
-        // by `set_font_handle_resolver`; the transmute reverses that exact
-        // `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    FONT_HANDLE_RESOLVER.resolve(name)
 }
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static MESH_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+static MESH_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> mesh-handle resolver. Called by concinnity-cook, backed by
 /// the current build's mesh-source handle map. Idempotent; the last writer wins.
@@ -141,7 +155,7 @@ static MESH_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
 /// across every geometry-producing kind (Mesh, ProceduralMesh, VoxelChunk, and
 /// mesh-kind File), so one resolver serves them all.
 pub fn set_mesh_handle_resolver(f: HandleResolveFn) {
-    MESH_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    MESH_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve a mesh reference name to its dense `MeshHandle` value via the installed
@@ -149,26 +163,16 @@ pub fn set_mesh_handle_resolver(f: HandleResolveFn) {
 /// declared mesh source; the caller decides whether to fall back (a validation
 /// context) or to fail (a real build).
 pub(crate) fn resolve_mesh_handle(name: &str) -> Option<u32> {
-    let v = MESH_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address stored
-        // by `set_mesh_handle_resolver`; the transmute reverses that exact
-        // `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    MESH_HANDLE_RESOLVER.resolve(name)
 }
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static MATERIAL_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+static MATERIAL_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> material-handle resolver. Called by concinnity-cook, backed
 /// by the current build's Material handle map. Idempotent; the last writer wins.
 /// Mirrors [`set_texture_handle_resolver`].
 pub fn set_material_handle_resolver(f: HandleResolveFn) {
-    MATERIAL_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    MATERIAL_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve a material reference name to its dense `MaterialHandle` value via the
@@ -176,20 +180,10 @@ pub fn set_material_handle_resolver(f: HandleResolveFn) {
 /// not a declared material; the caller decides whether to fall back (a validation
 /// context) or to fail (a real build).
 pub(crate) fn resolve_material_handle(name: &str) -> Option<u32> {
-    let v = MATERIAL_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address stored
-        // by `set_material_handle_resolver`; the transmute reverses that exact
-        // `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    MATERIAL_HANDLE_RESOLVER.resolve(name)
 }
 
-// 0 means "no resolver installed". Any other value is a `HandleResolveFn`.
-static SKINNED_MESH_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
+static SKINNED_MESH_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
 
 /// Install the name -> skinned-mesh-handle resolver. Called by concinnity-cook,
 /// backed by the current build's SkinnedMesh handle map. Idempotent; the last
@@ -198,7 +192,7 @@ static SKINNED_MESH_HANDLE_RESOLVER: AtomicUsize = AtomicUsize::new(0);
 /// `AnimGraph.target`, `FollowController.target`) resolve to its dense handle so
 /// they no longer carry an interned id.
 pub fn set_skinned_mesh_handle_resolver(f: HandleResolveFn) {
-    SKINNED_MESH_HANDLE_RESOLVER.store(f as usize, Ordering::Release);
+    SKINNED_MESH_HANDLE_RESOLVER.set(f);
 }
 
 /// Resolve a skinned-mesh reference name to its dense `SkinnedMeshHandle` value via
@@ -206,16 +200,7 @@ pub fn set_skinned_mesh_handle_resolver(f: HandleResolveFn) {
 /// is not a declared SkinnedMesh; the caller decides whether to fall back (a
 /// validation context) or to fail (a real build).
 pub(crate) fn resolve_skinned_mesh_handle(name: &str) -> Option<u32> {
-    let v = SKINNED_MESH_HANDLE_RESOLVER.load(Ordering::Acquire);
-    if v == 0 {
-        None
-    } else {
-        // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address stored
-        // by `set_skinned_mesh_handle_resolver`; the transmute reverses that exact
-        // `fn as usize`.
-        let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
-    }
+    SKINNED_MESH_HANDLE_RESOLVER.resolve(name)
 }
 
 #[cfg(test)]

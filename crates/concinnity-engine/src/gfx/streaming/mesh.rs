@@ -1,8 +1,8 @@
-// src/app/mesh_stream.rs
+// src/gfx/streaming/mesh.rs
 //
 // The `std`-side driver for mesh-geometry streaming.
 //
-// This is the geometry counterpart of `crate::app::texture_stream`: it owns a
+// This is the geometry counterpart of `super::texture`: it owns a
 // background payload-fetch thread and the channels that carry work to it, and
 // wraps the `no_std` policy core in `crate::gfx::streaming`. The split:
 // `gfx::streaming::StreamPlanner` decides *what* to stream using only
@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
+use super::{StreamPlanner, StreamState};
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::streaming::{StreamPlanner, StreamState};
 
 // A mesh payload decoded to GPU-ready vertex and index data.
 //
@@ -296,6 +296,23 @@ impl MeshStreamer {
         self.planner.len()
     }
 
+    // Set (or clear with `None`) the resident-byte budget for this pool. When
+    // set, the planner evicts farther-from-camera meshes to hold resident bytes
+    // at or under the budget, on top of the item-count cap.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.planner.set_byte_budget(budget);
+    }
+
+    // Total resident mesh bytes, for diagnostics.
+    pub fn resident_bytes(&self) -> u64 {
+        self.planner.resident_bytes()
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.planner.byte_budget()
+    }
+
     // Re-score every mesh from the camera position and refresh the LRU
     // timestamp of resident meshes. Call once per frame before
     // [`plan_and_dispatch`](Self::plan_and_dispatch).
@@ -348,7 +365,11 @@ impl MeshStreamer {
             match result.decoded {
                 Ok(mesh) => match upload(result.id, &mesh.vertices, &mesh.indices) {
                     Ok(()) => {
-                        self.planner.mark_resident(result.id, frame);
+                        // Resident footprint is the vertex + index buffer bytes.
+                        let bytes = (mesh.vertices.len() * core::mem::size_of::<Vertex>()
+                            + mesh.indices.len() * core::mem::size_of::<u16>())
+                            as u64;
+                        self.planner.mark_resident(result.id, frame, bytes);
                         applied += 1;
                     }
                     Err(e) => {
@@ -366,8 +387,9 @@ impl MeshStreamer {
                 Err(e) => {
                     tracing::warn!("mesh stream: load of mesh {} failed: {}", result.id, e);
                     // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the mesh keeps its empty region.
-                    self.planner.mark_resident(result.id, frame);
+                    // planner stops retrying; the mesh keeps its empty region,
+                    // which occupies no streamed bytes.
+                    self.planner.mark_resident(result.id, frame, 0);
                 }
             }
         }

@@ -1,26 +1,32 @@
-// src/audio/system.rs
+// concinnity-audio/src/system.rs
 //
 // Audio playback: 3D positional emitters and view-triggered cues. An internal
-// system (not a declarable asset): `World::start` constructs one whenever the
-// world contains any `AudioEmitter` or `AudioCue`, so a world with neither
+// system (not a declarable asset): the engine schedule constructs one whenever
+// the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 // never opens an audio device.
 
 use std::collections::HashMap;
 
-use crate::assets::{
+use crate::{AudioEngine, EmitterId};
+use concinnity_core::assets::{
     AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
 };
-use crate::audio::{AudioEngine, EmitterId};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::decompose::EntityByName;
-use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};
-use crate::resource::AudioClipTable;
+use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{
+    AudioClipHandle, EntityByName, EventCursor, PayloadLocator, PipelineContext, StepResult, System,
+};
+use concinnity_core::resource::AudioClipTable;
 
 // Audio behavior. Constructed internally by `World::start` when the world
 // declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
 // it carries no config.
 pub struct AudioSystem {
     engine: AudioEngine,
+    // The persisted master output volume (settings menu), applied to the main
+    // mix track at init. `None` leaves output at unity. Resolved by the
+    // engine's audio gate (which owns the settings store) and handed in at
+    // construction, so this crate needs no dependency on the engine.
+    master_volume: Option<f32>,
     // One entry per `AudioEmitter` that became a live engine emitter.
     emitters: Vec<EmitterBinding>,
     // View-triggered cues, keyed by the View whose activation fires them.
@@ -29,12 +35,12 @@ pub struct AudioSystem {
     // AudioClipHandle.
     cue_clip_bytes: HashMap<AudioClipHandle, Vec<u8>>,
     // Cursor into the Events<AudioCommand> queue (live master-volume changes).
-    audio_cmd_cursor: crate::ecs::EventCursor,
+    audio_cmd_cursor: EventCursor,
     // Cursor into the Events<ViewShown> queue (cue triggers).
-    view_shown_cursor: crate::ecs::EventCursor,
+    view_shown_cursor: EventCursor,
     // Cursor into the Events<PlayCue> queue (direct play requests, e.g. the
     // story system's page audio).
-    play_cue_cursor: crate::ecs::EventCursor,
+    play_cue_cursor: EventCursor,
     // Cues that matched a shown view so far; observable engine-independent
     // progress for headless tests (playback needs a device and a payload).
     cues_matched: usize,
@@ -65,21 +71,29 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
-    // Fresh system with no device, live emitters, or cues. The output device
-    // is acquired and the emitters / cues are bound from the world's
-    // components in [`System::init`], so construction is side-effect-free
-    // (required by the `World::system_manifest` gate probe).
-    pub fn new() -> Self {
+    // Fresh system with no device, live emitters, or cues. `master_volume` is
+    // the persisted settings-menu master (`None` = unity), applied to the mix
+    // in [`System::init`]. The output device is acquired and the emitters /
+    // cues are bound from the world's components in `init`, so construction is
+    // side-effect-free (required by the `World::system_manifest` gate probe).
+    pub fn new(master_volume: Option<f32>) -> Self {
         Self {
             engine: AudioEngine::disabled(),
+            master_volume,
             emitters: Vec::new(),
             cues: HashMap::new(),
             cue_clip_bytes: HashMap::new(),
-            audio_cmd_cursor: crate::ecs::EventCursor::default(),
-            view_shown_cursor: crate::ecs::EventCursor::default(),
-            play_cue_cursor: crate::ecs::EventCursor::default(),
+            audio_cmd_cursor: EventCursor::default(),
+            view_shown_cursor: EventCursor::default(),
+            play_cue_cursor: EventCursor::default(),
             cues_matched: 0,
         }
+    }
+
+    // Number of cue bindings fired since init. Engine-independent progress the
+    // schedule tests observe, since playback itself needs an output device.
+    pub fn cues_matched(&self) -> usize {
+        self.cues_matched
     }
 }
 
@@ -94,7 +108,7 @@ impl System for AudioSystem {
         // `AudioClipHandle(N)`. Collecting this owned Vec releases the resource
         // borrow before the `read_payload` calls below.
         let emitter_snaps: Vec<AudioEmitter> = ctx.query::<AudioEmitter>().cloned().collect();
-        let clip_locators: Vec<Option<crate::ecs::PayloadLocator>> = ctx
+        let clip_locators: Vec<Option<PayloadLocator>> = ctx
             .resource::<AudioClipTable>()
             .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
             .unwrap_or_default();
@@ -103,11 +117,8 @@ impl System for AudioSystem {
         // the main mix track, so it can be changed live (see `step`). `None`
         // leaves output at unity. Clips play at their authored gain; the master
         // is a separate output-stage multiplier.
-        let master = crate::config::Settings::load()
-            .audio
-            .master_volume
-            .unwrap_or(1.0);
-        self.engine.set_master_volume(master);
+        self.engine
+            .set_master_volume(self.master_volume.unwrap_or(1.0));
 
         for emitter in emitter_snaps {
             let Some(id) = self.engine.add_emitter(emitter.position) else {
@@ -166,7 +177,7 @@ impl System for AudioSystem {
         // A story plays clips by direct PlayCue request rather than through
         // view-keyed cues, so cache every clip payload up front, keyed by handle.
         if ctx.query::<Story>().next().is_some() {
-            let uncached: Vec<(AudioClipHandle, crate::ecs::PayloadLocator)> = clip_locators
+            let uncached: Vec<(AudioClipHandle, PayloadLocator)> = clip_locators
                 .iter()
                 .enumerate()
                 .filter_map(|(i, loc)| loc.clone().map(|l| (AudioClipHandle(i as u32), l)))
@@ -287,160 +298,26 @@ impl System for AudioSystem {
 
 #[cfg(test)]
 mod tests {
-    use crate::assets::AudioEmitter;
-    use crate::ecs::World;
-
-    // An `AudioEmitter` in the world spawns the internal AudioSystem; without
-    // one, no audio device is opened.
-    #[test]
-    fn audio_emitter_spawns_internal_system() {
-        let mut world = World::new_empty();
-        world.add_component(AudioEmitter::default());
-        world.start().unwrap();
-
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["AudioSystem"]);
-    }
-
-    #[test]
-    fn no_audio_emitter_means_no_system() {
-        let mut world = World::new_empty();
-        world.start().unwrap();
-        assert!(world.systems().is_empty());
-    }
-
-    // An `AudioCue` alone (no emitter) also spawns the audio system: a UI-only
-    // world can play view-triggered audio.
-    #[test]
-    fn audio_cue_spawns_internal_system() {
-        let mut world = World::new_empty();
-        world.add_component(crate::assets::AudioCue::default());
-        world.start().unwrap();
-
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert!(names.contains(&"AudioSystem"), "{names:?}");
-    }
-
-    // The full trigger chain: the initial view's activation (announced by
-    // UiInputSystem at init) reaches the audio system, which matches the
-    // view's cue on the first step. Playback itself needs a device and a
-    // compiled payload, so the test observes the match counter.
-    #[test]
-    fn initial_view_fires_its_cue() {
-        use crate::assets::{AudioCue, View};
-        use crate::ecs::AudioClipHandle;
-        use crate::ecs::asset_id::AssetId;
-
-        let mut world = World::new_empty();
-        let view = AssetId(90);
-        // The cue references its clip by handle. Matching (view + clip present)
-        // is independent of the clip payload, so no `AudioClipTable` is needed
-        // here -- the counter observes the match, not playback.
-        world.add_component(View {
-            asset_id: view,
-            initial: true,
-            fade_in_secs: 0.0,
-        });
-        world.add_component(AudioCue {
-            view: Some(view),
-            clip: Some(AudioClipHandle(0)),
-            ..Default::default()
-        });
-        world.start().unwrap();
-        world.step();
-
-        let matched = world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::AudioSystem(a) => Some(a.cues_matched),
-                _ => None,
-            })
-            .expect("world has an AudioSystem");
-        assert_eq!(matched, 1, "the initial view's cue should have matched");
-    }
-
-    // The live master gain the world's AudioSystem currently holds. Mirrors how
-    // the ControlsCommand test observes Camera3D.yaw: reach into the running
-    // system to assert the command actually took effect (the gain is engine
-    // state, not a queryable component).
-    fn applied_master_volume(world: &World) -> f32 {
-        world
-            .systems()
-            .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::AudioSystem(a) => Some(a.engine.last_master_volume),
-                _ => None,
-            })
-            .expect("world has an AudioSystem")
-    }
-
-    // A master-volume AudioCommand sent mid-tick is read AND applied by the
-    // audio system the same tick, so the new master takes effect without a
-    // restart (the settings-menu master-volume row).
-    #[test]
-    fn audio_command_applies_master_volume_live() {
-        use crate::assets::AudioCommand;
-
-        let mut world = World::new_empty();
-        world.add_component(AudioEmitter::default());
-        world.start().unwrap();
-        // Init applied the persisted master (unity by default in a test).
-        assert!((applied_master_volume(&world) - 1.0).abs() < 1.0e-6);
-
-        // GraphicsSystem would send this when the master-volume row is cycled;
-        // the audio system reads it this same tick.
-        world
-            .events_mut::<AudioCommand>()
-            .send(AudioCommand { master_volume: 0.5 });
-        world.step();
-
-        assert!(
-            (applied_master_volume(&world) - 0.5).abs() < 1.0e-6,
-            "master volume should be applied live this tick"
-        );
-    }
-
-    // Several AudioCommands sent in one tick (e.g. a rapid double-cycle) are
-    // all read in order; the last one sent is applied last and wins.
-    #[test]
-    fn audio_command_last_write_wins_per_tick() {
-        use crate::assets::AudioCommand;
-
-        let mut world = World::new_empty();
-        world.add_component(AudioEmitter::default());
-        world.start().unwrap();
-
-        world
-            .events_mut::<AudioCommand>()
-            .send(AudioCommand { master_volume: 0.5 });
-        world.events_mut::<AudioCommand>().send(AudioCommand {
-            master_volume: 0.25,
-        });
-        world.step();
-
-        assert!((applied_master_volume(&world) - 0.25).abs() < 1.0e-6);
-    }
-
-    // The following tests drive AudioSystem::init / step against a hand-built
+    // These tests drive AudioSystem::init / step against a hand-built
     // PipelineContext and an in-memory blob, so no audio device is opened. They
     // assert on the engine-independent state the system tracks (its cue
     // bindings, cached payloads, and match counter) rather than on playback,
     // which needs a real device. Cue payloads are opaque to the caching path,
-    // so any bytes serve.
+    // so any bytes serve. The gate/schedule tests (which need the engine's
+    // `World`) live in the engine's `ecs/schedule.rs`.
     use super::{AudioSystem, EmitterBinding};
-    use crate::assets::{AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown};
-    use crate::audio::EmitterId;
-    use crate::blob::BlobData;
-    use crate::ecs::asset_id::AssetId;
-    use crate::ecs::decompose::EntityByName;
-    use crate::ecs::{
-        AudioClipHandle, ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext,
-        Resources, StepResult, System,
+    use crate::EmitterId;
+    use concinnity_core::assets::{
+        AudioCommand, AudioCue, Camera3D, CueKind, PlayCue, Story, Transform, ViewShown,
     };
-    use crate::gfx::profile::FrameProfile;
-    use crate::resource::AudioClipTable;
-    use concinnity_core::ecs::{ResourceKind, ResourceRecord};
+    use concinnity_core::blob::BlobData;
+    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_core::ecs::{
+        AudioClipHandle, ComponentSlot, ComponentStorage, EntityByName, PayloadLocator,
+        PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult, System,
+    };
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::resource::AudioClipTable;
 
     // Accumulates audio components + one blob section serving every payload
     // locator handed out, plus the audio-clip resource records, then seals into a
@@ -539,7 +416,7 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
 
         let bindings = sys.cues.get(&view).expect("cue bound to its view");
@@ -565,7 +442,7 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
 
         assert!(sys.cues.is_empty());
@@ -583,7 +460,7 @@ mod tests {
         w.push(Story::default());
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
 
         assert!(sys.cues.is_empty(), "no cues declared");
@@ -618,7 +495,7 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
         assert_eq!(sys.cues.get(&view).map(Vec::len), Some(2));
 
@@ -648,7 +525,7 @@ mod tests {
         w.push(Story::default());
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         sys.init(&mut sealed.ctx());
 
         {
@@ -696,7 +573,7 @@ mod tests {
         };
         assert!(sealed.ctx().get::<Transform>(entity).is_some());
 
-        let mut sys = AudioSystem::new();
+        let mut sys = AudioSystem::new(None);
         // A live emitter that follows the prop, seeded directly (a real
         // emitter needs a device, which the headless test has no access to).
         sys.emitters.push(EmitterBinding {
@@ -705,5 +582,61 @@ mod tests {
         });
 
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+    }
+
+    // A master-volume AudioCommand sent mid-tick is read AND applied by the
+    // audio system the same tick, so the new master takes effect without a
+    // restart (the settings-menu master-volume row). `master_volume: None` at
+    // construction means init leaves output at unity.
+    #[test]
+    fn audio_command_applies_master_volume_live() {
+        let mut sealed = AudioWorld::new().seal();
+        let mut sys = AudioSystem::new(None);
+        sys.init(&mut sealed.ctx());
+        // Init applied unity (no persisted master handed in).
+        assert!((sys.engine.last_master_volume - 1.0).abs() < 1.0e-6);
+
+        // GraphicsSystem would send this when the master-volume row is cycled;
+        // the audio system reads it this same tick.
+        {
+            let mut ctx = sealed.ctx();
+            ctx.events_mut::<AudioCommand>()
+                .send(AudioCommand { master_volume: 0.5 });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert!(
+            (sys.engine.last_master_volume - 0.5).abs() < 1.0e-6,
+            "master volume should be applied live this tick"
+        );
+    }
+
+    // Several AudioCommands sent in one tick (e.g. a rapid double-cycle) are
+    // all read in order; the last one sent is applied last and wins.
+    #[test]
+    fn audio_command_last_write_wins_per_tick() {
+        let mut sealed = AudioWorld::new().seal();
+        let mut sys = AudioSystem::new(None);
+        sys.init(&mut sealed.ctx());
+
+        {
+            let mut ctx = sealed.ctx();
+            let events = ctx.events_mut::<AudioCommand>();
+            events.send(AudioCommand { master_volume: 0.5 });
+            events.send(AudioCommand {
+                master_volume: 0.25,
+            });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert!((sys.engine.last_master_volume - 0.25).abs() < 1.0e-6);
+    }
+
+    // A persisted master handed in at construction is applied to the mix at
+    // init (the settings-menu master-volume, resolved by the engine's gate).
+    #[test]
+    fn init_applies_persisted_master_volume() {
+        let mut sealed = AudioWorld::new().seal();
+        let mut sys = AudioSystem::new(Some(0.5));
+        sys.init(&mut sealed.ctx());
+        assert!((sys.engine.last_master_volume - 0.5).abs() < 1.0e-6);
     }
 }

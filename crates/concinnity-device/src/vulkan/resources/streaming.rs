@@ -192,11 +192,10 @@ impl VkContext {
 
         self.wait_idle();
 
-        let vert_bytes =
-            unsafe { std::slice::from_raw_parts(vertices.as_ptr() as *const u8, v_len) };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(self.geometry.vertex_buffer, v_off as u64, vert_bytes)?;
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        let idx_bytes = unsafe { std::slice::from_raw_parts(widened.as_ptr() as *const u8, i_len) };
+        let idx_bytes = bytemuck::cast_slice(&widened);
         self.write_geometry_region(self.geometry.index_buffer, i_off as u64, idx_bytes)?;
 
         let base_vertex = (v_off / std::mem::size_of::<Vertex>()) as i32;

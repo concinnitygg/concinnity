@@ -22,18 +22,10 @@ use crate::assets::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
 
-// Maps a placement's asset identity (its declared name) to the live Entity it
-// was loaded into. Built by the decomposition pass so later passes can resolve
-// a name reference (a Prop parent, a PropBody owner, an audio emitter target)
-// to an Entity without scanning.
-#[derive(Debug, Default)]
-pub struct EntityByName(pub HashMap<AssetId, Entity>);
-
-impl EntityByName {
-    pub fn get(&self, name: AssetId) -> Option<Entity> {
-        self.0.get(&name).copied()
-    }
-}
+// The index this pass publishes is renderer-free and lives in concinnity-core so
+// the physics / audio subsystem crates can name it; re-export it under the
+// historical `crate::ecs::decompose::EntityByName` path for every reader.
+pub use concinnity_core::ecs::EntityByName;
 
 // Decompose every loaded Prop into per-instance components on its own entity,
 // then drain the Prop column.

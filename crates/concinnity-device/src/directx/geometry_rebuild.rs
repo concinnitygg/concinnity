@@ -287,12 +287,8 @@ impl DxContext {
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        write_upload_buffer(&v_upload, unsafe {
-            std::slice::from_raw_parts(new_vertices.as_ptr() as *const u8, new_v_bytes as usize)
-        })?;
-        write_upload_buffer(&i_upload, unsafe {
-            std::slice::from_raw_parts(new_indices.as_ptr() as *const u8, new_i_bytes as usize)
-        })?;
+        write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
+        write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&new_vbuf, 0, &v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&new_ibuf, 0, &i_upload, 0, new_i_bytes);
@@ -601,12 +597,8 @@ impl DxContext {
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        write_upload_buffer(&v_upload, unsafe {
-            std::slice::from_raw_parts(new_vertices.as_ptr() as *const u8, new_v_bytes as usize)
-        })?;
-        write_upload_buffer(&i_upload, unsafe {
-            std::slice::from_raw_parts(new_indices.as_ptr() as *const u8, new_i_bytes as usize)
-        })?;
+        write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
+        write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&new_vbuf, 0, &v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&new_ibuf, 0, &i_upload, 0, new_i_bytes);

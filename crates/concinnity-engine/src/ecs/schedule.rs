@@ -56,6 +56,17 @@ pub(crate) fn settings(world: &World) -> Option<SystemAsset> {
         .map(|_| crate::gfx::settings_system::SettingsSystem::new().into())
 }
 
+// StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
+// streaming pools and publishes the camera-relative view graphics draws.
+// Scheduled immediately before GraphicsSystem so a chunk world's view rebase is
+// ready for this frame's submit and any texture/mesh upload lands before it.
+pub(crate) fn streaming(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::GraphicsConfig>()
+        .next()
+        .map(|_| crate::gfx::streaming_system::StreamingSystem::new().into())
+}
+
 // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
 // (the render marker).
 pub(crate) fn graphics(world: &World) -> Option<SystemAsset> {
@@ -128,7 +139,7 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
         .next()
         .cloned()
         .unwrap_or_default();
-    Some(crate::physics::system::PhysicsSystem::new(config).into())
+    Some(concinnity_physics::PhysicsSystem::new(config).into())
 }
 
 // The first controlled `Camera3D` picks the controller flavor: no `follow`
@@ -211,7 +222,14 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
                             .any(|p| p.music.is_some() || !p.sounds.is_empty())
                 })
             });
-    needs.then(|| crate::audio::system::AudioSystem::new().into())
+    if !needs {
+        return None;
+    }
+    // The persisted master volume lives in the engine's settings store; resolve
+    // it here and hand it to the system so the audio crate stays free of the
+    // engine's `Settings` type.
+    let master = crate::config::Settings::load().audio.master_volume;
+    Some(concinnity_audio::AudioSystem::new(master).into())
 }
 
 // UiInputSystem: present whenever the world declares any `HitRegion`, `View`,
@@ -231,4 +249,137 @@ pub(crate) fn text_input(world: &World) -> Option<SystemAsset> {
         .query::<crate::assets::TextInput>()
         .next()
         .map(|_| crate::text_input_system::TextInputSystem::new().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::assets::{Camera3D, CameraController, PhysicsConfig, RigidBody};
+    use crate::ecs::World;
+
+    fn controlled_camera() -> Camera3D {
+        Camera3D {
+            fov_y_degrees: 75.0,
+            near: 0.05,
+            far: 200.0,
+            view_matrix: [[0.0; 4]; 4],
+            position: [0.0, 1.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            desired_move: [0.0; 3],
+            jump_requested: false,
+            interact_requested: false,
+            controller: Some(CameraController::default()),
+        }
+    }
+
+    // A PhysicsConfig gates the internal physics system on.
+    #[test]
+    fn physics_config_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem"]);
+    }
+
+    // A RigidBody (character capsule) gates physics on, even with no config.
+    #[test]
+    fn rigid_body_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(RigidBody::default());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem"]);
+    }
+
+    // No physics content (no PhysicsConfig / RigidBody / PropBody) → no system.
+    #[test]
+    fn no_physics_content_no_system() {
+        let mut world = World::new_empty();
+        world.start().unwrap();
+        assert!(world.systems().is_empty());
+    }
+
+    // PhysicsSystem runs before Camera3DSystem: it consumes the camera's
+    // previous-frame movement intent.
+    #[test]
+    fn physics_runs_before_camera_controller() {
+        let mut world = World::new_empty();
+        world.add_component(PhysicsConfig::default());
+        world.add_component(controlled_camera());
+        world.start().unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["PhysicsSystem", "Camera3DSystem"]);
+    }
+
+    // An `AudioEmitter` in the world spawns the internal AudioSystem; without
+    // one, no audio device is opened.
+    #[test]
+    fn audio_emitter_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::AudioEmitter::default());
+        world.start().unwrap();
+
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["AudioSystem"]);
+    }
+
+    // No audio content means no AudioSystem (no audio device is opened).
+    #[test]
+    fn no_audio_emitter_means_no_system() {
+        let mut world = World::new_empty();
+        world.start().unwrap();
+        assert!(world.systems().is_empty());
+    }
+
+    // An `AudioCue` alone (no emitter) also spawns the audio system: a UI-only
+    // world can play view-triggered audio.
+    #[test]
+    fn audio_cue_spawns_internal_system() {
+        let mut world = World::new_empty();
+        world.add_component(crate::assets::AudioCue::default());
+        world.start().unwrap();
+
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert!(names.contains(&"AudioSystem"), "{names:?}");
+    }
+
+    // The full trigger chain: the initial view's activation (announced by
+    // UiInputSystem at init) reaches the audio system, which matches the
+    // view's cue on the first step. Playback itself needs a device and a
+    // compiled payload, so the test observes the match counter.
+    #[test]
+    fn initial_view_fires_its_cue() {
+        use crate::assets::{AudioCue, View};
+        use crate::ecs::AudioClipHandle;
+        use crate::ecs::asset_id::AssetId;
+
+        let mut world = World::new_empty();
+        let view = AssetId(90);
+        // The cue references its clip by handle. Matching (view + clip present)
+        // is independent of the clip payload, so no `AudioClipTable` is needed
+        // here -- the counter observes the match, not playback.
+        world.add_component(View {
+            asset_id: view,
+            initial: true,
+            fade_in_secs: 0.0,
+        });
+        world.add_component(AudioCue {
+            view: Some(view),
+            clip: Some(AudioClipHandle(0)),
+            ..Default::default()
+        });
+        world.start().unwrap();
+        world.step();
+
+        let matched = world
+            .systems()
+            .iter()
+            .find_map(|s| match s {
+                crate::ecs::SystemAsset::AudioSystem(a) => Some(a.cues_matched()),
+                _ => None,
+            })
+            .expect("world has an AudioSystem");
+        assert_eq!(matched, 1, "the initial view's cue should have matched");
+    }
 }

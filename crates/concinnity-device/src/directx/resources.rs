@@ -721,8 +721,7 @@ impl DxContext {
         // the vertex region the allocator chose: v_off is always a multiple of
         // size_of::<Vertex>() (every seed region and allocation is), so the
         // base is an exact vertex index.
-        let vert_bytes =
-            unsafe { std::slice::from_raw_parts(vertices.as_ptr() as *const u8, v_len) };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
             &self.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -732,7 +731,7 @@ impl DxContext {
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         // Widen u16 → u32 while rebasing onto the chosen vertex region.
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = unsafe { std::slice::from_raw_parts(rebased.as_ptr() as *const u8, i_len) };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(
             &self.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
@@ -838,12 +837,7 @@ impl DxContext {
 
         self.wait_idle();
 
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
             &self.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -851,12 +845,7 @@ impl DxContext {
             vert_bytes,
         )?;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                rebased.as_ptr() as *const u8,
-                std::mem::size_of_val(rebased.as_slice()),
-            )
-        };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(
             &self.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
@@ -869,12 +858,7 @@ impl DxContext {
         // same `base`.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            let alt_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    alt_rebased.as_ptr() as *const u8,
-                    std::mem::size_of_val(alt_rebased.as_slice()),
-                )
-            };
+            let alt_bytes = bytemuck::cast_slice(&alt_rebased);
             self.write_geometry_region(
                 &self.geometry.index_buffer,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
@@ -1118,8 +1102,7 @@ impl DxContext {
 
         // Vertices and indices both copy verbatim: the indices stay 0-based and
         // the draw fixes them up with `base_vertex`.
-        let vert_bytes =
-            unsafe { std::slice::from_raw_parts(vertices.as_ptr() as *const u8, v_len) };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
             &self.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -1129,7 +1112,7 @@ impl DxContext {
         // Chunk indices stay mesh-relative; the draw fixes them up with
         // `base_vertex`. Widen u16 → u32 to match the static IB's stride.
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        let idx_bytes = unsafe { std::slice::from_raw_parts(widened.as_ptr() as *const u8, i_len) };
+        let idx_bytes = bytemuck::cast_slice(&widened);
         self.write_geometry_region(
             &self.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
@@ -1305,18 +1288,8 @@ impl DxContext {
         };
 
         // Shared skinned vertex/index buffers (DEFAULT heap, GPU-copied once).
-        let vtx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                indices.as_ptr() as *const u8,
-                std::mem::size_of_val(indices),
-            )
-        };
+        let vtx_bytes = bytemuck::cast_slice(vertices);
+        let idx_bytes = bytemuck::cast_slice(indices);
         // GENERIC_READ (rather than the narrower VERTEX_AND_CONSTANT_BUFFER /
         // INDEX_BUFFER) so these stay both vertex/index-bindable for the skinned
         // main + shadow passes AND shader-readable as raw root SRVs for the RT
@@ -1583,24 +1556,14 @@ impl DxContext {
 
         self.wait_idle();
 
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
             &v_buf,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             v_byte_off as u64,
             vert_bytes,
         )?;
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                rebased.as_ptr() as *const u8,
-                std::mem::size_of_val(rebased.as_slice()),
-            )
-        };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(
             &i_buf,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,

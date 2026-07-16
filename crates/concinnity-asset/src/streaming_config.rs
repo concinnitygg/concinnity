@@ -34,6 +34,17 @@ pub struct StreamingConfig {
     /// Maximum number of meshes kept loaded at once. When exceeded, the
     /// farthest-from-camera meshes are dropped.
     pub mesh_cap: u32,
+    /// Resident-texture memory budget in mebibytes, spanning the colour and
+    /// normal-map pools together. Once resident textures exceed it the
+    /// farthest-from-camera ones are dropped, so nearer textures always win the
+    /// space. `0` (the default) derives the budget from the GPU's reported
+    /// memory instead. `texture_cap` still applies as a hard item-count ceiling.
+    pub texture_budget_mb: u32,
+    /// Resident-mesh memory budget in mebibytes. Once resident meshes exceed it
+    /// the farthest-from-camera ones are dropped. `0` (the default) derives the
+    /// budget from the GPU's reported memory instead. `mesh_cap` still applies
+    /// as a hard item-count ceiling.
+    pub mesh_budget_mb: u32,
 }
 
 impl Default for StreamingConfig {
@@ -43,6 +54,8 @@ impl Default for StreamingConfig {
             texture_cap: 96,
             mesh_budget: 4,
             mesh_cap: 4096,
+            texture_budget_mb: 0,
+            mesh_budget_mb: 0,
         }
     }
 }

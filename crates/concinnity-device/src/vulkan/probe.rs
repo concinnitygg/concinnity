@@ -701,13 +701,9 @@ impl VkContext {
         let mut push = [0u8; 112];
         for (i, p) in frustum.planes.iter().enumerate().take(6) {
             let plane = [p.normal[0], p.normal[1], p.normal[2], p.d];
-            push[i * 16..i * 16 + 16].copy_from_slice(unsafe {
-                std::slice::from_raw_parts(plane.as_ptr() as *const u8, 16)
-            });
+            push[i * 16..i * 16 + 16].copy_from_slice(bytemuck::bytes_of(&plane));
         }
-        push[96..108].copy_from_slice(unsafe {
-            std::slice::from_raw_parts(cam_pos.as_ptr() as *const u8, 12)
-        });
+        push[96..108].copy_from_slice(bytemuck::bytes_of(&cam_pos));
         push[108..112].copy_from_slice(&(self.cull_count() as u32).to_le_bytes());
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
@@ -856,6 +852,14 @@ impl RenderingBake {
     // last submitted face; the single graphics queue retires the rest in order).
     fn last_fence(&self) -> usize {
         self.cursor.saturating_sub(1)
+    }
+
+    // The texture-pool descriptor set this in-flight bake samples across its
+    // staggered per-face draws. Built once from the pool at bake start, so a
+    // streamed texture swap must re-point it (see `rewrite_texture_slot`) or its
+    // next face draw samples a destroyed image view.
+    pub(super) fn bindless_set(&self) -> vk::DescriptorSet {
+        self.bake.bindless_set
     }
 
     // Free every owned GPU resource: the per-face command buffers (back to the
@@ -1406,9 +1410,7 @@ fn shadow_bytes(u: &crate::gfx::render_types::ShadowUniforms) -> &[u8] {
 }
 
 fn probeset_bytes(p: &ProbeSet) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(p as *const _ as *const u8, std::mem::size_of::<ProbeSet>())
-    }
+    bytemuck::bytes_of(p)
 }
 
 fn hiz_params_bytes(p: &CullHizParams) -> &[u8] {

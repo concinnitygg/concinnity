@@ -245,7 +245,7 @@ pub struct ShadowPassPush {
 
 // Compact vertex type used exclusively by the text render pass.
 // 32 bytes: screen-pixel position, atlas UV, text colour, and sampling mode.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TextVertex {
     // Screen-space position in pixels (x from left, y from top).
@@ -801,7 +801,7 @@ impl DrawObject {
 // more than one role resolves to one descriptor. The pool's flat-normal
 // fallback occupies a reserved slot past the real textures; an object with no
 // normal map addresses it, so `normal_index` never needs a shader branch.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuObjectData {
     // Column-major model-to-world matrix.
@@ -1034,7 +1034,7 @@ pub fn pack_skinned_record(
 // backend's cull kernel: `default.metal` / the Metal `build_cull_pipeline`
 // MSL, the inline cull HLSL in `directx/pipeline.rs`, and the inline cull
 // GLSL in `vulkan/pipeline.rs`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuDrawArgs {
     // Number of indices to draw (`DrawObject::index_count`).

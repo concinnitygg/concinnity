@@ -318,17 +318,51 @@ pub fn watch(port: u16, target: WatchTarget, interval_ms: u64) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+
+    // Candidate localhost ports for the "server is not running" tests. They sit
+    // below every platform's ephemeral range so `bind(:0)` never hands one out,
+    // avoiding the race where a dropped ephemeral port is reassigned to a
+    // parallel test that then listens on it. Same rationale as concinnity-cli's
+    // cli.rs.
+    const DEAD_PORT_CANDIDATES: [u16; 4] = [28474, 28475, 28476, 28477];
+
+    // The first candidate that promptly refuses a connection (nothing
+    // listening), or `None` when the host refuses none. Callers skip when
+    // `None`: the paths they assert are platform-independent and still run on
+    // hosts where the connection is refused.
+    fn find_dead_port() -> Option<u16> {
+        DEAD_PORT_CANDIDATES
+            .into_iter()
+            .find(|&port| connect_refused(port))
+    }
+
+    // True when connecting to `127.0.0.1:port` is refused, i.e. nothing is
+    // listening. A connect that instead times out (a dropped SYN with no RST, as
+    // some firewalled loopback stacks do) returns false: the port is unused but
+    // not promptly refused, so it is not a usable dead port and the caller skips
+    // rather than wait out the multi-second connect timeout.
+    fn connect_refused(port: u16) -> bool {
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        matches!(
+            TcpStream::connect_timeout(&addr, Duration::from_millis(250)),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+        )
+    }
+
+    // Stable Rust has no runtime "skipped" test state, so a test whose host
+    // precondition is unmet prints this and returns (counting as passed).
+    // Visible under `cargo test -- --nocapture`.
+    fn skip_no_dead_port(test: &str) {
+        eprintln!("[skip] {test}: no localhost port refuses connections on this host");
+    }
 
     #[test]
     fn connect_to_dead_port_errors_fast() {
-        // Bind an ephemeral port, learn its number, then drop the listener so
-        // nothing is accepting there. Connecting must fail promptly with a
+        let Some(port) = find_dead_port() else {
+            return skip_no_dead_port("connect_to_dead_port_errors_fast");
+        };
+        // Connecting to a port nothing listens on must fail promptly with a
         // clear message rather than hanging.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         let start = Instant::now();
         let err = connect(port).expect_err("connect to a dead port must fail");
         assert!(
@@ -340,9 +374,9 @@ mod tests {
 
     #[test]
     fn request_to_dead_port_errors() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        let Some(port) = find_dead_port() else {
+            return skip_no_dead_port("request_to_dead_port_errors");
+        };
         assert!(request_cmd(port, "state").is_err());
     }
 }

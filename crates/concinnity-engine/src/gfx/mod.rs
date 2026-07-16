@@ -37,10 +37,10 @@ pub(crate) use concinnity_render::{cursor, display_mode, keymap, lights, sprite,
 // backends' probe + planar ports have not landed, so unused off macOS.
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
-// Chunk / texture streaming layout: driven only by the Metal backend's streaming
+// Chunk-window streaming layout: driven only by the Metal backend's streaming
 // path today, so unused on other backends.
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
-pub(crate) use concinnity_render::{chunk_window, streaming};
+pub(crate) use concinnity_render::chunk_window;
 // Consumed only by the runtime-spawn unit tests (draw-slot allocator +
 // skinned-instance pool); the production spawn path lives in the backends.
 #[cfg(test)]
@@ -68,6 +68,15 @@ pub(crate) mod overlay;
 // Internal system, constructed alongside GraphicsSystem (same gate) and
 // scheduled just before it.
 pub(crate) mod settings_system;
+// Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`)
+// plus the `std` texture / mesh / chunk drivers it schedules.
+pub(crate) mod streaming;
+// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
+// camera-relative view publish. Internal system, constructed alongside
+// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
+// editor's debug server can name `StreamingStats` (its state lives in the parked
+// `StreamingState` resource, read via `World::streaming_stats`).
+pub mod streaming_system;
 // Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
 // compiled only into the unit-test binary. Implements concinnity-render's
 // RenderBackend seam on a client-local type and carries a `config::Settings`,

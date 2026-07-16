@@ -307,6 +307,12 @@ pub struct ListArgs {
     // each row tagged with its provenance (authored / injected / expanded).
     #[arg(long)]
     pub expanded: bool,
+
+    /// List the systems this world runs, in order, each with the condition
+    // that includes it. Builds the world and reports `World::system_manifest()`
+    // -- the same gates the runtime runs at start -- so it cannot drift.
+    #[arg(long)]
+    pub systems: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -464,7 +470,7 @@ pub fn run() -> std::io::Result<()> {
             cli::add(args.name.as_deref(), &args.target, args.template.as_deref())
         }
         Commands::Rm(args) => cli::rm(&args.name),
-        Commands::List(args) => cli::list(args.file.as_deref(), args.expanded),
+        Commands::List(args) => cli::list(args.file.as_deref(), args.expanded, args.systems),
         Commands::Explain(args) => cli::explain(&args.name, args.file.as_deref()),
         Commands::Test(args) => {
             let path = args.file.as_deref().unwrap_or("");

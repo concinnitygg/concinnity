@@ -1,0 +1,18 @@
+[package]
+name = "concinnity-audio"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "concinnity_audio"
+doctest = false
+
+[dependencies]
+concinnity-core = { path = "../concinnity-core" }
+
+kira = "0.12"
+mint = "0.5"
+tracing = "0.1.44"

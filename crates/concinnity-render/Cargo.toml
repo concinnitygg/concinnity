@@ -23,6 +23,7 @@ vulkan = ["concinnity-core/vulkan"]
 # The renderer-free foundation: GPU data layouts, CPU-side render math, asset
 # data types, and the runtime-usable build helpers (environment-map baking).
 concinnity-core = { path = "../concinnity-core" }
+bytemuck = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

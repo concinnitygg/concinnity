@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 use concinnity_core::shutdown::ShutdownToken;
 
-use crate::gfx::graphics_system::StreamingStats;
+use crate::gfx::streaming_system::StreamingStats;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.
@@ -49,6 +49,36 @@ pub(crate) struct DebugState {
     // `None` until the first tick that finds a `Camera3D` (a world with no
     // camera never sets it).
     pub(super) camera: Option<CameraSnapshot>,
+    // Process thread + memory budgets, refreshed every tick for the `budget`
+    // query. `None` until `App::start` has published them.
+    pub(super) budget: Option<BudgetSnapshot>,
+    // Live RAM back-off pressure on streaming, refreshed every tick for the
+    // `streaming` query. `None` until StreamingSystem publishes its first sample
+    // (or when the valve is inert: no `MemoryBudget` / RSS available).
+    pub(super) streaming_pressure: Option<PressureSnapshot>,
+}
+
+// A read-only snapshot of the process thread + memory budgets (see
+// `concinnity_engine::app::budget`), served by the `budget` query. `rss_mib` is
+// the live resident set size sampled each tick; the rest are fixed at start.
+#[derive(Clone, Default, serde::Serialize)]
+pub(crate) struct BudgetSnapshot {
+    pub(super) total_cores: usize,
+    pub(super) job_threads: usize,
+    pub(super) total_ram_mib: Option<u64>,
+    pub(super) budget_mib: u64,
+    pub(super) overridden: bool,
+    pub(super) rss_mib: Option<u64>,
+}
+
+// A read-only snapshot of the streaming RAM back-off valve (see
+// `concinnity_engine::gfx::streaming_system::StreamingPressure`), served
+// alongside the `streaming` query so the valve is headless-verifiable.
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub(crate) struct PressureSnapshot {
+    pub(super) rss_bytes: u64,
+    pub(super) budget_bytes: u64,
+    pub(super) under_pressure: bool,
 }
 
 // A read-only snapshot of the active `Camera3D`, served by `camera-get`. The

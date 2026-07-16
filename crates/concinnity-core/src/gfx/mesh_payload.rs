@@ -23,7 +23,7 @@
 
 // Vertex layout shared by all mesh producers and both GPU backends.
 // Repr(C) so it can be cast directly to GPU buffer memory.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct Vertex {
     pub pos: [f32; 3],
@@ -230,7 +230,7 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
 // joint matrices: `sum(weights[k] * joint[joints[k]] * v)`. Weights that sum
 // to less than 1 leave the remainder un-skinned; the build step normalises
 // them so this never happens for authored meshes.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SkinnedVertex {
     pub pos: [f32; 3],

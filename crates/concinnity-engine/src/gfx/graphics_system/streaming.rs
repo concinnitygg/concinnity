@@ -9,6 +9,30 @@ use crate::gfx::mesh_payload::Vertex;
 use super::helpers::*;
 use super::*;
 
+// Default fractions of the GPU's reported memory each streaming pool may hold
+// resident when a world sets no explicit byte budget. The remainder is left for
+// render targets, the chunk pool, and slack.
+const TEXTURE_VRAM_FRACTION: f64 = 0.50;
+const MESH_VRAM_FRACTION: f64 = 0.30;
+// Infinite voxel-world chunk residency. Chunk streaming is not
+// StreamingConfig-gated, so there is no user override: the budget is always
+// derived from the GPU's reported memory, keeping this pool schema-free.
+const CHUNK_VRAM_FRACTION: f64 = 0.15;
+
+// Resolve a streaming pool's resident-byte budget. A non-zero `override_mb`
+// wins, converted from mebibytes. Otherwise the budget is `fraction` of the
+// GPU's reported memory; a GPU that reports 0 (no figure available) yields
+// `None`, leaving the pool on its count-only residency policy.
+fn derive_byte_budget(override_mb: u32, gpu_memory_bytes: u64, fraction: f64) -> Option<u64> {
+    if override_mb != 0 {
+        return Some(override_mb as u64 * 1024 * 1024);
+    }
+    if gpu_memory_bytes == 0 {
+        return None;
+    }
+    Some((gpu_memory_bytes as f64 * fraction) as u64)
+}
+
 // Worst-case resident chunk count for a streaming VoxelWorld: the bound the
 // GPU-cull buffers reserve at init so every resident chunk gets a `GpuObjectData`
 // record (chunks fold into the indirect path). The streamer RETAINS a
@@ -50,6 +74,9 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = backend.gpu_profile().memory_budget_bytes;
         // Each backend's update_texture_slot rewrites whichever descriptors,
         // argument-buffers, or per-cluster SRVs sample that slot.
         for slot in 0..slot_count {
@@ -65,18 +92,28 @@ impl GraphicsSystem {
                     return;
                 }
             };
-        let streamer = crate::app::texture_stream::TextureStreamer::new(
+        let mut streamer = crate::gfx::streaming::texture::TextureStreamer::new(
             source,
             texture_centers,
             config.budget(),
             config.cap(),
         );
+        let byte_budget = derive_byte_budget(
+            config.texture_budget_mb,
+            gpu_memory_bytes,
+            TEXTURE_VRAM_FRACTION,
+        );
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: texture streaming enabled ({} textures, {} source, budget {}/frame, cap {})",
+            "GraphicsSystem: texture streaming enabled ({} textures, {} source, budget {}/frame, cap {}, byte budget {})",
             streamer.len(),
             if disk_backed { "disk" } else { "ram" },
             config.budget(),
             config.cap(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
         );
         self.texture_streamer = Some(streamer);
     }
@@ -96,7 +133,7 @@ impl GraphicsSystem {
     pub(super) fn setup_mesh_streaming(
         &mut self,
         config: Option<StreamingConfig>,
-        mesh_payloads: Vec<crate::app::mesh_stream::DecodedMesh>,
+        mesh_payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
         mesh_centers: Vec<Vec<[f32; 3]>>,
         mesh_draw_indices: Vec<usize>,
         disk_backed: bool,
@@ -109,6 +146,9 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = backend.gpu_profile().memory_budget_bytes;
         // Init residency. Two paths:
         //  - Shrinkable seed (`seed_region` present): the streamed geometry was
         //    never baked into the buffers -- compaction already marked each
@@ -135,31 +175,40 @@ impl GraphicsSystem {
         // A disk-backed world spills the geometry to a scratch file so the
         // `mesh_payloads` RAM copy can be dropped; `cn debug` keeps it
         // resident since it has no disk artifacts to re-read.
-        let source: std::sync::Arc<dyn crate::app::mesh_stream::MeshPayloadSource> = if disk_backed
-        {
-            let path = crate::app::mesh_stream::default_scratch_path();
-            match crate::app::mesh_stream::write_mesh_scratch(path, &mesh_payloads) {
-                Ok(s) => std::sync::Arc::new(s),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: mesh streaming scratch file: {}", e);
-                    return;
+        let source: std::sync::Arc<dyn crate::gfx::streaming::mesh::MeshPayloadSource> =
+            if disk_backed {
+                let path = crate::gfx::streaming::mesh::default_scratch_path();
+                match crate::gfx::streaming::mesh::write_mesh_scratch(path, &mesh_payloads) {
+                    Ok(s) => std::sync::Arc::new(s),
+                    Err(e) => {
+                        tracing::error!("GraphicsSystem: mesh streaming scratch file: {}", e);
+                        return;
+                    }
                 }
-            }
-        } else {
-            std::sync::Arc::new(crate::app::mesh_stream::MemMeshSource::new(mesh_payloads))
-        };
-        let streamer = crate::app::mesh_stream::MeshStreamer::new(
+            } else {
+                std::sync::Arc::new(crate::gfx::streaming::mesh::MemMeshSource::new(
+                    mesh_payloads,
+                ))
+            };
+        let mut streamer = crate::gfx::streaming::mesh::MeshStreamer::new(
             source,
             mesh_centers,
             config.mesh_budget(),
             config.mesh_cap(),
         );
+        let byte_budget =
+            derive_byte_budget(config.mesh_budget_mb, gpu_memory_bytes, MESH_VRAM_FRACTION);
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: mesh streaming enabled ({} meshes, {} source, budget {}/frame, cap {})",
+            "GraphicsSystem: mesh streaming enabled ({} meshes, {} source, budget {}/frame, cap {}, byte budget {})",
             streamer.len(),
             if disk_backed { "disk" } else { "ram" },
             config.mesh_budget(),
             config.mesh_cap(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
         );
         self.mesh_streamer = Some(streamer);
         self.mesh_stream_draw_indices = mesh_draw_indices;
@@ -257,6 +306,14 @@ impl GraphicsSystem {
         let chunk_idx_bytes =
             (near_chunks * full_idx + far_chunks * impostor_idx).min(MAX_HEADROOM) as usize;
 
+        // The GPU's reported memory (discrete VRAM, or the unified-memory
+        // working set on Apple); 0 when the driver cannot report it.
+        let gpu_memory_bytes = self
+            .backend
+            .as_deref()
+            .map(|b| b.gpu_profile().memory_budget_bytes)
+            .unwrap_or(0);
+
         // Backend-specific buffer growth + SRV/descriptor setup. Metal binds
         // chunk textures per draw and ignores the slot args (its impl drops
         // them); DirectX and Vulkan bake one shared (albedo, normal)
@@ -275,14 +332,14 @@ impl GraphicsSystem {
             return;
         }
 
-        let source = std::sync::Arc::new(crate::app::chunk_stream::ProceduralChunkSource::new(
+        let source = std::sync::Arc::new(crate::gfx::streaming::chunk::ProceduralChunkSource::new(
             vw.seed,
             chunk_blocks,
             block_size,
             palette,
             impostor_step,
         ));
-        let streamer = crate::app::chunk_stream::ChunkStreamer::new(
+        let mut streamer = crate::gfx::streaming::chunk::ChunkStreamer::new(
             source,
             near_radius,
             far_radius,
@@ -290,8 +347,13 @@ impl GraphicsSystem {
             chunk_w,
             chunk_d,
         );
+        // Chunk streaming has no user override (it is not StreamingConfig-gated),
+        // so the byte budget is always the VRAM-derived fraction; a GPU that
+        // reports nothing leaves the pool on its pure radius-only policy.
+        let byte_budget = derive_byte_budget(0, gpu_memory_bytes, CHUNK_VRAM_FRACTION);
+        streamer.set_byte_budget(byte_budget);
         tracing::info!(
-            "GraphicsSystem: VoxelWorld streaming enabled (seed {}, {}x{}x{} blocks, near-radius {}, impostor-radius {} (step {}), budget {}/frame, {} KiB chunk headroom)",
+            "GraphicsSystem: VoxelWorld streaming enabled (seed {}, {}x{}x{} blocks, near-radius {}, impostor-radius {} (step {}), budget {}/frame, byte budget {}, {} KiB chunk headroom)",
             vw.seed,
             chunk_blocks[0],
             chunk_blocks[1],
@@ -304,9 +366,13 @@ impl GraphicsSystem {
             },
             impostor_step,
             vw.load_budget(),
+            byte_budget.map_or_else(
+                || "count-only".to_string(),
+                |b| format!("{} MB", b / (1024 * 1024))
+            ),
             (chunk_vtx_bytes + chunk_idx_bytes) / 1024,
         );
-        self.chunk_stream = Some(ChunkStreamState {
+        self.chunk_stream = Some(crate::gfx::streaming_system::ChunkStreamState {
             streamer,
             draws: std::collections::BTreeMap::new(),
             chunk_w,
@@ -320,23 +386,53 @@ impl GraphicsSystem {
             material,
         });
     }
-
-    // `(resident, pending, unloaded)` counts for each active streaming pool.
-    // Used by the debug server's `streaming` command for headless checks.
-    // (Consumed only by the `cn debug` binary, so dead in a library build.)
-    #[allow(dead_code)]
-    pub fn streaming_stats(&self) -> StreamingStats {
-        StreamingStats {
-            texture: self.texture_streamer.as_ref().map(|s| s.stats()),
-            mesh: self.mesh_streamer.as_ref().map(|s| s.stats()),
-            chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An explicit non-zero override is taken verbatim (converted MiB -> bytes),
+    // regardless of what the GPU reports.
+    #[test]
+    fn derive_byte_budget_uses_explicit_override() {
+        // 256 MiB override, GPU memory irrelevant.
+        assert_eq!(
+            derive_byte_budget(256, 8 * 1024 * 1024 * 1024, TEXTURE_VRAM_FRACTION),
+            Some(256 * 1024 * 1024)
+        );
+        // The override wins even when the GPU reports nothing.
+        assert_eq!(
+            derive_byte_budget(64, 0, MESH_VRAM_FRACTION),
+            Some(64 * 1024 * 1024)
+        );
+    }
+
+    // With no override, the budget is the fraction of the reported GPU memory.
+    #[test]
+    fn derive_byte_budget_derives_fraction_of_gpu_memory() {
+        let vram = 8 * 1024 * 1024 * 1024u64; // 8 GiB
+        assert_eq!(
+            derive_byte_budget(0, vram, TEXTURE_VRAM_FRACTION),
+            Some((vram as f64 * 0.50) as u64)
+        );
+        assert_eq!(
+            derive_byte_budget(0, vram, MESH_VRAM_FRACTION),
+            Some((vram as f64 * 0.30) as u64)
+        );
+        // Chunk streaming derives 15% of the GPU's reported memory.
+        assert_eq!(
+            derive_byte_budget(0, vram, CHUNK_VRAM_FRACTION),
+            Some((vram as f64 * 0.15) as u64)
+        );
+    }
+
+    // An unreporting GPU (0 bytes) with no override degrades to count-only.
+    #[test]
+    fn derive_byte_budget_is_none_when_gpu_reports_nothing() {
+        assert_eq!(derive_byte_budget(0, 0, TEXTURE_VRAM_FRACTION), None);
+        assert_eq!(derive_byte_budget(0, 0, MESH_VRAM_FRACTION), None);
+    }
 
     // The chunk record reserve must cover the streamer's worst-case
     // residency, or resident chunks past the reserve get no GPU-driven draw record

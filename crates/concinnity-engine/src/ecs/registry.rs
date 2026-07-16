@@ -19,6 +19,10 @@
 //   * SettingsSystem before GraphicsSystem: a SettingCommand applied here lands
 //     on the backend before this frame's submit (visible the same frame), and
 //     a SceneCommand's jump primes the reel GraphicsSystem ticks below.
+//   * StreamingSystem immediately before GraphicsSystem: it drives the streaming
+//     pools and publishes the `CameraRelativeView` GraphicsSystem draws with, so
+//     a chunk world's view rebase is ready for this frame's submit and any
+//     texture/mesh upload lands before it.
 //   * GraphicsSystem right after them: makes payloads resident, uploads
 //     transforms, and submits the frame (consuming the overlay build).
 //   * InputSystem immediately after GraphicsSystem: on Metal the OS event pump
@@ -50,6 +54,10 @@ crate::define_systems! {
         gate: schedule::settings,
         present_when: "the world declares a GraphicsConfig",
     },
+    StreamingSystem => crate::gfx::streaming_system::StreamingSystem {
+        gate: schedule::streaming,
+        present_when: "the world declares a GraphicsConfig",
+    },
     GraphicsSystem => crate::gfx::graphics_system::GraphicsSystem {
         gate: schedule::graphics,
         present_when: "the world declares a GraphicsConfig",
@@ -66,7 +74,7 @@ crate::define_systems! {
         gate: schedule::debug_hud,
         present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
     },
-    PhysicsSystem => crate::physics::system::PhysicsSystem {
+    PhysicsSystem => concinnity_physics::PhysicsSystem {
         gate: schedule::physics,
         present_when: "the world declares a PhysicsConfig, RigidBody, or PropBody, or a skinned mesh bakes a character capsule",
     },
@@ -90,7 +98,7 @@ crate::define_systems! {
         gate: schedule::story,
         present_when: "the world declares a Story",
     },
-    AudioSystem => crate::audio::system::AudioSystem {
+    AudioSystem => concinnity_audio::AudioSystem {
         gate: schedule::audio,
         present_when: "the world declares any AudioEmitter, AudioCue, or a Story page/choice with audio",
     },

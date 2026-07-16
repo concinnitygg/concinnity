@@ -260,18 +260,20 @@ fn backend_parked(world: &TestWorld) -> bool {
 
 // One frame the way the schedule runs it: OverlaySystem builds the draw list,
 // SpawnSystem applies the entity churn, SettingsSystem applies the settings /
-// scene command batches, GraphicsSystem submits, then InputSystem publishes
+// scene command batches, StreamingSystem drives the streaming pools + publishes
+// the camera-relative view, GraphicsSystem submits, then InputSystem publishes
 // the FrameInput snapshot. A hard Stop from graphics aborts the tick before
-// input, exactly like `World::step`. Fresh overlay / spawn / settings / input
-// instances per step mirror persistent ones here: SettingsSystem and
-// SpawnSystem read their persistent state / cursors from parked resources, and
-// these tests never leave a drained event in retention across a second step.
+// input, exactly like `World::step`. Fresh overlay / spawn / settings /
+// streaming / input instances per step mirror persistent ones here: each reads
+// its persistent state / cursors from parked resources, and these tests never
+// leave a drained event in retention across a second step.
 fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
     use crate::ecs::System;
     let mut ctx = world.ctx();
     crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
     crate::spawn::SpawnSystem::new().step(&mut ctx);
     crate::gfx::settings_system::SettingsSystem::new().step(&mut ctx);
+    crate::gfx::streaming_system::StreamingSystem::new().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
         crate::gfx::input_system::InputSystem::new().step(&mut ctx);
@@ -332,6 +334,50 @@ fn init_builds_draw_list_and_render_handles() {
         .collect();
     assert_eq!(globals.len(), 1);
     assert_eq!(globals[0][3][0], 1.0);
+}
+
+// Regression: init parks exactly one OverlayAssets carrying the captured HUD
+// chip ids. A duplicated park block once re-took the already-moved fields
+// (`std::mem::take`), so the second park overwrote the resource with empty
+// defaults and the whole overlay -- HUD chips and menu alike -- silently drew
+// nothing. The chips surviving to the parked resource guards that.
+#[test]
+fn init_parks_overlay_assets_with_the_hud_chips() {
+    use crate::assets::{DebugHud, StatHud};
+    use crate::gfx::overlay::OverlayAssets;
+
+    let (_state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    b.push(StatHud {
+        fps_label: Some(AssetId(10)),
+        vram_label: Some(AssetId(11)),
+        ..Default::default()
+    });
+    b.push(DebugHud {
+        mouse_label: Some(AssetId(20)),
+        passes_label: Some(AssetId(21)),
+        ..Default::default()
+    });
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed, "init must succeed");
+
+    let overlay = world
+        .resources
+        .get::<OverlayAssets>()
+        .expect("OverlayAssets parked at init");
+    assert_eq!(
+        overlay.stat_hud_chips,
+        vec![AssetId(10), AssetId(11)],
+        "StatHud chip ids survive to the parked OverlayAssets"
+    );
+    // DebugHud strip order is mouse, camera, sys, passes; only mouse + passes
+    // were set here.
+    assert_eq!(
+        overlay.debug_hud_chips,
+        vec![AssetId(20), AssetId(21)],
+        "DebugHud chip ids survive to the parked OverlayAssets"
+    );
 }
 
 // The built backend can be taken exactly once (the `cn editor` transplant).
@@ -998,6 +1044,17 @@ fn despawn_request_retires_draw_slots() {
     );
 }
 
+// The streaming pools graphics init builds are parked in the `StreamingState`
+// resource (StreamingSystem drives them each frame). Read its per-pool stats
+// for the streaming assertions.
+fn streaming_stats(world: &TestWorld) -> crate::gfx::streaming_system::StreamingStats {
+    world
+        .resources
+        .get::<crate::gfx::streaming_system::StreamingState>()
+        .expect("StreamingState parked at init")
+        .streaming_stats()
+}
+
 #[test]
 fn streaming_init_evicts_streamable_slots() {
     let (state, hooks) = recording_hooks();
@@ -1007,14 +1064,20 @@ fn streaming_init_evicts_streamable_slots() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
+    // The streamers were handed off to the parked StreamingState, so the
+    // system's own scratch fields are cleared.
+    assert!(gs.texture_streamer.is_none());
+    assert!(gs.mesh_streamer.is_none());
+    let stats = streaming_stats(&world);
+    assert!(stats.texture.is_some(), "texture pool streaming");
+    assert!(stats.mesh.is_some(), "mesh pool streaming");
+
     let s = lock(&state);
     // The albedo pool slot is evicted to a placeholder at init; the mesh
     // keeps its build-time region (cap covers the whole set) but is evicted
     // so the streamer brings it back nearest-first.
     assert!(s.saw(&Call::EvictTextureSlot(0)));
     assert!(s.saw(&Call::EvictMesh(0)));
-    assert!(gs.texture_streamer.is_some());
-    assert!(gs.mesh_streamer.is_some());
 }
 
 #[test]
@@ -1049,7 +1112,7 @@ fn texture_streaming_uploads_evicted_slots() {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    let (resident, pending, unloaded) = gs.texture_streamer.as_ref().unwrap().stats();
+    let (resident, pending, unloaded) = streaming_stats(&world).texture.unwrap();
     assert_eq!((resident, pending, unloaded), (1, 0, 0));
 }
 
@@ -1083,6 +1146,76 @@ fn mesh_streaming_reuploads_evicted_geometry() {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    let (resident, pending, unloaded) = gs.mesh_streamer.as_ref().unwrap().stats();
+    let (resident, pending, unloaded) = streaming_stats(&world).mesh.unwrap();
     assert_eq!((resident, pending, unloaded), (1, 0, 0));
+}
+
+// A VoxelWorld rebases the draw's view + camera onto the chunk render origin:
+// StreamingSystem publishes the camera-relative pair and GraphicsSystem submits
+// it. Exercises the view-rebase timing across the StreamingSystem/GraphicsSystem
+// split (a non-voxel world leaves the absolute view untouched -- see
+// `camera_state_reaches_the_backend_each_frame`). No chunk needs to be resident:
+// the rebase is a function of the camera position alone.
+#[test]
+fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
+    use crate::assets::VoxelWorld;
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    // Default chunk is 16x16 world units; a small view radius keeps the chunk
+    // dispatch light (no chunk is awaited).
+    b.push(VoxelWorld {
+        seed: 1,
+        view_radius: 1,
+        ..Default::default()
+    });
+    let mut world = b.build();
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    // The chunk pool was handed to StreamingSystem's parked state.
+    assert!(
+        streaming_stats(&world).chunk.is_some(),
+        "chunk pool streaming"
+    );
+
+    // Place the camera two chunks east and three chunks north of the origin
+    // (floor(40/16)=2, floor(-40/16)=-3), so the rebase is non-trivial.
+    let cam_pos = [40.0, 5.0, -40.0];
+    let view = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [-40.0, -5.0, 40.0, 1.0],
+    ];
+    {
+        let mut ctx = world.ctx();
+        let cam = ctx.query_mut::<Camera3D>().next().unwrap();
+        cam.position = cam_pos;
+        cam.view_matrix = view;
+    }
+    step(&mut gs, &mut world);
+
+    // Render origin = chunk (2, -3) -> world (32, -48).
+    let origin = [32.0, 0.0, -48.0];
+    let expected_cam = [8.0, 5.0, 8.0];
+    let expected_view = crate::gfx::chunk_coord::camera_relative_view(view, cam_pos, origin);
+
+    let s = lock(&state);
+    match s.last_draw_frame() {
+        Some(Call::DrawFrame { cam_pos: cp, .. }) => {
+            assert_eq!(
+                cp, expected_cam,
+                "draw camera rebased onto the chunk origin"
+            );
+            assert_ne!(cp, cam_pos, "the rebase actually moved the camera");
+        }
+        other => panic!("expected a DrawFrame, got {other:?}"),
+    }
+    assert!(
+        s.saw(&Call::UpdateView(expected_view)),
+        "the camera-relative view reaches update_view, not the absolute one"
+    );
+    assert!(
+        !s.saw(&Call::UpdateView(view)),
+        "the absolute view is not what the backend received"
+    );
 }

@@ -1,8 +1,8 @@
-// src/app/chunk_stream.rs
+// src/gfx/streaming/chunk.rs
 //
 // The `std`-side driver for infinite-world voxel chunk streaming.
 //
-// This is the chunk counterpart of `crate::app::mesh_stream`: it owns a
+// This is the chunk counterpart of `super::mesh`: it owns a
 // background generation thread and the channels that carry work to it, and
 // wraps the `no_std` policy core in `crate::gfx::chunk_window`. The split is
 // the same one the rest of the streaming subsystem uses: `ChunkWindow` decides
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-use crate::app::mesh_stream::DecodedMesh;
+use super::mesh::DecodedMesh;
 use crate::geometry::{
     ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,
 };
@@ -241,8 +241,11 @@ impl ChunkStreamer {
             }
             match result.decoded {
                 Ok(mesh) => {
+                    // Resident GPU footprint: the decoded vertex + index buffers.
+                    let bytes = mesh.vertices.len() * std::mem::size_of::<Vertex>()
+                        + mesh.indices.len() * std::mem::size_of::<u16>();
                     upload(result.coord, &mesh.vertices, &mesh.indices);
-                    self.window.mark_resident(result.coord);
+                    self.window.mark_resident(result.coord, bytes as u64);
                     applied += 1;
                 }
                 Err(e) => {
@@ -252,9 +255,10 @@ impl ChunkStreamer {
                         result.coord.z,
                         e
                     );
-                    // Terminally resident so the planner stops retrying a
-                    // chunk whose generation deterministically fails.
-                    self.window.mark_resident(result.coord);
+                    // Terminally resident (0 bytes -- nothing uploaded) so the
+                    // planner stops retrying a chunk whose generation
+                    // deterministically fails.
+                    self.window.mark_resident(result.coord, 0);
                 }
             }
         }
@@ -270,6 +274,24 @@ impl ChunkStreamer {
     // resident distant impostors, for diagnostics.
     pub fn detail_counts(&self) -> (usize, usize) {
         self.window.counts_by_detail()
+    }
+
+    // Set (or clear with `None`) the resident-chunk-byte budget. When set, the
+    // window clamps its effective view radius down to hold resident chunk bytes
+    // at or under the budget, shedding the far impostor band before the near
+    // full-detail band.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.window.set_byte_budget(budget);
+    }
+
+    // Total resident chunk bytes, for diagnostics.
+    pub fn resident_bytes(&self) -> u64 {
+        self.window.resident_bytes()
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.window.byte_budget()
     }
 }
 

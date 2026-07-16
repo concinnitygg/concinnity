@@ -27,7 +27,6 @@ pub mod app;
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
 pub use app::run::run_from;
-pub(crate) mod audio;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;
@@ -36,7 +35,6 @@ pub(crate) mod hud;
 // historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps
 // reaching it through `concinnity_engine::jobs`.
 pub use concinnity_render::jobs;
-pub(crate) mod physics;
 // Runtime resource tables (per-kind, handle-indexed views of the blob's resource
 // stream). `pub` so the editor's in-memory build path can construct the tables it
 // inserts into the world, mirroring the shipped-runtime loader.

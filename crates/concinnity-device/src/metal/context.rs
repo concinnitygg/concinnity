@@ -1339,11 +1339,8 @@ pub(super) fn copy_buffer_prefix(
     }
 }
 
-pub(super) fn bytes_of_slice<T>(slice: &[T]) -> &[u8] {
-    // SAFETY: reinterprets the slice as raw bytes over the same length. Sound
-    // only for plain-old-data `T` with no padding/uninitialised bytes; every
-    // caller passes a `#[repr(C)]` GPU upload type that satisfies this.
-    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice)) }
+pub(super) fn bytes_of_slice<T: bytemuck::NoUninit>(slice: &[T]) -> &[u8] {
+    bytemuck::cast_slice(slice)
 }
 
 // Copy `src` into a shared-storage buffer at `offset` bytes, bounds-checked

@@ -6,21 +6,15 @@
 // reach these runtime app items through `concinnity_engine::app::*`.
 pub mod anim_runtime;
 
+// Process-level thread + memory budgets computed at App start.
+pub mod budget;
 pub mod dev_flags;
 pub(crate) mod pacing;
 pub mod run;
 pub mod runloop;
 pub mod state;
-
-// Async asset-streaming drivers. Currently driven only by the Metal
-// backend (Vulkan and DirectX catch-up is a separate follow-up), so on
-// non-macOS builds these modules are compiled but unreferenced.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) mod chunk_stream;
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) mod mesh_stream;
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) mod texture_stream;
+// Host-memory queries backing the memory budget + the live-usage readout.
+pub mod sysmem;
 
 // Run the app from compiled binary data: the `cn run` production path. `pub`
 // so the editor crate's CLI can dispatch to it.

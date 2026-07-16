@@ -40,6 +40,12 @@ const EVICT_HYSTERESIS: i32 = 2;
 // across the near/far boundary would re-detail a chunk every step.
 const DETAIL_HYSTERESIS: i32 = 1;
 
+// Low-water mark (percent of the byte budget) the effective window regrows at.
+// The window shrinks a ring whenever resident bytes exceed the budget and only
+// regrows once they fall back under this fraction of it; the gap is hysteresis
+// that stops the radius oscillating a ring in and out at the boundary.
+const BYTE_BUDGET_LOW_PCT: u64 = 75;
+
 // Residency state of a chunk the window is currently tracking.
 //
 // A chunk not in the window's map is simply unloaded -- there is no explicit
@@ -67,6 +73,10 @@ pub enum ChunkDetail {
 struct Slot {
     state: ChunkState,
     detail: ChunkDetail,
+    // Resident GPU footprint in bytes, reported by the driver on load
+    // completion. Zero while Pending; only counted toward `resident_bytes`
+    // once the slot is Resident.
+    bytes: u64,
 }
 
 // The load / evict decisions produced by one [`ChunkWindow::plan`] call.
@@ -99,10 +109,19 @@ pub struct ChunkWindow {
     near_radius: i32,
     // Chebyshev radius of the outer impostor window (>= near_radius).
     far_radius: i32,
-    // Chebyshev radius past which a tracked chunk is evicted.
-    evict_radius: i32,
     // Max chunk loads dispatched per `plan` call.
     load_budget: usize,
+    // Optional cap on total resident chunk bytes. When `Some(b)`, `plan`
+    // clamps the effective window down (shrinking the far impostor band before
+    // the near full-detail band) whenever resident bytes exceed `b`, evicting
+    // the outermost chunks until they fit. `None` (the default) disables byte
+    // accounting entirely, leaving the pure radius-based window.
+    byte_budget: Option<u64>,
+    // Rings the effective window is currently shrunk by under byte pressure,
+    // in `[0, far_radius]`. Zero (the default, and always so with no byte
+    // budget) means the effective window is exactly the configured one. Each
+    // ring shrinks the far band first, then the near band once the two meet.
+    shrink: i32,
 }
 
 impl ChunkWindow {
@@ -121,24 +140,40 @@ impl ChunkWindow {
             states: BTreeMap::new(),
             near_radius,
             far_radius,
-            evict_radius: far_radius + EVICT_HYSTERESIS,
             load_budget: load_budget.max(1),
+            byte_budget: None,
+            shrink: 0,
         }
     }
 
+    // Set (or clear with `None`) the total resident-chunk-byte budget. `None`
+    // keeps the pure radius-based window; `Some(b)` additionally clamps the
+    // effective view radius down until resident bytes fit `b`. Off by default
+    // so worlds that never set it behave exactly as the radius-only window.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.byte_budget = budget;
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off
+    // (the pure radius window). For diagnostics.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.byte_budget
+    }
+
     // The detail a chunk should currently be at, given its distance from the
-    // camera and (for hysteresis) the detail it is currently tracked at.
+    // camera, the effective full-detail radius, and (for hysteresis) the detail
+    // it is currently tracked at.
     fn target_detail(
         &self,
         c: ChunkCoord,
         camera: ChunkCoord,
         current: Option<ChunkDetail>,
+        near_radius: i32,
     ) -> ChunkDetail {
         let d = c.chebyshev_distance(camera);
-        if d <= self.near_radius {
+        if d <= near_radius {
             ChunkDetail::Near
-        } else if matches!(current, Some(ChunkDetail::Near))
-            && d <= self.near_radius + DETAIL_HYSTERESIS
+        } else if matches!(current, Some(ChunkDetail::Near)) && d <= near_radius + DETAIL_HYSTERESIS
         {
             // A currently-full chunk keeps full detail through the hysteresis
             // band rather than re-detailing the instant it leaves near_radius.
@@ -148,14 +183,72 @@ impl ChunkWindow {
         }
     }
 
+    // The effective `(near_radius, far_radius)` after applying the byte-pressure
+    // `shrink`. A shrink first trims the far impostor band down to the near
+    // band, then shrinks the near band (with the far band held equal to it), so
+    // cheap distant impostors are dropped before full-detail near chunks.
+    fn effective_radii(&self) -> (i32, i32) {
+        let far_span = self.far_radius - self.near_radius;
+        if self.shrink <= far_span {
+            (self.near_radius, self.far_radius - self.shrink)
+        } else {
+            let near = (self.near_radius - (self.shrink - far_span)).max(0);
+            (near, near)
+        }
+    }
+
+    // Adjust the byte-pressure `shrink` from resident bytes vs the budget, with
+    // hysteresis so the effective radius does not oscillate at the boundary. A
+    // no-op (shrink pinned to 0) when no byte budget is set.
+    fn adjust_shrink(&mut self) {
+        let Some(budget) = self.byte_budget else {
+            self.shrink = 0;
+            return;
+        };
+        let resident = self.resident_bytes();
+        if resident > budget {
+            // Over budget: shrink one more ring (far impostor band first, then
+            // the near full-detail band), never past a lone camera chunk.
+            self.shrink = (self.shrink + 1).min(self.far_radius);
+            return;
+        }
+        // Under budget: regrow one ring only once resident bytes fall
+        // comfortably below the low-water margin AND no loads are in flight
+        // (a pending load's bytes are not yet counted, so regrowing before it
+        // lands could overshoot and force an immediate re-shrink). The margin
+        // plus the in-flight gate are the hysteresis that keeps the effective
+        // radius from oscillating ring in and out frame to frame.
+        if self.shrink == 0 {
+            return;
+        }
+        let pending = self
+            .states
+            .values()
+            .filter(|slot| slot.state == ChunkState::Pending)
+            .count();
+        if pending == 0 && resident.saturating_mul(100) < budget.saturating_mul(BYTE_BUDGET_LOW_PCT)
+        {
+            self.shrink -= 1;
+        }
+    }
+
     // Decide this frame's chunk loads and evictions for a camera in chunk
     // `camera`.
     //
-    // Evicts every tracked chunk now beyond the evict radius, then re-details
-    // any tracked chunk that has crossed the near/far boundary (evict +
-    // reload at the new detail), then dispatches the nearest in-window chunks
-    // not yet tracked, up to the load budget, marking each `Pending`.
+    // First reconciles the effective view radius against the byte budget (a
+    // no-op when none is set), then evicts every tracked chunk now beyond the
+    // effective evict radius, re-details any tracked chunk that has crossed the
+    // near/far boundary (evict + reload at the new detail), and dispatches the
+    // nearest in-window chunks not yet tracked, up to the load budget, marking
+    // each `Pending`.
     pub fn plan(&mut self, camera: ChunkCoord) -> ChunkPlan {
+        // 0. Reconcile the effective window with the byte budget. The clamp only
+        //    ever shrinks below the configured radii, so a world with no budget
+        //    (shrink pinned to 0) plans exactly the configured window.
+        self.adjust_shrink();
+        let (near_radius, far_radius) = self.effective_radii();
+        let evict_radius = far_radius + EVICT_HYSTERESIS;
+
         let mut to_evict: Vec<ChunkCoord> = Vec::new();
 
         // 1. Evict chunks that have drifted past the evict radius.
@@ -163,7 +256,7 @@ impl ChunkWindow {
             .states
             .keys()
             .copied()
-            .filter(|c| c.chebyshev_distance(camera) > self.evict_radius)
+            .filter(|c| c.chebyshev_distance(camera) > evict_radius)
             .collect();
         for c in &gone {
             self.states.remove(c);
@@ -176,7 +269,9 @@ impl ChunkWindow {
         let redetail: Vec<ChunkCoord> = self
             .states
             .iter()
-            .filter(|(c, slot)| self.target_detail(**c, camera, Some(slot.detail)) != slot.detail)
+            .filter(|(c, slot)| {
+                self.target_detail(**c, camera, Some(slot.detail), near_radius) != slot.detail
+            })
             .map(|(c, _)| *c)
             .collect();
         for c in &redetail {
@@ -187,8 +282,8 @@ impl ChunkWindow {
         // 3. Collect in-window chunks (within far_radius) not yet tracked,
         //    nearest first.
         let mut candidates: Vec<ChunkCoord> = Vec::new();
-        for dz in -self.far_radius..=self.far_radius {
-            for dx in -self.far_radius..=self.far_radius {
+        for dz in -far_radius..=far_radius {
+            for dx in -far_radius..=far_radius {
                 let c = camera.offset(dx, dz);
                 if !self.states.contains_key(&c) {
                     candidates.push(c);
@@ -205,12 +300,13 @@ impl ChunkWindow {
 
         let mut to_load = Vec::with_capacity(candidates.len());
         for &c in &candidates {
-            let detail = self.target_detail(c, camera, None);
+            let detail = self.target_detail(c, camera, None, near_radius);
             self.states.insert(
                 c,
                 Slot {
                     state: ChunkState::Pending,
                     detail,
+                    bytes: 0,
                 },
             );
             to_load.push((c, detail));
@@ -220,14 +316,28 @@ impl ChunkWindow {
         ChunkPlan { to_load, to_evict }
     }
 
-    // Mark a dispatched chunk resident once its mesh is on the GPU.
+    // Mark a dispatched chunk resident once its mesh is on the GPU, recording
+    // its GPU footprint in `bytes` (the decoded vertex + index buffer size).
+    // `bytes` may be 0 when nothing was uploaded (e.g. a generation that
+    // deterministically failed and is being retired to stop retrying it).
     //
     // A no-op if the chunk is no longer tracked -- the camera may have moved
     // far enough to evict it while its load was still in flight.
-    pub fn mark_resident(&mut self, coord: ChunkCoord) {
+    pub fn mark_resident(&mut self, coord: ChunkCoord, bytes: u64) {
         if let Some(slot) = self.states.get_mut(&coord) {
             slot.state = ChunkState::Resident;
+            slot.bytes = bytes;
         }
+    }
+
+    // Total bytes of all currently Resident chunks, for diagnostics and the
+    // byte-budget clamp. Pending chunks (not yet uploaded) are excluded.
+    pub fn resident_bytes(&self) -> u64 {
+        self.states
+            .values()
+            .filter(|slot| slot.state == ChunkState::Resident)
+            .map(|slot| slot.bytes)
+            .sum()
     }
 
     // Drop `coord` from tracking so a later [`plan`](Self::plan) will
@@ -290,6 +400,39 @@ mod tests {
         plan.to_load.iter().map(|(c, _)| *c).collect()
     }
 
+    // Fill the whole configured window at `camera`, marking every dispatched
+    // chunk resident with `bytes`. Assumes a load budget covering the window.
+    fn fill(w: &mut ChunkWindow, camera: ChunkCoord, bytes: u64) {
+        for (c, _) in w.plan(camera).to_load {
+            w.mark_resident(c, bytes);
+        }
+    }
+
+    // Replan at a stationary `camera`, marking each newly loaded chunk resident,
+    // until the byte clamp reaches a fixed point. Convergence is a streak of
+    // plans that neither load nor evict: a single quiet plan is not enough,
+    // because the effective radius shrinks two frames before the `+2` evict
+    // hysteresis actually drops the outer ring. Panics if it never settles --
+    // which doubles as the assertion that the clamp does not oscillate.
+    fn settle(w: &mut ChunkWindow, camera: ChunkCoord, bytes: u64) {
+        let mut quiet = 0;
+        for _ in 0..200 {
+            let plan = w.plan(camera);
+            for (c, _) in &plan.to_load {
+                w.mark_resident(*c, bytes);
+            }
+            if plan.to_load.is_empty() && plan.to_evict.is_empty() {
+                quiet += 1;
+                if quiet >= 4 {
+                    return;
+                }
+            } else {
+                quiet = 0;
+            }
+        }
+        panic!("byte-budget clamp did not converge (oscillating?)");
+    }
+
     #[test]
     fn plan_loads_nearest_in_window_chunks_within_budget() {
         // near=far=2 -> a 5x5 window of 25 chunks, impostors off; budget 4.
@@ -343,14 +486,14 @@ mod tests {
         let plan = w.plan(cc(0, 0));
         assert_eq!(plan.to_load, vec![(cc(0, 0), ChunkDetail::Near)]);
         assert_eq!(w.counts(), (0, 1));
-        w.mark_resident(cc(0, 0));
+        w.mark_resident(cc(0, 0), 0);
         assert_eq!(w.counts(), (1, 0));
     }
 
     #[test]
     fn mark_resident_of_an_untracked_chunk_is_a_noop() {
         let mut w = ChunkWindow::new(0, 0, 1);
-        w.mark_resident(cc(9, 9)); // never planned -- must not panic or insert
+        w.mark_resident(cc(9, 9), 0); // never planned -- must not panic or insert
         assert_eq!(w.counts(), (0, 0));
         assert!(!w.is_tracked(cc(9, 9)));
     }
@@ -400,7 +543,7 @@ mod tests {
         let crossing = cc(2, 0); // distance 2 -> Far impostor at the origin
         assert!(plan.to_load.contains(&(crossing, ChunkDetail::Far)));
         for (c, _) in plan.to_load.clone() {
-            w.mark_resident(c);
+            w.mark_resident(c, 0);
         }
         let (near0, far0) = w.counts_by_detail();
         assert!(near0 > 0 && far0 > 0);
@@ -417,7 +560,7 @@ mod tests {
         // near 2, far 5. A chunk at the origin starts Near (camera at origin).
         let mut w = ChunkWindow::new(2, 5, 200);
         for (c, _) in w.plan(cc(0, 0)).to_load {
-            w.mark_resident(c);
+            w.mark_resident(c, 0);
         }
         // Camera steps to (3,0): origin chunk is now chebyshev distance 3 =
         // near_radius(2) + hysteresis(1), so it stays Near, no re-detail.
@@ -437,5 +580,102 @@ mod tests {
         let plan = w.plan(cc(0, 0));
         assert!(plan.to_load.iter().all(|(_, d)| *d == ChunkDetail::Near));
         assert_eq!(w.counts_by_detail().1, 0); // never any far chunks
+    }
+
+    #[test]
+    fn resident_bytes_counts_only_resident_chunks() {
+        let mut w = ChunkWindow::new(1, 1, 100); // 3x3 window
+        w.plan(cc(0, 0)); // all 9 dispatched Pending
+        assert_eq!(w.resident_bytes(), 0); // nothing uploaded yet
+        w.mark_resident(cc(0, 0), 500);
+        w.mark_resident(cc(1, 0), 250);
+        assert_eq!(w.resident_bytes(), 750);
+        // The 7 still-pending chunks contribute nothing to the resident total.
+        assert_eq!(w.counts(), (2, 7));
+    }
+
+    #[test]
+    fn byte_budget_accessor_reflects_set_and_clear() {
+        let mut w = ChunkWindow::new(1, 1, 4);
+        assert_eq!(w.byte_budget(), None);
+        w.set_byte_budget(Some(4096));
+        assert_eq!(w.byte_budget(), Some(4096));
+        w.set_byte_budget(None);
+        assert_eq!(w.byte_budget(), None);
+    }
+
+    #[test]
+    fn no_byte_budget_never_shrinks_the_window() {
+        // Absurd resident bytes but no budget: the window stays the configured
+        // radius and a stationary replan neither loads nor evicts -- byte-for-byte
+        // the pure radius-only behavior the existing tests pin.
+        let mut w = ChunkWindow::new(1, 3, 1000);
+        fill(&mut w, cc(0, 0), 10_000_000);
+        assert_eq!(w.counts().0, 49); // full 7x7 window resident
+        for _ in 0..4 {
+            let plan = w.plan(cc(0, 0));
+            assert!(plan.to_load.is_empty());
+            assert!(plan.to_evict.is_empty());
+        }
+        assert_eq!(w.counts().0, 49);
+    }
+
+    #[test]
+    fn byte_budget_evicts_the_far_band_before_the_near_band() {
+        let mut w = ChunkWindow::new(2, 6, 1000);
+        fill(&mut w, cc(0, 0), 100);
+        let (near_full, far_full) = w.counts_by_detail();
+        assert_eq!(near_full, 25); // the 5x5 full-detail core
+        assert!(far_full > 0);
+        // A budget that cannot hold the whole impostor band but comfortably fits
+        // the near core: the far band shrinks first, leaving the core intact.
+        w.set_byte_budget(Some(9000));
+        settle(&mut w, cc(0, 0), 100);
+        let (near_after, far_after) = w.counts_by_detail();
+        assert_eq!(near_after, 25, "full-detail core must survive");
+        assert!(far_after < far_full, "impostor band must shrink");
+        assert!(w.resident_bytes() <= 9000);
+        assert!(w.is_tracked(cc(0, 0)), "camera chunk is never evicted");
+        assert!(!w.is_tracked(cc(6, 0)), "outermost ring evicted");
+    }
+
+    #[test]
+    fn tighter_byte_budget_shrinks_the_window_further() {
+        // A tighter budget must keep strictly fewer chunks resident -- once the
+        // far band is exhausted the clamp shrinks into the near band too.
+        let build = |budget: u64| {
+            let mut w = ChunkWindow::new(2, 6, 1000);
+            fill(&mut w, cc(0, 0), 100);
+            w.set_byte_budget(Some(budget));
+            settle(&mut w, cc(0, 0), 100);
+            w
+        };
+        let loose = build(9000);
+        let tight = build(6000);
+        assert!(loose.resident_bytes() <= 9000);
+        assert!(tight.resident_bytes() <= 6000);
+        assert!(
+            tight.counts().0 < loose.counts().0,
+            "tighter budget must shrink further: tight {} vs loose {}",
+            tight.counts().0,
+            loose.counts().0
+        );
+        assert!(loose.is_tracked(cc(0, 0)) && tight.is_tracked(cc(0, 0)));
+    }
+
+    #[test]
+    fn byte_budget_clamp_settles_without_oscillating() {
+        let mut w = ChunkWindow::new(1, 5, 1000);
+        fill(&mut w, cc(0, 0), 100);
+        w.set_byte_budget(Some(5000));
+        settle(&mut w, cc(0, 0), 100); // panics if it never converges
+        // Past the fixed point a stationary replan is a no-op: the effective
+        // radius neither regrows nor re-shrinks frame to frame.
+        for _ in 0..8 {
+            let plan = w.plan(cc(0, 0));
+            assert!(plan.to_load.is_empty(), "regrew: {:?}", plan.to_load);
+            assert!(plan.to_evict.is_empty(), "evicted: {:?}", plan.to_evict);
+        }
+        assert!(w.resident_bytes() <= 5000);
     }
 }

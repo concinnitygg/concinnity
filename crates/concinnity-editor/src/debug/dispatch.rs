@@ -55,32 +55,78 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         }),
         "streaming" => {
             // Each pool is null when it is not streaming, else its
-            // (resident, pending, unloaded) counts.
-            let pool = |s: &Option<(usize, usize, usize)>| match s {
-                Some((resident, pending, unloaded)) => serde_json::json!({
-                    "resident": resident,
-                    "pending": pending,
-                    "unloaded": unloaded,
-                }),
+            // (resident, pending, unloaded) counts plus resident bytes and the
+            // active byte budget (`byte_budget` is 0 when the pool runs
+            // count-only, with no byte budget).
+            let pool = |s: &Option<(usize, usize, usize)>, bytes: &Option<(u64, u64)>| match s {
+                Some((resident, pending, unloaded)) => {
+                    let (resident_bytes, byte_budget) = bytes.unwrap_or((0, 0));
+                    serde_json::json!({
+                        "resident": resident,
+                        "pending": pending,
+                        "unloaded": unloaded,
+                        "resident_bytes": resident_bytes,
+                        "byte_budget": byte_budget,
+                    })
+                }
                 None => serde_json::Value::Null,
             };
             // The chunk pool has no `unloaded` count -- an infinite world has
-            // no bounded set of not-yet-loaded chunks.
-            let chunk_pool = |s: &Option<(usize, usize)>| match s {
-                Some((resident, pending)) => serde_json::json!({
-                    "resident": resident,
-                    "pending": pending,
+            // no bounded set of not-yet-loaded chunks. Its resident bytes +
+            // byte budget ride alongside so the byte clamp is observable.
+            let chunk_pool = |s: &Option<(usize, usize)>, bytes: &Option<(u64, u64)>| match s {
+                Some((resident, pending)) => {
+                    let (resident_bytes, byte_budget) = bytes.unwrap_or((0, 0));
+                    serde_json::json!({
+                        "resident": resident,
+                        "pending": pending,
+                        "resident_bytes": resident_bytes,
+                        "byte_budget": byte_budget,
+                    })
+                }
+                None => serde_json::Value::Null,
+            };
+            // The RAM back-off valve reading rides alongside the pool counts,
+            // or null before StreamingSystem's first sample / when inert.
+            let pressure = match &state.streaming_pressure {
+                Some(p) => serde_json::json!({
+                    "rss_bytes": p.rss_bytes,
+                    "budget_bytes": p.budget_bytes,
+                    "under_pressure": p.under_pressure,
                 }),
                 None => serde_json::Value::Null,
             };
             serde_json::json!({
                 "ok": true,
                 "frame": state.frame,
-                "texture": pool(&state.streaming.texture),
-                "mesh": pool(&state.streaming.mesh),
-                "chunk": chunk_pool(&state.streaming.chunk),
+                "texture": pool(&state.streaming.texture, &state.streaming.texture_bytes),
+                "mesh": pool(&state.streaming.mesh, &state.streaming.mesh_bytes),
+                "chunk": chunk_pool(&state.streaming.chunk, &state.streaming.chunk_bytes),
+                "pressure": pressure,
             })
         }
+        "budget" => match &state.budget {
+            Some(b) => serde_json::json!({
+                "ok": true,
+                "frame": state.frame,
+                "threads": {
+                    "total_cores": b.total_cores,
+                    "job_threads": b.job_threads,
+                },
+                "memory": {
+                    "total_ram_mib": b.total_ram_mib,
+                    "budget_mib": b.budget_mib,
+                    "overridden": b.overridden,
+                    "rss_mib": b.rss_mib,
+                },
+            }),
+            // App::start publishes the budgets before the loop runs, so a None
+            // here means `tick` has not run since startup yet.
+            None => serde_json::json!({
+                "ok": false,
+                "error": "budgets not published yet (App::start has not run)",
+            }),
+        },
         "profile" => {
             let r = &state.profile_render;
             let systems: Vec<_> = state
@@ -291,8 +337,8 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
-    use crate::gfx::graphics_system::StreamingStats;
     use crate::gfx::profile::RenderStats;
+    use crate::gfx::streaming_system::StreamingStats;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // Run one request against a hand-built snapshot and parse the reply.
@@ -323,6 +369,37 @@ mod tests {
         assert_eq!(r["system_count"], 3);
         assert_eq!(r["component_count"], 7);
         assert_eq!(r["systems"][0], "GraphicsSystem");
+    }
+
+    #[test]
+    fn budget_reports_threads_and_memory() {
+        use crate::debug::state::BudgetSnapshot;
+        let st = DebugState {
+            frame: 9,
+            budget: Some(BudgetSnapshot {
+                total_cores: 10,
+                job_threads: 9,
+                total_ram_mib: Some(65536),
+                budget_mib: 16384,
+                overridden: true,
+                rss_mib: Some(512),
+            }),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"budget"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["threads"]["total_cores"], 10);
+        assert_eq!(r["threads"]["job_threads"], 9);
+        assert_eq!(r["memory"]["total_ram_mib"], 65536);
+        assert_eq!(r["memory"]["budget_mib"], 16384);
+        assert_eq!(r["memory"]["overridden"], true);
+        assert_eq!(r["memory"]["rss_mib"], 512);
+    }
+
+    #[test]
+    fn budget_before_start_is_not_ready() {
+        let r = reply(r#"{"cmd":"budget"}"#, DebugState::default());
+        assert_eq!(r["ok"], false);
     }
 
     #[test]
@@ -432,6 +509,9 @@ mod tests {
                 texture: Some((10, 2, 1)),
                 mesh: Some((4, 0, 3)),
                 chunk: Some((7, 5)),
+                texture_bytes: Some((2048, 4096)),
+                mesh_bytes: Some((1024, 0)),
+                chunk_bytes: Some((3072, 8192)),
             },
             ..Default::default()
         };
@@ -441,11 +521,40 @@ mod tests {
         assert_eq!(r["texture"]["resident"], 10);
         assert_eq!(r["texture"]["pending"], 2);
         assert_eq!(r["texture"]["unloaded"], 1);
+        // Resident bytes + the derived byte budget ride alongside the counts.
+        assert_eq!(r["texture"]["resident_bytes"], 2048);
+        assert_eq!(r["texture"]["byte_budget"], 4096);
         assert_eq!(r["mesh"]["resident"], 4);
+        // A 0 byte_budget flags a count-only pool (no byte budget set).
+        assert_eq!(r["mesh"]["resident_bytes"], 1024);
+        assert_eq!(r["mesh"]["byte_budget"], 0);
         // The chunk pool reports resident + pending but carries no unloaded count.
         assert_eq!(r["chunk"]["resident"], 7);
         assert_eq!(r["chunk"]["pending"], 5);
         assert!(r["chunk"]["unloaded"].is_null());
+        // The chunk byte clamp's resident bytes + derived budget ride alongside.
+        assert_eq!(r["chunk"]["resident_bytes"], 3072);
+        assert_eq!(r["chunk"]["byte_budget"], 8192);
+        // No pressure sample published yet: the valve reading is null.
+        assert!(r["pressure"].is_null());
+    }
+
+    #[test]
+    fn streaming_reports_ram_back_off_pressure() {
+        let st = DebugState {
+            frame: 3,
+            streaming_pressure: Some(crate::debug::state::PressureSnapshot {
+                rss_bytes: 900,
+                budget_bytes: 1000,
+                under_pressure: true,
+            }),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"streaming"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["pressure"]["rss_bytes"], 900);
+        assert_eq!(r["pressure"]["budget_bytes"], 1000);
+        assert_eq!(r["pressure"]["under_pressure"], true);
     }
 
     #[test]

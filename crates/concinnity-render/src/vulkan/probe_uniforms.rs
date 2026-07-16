@@ -29,7 +29,7 @@
 // every field 16-byte aligned, matching the GLSL `vec4` layout. `box_min.w` is
 // the enabled flag: 0 disables parallax (and signals no baked probe), so the
 // shader samples the raw reflection vector.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct ProbeUniforms {
     // xyz = influence-box min; w = enabled (1.0 = parallax on, 0.0 = off).
@@ -66,7 +66,7 @@ const _: () = assert!(crate::reflection_probe::AUTO_SEED_BUDGET <= MAX_PROBES);
 // distance), falling back to the nearest when the surface is outside all boxes,
 // and samples those slices of the probe cube array. Slices beyond `count` hold the
 // sky fallback cube + a `DISABLED` box, so a sample at any index is always valid.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ProbeSet {
     pub count: u32,

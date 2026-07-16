@@ -19,29 +19,6 @@ pub(super) fn block_type_to_chunk(bt: &BlockType) -> crate::geometry::ChunkBlock
     }
 }
 
-// Column-major model-to-world transform placing a chunk relative to the
-// camera-relative render `origin` chunk: the translation is the chunk's offset
-// from the origin in world units, computed from the integer chunk delta so it
-// is exact and small regardless of how far the world origin is. The matching
-// view matrix is rebased onto the same origin by `camera_relative_view`, which
-// keeps an unbounded world's precision intact. Used by every
-// backend's per-frame chunk-streaming drive.
-pub(super) fn chunk_model_matrix(
-    coord: crate::gfx::chunk_coord::ChunkCoord,
-    origin: crate::gfx::chunk_coord::ChunkCoord,
-    chunk_w: f32,
-    chunk_d: f32,
-) -> [[f32; 4]; 4] {
-    let dx = (coord.x - origin.x) as f32 * chunk_w;
-    let dz = (coord.z - origin.z) as f32 * chunk_d;
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [dx, 0.0, dz, 1.0],
-    ]
-}
-
 // World-space position used to score a draw object for texture streaming:
 // the AABB centre when bounds are finite, otherwise the model-matrix
 // translation (dynamic props carry a non-finite sentinel AABB).
@@ -134,10 +111,10 @@ pub(super) fn build_texture_payload_source(
     payloads: Vec<Vec<u8>>,
     locators: &[crate::ecs::PayloadLocator],
     disk_backed: bool,
-) -> Result<std::sync::Arc<dyn crate::app::texture_stream::PayloadSource>, String> {
+) -> Result<std::sync::Arc<dyn crate::gfx::streaming::texture::PayloadSource>, String> {
     if !disk_backed {
         return Ok(std::sync::Arc::new(
-            crate::app::texture_stream::MemPayloadSource::new(payloads),
+            crate::gfx::streaming::texture::MemPayloadSource::new(payloads),
         ));
     }
     let mut section_starts: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
@@ -153,14 +130,14 @@ pub(super) fn build_texture_payload_source(
                 s
             }
         };
-        disk_locators.push(crate::app::texture_stream::DiskTextureLocator {
+        disk_locators.push(crate::gfx::streaming::texture::DiskTextureLocator {
             path,
             file_offset: start + loc.offset,
             len: loc.len,
         });
     }
     Ok(std::sync::Arc::new(
-        crate::app::texture_stream::DiskPayloadSource::new(disk_locators),
+        crate::gfx::streaming::texture::DiskPayloadSource::new(disk_locators),
     ))
 }
 
@@ -247,26 +224,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!block_type_to_chunk(&bt).solid);
-    }
-
-    // The translation column is the integer chunk delta scaled by chunk size;
-    // the basis stays identity.
-    #[test]
-    fn chunk_model_matrix_offsets_by_chunk_delta() {
-        use crate::gfx::chunk_coord::ChunkCoord;
-        let m = chunk_model_matrix(ChunkCoord::new(2, -3), ChunkCoord::new(0, 0), 16.0, 10.0);
-        assert_eq!(m[3], [32.0, 0.0, -30.0, 1.0]);
-        assert_eq!(m[0], [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(m[1], [0.0, 1.0, 0.0, 0.0]);
-        assert_eq!(m[2], [0.0, 0.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn chunk_model_matrix_origin_chunk_is_untranslated() {
-        use crate::gfx::chunk_coord::ChunkCoord;
-        let c = ChunkCoord::new(5, 7);
-        let m = chunk_model_matrix(c, c, 16.0, 16.0);
-        assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
     }
 
     // Finite bounds score at the AABB centre.

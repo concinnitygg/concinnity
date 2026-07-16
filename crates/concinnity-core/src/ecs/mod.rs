@@ -7,12 +7,39 @@
 // `BlobAssetDef`, `AssetKind`). The authoring `Registration` record lives in
 // concinnity-world, constructed from the trait's metadata consts.
 //
-// The runtime half (the `System` behavior trait, `PipelineContext`, `World`,
+// The `System` behavior trait + its `StepResult` are here too (renderer-free:
+// they name only `PipelineContext`). The rest of the runtime half (the `World`,
 // the value enums (`ComponentAsset` / `SystemAsset`), and the registry macros)
 // lives in the client crate's `ecs` module, which re-exports everything here
 // under the historical `crate::ecs::*` paths.
 pub mod asset_id;
+mod entity_index;
+mod protocol;
 mod registry;
+mod system;
+
+// Renderer-free per-frame protocol resources the runtime systems publish and
+// read to coordinate a tick (menu state, frame-rate cap, HUD prefs, cursor +
+// dropdown views). They name no renderer type, so they live here where the
+// physics / audio subsystem crates can reach them; the client `ecs` module
+// re-exports them under the historical `crate::ecs::*` paths.
+pub use protocol::{
+    CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
+    OpenDropdown,
+};
+
+// The runtime behavior trait every engine system implements + its per-step
+// control signal. Renderer-free (they name only `PipelineContext`), so they live
+// here for the physics / audio subsystem crates; the client `ecs` module
+// re-exports them under the historical `crate::ecs::*` paths and its
+// `define_systems!` table generates the dispatching `SystemAsset` enum.
+pub use system::{StepResult, System};
+
+// The name -> Entity index the load-time Prop decomposition pass publishes.
+// Renderer-free, so the physics / audio subsystem crates can resolve a name
+// reference to an Entity through it; the client `ecs::decompose` module
+// re-exports it under the historical `crate::ecs::decompose::EntityByName` path.
+pub use entity_index::EntityByName;
 
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;

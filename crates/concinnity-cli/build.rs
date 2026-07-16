@@ -4,7 +4,7 @@
 // backend cfg (src/main.rs gates the Agility SDK export statics on backend_dx)
 // and bundles the graphics-SDK runtime DLLs next to the artifact plus emits the
 // Agility linker exports (`SdkOptions { bundle_dlls: true }`). The command logic
-// it wraps lives in concinnity-editor; the C FFI header lives in concinnity-ffi.
+// it wraps lives in concinnity-editor
 
 use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 

@@ -188,18 +188,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         // Append this label's vertex + index geometry into the frame slot's
         // persistent upload buffer (sized up front by `reserve` in
         // `encode_composite_and_text`) and bind sub-views into it.
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(
-                call.vertices.as_ptr() as *const u8,
-                call.vertices.len() * std::mem::size_of::<TextVertex>(),
-            )
-        };
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                call.indices.as_ptr() as *const u8,
-                call.indices.len() * std::mem::size_of::<u16>(),
-            )
-        };
+        let vert_bytes = bytemuck::cast_slice(&call.vertices);
+        let idx_bytes = bytemuck::cast_slice(&call.indices);
 
         let vert_va = self.text_upload.push(args.frame_idx, vert_bytes)?;
         let idx_va = self.text_upload.push(args.frame_idx, idx_bytes)?;

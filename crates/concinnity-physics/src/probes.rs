@@ -1,4 +1,4 @@
-// src/physics/probes.rs
+// concinnity-physics/src/probes.rs
 //
 // Raycast probe answering: each frame the ground probes the animation IK
 // published and the third-person camera's occlusion probe get their rays
@@ -6,8 +6,8 @@
 // writer (the probing systems run after physics), which is invisible at
 // frame rates.
 
-use crate::assets::{CameraProbe, GroundProbes};
-use crate::ecs::PipelineContext;
+use concinnity_core::assets::{CameraProbe, GroundProbes};
+use concinnity_core::ecs::PipelineContext;
 
 use super::PhysicsWorld;
 use super::rig::RigPhysics;

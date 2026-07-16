@@ -642,7 +642,13 @@ impl CrossReferenced for StatHud {
             "StatHud",
             name,
             args,
-            &["fps_label", "vram_label", "ev_label", "edr_label"],
+            &[
+                "fps_label",
+                "vram_label",
+                "ram_label",
+                "ev_label",
+                "edr_label",
+            ],
         )
     }
 }
@@ -653,7 +659,7 @@ impl CrossReferenced for DebugHud {
             "DebugHud",
             name,
             args,
-            &["passes_label", "mouse_label", "camera_label"],
+            &["passes_label", "mouse_label", "camera_label", "sys_label"],
         )
     }
 }

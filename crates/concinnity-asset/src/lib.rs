@@ -108,7 +108,7 @@ mod voxel_world;
 mod water_surface;
 mod window;
 
-pub use application::Application;
+pub use application::{AppLimits, Application};
 pub use audio_clip::AudioClip;
 pub use audio_cue::{AudioCue, CueKind};
 pub use audio_emitter::AudioEmitter;

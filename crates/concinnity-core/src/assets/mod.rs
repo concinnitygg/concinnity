@@ -76,7 +76,6 @@ pub use camera3d::Camera3D;
 pub use character_rig::CharacterRig;
 #[allow(unused_imports)]
 pub use concinnity_asset::AaMode;
-pub use concinnity_asset::Application;
 pub use concinnity_asset::AudioClip;
 pub use concinnity_asset::AudioEmitter;
 pub use concinnity_asset::BlockType;
@@ -116,6 +115,7 @@ pub use concinnity_asset::SsgiResolution;
 pub use concinnity_asset::UpscaleQuality;
 #[allow(unused_imports)]
 pub use concinnity_asset::UpscalerBackend;
+pub use concinnity_asset::{AppLimits, Application};
 pub use concinnity_asset::{AudioCue, CueKind};
 pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
 pub use concinnity_asset::{FileArgs, FileKind};

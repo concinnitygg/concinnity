@@ -16,8 +16,6 @@
 // reasoning lives in one auditable place per backend instead of being repeated
 // on three structurally identical wrapper types.
 
-use std::marker::PhantomData;
-
 /// Marker for a backend context that may be shared, read-only, across the
 /// parallel-encode worker fan-out.
 ///
@@ -35,30 +33,21 @@ pub unsafe trait ParallelEncodeCtx {}
 // Worker closures use it to reach the immutable subset of the backend context
 // they need while recording commands into their own command buffer/list.
 //
-// # Safety
-//
-// `new` takes `&'a T`; the lifetime is preserved through `PhantomData`. The
+// The borrow is held directly, so its lifetime is enforced by the type. The
 // wrapper is only used inside each backend's parallel-encoder fan-out in
 // `graph_exec.rs`, which joins all workers before the outer borrow returns. The
 // Send/Sync claim rests entirely on the `T: ParallelEncodeCtx` marker.
 pub struct ParallelCtxRef<'a, T> {
-    ptr: *const T,
-    _marker: PhantomData<&'a T>,
+    inner: &'a T,
 }
 
 impl<'a, T> ParallelCtxRef<'a, T> {
     pub fn new(ctx: &'a T) -> Self {
-        Self {
-            ptr: ctx as *const T,
-            _marker: PhantomData,
-        }
+        Self { inner: ctx }
     }
 
     pub fn as_ctx(&self) -> &T {
-        // SAFETY: lifetime tied to `'a` via PhantomData; the pointer is a
-        // straight reborrow of `&'a T`, and the workers that hold this are all
-        // joined before that borrow ends (see each backend's graph_exec).
-        unsafe { &*self.ptr }
+        self.inner
     }
 }
 

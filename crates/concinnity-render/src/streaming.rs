@@ -35,6 +35,11 @@ struct Item {
     // Frame this item was last referenced; the LRU tiebreak when two resident
     // items have an equal score during eviction.
     last_touch: u64,
+    // Resident GPU footprint in bytes, reported by the driver on load
+    // completion. Zero until the item first becomes Resident; retained as the
+    // re-load estimate after an eviction. Only counted while Resident, so a
+    // stale weight on an Unloaded item never inflates `resident_bytes`.
+    bytes: u64,
 }
 
 // The load / evict decisions produced by one [`StreamPlanner::plan`] call.
@@ -61,6 +66,11 @@ pub struct StreamPlanner {
     // Max number of items allowed Resident-or-Pending simultaneously. Once the
     // pool is full a load can only proceed by evicting a lower-priority item.
     resident_cap: usize,
+    // Optional cap on total resident bytes. When `Some(b)`, `plan` treats the
+    // pool as full whenever loading a candidate would push resident bytes past
+    // `b`, evicting farther residents until it fits. `None` (the default)
+    // disables byte accounting entirely, leaving the count-only policy.
+    byte_budget: Option<u64>,
 }
 
 impl StreamPlanner {
@@ -75,12 +85,28 @@ impl StreamPlanner {
                     state: StreamState::Unloaded,
                     score: 0.0,
                     last_touch: 0,
+                    bytes: 0,
                 };
                 count
             ],
             load_budget: load_budget.max(1),
             resident_cap: resident_cap.max(1),
+            byte_budget: None,
         }
+    }
+
+    // Set (or clear with `None`) the total resident-byte budget. `None` keeps
+    // the count-only policy; `Some(b)` additionally evicts to hold resident
+    // bytes at or under `b`. Off by default so worlds that never set it behave
+    // exactly as the count-only planner.
+    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+        self.byte_budget = budget;
+    }
+
+    // The active resident-byte budget, or `None` when byte accounting is off
+    // (the count-only policy). For diagnostics.
+    pub fn byte_budget(&self) -> Option<u64> {
+        self.byte_budget
     }
 
     // Number of tracked items.
@@ -115,20 +141,36 @@ impl StreamPlanner {
     }
 
     // Report that a dispatched load for item `id` has completed and the
-    // resource is now on the GPU.
-    pub fn mark_resident(&mut self, id: usize, frame: u64) {
+    // resource is now on the GPU, occupying `bytes` of GPU memory. The driver
+    // knows the exact resident size at completion (decoded pixel bytes, or
+    // vertex + index buffer bytes); `bytes` may be 0 when the size is unknown
+    // or nothing was actually uploaded (e.g. a failed fetch left a placeholder).
+    pub fn mark_resident(&mut self, id: usize, frame: u64, bytes: u64) {
         if let Some(item) = self.items.get_mut(id) {
             item.state = StreamState::Resident;
             item.last_touch = frame;
+            item.bytes = bytes;
         }
     }
 
     // Force item `id` back to `Unloaded` (e.g. after a failed load that
-    // should be retried). Out-of-range ids are ignored.
+    // should be retried). Out-of-range ids are ignored. The item's last-known
+    // byte weight is retained as the estimate for a future re-load; it no
+    // longer counts toward `resident_bytes` while Unloaded.
     pub fn mark_unloaded(&mut self, id: usize) {
         if let Some(item) = self.items.get_mut(id) {
             item.state = StreamState::Unloaded;
         }
+    }
+
+    // Total bytes of all currently Resident items, for diagnostics and the
+    // byte-budget policy. Pending and Unloaded items are excluded.
+    pub fn resident_bytes(&self) -> u64 {
+        self.items
+            .iter()
+            .filter(|it| it.state == StreamState::Resident)
+            .map(|it| it.bytes)
+            .sum()
     }
 
     // `(resident, pending, unloaded)` item counts, for diagnostics.
@@ -149,11 +191,14 @@ impl StreamPlanner {
     // Decide which items to load and evict this frame.
     //
     // `Unloaded` items are considered best-score-first. While the pool has
-    // spare capacity they are simply scheduled to load. Once the pool is full
-    // a candidate can still load by evicting the worst-scored resident item,
-    // but only when that resident is strictly farther than the candidate, so
-    // equal-priority items never churn. At most `load_budget` loads are
-    // scheduled per call.
+    // spare capacity -- under both the count cap and (when set) the byte budget
+    // -- they are simply scheduled to load. Once the pool is full a candidate
+    // can still load by evicting worst-scored residents, but only ones strictly
+    // farther than the candidate, so equal-priority items never churn. A large
+    // candidate may evict several small residents to fit under the byte budget.
+    // At most `load_budget` loads are scheduled per call.
+    //
+    // With no byte budget set this reduces exactly to the count-only policy.
     //
     // This method mutates planner state: scheduled items become `Pending` and
     // evicted items become `Unloaded`, so a later `plan` call in the same
@@ -176,48 +221,79 @@ impl StreamPlanner {
                 .unwrap_or(core::cmp::Ordering::Equal)
         });
 
-        // Items occupying (or about to occupy) a pool slot.
-        let occupied = |items: &[Item]| {
-            items
-                .iter()
-                .filter(|it| it.state != StreamState::Unloaded)
-                .count()
-        };
-
         for &id in &candidates {
             if plan.to_load.len() >= self.load_budget {
                 break;
             }
-            let free = self.resident_cap.saturating_sub(occupied(&self.items));
-            if free > 0 {
+            let cand_score = self.items[id].score;
+            let cand_bytes = self.items[id].bytes;
+
+            // Tentatively pick victims -- worst-scored resident first, and only
+            // ones strictly farther than the candidate -- until the candidate
+            // would fit under both the count cap and the byte budget. Track the
+            // occupancy and resident-byte totals as if each tentative victim
+            // were already gone; commit only if the candidate actually fits.
+            let mut occ = self.occupied();
+            let mut resident_bytes = self.resident_bytes();
+            let mut victims: Vec<usize> = Vec::new();
+            let fits = loop {
+                let count_ok = occ < self.resident_cap;
+                let byte_ok = self
+                    .byte_budget
+                    .is_none_or(|b| resident_bytes + cand_bytes <= b);
+                if count_ok && byte_ok {
+                    break true;
+                }
+                match self.worst_resident(&plan.to_evict, &victims) {
+                    Some(victim) if self.items[victim].score > cand_score => {
+                        occ -= 1;
+                        resident_bytes -= self.items[victim].bytes;
+                        victims.push(victim);
+                    }
+                    // No farther resident left to shed: this candidate cannot
+                    // be placed.
+                    _ => break false,
+                }
+            };
+
+            if fits {
+                for &victim in &victims {
+                    self.items[victim].state = StreamState::Unloaded;
+                    plan.to_evict.push(victim);
+                }
                 self.items[id].state = StreamState::Pending;
                 plan.to_load.push(id);
-                continue;
+            } else if self.byte_budget.is_none() {
+                // Count-only: candidates are score-sorted, so if the best
+                // remaining one cannot displace the worst resident, none can.
+                break;
             }
-            // Pool is full: evict the worst resident if it is genuinely
-            // farther than this candidate, otherwise stop; every remaining
-            // candidate is even lower priority.
-            match self.worst_resident(&plan.to_evict) {
-                Some(victim) if self.items[victim].score > self.items[id].score => {
-                    self.items[victim].state = StreamState::Unloaded;
-                    self.items[id].state = StreamState::Pending;
-                    plan.to_evict.push(victim);
-                    plan.to_load.push(id);
-                }
-                _ => break,
-            }
+            // Byte budget set: a later, smaller candidate may still fit, so
+            // keep scanning rather than stopping here.
         }
 
         plan
     }
 
+    // Items occupying (or about to occupy) a pool slot: everything not Unloaded.
+    fn occupied(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|it| it.state != StreamState::Unloaded)
+            .count()
+    }
+
     // The resident item with the worst (highest) score, breaking ties toward
-    // the least-recently-touched. `excluded` items are skipped so a single
-    // `plan` call never evicts the same victim twice.
-    fn worst_resident(&self, excluded: &[usize]) -> Option<usize> {
+    // the least-recently-touched. Items in either `excluded` slice are skipped
+    // so a single `plan` call never evicts the same victim twice (one slice is
+    // the committed evictions, the other this candidate's tentative picks).
+    fn worst_resident(&self, excluded: &[usize], tentative: &[usize]) -> Option<usize> {
         let mut worst: Option<usize> = None;
         for (id, item) in self.items.iter().enumerate() {
-            if item.state != StreamState::Resident || excluded.contains(&id) {
+            if item.state != StreamState::Resident
+                || excluded.contains(&id)
+                || tentative.contains(&id)
+            {
                 continue;
             }
             match worst {
@@ -294,8 +370,8 @@ mod tests {
         p.set_score(2, 99.0);
         let plan = p.plan();
         assert_eq!(plan.to_load, vec![0, 1]);
-        p.mark_resident(0, 1);
-        p.mark_resident(1, 1);
+        p.mark_resident(0, 1, 0);
+        p.mark_resident(1, 1, 0);
         // The far item cannot displace either resident; they are both closer.
         let plan = p.plan();
         assert!(plan.to_load.is_empty());
@@ -310,8 +386,8 @@ mod tests {
         p.set_score(2, 99.0);
         let plan = p.plan();
         assert_eq!(plan.to_load, vec![0, 1]);
-        p.mark_resident(0, 1);
-        p.mark_resident(1, 1);
+        p.mark_resident(0, 1, 0);
+        p.mark_resident(1, 1, 0);
         // Item 2 walks closer than resident item 1.
         p.set_score(2, 10.0);
         let plan = p.plan();
@@ -329,8 +405,8 @@ mod tests {
         p.set_score(2, 99.0); // far away initially, so 0 and 1 become resident
         let plan = p.plan();
         assert_eq!(plan.to_load, vec![0, 1]);
-        p.mark_resident(0, 1);
-        p.mark_resident(1, 1);
+        p.mark_resident(0, 1, 0);
+        p.mark_resident(1, 1, 0);
         // Item 0 is referenced more recently than item 1.
         p.touch(0, 100);
         p.touch(1, 50);
@@ -347,7 +423,7 @@ mod tests {
         let plan = p.plan();
         let id = plan.to_load[0];
         assert_eq!(p.counts(), (0, 1, 2));
-        p.mark_resident(id, 1);
+        p.mark_resident(id, 1, 0);
         assert_eq!(p.counts(), (1, 0, 2));
         p.mark_unloaded(id);
         assert_eq!(p.counts(), (0, 0, 3));
@@ -358,5 +434,154 @@ mod tests {
         let mut p = StreamPlanner::new(0, 4, 8);
         assert_eq!(p.len(), 0);
         assert_eq!(p.plan(), StreamPlan::default());
+    }
+
+    // Give an Unloaded item a known byte weight, as if it had been resident and
+    // then evicted: `mark_resident` records the size, `mark_unloaded` frees the
+    // slot but keeps the weight as the re-load estimate.
+    fn seed_bytes(p: &mut StreamPlanner, id: usize, bytes: u64) {
+        p.mark_resident(id, 0, bytes);
+        p.mark_unloaded(id);
+    }
+
+    #[test]
+    fn byte_budget_accessor_reflects_set_and_clear() {
+        let mut p = StreamPlanner::new(1, 4, 8);
+        assert_eq!(p.byte_budget(), None);
+        p.set_byte_budget(Some(4096));
+        assert_eq!(p.byte_budget(), Some(4096));
+        p.set_byte_budget(None);
+        assert_eq!(p.byte_budget(), None);
+    }
+
+    #[test]
+    fn resident_bytes_sums_resident_items_only() {
+        let mut p = StreamPlanner::new(3, 4, 8);
+        assert_eq!(p.resident_bytes(), 0);
+        p.mark_resident(0, 1, 100);
+        p.mark_resident(1, 1, 250);
+        assert_eq!(p.resident_bytes(), 350);
+        // An unloaded item stops counting even though it keeps its weight.
+        p.mark_unloaded(0);
+        assert_eq!(p.resident_bytes(), 250);
+    }
+
+    #[test]
+    fn no_byte_budget_ignores_item_bytes() {
+        // Generous count cap, no byte budget: even huge items never evict.
+        let mut p = StreamPlanner::new(3, 4, 8);
+        p.set_score(0, 5.0);
+        p.set_score(1, 6.0);
+        p.mark_resident(0, 1, 10_000);
+        p.mark_resident(1, 1, 10_000);
+        seed_bytes(&mut p, 2, 10_000);
+        p.set_score(2, 7.0);
+        let plan = p.plan();
+        // A count slot is free, so it simply loads with no eviction.
+        assert_eq!(plan.to_load, vec![2]);
+        assert!(plan.to_evict.is_empty());
+    }
+
+    #[test]
+    fn byte_budget_evicts_worst_scored_resident_to_fit() {
+        // Count cap is generous; the byte budget is the only pressure.
+        let mut p = StreamPlanner::new(3, 4, 100);
+        p.set_byte_budget(Some(100));
+        // Two residents fill the 100-byte budget: a near one and a far one.
+        p.set_score(0, 5.0);
+        p.set_score(1, 80.0);
+        p.mark_resident(0, 1, 50);
+        p.mark_resident(1, 1, 50);
+        assert_eq!(p.resident_bytes(), 100);
+        // A mid-distance 50-byte candidate wants in.
+        seed_bytes(&mut p, 2, 50);
+        p.set_score(2, 10.0);
+        let plan = p.plan();
+        // It must evict the worst-scored resident (far id 1), not near id 0.
+        assert_eq!(plan.to_evict, vec![1]);
+        assert_eq!(plan.to_load, vec![2]);
+    }
+
+    #[test]
+    fn count_cap_binds_first_for_small_items() {
+        // Tight count cap, roomy byte budget: the count cap drives eviction.
+        let mut p = StreamPlanner::new(3, 4, 2);
+        p.set_byte_budget(Some(10_000));
+        p.set_score(0, 10.0);
+        p.set_score(1, 20.0);
+        p.set_score(2, 99.0);
+        let plan = p.plan();
+        assert_eq!(plan.to_load, vec![0, 1]);
+        p.mark_resident(0, 1, 8);
+        p.mark_resident(1, 1, 8);
+        // id 2 walks in closer than id 1. Resident bytes (16) are nowhere near
+        // the 10_000 budget, so the full count cap is what forces the swap.
+        seed_bytes(&mut p, 2, 8);
+        p.set_score(2, 15.0);
+        let plan = p.plan();
+        assert_eq!(plan.to_evict, vec![1]);
+        assert_eq!(plan.to_load, vec![2]);
+        assert_eq!(p.resident_bytes(), 8); // only id 0 remains resident
+    }
+
+    #[test]
+    fn byte_budget_binds_first_for_large_items() {
+        // Roomy count cap, tight byte budget: bytes drive eviction.
+        let mut p = StreamPlanner::new(3, 4, 100);
+        p.set_byte_budget(Some(100));
+        p.set_score(0, 10.0);
+        p.set_score(1, 20.0);
+        p.mark_resident(0, 1, 50);
+        p.mark_resident(1, 1, 50); // 100 bytes: budget full, 2/100 slots used
+        seed_bytes(&mut p, 2, 50);
+        p.set_score(2, 15.0);
+        let plan = p.plan();
+        // 98 count slots are free, so only the byte budget can force this.
+        assert_eq!(plan.to_evict, vec![1]);
+        assert_eq!(plan.to_load, vec![2]);
+        assert!(p.resident_bytes() + 50 <= 100);
+    }
+
+    #[test]
+    fn large_candidate_evicts_multiple_farther_residents_but_not_a_closer_one() {
+        let mut p = StreamPlanner::new(5, 4, 100);
+        p.set_byte_budget(Some(100));
+        // Four 20-byte residents: one near (score 5), three far (30/40/50).
+        p.set_score(0, 5.0);
+        p.set_score(1, 30.0);
+        p.set_score(2, 40.0);
+        p.set_score(3, 50.0);
+        p.mark_resident(0, 1, 20);
+        p.mark_resident(1, 1, 20);
+        p.mark_resident(2, 1, 20);
+        p.mark_resident(3, 1, 20);
+        assert_eq!(p.resident_bytes(), 80);
+        // A big 60-byte candidate (score 10) needs 40 bytes freed: it evicts
+        // the two worst-scored residents (far id 3 then id 2), never the nearer
+        // id 0 or id 1.
+        seed_bytes(&mut p, 4, 60);
+        p.set_score(4, 10.0);
+        let plan = p.plan();
+        assert_eq!(plan.to_load, vec![4]);
+        assert_eq!(plan.to_evict, vec![3, 2]);
+        assert_eq!(p.state(0), Some(StreamState::Resident));
+        assert_eq!(p.state(1), Some(StreamState::Resident));
+        assert!(p.resident_bytes() + 60 <= 100);
+    }
+
+    #[test]
+    fn byte_budget_does_not_evict_a_resident_closer_than_the_candidate() {
+        let mut p = StreamPlanner::new(2, 4, 100);
+        p.set_byte_budget(Some(50));
+        // A single near resident already fills the budget.
+        p.set_score(0, 5.0);
+        p.mark_resident(0, 1, 50);
+        // A farther, large candidate cannot displace the closer resident.
+        seed_bytes(&mut p, 1, 50);
+        p.set_score(1, 99.0);
+        let plan = p.plan();
+        assert!(plan.to_load.is_empty());
+        assert!(plan.to_evict.is_empty());
+        assert_eq!(p.state(0), Some(StreamState::Resident));
     }
 }

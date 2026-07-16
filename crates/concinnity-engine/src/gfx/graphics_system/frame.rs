@@ -1,12 +1,12 @@
-// GraphicsSystem per-frame step: transform/pose upload, settings application,
-// streaming updates, scene-reel ticking, and the backend draw call.
+// GraphicsSystem per-frame step: transform/pose upload, scene-reel ticking, and
+// the backend draw call. Asset streaming + the camera-relative view rebase run
+// in StreamingSystem, scheduled just before this system.
 
-use super::helpers::*;
 use super::*;
 use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
-use crate::gfx::backend::{ChunkMesh, FrameParams};
+use crate::gfx::backend::FrameParams;
 use crate::gfx::{draw_list, scene_reel, settings};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
@@ -43,8 +43,12 @@ impl GraphicsSystem {
             .map(|t| t.elapsed().as_secs_f32())
             .unwrap_or(0.0);
 
-        // read projection and view from Camera3D; view_matrix was written by
-        // Camera3DSystem on the previous tick
+        // read projection from Camera3D; the view + camera position for the
+        // draw come from StreamingSystem's `CameraRelativeView` (published just
+        // before this system: the absolute values from Camera3D when no chunk
+        // world is streaming, or both rebased onto the chunk render origin when
+        // one is). Fall back to the absolute Camera3D values if the resource is
+        // absent (a unit test driving this system without StreamingSystem).
         let (fov_y_radians, near, far, view_matrix, cam_pos) = ctx
             .query::<Camera3D>()
             .next()
@@ -64,6 +68,10 @@ impl GraphicsSystem {
                 IDENTITY4,
                 [0.0; 3],
             ));
+        let (final_view, final_cam_pos) = ctx
+            .resource::<crate::gfx::streaming_system::CameraRelativeView>()
+            .map(|c| (c.view, c.cam_pos))
+            .unwrap_or((view_matrix, cam_pos));
 
         // The overlay draw list + resolved menu state OverlaySystem built
         // earlier this tick, taken so a stale build is never redrawn.
@@ -189,176 +197,11 @@ impl GraphicsSystem {
                     }
                 }
 
-                // Drive albedo-texture streaming: re-score every slot by
-                // camera distance, dispatch this frame's background loads
-                // within budget, then apply completed uploads + evictions.
-                // Each backend's update_texture_slot rewrites whichever
-                // descriptors / argument-buffers sample that slot so it
-                // takes effect on this same draw_frame.
-                if !overlay.world_hidden
-                    && let Some(streamer) = &mut self.texture_streamer
-                {
-                    streamer.update_scores(cam_pos, self.frame_count);
-                    for slot in streamer.plan_and_dispatch() {
-                        if let Err(e) = backend.evict_texture_slot(slot) {
-                            tracing::warn!("GraphicsSystem: texture evict slot {}: {}", slot, e);
-                        }
-                    }
-                    streamer.drain_completed(self.frame_count, |slot, w, h, px| {
-                        if let Err(e) = backend.update_texture_slot(slot, w, h, px) {
-                            tracing::warn!("GraphicsSystem: texture upload slot {}: {}", slot, e);
-                        }
-                    });
-                    // Surface streaming progress periodically so a headless
-                    // run can confirm textures are coming resident.
-                    if self.frame_count.is_multiple_of(120) {
-                        let (resident, pending, unloaded) = streamer.stats();
-                        tracing::info!(
-                            "GraphicsSystem: texture streaming -- {} resident, {} pending, {} unloaded",
-                            resident,
-                            pending,
-                            unloaded
-                        );
-                    }
-                }
-
-                // Drive mesh-geometry streaming: re-score each streamed mesh
-                // by camera distance, dispatch this frame's background loads,
-                // then apply completed geometry uploads + evictions. A mesh is
-                // skipped in every pass until its geometry region is resident.
-                if !overlay.world_hidden
-                    && let Some(streamer) = &mut self.mesh_streamer
-                {
-                    streamer.update_scores(cam_pos, self.frame_count);
-                    // A runtime eviction's freed space must not be reused
-                    // until the in-flight command buffers that drew it retire.
-                    let retire_frame = self.frame_count + self.frames_in_flight as u64;
-                    for stream_id in streamer.plan_and_dispatch() {
-                        if let Some(&draw_idx) = self.mesh_stream_draw_indices.get(stream_id)
-                            && let Err(e) = backend.evict_mesh(draw_idx, retire_frame)
-                        {
-                            tracing::warn!("GraphicsSystem: mesh evict draw {}: {}", draw_idx, e);
-                        }
-                    }
-                    let draw_indices = &self.mesh_stream_draw_indices;
-                    let frame = self.frame_count;
-                    streamer.drain_completed(self.frame_count, |stream_id, verts, idxs| {
-                        match draw_indices.get(stream_id) {
-                            // Return the upload result so the streamer can roll
-                            // a transient seed-full miss back to Unloaded and
-                            // retry it once freed regions reclaim, rather than
-                            // marking the mesh resident with no GPU geometry.
-                            Some(&draw_idx) => backend.upload_mesh(draw_idx, verts, idxs, frame),
-                            None => Ok(()),
-                        }
-                    });
-                    if self.frame_count.is_multiple_of(120) {
-                        let (resident, pending, unloaded) = streamer.stats();
-                        tracing::info!(
-                            "GraphicsSystem: mesh streaming -- {} resident, {} pending, {} unloaded",
-                            resident,
-                            pending,
-                            unloaded
-                        );
-                    }
-                }
-
-                // Drive infinite-world chunk streaming: generate + upload the
-                // chunks entering the camera's view window and remove those
-                // that have left it. None unless a VoxelWorld was declared.
-                //
-                // Camera-relative rendering: chunk geometry is placed
-                // relative to a render origin that follows the camera's chunk,
-                // and the view + camera position handed to the backend are
-                // rebased onto the same origin. The world transform is
-                // unchanged -- it is just evaluated from small coordinates, so
-                // an unbounded world renders without large-coordinate jitter.
-                // `final_view` / `final_cam_pos` stay absolute when no
-                // VoxelWorld is streaming, leaving a non-voxel world
-                // byte-for-byte unchanged.
-                let mut final_view = view_matrix;
-                let mut final_cam_pos = cam_pos;
-                if let Some(cs) = &mut self.chunk_stream {
-                    let camera_chunk = cs.streamer.camera_chunk(cam_pos);
-                    let retire_frame = self.frame_count + self.frames_in_flight as u64;
-                    for coord in cs.streamer.plan_and_dispatch(camera_chunk) {
-                        if let Some(draw_idx) = cs.draws.remove(&coord)
-                            && let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame)
-                        {
-                            tracing::warn!(
-                                "GraphicsSystem: chunk remove ({},{}): {}",
-                                coord.x,
-                                coord.z,
-                                e
-                            );
-                        }
-                    }
-                    // The camera crossed into a new chunk: move the render
-                    // origin to it and rebase every resident chunk's model
-                    // matrix. `prev_draw_models` is deliberately left alone --
-                    // the rebase is exact, so a stationary chunk shows zero TAA
-                    // velocity across the shift.
-                    if camera_chunk != cs.origin_chunk {
-                        for (&coord, &draw_idx) in &cs.draws {
-                            let model =
-                                chunk_model_matrix(coord, camera_chunk, cs.chunk_w, cs.chunk_d);
-                            if let Err(e) = backend.set_chunk_model(draw_idx, model) {
-                                tracing::warn!(
-                                    "GraphicsSystem: chunk rebase ({},{}): {}",
-                                    coord.x,
-                                    coord.z,
-                                    e
-                                );
-                            }
-                        }
-                        cs.origin_chunk = camera_chunk;
-                    }
-                    let frame = self.frame_count;
-                    let (chunk_w, chunk_d) = (cs.chunk_w, cs.chunk_d);
-                    let (tex, nm, mat) = (cs.texture_slot, cs.normal_map_slot, cs.material);
-                    let mut added: Vec<(crate::gfx::chunk_coord::ChunkCoord, usize)> = Vec::new();
-                    cs.streamer.drain_completed(|coord, verts, idxs| {
-                        let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
-                        match backend.add_chunk_mesh(ChunkMesh {
-                            verts,
-                            idxs,
-                            model,
-                            texture_slot: tex,
-                            normal_map_slot: nm,
-                            material: mat,
-                            frame,
-                        }) {
-                            Ok(draw_idx) => added.push((coord, draw_idx)),
-                            Err(e) => tracing::warn!(
-                                "GraphicsSystem: chunk add ({},{}): {}",
-                                coord.x,
-                                coord.z,
-                                e
-                            ),
-                        }
-                    });
-                    for (coord, draw_idx) in added {
-                        cs.draws.insert(coord, draw_idx);
-                    }
-                    // Rebase the view + camera onto the render origin so the
-                    // origin-relative chunk geometry above transforms exactly.
-                    let (ox, oz) = camera_chunk.origin_world(cs.chunk_w, cs.chunk_d);
-                    let origin = [ox, 0.0, oz];
-                    final_view =
-                        crate::gfx::chunk_coord::camera_relative_view(view_matrix, cam_pos, origin);
-                    final_cam_pos = [cam_pos[0] - ox, cam_pos[1], cam_pos[2] - oz];
-                    if self.frame_count.is_multiple_of(120) {
-                        let (resident, pending) = cs.streamer.stats();
-                        let (near, far) = cs.streamer.detail_counts();
-                        tracing::info!(
-                            "GraphicsSystem: chunk streaming -- {} resident ({} full, {} impostor), {} pending",
-                            resident,
-                            near,
-                            far,
-                            pending
-                        );
-                    }
-                }
+                // Asset streaming (texture / mesh / voxel-world chunk pools)
+                // and the camera-relative view rebase run in StreamingSystem,
+                // scheduled immediately before this system; the rebased
+                // `final_view` / `final_cam_pos` were read from its
+                // `CameraRelativeView` at the top of this step.
 
                 // On Metal, pump_ns_events runs inside draw_frame, so update_view
                 // is called first so any key/mouse events that arrived since the

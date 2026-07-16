@@ -2,10 +2,7 @@
 //
 // Holds the world authoring / in-memory build code (add / rm / check / build),
 // the in-engine editor HUD, the localhost debug server, and the interpreted
-// (`cn debug`) run loop. The `concinnity` CLI binary (concinnity-cli, which
-// owns the argv parsing) and the C-ABI embedding surface (concinnity-ffi) both
-// build on this crate. Sits on top of the runtime (concinnity-engine) and the
-// compiler (concinnity-cook); a shipped runtime links none of this.
+// (`cn debug`) run loop.
 
 // Bridge: re-export the runtime/core modules the authoring, editor, and debug
 // code names under crate::* so their `crate::<module>` import paths resolve.
@@ -44,8 +41,7 @@ pub use debug::{WatchTarget, client as debug_client};
 pub use editor::run_editor;
 pub use run::run_debug;
 
-// The authoring API, shared with the FFI embedding surface (concinnity-ffi) and
-// published as the Rust build + validate surface.
+// The authoring API
 pub use authoring::{
     add_to_path, arg_value_to_json, build_world_from_path, build_world_from_str,
     build_world_to_disk, check_at_path, check_from_str, rm_at_path, spec_args, spec_to_value,

@@ -33,6 +33,22 @@ fn vram_text(bytes: u64) -> String {
     format!("VRAM {} MB", bytes / (1024 * 1024))
 }
 
+// Build the host-memory chip text from the process resident set size, with the
+// memory budget appended as `/ {budget} MB` when the budget resource is
+// available. `None` RSS (an unsupported platform, or the editor's in-memory
+// preview that does not query it) blanks the chip so the HUD shows no stale
+// reading; a known RSS without a budget still reports the bare figure.
+fn ram_text(rss: Option<u64>, budget_mib: Option<u64>) -> String {
+    let Some(rss) = rss else {
+        return String::new();
+    };
+    let rss_mib = rss / (1024 * 1024);
+    match budget_mib {
+        Some(budget) => format!("RAM {rss_mib} / {budget} MB"),
+        None => format!("RAM {rss_mib} MB"),
+    }
+}
+
 // Build the exposure-value chip text from the current auto-exposure EMA
 // reading, or `None` when auto-exposure is not active for this world.
 fn ev_text(ev: Option<f32>) -> String {
@@ -93,6 +109,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 pub struct StatHudSystem {
     fps_label: Option<AssetId>,
     vram_label: Option<AssetId>,
+    ram_label: Option<AssetId>,
     ev_label: Option<AssetId>,
     edr_label: Option<AssetId>,
     // Start of the current averaging window.
@@ -101,6 +118,10 @@ pub struct StatHudSystem {
     frames: u32,
     // Most recent GPU-memory sample, bytes.
     vram_bytes: u64,
+    // Most recent host resident-set size, bytes; `None` when the platform
+    // query is unavailable (the chip is then blanked). Sampled on the throttled
+    // emit tick, not per frame, so the syscall runs at most twice a second.
+    ram_bytes: Option<u64>,
     // Most recent auto-exposure EV; `None` when auto-exposure is not active
     // for this world (the chip is then blanked).
     ev: Option<f32>,
@@ -115,11 +136,13 @@ impl StatHudSystem {
         Self {
             fps_label: config.fps_label,
             vram_label: config.vram_label,
+            ram_label: config.ram_label,
             ev_label: config.ev_label,
             edr_label: config.edr_label,
             last_emit: Instant::now(),
             frames: 0,
             vram_bytes: 0,
+            ram_bytes: None,
             ev: None,
             max_edr: None,
         }
@@ -157,6 +180,14 @@ impl System for StatHudSystem {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_emit).as_secs_f32();
         if elapsed >= EMIT_INTERVAL_SECS {
+            // Host resident-set size + memory budget, sampled here (on the
+            // throttled tick) so the syscall runs at most every EMIT_INTERVAL_SECS
+            // rather than every frame. The budget resource is absent in the
+            // editor's in-memory preview, so `ram_text` reports the bare RSS then.
+            self.ram_bytes = crate::app::sysmem::process_resident_bytes();
+            let budget_mib = ctx
+                .resource::<crate::app::budget::MemoryBudget>()
+                .map(|b| b.budget_mib());
             // A blank chip reads as empty content -> the renderer draws neither
             // text nor the background box, so a disabled chip fully disappears.
             Self::write_chip(
@@ -177,6 +208,7 @@ impl System for StatHudSystem {
                     String::new()
                 },
             );
+            Self::write_chip(ctx, self.ram_label, ram_text(self.ram_bytes, budget_mib));
             Self::write_chip(ctx, self.ev_label, ev_text(self.ev));
             Self::write_chip(ctx, self.edr_label, edr_text(self.max_edr));
             self.frames = 0;
@@ -209,6 +241,31 @@ mod tests {
         assert_eq!(vram_text(512 * 1024 * 1024), "VRAM 512 MB");
         // Truncates to whole MB.
         assert_eq!(vram_text(1024 * 1024 + 1), "VRAM 1 MB");
+    }
+
+    #[test]
+    fn ram_text_reports_rss_with_budget_when_known() {
+        // Known RSS and budget render as "used / budget MB", both truncated to
+        // whole MiB.
+        assert_eq!(
+            ram_text(Some(512 * 1024 * 1024), Some(16384)),
+            "RAM 512 / 16384 MB"
+        );
+    }
+
+    #[test]
+    fn ram_text_reports_bare_rss_without_a_budget() {
+        // No budget resource (the editor's in-memory preview): report the RSS
+        // alone rather than a dangling "/ MB".
+        assert_eq!(ram_text(Some(256 * 1024 * 1024), None), "RAM 256 MB");
+    }
+
+    #[test]
+    fn ram_text_blanks_when_rss_unavailable() {
+        // `None` RSS (an unsupported platform): the chip stays empty rather than
+        // showing a stale or zeroed figure.
+        assert_eq!(ram_text(None, Some(16384)), "");
+        assert_eq!(ram_text(None, None), "");
     }
 
     #[test]
@@ -283,15 +340,17 @@ mod tests {
         assert!(world.systems().is_empty());
     }
 
-    // A world carrying a StatHud wired to fps + vram chips and their labels.
+    // A world carrying a StatHud wired to fps + vram + ram chips and their
+    // labels.
     fn hud_world() -> crate::ecs::World {
         let mut world = crate::ecs::World::new_empty();
         world.add_component(StatHud {
             fps_label: Some(AssetId(1)),
             vram_label: Some(AssetId(2)),
+            ram_label: Some(AssetId(3)),
             ..StatHud::default()
         });
-        for id in [1u32, 2] {
+        for id in [1u32, 2, 3] {
             world.add_component(TextLabel {
                 asset_id: AssetId(id),
                 ..Default::default()
@@ -329,6 +388,37 @@ mod tests {
         world.step();
         assert!(chip(&world, 1).starts_with("FPS "), "{}", chip(&world, 1));
         assert_eq!(chip(&world, 2), "VRAM 0 MB");
+    }
+
+    // The RAM chip is always-on (not gated by HudPrefs): on a platform that
+    // reports RSS it fills with a "RAM ..." reading, and the published
+    // MemoryBudget resource appends the "/ budget MB" tail.
+    #[test]
+    fn emit_window_writes_ram_chip_with_budget() {
+        use crate::app::budget::MemoryBudget;
+
+        let mut world = hud_world();
+        world.start().unwrap();
+        // The budget defaults to a fraction of total RAM, so derive the expected
+        // MiB from the same value rather than assuming it equals total RAM.
+        let budget = MemoryBudget::compute(Some(16 * 1024 * 1024 * 1024), 0);
+        world.insert_resource(budget);
+        force_emit_due(&mut world);
+        world.step();
+        // RSS is available on macOS / Linux / Windows; other targets report
+        // `None`, blanking the chip (so the assertion is platform-gated).
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            let ram = chip(&world, 3);
+            assert!(ram.starts_with("RAM "), "{ram}");
+            assert!(
+                ram.ends_with(&format!(" / {} MB", budget.budget_mib())),
+                "{ram}"
+            );
+        }
     }
 
     // The HudPrefs resource (published by GraphicsSystem) gates each chip: with

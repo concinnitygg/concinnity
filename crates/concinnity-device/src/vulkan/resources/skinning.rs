@@ -105,18 +105,8 @@ impl VkContext {
                 (None, None)
             };
 
-        let vtx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                indices.as_ptr() as *const u8,
-                std::mem::size_of_val(indices),
-            )
-        };
+        let vtx_bytes = bytemuck::cast_slice(vertices);
+        let idx_bytes = bytemuck::cast_slice(indices);
         // When ray-traced reflections are live the skinned VB/IB feed the RT
         // skinning path: the skin compute kernel reads the bind-pose VB as a
         // storage buffer, and the IB is both the skinned BLAS index input
@@ -386,19 +376,9 @@ impl VkContext {
 
         self.wait_idle();
 
-        let vert_bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                std::mem::size_of_val(vertices),
-            )
-        };
+        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(self.skinned.vertex_buffer, v_byte_off as u64, vert_bytes)?;
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                rebased.as_ptr() as *const u8,
-                std::mem::size_of_val(rebased.as_slice()),
-            )
-        };
+        let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(self.skinned.index_buffer, i_byte_off, idx_bytes)?;
         Ok(())
     }

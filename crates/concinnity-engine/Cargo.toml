@@ -29,13 +29,12 @@ vulkan = [
 concinnity-core = { path = "../concinnity-core" }
 concinnity-render = { path = "../concinnity-render" }
 concinnity-device = { path = "../concinnity-device" }
+concinnity-physics = { path = "../concinnity-physics" }
+concinnity-audio = { path = "../concinnity-audio" }
 
 ciborium = "0.2"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 ctrlc = "3.5.2"
-kira = "0.12"
-mint = "0.5"
-rapier3d = "0.32"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
@@ -47,6 +46,20 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 core-foundation = "0.10.1"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
+
+[target.'cfg(unix)'.dependencies]
+# Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`
+# on macOS; `/proc` on Linux only needs the page size from here.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }

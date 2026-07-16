@@ -327,18 +327,8 @@ impl DecalResources {
         let pso = dump_on_err(info_queue, create_decal_pso(device, &root_sig, &vs, &ps))?;
 
         // Unit-cube vertex + index buffers.
-        let vbytes = unsafe {
-            std::slice::from_raw_parts(
-                CUBE_VERTS.as_ptr() as *const u8,
-                std::mem::size_of_val(&CUBE_VERTS),
-            )
-        };
-        let ibytes = unsafe {
-            std::slice::from_raw_parts(
-                CUBE_INDICES.as_ptr() as *const u8,
-                std::mem::size_of_val(&CUBE_INDICES),
-            )
-        };
+        let vbytes = bytemuck::cast_slice(CUBE_VERTS.as_slice());
+        let ibytes = bytemuck::cast_slice(CUBE_INDICES.as_slice());
         let vertex_buffer = upload_buffer(
             device,
             command_queue,

@@ -813,9 +813,8 @@ impl crate::vulkan::context::VkContext {
     }
 }
 
-fn as_bytes<T: Copy>(v: &T) -> &[u8] {
-    // SAFETY: `T` is `Copy` and `repr(C)`; we read `size_of::<T>()` bytes.
-    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
+fn as_bytes<T: bytemuck::NoUninit>(v: &T) -> &[u8] {
+    bytemuck::bytes_of(v)
 }
 
 fn depth_barrier(

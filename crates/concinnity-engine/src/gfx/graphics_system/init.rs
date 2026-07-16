@@ -63,33 +63,39 @@ impl GraphicsSystem {
         if let Some(w) = ctx.drain::<Window>().into_iter().next() {
             self.window_args = w;
         }
-        // Capture the DebugHud chip ids (cursor, camera, passes stack order) so
-        // the frame step can anchor them to the top-right of the window. Passes
-        // is last because it grows/shrinks with the frame's step count, so
-        // keeping it at the bottom leaves the fixed-height chips unshifted. The
-        // DebugHud component is queried (not drained) by its system, so it is
-        // still present here; absent fields are skipped.
+        // Capture the DebugHud chip ids (cursor, camera, sys, passes stack
+        // order) so the frame step can anchor them to the top-right of the
+        // window. Passes is last because it grows/shrinks with the frame's step
+        // count, so keeping it at the bottom leaves the fixed-height chips
+        // unshifted. The DebugHud component is queried (not drained) by its
+        // system, so it is still present here; absent fields are skipped.
         self.debug_hud_chips = ctx
             .query::<crate::assets::DebugHud>()
             .next()
             .map(|d| {
-                [d.mouse_label, d.camera_label, d.passes_label]
+                [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
                     .into_iter()
                     .flatten()
                     .collect()
             })
             .unwrap_or_default();
-        // Capture the StatHud chip ids (fps, vram, ev, edr strip order) so the
-        // frame step can pack them tight from the top-left. Like DebugHud the
-        // component is queried (not drained), so it is still present here.
+        // Capture the StatHud chip ids (fps, vram, ram, ev, edr strip order) so
+        // the frame step can pack them tight from the top-left. Like DebugHud
+        // the component is queried (not drained), so it is still present here.
         self.stat_hud_chips = ctx
             .query::<crate::assets::StatHud>()
             .next()
             .map(|s| {
-                [s.fps_label, s.vram_label, s.ev_label, s.edr_label]
-                    .into_iter()
-                    .flatten()
-                    .collect()
+                [
+                    s.fps_label,
+                    s.vram_label,
+                    s.ram_label,
+                    s.ev_label,
+                    s.edr_label,
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
             })
             .unwrap_or_default();
         if let Some(m) = user_graphics.window_mode {
@@ -1858,7 +1864,7 @@ impl GraphicsSystem {
         let (mesh_stream_draw_indices, mesh_centers, mesh_payloads) = {
             let mut draw_indices: Vec<usize> = Vec::new();
             let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
-            let mut payloads: Vec<crate::app::mesh_stream::DecodedMesh> = Vec::new();
+            let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
             for (draw_idx, obj) in draw_objects.iter().enumerate() {
                 if !obj.cullable() {
                     continue;
@@ -1880,7 +1886,7 @@ impl GraphicsSystem {
                 // fits in u16 (the build-time splitter enforces this), so we
                 // narrow back here for DecodedMesh's per-mesh u16 indices.
                 let vbase = vstart as u32;
-                payloads.push(crate::app::mesh_stream::DecodedMesh {
+                payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
                     vertices: all_vertices[vstart..vend].to_vec(),
                     indices: all_indices[obj.index_offset..iend]
                         .iter()
@@ -2605,20 +2611,33 @@ impl GraphicsSystem {
             setting_cmd_cursor: crate::ecs::EventCursor::default(),
         });
 
-        // Hand the overlay build inputs assembled above (font atlases, sprite
-        // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
-        // draw list from them each frame before this system submits it.
-        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
-            fonts: std::mem::take(&mut self.loaded_fonts),
-            sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
-            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
-            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
-            clip_rects: std::mem::take(&mut self.clip_rects),
-            initial_viewport: self
-                .backend
-                .as_ref()
-                .map(|b| b.logical_size())
-                .unwrap_or((0.0, 0.0)),
+        // Hand the streaming pools built above to StreamingSystem: it drives
+        // them each frame (against the parked backend) and publishes the
+        // camera-relative view GraphicsSystem draws with. `frame_count` starts
+        // at 0 in lockstep with this system's own frame clock (both tick once
+        // per world step), so eviction retire-frames match the draw's frame.
+        // Capture each pool's derived byte budget as the back-off valve's
+        // baseline before the streamers move into the parked state, so stage 2
+        // can reduce it and the release can restore it exactly.
+        let texture_baseline_budget = self.texture_streamer.as_ref().and_then(|s| s.byte_budget());
+        let mesh_baseline_budget = self.mesh_streamer.as_ref().and_then(|s| s.byte_budget());
+        let chunk_baseline_budget = self
+            .chunk_stream
+            .as_ref()
+            .and_then(|cs| cs.streamer.byte_budget());
+        ctx.insert_resource(crate::gfx::streaming_system::StreamingState {
+            texture_streamer: self.texture_streamer.take(),
+            mesh_streamer: self.mesh_streamer.take(),
+            mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
+            chunk_stream: self.chunk_stream.take(),
+            frame_count: 0,
+            frames_in_flight: self.frames_in_flight,
+            texture_baseline_budget,
+            mesh_baseline_budget,
+            chunk_baseline_budget,
+            pressure_stage: crate::gfx::streaming_system::pressure::StreamPressureStage::None,
+            pressure_factor: 1.0,
+            last_sampled_rss: None,
         });
 
         // Init-time wiring is done: park the backend in the world's shared
