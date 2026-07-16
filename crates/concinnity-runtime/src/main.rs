@@ -1,11 +1,6 @@
 // concinnity-runtime: the shipped app player.
 //
-// A minimal standalone binary that plays a world's pre-compiled blobs. It links
-// only the runtime crate (concinnity-engine) and the shared data types it
-// re-exports (concinnity-core), never the cook/build pipeline or the editor, so
-// a shipped app carries no compiler. `cn export` ships this prebuilt beside the
-// `cn` toolchain and copies it (renamed) into each app bundle beside the world's
-// `data/` blobs.
+// A minimal standalone binary that plays a world's pre-compiled blobs.
 //
 // The state root (holding `data/`, plus the `saves/` and `settings` the app
 // writes at runtime) is anchored to the executable, not the launch working
@@ -69,7 +64,7 @@ fn main() -> std::io::Result<()> {
     if !dir_is_writable(&content_dir)
         && let Some(writable) = per_user_state_dir(&app_name_from_exe(&exe))
     {
-        concinnity_core::paths::set_writable_state_dir(writable);
+        concinnity_engine::set_writable_state_dir(writable);
     }
 
     concinnity_engine::run_from(&content_dir)

@@ -27,6 +27,10 @@ pub mod app;
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
 pub use app::run::run_from;
+// Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
+// when the content dir is read-only. Exported beside `run_from` so the runtime
+// bin's entire entry API lives on this crate.
+pub use concinnity_core::paths::set_writable_state_dir;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;

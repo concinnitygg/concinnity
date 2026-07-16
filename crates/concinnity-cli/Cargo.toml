@@ -29,7 +29,6 @@ vulkan = [
 concinnity-editor = { path = "../concinnity-editor" }
 concinnity-cook = { path = "../concinnity-cook" }
 concinnity-engine = { path = "../concinnity-engine" }
-concinnity-core = { path = "../concinnity-core" }
 
 clap = { version = "4", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

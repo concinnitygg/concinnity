@@ -618,7 +618,6 @@ dependencies = [
  "ash",
  "clap",
  "concinnity-cook",
- "concinnity-core",
  "concinnity-editor",
  "concinnity-engine",
  "concinnity-toolchain",
@@ -808,7 +807,6 @@ dependencies = [
 name = "concinnity-runtime"
 version = "0.10.1"
 dependencies = [
- "concinnity-core",
  "concinnity-engine",
  "concinnity-toolchain",
  "tempfile",

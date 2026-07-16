@@ -10,7 +10,7 @@
 // its `crate::{assets,ecs,gfx,geometry,result}` paths. The payload *decoders*
 // and shared payload types live in `concinnity_core::build`; this crate's
 // modules call back into them.
-pub use concinnity_core::{assets, ecs, gfx, paths, result};
+pub use concinnity_core::{assets, build, ecs, gfx, paths, result};
 
 // The world front half -- the authored model, the type vocabulary
 // (`ComponentType` / `ResourceAssetType`), and the pure semantic checks --

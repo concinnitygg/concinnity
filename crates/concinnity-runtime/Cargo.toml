@@ -14,7 +14,6 @@ vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
 concinnity-engine = { path = "../concinnity-engine" }
-concinnity-core = { path = "../concinnity-core" }
 
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }

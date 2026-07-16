@@ -82,7 +82,7 @@ pub fn export(
 
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir)?;
-    let data_dir = concinnity_core::paths::data_dir();
+    let data_dir = concinnity_cook::paths::data_dir();
 
     if cfg!(target_os = "macos") {
         export_macos(&meta, &runtime, out_dir, &data_dir, make_zip, dmg)
@@ -319,7 +319,7 @@ fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
 // platform (None for an unstamped runtime, already warned about); compare it to
 // ours.
 fn verify_runtime_backend(found: Option<&str>) -> io::Result<()> {
-    let expected = concinnity_core::build::asset::Platform::current().key();
+    let expected = concinnity_cook::build::Platform::current().key();
     match found {
         // Unstamped runtime: cannot verify, so proceed rather than block a
         // possibly-fine export (the missing-stamp warning already printed).
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn verify_runtime_backend_accepts_matching_or_unstamped() {
-        let expected = concinnity_core::build::asset::Platform::current().key();
+        let expected = concinnity_cook::build::Platform::current().key();
         verify_runtime_backend(None).unwrap();
         verify_runtime_backend(Some(expected)).unwrap();
 
