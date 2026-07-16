@@ -8,18 +8,69 @@
 
 use crate::assets::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
-    Material, ParticleEmitter, PointLight, Prop, ReflectionProbe, RigidBody, VolumetricFog,
-    VoxelChunk, WaterSurface, WaterWave,
+    Material, ParticleEmitter, PointLight, Prop, ReflectionProbe, RigidBody, SdfVolume,
+    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 
 // The wave ceiling lives in core (`concinnity_core::assets::MAX_WATER_WAVES`,
 // shared with the render backends); re-imported here for the clamp.
 use crate::assets::MAX_WATER_WAVES;
 
-// SdfVolume's clamp lives beside its platform-source helpers in core; this
-// wrapper gives it the registry's `validate:` shape.
-pub fn sdf_volume(v: crate::assets::SdfVolume) -> crate::assets::SdfVolume {
-    crate::assets::sdf_volume::clamped(v)
+// Resolve the fragment shader source path for the current build backend from a
+// volume's `fragment_shaders` map (preferred) or its `fragment_shader`
+// fallback. Mirrors the source selection in `source_args`.
+fn sdf_current_platform_source(v: &SdfVolume) -> Option<String> {
+    let platform = crate::build::Platform::current();
+    if let Some(map) = &v.fragment_shaders
+        && let Some(src) = map.get(platform.key()).filter(|s| !s.is_empty())
+    {
+        return Some(src.clone());
+    }
+    if v.fragment_shader.is_empty() {
+        return None;
+    }
+    let ext = std::path::Path::new(&v.fragment_shader)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if platform.accepts_ext(ext) {
+        Some(v.fragment_shader.clone())
+    } else {
+        None
+    }
+}
+
+// Normalize an authored volume for the runtime: clamp the raymarch knobs to
+// sane bounds, force shadows off for translucent volumetrics (they write no
+// depth), and collapse the per-backend `fragment_shaders` map to the current
+// backend's `fragment_shader` (the DirectX raymarch pass filters volumes by
+// that path's extension). The step-count bounds stay in core: they double as
+// the runtime kernel's loop bound.
+pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
+    use crate::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+    // Extents must be positive: a zero or negative extent would produce an
+    // inside-out bounding box no fragment ever enters.
+    for axis in v.extent.iter_mut() {
+        if !axis.is_finite() || *axis <= 0.0 {
+            *axis = 1.0;
+        }
+    }
+    if !v.max_gradient.is_finite() || v.max_gradient <= 0.0 {
+        v.max_gradient = 1.0;
+    }
+    v.max_steps = v
+        .max_steps
+        .clamp(SDF_MAX_STEPS_FLOOR, SDF_MAX_STEPS_CEILING);
+    if !v.max_distance.is_finite() || v.max_distance < 0.1 {
+        v.max_distance = 0.1;
+    }
+    if v.volumetric {
+        v.cast_shadows = false;
+    }
+    if let Some(src) = sdf_current_platform_source(&v) {
+        v.fragment_shader = src;
+    }
+    v
 }
 
 pub fn point_light(mut args: PointLight) -> PointLight {
@@ -558,6 +609,109 @@ mod tests {
             };
             let p = super::super::instanced_prop(args);
             assert_eq!(p.cull_distance, 0.0);
+        }
+    }
+
+    mod sdf_volume {
+        use super::*;
+        use crate::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+
+        // File extension matching the backend these tests compile against, so a
+        // single `fragment_shader` path resolves as current-platform-compatible
+        // on Metal, DirectX, and Vulkan alike.
+        fn platform_ext() -> &'static str {
+            crate::build::Platform::current().key()
+        }
+
+        #[test]
+        fn clamps_steps() {
+            let mut a = SdfVolume {
+                max_steps: 1,
+                ..Default::default()
+            };
+            let fixed = super::super::sdf_volume(a.clone());
+            assert_eq!(fixed.max_steps, SDF_MAX_STEPS_FLOOR);
+
+            a.max_steps = 9999;
+            let fixed = super::super::sdf_volume(a);
+            assert_eq!(fixed.max_steps, SDF_MAX_STEPS_CEILING);
+        }
+
+        #[test]
+        fn repairs_bad_extent() {
+            let a = SdfVolume {
+                extent: [0.0, -1.0, f32::NAN],
+                ..Default::default()
+            };
+            let fixed = super::super::sdf_volume(a);
+            assert_eq!(fixed.extent, [1.0, 1.0, 1.0]);
+        }
+
+        #[test]
+        fn repairs_bad_gradient_and_distance() {
+            let a = SdfVolume {
+                max_gradient: -0.5,
+                max_distance: f32::NAN,
+                ..Default::default()
+            };
+            let fixed = super::super::sdf_volume(a);
+            assert_eq!(fixed.max_gradient, 1.0);
+            assert_eq!(fixed.max_distance, 0.1);
+        }
+
+        #[test]
+        fn collapses_map_to_current_backend() {
+            // The runtime struct should carry the current backend's path in
+            // `fragment_shader` so the DirectX path-extension filter still works
+            // for map-authored volumes.
+            // Include every backend so the collapse resolves regardless of which
+            // backend this test build targets (metal / hlsl / glsl).
+            let mut map = std::collections::BTreeMap::new();
+            map.insert("metal".to_string(), "shaders/blob.metal".to_string());
+            map.insert("hlsl".to_string(), "shaders/blob.hlsl".to_string());
+            map.insert("glsl".to_string(), "shaders/blob.glsl".to_string());
+            let a = SdfVolume {
+                fragment_shaders: Some(map),
+                ..Default::default()
+            };
+            let resolved = super::super::sdf_volume(a);
+            assert_eq!(
+                resolved.fragment_shader,
+                format!("shaders/blob.{}", platform_ext())
+            );
+        }
+
+        #[test]
+        fn volumetric_forces_cast_shadows_off() {
+            let a = SdfVolume {
+                volumetric: true,
+                cast_shadows: true,
+                ..Default::default()
+            };
+            let fixed = super::super::sdf_volume(a);
+            assert!(fixed.volumetric);
+            assert!(
+                !fixed.cast_shadows,
+                "volumetric SDFs are translucent and must not cast hard shadows"
+            );
+        }
+
+        #[test]
+        fn roundtrip_through_args() {
+            let mut v = SdfVolume {
+                centre: [1.0, 2.0, 3.0],
+                extent: [4.0, 5.0, 6.0],
+                fragment_shader: "shaders/foo.metal".to_string(),
+                ..Default::default()
+            };
+            v.params[7] = 0.42;
+            let json = serde_json::to_value(v.clone()).expect("serialises");
+            let back: SdfVolume = serde_json::from_value(json).expect("deserialises");
+            let back = super::super::sdf_volume(back);
+            assert_eq!(back.centre, [1.0, 2.0, 3.0]);
+            assert_eq!(back.extent, [4.0, 5.0, 6.0]);
+            assert_eq!(back.fragment_shader, "shaders/foo.metal");
+            assert_eq!(back.params[7], 0.42);
         }
     }
 }

@@ -989,7 +989,7 @@ fn desugar_gltf_animations(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()
 
 // Bake root motion on every Animation that opted in: strip the root joint's
 // travel out of the pose tracks into the asset's `root_track` (see
-// `Animation::bake_root_motion`). Runs after the glTF pass so imported
+// `root_motion::bake_root_motion`). Runs after the glTF pass so imported
 // tracks are already inline; an Animation without `root_motion` is
 // untouched. A root-motion clip whose root joint has no track produces an
 // empty curve, which would silently never move a character, so it warns.
@@ -1018,7 +1018,7 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
                 ),
             )
         })?;
-        anim.bake_root_motion();
+        crate::root_motion::bake_root_motion(&mut anim);
         if anim.root_track.is_empty() {
             tracing::warn!(
                 "Asset '{}': root_motion is set but the clip has no track on the root \

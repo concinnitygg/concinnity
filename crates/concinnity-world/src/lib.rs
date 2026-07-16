@@ -21,7 +21,7 @@
 // Bridge: re-export the core modules the moved code names under crate::* so
 // its `crate::<module>` import paths resolve unchanged.
 #[allow(unused_imports)]
-pub(crate) use concinnity_core::{assets, ecs, paths, result};
+pub(crate) use concinnity_core::{assets, build, ecs, paths, result};
 
 pub mod check;
 pub mod registry;
