@@ -715,7 +715,7 @@ fn validate_story(story: &Story) -> Result<(), String> {
     Ok(())
 }
 
-// ---- Frontmatter ----
+// Frontmatter
 
 // The frontmatter is a deliberately strict YAML subset: a `title` line and a
 // `characters:` block whose entries take three forms:

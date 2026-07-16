@@ -50,10 +50,35 @@ pub struct InjectedAsset {
     pub injected_by: &'static str,
 }
 
-// What the injection passes added during one expansion run.
+// One asset a macro expansion produced from an authored entry, recorded so
+// listings can group generated assets by what produced them and offer to copy
+// one into world.jsonl as an override.
+#[derive(Debug, Clone)]
+pub struct GeneratedAsset {
+    pub name: String,
+    pub asset_type: String,
+    // The authored asset that generated it (a SceneImport's name).
+    pub generated_by: String,
+}
+
+// One generated asset the world declares itself: the authored entry wins and
+// the generated one is dropped, so a copy edited in world.jsonl overrides what
+// the expansion produces. Recorded so listings can show the override for what
+// it is rather than leaving the generated asset unaccounted for.
+#[derive(Debug, Clone)]
+pub struct ShadowedAsset {
+    pub name: String,
+    pub asset_type: String,
+    // The authored asset whose expansion it would have come from.
+    pub generated_by: String,
+}
+
+// What the expansion passes added, generated, and skipped during one run.
 #[derive(Debug, Default)]
 pub struct ExpandReport {
     pub injected: Vec<InjectedAsset>,
+    pub generated: Vec<GeneratedAsset>,
+    pub shadowed: Vec<ShadowedAsset>,
 }
 
 impl ExpandReport {
@@ -71,6 +96,27 @@ impl ExpandReport {
             injected_by,
         });
     }
+
+    pub(crate) fn record_generated(&mut self, name: &str, asset_type: &str, generated_by: &str) {
+        self.generated.push(GeneratedAsset {
+            name: name.to_string(),
+            asset_type: asset_type.to_string(),
+            generated_by: generated_by.to_string(),
+        });
+    }
+
+    // Idempotent: a name can be checked by more than one pass (both HUDs test the
+    // shared font), and the same override must not be listed twice.
+    pub(crate) fn record_shadowed(&mut self, name: &str, asset_type: &str, generated_by: &str) {
+        if self.shadowed.iter().any(|s| s.name == name) {
+            return;
+        }
+        self.shadowed.push(ShadowedAsset {
+            name: name.to_string(),
+            asset_type: asset_type.to_string(),
+            generated_by: generated_by.to_string(),
+        });
+    }
 }
 
 // Run all expansion passes in order. Mutates the asset list in place and
@@ -82,7 +128,7 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     // Imports expand first so the assets they generate (materials, meshes,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
-    expand_scene_imports(assets)?;
+    expand_scene_imports(assets, &mut report)?;
     // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
     // injection so their TextLabels pull in GraphicsConfig + Font companions.

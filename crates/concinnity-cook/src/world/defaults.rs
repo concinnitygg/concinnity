@@ -117,7 +117,7 @@ fn inject_story_pause_menu(
     // No MainMenu exists (checked above), so this can only flag a same-name
     // collision with an unrelated asset, which is a hard error rather than a
     // silent skip.
-    if name_claimed(assets, &name, "MainMenu")? {
+    if name_claimed(assets, report, "story_pause_menu", &name, "MainMenu")? {
         return Ok(());
     }
 
@@ -239,11 +239,14 @@ fn drain_toggles(assets: &mut Vec<serde_json::Value>) -> Result<EngineDefaults, 
 }
 
 // Whether the world already provides `name` as an asset of `asset_type` (the
-// user's version replaces the default). A name held by a different type is a
-// hard error: the default cannot be injected and silently skipping it would
-// hide the conflict.
+// user's version replaces the default). A claimed name is recorded as a shadow,
+// so a listing can show the default the world overrides rather than leaving it
+// unaccounted for. A name held by a different type is a hard error: the default
+// cannot be injected and silently skipping it would hide the conflict.
 fn name_claimed(
     assets: &[serde_json::Value],
+    report: &mut ExpandReport,
+    injected_by: &'static str,
     name: &str,
     asset_type: &str,
 ) -> Result<bool, String> {
@@ -252,6 +255,7 @@ fn name_claimed(
             continue;
         }
         if type_norm(v) == asset_type.to_lowercase().replace('_', "") {
+            report.record_shadowed(name, asset_type, injected_by);
             return Ok(true);
         }
         return Err(format!(
@@ -308,7 +312,7 @@ fn inject_hud(
     let hud_index = match assets.iter().position(|v| type_norm(v) == hud_type_norm) {
         Some(i) => i,
         None => {
-            if name_claimed(assets, default_name, hud_type)? {
+            if name_claimed(assets, report, injected_by, default_name, hud_type)? {
                 // Unreachable in practice: a same-name same-type asset would
                 // have matched the type scan above.
                 return Ok(());
@@ -365,14 +369,14 @@ fn inject_hud(
 
     let mut chip_injected = false;
     for chip in needed_chips {
-        if name_claimed(assets, chip, "TextLabel")? {
+        if name_claimed(assets, report, injected_by, chip, "TextLabel")? {
             continue;
         }
         inject(assets, report, injected_by, chip, "TextLabel", chip_args());
         chip_injected = true;
     }
 
-    if chip_injected && !name_claimed(assets, HUD_FONT_NAME, "Font")? {
+    if chip_injected && !name_claimed(assets, report, injected_by, HUD_FONT_NAME, "Font")? {
         inject(
             assets,
             report,
@@ -418,7 +422,7 @@ fn inject_sky(
         .unwrap_or(CAMERA_FAR_DEFAULT);
     let size = (far * SKY_FAR_FRACTION).min(SKY_SIZE_MAX);
 
-    let mesh_claimed = name_claimed(assets, "sky_mesh", "ProceduralMesh")?;
+    let mesh_claimed = name_claimed(assets, report, "sky", "sky_mesh", "ProceduralMesh")?;
     if !mesh_claimed {
         inject(
             assets,
@@ -429,7 +433,7 @@ fn inject_sky(
             serde_json::json!({ "generator": "skybox", "size": size }),
         );
     }
-    if !name_claimed(assets, "mat_sky", "Material")? {
+    if !name_claimed(assets, report, "sky", "mat_sky", "Material")? {
         inject(
             assets,
             report,
@@ -439,7 +443,7 @@ fn inject_sky(
             serde_json::json!({ "roughness": 1.0, "metallic": 0.0, "tint": [1.0, 1.0, 1.0] }),
         );
     }
-    if !name_claimed(assets, "sky", "Prop")? {
+    if !name_claimed(assets, report, "sky", "sky", "Prop")? {
         inject(
             assets,
             report,

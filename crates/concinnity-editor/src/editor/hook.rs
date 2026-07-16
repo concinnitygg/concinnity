@@ -30,6 +30,7 @@
 // the live render backend is transplanted out of the world and `apply_world_swap`
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
+use super::expanded::{self, ExpandedGroup, ExpandedRow};
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
@@ -37,7 +38,7 @@ use super::import_panel::{self, ImportAction, ImportRow, ImportView};
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
-use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
+use super::panel::{self, Combo, ListRow, PanelAction, PanelView, Tab};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
 use super::story;
@@ -120,6 +121,17 @@ pub(crate) struct EditorHook {
     import_status: Option<String>,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
+    // The Assets panel's body: the world's own lines, or everything the build
+    // adds around them. `expanded_groups` is the cooked model behind the
+    // Expanded tab (it costs a world expansion, so it is recomputed only when
+    // `expanded_stale` and that tab is up), `expanded_open` holds the groups the
+    // user unfolded, and `expanded_status` carries a cook failure to the body.
+    tab: Tab,
+    expanded_groups: Vec<ExpandedGroup>,
+    expanded_open: Vec<usize>,
+    expanded_scroll: usize,
+    expanded_stale: bool,
+    expanded_status: Option<String>,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -182,6 +194,7 @@ struct PanelData {
     combo_options: Vec<String>,
     combo_selected: Option<usize>,
     list_rows: Vec<ListRow>,
+    expanded_rows: Vec<ExpandedRow>,
     form_title: String,
 }
 
@@ -257,6 +270,7 @@ mod lighting_edit;
 pub(super) mod panels;
 mod routing;
 // Named to avoid colliding with the `use super::story` module import.
+mod expanded_tab;
 mod story_edit;
 #[cfg(test)]
 mod tests;
@@ -289,6 +303,12 @@ impl EditorHook {
             import_scroll: 0,
             import_status: None,
             panel_open: false,
+            tab: Tab::Config,
+            expanded_groups: Vec::new(),
+            expanded_open: Vec::new(),
+            expanded_scroll: 0,
+            expanded_stale: true,
+            expanded_status: None,
             preview_open: true,
             view_open: false,
             combo: Combo::Closed,
@@ -318,6 +338,9 @@ impl EditorHook {
 
 impl DebugHook for EditorHook {
     fn tick(&mut self, world: &mut World) {
+        // Bring the Expanded tab's model up to date before anything reads it,
+        // so this frame's hit test and draw agree on the rows.
+        self.refresh_expanded_if_needed();
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Escape hands the cursor back to the editor (leaves play mode).

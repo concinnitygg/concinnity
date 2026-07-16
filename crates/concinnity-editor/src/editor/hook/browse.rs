@@ -103,12 +103,17 @@ impl EditorHook {
             combo_options,
             combo_selected,
             list_rows: self.list_rows(),
+            expanded_rows: self.expanded_rows(),
             form_title,
         }
     }
 
     pub(super) fn make_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
         PanelView {
+            tab: self.tab,
+            expanded_rows: &d.expanded_rows,
+            expanded_scroll: self.expanded_scroll,
+            expanded_status: self.expanded_status.as_deref(),
             combo: self.combo,
             filter_label: &d.filter_label,
             combo_options: &d.combo_options,

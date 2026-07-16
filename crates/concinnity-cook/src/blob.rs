@@ -53,6 +53,11 @@ pub struct BlobLock {
     // engine defaults). Each entry carries its full args so it can be copied
     // into world.jsonl verbatim as an override.
     pub injected: Vec<LockedInjection>,
+    // Generated assets the world declares its own copy of. The copy won and the
+    // generated entry was dropped, so the source file no longer drives these;
+    // recorded to make that override visible rather than silent.
+    #[serde(default)]
+    pub shadowed: Vec<LockedShadow>,
 }
 
 // One asset as recorded in the lock file
@@ -75,6 +80,16 @@ pub struct LockedInjection {
     pub asset_type: String,
     pub args: serde_json::Value,
     pub injected_by: String,
+}
+
+// One generated asset the world overrides with its own copy. Carries no args:
+// the copy that won is the world.jsonl line of the same name.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LockedShadow {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub asset_type: String,
+    pub generated_by: String,
 }
 
 // One resource-stream asset as recorded in the lock file. Resource assets have
@@ -182,6 +197,7 @@ pub fn write_lock(
     named_defs: &[(&str, &BlobAssetDef)],
     resources: &[LockedResource],
     injected: &[crate::world::InjectedAsset],
+    shadowed: &[crate::world::ShadowedAsset],
     blob_paths: &[String],
 ) -> std::io::Result<()> {
     let mut blobs = Vec::new();
@@ -225,6 +241,14 @@ pub fn write_lock(
                 asset_type: i.asset_type.clone(),
                 args: i.args.clone(),
                 injected_by: i.injected_by.to_string(),
+            })
+            .collect(),
+        shadowed: shadowed
+            .iter()
+            .map(|s| LockedShadow {
+                name: s.name.clone(),
+                asset_type: s.asset_type.clone(),
+                generated_by: s.generated_by.clone(),
             })
             .collect(),
     };
@@ -343,21 +367,30 @@ mod tests {
                 args: serde_json::json!({}),
                 injected_by: "engine".to_string(),
             }],
+            shadowed: vec![LockedShadow {
+                name: "bistro_mat_wood".to_string(),
+                asset_type: "Material".to_string(),
+                generated_by: "bistro".to_string(),
+            }],
         };
         let json = serde_json::to_value(&lock).unwrap();
         assert_eq!(json["injected"][0]["type"], "DebugHud");
         assert!(json["injected"][0].get("asset_type").is_none());
+        // LockedShadow carries the same rename, and names what it overrides.
+        assert_eq!(json["shadowed"][0]["type"], "Material");
+        assert_eq!(json["shadowed"][0]["generated_by"], "bistro");
 
         let back: BlobLock = serde_json::from_value(json).unwrap();
         assert_eq!(back.injected[0].asset_type, "DebugHud");
         assert_eq!(back.blobs[0].payload_bytes, 4);
         assert_eq!(back.resources[0].kind, "AudioClip");
+        assert_eq!(back.shadowed[0].name, "bistro_mat_wood");
     }
 
     #[test]
-    fn blob_lock_reads_a_lock_without_a_resources_field() {
-        // Locks written before resource provenance landed have no `resources`
-        // key; reading one must not fail.
+    fn blob_lock_reads_a_lock_without_its_optional_fields() {
+        // Locks written before resource and shadow provenance landed have no
+        // `resources` / `shadowed` key; reading one must not fail.
         let json = serde_json::json!({
             "engine_version": "0.0.0",
             "built_at": "2026-01-01T00:00:00Z",
@@ -367,5 +400,6 @@ mod tests {
         });
         let back: BlobLock = serde_json::from_value(json).unwrap();
         assert!(back.resources.is_empty());
+        assert!(back.shadowed.is_empty());
     }
 }

@@ -190,7 +190,7 @@ pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
     let loaded = prepare(&content)?;
     let result = concinnity_cook::build_compiled(loaded.assets, None)?;
-    concinnity_cook::write_build_outputs(&result, &loaded.injected)?;
+    concinnity_cook::write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     Ok(())
 }
 

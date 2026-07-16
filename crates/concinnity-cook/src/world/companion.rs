@@ -34,6 +34,25 @@ fn asset_type_norm(v: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+// Record a skipped companion the world provides itself under the spec's own
+// name: that asset is the user's copy of the companion, and a listing needs to
+// say so rather than leave the companion unaccounted for. A spec skipped because
+// the world has that type under some OTHER name is not an override of this
+// asset, and an injection from an earlier round is our own, so neither counts.
+fn record_if_overridden(
+    snapshot: &[serde_json::Value],
+    report: &mut ExpandReport,
+    spec: &CompanionSpec,
+) {
+    let claimed = snapshot
+        .iter()
+        .any(|v| v.get("name").and_then(|n| n.as_str()) == Some(spec.name));
+    let ours = report.injected.iter().any(|i| i.name == spec.name);
+    if claimed && !ours {
+        report.record_shadowed(spec.name, spec.asset_type, "companion");
+    }
+}
+
 // Dispatch a companion lookup for one asset by its normalized type name.
 fn companions_for_type(
     asset_type: &str,
@@ -129,6 +148,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         let mut to_inject = Vec::new();
         for spec in candidates {
             if present_types.contains(&type_norm_str(spec.asset_type)) {
+                record_if_overridden(&snapshot, report, &spec);
                 continue;
             }
             if !seen_names.insert(spec.name.to_string()) {
@@ -166,6 +186,72 @@ mod tests {
 
     fn type_norm(v: &serde_json::Value) -> String {
         asset_type_norm(v)
+    }
+
+    // A world that declares a companion under the companion's own name is
+    // overriding it: the spec is skipped and the override recorded, so a
+    // listing can show the companion rather than silently losing it. The
+    // recorded name lets the editor's Expanded tab gray the row it copied.
+    #[test]
+    fn a_world_supplied_companion_is_recorded_as_an_override() {
+        let mut assets = vec![
+            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            // "Window" is the name the Window companion injects under.
+            serde_json::json!({"name":"Window","type":"Window","args":{}}),
+        ];
+        let mut report = ExpandReport::default();
+        inject_companions(&mut assets, &mut report);
+        assert_eq!(
+            assets.iter().filter(|v| type_norm(v) == "window").count(),
+            1,
+            "the world's own Window wins, and is not duplicated"
+        );
+        let shadow = report
+            .shadowed
+            .iter()
+            .find(|s| s.name == "Window")
+            .expect("the overridden companion is recorded");
+        assert_eq!(shadow.asset_type, "Window");
+        assert_eq!(shadow.generated_by, "companion");
+    }
+
+    // A companion we injected ourselves is not an override, even though later
+    // rounds see it in the world and skip the spec.
+    #[test]
+    fn an_injected_companion_is_not_recorded_as_an_override() {
+        let mut assets = vec![serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})];
+        let mut report = ExpandReport::default();
+        inject_companions(&mut assets, &mut report);
+        assert!(
+            report.injected.iter().any(|i| i.name == "Window"),
+            "the Window companion was injected"
+        );
+        assert!(
+            report.shadowed.is_empty(),
+            "our own injection is not the user overriding it: {:?}",
+            report.shadowed
+        );
+    }
+
+    // A world whose Window has a different name still suppresses the companion
+    // (the skip is by type), but that is not an override OF the companion asset,
+    // so nothing is recorded against its name.
+    #[test]
+    fn a_differently_named_asset_of_the_same_type_is_not_an_override() {
+        let mut assets = vec![
+            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"name":"main_window","type":"Window","args":{}}),
+        ];
+        let mut report = ExpandReport::default();
+        inject_companions(&mut assets, &mut report);
+        assert_eq!(
+            assets.iter().filter(|v| type_norm(v) == "window").count(),
+            1
+        );
+        assert!(
+            !report.shadowed.iter().any(|s| s.name == "Window"),
+            "no asset named Window exists to be the override"
+        );
     }
 
     #[test]

@@ -34,10 +34,14 @@ pub use story::validate_story_source;
 pub(crate) mod ui_spec;
 
 pub(crate) mod expand;
+mod provenance;
+pub use provenance::Provenance;
 
 #[allow(unused_imports)]
 pub use config::{DEFAULT_MAX_BLOB_BYTES, WorldConfig};
-pub use expand::{ExpandReport, InjectedAsset, expand_world, expand_world_from_str};
+pub use expand::{
+    ExpandReport, GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world, expand_world_from_str,
+};
 pub use shader::normalize_single_shader_type;
 
 // A world.jsonl that has been loaded, structurally validated, expanded, and
@@ -48,6 +52,12 @@ pub struct LoadedWorld {
     // Assets added by the injection passes (companions, engine defaults),
     // recorded in world-lock.json so the user can see and override them.
     pub injected: Vec<InjectedAsset>,
+    // Assets a macro expansion produced, paired with the authored asset that
+    // produced them, so listings can group them by source.
+    pub generated: Vec<GeneratedAsset>,
+    // Generated assets the world declares its own copy of; the copy is in
+    // `assets` and the generated entry was dropped.
+    pub shadowed: Vec<ShadowedAsset>,
     // Names declared in the world file itself (pre-expansion), for
     // provenance listings.
     pub authored: Vec<String>,
@@ -74,6 +84,8 @@ pub fn prepare_world(content: &str) -> Result<LoadedWorld, Vec<String>> {
     Ok(LoadedWorld {
         assets,
         injected: report.injected,
+        generated: report.generated,
+        shadowed: report.shadowed,
         authored,
     })
 }

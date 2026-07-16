@@ -30,6 +30,7 @@ use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
+use super::expanded::ExpandedRow;
 use super::hud;
 use super::registry::{self, PanelKey};
 use super::widget::{self, place_sprite, point_in};
@@ -127,6 +128,27 @@ pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
 // combo's filter list and as the combo's text when no type filter is active.
 pub(crate) const ALL_LABEL: &str = "All";
 
+// Which list the panel body shows. Config is the world's own world.jsonl lines
+// (the editable set); Expanded is everything the build adds around them, which
+// is most of a world's content yet has no line to browse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Tab {
+    #[default]
+    Config,
+    Expanded,
+}
+
+impl Tab {
+    pub(crate) const ALL: [Tab; 2] = [Tab::Config, Tab::Expanded];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Tab::Config => "Config",
+            Tab::Expanded => "Expanded",
+        }
+    }
+}
+
 // The combo (header dropdown) state: closed, or open in one of two flavours that
 // share the header filter field and the floating option list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +172,8 @@ pub(crate) const PLUS_LABEL: AssetId = AssetId(PANEL + 2);
 pub(crate) const TYPEDROP_BG: AssetId = AssetId(PANEL + 3);
 pub(crate) const TYPEDROP_LABEL: AssetId = AssetId(PANEL + 4);
 pub(crate) const FILTER_INPUT: AssetId = AssetId(PANEL + 5);
+// The Config / Expanded tab strip, below the title bar.
+pub(crate) const TAB_BG: AssetId = AssetId(PANEL + 6);
 pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 12);
 pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 0x58);
 pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 0x59);
@@ -174,6 +198,19 @@ pub(crate) fn list_row_bg(i: usize) -> AssetId {
 pub(crate) fn list_row_label(i: usize) -> AssetId {
     AssetId(PANEL + 0x40 + i as u32)
 }
+pub(crate) fn tab_bg(i: usize) -> AssetId {
+    AssetId(PANEL + 0xC0 + i as u32)
+}
+pub(crate) fn tab_label(i: usize) -> AssetId {
+    AssetId(PANEL + 0xC4 + i as u32)
+}
+// The "+" on an Expanded row that can be copied into the config.
+pub(crate) fn add_row_bg(i: usize) -> AssetId {
+    AssetId(PANEL + 0xD0 + i as u32)
+}
+pub(crate) fn add_row_label(i: usize) -> AssetId {
+    AssetId(PANEL + 0xE0 + i as u32)
+}
 pub(crate) fn combo_row_bg(i: usize) -> AssetId {
     AssetId(PANEL + 0x60 + i as u32)
 }
@@ -186,7 +223,17 @@ pub(crate) fn combo_row_label(i: usize) -> AssetId {
 // panel; the hook owns the origin.
 pub(crate) const PANEL_W: f32 = 320.0;
 const HEADER_H: f32 = 40.0;
+const TAB_H: f32 = 28.0;
 const GAP: f32 = 6.0;
+// The "+" that copies an Expanded row into the config.
+const ADD_SZ: f32 = 20.0;
+// Characters an Expanded row fits at PANEL_W: a header spans the body width, an
+// asset row stops short of its "+". Both are free-length text (an import names
+// its output after itself), so they clip rather than overrun the panel.
+const HEADER_ROW_CHARS: usize = 33;
+const ASSET_ROW_CHARS: usize = 29;
+// However long the type is, leave enough of the name to tell rows apart.
+const MIN_NAME_CHARS: usize = 8;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 24.0;
 // The floating Delete menu.
@@ -206,6 +253,15 @@ const COMBO_BG_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
 const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const DOT_BG_TINT: [f32; 4] = [0.30, 0.34, 0.46, 0.95];
 const DOT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
+const TAB_STRIP_TINT: [f32; 4] = [0.07, 0.07, 0.09, 1.0];
+const TAB_TINT: [f32; 4] = [0.11, 0.11, 0.14, 1.0];
+const TAB_TINT_HOVER: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
+const TAB_TINT_ACTIVE: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
+// The Expanded tab's group headers read as bands, unlike the Config tab's
+// transparent type sub-headers, because they are the clickable control there.
+const GROUP_ROW_TINT: [f32; 4] = [0.13, 0.14, 0.19, 1.0];
+const ADD_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
+const ADD_TINT_HOVER: [f32; 4] = [0.28, 0.60, 0.40, 1.0];
 const MENU_BG_TINT: [f32; 4] = [0.14, 0.14, 0.18, 1.0];
 const MENU_ROW_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
 const MENU_ROW_HOVER: [f32; 4] = [0.26, 0.30, 0.42, 1.0];
@@ -218,20 +274,32 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [vw - PANEL_W, hud::body_top()]
 }
 
-// The panel's fixed footprint, for the hook's drag clamp.
-pub(crate) fn size() -> [f32; 2] {
-    let r = panel_rect([0.0, 0.0]);
+// The panel's footprint, for the hook's drag clamp. Tab-dependent: only the
+// Config tab carries the add / filter header.
+pub(crate) fn size(tab: Tab) -> [f32; 2] {
+    let r = panel_rect([0.0, 0.0], tab);
     [r[2], r[3]]
 }
 
-// The panel outer rect (title bar + header + body) at origin `o`.
-pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
+// The panel outer rect (title bar + tabs + header + body) at origin `o`.
+pub(crate) fn panel_rect(o: [f32; 2], tab: Tab) -> [f32; 4] {
     [
         o[0],
         o[1],
         PANEL_W,
-        widget::TITLE_H + HEADER_H + MAX_ROWS as f32 * ROW_H,
+        body_y(o, tab) - o[1] + MAX_ROWS as f32 * ROW_H,
     ]
+}
+
+// The tab strip, spanning the panel width below the title bar.
+pub(crate) fn tab_strip_rect(o: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1] + widget::TITLE_H, PANEL_W, TAB_H]
+}
+
+// Tab `i`, splitting the strip evenly.
+pub(crate) fn tab_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    let w = PANEL_W / Tab::ALL.len() as f32;
+    [o[0] + i as f32 * w, o[1] + widget::TITLE_H, w, TAB_H]
 }
 
 // The draggable title bar across the panel top.
@@ -244,9 +312,14 @@ pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
     widget::close_rect(title_rect(o))
 }
 
-// The square "+" add button (panel header below the title bar, left).
+// Where the Config tab's add / filter header row begins.
+fn header_y(o: [f32; 2]) -> f32 {
+    o[1] + widget::TITLE_H + TAB_H
+}
+
+// The square "+" add button (panel header below the tabs, left).
 pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1] + widget::TITLE_H, HEADER_H, HEADER_H]
+    [o[0], header_y(o), HEADER_H, HEADER_H]
 }
 
 // The combo area (panel header, filling the rest of the row): the browse-filter
@@ -254,7 +327,7 @@ pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
 pub(crate) fn combo_rect(o: [f32; 2]) -> [f32; 4] {
     [
         o[0] + HEADER_H + GAP,
-        o[1] + widget::TITLE_H,
+        header_y(o),
         PANEL_W - HEADER_H - GAP,
         HEADER_H,
     ]
@@ -266,17 +339,46 @@ pub(crate) fn filter_input_rect(o: [f32; 2]) -> [f32; 4] {
     [c[0], c[1] + (HEADER_H - ROW_H) * 0.5, c[2], ROW_H]
 }
 
-// Where the body (below the header) begins.
-fn body_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + HEADER_H
+// Where the body begins: below the tabs, and below the add / filter header on
+// the Config tab (the Expanded tab has no header, so its body starts higher).
+fn body_y(o: [f32; 2], tab: Tab) -> f32 {
+    match tab {
+        Tab::Config => header_y(o) + HEADER_H,
+        Tab::Expanded => o[1] + widget::TITLE_H + TAB_H,
+    }
 }
 
 // A body row `i` spanning the panel width (list or combo option).
 pub(crate) fn list_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    [o[0], body_y(o) + i as f32 * ROW_H, PANEL_W, ROW_H]
+    [
+        o[0],
+        body_y(o, Tab::Config) + i as f32 * ROW_H,
+        PANEL_W,
+        ROW_H,
+    ]
 }
 pub(crate) fn combo_option_rect(o: [f32; 2], i: usize) -> [f32; 4] {
     list_row_rect(o, i)
+}
+
+// An Expanded-tab row `i` (its body starts higher than the Config tab's).
+pub(crate) fn expanded_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+    [
+        o[0],
+        body_y(o, Tab::Expanded) + i as f32 * ROW_H,
+        PANEL_W,
+        ROW_H,
+    ]
+}
+
+// The "+" at the right of an addable Expanded row, left of the scrollbar.
+pub(crate) fn add_rect(row: [f32; 4]) -> [f32; 4] {
+    [
+        row[0] + row[2] - ADD_SZ - SCROLLBAR_W - 6.0,
+        row[1] + (ROW_H - ADD_SZ) * 0.5,
+        ADD_SZ,
+        ADD_SZ,
+    ]
 }
 
 // The triple-dot button rect at the right of a name row, left of the scrollbar.
@@ -294,7 +396,7 @@ fn dot_rect(row: [f32; 4]) -> [f32; 4] {
 // Returns (background, delete row).
 fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4]) {
     let x = o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0;
-    let top = body_y(o) + vr as f32 * ROW_H + ROW_H;
+    let top = body_y(o, Tab::Config) + vr as f32 * ROW_H + ROW_H;
     let delete = [x, top, MENU_W, MENU_ROW_H];
     let bg = [x, top, MENU_W, MENU_ROW_H];
     (bg, delete)
@@ -305,6 +407,13 @@ fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4]) {
 // carry the entry index the menu belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanelAction {
+    // A tab in the strip below the title bar.
+    SwitchTab(Tab),
+    // An Expanded-tab group header: collapse / expand it (carries the group).
+    ToggleGroup(usize),
+    // An Expanded-tab row's "+": copy that asset's entry into the config
+    // (carries the group and the index within it).
+    AddExpanded(usize, usize),
     // The "+" button: open the type picker (from list) or close it.
     TogglePicker,
     // The combo button: open the type-filter dropdown (or close it).
@@ -327,6 +436,15 @@ pub(crate) enum PanelAction {
 
 // The per-frame data the hook hands to `apply` / `hit_test`.
 pub(crate) struct PanelView<'a> {
+    // Which body list is showing. The combo / row-menu fields below describe the
+    // Config tab and are ignored while the Expanded tab is up.
+    pub tab: Tab,
+    // The Expanded tab's rows (group headers plus the assets of open groups).
+    pub expanded_rows: &'a [ExpandedRow],
+    pub expanded_scroll: usize,
+    // Why the Expanded tab has no rows, when a cook of the working entries
+    // failed rather than there being nothing to show.
+    pub expanded_status: Option<&'a str>,
     pub combo: Combo,
     // The combo button's text ("All" or the active type), shown when closed.
     pub filter_label: &'a str,
@@ -366,6 +484,21 @@ fn visible_row_of(view: &PanelView, entry: usize) -> Option<usize> {
 // the field from the same input). Title-bar presses never reach this: the hook
 // intercepts them first to start a drag.
 pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
+    // The tab strip is always live, whichever body is up. Checked before the
+    // Config tab's modal overlays so a stray combo can never trap the tabs.
+    if point_in(mx, my, tab_strip_rect(o)) {
+        for (i, tab) in Tab::ALL.iter().enumerate() {
+            if point_in(mx, my, tab_rect(o, i)) {
+                return Some(PanelAction::SwitchTab(*tab));
+            }
+        }
+        return Some(PanelAction::Consume);
+    }
+
+    if view.tab == Tab::Expanded {
+        return hit_test_expanded(view, mx, my, o);
+    }
+
     // An open row menu is modal over the panel: its rows pick, anything else
     // dismisses it.
     if let Some(entry) = view.row_menu {
@@ -403,7 +536,7 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
 
     // Combo closed: clicks outside the panel fall through (the hook's caller
     // decides who else wants them).
-    if !point_in(mx, my, panel_rect(o)) {
+    if !point_in(mx, my, panel_rect(o, Tab::Config)) {
         return None;
     }
     if point_in(mx, my, plus_rect(o)) {
@@ -435,6 +568,42 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
     Some(PanelAction::Consume)
 }
 
+// Resolve a click on the Expanded tab's body: a group header collapses or
+// expands it, an addable row's "+" copies that asset into the config, and the
+// rest of a row is inert (a generated asset has nothing to edit until it is
+// copied, and an already-copied one is edited from the Config tab).
+fn hit_test_expanded(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
+    if !point_in(mx, my, panel_rect(o, Tab::Expanded)) {
+        return None;
+    }
+    let scroll = view
+        .expanded_scroll
+        .min(view.expanded_rows.len().saturating_sub(1));
+    for r in 0..MAX_ROWS {
+        let idx = scroll + r;
+        if idx >= view.expanded_rows.len() {
+            break;
+        }
+        let rect = expanded_row_rect(o, r);
+        if !point_in(mx, my, rect) {
+            continue;
+        }
+        return Some(match &view.expanded_rows[idx] {
+            ExpandedRow::Header { group, .. } => PanelAction::ToggleGroup(*group),
+            ExpandedRow::Asset {
+                group,
+                index,
+                addable,
+                ..
+            } if *addable && point_in(mx, my, add_rect(rect)) => {
+                PanelAction::AddExpanded(*group, *index)
+            }
+            ExpandedRow::Asset { .. } => PanelAction::Consume,
+        });
+    }
+    Some(PanelAction::Consume)
+}
+
 // Position + show the panel's elements for this frame at origin `o`, or hide
 // them all when the panel is closed (`view` is `None`).
 pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
@@ -446,10 +615,22 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    place_sprite(world, PANEL_BG, panel_rect(o), PANEL_BG_TINT, true);
+    place_sprite(
+        world,
+        PANEL_BG,
+        panel_rect(o, view.tab),
+        PANEL_BG_TINT,
+        true,
+    );
     widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Assets");
     let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
+    layout_tabs(world, view, o);
+
+    if view.tab == Tab::Expanded {
+        layout_expanded(world, view, o);
+        return;
+    }
 
     // The "+" add button. While the type picker is open it becomes a gray "X"
     // that returns to the browse list (the previous focus).
@@ -480,6 +661,164 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     }
 }
 
+// The tab strip: the active tab is lit, the others recede.
+fn layout_tabs(world: &mut World, view: &PanelView, o: [f32; 2]) {
+    place_sprite(world, TAB_BG, tab_strip_rect(o), TAB_STRIP_TINT, true);
+    for (i, tab) in Tab::ALL.iter().enumerate() {
+        let rect = tab_rect(o, i);
+        let active = *tab == view.tab;
+        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
+        let tint = match (active, hovered) {
+            (true, _) => TAB_TINT_ACTIVE,
+            (false, true) => TAB_TINT_HOVER,
+            (false, false) => TAB_TINT,
+        };
+        place_sprite(world, tab_bg(i), rect, tint, true);
+        if let Some(l) = widget::label_mut(world, tab_label(i)) {
+            l.x = rect[0] + rect[2] * 0.5;
+            l.y = rect[1] + TAB_H * 0.5 - 9.0;
+            l.align = TextAlign::Center;
+            l.color = if active { LABEL_WHITE } else { LABEL_DIM };
+            l.visible = true;
+            l.content = tab.label().to_string();
+        }
+    }
+}
+
+// The Expanded body: one row per group header, plus the assets of each open
+// group. An asset already in the config is dimmed (its own line wins, so there
+// is nothing to add); an addable one carries a "+".
+fn layout_expanded(world: &mut World, view: &PanelView, o: [f32; 2]) {
+    let total = view.expanded_rows.len();
+    if total == 0 {
+        // A world that does not cook has no expansion to show; say which it is.
+        let msg = view
+            .expanded_status
+            .unwrap_or("The build adds nothing to this world");
+        place_left_label(
+            world,
+            EMPTY_LABEL,
+            [o[0] + PAD, body_y(o, Tab::Expanded) + PAD],
+            msg,
+            LABEL_DIM,
+            true,
+        );
+        return;
+    }
+    let scroll = view.expanded_scroll.min(total.saturating_sub(1));
+    for r in 0..MAX_ROWS {
+        let idx = scroll + r;
+        if idx >= total {
+            break;
+        }
+        let rect = expanded_row_rect(o, r);
+        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
+        match &view.expanded_rows[idx] {
+            ExpandedRow::Header {
+                origin,
+                count,
+                in_config,
+                open,
+                ..
+            } => {
+                let tint = if hovered {
+                    ROW_TINT_HOVER
+                } else {
+                    GROUP_ROW_TINT
+                };
+                place_sprite(world, list_row_bg(r), rect, tint, true);
+                let caption = group_caption(origin, *count, *in_config, *open);
+                place_left_label(
+                    world,
+                    list_row_label(r),
+                    [rect[0] + PAD, rect[1] + ROW_LABEL_TOP],
+                    &caption,
+                    asset_list::HEADER_LABEL,
+                    true,
+                );
+            }
+            ExpandedRow::Asset {
+                name,
+                asset_type,
+                in_config,
+                addable,
+                ..
+            } => {
+                let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
+                place_sprite(world, list_row_bg(r), rect, tint, true);
+                let color = if *in_config { LABEL_DIM } else { LABEL };
+                place_left_label(
+                    world,
+                    list_row_label(r),
+                    [rect[0] + PAD + asset_list::INDENT, rect[1] + ROW_LABEL_TOP],
+                    &asset_caption(name, asset_type),
+                    color,
+                    true,
+                );
+                if *addable {
+                    place_add_button(world, r, rect, view.mouse);
+                }
+            }
+        }
+    }
+    asset_list::layout_scrollbar(
+        world,
+        LIST_TRACK,
+        LIST_THUMB,
+        total,
+        scroll,
+        o[0] + PANEL_W,
+        body_y(o, Tab::Expanded),
+    );
+}
+
+// A group header's caption: the collapse marker, what produced the group, and
+// how many assets it holds (with the count already in the config, when any).
+fn group_caption(origin: &str, count: usize, in_config: usize, open: bool) -> String {
+    let marker = if open { "-" } else { "+" };
+    let tail = if in_config > 0 {
+        format!("({}, {} in config)", count, in_config)
+    } else {
+        format!("({})", count)
+    };
+    // Clip the origin rather than the counts, which are the part worth keeping.
+    let budget = HEADER_ROW_CHARS.saturating_sub(tail.chars().count() + 4);
+    format!(
+        "{} {}  {}",
+        marker,
+        widget::clip_text(origin, budget.max(MIN_NAME_CHARS)),
+        tail
+    )
+}
+
+// An asset row's caption: its name and type. Generated names are long (an import
+// prefixes every one with its own name), so the name is clipped to what the type
+// leaves; unclipped it would run under the "+" and off the panel.
+fn asset_caption(name: &str, asset_type: &str) -> String {
+    let budget = ASSET_ROW_CHARS.saturating_sub(asset_type.chars().count() + 3);
+    format!(
+        "{} ({})",
+        widget::clip_text(name, budget.max(MIN_NAME_CHARS)),
+        asset_type
+    )
+}
+
+// The "+" that copies one Expanded row's asset into the config.
+fn place_add_button(world: &mut World, r: usize, row: [f32; 4], mouse: [f32; 2]) {
+    let rect = add_rect(row);
+    let hovered = point_in(mouse[0], mouse[1], rect);
+    let tint = if hovered { ADD_TINT_HOVER } else { ADD_TINT };
+    place_sprite(world, add_row_bg(r), rect, tint, true);
+    if let Some(l) = widget::label_mut(world, add_row_label(r)) {
+        l.x = rect[0] + rect[2] * 0.5;
+        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.align = TextAlign::Center;
+        l.color = LABEL_WHITE;
+        l.visible = true;
+        l.content = "+".to_string();
+    }
+}
+
 // The "+" / "X" glyph, centered in the add button and drawn a step larger than
 // the body text (the box itself stays a HEADER_H square).
 const PLUS_SCALE: f32 = 1.3;
@@ -500,7 +839,7 @@ fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
         place_left_label(
             world,
             EMPTY_LABEL,
-            [o[0] + PAD, body_y(o) + PAD],
+            [o[0] + PAD, body_y(o, Tab::Config) + PAD],
             "No matching assets",
             LABEL_DIM,
             true,
@@ -568,7 +907,7 @@ fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
         total,
         scroll,
         o[0] + PANEL_W,
-        body_y(o),
+        body_y(o, Tab::Config),
     );
 }
 
@@ -576,13 +915,18 @@ fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
     let total = view.combo_options.len();
     let scroll = view.combo_scroll.min(total.saturating_sub(1));
     let shown = total.saturating_sub(scroll).clamp(1, MAX_ROWS);
-    let backing = [o[0], body_y(o), PANEL_W, shown as f32 * ROW_H + PAD];
+    let backing = [
+        o[0],
+        body_y(o, Tab::Config),
+        PANEL_W,
+        shown as f32 * ROW_H + PAD,
+    ];
     place_sprite(world, COMBO_BG, backing, COMBO_BG_TINT, true);
     if total == 0 {
         place_left_label(
             world,
             EMPTY_LABEL,
-            [o[0] + PAD, body_y(o) + PAD],
+            [o[0] + PAD, body_y(o, Tab::Config) + PAD],
             "No matching types",
             LABEL_DIM,
             true,
@@ -620,7 +964,7 @@ fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
         total,
         scroll,
         o[0] + PANEL_W,
-        body_y(o),
+        body_y(o, Tab::Config),
     );
 }
 
@@ -676,7 +1020,9 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) 
 // overlays (scrollbar, triple-dot, row menu), which must sit ABOVE the row
 // backgrounds so a hovered row's fill cannot cover them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG, COMBO_BG];
+    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG, TAB_BG];
+    ids.extend((0..Tab::ALL.len()).map(tab_bg));
+    ids.push(COMBO_BG);
     ids.extend((0..MAX_ROWS).map(list_row_bg));
     ids.extend((0..MAX_ROWS).map(combo_row_bg));
     ids.extend([
@@ -689,6 +1035,8 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
         MENU_BG,
         MENU_DELETE_BG,
     ]);
+    // The Expanded rows' "+" buttons sit above their row backgrounds.
+    ids.extend((0..MAX_ROWS).map(add_row_bg));
     ids
 }
 // Same draw-order contract as `all_sprite_ids` (all TextLabels draw after all
@@ -703,8 +1051,10 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         TYPEDROP_LABEL,
         EMPTY_LABEL,
     ];
+    ids.extend((0..Tab::ALL.len()).map(tab_label));
     ids.extend((0..MAX_ROWS).map(list_row_label));
     ids.extend((0..MAX_ROWS).map(combo_row_label));
+    ids.extend((0..MAX_ROWS).map(add_row_label));
     ids.extend([MENU_DELETE_LABEL]);
     ids
 }
@@ -729,7 +1079,7 @@ pub(crate) fn hide_all(world: &mut World) {
     }
 }
 
-// -- Element mutation helpers -------------------------------------------------
+// Element mutation helpers
 //
 // The reserved-id lookups (`widget::sprite_mut` / `label_mut` / `input_mut`) and
 // `place_sprite` / visibility setters live in `widget.rs`, shared with `hud.rs`.
@@ -765,9 +1115,9 @@ fn set_row_label(
 }
 
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
-pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2]) -> bool {
-    let p = panel_rect(o);
-    mx >= p[0] && mx < p[0] + p[2] && my >= body_y(o) && my < p[1] + p[3]
+pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], tab: Tab) -> bool {
+    let p = panel_rect(o, tab);
+    mx >= p[0] && mx < p[0] + p[2] && my >= body_y(o, tab) && my < p[1] + p[3]
 }
 
 #[cfg(test)]
@@ -806,9 +1156,11 @@ mod tests {
             .collect()
     }
 
+    #[derive(Default)]
     struct Fixture {
         combo_options: Vec<String>,
         list_rows: Vec<ListRow>,
+        expanded_rows: Vec<ExpandedRow>,
     }
 
     fn view<'a>(
@@ -818,6 +1170,10 @@ mod tests {
         mouse: [f32; 2],
     ) -> PanelView<'a> {
         PanelView {
+            tab: Tab::Config,
+            expanded_rows: &fx.expanded_rows,
+            expanded_scroll: 0,
+            expanded_status: None,
             combo,
             filter_label: ALL_LABEL,
             combo_options: &fx.combo_options,
@@ -828,6 +1184,47 @@ mod tests {
             row_menu,
             selected: None,
             mouse,
+        }
+    }
+
+    // A view showing the Expanded tab's rows.
+    fn expanded_view<'a>(fx: &'a Fixture, mouse: [f32; 2]) -> PanelView<'a> {
+        PanelView {
+            tab: Tab::Expanded,
+            ..view(fx, Combo::Closed, None, mouse)
+        }
+    }
+
+    fn header(
+        group: usize,
+        origin: &str,
+        count: usize,
+        in_config: usize,
+        open: bool,
+    ) -> ExpandedRow {
+        ExpandedRow::Header {
+            group,
+            origin: origin.to_string(),
+            count,
+            in_config,
+            open,
+        }
+    }
+
+    fn expanded_asset(
+        group: usize,
+        index: usize,
+        name: &str,
+        in_config: bool,
+        addable: bool,
+    ) -> ExpandedRow {
+        ExpandedRow::Asset {
+            group,
+            index,
+            name: name.to_string(),
+            asset_type: "Material".to_string(),
+            in_config,
+            addable,
         }
     }
 
@@ -870,26 +1267,43 @@ mod tests {
     #[test]
     fn default_origin_sits_below_the_top_bar_right_aligned() {
         let o = test_origin();
-        let p = panel_rect(o);
+        let p = panel_rect(o, Tab::Config);
         assert_eq!(p[0] + p[2], 1280.0, "flush to the window right");
         assert_eq!(p[1], hud::body_top(), "starts below the top-bar buttons");
         // The whole panel follows its origin: dragged elsewhere, every rect moves.
-        let moved = panel_rect([40.0, 60.0]);
+        let moved = panel_rect([40.0, 60.0], Tab::Config);
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!((moved[2], moved[3]), (p[2], p[3]));
-        assert_eq!(size(), [p[2], p[3]], "the drag-clamp footprint matches");
+        assert_eq!(
+            size(Tab::Config),
+            [p[2], p[3]],
+            "the drag-clamp footprint matches"
+        );
     }
 
     #[test]
-    fn title_bar_spans_the_panel_top_and_header_sits_below_it() {
+    fn title_bar_spans_the_panel_top_and_header_sits_below_the_tabs() {
         let o = test_origin();
         let title = title_rect(o);
         assert_eq!(title, [o[0], o[1], PANEL_W, widget::TITLE_H]);
+        // The tab strip spans the width directly under the title bar, split
+        // evenly between the tabs.
+        let strip = tab_strip_rect(o);
+        assert_eq!(strip[1], o[1] + widget::TITLE_H);
+        assert_eq!(strip[2], PANEL_W);
+        assert_eq!(tab_rect(o, 0)[0], o[0]);
+        assert_eq!(tab_rect(o, 1)[0], o[0] + PANEL_W * 0.5);
+        assert_eq!(
+            tab_rect(o, 1)[0] + tab_rect(o, 1)[2],
+            o[0] + PANEL_W,
+            "the tabs fill the strip"
+        );
+
         let plus = plus_rect(o);
         assert_eq!(
             plus[1],
-            o[1] + widget::TITLE_H,
-            "the header row starts below the title bar"
+            strip[1] + strip[3],
+            "the header row starts below the tab strip"
         );
         let combo = combo_rect(o);
         assert!(plus[0] + plus[2] <= combo[0], "+ is left of the combo");
@@ -898,6 +1312,8 @@ mod tests {
             o[0] + PANEL_W,
             "combo reaches the panel right"
         );
+        // And the Config body still sits below that header.
+        assert_eq!(list_row_rect(o, 0)[1], plus[1] + plus[3]);
     }
 
     #[test]
@@ -905,6 +1321,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: vec![],
+            ..Default::default()
         };
         let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
         let plus = plus_rect(test_origin());
@@ -921,6 +1338,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec!["PointLight".to_string()],
             list_rows: vec![],
+            ..Default::default()
         };
         let glyph = |world: &World| {
             world
@@ -964,6 +1382,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: vec![],
+            ..Default::default()
         };
         let mut world = injected_world();
         let o = test_origin();
@@ -992,6 +1411,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![ALL_LABEL.to_string(), "PointLight".to_string()],
             list_rows: vec![],
+            ..Default::default()
         };
         // Closed: clicking the combo opens the filter dropdown.
         let o = test_origin();
@@ -1027,6 +1447,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec!["PointLight".to_string()],
             list_rows: vec![],
+            ..Default::default()
         };
         let o = test_origin();
         let vo = view(&fx, Combo::Filter, None, [0.0, 0.0]);
@@ -1048,6 +1469,7 @@ mod tests {
                 text: "only".to_string(),
                 entry: Some(0),
             }],
+            ..Default::default()
         };
         let o = test_origin();
         let v = view(&fx, Combo::Closed, Some(9), [0.0, 0.0]);
@@ -1062,6 +1484,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: vec![],
+            ..Default::default()
         };
         let mut world = injected_world();
         let o = test_origin();
@@ -1083,22 +1506,15 @@ mod tests {
         let fx = Fixture {
             combo_options: vec!["All".to_string(), "PointLight".to_string()],
             list_rows: vec![],
+            ..Default::default()
         };
         let mut world = injected_world();
         let o = test_origin();
         // The active filter is option 1; the mouse rests far from the options so
         // the selected (not hovered) branch renders it.
         let v = PanelView {
-            combo: Combo::Filter,
-            filter_label: ALL_LABEL,
-            combo_options: &fx.combo_options,
             combo_selected: Some(1),
-            combo_scroll: 0,
-            list_rows: &fx.list_rows,
-            list_scroll: 0,
-            row_menu: None,
-            selected: None,
-            mouse: [0.0, 0.0],
+            ..view(&fx, Combo::Filter, None, [0.0, 0.0])
         };
         apply(&mut world, Some(&v), o);
         let label = world
@@ -1115,6 +1531,7 @@ mod tests {
         let fx = Fixture {
             combo_options: opts,
             list_rows: vec![],
+            ..Default::default()
         };
         let mut v = view(&fx, Combo::Picker, None, [0.0, 0.0]);
         v.combo_scroll = 2;
@@ -1133,6 +1550,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(7))]),
+            ..Default::default()
         };
         let o = test_origin();
         let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
@@ -1164,6 +1582,7 @@ mod tests {
                 (false, "lamp", Some(0)),
                 (false, "spot", Some(1)),
             ]),
+            ..Default::default()
         };
         let mut world = injected_world();
         let o = test_origin();
@@ -1187,6 +1606,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(3))]),
+            ..Default::default()
         };
         let o = test_origin();
         let v = view(&fx, Combo::Closed, Some(3), [0.0, 0.0]);
@@ -1207,6 +1627,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: vec![],
+            ..Default::default()
         };
         let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
         assert_eq!(hit_test(&v, 10.0, 400.0, test_origin()), None);
@@ -1258,6 +1679,7 @@ mod tests {
         let fx = Fixture {
             combo_options: vec![],
             list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(0))]),
+            ..Default::default()
         };
         let name = list_row_rect(o, 1);
         let dot = dot_rect(name);
@@ -1385,6 +1807,300 @@ mod tests {
                 offered.contains(ty) ^ excluded.contains(ty),
                 "{ty} cooks blank: add it to ADD_TYPES or to the EXCLUDED list (with a reason), not both/neither"
             );
+        }
+    }
+
+    // -- Tabs + the Expanded body ------------------------------------------------
+
+    // Each tab in the strip resolves to its own switch, whichever body is up.
+    #[test]
+    fn the_tab_strip_switches_tabs_from_either_body() {
+        let fx = Fixture::default();
+        let o = test_origin();
+        for (i, tab) in Tab::ALL.iter().enumerate() {
+            let r = tab_rect(o, i);
+            let point = (r[0] + 5.0, r[1] + 5.0);
+            assert_eq!(
+                hit_test(
+                    &view(&fx, Combo::Closed, None, [0.0, 0.0]),
+                    point.0,
+                    point.1,
+                    o
+                ),
+                Some(PanelAction::SwitchTab(*tab))
+            );
+            assert_eq!(
+                hit_test(&expanded_view(&fx, [0.0, 0.0]), point.0, point.1, o),
+                Some(PanelAction::SwitchTab(*tab)),
+                "the strip stays live on the Expanded tab too"
+            );
+        }
+    }
+
+    // The strip is checked before the Config tab's modal overlays, so an open
+    // combo cannot trap the user on one tab.
+    #[test]
+    fn an_open_combo_does_not_swallow_the_tab_strip() {
+        let fx = Fixture {
+            combo_options: vec!["PointLight".to_string()],
+            ..Default::default()
+        };
+        let o = test_origin();
+        let r = tab_rect(o, 1);
+        assert_eq!(
+            hit_test(
+                &view(&fx, Combo::Picker, None, [0.0, 0.0]),
+                r[0] + 5.0,
+                r[1] + 5.0,
+                o
+            ),
+            Some(PanelAction::SwitchTab(Tab::Expanded))
+        );
+    }
+
+    // The Expanded tab has no add / filter header, so its body starts higher and
+    // the panel is correspondingly shorter.
+    #[test]
+    fn the_expanded_tab_drops_the_config_header() {
+        let o = test_origin();
+        let config = panel_rect(o, Tab::Config);
+        let expanded = panel_rect(o, Tab::Expanded);
+        assert!(
+            expanded[3] < config[3],
+            "no header row: {expanded:?} vs {config:?}"
+        );
+        assert_eq!(expanded[2], config[2], "same width");
+        // Both bodies still show MAX_ROWS rows.
+        assert_eq!(
+            expanded_row_rect(o, 0)[1] + MAX_ROWS as f32 * ROW_H,
+            expanded[1] + expanded[3]
+        );
+        // The first Expanded row sits directly below the tab strip.
+        let strip = tab_strip_rect(o);
+        assert_eq!(expanded_row_rect(o, 0)[1], strip[1] + strip[3]);
+        assert_eq!(size(Tab::Expanded), [expanded[2], expanded[3]]);
+    }
+
+    // A group header toggles its group; an addable row's "+" copies it; the row
+    // body (and a non-addable row's "+" area) is inert.
+    #[test]
+    fn expanded_rows_toggle_groups_and_add_assets() {
+        let fx = Fixture {
+            expanded_rows: vec![
+                header(0, "fox", 2, 1, true),
+                expanded_asset(0, 0, "fox_mat_0", false, true),
+                expanded_asset(0, 1, "fox_mat_wood", true, false),
+            ],
+            ..Default::default()
+        };
+        let o = test_origin();
+        let v = expanded_view(&fx, [0.0, 0.0]);
+
+        let hdr = expanded_row_rect(o, 0);
+        assert_eq!(
+            hit_test(&v, hdr[0] + 5.0, hdr[1] + 5.0, o),
+            Some(PanelAction::ToggleGroup(0))
+        );
+
+        let addable = expanded_row_rect(o, 1);
+        let plus = add_rect(addable);
+        assert_eq!(
+            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, o),
+            Some(PanelAction::AddExpanded(0, 0))
+        );
+        // The rest of that row does nothing: the asset is edited from the Config
+        // tab once copied, not from here.
+        assert_eq!(
+            hit_test(&v, addable[0] + 5.0, addable[1] + 5.0, o),
+            Some(PanelAction::Consume)
+        );
+
+        // An asset already in the config offers no "+" at all.
+        let in_config = expanded_row_rect(o, 2);
+        let where_plus_would_be = add_rect(in_config);
+        assert_eq!(
+            hit_test(
+                &v,
+                where_plus_would_be[0] + 5.0,
+                where_plus_would_be[1] + 5.0,
+                o
+            ),
+            Some(PanelAction::Consume)
+        );
+    }
+
+    #[test]
+    fn expanded_clicks_outside_the_panel_fall_through() {
+        let fx = Fixture::default();
+        assert_eq!(
+            hit_test(&expanded_view(&fx, [0.0, 0.0]), 10.0, 400.0, test_origin()),
+            None
+        );
+    }
+
+    // A header states what produced the group and how many assets it holds; an
+    // asset row names its type, dims when already in the config, and shows its
+    // "+" only when addable.
+    #[test]
+    fn expanded_body_draws_headers_dimming_and_add_buttons() {
+        let fx = Fixture {
+            expanded_rows: vec![
+                header(0, "fox", 2, 1, true),
+                expanded_asset(0, 0, "fox_mat_0", false, true),
+                expanded_asset(0, 1, "fox_mat_wood", true, false),
+            ],
+            ..Default::default()
+        };
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
+
+        let label = |i: usize| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == list_row_label(i))
+                .cloned()
+                .unwrap()
+        };
+        // The header names the origin, the count, and what is already copied.
+        let h = label(0);
+        assert!(h.content.contains("fox"), "{}", h.content);
+        assert!(h.content.contains('2'), "{}", h.content);
+        assert!(h.content.contains("1 in config"), "{}", h.content);
+        assert!(h.content.starts_with('-'), "open marker: {}", h.content);
+
+        // The asset rows carry their type, and the copied one is dimmed.
+        assert!(label(1).content.contains("Material"));
+        assert_eq!(label(1).color, LABEL);
+        assert_eq!(label(2).color, LABEL_DIM, "an already-copied asset dims");
+
+        // Only the addable row draws a "+".
+        assert!(sprite_visible(&world, add_row_bg(1)));
+        assert!(!sprite_visible(&world, add_row_bg(2)));
+
+        // The Config tab's header chrome is gone.
+        assert!(!sprite_visible(&world, PLUS_BG));
+        assert!(!sprite_visible(&world, TYPEDROP_BG));
+    }
+
+    // A collapsed group draws its marker the other way, so the row reads as
+    // openable.
+    #[test]
+    fn a_collapsed_group_marks_itself_closed() {
+        let fx = Fixture {
+            expanded_rows: vec![header(0, "fox", 4712, 0, false)],
+            ..Default::default()
+        };
+        let mut world = injected_world();
+        apply(
+            &mut world,
+            Some(&expanded_view(&fx, [0.0, 0.0])),
+            test_origin(),
+        );
+        let h = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == list_row_label(0))
+            .unwrap();
+        assert!(h.content.starts_with('+'), "closed marker: {}", h.content);
+        assert!(h.content.contains("4712"));
+        assert!(
+            !h.content.contains("in config"),
+            "nothing copied yet: {}",
+            h.content
+        );
+    }
+
+    // The active tab is lit and the other recedes.
+    #[test]
+    fn the_active_tab_is_highlighted() {
+        let fx = Fixture::default();
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(
+            &mut world,
+            Some(&view(&fx, Combo::Closed, None, [0.0, 0.0])),
+            o,
+        );
+        assert_eq!(sprite(&world, tab_bg(0)).tint, TAB_TINT_ACTIVE);
+        assert_eq!(sprite(&world, tab_bg(1)).tint, TAB_TINT);
+        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
+        assert_eq!(sprite(&world, tab_bg(0)).tint, TAB_TINT);
+        assert_eq!(sprite(&world, tab_bg(1)).tint, TAB_TINT_ACTIVE);
+    }
+
+    // An empty Expanded tab explains itself; a world that would not cook says so
+    // instead of showing an empty list as though there were nothing to add.
+    #[test]
+    fn the_expanded_empty_state_reports_a_cook_failure() {
+        let fx = Fixture::default();
+        let mut world = injected_world();
+        let o = test_origin();
+        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
+        let empty = |world: &World| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == EMPTY_LABEL)
+                .cloned()
+                .unwrap()
+        };
+        assert!(empty(&world).content.contains("adds nothing"));
+
+        let v = PanelView {
+            expanded_status: Some("boom: bad args"),
+            ..expanded_view(&fx, [0.0, 0.0])
+        };
+        apply(&mut world, Some(&v), o);
+        assert_eq!(empty(&world).content, "boom: bad args");
+    }
+
+    // Generated names are long (an import prefixes each with its own name), and
+    // the panel is narrow: an unclipped caption runs under the "+" and off the
+    // panel. The name clips; the type stays, since it is what the row is for.
+    #[test]
+    fn a_long_asset_caption_clips_and_keeps_its_type() {
+        let caption = asset_caption("default_fragment_shader", "ShaderStage");
+        assert!(
+            caption.chars().count() <= ASSET_ROW_CHARS,
+            "{caption} ({} chars)",
+            caption.chars().count()
+        );
+        assert!(caption.ends_with("(ShaderStage)"), "{caption}");
+        assert!(caption.starts_with("default_f"), "{caption}");
+        assert!(caption.contains("..."), "{caption}");
+        // A short name is left alone.
+        assert_eq!(asset_caption("hud_font", "Font"), "hud_font (Font)");
+    }
+
+    // A type long enough to eat the whole budget still leaves the name legible
+    // rather than clipping it away to nothing.
+    #[test]
+    fn a_very_long_type_still_leaves_a_readable_name() {
+        let caption = asset_caption("some_generated_asset", &"T".repeat(40));
+        assert!(caption.starts_with("some_..."), "{caption}");
+    }
+
+    // The header clips its origin, never the counts.
+    #[test]
+    fn a_long_group_caption_clips_the_origin_not_the_counts() {
+        let caption = group_caption(&"a_very_long_import_name".repeat(3), 4712, 3, false);
+        assert!(
+            caption.chars().count() <= HEADER_ROW_CHARS,
+            "{caption} ({} chars)",
+            caption.chars().count()
+        );
+        assert!(caption.ends_with("(4712, 3 in config)"), "{caption}");
+        assert!(caption.starts_with("+ a_very"), "{caption}");
+    }
+
+    // Draw order: a row's "+" must sit above the row backgrounds, or a hovered
+    // row's fill paints over it.
+    #[test]
+    fn expanded_add_buttons_draw_above_the_row_backgrounds() {
+        let sprites = all_sprite_ids();
+        let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
+        let last_row_bg = (0..MAX_ROWS).map(list_row_bg).map(spos).max().unwrap();
+        for i in 0..MAX_ROWS {
+            assert!(spos(add_row_bg(i)) > last_row_bg);
         }
     }
 }

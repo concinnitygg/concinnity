@@ -29,7 +29,7 @@ pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
 
     let result = build_compiled(loaded.assets, None)?;
 
-    let pack_result = write_build_outputs(&result, &loaded.injected)?;
+    let pack_result = write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
         let payload_bytes = result.payloads.get(blob_idx).map(|b| b.len()).unwrap_or(0);
         println!("Wrote {} ({} payload bytes)", path, payload_bytes);
@@ -59,6 +59,7 @@ pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
 pub fn write_build_outputs(
     result: &PipelineResult,
     injected: &[crate::world::InjectedAsset],
+    shadowed: &[crate::world::ShadowedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
     let pack_result = crate::blob::write_blobs(&result.defs, &result.resources, &result.payloads)?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
@@ -71,6 +72,7 @@ pub fn write_build_outputs(
         &named_refs,
         &result.resource_locks,
         injected,
+        shadowed,
         &pack_result.blob_paths,
     )?;
     Ok(pack_result)

@@ -145,6 +145,9 @@ impl EditorHook {
     // `TextInput` components, so this needs the world.
     pub(super) fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
         match action {
+            PanelAction::SwitchTab(tab) => self.switch_tab(tab),
+            PanelAction::ToggleGroup(g) => self.toggle_expanded_group(g),
+            PanelAction::AddExpanded(g, i) => self.add_expanded(g, i),
             PanelAction::TogglePicker => {
                 if self.combo == Combo::Picker {
                     self.combo = Combo::Closed;

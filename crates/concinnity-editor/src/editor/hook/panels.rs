@@ -31,8 +31,8 @@ impl Panel for AssetsPanel {
         hook.combo = Combo::Closed;
         hook.row_menu = None;
     }
-    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        panel::size()
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        panel::size(hook.tab)
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         panel::default_origin(vp[0])
@@ -67,18 +67,14 @@ impl Panel for AssetsPanel {
             None => false,
         }
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        panel::cursor_over_body(mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        panel::cursor_over_body(mx, my, o, hook.tab)
     }
     fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
-        hook.scroll_list(delta, world);
+        match hook.tab {
+            Tab::Config => hook.scroll_list(delta, world),
+            Tab::Expanded => hook.scroll_expanded(delta),
+        }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let data = hook.panel_data(world);

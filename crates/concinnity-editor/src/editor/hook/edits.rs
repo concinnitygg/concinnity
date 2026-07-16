@@ -80,6 +80,10 @@ impl EditorHook {
     pub(super) fn mark_changed(&mut self) {
         self.dirty = true;
         self.rebuild_preview = true;
+        // The expansion follows the entries, so the Expanded tab's model is now
+        // out of date. Recomputed by the frame drive if that tab is showing, so
+        // a burst of edits costs one expansion rather than one each.
+        self.expanded_stale = true;
     }
 
     // SAVE: persist the working entries to disk (world.jsonl + recompiled blobs).

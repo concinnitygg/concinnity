@@ -2126,7 +2126,7 @@ fn lighting_focus_yields_when_not_frontmost() {
     assert_eq!(h.make_lighting_view(&d, [0.0, 0.0]).focus, None);
 }
 
-// -- Story panel ---------------------------------------------------------------
+// Story panel
 
 fn story_import(source: &str) -> serde_json::Value {
     serde_json::json!({"name": "tale", "type": "StoryImport", "args": {"source": source}})
@@ -2306,7 +2306,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// -- Import panel ---------------------------------------------------------------
+// Import panel
 
 fn import_session() -> (EditorHook, World, std::path::PathBuf) {
     let mut world = World::new_empty();
@@ -2464,4 +2464,173 @@ fn import_browse_result_fills_the_path_field_relatively() {
 
     std::env::set_current_dir(old).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// The Assets panel's Expanded tab
+
+// A world whose GraphicsConfig pulls in companions, so the expansion has
+// something to show without needing a scene file on disk.
+fn expandable_hook() -> EditorHook {
+    isolate_state_dir();
+    let mut h = hook(vec![serde_json::json!({
+        "name": "gfx", "type": "GraphicsConfig", "args": {}
+    })]);
+    h.panel_open = true;
+    h
+}
+
+// The model is only cooked when the tab is actually showing: the Config tab
+// must not pay for an expansion it never draws.
+#[test]
+fn the_expanded_model_is_cooked_only_while_its_tab_is_up() {
+    let mut h = expandable_hook();
+    assert!(h.expanded_stale);
+    h.refresh_expanded_if_needed();
+    assert!(
+        h.expanded_stale && h.expanded_groups.is_empty(),
+        "the Config tab does not cook"
+    );
+
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    assert!(!h.expanded_stale);
+    assert!(
+        !h.expanded_groups.is_empty(),
+        "the injected companions are grouped"
+    );
+    assert_eq!(h.expanded_status, None);
+}
+
+// An edit invalidates the model, and the refresh happens once for a burst of
+// edits rather than once per edit.
+#[test]
+fn an_edit_restales_the_expanded_model() {
+    let mut h = expandable_hook();
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    assert!(!h.expanded_stale);
+    h.mark_changed();
+    assert!(h.expanded_stale, "the expansion follows the entries");
+    h.mark_changed();
+    h.refresh_expanded_if_needed();
+    assert!(!h.expanded_stale, "one refresh covers the burst");
+}
+
+#[test]
+fn switching_tabs_drops_the_config_overlays() {
+    let mut h = expandable_hook();
+    h.combo = Combo::Picker;
+    h.row_menu = Some(0);
+    h.switch_tab(Tab::Expanded);
+    assert_eq!(h.tab, Tab::Expanded);
+    assert_eq!(h.combo, Combo::Closed);
+    assert_eq!(h.row_menu, None);
+}
+
+#[test]
+fn groups_collapse_and_expand() {
+    let mut h = expandable_hook();
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    let collapsed = h.expanded_rows().len();
+    assert_eq!(collapsed, h.expanded_groups.len(), "headers only");
+
+    h.toggle_expanded_group(0);
+    assert!(h.expanded_rows().len() > collapsed, "the group unfolded");
+    h.toggle_expanded_group(0);
+    assert_eq!(h.expanded_rows().len(), collapsed, "and folded again");
+}
+
+// "+" copies the generated entry into the config, marks the world dirty, and
+// restales the model so the row grays out. It does NOT rebuild the preview: the
+// built world is identical, since the entry is what the expansion emitted.
+#[test]
+fn adding_an_expanded_asset_copies_its_entry_without_a_rebuild() {
+    let mut h = expandable_hook();
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    h.rebuild_preview = false;
+    h.dirty = false;
+
+    // Find a group holding a copyable asset.
+    let (gi, ai, name, expected) = h
+        .expanded_groups
+        .iter()
+        .enumerate()
+        .find_map(|(gi, g)| {
+            g.assets
+                .iter()
+                .enumerate()
+                .find_map(|(ai, a)| a.entry.clone().map(|e| (gi, ai, a.name.clone(), e)))
+        })
+        .expect("an injected default is copyable");
+
+    let before = h.entries.len();
+    h.add_expanded(gi, ai);
+    assert_eq!(h.entries.len(), before + 1);
+    assert_eq!(
+        h.entries.last().unwrap(),
+        &expected,
+        "the entry is copied verbatim"
+    );
+    assert_eq!(entry_name(h.entries.last().unwrap()), Some(name.as_str()));
+    assert!(h.dirty, "the copy is an unsaved change");
+    assert!(
+        !h.rebuild_preview,
+        "the built world is unchanged, so no rebuild is needed"
+    );
+    assert!(h.expanded_stale, "the row must gray out");
+}
+
+// After copying, the asset is still listed under its origin (now grayed and
+// with no "+"), rather than vanishing from the tab. This is the whole point of
+// the cook side recording shadows.
+#[test]
+fn a_copied_asset_stays_listed_and_loses_its_add_button() {
+    let mut h = expandable_hook();
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    let (gi, ai, name) = h
+        .expanded_groups
+        .iter()
+        .enumerate()
+        .find_map(|(gi, g)| {
+            g.assets
+                .iter()
+                .enumerate()
+                .find_map(|(ai, a)| a.entry.as_ref().map(|_| (gi, ai, a.name.clone())))
+        })
+        .expect("an injected default is copyable");
+
+    h.add_expanded(gi, ai);
+    h.refresh_expanded_if_needed();
+
+    let found = h
+        .expanded_groups
+        .iter()
+        .flat_map(|g| g.assets.iter())
+        .find(|a| a.name == name)
+        .expect("the copied asset is still listed under its origin");
+    assert!(found.in_config, "and marked as already in the config");
+    assert!(found.entry.is_none(), "so it offers no second copy");
+
+    // Adding it again is a no-op (the name is taken).
+    let before = h.entries.len();
+    h.add_expanded(gi, ai);
+    assert_eq!(h.entries.len(), before, "no duplicate entry");
+}
+
+// A world that does not cook reports why instead of showing an empty list.
+#[test]
+fn a_broken_world_reports_its_error_on_the_expanded_tab() {
+    isolate_state_dir();
+    let mut h = hook(vec![serde_json::json!({
+        "name": "oops", "type": "NotARealAssetType", "args": {}
+    })]);
+    h.panel_open = true;
+    h.switch_tab(Tab::Expanded);
+    h.refresh_expanded_if_needed();
+    assert!(h.expanded_groups.is_empty());
+    let status = h.expanded_status.as_deref().expect("the failure surfaces");
+    assert!(status.contains("NotARealAssetType"), "{status}");
 }

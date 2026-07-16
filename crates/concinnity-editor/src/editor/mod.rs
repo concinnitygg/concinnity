@@ -7,6 +7,7 @@
 // existing debug server so `cn debug smoke` / `screenshot` can verify a session.
 
 mod asset_list;
+mod expanded;
 mod file_dialog;
 mod form;
 mod form_panel;
