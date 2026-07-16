@@ -854,6 +854,14 @@ impl RenderingBake {
         self.cursor.saturating_sub(1)
     }
 
+    // The texture-pool descriptor set this in-flight bake samples across its
+    // staggered per-face draws. Built once from the pool at bake start, so a
+    // streamed texture swap must re-point it (see `rewrite_texture_slot`) or its
+    // next face draw samples a destroyed image view.
+    pub(super) fn bindless_set(&self) -> vk::DescriptorSet {
+        self.bake.bindless_set
+    }
+
     // Free every owned GPU resource: the per-face command buffers (back to the
     // one-shot pool), the per-face fences, and the bake target / cull / sets. The
     // caller has ensured the GPU retired them (the last face's fence is signalled, or

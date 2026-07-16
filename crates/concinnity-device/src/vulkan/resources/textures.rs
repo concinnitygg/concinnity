@@ -98,6 +98,14 @@ impl VkContext {
         for &set in &self.cull.bindless_sets {
             self.write_pool_image(set, slot as u32, view);
         }
+        // An in-flight reflection-probe bake holds its own copy of the texture
+        // pool set, built once at bake start and sampled across its staggered
+        // per-face draws. Streaming a texture in destroys the old view, so the
+        // bake set must be re-pointed too or its next face samples a destroyed
+        // view; the shared cull sets above do not cover it.
+        if let Some(rendering) = self.probe_rendering.as_ref() {
+            self.write_pool_image(rendering.bindless_set(), slot as u32, view);
+        }
         for (set, cluster) in self
             .instanced
             .object_sets
