@@ -426,7 +426,10 @@ fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<s
     }))
 }
 
-fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
+// Resolve a file path into its asset entries by extension. Shared by the CLI
+// add flow above and the editor's Import panel, so both produce identical
+// entries for the same file.
+pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
     let path = std::path::Path::new(path_str);
 
     let ext = path

@@ -1,0 +1,125 @@
+// src/editor/hook/import_edit.rs
+//
+// EditorHook: the Import panel's actions. Adding resolves the typed path
+// through `authoring::add::entry_from_path` -- the exact dispatch `cn add
+// <file>` runs -- so a panel import and a CLI import produce identical
+// entries; resolution failures (missing file, unknown extension, invalid
+// content) land on the status line and nothing is committed. Listed imports
+// open in the standard edit form for full arg editing.
+
+use super::*;
+
+impl EditorHook {
+    // The world's file-backed entries, in entry order.
+    pub(super) fn import_rows(&self) -> Vec<ImportRow> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let ty = entry_type(e)?;
+                if !import_panel::IMPORT_TYPES.contains(&ty) {
+                    return None;
+                }
+                let name = entry_name(e).unwrap_or("?");
+                let source = e
+                    .get("args")
+                    .map(import_panel::source_of)
+                    .unwrap_or_default();
+                Some(ImportRow {
+                    entry: i,
+                    caption: format!("{name}  ({ty})  {source}"),
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn make_import_view<'a>(
+        &'a self,
+        rows: &'a [ImportRow],
+        mouse: [f32; 2],
+    ) -> ImportView<'a> {
+        ImportView {
+            rows,
+            scroll: self.import_scroll,
+            // Focus is asserted only while frontmost, matching the other
+            // panels' guard against fighting for typed keys.
+            focus: self.import_focus && self.panel_order.last() == Some(&PanelKey::Import),
+            status: self.import_status.as_deref(),
+            mouse,
+        }
+    }
+
+    pub(super) fn scroll_imports(&mut self, delta: f32) {
+        let max = self
+            .import_rows()
+            .len()
+            .saturating_sub(import_panel::IMPORT_POOL);
+        self.import_scroll = scroll_step(self.import_scroll, delta, max);
+    }
+
+    // Route a resolved Import-panel click.
+    pub(super) fn apply_import_action(&mut self, action: ImportAction, world: &mut World) {
+        match action {
+            ImportAction::FocusPath => self.import_focus = true,
+            ImportAction::Add => self.add_import(world),
+            ImportAction::Open(i) => {
+                if let Some(row) = self.import_rows().get(i) {
+                    self.open_import(row.entry, world);
+                }
+            }
+            // A click on panel chrome blurs the path field.
+            ImportAction::Consume => self.import_focus = false,
+        }
+    }
+
+    // Resolve the typed path and append its entries (renamed to stay unique),
+    // exactly as `cn add <path>` would. Success clears the field; failure
+    // shows on the status line and commits nothing.
+    pub(super) fn add_import(&mut self, world: &mut World) {
+        self.import_status = None;
+        let path = widget::field_text(world, import_panel::PATH_INPUT)
+            .trim()
+            .to_string();
+        if path.is_empty() {
+            return;
+        }
+        // Scene entries defer reading their file to the cook, which would
+        // surface a typo only as a preview-rebuild log; catch it here instead.
+        if !std::path::Path::new(&path).is_file() {
+            self.import_status = Some(short_error(&format!("{path}: no such file")));
+            return;
+        }
+        let mut new_entries = match crate::authoring::entry_from_path(&path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                self.import_status = Some(short_error(&e.to_string()));
+                return;
+            }
+        };
+        for entry in &mut new_entries {
+            let base = entry_name(entry).unwrap_or("import").to_string();
+            let unique = self.unique_from(&base);
+            entry["name"] = serde_json::Value::String(unique);
+            self.entries.push(entry.clone());
+        }
+        self.mark_changed();
+        widget::seed_field(world, import_panel::PATH_INPUT, "");
+    }
+
+    // Open import entry `idx` in the standard add / edit form (part of the
+    // Assets UI, so the browse panel comes up alongside it).
+    pub(super) fn open_import(&mut self, idx: usize, world: &mut World) {
+        let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) else {
+            return;
+        };
+        self.panel_open = true;
+        self.open_form(world, ty, Some(idx));
+    }
+
+    // Enter in the focused path field adds, like clicking the Add button.
+    pub(super) fn import_keys(&mut self, world: &mut World, input: &FrameInput) {
+        if self.import_focus && input.captured_key == Some(crate::assets::Key::Enter) {
+            self.add_import(world);
+        }
+    }
+}

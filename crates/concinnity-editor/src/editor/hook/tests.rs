@@ -1964,7 +1964,7 @@ fn confirm_form_without_a_selected_type_just_closes() {
     assert!(!h.form_open());
 }
 
-// -- Lighting panel ----------------------------------------------------------
+// Lighting panel
 
 fn sun_entry() -> serde_json::Value {
     serde_json::json!({"name": "sun", "type": "DirectionalLight", "args": {
@@ -2303,5 +2303,127 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert_eq!(h.entries.len(), 1);
 
     std::env::set_current_dir(old).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// -- Import panel ---------------------------------------------------------------
+
+fn import_session() -> (EditorHook, World, std::path::PathBuf) {
+    let mut world = World::new_empty();
+    super::super::inject::editor_hud(&mut world);
+    let mut h = hook(Vec::new());
+    h.import_open = true;
+    h.import_focus = true;
+    h.focus_panel(PanelKey::Import);
+    let dir = std::env::temp_dir().join(format!(
+        "cn-import-{}-{}",
+        std::process::id(),
+        std::thread::current()
+            .name()
+            .unwrap_or("t")
+            .replace(':', "_")
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    (h, world, dir)
+}
+
+fn type_path(world: &mut World, path: &str) {
+    widget::seed_field(world, import_panel::PATH_INPUT, path);
+}
+
+// A scene file resolves through the same dispatch `cn add` uses: one
+// SceneImport entry, the world marked changed, and the field cleared.
+#[test]
+fn import_add_resolves_a_scene_file() {
+    let (mut h, mut world, dir) = import_session();
+    let glb = dir.join("crate_stack.glb");
+    std::fs::write(&glb, b"glb bytes").unwrap();
+    type_path(&mut world, &glb.to_string_lossy());
+    h.add_import(&mut world);
+    assert_eq!(h.import_status, None);
+    assert_eq!(h.entries.len(), 1);
+    assert_eq!(h.entries[0]["type"], "SceneImport");
+    assert_eq!(h.entries[0]["name"], "crate_stack");
+    assert_eq!(
+        h.entries[0]["args"]["source"],
+        serde_json::Value::String(glb.to_string_lossy().to_string())
+    );
+    assert!(h.dirty && h.rebuild_preview);
+    assert_eq!(
+        widget::field_text(&world, import_panel::PATH_INPUT),
+        "",
+        "the path field clears on success"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// A story markdown resolves to a StoryImport; a colliding name is uniquified
+// instead of erroring.
+#[test]
+fn import_add_uniquifies_a_colliding_name() {
+    let (mut h, mut world, dir) = import_session();
+    let md = dir.join("tale.md");
+    std::fs::write(&md, super::super::story::STARTER_STORY).unwrap();
+    h.entries.push(entry("tale", "PointLight"));
+    type_path(&mut world, &md.to_string_lossy());
+    h.add_import(&mut world);
+    assert_eq!(h.import_status, None);
+    assert_eq!(h.entries.len(), 2);
+    assert_eq!(h.entries[1]["type"], "StoryImport");
+    assert_eq!(h.entries[1]["name"], "tale_1", "renamed past the collision");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Failures land on the status line and commit nothing: a missing file, and an
+// unknown extension.
+#[test]
+fn import_add_rejects_missing_files_and_unknown_extensions() {
+    let (mut h, mut world, dir) = import_session();
+    type_path(&mut world, "/no/such/thing.glb");
+    h.add_import(&mut world);
+    assert!(h.import_status.as_deref().unwrap().contains("no such file"));
+    assert!(h.entries.is_empty() && !h.dirty);
+
+    let odd = dir.join("mystery.xyz");
+    std::fs::write(&odd, b"?").unwrap();
+    type_path(&mut world, &odd.to_string_lossy());
+    h.add_import(&mut world);
+    assert!(h.import_status.is_some(), "unknown extension rejected");
+    assert!(h.entries.is_empty() && !h.dirty);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Enter in the focused path field adds, like clicking the Add button.
+#[test]
+fn import_enter_key_adds() {
+    let (mut h, mut world, dir) = import_session();
+    let glb = dir.join("prop.glb");
+    std::fs::write(&glb, b"glb").unwrap();
+    type_path(&mut world, &glb.to_string_lossy());
+    h.import_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(h.entries.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// The list shows the world's file-backed entries and opens one in the
+// standard edit form (alongside the Assets browse panel).
+#[test]
+fn import_rows_list_and_open_in_the_edit_form() {
+    let (mut h, mut world, dir) = import_session();
+    h.entries = vec![
+        entry("lamp", "PointLight"),
+        serde_json::json!({"name": "town", "type": "SceneImport", "args": {"source": "town.glb"}}),
+        serde_json::json!({"name": "face", "type": "Font", "args": {"path": "face.ttf"}}),
+    ];
+    let rows = h.import_rows();
+    assert_eq!(rows.len(), 2, "only file-backed types list");
+    assert_eq!(rows[0].entry, 1);
+    assert_eq!(rows[0].caption, "town  (SceneImport)  town.glb");
+    assert_eq!(rows[1].caption, "face  (Font)  face.ttf");
+
+    h.apply_import_action(ImportAction::Open(0), &mut world);
+    assert!(h.panel_open, "the Assets UI comes up with the form");
+    assert!(h.form_open());
+    assert_eq!(h.editing, Some(1), "the clicked entry is being edited");
     let _ = std::fs::remove_dir_all(&dir);
 }

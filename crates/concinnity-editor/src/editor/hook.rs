@@ -33,6 +33,7 @@
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
+use super::import_panel::{self, ImportAction, ImportRow, ImportView};
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
@@ -111,6 +112,12 @@ pub(crate) struct EditorHook {
     story_path: String,
     story_status: Option<String>,
     story_blur: bool,
+    // The Import panel: shown state, whether the path field holds keyboard
+    // focus, the list window scroll, and the last resolution error.
+    import_open: bool,
+    import_focus: bool,
+    import_scroll: usize,
+    import_status: Option<String>,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // Whether the Preview panel is shown (starts shown; toggled from the View
@@ -242,6 +249,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 mod browse;
 mod editing;
 mod edits;
+mod import_edit;
 mod layout;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
@@ -276,6 +284,10 @@ impl EditorHook {
             story_path: String::new(),
             story_status: None,
             story_blur: false,
+            import_open: false,
+            import_focus: false,
+            import_scroll: 0,
+            import_status: None,
             panel_open: false,
             preview_open: true,
             view_open: false,

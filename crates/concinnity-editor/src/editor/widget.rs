@@ -188,6 +188,17 @@ pub(crate) fn field_text(world: &World, id: AssetId) -> String {
 // panel keep using `widget::point_in`.
 pub(crate) use concinnity_templates::ui::point_in;
 
+// A label's display text clipped to `max` characters with an ellipsis, for
+// panels that show free-length strings (file paths, story lines) in
+// fixed-width rows. Editable text scrolls in its TextInput instead.
+pub(crate) fn clip_text(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let clipped: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{clipped}...")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +220,12 @@ mod tests {
             });
         }
         world
+    }
+
+    #[test]
+    fn clip_text_shortens_long_strings() {
+        assert_eq!(clip_text("short", 10), "short");
+        assert_eq!(clip_text("a very long line indeed", 10), "a very ...");
     }
 
     #[test]

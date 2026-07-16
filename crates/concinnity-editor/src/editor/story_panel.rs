@@ -10,7 +10,6 @@
 // with no `StoryImport` shows a single "+ Create story" row instead.
 
 use super::registry::{self, PanelKey};
-use super::story;
 use super::widget::{self, place_sprite, point_in};
 use crate::assets::TextAlign;
 use crate::ecs::World;
@@ -198,7 +197,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
         l.align = TextAlign::Left;
         l.color = PATH_COLOR;
         l.visible = !view.create;
-        l.content = story::clip_display(view.path, 52);
+        l.content = widget::clip_text(view.path, 52);
     }
     let apply_btn = apply_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
@@ -264,7 +263,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
             l.align = TextAlign::Left;
             l.color = LABEL;
             l.visible = true;
-            l.content = story::clip_display(&view.lines[i], MAX_LINE_CHARS);
+            l.content = widget::clip_text(&view.lines[i], MAX_LINE_CHARS);
         }
     }
 

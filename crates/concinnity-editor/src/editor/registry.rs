@@ -32,12 +32,13 @@ pub(crate) enum PanelKey {
     Templates,
     Lighting,
     Story,
+    Import,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 8;
+pub(crate) const PANEL_COUNT: usize = 9;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -48,6 +49,7 @@ impl PanelKey {
         PanelKey::Templates,
         PanelKey::Lighting,
         PanelKey::Story,
+        PanelKey::Import,
         PanelKey::TemplateDetail,
     ];
 
@@ -71,6 +73,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::TemplateDetail => 0x700,
             PanelKey::Lighting => 0x800,
             PanelKey::Story => 0x900,
+            PanelKey::Import => 0xA00,
         }
 }
 
@@ -147,6 +150,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::TemplatesPanel,
     &panels::LightingPanel,
     &panels::StoryPanel,
+    &panels::ImportPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -215,7 +219,14 @@ mod tests {
         let rows: Vec<&'static str> = view_toggles().map(|p| p.view_row().unwrap()).collect();
         assert_eq!(
             rows,
-            ["Assets", "Preview", "Templates", "Lighting", "Story"]
+            [
+                "Assets",
+                "Preview",
+                "Templates",
+                "Lighting",
+                "Story",
+                "Import"
+            ]
         );
     }
 }

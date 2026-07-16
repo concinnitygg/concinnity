@@ -55,17 +55,6 @@ pub(crate) fn join_with_previous(lines: &mut Vec<String>, i: usize) -> Option<(u
     Some((i - 1, caret))
 }
 
-// A non-edited line's display text, clipped to `max` characters with an
-// ellipsis (labels have no fit pass of their own; the edit line's `TextInput`
-// scrolls instead).
-pub(crate) fn clip_display(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let clipped: String = text.chars().take(max.saturating_sub(3)).collect();
-    format!("{clipped}...")
-}
-
 // The starter story a "+ Create story" writes: minimal but exercising the
 // format's main constructs (frontmatter with a declared character, a node
 // heading, an attributed line, plain narration). Pinned parseable by test.
@@ -126,12 +115,6 @@ mod tests {
         assert_eq!((cur, caret), (0, 2), "caret in characters, not bytes");
         assert_eq!(lines, ["héllo"]);
         assert_eq!(join_with_previous(&mut lines, 0), None, "no previous line");
-    }
-
-    #[test]
-    fn clip_display_shortens_long_lines() {
-        assert_eq!(clip_display("short", 10), "short");
-        assert_eq!(clip_display("a very long line indeed", 10), "a very ...");
     }
 
     // The starter story must parse with the real story pipeline; a format
