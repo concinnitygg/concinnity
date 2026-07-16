@@ -11,7 +11,8 @@
 // `TextInput` fields do bring in the engine's general text-input system, which
 // is real runtime code, not editor-only.)
 
-use super::{form_panel, hud, panel, preview, template_panel, templates, view};
+use super::hud;
+use super::registry::{self, PanelKey};
 use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
@@ -55,27 +56,35 @@ fn hud_font(world: &World) -> Option<FontHandle> {
         .or_else(|| world.query::<TextLabel>().find_map(|l| l.font))
 }
 
-// Inject the editor HUD: the floating Assets, edit-form, Preview, View, and
-// Templates panels and the top bar (SAVE / View), all view-less window-space
-// overlays. Injected once by the caller, before start. The overlay draws
-// components in insertion order, so the panels go in FIRST and the top bar LAST:
-// a panel dragged under the bar slides behind it, matching the hook's hit-test
-// priority (top bar first). The edit form goes in after the Assets panel so it
-// floats over the browse list it was opened from. (The hook also publishes a
-// per-frame focus-stack draw layer that reorders overlapping panels; the
-// injection order is the fallback when the layer map is empty.)
+// Inject the editor HUD: every registered floating panel and the top bar
+// (SAVE / View), all view-less window-space overlays. Injected once by the
+// caller, before start. Each panel's elements come from its registry id lists
+// and start hidden with placeholder geometry; the hook's tick positions and
+// shows only what each frame needs. The overlay draws components in insertion
+// order, so the panels go in FIRST (registry order, back-to-front) and the top
+// bar LAST: a panel dragged under the bar slides behind it, matching the hook's
+// hit-test priority (top bar first). (The hook also publishes a per-frame
+// focus-stack draw layer that reorders overlapping panels; the injection order
+// is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
     // The editor HUD replaces the baked-in debug HUD (both would answer F1):
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.
     world.remove_all::<DebugHud>();
-    inject_panel(world, font);
-    inject_form_panel(world, font);
-    inject_preview(world, font);
-    inject_view(world, font);
-    inject_templates(world, font);
-    inject_template_panel(world, font);
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for key in PanelKey::ALL {
+        let p = registry::panel(key);
+        for id in p.sprite_ids() {
+            world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+        }
+        for id in p.label_ids() {
+            world.add_component(row_label(id, "", hidden, font, false));
+        }
+        for (id, placeholder) in p.field_ids() {
+            world.add_component(text_field(id, placeholder, font));
+        }
+    }
     inject_top_bar(world, font);
 }
 
@@ -97,91 +106,6 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     ));
     world.add_component(centered_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
     world.add_component(centered_label(hud::VIEW_LABEL, "View", view_rect, font));
-}
-
-// Inject the View panel's elements, hidden with placeholder geometry; the tick's
-// `view::apply` positions and shows them when the panel is toggled on.
-fn inject_view(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in view::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in view::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
-}
-
-// Inject the Templates panel's elements, hidden with placeholder geometry; the
-// tick's `templates::apply` positions and shows them when the panel is toggled on.
-fn inject_templates(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in templates::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in templates::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
-}
-
-// Inject the Template detail panel's elements, hidden with placeholder geometry;
-// the tick's `template_panel::apply` positions and shows them once a template row
-// is picked from the Templates list.
-fn inject_template_panel(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in template_panel::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in template_panel::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
-}
-
-// Inject the Assets panel's elements, all starting hidden (the panel is closed
-// at launch). The tick's `panel::apply` positions, tints, and shows only what the
-// active mode needs each frame, so inject every element hidden with placeholder
-// geometry / tint / content. Sourcing the ids from the panel's own id lists keeps
-// this in lockstep with what the panel draws.
-fn inject_panel(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in panel::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in panel::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
-    // The combo's typed filter field (hidden; the panel shows + focuses it while
-    // the combo is open).
-    world.add_component(text_field(panel::FILTER_INPUT, "filter", font));
-}
-
-// Inject the edit-form panel's elements, all starting hidden (the form opens
-// from a browse-list click or the "+" picker): its chrome + slot pools from its
-// id lists, plus the name heading and the fixed pool of arg text inputs.
-fn inject_form_panel(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in form_panel::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in form_panel::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
-    world.add_component(text_field(form_panel::NAME_INPUT, "name", font));
-    for j in 0..super::form::FIELD_POOL {
-        world.add_component(text_field(form_panel::form_input(j), "", font));
-    }
-}
-
-// Inject the Preview panel's elements, hidden with placeholder geometry; the
-// tick's `preview::apply` positions and shows them from the first frame that has
-// a `FrameInput`.
-fn inject_preview(world: &mut World, font: Option<FontHandle>) {
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    for id in preview::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in preview::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
-    }
 }
 
 // Materialize a templates asset spec into a live component through the engine's
@@ -248,6 +172,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 
 #[cfg(test)]
 mod tests {
+    use super::super::{form_panel, panel, preview, template_panel, templates, view};
     use super::*;
 
     // Injection adds the top-bar controls (visible) plus the Assets, Preview,

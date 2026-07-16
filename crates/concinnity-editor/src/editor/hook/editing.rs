@@ -49,7 +49,7 @@ impl EditorHook {
         self.vec_expanded.clear();
         // A freshly opened form comes to the front (the click that opened it focused
         // the Assets panel; the form the user is now editing should sit on top).
-        self.focus_panel(DragTarget::Edit);
+        self.focus_panel(PanelKey::Edit);
         self.refresh_form(world);
         widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
     }

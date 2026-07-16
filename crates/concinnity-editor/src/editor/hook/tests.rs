@@ -9,6 +9,16 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
 }
 
+// The shared title-bar / close-button rects the routing derives for a panel
+// (per-panel geometry fns were retired with the registry).
+fn title_rect_of(h: &EditorHook, key: PanelKey, vp: [f32; 2]) -> [f32; 4] {
+    let o = h.origin(key, vp);
+    [o[0], o[1], registry::panel(key).size(h)[0], widget::TITLE_H]
+}
+fn close_rect_of(h: &EditorHook, key: PanelKey, vp: [f32; 2]) -> [f32; 4] {
+    widget::close_rect(title_rect_of(h, key, vp))
+}
+
 // Point the cook's content-addressed cache at a private temp dir for the test
 // process, so the in-memory rebuild tests never touch the working directory.
 fn isolate_state_dir() {
@@ -78,14 +88,14 @@ fn view_button_and_view_rows_toggle_the_panels() {
     h.apply_top(HudAction::ToggleView);
     assert!(!h.view_open, "a second click hides it");
     // Row 0 -> Assets, row 1 -> Preview, row 2 -> Templates.
-    h.apply_view(ViewAction::Toggle(0));
+    h.toggle_view_row(0);
     assert!(h.panel_open, "row 0 shows the Assets panel");
-    h.apply_view(ViewAction::Toggle(1));
+    h.toggle_view_row(1);
     assert!(
         !h.preview_open,
         "row 1 hides the (default-shown) Preview panel"
     );
-    h.apply_view(ViewAction::Toggle(2));
+    h.toggle_view_row(2);
     assert!(h.templates_open, "row 2 shows the Templates panel");
     assert!(
         h.panel_open,
@@ -98,7 +108,7 @@ fn view_button_and_view_rows_toggle_the_panels() {
 #[test]
 fn template_pick_opens_detail_then_apply_adds_idempotently() {
     let mut h = hook(Vec::new());
-    h.apply_templates(TemplatesAction::Pick(0));
+    h.open_template_detail(0);
     assert_eq!(h.open_template, Some(0), "the detail panel opens on pick");
     assert!(h.entries.is_empty(), "picking adds nothing on its own");
 
@@ -108,7 +118,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
     assert_eq!(h.open_template, None, "Apply closes the detail panel");
 
     // Re-open and Apply again: no duplicate entries.
-    h.apply_templates(TemplatesAction::Pick(0));
+    h.open_template_detail(0);
     h.apply_template_detail(TemplateAction::Apply);
     assert_eq!(h.entries.len(), first, "re-apply is idempotent");
 }
@@ -495,7 +505,7 @@ fn set_input(world: &mut World, input: FrameInput) {
 fn preview_capture_row_click_toggles_play_mode() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
-    let o = h.preview_origin(vp);
+    let o = h.origin(PanelKey::Preview, vp);
     let row_y = o[1] + preview::size()[1] - 5.0;
     let mut world = world_with_input(FrameInput {
         viewport: vp,
@@ -529,7 +539,7 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     let mut h = hook(Vec::new());
     h.panel_open = true;
     let vp = [1280.0, 720.0];
-    let start = h.panel_origin(vp);
+    let start = h.origin(PanelKey::Assets, vp);
     // Press on the title bar, 10 px in from its corner.
     let mut world = world_with_input(FrameInput {
         viewport: vp,
@@ -554,7 +564,7 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.panel_origin(vp), [390.0, 140.0]);
+    assert_eq!(h.origin(PanelKey::Assets, vp), [390.0, 140.0]);
 
     // Drag far past the top-left corner: the panel hard-stops at the edge.
     set_input(
@@ -568,7 +578,11 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.panel_origin(vp), [0.0, 0.0], "never partially off screen");
+    assert_eq!(
+        h.origin(PanelKey::Assets, vp),
+        [0.0, 0.0],
+        "never partially off screen"
+    );
 
     // Release ends the drag; the panel stays where it was dropped.
     set_input(
@@ -581,7 +595,7 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     );
     h.tick(&mut world);
     assert!(h.drag.is_none(), "release ends the drag");
-    assert_eq!(h.panel_origin(vp), [0.0, 0.0]);
+    assert_eq!(h.origin(PanelKey::Assets, vp), [0.0, 0.0]);
 }
 
 // The Preview panel drags by its own title bar, clamped to the window's far
@@ -590,7 +604,7 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
 fn title_bar_drag_moves_and_clamps_the_preview_panel() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
-    let start = h.preview_origin(vp);
+    let start = h.origin(PanelKey::Preview, vp);
     let mut world = world_with_input(FrameInput {
         viewport: vp,
         mouse_x: start[0] + 5.0,
@@ -614,7 +628,7 @@ fn title_bar_drag_moves_and_clamps_the_preview_panel() {
     h.tick(&mut world);
     let size = preview::size();
     assert_eq!(
-        h.preview_origin(vp),
+        h.origin(PanelKey::Preview, vp),
         [vp[0] - size[0], vp[1] - size[1]],
         "stops flush with the bottom-right corner"
     );
@@ -628,7 +642,7 @@ fn dragging_does_not_trigger_controls_it_crosses() {
     let mut h = hook(Vec::new());
     h.panel_open = true;
     let vp = [1280.0, 720.0];
-    let start = h.panel_origin(vp);
+    let start = h.origin(PanelKey::Assets, vp);
     let mut world = world_with_input(FrameInput {
         viewport: vp,
         mouse_x: start[0] + 10.0,
@@ -640,7 +654,7 @@ fn dragging_does_not_trigger_controls_it_crosses() {
     h.tick(&mut world);
     // Cross the Preview panel's capture row with the button still held and a
     // stray click edge (e.g. from event coalescing).
-    let pv = h.preview_origin(vp);
+    let pv = h.origin(PanelKey::Preview, vp);
     set_input(
         &mut world,
         FrameInput {
@@ -664,7 +678,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     h.panel_open = true;
     let vp = [1280.0, 720.0];
-    let po = h.panel_origin(vp);
+    let po = h.origin(PanelKey::Assets, vp);
     // Row 0 is the type header; row 1 is the name.
     let row = panel::list_row_rect(po, 1);
     let mut world = World::new_empty();
@@ -727,7 +741,7 @@ fn edit_panel_drags_by_its_title_bar() {
     h.panel_open = true;
     h.open_form(&mut world, "PointLight".to_string(), Some(0));
     let vp = [1280.0, 720.0];
-    let fo = h.edit_origin(vp);
+    let fo = h.origin(PanelKey::Edit, vp);
     world.add_component(FrameInput {
         viewport: vp,
         mouse_x: fo[0] + 12.0,
@@ -749,9 +763,9 @@ fn edit_panel_drags_by_its_title_bar() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.edit_origin(vp), [100.0, 200.0]);
+    assert_eq!(h.origin(PanelKey::Edit, vp), [100.0, 200.0]);
     assert_eq!(
-        h.panel_origin(vp),
+        h.origin(PanelKey::Assets, vp),
         panel::default_origin(vp[0]),
         "the Assets panel did not move"
     );
@@ -767,14 +781,14 @@ fn focusing_a_panel_moves_it_to_the_front() {
     // frontmost (over the Templates list it spawns from).
     assert_eq!(
         h.panel_order.last().copied(),
-        Some(DragTarget::TemplateDetail)
+        Some(PanelKey::TemplateDetail)
     );
-    h.focus_panel(DragTarget::Assets);
-    assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+    h.focus_panel(PanelKey::Assets);
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
     assert_eq!(h.panel_order.len(), panels, "no duplicates");
     // Re-focusing the frontmost is a no-op.
-    h.focus_panel(DragTarget::Assets);
-    assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+    h.focus_panel(PanelKey::Assets);
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
     assert_eq!(h.panel_order.len(), panels);
 }
 
@@ -783,7 +797,7 @@ fn focusing_a_panel_moves_it_to_the_front() {
 #[test]
 fn publish_layers_ranks_panels_below_the_top_bar() {
     let mut h = hook(Vec::new());
-    h.focus_panel(DragTarget::Edit); // Edit -> frontmost
+    h.focus_panel(PanelKey::Edit); // Edit -> frontmost
     let layers = h.compute_layers();
     let layer = |id| *layers.get(&id).expect("id mapped");
     let edit = layer(form_panel::EDIT_BG);
@@ -809,11 +823,11 @@ fn a_panel_press_brings_it_to_the_front() {
     let mut world = world_with_fields();
     h.panel_open = true;
     let vp = [1280.0, 720.0];
-    let po = h.panel_origin(vp);
+    let po = h.origin(PanelKey::Assets, vp);
     let t = panel::title_rect(po);
-    let claimed = h.try_panel_press(DragTarget::Assets, t[0] + 5.0, t[1] + 5.0, vp, &mut world);
+    let claimed = h.try_panel_press(PanelKey::Assets, t[0] + 5.0, t[1] + 5.0, vp, &mut world);
     assert!(claimed, "the press was claimed by the Assets panel");
-    assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Assets));
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
 }
 
@@ -827,8 +841,8 @@ fn edit_form_title_bar_x_closes_the_form() {
     h.open_form(&mut world, "PointLight".to_string(), Some(0));
     assert!(h.form_open());
     let vp = [1280.0, 720.0];
-    let x = form_panel::close_rect(h.edit_origin(vp));
-    let claimed = h.try_panel_press(DragTarget::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
+    let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp));
+    let claimed = h.try_panel_press(PanelKey::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
     assert!(claimed, "the X press was claimed");
     assert!(!h.form_open(), "the X closed the form");
     assert!(h.drag.is_none(), "the X did not start a drag");
@@ -843,14 +857,8 @@ fn every_panel_title_bar_x_closes_it() {
 
     // Preview starts shown; its X hides it.
     let mut h = hook(Vec::new());
-    let px = preview::close_rect(h.preview_origin(vp));
-    assert!(h.try_panel_press(
-        DragTarget::Preview,
-        px[0] + 5.0,
-        px[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    let px = close_rect_of(&h, PanelKey::Preview, vp);
+    assert!(h.try_panel_press(PanelKey::Preview, px[0] + 5.0, px[1] + 5.0, vp, &mut world));
     assert!(
         !h.preview_open && h.drag.is_none(),
         "Preview X closed it, no drag"
@@ -859,8 +867,8 @@ fn every_panel_title_bar_x_closes_it() {
     // Assets.
     let mut h = hook(Vec::new());
     h.panel_open = true;
-    let ax = panel::close_rect(h.panel_origin(vp));
-    assert!(h.try_panel_press(DragTarget::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
+    let ax = panel::close_rect(h.origin(PanelKey::Assets, vp));
+    assert!(h.try_panel_press(PanelKey::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
     assert!(
         !h.panel_open && h.drag.is_none(),
         "Assets X closed it, no drag"
@@ -869,8 +877,8 @@ fn every_panel_title_bar_x_closes_it() {
     // View.
     let mut h = hook(Vec::new());
     h.view_open = true;
-    let vx = view::close_rect(h.view_origin(vp));
-    assert!(h.try_panel_press(DragTarget::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
+    let vx = close_rect_of(&h, PanelKey::View, vp);
+    assert!(h.try_panel_press(PanelKey::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
     assert!(
         !h.view_open && h.drag.is_none(),
         "View X closed it, no drag"
@@ -879,9 +887,9 @@ fn every_panel_title_bar_x_closes_it() {
     // Templates.
     let mut h = hook(Vec::new());
     h.templates_open = true;
-    let tx = templates::close_rect(h.templates_origin(vp));
+    let tx = close_rect_of(&h, PanelKey::Templates, vp);
     assert!(h.try_panel_press(
-        DragTarget::Templates,
+        PanelKey::Templates,
         tx[0] + 5.0,
         tx[1] + 5.0,
         vp,
@@ -901,29 +909,17 @@ fn a_hidden_panel_is_not_interactive() {
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
     // Preview starts shown: a title-bar press is claimed (starts a drag).
-    let pt = preview::title_rect(h.preview_origin(vp));
-    assert!(h.try_panel_press(
-        DragTarget::Preview,
-        pt[0] + 5.0,
-        pt[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    let pt = title_rect_of(&h, PanelKey::Preview, vp);
+    assert!(h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
     // Hidden: the same press falls through.
     h.drag = None;
     h.preview_open = false;
-    assert!(!h.try_panel_press(
-        DragTarget::Preview,
-        pt[0] + 5.0,
-        pt[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    assert!(!h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
     // The View panel starts hidden: its press falls through until it is opened.
-    let vt = view::title_rect(h.view_origin(vp));
-    assert!(!h.try_panel_press(DragTarget::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
+    let vt = title_rect_of(&h, PanelKey::View, vp);
+    assert!(!h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
     h.view_open = true;
-    assert!(h.try_panel_press(DragTarget::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
+    assert!(h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
 }
 
 // The Templates panel drags by its own title bar and comes to the front on a
@@ -934,16 +930,10 @@ fn templates_panel_press_drags_and_focuses() {
     h.templates_open = true;
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
-    let t = templates::title_rect(h.templates_origin(vp));
-    assert!(h.try_panel_press(
-        DragTarget::Templates,
-        t[0] + 5.0,
-        t[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    let t = title_rect_of(&h, PanelKey::Templates, vp);
+    assert!(h.try_panel_press(PanelKey::Templates, t[0] + 5.0, t[1] + 5.0, vp, &mut world));
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
-    assert_eq!(h.panel_order.last().copied(), Some(DragTarget::Templates));
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Templates));
 }
 
 // End-to-end through `tick` against a fully injected HUD: the top-bar View
@@ -1072,7 +1062,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
 
     // Click the detail's Apply button -> the template's assets are added and
     // the detail closes.
-    let apply = template_panel::apply_rect(h.template_detail_origin(0, vp));
+    let apply = template_panel::apply_rect(h.origin(PanelKey::TemplateDetail, vp));
     set_input(
         &mut world,
         FrameInput {
@@ -1363,16 +1353,16 @@ fn scrolling_advances_an_open_field_dropdown() {
         .expect("texture ref field");
     h.apply_form(FormAction::OpenFieldDropdown(idx), &mut world);
     assert_eq!(h.field_dropdown_scroll, 0);
-    h.scroll(1.0, ScrollTarget::Form, &mut world);
+    h.scroll_form(1.0, &mut world);
     assert_eq!(
         h.field_dropdown_scroll, 1,
         "wheel down advances the dropdown"
     );
-    h.scroll(-1.0, ScrollTarget::Form, &mut world);
+    h.scroll_form(-1.0, &mut world);
     assert_eq!(h.field_dropdown_scroll, 0, "wheel up rewinds it");
     // It cannot scroll past the last page.
     for _ in 0..50 {
-        h.scroll(1.0, ScrollTarget::Form, &mut world);
+        h.scroll_form(1.0, &mut world);
     }
     let total = h.form_fields[idx].variants.len();
     assert_eq!(
@@ -1556,7 +1546,7 @@ fn add_form_scrolls_to_and_edits_an_off_window_field() {
     );
     // Wheel to the bottom; roughness scrolls into the window.
     for _ in 0..h.form_fields.len() {
-        h.scroll(1.0, ScrollTarget::Form, &mut world);
+        h.scroll_form(1.0, &mut world);
     }
     let slot = visible_slot(rj, h.form_scroll).expect("roughness scrolled into view");
     // Edit it through its now-visible control and confirm.
@@ -1624,7 +1614,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     h.open_form(&mut world, "PointLight".to_string(), Some(0));
     assert!(h.form_open() && h.editing == Some(0));
     // Toggle the assets UI off: the form + selection are kept, not discarded.
-    h.apply_view(ViewAction::Toggle(0));
+    h.toggle_view_row(0);
     assert!(!h.panel_open);
     assert!(
         h.form_open(),
@@ -1632,7 +1622,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     );
     assert_eq!(h.editing, Some(0), "the browse selection is kept");
     // Toggle back on: the same form and selection are restored.
-    h.apply_view(ViewAction::Toggle(0));
+    h.toggle_view_row(0);
     assert!(h.panel_open && h.form_open());
     assert_eq!(h.editing, Some(0));
 }
@@ -1659,12 +1649,12 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
     h.tick(&mut world);
     assert!(form_shown(&world), "form shown while the panel is open");
     // Toggle off: the form elements hide, but its state is retained.
-    h.apply_view(ViewAction::Toggle(0));
+    h.toggle_view_row(0);
     h.tick(&mut world);
     assert!(!form_shown(&world), "form elements hidden when toggled off");
     assert!(h.form_open(), "but the form state is retained");
     // Toggle on: the form re-renders.
-    h.apply_view(ViewAction::Toggle(0));
+    h.toggle_view_row(0);
     h.tick(&mut world);
     assert!(form_shown(&world), "form shown again on toggle-on");
 }
@@ -1828,16 +1818,16 @@ fn scroll_moves_each_regions_offset() {
             .collect(),
     );
     h.row_menu = Some(0);
-    h.scroll(1.0, ScrollTarget::List, &mut world);
+    h.scroll_list(1.0, &mut world);
     assert!(h.list_scroll > 0, "a closed combo scrolls the browse list");
     assert!(h.row_menu.is_none(), "scrolling dismisses an open row menu");
-    h.scroll(-1.0, ScrollTarget::List, &mut world);
+    h.scroll_list(-1.0, &mut world);
     assert_eq!(h.list_scroll, 0, "scrolling back up clamps at the top");
 
     // An open filter combo scrolls its own option list instead of the browse list.
     h.combo = Combo::Filter;
     let before = h.list_scroll;
-    h.scroll(1.0, ScrollTarget::List, &mut world);
+    h.scroll_list(1.0, &mut world);
     assert_eq!(
         h.list_scroll, before,
         "the browse list stays put with a combo open"
@@ -1845,7 +1835,7 @@ fn scroll_moves_each_regions_offset() {
 
     // A picked template detail scrolls its own asset list.
     h.open_template = Some(0);
-    h.scroll(1.0, ScrollTarget::TemplateList, &mut world);
+    h.scroll_template_list(1.0);
 }
 
 #[test]
@@ -1860,29 +1850,35 @@ fn drive_drag_parks_each_secondary_panel() {
 
     let mut h = hook(Vec::new());
     h.drag = Some(Drag {
-        target: DragTarget::View,
-        grab: [10.0, 10.0],
-    });
-    h.drive_drag(&held, vp);
-    assert!(h.view_pos.is_some(), "the View panel follows the cursor");
-
-    let mut h = hook(Vec::new());
-    h.drag = Some(Drag {
-        target: DragTarget::Templates,
-        grab: [10.0, 10.0],
-    });
-    h.drive_drag(&held, vp);
-    assert!(h.templates_pos.is_some(), "the Templates panel follows");
-
-    let mut h = hook(Vec::new());
-    h.open_template = Some(0);
-    h.drag = Some(Drag {
-        target: DragTarget::TemplateDetail,
+        key: PanelKey::View,
         grab: [10.0, 10.0],
     });
     h.drive_drag(&held, vp);
     assert!(
-        h.template_detail_pos.is_some(),
+        h.positions[PanelKey::View.index()].is_some(),
+        "the View panel follows the cursor"
+    );
+
+    let mut h = hook(Vec::new());
+    h.drag = Some(Drag {
+        key: PanelKey::Templates,
+        grab: [10.0, 10.0],
+    });
+    h.drive_drag(&held, vp);
+    assert!(
+        h.positions[PanelKey::Templates.index()].is_some(),
+        "the Templates panel follows"
+    );
+
+    let mut h = hook(Vec::new());
+    h.open_template = Some(0);
+    h.drag = Some(Drag {
+        key: PanelKey::TemplateDetail,
+        grab: [10.0, 10.0],
+    });
+    h.drive_drag(&held, vp);
+    assert!(
+        h.positions[PanelKey::TemplateDetail.index()].is_some(),
         "the Template detail panel follows"
     );
 }

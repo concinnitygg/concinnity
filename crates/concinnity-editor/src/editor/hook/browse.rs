@@ -1,7 +1,7 @@
 // src/editor/hook/browse.rs
 //
-// EditorHook: the Assets browse panel and header combo, plus the View and
-// Templates panels' actions (including applying a template and its detail view).
+// EditorHook: the Assets browse panel and header combo, plus the Templates
+// panel's actions (including applying a template and its detail view).
 
 use super::*;
 
@@ -158,37 +158,16 @@ impl EditorHook {
         self.row_menu = None;
     }
 
-    // Route a resolved View-panel click: each checkbox toggles one panel's shown
-    // state (rows are Assets / Preview / Templates, in order).
-    pub(super) fn apply_view(&mut self, action: ViewAction) {
-        match action {
-            ViewAction::Toggle(0) => self.toggle_assets(),
-            ViewAction::Toggle(1) => self.preview_open = !self.preview_open,
-            ViewAction::Toggle(2) => self.templates_open = !self.templates_open,
-            ViewAction::Toggle(_) => {}
-            ViewAction::Consume => {}
-        }
-    }
-
-    // Route a resolved Templates-panel click: picking a template opens its detail
-    // panel (a preview of the assets it would add, with an Apply button); the
-    // Templates list stays open so another can be picked.
-    pub(super) fn apply_templates(&mut self, action: TemplatesAction) {
-        match action {
-            TemplatesAction::Pick(i) => self.open_template_detail(i),
-            TemplatesAction::Consume => {}
-        }
-    }
-
-    // Open (or re-target) the Template detail panel on template `i`, bringing it to
-    // the front of the focus stack.
+    // Open (or re-target) the Template detail panel on template `i` (a preview of
+    // the assets it would add, with an Apply button), bringing it to the front of
+    // the focus stack. The Templates list stays open so another can be picked.
     pub(super) fn open_template_detail(&mut self, i: usize) {
         if i >= concinnity_templates::TEMPLATES.len() {
             return;
         }
         self.open_template = Some(i);
         self.template_list_scroll = 0;
-        self.focus_panel(DragTarget::TemplateDetail);
+        self.focus_panel(PanelKey::TemplateDetail);
     }
 
     // Close the Template detail panel (its state is transient; the Templates list

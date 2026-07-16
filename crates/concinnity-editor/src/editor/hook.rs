@@ -33,11 +33,13 @@
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::hud::{self, HudAction, HudState};
+use super::list_panel::Row;
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
+use super::registry::{self, PANEL_COUNT, PanelKey};
 use super::template_panel::{self, TemplateAction, TemplateView};
 use super::templates::{self, TemplatesAction};
-use super::view::{self, ViewAction, ViewState};
+use super::view::{self, ViewAction};
 use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
@@ -50,38 +52,14 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{HudLayers, MenuOverride, PendingBackend, World};
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
-// small 1..=3 rank), so the bar always sits on top even under a dragged panel.
+// small 1..=6 rank), so the bar always sits on top even under a dragged panel.
 const TOP_BAR_LAYER: i32 = 1_000;
-
-// Which floating panel a title-bar drag is moving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragTarget {
-    Assets,
-    Edit,
-    Preview,
-    View,
-    Templates,
-    // The Template detail panel spawned by picking a Templates-list row.
-    TemplateDetail,
-}
-
-// Which scroll region a wheel event lands in (decided by the tick from the
-// cursor position, since the browse and form panels can be open at once).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScrollTarget {
-    // The edit form's field window (or its open value dropdown).
-    Form,
-    // The Assets panel's browse list / combo options.
-    List,
-    // The Template detail panel's asset list.
-    TemplateList,
-}
 
 // An active title-bar drag: the grabbed panel and the cursor's offset from its
 // origin at the press, so the panel follows without snapping to the cursor.
 #[derive(Debug, Clone, Copy)]
 struct Drag {
-    target: DragTarget,
+    key: PanelKey,
     grab: [f32; 2],
 }
 
@@ -153,21 +131,17 @@ pub(crate) struct EditorHook {
     // The paths of the form's non-colour vector fields currently disclosed into
     // per-element leaves. Cleared when the form opens / closes.
     vec_expanded: std::collections::HashSet<String>,
-    // The floating panels' dragged origins; `None` means the panel still sits at
-    // its default anchor. Always clamped fully on screen before use.
-    panel_pos: Option<[f32; 2]>,
-    edit_pos: Option<[f32; 2]>,
-    preview_pos: Option<[f32; 2]>,
-    view_pos: Option<[f32; 2]>,
-    templates_pos: Option<[f32; 2]>,
-    template_detail_pos: Option<[f32; 2]>,
+    // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
+    // the panel still sits at its default anchor. Always clamped fully on screen
+    // before use.
+    positions: [Option<[f32; 2]>; PANEL_COUNT],
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
     // top + first to receive clicks). Dragging or clicking a panel moves it to the
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
     // panels occlude cleanly instead of merging.
-    panel_order: Vec<DragTarget>,
+    panel_order: Vec<PanelKey>,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the entries + the live
@@ -238,6 +212,8 @@ mod browse;
 mod editing;
 mod edits;
 mod layout;
+// The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
+pub(super) mod panels;
 mod routing;
 #[cfg(test)]
 mod tests;
@@ -272,23 +248,12 @@ impl EditorHook {
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
             vec_expanded: std::collections::HashSet::new(),
-            panel_pos: None,
-            edit_pos: None,
-            preview_pos: None,
-            view_pos: None,
-            templates_pos: None,
-            template_detail_pos: None,
+            positions: [None; PANEL_COUNT],
             drag: None,
-            // Back-to-front, matching the injected draw order (the Template detail
-            // panel frontmost, over the Templates list it spawns from).
-            panel_order: vec![
-                DragTarget::Assets,
-                DragTarget::Edit,
-                DragTarget::Preview,
-                DragTarget::View,
-                DragTarget::Templates,
-                DragTarget::TemplateDetail,
-            ],
+            // Back-to-front, matching the injected draw order (registry order:
+            // the Template detail panel frontmost, over the Templates list it
+            // spawns from).
+            panel_order: PanelKey::ALL.to_vec(),
         }
     }
 }
@@ -315,47 +280,25 @@ impl DebugHook for EditorHook {
                     self.route_click(input, vp, world);
                 }
                 // Wheel routing: the frontmost scrollable panel under the cursor
-                // takes the wheel (the form's field window or the Assets list). An
-                // open value dropdown is modal and can extend past the panel, so it
-                // scrolls the form from anywhere while open.
+                // takes the wheel. An open value dropdown is modal and can extend
+                // past the form panel, so it scrolls the form from anywhere while
+                // open.
                 if input.scroll_delta.abs() > 0.5 {
                     let (mx, my) = (input.mouse_x, input.mouse_y);
-                    let form_shown = self.form_open() && self.panel_open;
+                    let form_shown = registry::panel(PanelKey::Edit).is_open(self);
                     if form_shown && self.field_dropdown.is_some() {
-                        self.scroll(input.scroll_delta, ScrollTarget::Form, world);
+                        self.scroll_form(input.scroll_delta, world);
                     } else {
-                        let front_to_back: Vec<DragTarget> =
+                        let front_to_back: Vec<PanelKey> =
                             self.panel_order.iter().rev().copied().collect();
-                        for target in front_to_back {
-                            let hit = match target {
-                                DragTarget::Edit if form_shown => {
-                                    let data = self.panel_data(world);
-                                    let view = self.make_form_view(&data, [mx, my]);
-                                    form_panel::cursor_over(&view, mx, my, self.edit_origin(vp))
-                                        .then_some(ScrollTarget::Form)
-                                }
-                                DragTarget::Assets if self.panel_open => {
-                                    panel::cursor_over_body(mx, my, self.panel_origin(vp))
-                                        .then_some(ScrollTarget::List)
-                                }
-                                DragTarget::TemplateDetail => self
-                                    .open_template
-                                    .filter(|_| self.templates_open)
-                                    .and_then(|i| {
-                                        let data = self.template_detail_data(i);
-                                        let view = self.make_template_view(&data, [mx, my]);
-                                        template_panel::cursor_over(
-                                            &view,
-                                            mx,
-                                            my,
-                                            self.template_detail_origin(i, vp),
-                                        )
-                                        .then_some(ScrollTarget::TemplateList)
-                                    }),
-                                _ => None,
-                            };
-                            if let Some(t) = hit {
-                                self.scroll(input.scroll_delta, t, world);
+                        for key in front_to_back {
+                            let p = registry::panel(key);
+                            if !p.is_open(self) {
+                                continue;
+                            }
+                            let o = self.origin(key, vp);
+                            if p.wheel_over(self, world, mx, my, o) {
+                                p.scroll(self, world, input.scroll_delta);
                                 break;
                             }
                         }
@@ -386,53 +329,16 @@ impl DebugHook for EditorHook {
         } else {
             world.insert_resource(HudLayers::default());
         }
-        // Preview panel (toggled from the View panel; shown by default).
-        if shown && self.preview_open {
-            preview::apply(world, self.preview_origin(vp), self.world_capture, mouse);
-        } else {
-            preview::hide_all(world);
-        }
-        // View panel (toggled from the top-bar View button).
-        if shown && self.view_open {
-            view::apply(world, self.view_origin(vp), self.view_state(), mouse);
-        } else {
-            view::hide_all(world);
-        }
-        // Templates panel (toggled from the View panel); the picked template's row
-        // stays highlighted while its detail panel is open.
-        if shown && self.templates_open {
-            templates::apply(world, self.templates_origin(vp), self.open_template, mouse);
-        } else {
-            templates::hide_all(world);
-        }
-        // Template detail panel: shown only while the Templates list is open and a
-        // template is picked; hiding it keeps `open_template` so a later toggle-on
-        // restores it.
-        let detail = self.open_template.filter(|_| shown && self.templates_open);
-        if let Some(i) = detail {
-            let data = self.template_detail_data(i);
-            let view = self.make_template_view(&data, mouse);
-            template_panel::apply(world, Some(&view), self.template_detail_origin(i, vp));
-        } else {
-            template_panel::apply(world, None, [0.0, 0.0]);
-        }
-        // Assets panel (toggled from the View panel).
-        if shown && self.panel_open {
-            let data = self.panel_data(world);
-            let view = self.make_view(&data, mouse);
-            panel::apply(world, Some(&view), self.panel_origin(vp));
-        } else {
-            panel::apply(world, None, [0.0, 0.0]);
-        }
-        // The edit form shows only while the assets UI is on (panel_open); hiding
-        // it keeps its state so a later toggle-on restores it.
-        let show_form = shown && self.panel_open && self.form_open();
-        if show_form {
-            let data = self.panel_data(world);
-            let view = self.make_form_view(&data, mouse);
-            form_panel::apply(world, Some(&view), self.edit_origin(vp));
-        } else {
-            form_panel::apply(world, None, [0.0, 0.0]);
+        // Lay out every open panel (hiding keeps its state, so toggling back
+        // restores the same view). Compound gates live on each panel's
+        // `is_open` -- e.g. the edit form shows only while the assets UI is on.
+        for p in registry::all() {
+            if shown && p.is_open(self) {
+                let o = self.origin(p.key(), vp);
+                p.draw(self, world, o, mouse);
+            } else {
+                p.hide(world);
+            }
         }
     }
 

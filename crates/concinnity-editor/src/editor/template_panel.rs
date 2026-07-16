@@ -19,12 +19,12 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
+use super::registry::{self, PanelKey};
 use super::widget::{self, place_sprite, point_in};
 
-// Reserved asset-id family, past the Templates list panel's (`templates.rs`,
-// `ID_BASE + 0x600`). The row pools sit at `+0x20` / `+0x40`; the chrome ids
-// below stay under `+0x20`, so the ranges never overlap.
-const TPL: u32 = 0x3000_0000 + 0x700;
+// The row pools sit at `+0x20` / `+0x40`; the chrome ids below stay under
+// `+0x20`, so the sub-ranges never overlap.
+const TPL: u32 = registry::base(PanelKey::TemplateDetail);
 pub(crate) const PANEL_BG: AssetId = AssetId(TPL);
 pub(crate) const TITLE_BG: AssetId = AssetId(TPL + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(TPL + 2);

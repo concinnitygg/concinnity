@@ -23,6 +23,7 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
+use super::registry::{self, PanelKey};
 use super::widget::{self, place_sprite, point_in};
 
 // An enum / ref field with this many variants or fewer cycles in place on click
@@ -36,9 +37,7 @@ pub(crate) const MAX_DROP_ROWS: usize = 8;
 // A field-value dropdown option row's height.
 const DROP_ROW_H: f32 = 28.0;
 
-// Reserved asset-id families, between the Assets panel's (up past
-// `ID_BASE + 0x40`) and the Preview panel's (`ID_BASE + 0x400`).
-const EDIT: u32 = 0x3000_0000 + 0x200;
+const EDIT: u32 = registry::base(PanelKey::Edit);
 pub(crate) const EDIT_BG: AssetId = AssetId(EDIT);
 pub(crate) const TITLE_BG: AssetId = AssetId(EDIT + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(EDIT + 2);

@@ -11,12 +11,12 @@
 // crate.
 
 use super::list_panel::{self, Row};
+use super::registry::{self, PanelKey};
 use super::widget::point_in;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
-// Reserved id base, past the View panel's family (`view.rs`, `ID_BASE + 0x500`).
-const BASE: u32 = 0x3000_0000 + 0x600;
+const BASE: u32 = registry::base(PanelKey::Templates);
 // Named ids the cross-module tests reference; the shipping paths derive every id
 // from `BASE` through `list_panel`.
 #[cfg(test)]
@@ -62,19 +62,9 @@ pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
     list_panel::panel_rect(o, TEMPLATES_W, count())
 }
 
-// The draggable title bar across the panel top.
-pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    list_panel::title_rect(o, TEMPLATES_W)
-}
-
-// The "X" close button in the title bar's top-right corner.
-pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    list_panel::close_rect(o, TEMPLATES_W)
-}
-
 // Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means the
 // click missed the panel. Title-bar presses never reach this: the hook intercepts
-// them first to start a drag.
+// them first to start a drag (the shared routing owns the title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<TemplatesAction> {
     if let Some(i) = list_panel::hit_row(mx, my, o, TEMPLATES_W, count()) {
         return Some(TemplatesAction::Pick(i));
@@ -136,7 +126,7 @@ mod tests {
             hit_test(r0[0] + 10.0, r0[1] + 10.0, o),
             Some(TemplatesAction::Pick(0))
         );
-        let t = title_rect(o);
+        let t = list_panel::title_rect(o, TEMPLATES_W);
         assert_eq!(
             hit_test(t[0] + 5.0, t[1] + 5.0, o),
             Some(TemplatesAction::Consume)

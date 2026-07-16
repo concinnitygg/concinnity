@@ -31,6 +31,7 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 use super::hud;
+use super::registry::{self, PanelKey};
 use super::widget::{self, place_sprite, point_in};
 
 // The grouped browse list (row model, grouping, geometry, base style, and the
@@ -138,13 +139,11 @@ pub(crate) enum Combo {
     Picker,
 }
 
-// Reserved asset-id families for the panel, offset past the top-bar HUD's ids
-// (see `hud.rs`; the top bar uses `ID_BASE + 0..0x23`). Interned world ids never
-// reach this range and these are never serialized. The asset-id VALUE does not
-// affect draw order (the overlay draws in component-insertion order, not by id);
+// Reserved asset-id family for the panel. The asset-id VALUE does not affect
+// draw order (the overlay draws in component-insertion order, not by id);
 // z-order is set by the sequence in `all_sprite_ids` / `all_label_ids`, which
 // `inject.rs` inserts in that order. The id values only need to be distinct.
-const PANEL: u32 = 0x3000_0000 + 0x40;
+const PANEL: u32 = registry::base(PanelKey::Assets);
 pub(crate) const PANEL_BG: AssetId = AssetId(PANEL);
 pub(crate) const PLUS_BG: AssetId = AssetId(PANEL + 1);
 pub(crate) const PLUS_LABEL: AssetId = AssetId(PANEL + 2);

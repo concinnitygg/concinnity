@@ -13,17 +13,11 @@
 // (before the world step) means the layout applies the same frame GraphicsSystem
 // draws it. The whole HUD toggles with F1 (see `hook.rs`).
 
+use super::registry::ID_BASE;
 use super::widget::{self, place_sprite, point_in};
 use crate::assets::{FrameInput, TextAlign};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-
-// Reserved asset-id range for the runtime-injected editor HUD. Interned ids are
-// dense from 0 and a real world never approaches this range, so a fixed high
-// base is collision-free without scanning the world. These ids are never
-// interned and never serialized to a blob. (The panel families live past
-// `ID_BASE + 0x40`; keep the two ranges disjoint.)
-const ID_BASE: u32 = 0x3000_0000;
 pub(crate) const SAVE_BUTTON: AssetId = AssetId(ID_BASE);
 pub(crate) const SAVE_LABEL: AssetId = AssetId(ID_BASE + 1);
 pub(crate) const VIEW_BUTTON: AssetId = AssetId(ID_BASE + 2);
