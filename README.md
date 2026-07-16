@@ -58,7 +58,6 @@ cargo run -p bistro --release
 | ---------------------------------------------------- | :----------------: | -------------------------------------------------------------------- |
 | [concinnity-cli](crates/concinnity-cli/)             |                    | The `concinnity` dev CLI binary: command tree + subcommands          |
 | [concinnity-editor](crates/concinnity-editor/)       |                    | Dev tooling library: world authoring, in-engine editor, debug server |
-| [concinnity-ffi](crates/concinnity-ffi/)             |                    | General-purpose C-ABI cdylib for embedding in a host app             |
 | [concinnity-runtime](crates/concinnity-runtime/)     |                    | Shipped player binary for a world's compiled blobs                   |
 | [concinnity-engine](crates/concinnity-engine/)       |                    | Runtime engine: world loop, ECS, renderer                            |
 | [concinnity-physics](crates/concinnity-physics/)     |                    | Rapier rigid-body simulation: props, joints, character rigs          |

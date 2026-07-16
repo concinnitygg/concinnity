@@ -6,10 +6,6 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-# The dev tooling library: world authoring/build, the in-engine editor HUD, the
-# localhost debug server, and the interpreted run loop. The `concinnity` CLI
-# binary (concinnity-cli, which owns argv parsing) and the C-ABI cdylib
-# (concinnity-ffi) both build on this.
 [lib]
 name = "concinnity_editor"
 path = "src/lib.rs"
@@ -18,8 +14,7 @@ doctest = false
 [features]
 # Mirror the runtime's Vulkan feature so an editor build can target the Vulkan
 # backend; forwards to the runtime, the device backends, the compile pipeline,
-# and core. The ash/shaderc dep activation lives on the final-binary crates
-# (concinnity-cli, concinnity-ffi).
+# and core.
 vulkan = [
     "concinnity-engine/vulkan",
     "concinnity-device/vulkan",

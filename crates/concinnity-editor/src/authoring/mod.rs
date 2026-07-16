@@ -1,9 +1,7 @@
 // In-memory world authoring + build orchestration.
 //
 // The add / rm / check / build operations on a world JSONL, plus the templates
-// bridge, shared by the `concinnity` CLI (concinnity-cli) and the C-ABI
-// embedding surface (concinnity-ffi). This is the compile pipeline driven as a
-// library: a shipped runtime links none of it.
+// bridge, shared by the `concinnity` CLI (concinnity-cli).
 
 mod add;
 mod build;
