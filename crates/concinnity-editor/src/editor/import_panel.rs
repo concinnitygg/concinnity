@@ -28,6 +28,8 @@ pub(crate) const LIST_HEADER: AssetId = AssetId(BASE + 9);
 pub(crate) const LIST_TRACK: AssetId = AssetId(BASE + 10);
 pub(crate) const LIST_THUMB: AssetId = AssetId(BASE + 11);
 pub(crate) const PATH_INPUT: AssetId = AssetId(BASE + 12);
+pub(crate) const BROWSE_BG: AssetId = AssetId(BASE + 13);
+pub(crate) const BROWSE_LABEL: AssetId = AssetId(BASE + 14);
 
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(BASE + 0x20 + i as u32)
@@ -70,6 +72,8 @@ const HINT_H: f32 = 20.0;
 const STATUS_H: f32 = 22.0;
 const LIST_HEADER_H: f32 = 24.0;
 const BTN_W: f32 = 70.0;
+const BROWSE_W: f32 = 84.0;
+const GAP: f32 = 6.0;
 const ROW_H: f32 = 26.0;
 const SCROLLBAR_W: f32 = 5.0;
 // Visible import rows; a longer list scrolls.
@@ -81,6 +85,8 @@ const ROW_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
 const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
 const BTN_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
 const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
+// The Browse button reads as secondary next to the green Add.
+const BROWSE_TINT: [f32; 4] = [0.24, 0.26, 0.34, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
@@ -110,6 +116,8 @@ pub(crate) struct ImportView<'a> {
 pub(crate) enum ImportAction {
     // Give the path field keyboard focus.
     FocusPath,
+    // Open the native file picker and put the result in the path field.
+    Browse,
     // Resolve the typed path and add its entries.
     Add,
     // Open listed import `i` (a row index into the view) in the edit form.
@@ -147,23 +155,34 @@ fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], IMPORT_W, widget::TITLE_H]
 }
 
-// The path field, filling the header row left of the Add button.
-pub(crate) fn path_rect(o: [f32; 2]) -> [f32; 4] {
+// The header row's controls, right to left: Add pinned to the right end, the
+// Browse button beside it, and the path field filling the rest.
+fn header_y(o: [f32; 2]) -> f32 {
+    o[1] + widget::TITLE_H + 4.0
+}
+const CTRL_H: f32 = HEADER_H - 8.0;
+
+pub(crate) fn add_rect(o: [f32; 2]) -> [f32; 4] {
+    [o[0] + IMPORT_W - PAD - BTN_W, header_y(o), BTN_W, CTRL_H]
+}
+
+// The "Browse..." button, opening the native file picker.
+pub(crate) fn browse_rect(o: [f32; 2]) -> [f32; 4] {
     [
-        o[0] + PAD,
-        o[1] + widget::TITLE_H + 4.0,
-        IMPORT_W - BTN_W - 3.0 * PAD,
-        HEADER_H - 8.0,
+        add_rect(o)[0] - GAP - BROWSE_W,
+        header_y(o),
+        BROWSE_W,
+        CTRL_H,
     ]
 }
 
-// The Add button, pinned to the header row's right end.
-pub(crate) fn add_rect(o: [f32; 2]) -> [f32; 4] {
+pub(crate) fn path_rect(o: [f32; 2]) -> [f32; 4] {
+    let left = o[0] + PAD;
     [
-        o[0] + IMPORT_W - PAD - BTN_W,
-        o[1] + widget::TITLE_H + 4.0,
-        BTN_W,
-        HEADER_H - 8.0,
+        left,
+        header_y(o),
+        (browse_rect(o)[0] - GAP - left).max(0.0),
+        CTRL_H,
     ]
 }
 
@@ -193,6 +212,9 @@ pub(crate) fn cursor_over_list(mx: f32, my: f32, o: [f32; 2]) -> bool {
 pub(crate) fn hit_test(view: &ImportView, mx: f32, my: f32, o: [f32; 2]) -> Option<ImportAction> {
     if point_in(mx, my, add_rect(o)) {
         return Some(ImportAction::Add);
+    }
+    if point_in(mx, my, browse_rect(o)) {
+        return Some(ImportAction::Browse);
     }
     if point_in(mx, my, path_rect(o)) {
         return Some(ImportAction::FocusPath);
@@ -224,6 +246,18 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2]) {
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
     widget::show_field(world, PATH_INPUT, path_rect(o), view.focus);
+    let browse = browse_rect(o);
+    let hover = point_in(view.mouse[0], view.mouse[1], browse);
+    let tint = if hover { BTN_TINT_HOVER } else { BROWSE_TINT };
+    place_sprite(world, BROWSE_BG, browse, tint, true);
+    if let Some(l) = widget::label_mut(world, BROWSE_LABEL) {
+        l.x = browse[0] + browse[2] * 0.5;
+        l.y = browse[1] + browse[3] * 0.5 - 10.0;
+        l.align = TextAlign::Center;
+        l.color = [1.0, 1.0, 1.0];
+        l.visible = true;
+        l.content = "Browse...".to_string();
+    }
     let add = add_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], add);
     let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
@@ -334,7 +368,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // Every panel sprite id, in draw (insertion) order: chrome, then the list
 // rows, then the scrollbar floating above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, ADD_BG];
+    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, BROWSE_BG, ADD_BG];
     ids.extend((0..IMPORT_POOL).map(row_bg));
     ids.extend([LIST_TRACK, LIST_THUMB]);
     ids
@@ -344,6 +378,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![
         TITLE_LABEL,
         CLOSE_LABEL,
+        BROWSE_LABEL,
         ADD_LABEL,
         HINT_LABEL,
         STATUS_LABEL,
@@ -415,8 +450,24 @@ mod tests {
         assert_eq!(source_of(&serde_json::json!({"other": 1})), "");
     }
 
+    // The header packs right to left without overlapping, and the path field
+    // keeps a usable width beside the two buttons.
     #[test]
-    fn hit_test_resolves_path_add_and_rows() {
+    fn header_controls_pack_without_overlap() {
+        let o = [40.0, 40.0];
+        let (p, b, a) = (path_rect(o), browse_rect(o), add_rect(o));
+        assert_eq!(a[0] + a[2], o[0] + IMPORT_W - PAD, "Add pinned right");
+        assert_eq!(b[0] + b[2] + GAP, a[0], "Browse sits left of Add");
+        assert_eq!(p[0] + p[2] + GAP, b[0], "the field fills up to Browse");
+        assert!(p[2] > 200.0, "the path field stays usable: {}", p[2]);
+        for r in [p, b, a] {
+            assert_eq!(r[1], header_y(o));
+            assert_eq!(r[3], CTRL_H);
+        }
+    }
+
+    #[test]
+    fn hit_test_resolves_path_browse_add_and_rows() {
         let r = rows(3);
         let v = view(&r, 0);
         let o = [40.0, 40.0];
@@ -424,6 +475,11 @@ mod tests {
         assert_eq!(
             hit_test(&v, a[0] + 5.0, a[1] + 5.0, o),
             Some(ImportAction::Add)
+        );
+        let b = browse_rect(o);
+        assert_eq!(
+            hit_test(&v, b[0] + 5.0, b[1] + 5.0, o),
+            Some(ImportAction::Browse)
         );
         let p = path_rect(o);
         assert_eq!(
@@ -469,6 +525,11 @@ mod tests {
             .find(|t| t.asset_id == PATH_INPUT)
             .unwrap();
         assert!(input.visible && input.focused);
+        let browse = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == BROWSE_LABEL)
+            .unwrap();
+        assert!(browse.visible && browse.content == "Browse...");
         // An empty list keeps the header but no rows.
         apply(&mut world, Some(&view(&[], 0)), [20.0, 20.0]);
         let header = world

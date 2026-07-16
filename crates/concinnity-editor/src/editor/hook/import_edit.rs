@@ -4,10 +4,12 @@
 // through `authoring::add::entry_from_path` -- the exact dispatch `cn add
 // <file>` runs -- so a panel import and a CLI import produce identical
 // entries; resolution failures (missing file, unknown extension, invalid
-// content) land on the status line and nothing is committed. Listed imports
-// open in the standard edit form for full arg editing.
+// content) land on the status line and nothing is committed. Browse fills the
+// same field from a native picker, so both routes end at the same Add. Listed
+// imports open in the standard edit form for full arg editing.
 
 use super::*;
+use std::path::Path;
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.
@@ -61,6 +63,7 @@ impl EditorHook {
     pub(super) fn apply_import_action(&mut self, action: ImportAction, world: &mut World) {
         match action {
             ImportAction::FocusPath => self.import_focus = true,
+            ImportAction::Browse => self.browse_import(world),
             ImportAction::Add => self.add_import(world),
             ImportAction::Open(i) => {
                 if let Some(row) = self.import_rows().get(i) {
@@ -70,6 +73,27 @@ impl EditorHook {
             // A click on panel chrome blurs the path field.
             ImportAction::Consume => self.import_focus = false,
         }
+    }
+
+    // Open the native file picker at the project directory and take what the
+    // user picks. The dialog blocks the frame loop while it is up (it is a
+    // modal OS window over the editor); cancelling leaves the field alone.
+    // This wrapper is the only untestable step -- what the pick feeds is all in
+    // `accept_browsed_path`.
+    pub(super) fn browse_import(&mut self, world: &mut World) {
+        let root = project_root();
+        if let Some(picked) = super::super::file_dialog::pick_import_file(&root) {
+            self.accept_browsed_path(world, &picked);
+        }
+    }
+
+    // Put a picked file's project-relative path in the field, ready to Add. Not
+    // added outright: the user still sees what resolved before committing.
+    pub(super) fn accept_browsed_path(&mut self, world: &mut World, picked: &Path) {
+        let text = super::super::file_dialog::project_path(picked, &project_root());
+        widget::seed_field(world, import_panel::PATH_INPUT, &text);
+        self.import_focus = true;
+        self.import_status = None;
     }
 
     // Resolve the typed path and append its entries (renamed to stay unique),
@@ -122,4 +146,11 @@ impl EditorHook {
             self.add_import(world);
         }
     }
+}
+
+// The directory imported paths are stored relative to, and where the picker
+// opens: the process's working directory, which is the project root the cook
+// resolves an entry's `source` against.
+fn project_root() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_default()
 }

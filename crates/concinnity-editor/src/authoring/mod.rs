@@ -10,8 +10,9 @@ mod rm;
 mod template_spec;
 
 pub use add::add_to_path;
-// The path-to-entries resolution, shared with the editor's Import panel.
-pub(crate) use add::entry_from_path;
+// The path-to-entries resolution and the extensions it handles, shared with
+// the editor's Import panel (its Add path and its file picker's filters).
+pub(crate) use add::{IMPORT_EXTENSION_GROUPS, entry_from_path};
 pub use build::{
     build_world_from_path, build_world_from_str, build_world_to_disk, world_from_loaded,
 };

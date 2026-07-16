@@ -426,6 +426,21 @@ fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<s
     }))
 }
 
+// Every file extension the dispatch below resolves, grouped for a file
+// picker's category filters (the editor's Import panel builds its dialog from
+// this). Kept beside the dispatch so a newly handled extension is offered by
+// the picker the same day the CLI learns it;
+// `import_extension_groups_track_the_dispatch` fails if one drifts out.
+pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
+    ("Scenes", &["glb", "fbx"]),
+    ("Stories & text", &["md", "txt"]),
+    ("Images", &["png", "jpg", "jpeg", "bmp", "tga", "gif"]),
+    ("Audio", &["ogg", "wav", "mp3", "flac"]),
+    ("Fonts", &["ttf", "otf"]),
+    ("Shaders", &["vert", "frag", "glsl", "metal", "wgsl"]),
+    ("Models & data", &["obj", "mtl", "json", "gguf"]),
+];
+
 // Resolve a file path into its asset entries by extension. Shared by the CLI
 // add flow above and the editor's Import panel, so both produce identical
 // entries for the same file.
@@ -1674,6 +1689,44 @@ mod tests {
         let err = resolve_add_target("DefinitelyNotAnAssetOrFile").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("could not resolve"), "got: {err}");
+    }
+
+    // Every extension the picker advertises is one `entry_from_path` actually
+    // dispatches: each resolves, or fails for a content reason -- never with
+    // "unknown extension". Guards the two lists against drifting apart.
+    #[test]
+    fn import_extension_groups_track_the_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        for (_, exts) in IMPORT_EXTENSION_GROUPS {
+            for ext in *exts {
+                let path = dir.path().join(format!("probe.{ext}"));
+                // Valid-enough content for the arms that read their file.
+                std::fs::write(&path, b"{}").unwrap();
+                let path_str = path.to_string_lossy();
+                if let Err(e) = entry_from_path(&path_str) {
+                    assert!(
+                        !e.to_string().contains("unknown extension"),
+                        ".{ext} is advertised by the picker but not dispatched: {e}"
+                    );
+                }
+            }
+        }
+    }
+
+    // A picker group is only useful if the dialog can build a filter from it.
+    #[test]
+    fn import_extension_groups_are_non_empty_and_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, exts) in IMPORT_EXTENSION_GROUPS {
+            assert!(!exts.is_empty(), "{name} has no extensions");
+            for ext in *exts {
+                assert!(seen.insert(*ext), "'{ext}' listed in two groups");
+                assert!(
+                    !ext.starts_with('.'),
+                    "'{ext}' should be bare (rfd adds the dot)"
+                );
+            }
+        }
     }
 
     // import_entry

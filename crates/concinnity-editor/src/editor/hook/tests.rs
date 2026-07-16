@@ -2427,3 +2427,41 @@ fn import_rows_list_and_open_in_the_edit_form() {
     assert_eq!(h.editing, Some(1), "the clicked entry is being edited");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// A browsed file lands in the path field as a project-relative path, ready for
+// the user to confirm with Add (Browse never commits on its own). The dialog
+// itself is not exercised: `browse_import` is a three-line wrapper over it, and
+// everything the pick feeds runs through `accept_browsed_path`.
+#[test]
+fn import_browse_result_fills_the_path_field_relatively() {
+    let _guard = crate::test_support::lock();
+    let (mut h, mut world, dir) = import_session();
+    let old = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&dir).unwrap();
+
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let picked = assets.join("hero.glb");
+    std::fs::write(&picked, b"glb").unwrap();
+    h.import_status = Some("stale error".to_string());
+    h.accept_browsed_path(&mut world, &picked);
+
+    assert_eq!(
+        widget::field_text(&world, import_panel::PATH_INPUT),
+        "assets/hero.glb",
+        "a file inside the project stores relatively"
+    );
+    assert!(h.import_focus, "the field takes focus, ready to Add");
+    assert_eq!(h.import_status, None, "a stale error is cleared");
+    assert!(h.entries.is_empty(), "Browse does not commit on its own");
+
+    // Confirming with Add resolves the browsed path like any typed one.
+    h.add_import(&mut world);
+    assert_eq!(h.import_status, None);
+    assert_eq!(h.entries.len(), 1);
+    assert_eq!(h.entries[0]["type"], "SceneImport");
+    assert_eq!(h.entries[0]["args"]["source"], "assets/hero.glb");
+
+    std::env::set_current_dir(old).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
