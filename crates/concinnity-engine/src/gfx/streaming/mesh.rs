@@ -17,7 +17,7 @@
 // RAM copy past GPU upload). Both plug into the same planner and renderer.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -104,12 +104,7 @@ impl MeshPayloadSource for DiskMeshSource {
             .locators
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed mesh {}", id))?;
-        let mut file = File::open(&self.path).map_err(|e| format!("open {}: {}", self.path, e))?;
-        file.seek(SeekFrom::Start(loc.file_offset))
-            .map_err(|e| format!("seek {} in {}: {}", loc.file_offset, self.path, e))?;
-        let mut bytes = vec![0u8; loc.len as usize];
-        file.read_exact(&mut bytes)
-            .map_err(|e| format!("read {} bytes from {}: {}", loc.len, self.path, e))?;
+        let bytes = super::file_range::read_at(&self.path, loc.file_offset, loc.len)?;
         decode_mesh(&bytes)
     }
 }

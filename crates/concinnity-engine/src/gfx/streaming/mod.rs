@@ -13,6 +13,8 @@ pub(crate) use concinnity_render::streaming::*;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod chunk;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod file_range;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod mesh;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod texture;

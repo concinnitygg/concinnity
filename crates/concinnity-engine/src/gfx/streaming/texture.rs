@@ -15,8 +15,6 @@
 // (used by `cn run`, so the bytes never stay RAM-resident). Both plug into the
 // same planner and renderer.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
@@ -110,12 +108,7 @@ impl PayloadSource for DiskPayloadSource {
             .locators
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {}", id))?;
-        let mut file = File::open(&loc.path).map_err(|e| format!("open {}: {}", loc.path, e))?;
-        file.seek(SeekFrom::Start(loc.file_offset))
-            .map_err(|e| format!("seek {} in {}: {}", loc.file_offset, loc.path, e))?;
-        let mut bytes = vec![0u8; loc.len as usize];
-        file.read_exact(&mut bytes)
-            .map_err(|e| format!("read {} bytes from {}: {}", loc.len, loc.path, e))?;
+        let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
         let (width, height, pixels) = crate::build::texture::deserialise(&bytes)?;
         Ok(DecodedTexture {
             width,
