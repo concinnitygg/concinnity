@@ -507,7 +507,8 @@ fn preview_capture_row_click_toggles_play_mode() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
     let o = h.origin(PanelKey::Preview, vp);
-    let row_y = o[1] + preview::size()[1] - 5.0;
+    // Mid-row: the panel bottom carries a pad below the last row.
+    let row_y = o[1] + preview::size()[1] - 20.0;
     let mut world = world_with_input(FrameInput {
         viewport: vp,
         mouse_x: o[0] + 10.0,
@@ -803,7 +804,7 @@ fn publish_layers_ranks_panels_below_the_top_bar() {
     let layer = |id| *layers.get(&id).expect("id mapped");
     let edit = layer(form_panel::EDIT_BG);
     let assets = layer(panel::PANEL_BG);
-    let preview = layer(preview::TITLE_BG);
+    let preview = layer(preview::PANEL_BG);
     assert!(
         edit > assets && edit > preview,
         "the frontmost panel outranks the others"
@@ -963,7 +964,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         ..Default::default()
     });
     h.tick(&mut world);
-    assert!(!vis(&world, view::TITLE_BG) && !vis(&world, templates::TITLE_BG));
+    assert!(!vis(&world, view::PANEL_BG) && !vis(&world, templates::PANEL_BG));
 
     // Frame 2: click the top-bar View button -> the View panel opens.
     let (_, view_btn) = hud::layout(vp[0]);
@@ -980,7 +981,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     );
     h.tick(&mut world);
     assert!(
-        h.view_open && vis(&world, view::TITLE_BG),
+        h.view_open && vis(&world, view::PANEL_BG),
         "View panel opened"
     );
     // Its "Templates" row (index 2) is laid out; grab its rect to click it.
@@ -1000,7 +1001,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     );
     h.tick(&mut world);
     assert!(h.templates_open, "the Templates row toggled the panel on");
-    assert!(vis(&world, templates::TITLE_BG), "Templates panel shown");
+    assert!(vis(&world, templates::PANEL_BG), "Templates panel shown");
 }
 
 // Picking a template row spawns the detail panel (title "Template <name>",
@@ -1030,7 +1031,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     });
     h.tick(&mut world);
     assert!(
-        vis(&world, templates::TITLE_BG) && !vis(&world, template_panel::PANEL_BG),
+        vis(&world, templates::PANEL_BG) && !vis(&world, template_panel::PANEL_BG),
         "Templates list shown; detail panel still hidden"
     );
 

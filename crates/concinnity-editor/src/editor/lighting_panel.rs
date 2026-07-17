@@ -11,14 +11,14 @@
 use super::form::{FieldKind, FormField};
 use super::lighting::{self, Row};
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, point_in};
 use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Lighting);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_BG: AssetId = AssetId(BASE + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
 pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
 pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
@@ -57,19 +57,18 @@ const CHECK_SIZE: f32 = 18.0;
 const SWATCH_W: f32 = 24.0;
 const GAP: f32 = 6.0;
 
-const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
-const HEADER_ROW_TINT: [f32; 4] = [0.14, 0.16, 0.22, 1.0];
-const ROW_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
-const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
+const HEADER_ROW_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
+const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
+const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const CHECK_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
 const CHECK_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const HEADER_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
 const ADD_LABEL: [f32; 3] = [0.55, 0.80, 0.60];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
-const LABEL_TOP: f32 = ROW_H * 0.5 - 10.0;
+const LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
 // The per-frame view the hook assembles: the row list, the per-binding derived
 // fields (`None` while a section's asset is absent), the focused binding, and
@@ -218,9 +217,9 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
         return;
     };
     let n = view.rows.len();
-    place_sprite(world, PANEL_BG, panel_rect(o, n), PANEL_TINT, true);
+    widget::place_panel(world, PANEL_BG, panel_rect(o, n));
     let title = title_rect(o);
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title, "Lighting");
+    widget::place_heading(world, TITLE_LABEL, title, "Lighting");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
@@ -232,10 +231,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
     } else {
         BTN_TINT
     };
-    place_sprite(world, APPLY_BG, apply, tint, true);
+    place_rounded(world, APPLY_BG, apply, tint, theme::CONTROL_RADIUS, true);
     if let Some(l) = widget::label_mut(world, APPLY_LABEL) {
         l.x = apply[0] + apply[2] * 0.5;
-        l.y = apply[1] + apply[3] * 0.5 - 10.0;
+        l.y = apply[1] + apply[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = [1.0, 1.0, 1.0];
         l.visible = true;
@@ -243,7 +242,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
     }
     if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
         l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - 10.0;
+        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Left;
         l.color = ERROR_LABEL;
         l.visible = view.status.is_some();
@@ -277,7 +276,14 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
                 (ROW_TINT, caption, LABEL)
             }
         };
-        place_sprite(world, row_bg(i), r, bg, true);
+        place_rounded(
+            world,
+            row_bg(i),
+            theme::highlight_rect(r),
+            bg,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         if let Some(l) = widget::label_mut(world, row_label(i)) {
             l.x = r[0] + PAD;
             l.y = r[1] + LABEL_TOP;
@@ -293,7 +299,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
         match field.kind {
             FieldKind::Bool => {
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
-                place_sprite(world, check_bg(b), check_rect(r), tint, true);
+                place_rounded(world, check_bg(b), check_rect(r), tint, 4.0, true);
             }
             FieldKind::Vec { color: true, .. } => {
                 widget::show_field(
@@ -302,11 +308,12 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
                     control_rect(r, true),
                     view.focus == Some(b),
                 );
-                place_sprite(
+                place_rounded(
                     world,
                     swatch(b),
                     swatch_rect(r),
                     parse_color(&field.initial),
+                    4.0,
                     true,
                 );
             }
@@ -351,7 +358,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // Every panel sprite id, in draw (insertion) order: chrome first, then the row
 // backgrounds, then the floating per-binding controls above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, APPLY_BG];
+    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..max_rows()).map(row_bg));
     ids.extend((0..lighting::binding_count()).map(check_bg));
     ids.extend((0..lighting::binding_count()).map(swatch));

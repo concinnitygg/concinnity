@@ -9,14 +9,14 @@
 // standard edit form. Layout half only; `hook/import_edit.rs` owns the actions.
 
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, point_in};
 use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Import);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_BG: AssetId = AssetId(BASE + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
 pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
 pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
@@ -80,13 +80,12 @@ const SCROLLBAR_W: f32 = 5.0;
 pub(crate) const IMPORT_POOL: usize = 10;
 const MAX_ROW_CHARS: usize = 56;
 
-const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
-const ROW_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.92];
-const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
+const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
 const BTN_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
+const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.56, 0.38, 1.0];
 // The Browse button reads as secondary next to the green Add.
-const BROWSE_TINT: [f32; 4] = [0.24, 0.26, 0.34, 1.0];
+const BROWSE_TINT: [f32; 4] = theme::BUTTON_TINT;
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
@@ -239,20 +238,24 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2]) {
         hide_all(world);
         return;
     };
-    place_sprite(world, PANEL_BG, panel_rect(o), PANEL_TINT, true);
+    widget::place_panel(world, PANEL_BG, panel_rect(o));
     let title = title_rect(o);
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title, "Import");
+    widget::place_heading(world, TITLE_LABEL, title, "Import");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
     widget::show_field(world, PATH_INPUT, path_rect(o), view.focus);
     let browse = browse_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], browse);
-    let tint = if hover { BTN_TINT_HOVER } else { BROWSE_TINT };
-    place_sprite(world, BROWSE_BG, browse, tint, true);
+    let tint = if hover {
+        theme::HOVER_TINT
+    } else {
+        BROWSE_TINT
+    };
+    place_rounded(world, BROWSE_BG, browse, tint, theme::CONTROL_RADIUS, true);
     if let Some(l) = widget::label_mut(world, BROWSE_LABEL) {
         l.x = browse[0] + browse[2] * 0.5;
-        l.y = browse[1] + browse[3] * 0.5 - 10.0;
+        l.y = browse[1] + browse[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = [1.0, 1.0, 1.0];
         l.visible = true;
@@ -261,10 +264,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2]) {
     let add = add_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], add);
     let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
-    place_sprite(world, ADD_BG, add, tint, true);
+    place_rounded(world, ADD_BG, add, tint, theme::CONTROL_RADIUS, true);
     if let Some(l) = widget::label_mut(world, ADD_LABEL) {
         l.x = add[0] + add[2] * 0.5;
-        l.y = add[1] + add[3] * 0.5 - 10.0;
+        l.y = add[1] + add[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = [1.0, 1.0, 1.0];
         l.visible = true;
@@ -310,10 +313,17 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2]) {
         }
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
         let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-        place_sprite(world, row_bg(slot), r, tint, true);
+        place_rounded(
+            world,
+            row_bg(slot),
+            theme::highlight_rect(r),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         if let Some(l) = widget::label_mut(world, row_label(slot)) {
             l.x = r[0] + PAD;
-            l.y = r[1] + ROW_H * 0.5 - 10.0;
+            l.y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
             l.align = TextAlign::Left;
             l.color = LABEL;
             l.visible = true;
@@ -334,21 +344,23 @@ fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2]) {
     let x = o[0] + IMPORT_W - SCROLLBAR_W;
     let top = list_top(o);
     let h = IMPORT_POOL as f32 * ROW_H;
-    place_sprite(
+    place_rounded(
         world,
         LIST_TRACK,
         [x, top, SCROLLBAR_W, h],
         TRACK_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
     let thumb_h = (h * IMPORT_POOL as f32 / total as f32).max(18.0);
     let max_scroll = (total - IMPORT_POOL) as f32;
     let off = (h - thumb_h) * (view.scroll as f32 / max_scroll);
-    place_sprite(
+    place_rounded(
         world,
         LIST_THUMB,
         [x, top + off, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
 }
@@ -368,7 +380,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // Every panel sprite id, in draw (insertion) order: chrome, then the list
 // rows, then the scrollbar floating above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, BROWSE_BG, ADD_BG];
+    let mut ids = vec![PANEL_BG, CLOSE_BG, BROWSE_BG, ADD_BG];
     ids.extend((0..IMPORT_POOL).map(row_bg));
     ids.extend([LIST_TRACK, LIST_THUMB]);
     ids

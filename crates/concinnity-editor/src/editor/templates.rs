@@ -20,7 +20,7 @@ const BASE: u32 = registry::base(PanelKey::Templates);
 // Named ids the cross-module tests reference; the shipping paths derive every id
 // from `BASE` through `list_panel`.
 #[cfg(test)]
-pub(crate) const TITLE_BG: AssetId = list_panel::title_bg(BASE);
+pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
 #[cfg(test)]
 pub(crate) fn row_bg(i: usize) -> AssetId {
     list_panel::row_bg(BASE, i)

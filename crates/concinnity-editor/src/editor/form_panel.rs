@@ -24,7 +24,8 @@ use crate::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, point_in};
 
 // An enum / ref field with this many variants or fewer cycles in place on click
 // (fast for small sets); more than this opens a floating value dropdown anchored
@@ -39,7 +40,6 @@ const DROP_ROW_H: f32 = 28.0;
 
 const EDIT: u32 = registry::base(PanelKey::Edit);
 pub(crate) const EDIT_BG: AssetId = AssetId(EDIT);
-pub(crate) const TITLE_BG: AssetId = AssetId(EDIT + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(EDIT + 2);
 pub(crate) const APPLY_BG: AssetId = AssetId(EDIT + 3);
 pub(crate) const APPLY_LABEL: AssetId = AssetId(EDIT + 4);
@@ -111,16 +111,15 @@ const LABEL_COL: f32 = 190.0;
 const NEST_INDENT: f32 = 10.0;
 const SCROLLBAR_W: f32 = 5.0;
 // The name heading draws larger than the body text.
-const NAME_SCALE: f32 = 1.2;
+const NAME_SCALE: f32 = 1.05;
 
-const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
-const CYCLE_TINT: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
-const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
-const OPTION_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
-const OPTION_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
-const DROP_BG_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
+const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
+const CYCLE_TINT: [f32; 4] = theme::BUTTON_TINT;
+const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
+const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
+const OPTION_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
+const DROP_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const CHECK_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
@@ -458,8 +457,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    place_sprite(world, EDIT_BG, panel_rect(view, o), PANEL_TINT, true);
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), view.title);
+    widget::place_panel(world, EDIT_BG, panel_rect(view, o));
+    widget::place_heading(world, TITLE_LABEL, title_rect(o), view.title);
 
     // The "X" close button in the title bar's top-right corner (blends into the
     // title bar until hovered; shared look across every panel).
@@ -471,11 +470,12 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     show_name_heading(world, o, view.form_focus == FormFocus::Name);
     let apply_btn = apply_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
-    place_sprite(
+    place_rounded(
         world,
         APPLY_BG,
         apply_btn,
         if hover { BTN_TINT_HOVER } else { BTN_TINT },
+        theme::CONTROL_RADIUS,
         true,
     );
     let confirm = if view.editing { "Apply" } else { "Add" };
@@ -528,7 +528,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
             form_row_label(r),
             [
                 row[0] + PAD + depth as f32 * NEST_INDENT,
-                row[1] + FIELD_H * 0.5 - 10.0,
+                row[1] + FIELD_H * 0.5 - theme::TEXT_HALF,
             ],
             &caption,
             LABEL,
@@ -538,7 +538,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
             FieldKind::Bool => {
                 let t = form_toggle_rect(o, r);
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
-                place_sprite(world, form_toggle_bg(r), t, tint, true);
+                place_rounded(world, form_toggle_bg(r), t, tint, 4.0, true);
             }
             FieldKind::Enum | FieldKind::Ref { .. } => {
                 // A cycling button spanning the control, captioned with the
@@ -546,7 +546,14 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 let c = form_control_rect(o, r);
                 let hover = point_in(view.mouse[0], view.mouse[1], c);
                 let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
-                place_sprite(world, form_toggle_bg(r), c, tint, true);
+                place_rounded(
+                    world,
+                    form_toggle_bg(r),
+                    c,
+                    tint,
+                    theme::CONTROL_RADIUS,
+                    true,
+                );
                 let value = field
                     .variants
                     .get(field.variant_idx)
@@ -561,23 +568,25 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 place_left_label(
                     world,
                     form_enum_label(r),
-                    [c[0], c[1] + c[3] * 0.5 - 10.0],
+                    [c[0], c[1] + c[3] * 0.5 - theme::TEXT_HALF],
                     &format!("({})", field.variant_idx),
                     LABEL_DIM,
                     true,
                 );
-                place_sprite(
+                place_rounded(
                     world,
                     form_swatch(r),
                     array_remove_rect(o, r),
                     REMOVE_BTN_TINT,
+                    4.0,
                     true,
                 );
-                place_sprite(
+                place_rounded(
                     world,
                     form_toggle_bg(r),
                     array_add_rect(o, r),
                     ADD_BTN_TINT,
+                    4.0,
                     true,
                 );
             }
@@ -588,13 +597,20 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 let c = form_control_rect(o, r);
                 let hover = point_in(view.mouse[0], view.mouse[1], c);
                 let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
-                place_sprite(world, form_toggle_bg(r), c, tint, true);
+                place_rounded(
+                    world,
+                    form_toggle_bg(r),
+                    c,
+                    tint,
+                    theme::CONTROL_RADIUS,
+                    true,
+                );
                 let open = vec_expanded(view.form_fields, j);
                 let caption = format!("[{}] {}", vec_len(field.kind), if open { "v" } else { ">" });
                 place_left_label(
                     world,
                     form_enum_label(r),
-                    [c[0] + 8.0, c[1] + c[3] * 0.5 - 10.0],
+                    [c[0] + 8.0, c[1] + c[3] * 0.5 - theme::TEXT_HALF],
                     &caption,
                     LABEL_DIM,
                     true,
@@ -629,7 +645,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 );
                 if let Some(sw) = swatch {
                     let rgb = swatch_rgb(&widget::field_text(world, form_input(r)));
-                    place_sprite(world, form_swatch(r), sw, rgb, true);
+                    place_rounded(world, form_swatch(r), sw, rgb, 4.0, true);
                 }
             }
         }
@@ -668,7 +684,14 @@ fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32
         SCROLLBAR_W,
         track_h,
     ];
-    place_sprite(world, FORM_TRACK, track, TRACK_TINT, true);
+    place_rounded(
+        world,
+        FORM_TRACK,
+        track,
+        TRACK_TINT,
+        SCROLLBAR_W * 0.5,
+        true,
+    );
     let frac_visible = form::FIELD_POOL as f32 / total as f32;
     let thumb_h = (track_h * frac_visible).max(20.0);
     let max_scroll = (total - form::FIELD_POOL) as f32;
@@ -678,11 +701,12 @@ fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32
         0.0
     };
     let thumb_y = region_top + t * (track_h - thumb_h);
-    place_sprite(
+    place_rounded(
         world,
         FORM_THUMB,
         [track[0], thumb_y, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
 }
@@ -700,11 +724,12 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
     let total = field.variants.len();
     let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
     let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-    place_sprite(
+    place_rounded(
         world,
         DROP_BG,
         field_dropdown_backing(o, slot, shown),
         DROP_BG_TINT,
+        theme::CONTROL_RADIUS,
         true,
     );
     for r in 0..MAX_DROP_ROWS {
@@ -721,11 +746,18 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
         } else {
             OPTION_TINT
         };
-        place_sprite(world, drop_row_bg(r), rect, tint, true);
+        place_rounded(
+            world,
+            drop_row_bg(r),
+            theme::highlight_rect(rect),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         place_left_label(
             world,
             drop_row_label(r),
-            [rect[0] + PAD, rect[1] + DROP_ROW_H * 0.5 - 10.0],
+            [rect[0] + PAD, rect[1] + DROP_ROW_H * 0.5 - theme::TEXT_HALF],
             &field.variants[idx],
             LABEL,
             true,
@@ -739,7 +771,14 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
             SCROLLBAR_W,
             back[3],
         ];
-        place_sprite(world, DROP_TRACK, track, TRACK_TINT, true);
+        place_rounded(
+            world,
+            DROP_TRACK,
+            track,
+            TRACK_TINT,
+            SCROLLBAR_W * 0.5,
+            true,
+        );
         let frac = MAX_DROP_ROWS as f32 / total as f32;
         let thumb_h = (back[3] * frac).max(20.0);
         let max_scroll = (total - MAX_DROP_ROWS) as f32;
@@ -749,11 +788,12 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
             0.0
         };
         let thumb_y = back[1] + t * (back[3] - thumb_h);
-        place_sprite(
+        place_rounded(
             world,
             DROP_THUMB,
             [track[0], thumb_y, SCROLLBAR_W, thumb_h],
             THUMB_TINT,
+            SCROLLBAR_W * 0.5,
             true,
         );
     }
@@ -790,7 +830,7 @@ fn place_center_label(
 ) {
     if let Some(l) = widget::label_mut(world, id) {
         l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = color;
         l.visible = visible;
@@ -835,7 +875,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // title, buttons, per-slot chrome, then the floating overlays (scrollbar, value
 // dropdown) which must sit above the slot chrome.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![EDIT_BG, TITLE_BG, CLOSE_BG, APPLY_BG];
+    let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..form::FIELD_POOL).map(form_toggle_bg));
     ids.extend((0..form::FIELD_POOL).map(form_swatch));
     ids.extend([FORM_TRACK, FORM_THUMB, DROP_BG]);

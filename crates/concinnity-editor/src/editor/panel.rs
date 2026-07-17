@@ -33,7 +33,8 @@ use crate::ecs::asset_id::AssetId;
 use super::expanded::ExpandedRow;
 use super::hud;
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, place_sprite, point_in};
 
 // The grouped browse list (row model, grouping, geometry, base style, and the
 // per-row + scrollbar draw) is shared with the Template detail panel; only the
@@ -172,14 +173,11 @@ pub(crate) const PLUS_LABEL: AssetId = AssetId(PANEL + 2);
 pub(crate) const TYPEDROP_BG: AssetId = AssetId(PANEL + 3);
 pub(crate) const TYPEDROP_LABEL: AssetId = AssetId(PANEL + 4);
 pub(crate) const FILTER_INPUT: AssetId = AssetId(PANEL + 5);
-// The Config / Expanded tab strip, below the title bar.
-pub(crate) const TAB_BG: AssetId = AssetId(PANEL + 6);
 pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 12);
 pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 0x58);
 pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 0x59);
 pub(crate) const COMBO_BG: AssetId = AssetId(PANEL + 0x5A);
-// The draggable title bar across the panel top.
-pub(crate) const TITLE_BG: AssetId = AssetId(PANEL + 0x5B);
+// The draggable title bar's heading (the bar is the panel surface itself).
 pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 0x5C);
 // The "X" close button in the title bar's top-right corner.
 pub(crate) const CLOSE_BG: AssetId = AssetId(PANEL + 0x5D);
@@ -222,11 +220,13 @@ pub(crate) fn combo_row_label(i: usize) -> AssetId {
 // (its title bar's top-left corner), so dragging the title bar moves the whole
 // panel; the hook owns the origin.
 pub(crate) const PANEL_W: f32 = 320.0;
-const HEADER_H: f32 = 40.0;
-const TAB_H: f32 = 28.0;
+const HEADER_H: f32 = 36.0;
+const TAB_H: f32 = 26.0;
 const GAP: f32 = 6.0;
+// How far a tab's chip is inset within its strip cell.
+const TAB_INSET: f32 = 3.0;
 // The "+" that copies an Expanded row into the config.
-const ADD_SZ: f32 = 20.0;
+const ADD_SZ: f32 = 18.0;
 // Characters an Expanded row fits at PANEL_W: a header spans the body width, an
 // asset row stops short of its "+". Both are free-length text (an import names
 // its output after itself), so they clip rather than overrun the panel.
@@ -235,37 +235,35 @@ const ASSET_ROW_CHARS: usize = 29;
 // However long the type is, leave enough of the name to tell rows apart.
 const MIN_NAME_CHARS: usize = 8;
 // The triple-dot button on a hovered name row.
-const DOT_SZ: f32 = 24.0;
+const DOT_SZ: f32 = 22.0;
 // The floating Delete menu.
 const MENU_W: f32 = 132.0;
-const MENU_ROW_H: f32 = 30.0;
+const MENU_ROW_H: f32 = 26.0;
 
-const PANEL_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const PLUS_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
-const TYPEDROP_TINT: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
+const TYPEDROP_TINT: [f32; 4] = theme::BUTTON_TINT;
 // Interactive name-row tints, layered over the shared base `ROW_TINT`.
-const ROW_TINT_HOVER: [f32; 4] = [0.22, 0.26, 0.36, 0.98];
-const ROW_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
-const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
-const OPTION_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
-const OPTION_TINT_SELECTED: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
-const COMBO_BG_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
+const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
+const ROW_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
+const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
+const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
+const OPTION_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
+const COMBO_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
 const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const DOT_BG_TINT: [f32; 4] = [0.30, 0.34, 0.46, 0.95];
 const DOT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
-const TAB_STRIP_TINT: [f32; 4] = [0.07, 0.07, 0.09, 1.0];
-const TAB_TINT: [f32; 4] = [0.11, 0.11, 0.14, 1.0];
-const TAB_TINT_HOVER: [f32; 4] = [0.18, 0.20, 0.28, 1.0];
-const TAB_TINT_ACTIVE: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
+const TAB_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+const TAB_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
+const TAB_TINT_ACTIVE: [f32; 4] = theme::SELECTED_TINT;
 // The Expanded tab's group headers read as bands, unlike the Config tab's
 // transparent type sub-headers, because they are the clickable control there.
-const GROUP_ROW_TINT: [f32; 4] = [0.13, 0.14, 0.19, 1.0];
+const GROUP_ROW_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
 const ADD_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
 const ADD_TINT_HOVER: [f32; 4] = [0.28, 0.60, 0.40, 1.0];
-const MENU_BG_TINT: [f32; 4] = [0.14, 0.14, 0.18, 1.0];
-const MENU_ROW_TINT: [f32; 4] = [0.16, 0.16, 0.20, 1.0];
-const MENU_ROW_HOVER: [f32; 4] = [0.26, 0.30, 0.42, 1.0];
-const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
+const MENU_BG_TINT: [f32; 4] = [0.15, 0.15, 0.19, 1.0];
+const MENU_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+const MENU_ROW_HOVER: [f32; 4] = theme::HOVER_TINT;
+const LABEL_DIM: [f32; 3] = theme::LABEL_DIM;
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 
@@ -615,14 +613,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    place_sprite(
-        world,
-        PANEL_BG,
-        panel_rect(o, view.tab),
-        PANEL_BG_TINT,
-        true,
-    );
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), "Assets");
+    widget::place_panel(world, PANEL_BG, panel_rect(o, view.tab));
+    widget::place_heading(world, TITLE_LABEL, title_rect(o), "Assets");
     let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
     layout_tabs(world, view, o);
@@ -639,17 +631,31 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     } else {
         ("+", PLUS_TINT)
     };
-    place_sprite(world, PLUS_BG, plus_rect(o), tint, true);
+    place_rounded(
+        world,
+        PLUS_BG,
+        theme::highlight_rect(plus_rect(o)),
+        tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
     place_plus_glyph(world, plus_rect(o), glyph);
 
     // The combo area: the browse label when closed, the filter field when open.
     if view.combo == Combo::Closed {
-        place_sprite(world, TYPEDROP_BG, combo_rect(o), TYPEDROP_TINT, true);
         let td = combo_rect(o);
+        place_rounded(
+            world,
+            TYPEDROP_BG,
+            theme::highlight_rect(td),
+            TYPEDROP_TINT,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         place_left_label(
             world,
             TYPEDROP_LABEL,
-            [td[0] + PAD, td[1] + HEADER_H * 0.5 - 10.0],
+            [td[0] + PAD, td[1] + HEADER_H * 0.5 - theme::TEXT_HALF],
             view.filter_label,
             LABEL,
             true,
@@ -661,9 +667,9 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     }
 }
 
-// The tab strip: the active tab is lit, the others recede.
+// The tab strip: each tab is a rounded chip inset in its strip cell; the active
+// one is lit, the others recede to the panel surface.
 fn layout_tabs(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    place_sprite(world, TAB_BG, tab_strip_rect(o), TAB_STRIP_TINT, true);
     for (i, tab) in Tab::ALL.iter().enumerate() {
         let rect = tab_rect(o, i);
         let active = *tab == view.tab;
@@ -673,10 +679,16 @@ fn layout_tabs(world: &mut World, view: &PanelView, o: [f32; 2]) {
             (false, true) => TAB_TINT_HOVER,
             (false, false) => TAB_TINT,
         };
-        place_sprite(world, tab_bg(i), rect, tint, true);
+        let chip = [
+            rect[0] + TAB_INSET,
+            rect[1] + TAB_INSET,
+            rect[2] - 2.0 * TAB_INSET,
+            rect[3] - 2.0 * TAB_INSET,
+        ];
+        place_rounded(world, tab_bg(i), chip, tint, theme::CONTROL_RADIUS, true);
         if let Some(l) = widget::label_mut(world, tab_label(i)) {
             l.x = rect[0] + rect[2] * 0.5;
-            l.y = rect[1] + TAB_H * 0.5 - 9.0;
+            l.y = rect[1] + TAB_H * 0.5 - theme::TEXT_HALF;
             l.align = TextAlign::Center;
             l.color = if active { LABEL_WHITE } else { LABEL_DIM };
             l.visible = true;
@@ -726,7 +738,14 @@ fn layout_expanded(world: &mut World, view: &PanelView, o: [f32; 2]) {
                 } else {
                     GROUP_ROW_TINT
                 };
-                place_sprite(world, list_row_bg(r), rect, tint, true);
+                place_rounded(
+                    world,
+                    list_row_bg(r),
+                    theme::highlight_rect(rect),
+                    tint,
+                    theme::CONTROL_RADIUS,
+                    true,
+                );
                 let caption = group_caption(origin, *count, *in_config, *open);
                 place_left_label(
                     world,
@@ -745,7 +764,14 @@ fn layout_expanded(world: &mut World, view: &PanelView, o: [f32; 2]) {
                 ..
             } => {
                 let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-                place_sprite(world, list_row_bg(r), rect, tint, true);
+                place_rounded(
+                    world,
+                    list_row_bg(r),
+                    theme::highlight_rect(rect),
+                    tint,
+                    theme::CONTROL_RADIUS,
+                    true,
+                );
                 let color = if *in_config { LABEL_DIM } else { LABEL };
                 place_left_label(
                     world,
@@ -808,10 +834,17 @@ fn place_add_button(world: &mut World, r: usize, row: [f32; 4], mouse: [f32; 2])
     let rect = add_rect(row);
     let hovered = point_in(mouse[0], mouse[1], rect);
     let tint = if hovered { ADD_TINT_HOVER } else { ADD_TINT };
-    place_sprite(world, add_row_bg(r), rect, tint, true);
+    place_rounded(
+        world,
+        add_row_bg(r),
+        rect,
+        tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
     if let Some(l) = widget::label_mut(world, add_row_label(r)) {
         l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = LABEL_WHITE;
         l.visible = true;
@@ -821,7 +854,7 @@ fn place_add_button(world: &mut World, r: usize, row: [f32; 4], mouse: [f32; 2])
 
 // The "+" / "X" glyph, centered in the add button and drawn a step larger than
 // the body text (the box itself stays a HEADER_H square).
-const PLUS_SCALE: f32 = 1.3;
+const PLUS_SCALE: f32 = 1.15;
 fn place_plus_glyph(world: &mut World, rect: [f32; 4], glyph: &str) {
     if let Some(l) = widget::label_mut(world, PLUS_LABEL) {
         l.x = rect[0] + rect[2] * 0.5;
@@ -947,7 +980,14 @@ fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
         } else {
             OPTION_TINT
         };
-        place_sprite(world, combo_row_bg(r), rect, tint, true);
+        place_rounded(
+            world,
+            combo_row_bg(r),
+            theme::highlight_rect(rect),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         set_row_label(
             world,
             combo_row_label(r),
@@ -975,7 +1015,7 @@ fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
 fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
     let d = dot_rect(row);
     if show_box {
-        place_sprite(world, DOT_BG, d, DOT_BG_TINT, true);
+        place_rounded(world, DOT_BG, d, DOT_BG_TINT, theme::CONTROL_RADIUS, true);
     }
     let cx = d[0] + d[2] * 0.5;
     let cy = d[1] + d[3] * 0.5;
@@ -988,9 +1028,16 @@ fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
 
 fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) {
     let (bg, delete) = menu_rects(o, vr);
-    place_sprite(world, MENU_BG, bg, MENU_BG_TINT, true);
+    place_rounded(
+        world,
+        MENU_BG,
+        bg,
+        MENU_BG_TINT,
+        theme::CONTROL_RADIUS,
+        true,
+    );
     let del_hover = point_in(view.mouse[0], view.mouse[1], delete);
-    place_sprite(
+    place_rounded(
         world,
         MENU_DELETE_BG,
         delete,
@@ -999,12 +1046,16 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) 
         } else {
             MENU_ROW_TINT
         },
+        theme::CONTROL_RADIUS,
         true,
     );
     place_left_label(
         world,
         MENU_DELETE_LABEL,
-        [delete[0] + PAD, delete[1] + MENU_ROW_H * 0.5 - 10.0],
+        [
+            delete[0] + PAD,
+            delete[1] + MENU_ROW_H * 0.5 - theme::TEXT_HALF,
+        ],
         "Delete",
         DELETE_LABEL,
         true,
@@ -1020,7 +1071,7 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) 
 // overlays (scrollbar, triple-dot, row menu), which must sit ABOVE the row
 // backgrounds so a hovered row's fill cannot cover them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG, TAB_BG];
+    let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG];
     ids.extend((0..Tab::ALL.len()).map(tab_bg));
     ids.push(COMBO_BG);
     ids.extend((0..MAX_ROWS).map(list_row_bg));
@@ -1397,7 +1448,7 @@ mod tests {
             .unwrap();
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
-        assert!(sprite_visible(&world, TITLE_BG));
+        assert!(sprite_visible(&world, PANEL_BG));
         let t = title_rect(o);
         let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
         assert_eq!(

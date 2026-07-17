@@ -10,14 +10,14 @@
 // with no `StoryImport` shows a single "+ Create story" row instead.
 
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, point_in};
 use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Story);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_BG: AssetId = AssetId(BASE + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
 pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
 pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
@@ -52,12 +52,11 @@ pub(crate) const LINE_POOL: usize = 16;
 // scrolls instead of clipping).
 const MAX_LINE_CHARS: usize = 62;
 
-const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
-const ROW_TINT: [f32; 4] = [0.11, 0.11, 0.14, 0.9];
-const ROW_TINT_CURRENT: [f32; 4] = [0.16, 0.22, 0.34, 1.0];
-const ROW_TINT_HOVER: [f32; 4] = [0.18, 0.21, 0.30, 0.95];
+const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+const ROW_TINT_CURRENT: [f32; 4] = theme::SELECTED_TINT;
+const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
+const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
@@ -183,9 +182,9 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
         hide_all(world);
         return;
     };
-    place_sprite(world, PANEL_BG, panel_rect(o), PANEL_TINT, true);
+    widget::place_panel(world, PANEL_BG, panel_rect(o));
     let title = title_rect(o);
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title, "Story");
+    widget::place_heading(world, TITLE_LABEL, title, "Story");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
@@ -193,7 +192,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
     // create mode, where there is nothing to write yet).
     if let Some(l) = widget::label_mut(world, PATH_LABEL) {
         l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - 10.0;
+        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Left;
         l.color = PATH_COLOR;
         l.visible = !view.create;
@@ -202,10 +201,17 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
     let apply_btn = apply_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
     let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
-    place_sprite(world, APPLY_BG, apply_btn, tint, !view.create);
+    place_rounded(
+        world,
+        APPLY_BG,
+        apply_btn,
+        tint,
+        theme::CONTROL_RADIUS,
+        !view.create,
+    );
     if let Some(l) = widget::label_mut(world, APPLY_LABEL) {
         l.x = apply_btn[0] + apply_btn[2] * 0.5;
-        l.y = apply_btn[1] + apply_btn[3] * 0.5 - 10.0;
+        l.y = apply_btn[1] + apply_btn[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = [1.0, 1.0, 1.0];
         l.visible = !view.create;
@@ -228,10 +234,17 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
             let on = slot == 0;
             let hovered = on && point_in(view.mouse[0], view.mouse[1], r);
             let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-            place_sprite(world, row_bg(slot), r, tint, on);
+            place_rounded(
+                world,
+                row_bg(slot),
+                theme::highlight_rect(r),
+                tint,
+                theme::CONTROL_RADIUS,
+                on,
+            );
             if let Some(l) = widget::label_mut(world, row_label(slot)) {
                 l.x = r[0] + PAD;
-                l.y = r[1] + LINE_H * 0.5 - 10.0;
+                l.y = r[1] + LINE_H * 0.5 - theme::TEXT_HALF;
                 l.align = TextAlign::Left;
                 l.color = ADD_LABEL;
                 l.visible = on;
@@ -247,7 +260,14 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
         }
         let current = i == view.current;
         let tint = if current { ROW_TINT_CURRENT } else { ROW_TINT };
-        place_sprite(world, row_bg(slot), r, tint, true);
+        place_rounded(
+            world,
+            row_bg(slot),
+            theme::highlight_rect(r),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
         if current {
             // The edit line: the panel's one TextInput, focused per the view.
             widget::set_label_visible(world, row_label(slot), false);
@@ -259,7 +279,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
             );
         } else if let Some(l) = widget::label_mut(world, row_label(slot)) {
             l.x = r[0] + PAD;
-            l.y = r[1] + LINE_H * 0.5 - 10.0;
+            l.y = r[1] + LINE_H * 0.5 - theme::TEXT_HALF;
             l.align = TextAlign::Left;
             l.color = LABEL;
             l.visible = true;
@@ -281,22 +301,24 @@ fn layout_scrollbar(world: &mut World, view: &StoryView, o: [f32; 2]) {
     let x = o[0] + STORY_W - SCROLLBAR_W;
     let top = body_top(o);
     let h = LINE_POOL as f32 * LINE_H;
-    place_sprite(
+    place_rounded(
         world,
         LINE_TRACK,
         [x, top, SCROLLBAR_W, h],
         TRACK_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
     let frac = LINE_POOL as f32 / total as f32;
     let thumb_h = (h * frac).max(18.0);
     let max_scroll = (total - LINE_POOL) as f32;
     let off = (h - thumb_h) * (view.scroll as f32 / max_scroll);
-    place_sprite(
+    place_rounded(
         world,
         LINE_THUMB,
         [x, top + off, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
 }
@@ -316,7 +338,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // Every panel sprite id, in draw (insertion) order: chrome, then the line
 // rows, then the scrollbar floating above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, APPLY_BG];
+    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..LINE_POOL).map(row_bg));
     ids.extend([LINE_TRACK, LINE_THUMB]);
     ids

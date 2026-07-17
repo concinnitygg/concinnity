@@ -20,7 +20,7 @@ const BASE: u32 = registry::base(PanelKey::View);
 // Named ids the cross-module tests reference; the shipping paths derive every id
 // from `BASE` through `list_panel`.
 #[cfg(test)]
-pub(crate) const TITLE_BG: AssetId = list_panel::title_bg(BASE);
+pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
 #[cfg(test)]
 pub(crate) fn row_bg(i: usize) -> AssetId {
     list_panel::row_bg(BASE, i)
@@ -50,7 +50,8 @@ pub(crate) enum ViewAction {
 // Where the panel sits until the user drags it: the window's top-left, below the
 // Preview panel's default anchor so the two do not overlap at launch.
 pub(crate) fn default_origin() -> [f32; 2] {
-    [8.0, 8.0 + list_panel::size(VIEW_W, 1)[1] + 8.0]
+    let preview = super::preview::default_origin();
+    [8.0, preview[1] + list_panel::size(VIEW_W, 1)[1] + 8.0]
 }
 
 // The panel's footprint (tracks the registered toggle count), for the hook's

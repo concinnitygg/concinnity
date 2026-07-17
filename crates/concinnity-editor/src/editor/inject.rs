@@ -13,6 +13,7 @@
 
 use super::hud;
 use super::registry::{self, PanelKey};
+use super::theme;
 use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
@@ -20,12 +21,8 @@ use crate::ecs::asset_id::AssetId;
 use concinnity_templates::{AssetSpec, asset};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
-// the true window corner from the first frame's viewport. Sized to match the
-// tick's geometry so the initial placement is already close.
+// the true window corner from the first frame's viewport (`hud::layout`).
 const REF_W: f32 = 1280.0;
-const SAVE_W: f32 = 88.0;
-const VIEW_W: f32 = 132.0;
-const GAP: f32 = 8.0;
 
 // Reuse the engine HUD font for the button + field text. Every rendering
 // world carries an injected `hud_font` through the engine-default DebugHud /
@@ -124,22 +121,27 @@ fn hide_title_bar(world: &mut World) {
 }
 
 fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
-    let save_rect = [REF_W - SAVE_W, 0.0, SAVE_W, hud::BTN_H];
-    let view_rect = [save_rect[0] - GAP - VIEW_W, 0.0, VIEW_W, hud::BTN_H];
+    let (save_rect, view_rect) = hud::layout(REF_W);
 
+    world.add_component(button_sprite(
+        hud::BAR_BG,
+        [0.0, 0.0, REF_W, hud::BAR_H],
+        theme::CHROME_TINT,
+        true,
+    ));
     world.add_component(button_sprite(
         hud::SAVE_BUTTON,
         save_rect,
-        [0.82, 0.14, 0.16, 1.0],
+        theme::BUTTON_TINT,
         true,
     ));
     world.add_component(button_sprite(
         hud::VIEW_BUTTON,
         view_rect,
-        [0.20, 0.34, 0.52, 1.0],
+        theme::BUTTON_TINT,
         true,
     ));
-    world.add_component(centered_label(hud::SAVE_LABEL, "SAVE", save_rect, font));
+    world.add_component(centered_label(hud::SAVE_LABEL, "Save", save_rect, font));
     world.add_component(centered_label(hud::VIEW_LABEL, "View", view_rect, font));
 }
 
@@ -174,6 +176,7 @@ fn centered_label(
     ));
     l.asset_id = id;
     l.font = font;
+    l.scale = theme::TEXT_SCALE;
     l
 }
 
@@ -190,6 +193,7 @@ fn row_label(
     );
     l.asset_id = id;
     l.font = font;
+    l.scale = theme::TEXT_SCALE;
     l
 }
 
@@ -202,6 +206,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
     );
     t.asset_id = id;
     t.font = font;
+    t.scale = theme::TEXT_SCALE;
     t
 }
 
@@ -285,19 +290,18 @@ mod tests {
         // demand).
         for id in [
             panel::PANEL_BG,
-            panel::TITLE_BG,
             panel::PLUS_BG,
             panel::COMBO_BG,
             panel::MENU_BG,
             panel::list_row_bg(0),
             panel::combo_row_bg(0),
-            preview::TITLE_BG,
+            preview::PANEL_BG,
             preview::ROW_BG,
             preview::CHECK_BOX,
-            view::TITLE_BG,
+            view::PANEL_BG,
             view::row_bg(0),
             view::check_box(0),
-            templates::TITLE_BG,
+            templates::PANEL_BG,
             templates::row_bg(0),
             template_panel::PANEL_BG,
             template_panel::APPLY_BG,
@@ -318,9 +322,9 @@ mod tests {
         let sprites: Vec<AssetId> = world.query::<Sprite>().map(|s| s.asset_id).collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
         assert!(pos(panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(preview::TITLE_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(view::TITLE_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(templates::TITLE_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(preview::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(view::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(templates::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(template_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.

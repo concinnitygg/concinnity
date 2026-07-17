@@ -12,19 +12,20 @@ use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
-use super::widget::{self, place_sprite};
+use super::theme;
+use super::widget::{self, place_rounded, place_sprite};
 
 // Visible rows in the body before it scrolls (shared by the grouped list and the
 // Assets panel's combo option list, which reuses this window height).
 pub(crate) const MAX_ROWS: usize = 12;
 
 // Row geometry, in window pixels.
-pub(crate) const ROW_H: f32 = 34.0;
+pub(crate) const ROW_H: f32 = 28.0;
 pub(crate) const PAD: f32 = 8.0;
 // Extra left inset for an asset name under its type sub-header.
 pub(crate) const INDENT: f32 = 16.0;
 pub(crate) const SCROLLBAR_W: f32 = 5.0;
-pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - 10.0;
+pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
 // Base tints / colours. Interactive tints (hover / selected) belong to the
 // Assets panel; these are the shared baseline both lists draw from.
@@ -32,7 +33,7 @@ pub(crate) const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
 pub(crate) const HEADER_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 pub(crate) const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 pub(crate) const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
-pub(crate) const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
+pub(crate) const LABEL: [f32; 3] = theme::LABEL;
 pub(crate) const HEADER_LABEL: [f32; 3] = [0.58, 0.66, 0.80];
 
 // One rendered browse-list row: a type sub-header, or an indented asset name that
@@ -113,7 +114,8 @@ pub(crate) fn grouped_rows(
 // Draw one grouped-list row into (`bg_id`, `label_id`) at `rect` with background
 // `tint`: a type sub-header (no indent, header colour) or an indented asset name
 // (name colour). The caller chooses the tint (a plain read-only row, or the
-// Assets panel's hover / selected tint).
+// Assets panel's hover / selected tint). A name row's background draws as a
+// rounded highlight inset from the row rect; a header's spans the full row.
 pub(crate) fn place_row(
     world: &mut World,
     bg_id: AssetId,
@@ -122,7 +124,18 @@ pub(crate) fn place_row(
     rect: [f32; 4],
     tint: [f32; 4],
 ) {
-    place_sprite(world, bg_id, rect, tint, true);
+    if row.is_header {
+        place_sprite(world, bg_id, rect, tint, true);
+    } else {
+        place_rounded(
+            world,
+            bg_id,
+            theme::highlight_rect(rect),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
+    }
     let (x_off, color) = if row.is_header {
         (PAD, HEADER_LABEL)
     } else {
@@ -154,13 +167,14 @@ pub(crate) fn layout_scrollbar(
     if total <= MAX_ROWS {
         return;
     }
-    let x = right_x - SCROLLBAR_W;
+    let x = right_x - SCROLLBAR_W - 2.0;
     let track_h = MAX_ROWS as f32 * ROW_H;
-    place_sprite(
+    place_rounded(
         world,
         track_id,
         [x, top_y, SCROLLBAR_W, track_h],
         TRACK_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
     let frac_visible = MAX_ROWS as f32 / total as f32;
@@ -172,11 +186,12 @@ pub(crate) fn layout_scrollbar(
         0.0
     };
     let thumb_y = top_y + t * (track_h - thumb_h);
-    place_sprite(
+    place_rounded(
         world,
         thumb_id,
         [x, thumb_y, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
+        SCROLLBAR_W * 0.5,
         true,
     );
 }

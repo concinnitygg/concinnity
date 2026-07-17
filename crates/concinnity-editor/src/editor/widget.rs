@@ -7,36 +7,45 @@
 // reserved id and mutate it; these keep that lookup -- and the identical
 // place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
+use super::theme;
 use crate::assets::{Sprite, TextAlign, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 // Shared chrome for the floating editor panels (Assets, Preview): each has a
-// draggable title bar of this height across its top.
-pub(crate) const TITLE_H: f32 = 30.0;
-const TITLE_TINT: [f32; 4] = [0.15, 0.17, 0.23, 1.0];
-const TITLE_LABEL_COLOR: [f32; 3] = [0.92, 0.93, 0.96];
+// draggable title bar of this height across its top. The bar shares the panel's
+// background (no separate strip), so it reads as one unified surface.
+pub(crate) const TITLE_H: f32 = 28.0;
 
-// The title-bar close ("X") button: its background matches the title bar so it
-// blends in, and shows a subtly different square only when hovered; the "X" glyph
-// is always drawn. Shared so every floating panel's close button looks identical.
-const CLOSE_TINT_HOVER: [f32; 4] = [0.42, 0.26, 0.28, 1.0];
+// The title-bar close ("X") button: invisible until hovered, when a rounded
+// square appears behind the always-drawn glyph. Shared so every floating
+// panel's close button looks identical.
+const CLOSE_TINT_HOVER: [f32; 4] = [0.46, 0.26, 0.28, 1.0];
 const CLOSE_GLYPH_COLOR: [f32; 3] = [0.88, 0.89, 0.92];
+// The hover square is inset from the TITLE_H bounding box so the pill hugs the
+// glyph instead of filling the bar.
+const CLOSE_INSET: f32 = 4.0;
 
-// Draw a panel's title bar: the background strip and its left-aligned heading.
-pub(crate) fn place_title(
-    world: &mut World,
-    bg: AssetId,
-    label: AssetId,
-    rect: [f32; 4],
-    heading: &str,
-) {
-    place_sprite(world, bg, rect, TITLE_TINT, true);
+// Draw a panel's rounded background surface (the unified chrome tint).
+pub(crate) fn place_panel(world: &mut World, id: AssetId, rect: [f32; 4]) {
+    place_rounded(
+        world,
+        id,
+        rect,
+        theme::CHROME_TINT,
+        theme::PANEL_RADIUS,
+        true,
+    );
+}
+
+// Draw a panel's title-bar heading, left-aligned and vertically centered. The
+// bar itself is the panel background showing through.
+pub(crate) fn place_heading(world: &mut World, label: AssetId, rect: [f32; 4], heading: &str) {
     if let Some(l) = label_mut(world, label) {
-        l.x = rect[0] + 8.0;
-        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.x = rect[0] + 10.0;
+        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Left;
-        l.color = TITLE_LABEL_COLOR;
+        l.color = theme::HEADING;
         l.visible = true;
         l.content = heading.to_string();
     }
@@ -47,10 +56,8 @@ pub(crate) fn close_rect(title: [f32; 4]) -> [f32; 4] {
     [title[0] + title[2] - TITLE_H, title[1], TITLE_H, TITLE_H]
 }
 
-// Draw a panel's title-bar close button at the right end of `title`: the
-// background blends into the title bar until `hovered`, when it shows a subtly
-// different square; the "X" glyph is always visible. Call after `place_title` so
-// the button draws over the title strip.
+// Draw a panel's title-bar close button at the right end of `title`: nothing
+// but the glyph until `hovered`, when a rounded square appears behind it.
 pub(crate) fn place_close(
     world: &mut World,
     bg: AssetId,
@@ -59,17 +66,33 @@ pub(crate) fn place_close(
     hovered: bool,
 ) {
     let rect = close_rect(title);
-    let tint = if hovered {
-        CLOSE_TINT_HOVER
+    if hovered {
+        let pill = [
+            rect[0] + CLOSE_INSET,
+            rect[1] + CLOSE_INSET,
+            rect[2] - 2.0 * CLOSE_INSET,
+            rect[3] - 2.0 * CLOSE_INSET,
+        ];
+        place_rounded(
+            world,
+            bg,
+            pill,
+            CLOSE_TINT_HOVER,
+            theme::CONTROL_RADIUS,
+            true,
+        );
     } else {
-        TITLE_TINT
-    };
-    place_sprite(world, bg, rect, tint, true);
+        set_sprite_visible(world, bg, false);
+    }
     if let Some(l) = label_mut(world, label) {
         l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - 10.0;
+        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
-        l.color = CLOSE_GLYPH_COLOR;
+        l.color = if hovered {
+            [1.0, 1.0, 1.0]
+        } else {
+            CLOSE_GLYPH_COLOR
+        };
         l.visible = true;
         l.content = "X".to_string();
     }
@@ -109,12 +132,25 @@ pub(crate) fn place_sprite(
     tint: [f32; 4],
     visible: bool,
 ) {
+    place_rounded(world, id, rect, tint, 0.0, visible);
+}
+
+// `place_sprite` with rounded corners of the given `radius`.
+pub(crate) fn place_rounded(
+    world: &mut World,
+    id: AssetId,
+    rect: [f32; 4],
+    tint: [f32; 4],
+    radius: f32,
+    visible: bool,
+) {
     if let Some(s) = sprite_mut(world, id) {
         s.x = rect[0];
         s.y = rect[1];
         s.width = rect[2];
         s.height = rect[3];
         s.tint = tint;
+        s.corner_radius = radius;
         s.visible = visible;
     }
 }
@@ -272,15 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn place_title_positions_the_strip_and_heading() {
-        let mut world = world_with(&[AssetId(1), AssetId(2)]);
-        place_title(
-            &mut world,
-            AssetId(1),
-            AssetId(2),
-            [40.0, 60.0, 320.0, TITLE_H],
-            "Assets",
-        );
+    fn place_panel_draws_a_rounded_chrome_surface() {
+        let mut world = world_with(&[AssetId(1)]);
+        place_panel(&mut world, AssetId(1), [40.0, 60.0, 320.0, 400.0]);
         let bg = world
             .query::<Sprite>()
             .find(|s| s.asset_id == AssetId(1))
@@ -288,7 +318,20 @@ mod tests {
         assert!(bg.visible);
         assert_eq!(
             (bg.x, bg.y, bg.width, bg.height),
-            (40.0, 60.0, 320.0, TITLE_H)
+            (40.0, 60.0, 320.0, 400.0)
+        );
+        assert_eq!(bg.tint, theme::CHROME_TINT);
+        assert_eq!(bg.corner_radius, theme::PANEL_RADIUS);
+    }
+
+    #[test]
+    fn place_heading_positions_the_title_text() {
+        let mut world = world_with(&[AssetId(2)]);
+        place_heading(
+            &mut world,
+            AssetId(2),
+            [40.0, 60.0, 320.0, TITLE_H],
+            "Assets",
         );
         let l = world
             .query::<TextLabel>()
@@ -297,14 +340,14 @@ mod tests {
         assert!(l.visible);
         assert_eq!(l.content, "Assets");
         assert_eq!(l.align, TextAlign::Left);
-        assert_eq!(l.x, 48.0, "heading is inset from the strip's left edge");
+        assert_eq!(l.x, 50.0, "heading is inset from the panel's left edge");
     }
 
     // The close button is a square flush in the title bar's right end; its
-    // background blends into the title bar until hovered, and its "X" glyph always
-    // shows.
+    // background is hidden until hovered (the glyph always shows), and hovering
+    // reveals a rounded square behind it.
     #[test]
-    fn close_button_blends_until_hovered() {
+    fn close_button_shows_its_square_only_on_hover() {
         let mut world = world_with(&[AssetId(1), AssetId(2)]);
         let title = [40.0, 60.0, 320.0, TITLE_H];
         let r = close_rect(title);
@@ -314,19 +357,15 @@ mod tests {
             title[0] + title[2],
             "flush to the title bar's right edge"
         );
-        // Not hovered: the background matches the title bar (blends in).
+        // Not hovered: no background at all (the panel surface shows through).
         place_close(&mut world, AssetId(1), AssetId(2), title, false);
         let bg = |w: &World| {
             w.query::<Sprite>()
                 .find(|s| s.asset_id == AssetId(1))
+                .cloned()
                 .unwrap()
-                .tint
         };
-        assert_eq!(
-            bg(&world),
-            TITLE_TINT,
-            "blends into the title bar when idle"
-        );
+        assert!(!bg(&world).visible, "no square while idle");
         let glyph = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == AssetId(2))
@@ -335,9 +374,11 @@ mod tests {
             glyph.visible && glyph.content == "X",
             "the X glyph always shows"
         );
-        // Hovered: a subtly different square appears.
+        // Hovered: a rounded square appears.
         place_close(&mut world, AssetId(1), AssetId(2), title, true);
-        assert_ne!(bg(&world), TITLE_TINT, "a different square shows on hover");
+        let hovered = bg(&world);
+        assert!(hovered.visible, "the square shows on hover");
+        assert!(hovered.corner_radius > 0.0, "and it is rounded");
     }
 
     // The clamp hard-stops a panel at every window edge: it can never be dragged

@@ -18,7 +18,7 @@ const BASE: u32 = registry::base(PanelKey::Preview);
 // Named ids the cross-module tests reference (injection ordering / visibility);
 // the shipping paths derive every id from `BASE` through `list_panel`.
 #[cfg(test)]
-pub(crate) const TITLE_BG: AssetId = list_panel::title_bg(BASE);
+pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
 #[cfg(test)]
 pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
 #[cfg(test)]
@@ -28,10 +28,10 @@ const PREVIEW_W: f32 = 200.0;
 // The panel's single capture row.
 const ROWS: usize = 1;
 
-// Where the panel sits until the user drags it: the window's top-left corner
-// (clear of the top-right button bar and the Assets panel's default anchor).
+// Where the panel sits until the user drags it: the window's top-left, below
+// the top bar (clear of its buttons and the Assets panel's default anchor).
 pub(crate) fn default_origin() -> [f32; 2] {
-    [8.0, 8.0]
+    [8.0, super::hud::body_top()]
 }
 
 // The panel's fixed footprint, for the hook's drag clamp.

@@ -30,7 +30,7 @@ impl EditorHook {
         }
     }
 
-    // -- Option lists (derived from the entries + the live filter field) --------
+    // Option lists (derived from the entries + the live filter field)
 
     // The distinct asset types present in the world, sorted.
     pub(super) fn distinct_types(&self) -> Vec<String> {
@@ -142,7 +142,7 @@ impl EditorHook {
         }
     }
 
-    // -- Action handling --------------------------------------------------------
+    // Action handling
 
     // Route a resolved top-bar click: SAVE persists to disk (the live preview is
     // already current), the View button toggles the View panel.
@@ -150,6 +150,9 @@ impl EditorHook {
         match action {
             HudAction::Save => self.save(),
             HudAction::ToggleView => self.view_open = !self.view_open,
+            // A bar click that hit no chip: swallowed (the caller already
+            // dismisses any open overlays).
+            HudAction::Consume => {}
         }
     }
 

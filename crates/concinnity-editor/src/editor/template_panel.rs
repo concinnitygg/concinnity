@@ -20,13 +20,13 @@ use crate::ecs::asset_id::AssetId;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
 use super::registry::{self, PanelKey};
-use super::widget::{self, place_sprite, point_in};
+use super::theme;
+use super::widget::{self, place_rounded, point_in};
 
 // The row pools sit at `+0x20` / `+0x40`; the chrome ids below stay under
 // `+0x20`, so the sub-ranges never overlap.
 const TPL: u32 = registry::base(PanelKey::TemplateDetail);
 pub(crate) const PANEL_BG: AssetId = AssetId(TPL);
-pub(crate) const TITLE_BG: AssetId = AssetId(TPL + 1);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(TPL + 2);
 pub(crate) const CLOSE_BG: AssetId = AssetId(TPL + 3);
 pub(crate) const CLOSE_LABEL: AssetId = AssetId(TPL + 4);
@@ -53,11 +53,10 @@ const HEADER_H: f32 = 34.0;
 const BTN_W: f32 = 84.0;
 // The description draws a touch smaller than the body text so a full one-line
 // summary clears the Apply button.
-const DESC_SCALE: f32 = 0.9;
+const DESC_SCALE: f32 = 0.8;
 
-const PANEL_TINT: [f32; 4] = [0.09, 0.09, 0.12, 0.97];
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.24, 0.28, 0.40, 1.0];
+const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const DESC_COLOR: [f32; 3] = [0.72, 0.76, 0.84];
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 
@@ -188,8 +187,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    place_sprite(world, PANEL_BG, panel_rect(view, o), PANEL_TINT, true);
-    widget::place_title(world, TITLE_BG, TITLE_LABEL, title_rect(o), view.title);
+    widget::place_panel(world, PANEL_BG, panel_rect(view, o));
+    widget::place_heading(world, TITLE_LABEL, title_rect(o), view.title);
     let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
 
@@ -206,16 +205,17 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
     }
     let apply_btn = apply_rect(o);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
-    place_sprite(
+    place_rounded(
         world,
         APPLY_BG,
         apply_btn,
         if hover { BTN_TINT_HOVER } else { BTN_TINT },
+        theme::CONTROL_RADIUS,
         true,
     );
     if let Some(l) = widget::label_mut(world, APPLY_LABEL) {
         l.x = apply_btn[0] + apply_btn[2] * 0.5;
-        l.y = apply_btn[1] + apply_btn[3] * 0.5 - 10.0;
+        l.y = apply_btn[1] + apply_btn[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
         l.color = LABEL_WHITE;
         l.visible = true;
@@ -265,7 +265,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // ORDER (inject.rs inserts in this sequence, the overlay draws in insertion
 // order): background + chrome, the row backgrounds, then the scrollbar above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, TITLE_BG, CLOSE_BG, APPLY_BG];
+    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..MAX_ROWS).map(row_bg));
     ids.extend([LIST_TRACK, LIST_THUMB]);
     ids

@@ -25,6 +25,7 @@ mod story;
 mod story_panel;
 mod template_panel;
 mod templates;
+mod theme;
 mod view;
 mod widget;
 
