@@ -1,9 +1,9 @@
 // The blob WRITE side (build output): pack compiled payloads + the def table
-// into .cnb files and emit world-lock.json. The file format itself -- the
-// header, the record schema, and the single-file encoder `write_cnb` -- is
-// owned by the concinnity-blob crate (its encode half sits behind the `write`
-// feature only this crate enables); this file owns the packing POLICY (payload
-// distribution across overflow blobs, the size ceiling) and the lock.
+// into .cnb files and emit world-lock.json. The byte format itself -- the
+// header, the record schema, and the `encode_cnb` image builder -- is owned by
+// the I/O-free concinnity-blob crate; this file owns the packing POLICY
+// (payload distribution across overflow blobs, the size ceiling), the lock, and
+// the writes themselves.
 
 use std::fs;
 
@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use concinnity_blob::{HEADER_SIZE, write_cnb};
+use concinnity_blob::{HEADER_SIZE, encode_cnb};
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
 // Re-export the read side from core so `crate::blob::{BlobData, load_raw, ...}`
@@ -110,6 +110,14 @@ pub struct LockedResource {
 // The result of a build pack: the blobs written and the path of each
 pub struct PackResult {
     pub blob_paths: Vec<String>,
+}
+
+// Encode one blob image and write it out. The format crate performs no I/O, so
+// the write lives here alongside the rest of the build's file output.
+fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
+    let image = encode_cnb(meta, payload)
+        .map_err(|e| std::io::Error::other(format!("encoding {}: {:?}", path, e)))?;
+    fs::write(path, image)
 }
 
 // Pack the metadata (component defs + resource records) and their payloads into

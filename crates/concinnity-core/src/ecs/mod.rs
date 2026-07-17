@@ -290,7 +290,7 @@ impl<'a> PipelineContext<'a> {
     // out of range, or the on-demand load fails.
     #[allow(dead_code)]
     pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
-        self.blob.read(locator).map_err(Into::into)
+        self.blob.read(locator)
     }
 
     // Release the in-memory payload for an entire blob once all systems

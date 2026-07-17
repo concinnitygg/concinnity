@@ -7,30 +7,19 @@ license.workspace = true
 publish = false
 
 # The .cnb blob container format: the record schema, the 16-byte header, the
-# format version, and the read half. Blob data is read-only at runtime, so the
-# symmetric encode half is behind the off-by-default `write` feature, enabled
-# only by the compile pipeline (concinnity-cook) -- a runtime build links a
-# crate that cannot write. Path-agnostic: callers supply explicit file paths;
-# the `.concinnity/` layout stays in concinnity-core.
+# format version, and the pure bytes <-> metadata transforms. Performs no I/O
+# and holds no residency policy -- concinnity-core owns the `.concinnity/`
+# layout and `BlobData`, concinnity-cook writes what `encode_cnb` returns. That
+# keeps the crate no_std, so a no_std client runtime can decode blobs with its
+# own byte source.
 [lib]
 name = "concinnity_blob"
 path = "src/lib.rs"
 doctest = false
 
-[features]
-# The encode half (write_cnb). Cook-only: keeps write operations out of the
-# runtime tier's build.
-write = []
-
 [dependencies]
 concinnity-asset = { path = "../concinnity-asset" }
 
-postcard = { version = "1", default-features = false, features = ["use-std"] }
-serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
-tracing = "0.1.44"
-
-[dev-dependencies]
-# Self-dependency to enable the write half for the in-crate round-trip tests.
-concinnity-blob = { path = ".", features = ["write"] }
-tempfile = "3.25.0"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }

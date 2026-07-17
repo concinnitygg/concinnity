@@ -27,14 +27,6 @@ impl From<std::io::Error> for CnResult {
     }
 }
 
-// The blob format crate logs failure detail at the site; both classes fold
-// onto the runtime's coarse file-I/O result.
-impl From<concinnity_blob::BlobError> for CnResult {
-    fn from(_e: concinnity_blob::BlobError) -> Self {
-        CnResult::FileIo
-    }
-}
-
 // Baked blob records are postcard; a decode failure means the record and the
 // component schema disagree (a stale blob survives the version check instead
 // of reaching here).

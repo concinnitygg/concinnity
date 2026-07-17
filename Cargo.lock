@@ -603,12 +603,9 @@ name = "concinnity-blob"
 version = "0.11.0"
 dependencies = [
  "concinnity-asset",
- "concinnity-blob",
  "postcard",
  "serde",
  "serde_bytes",
- "tempfile",
- "tracing",
 ]
 
 [[package]]

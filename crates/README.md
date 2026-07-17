@@ -13,7 +13,7 @@
 | `concinnity-physics`   | lib       |                    | Physics system (rapier3d).                                          |
 | `concinnity-audio`     | lib       |                    | Audio system (kira).                                                |
 | `concinnity-core`      | lib       |                    | Shared ECS, assets, resources, and math foundation.                 |
-| `concinnity-blob`      | lib       |                    | Packed asset blob format; `write` feature gated to cook.            |
+| `concinnity-blob`      | lib       | :white_check_mark: | Packed asset blob format; `write` feature gated to cook.            |
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).         |
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                           |
 | `concinnity-templates` | lib       | :white_check_mark: | Typed asset/world spec builders and starter templates.              |

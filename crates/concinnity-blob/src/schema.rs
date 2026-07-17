@@ -4,6 +4,7 @@
 // type, resource_kind -> table) belongs to the runtime registry, not here --
 // these are containers, not meaning.
 
+use alloc::vec::Vec;
 use concinnity_asset::{AssetId, PayloadLocator};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -107,7 +108,7 @@ mod tests {
     #[test]
     fn blob_meta_round_trips_through_postcard() {
         let meta = sample_meta();
-        let bytes = postcard::to_stdvec(&meta).expect("serialize");
+        let bytes = postcard::to_allocvec(&meta).expect("serialize");
         let back: BlobMeta = postcard::from_bytes(&bytes).expect("deserialize");
         assert_eq!(back, meta);
     }
@@ -133,7 +134,7 @@ mod tests {
             data_bytes: vec![0xAA, 0xBB],
         };
         for rec in [payload_res, data_res] {
-            let bytes = postcard::to_stdvec(&rec).expect("serialize");
+            let bytes = postcard::to_allocvec(&rec).expect("serialize");
             let back: ResourceRecord = postcard::from_bytes(&bytes).expect("deserialize");
             assert_eq!(back, rec);
         }

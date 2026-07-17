@@ -15,24 +15,36 @@
 // payloads spill into blobs 1, 2, ... as needed. All blobs share the same
 // header format; only blob 0 carries non-empty metadata.
 //
-// This crate owns the format contract: the record schema, the header consts,
-// the version, and the read half. Blob data is read-only at runtime -- the
-// symmetric encode half (`write_cnb`) sits behind the `write` feature and only
-// the compile pipeline enables it. The crate knows nothing about where blob
-// files live: callers supply explicit paths (the `.concinnity/data/` layout is
-// concinnity-core's).
+// This crate owns the format contract and nothing else: the record schema, the
+// header consts, the version, and the pure bytes <-> metadata transforms. It
+// performs no I/O and holds no residency policy, so it never learns where blob
+// files live or which of them are resident. Callers own both: concinnity-core
+// reads the `.concinnity/data/` layout into `BlobData`, concinnity-cook writes
+// what `encode_cnb` returns.
+//
+// Being I/O-free makes the crate `#![no_std]` (using only `core` + `alloc`), so
+// a no_std client runtime can decode blobs with its own byte source.
 //
 // This crate never needs to change when a new asset type is added.
 
-mod read;
-mod schema;
-#[cfg(feature = "write")]
-mod write;
+#![no_std]
 
-pub use read::{BlobData, BlobError, load_raw, payload_section_start, read_cnb};
+extern crate alloc;
+
+// The test harness still wants std.
+#[cfg(test)]
+#[macro_use]
+extern crate std;
+
+mod encode;
+mod error;
+mod parse;
+mod schema;
+
+pub use encode::encode_cnb;
+pub use error::BlobError;
+pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
 pub use schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
-#[cfg(feature = "write")]
-pub use write::write_cnb;
 
 // The identity and payload-address types the records carry, owned by the
 // schema crate.
