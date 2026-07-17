@@ -156,6 +156,57 @@ impl Panel for EditPanel {
     }
 }
 
+pub(crate) struct HealthPanel;
+
+impl Panel for HealthPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Health
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Health")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.health_open
+    }
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.health_open = !hook.health_open;
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.health_open = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        health_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        health_panel::default_origin(vp)
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        health_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        health_panel::all_label_ids()
+    }
+    // Read-only: a body press is swallowed so it cannot reach the world.
+    fn press(
+        &self,
+        _hook: &mut EditorHook,
+        _world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        health_panel::hit_test(mx, my, o)
+    }
+    // The snapshot is refreshed on the hook's throttled sample, not here: `draw`
+    // only has `&EditorHook`, and the syscalls behind it must not run per frame.
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        health_panel::apply(world, hook.health.snapshot(), o, mouse);
+    }
+    fn hide(&self, world: &mut World) {
+        health_panel::hide_all(world);
+    }
+}
+
 pub(crate) struct PreviewPanel;
 
 impl Panel for PreviewPanel {

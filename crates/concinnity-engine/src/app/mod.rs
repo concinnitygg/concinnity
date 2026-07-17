@@ -14,6 +14,7 @@ pub mod run;
 pub mod runloop;
 pub mod state;
 // Host-memory queries backing the memory budget + the live-usage readout.
+pub mod syscpu;
 pub mod sysmem;
 
 // Run the app from compiled binary data: the `cn run` production path. `pub`

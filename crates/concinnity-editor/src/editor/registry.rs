@@ -33,12 +33,13 @@ pub(crate) enum PanelKey {
     Lighting,
     Story,
     Import,
+    Health,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 9;
+pub(crate) const PANEL_COUNT: usize = 10;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -50,6 +51,7 @@ impl PanelKey {
         PanelKey::Lighting,
         PanelKey::Story,
         PanelKey::Import,
+        PanelKey::Health,
         PanelKey::TemplateDetail,
     ];
 
@@ -74,6 +76,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::Lighting => 0x800,
             PanelKey::Story => 0x900,
             PanelKey::Import => 0xA00,
+            PanelKey::Health => 0xB00,
         }
 }
 
@@ -151,6 +154,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::LightingPanel,
     &panels::StoryPanel,
     &panels::ImportPanel,
+    &panels::HealthPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -225,7 +229,8 @@ mod tests {
                 "Templates",
                 "Lighting",
                 "Story",
-                "Import"
+                "Import",
+                "Health"
             ]
         );
     }

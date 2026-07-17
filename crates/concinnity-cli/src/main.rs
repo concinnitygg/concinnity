@@ -6,6 +6,12 @@
 // Also carries the Windows Agility SDK export statics the final binary must
 // carry.
 
+// Heap accounting for the editor's Health panel. `#[global_allocator]` is a
+// per-program item, so it is installed here rather than in the editor library.
+#[global_allocator]
+static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
+    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+
 // Microsoft Agility SDK opt-in.
 //
 // Windows' system `d3d12.dll` reads these two symbols from the host EXE's PE

@@ -338,9 +338,9 @@ impl World {
 
     // Per-pool `(resident, pending, unloaded)` streaming counts from the parked
     // `StreamingState` (StreamingSystem drives it against the backend each
-    // frame). `None` before graphics init parks it. Read by the `cn debug`
-    // server's `streaming` command; unused from the client itself.
-    #[allow(dead_code)]
+    // frame). `None` before graphics init parks it, and from inside a system
+    // step, which takes the state out. Read by the `cn debug` server's
+    // `streaming` command and the editor's Health panel.
     pub fn streaming_stats(&self) -> Option<crate::gfx::streaming_system::StreamingStats> {
         self.resources
             .get::<crate::gfx::streaming_system::StreamingState>()
@@ -356,6 +356,15 @@ impl World {
     pub fn streaming_pressure(&self) -> Option<crate::gfx::streaming_system::StreamingPressure> {
         self.resources
             .get::<crate::gfx::streaming_system::StreamingPressure>()
+            .copied()
+    }
+
+    // The detected GPU's capability + memory profile, published by graphics
+    // init. `None` before init runs, and `GpuProfile::UNKNOWN` when the backend
+    // could not classify the device.
+    pub fn gpu_profile(&self) -> Option<crate::gfx::backend::GpuProfile> {
+        self.resources
+            .get::<crate::gfx::backend::GpuProfile>()
             .copied()
     }
 

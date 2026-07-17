@@ -17,6 +17,7 @@
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).         |
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                           |
 | `concinnity-templates` | lib       | :white_check_mark: | Typed asset/world spec builders and starter templates.              |
+| `concinnity-memory`    | lib       | :white_check_mark: | Tracking global allocator and heap stats.                           |
 | `concinnity-toolchain` | build-dep |                    | Build-time codegen for the binary and graphics crates.              |
 | `concinnity-docs`      | build-dep |                    | Build-time asset-doc generator (reads `concinnity-world`).          |
 
@@ -70,13 +71,15 @@ space:1
 
 asset
 eas
-space:3
+memory
+space:2
 
 runtime --> engine
 
 cli --> cook
 cli --> editor
 cli --> engine
+cli --> memory
 
 core --> eas
 core --> asset
@@ -93,6 +96,7 @@ editor --> device
 editor --> cook
 editor --> core
 editor --> templates
+editor --> memory
 
 cook --> blob
 cook --> core

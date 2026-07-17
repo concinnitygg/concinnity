@@ -33,6 +33,8 @@
 use super::expanded::{self, ExpandedGroup, ExpandedRow};
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
+use super::health::HealthState;
+use super::health_panel;
 use super::hud::{self, HudAction, HudState};
 use super::import_panel::{self, ImportAction, ImportRow, ImportView};
 use super::lighting;
@@ -135,6 +137,12 @@ pub(crate) struct EditorHook {
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
+    // Whether the Health panel is shown (starts hidden; toggled from the View
+    // panel).
+    health_open: bool,
+    // The Health panel's sampler. Ticked every frame whether or not the panel is
+    // shown, so its rates cover a continuous window.
+    health: HealthState,
     // Whether the View panel itself is shown (the top-bar View button toggles it).
     view_open: bool,
     // The header combo (dropdown) state: closed, filtering, or picking a type.
@@ -310,6 +318,8 @@ impl EditorHook {
             expanded_stale: true,
             expanded_status: None,
             preview_open: true,
+            health_open: false,
+            health: HealthState::new(),
             view_open: false,
             combo: Combo::Closed,
             type_filter: None,
@@ -341,6 +351,11 @@ impl DebugHook for EditorHook {
         // Bring the Expanded tab's model up to date before anything reads it,
         // so this frame's hit test and draw agree on the rows.
         self.refresh_expanded_if_needed();
+        // Accumulate the Health panel's per-frame counters and, on its throttled
+        // boundary, resample. Unconditional: the rates measure a continuous
+        // window, so gating this on the panel being open would make the first
+        // window after opening report a partial one.
+        self.health.sample(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Escape hands the cursor back to the editor (leaves play mode).

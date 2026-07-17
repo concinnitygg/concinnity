@@ -11,6 +11,8 @@ mod expanded;
 mod file_dialog;
 mod form;
 mod form_panel;
+mod health;
+mod health_panel;
 mod hook;
 mod hud;
 mod import_panel;

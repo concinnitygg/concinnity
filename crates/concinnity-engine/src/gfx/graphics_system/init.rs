@@ -29,6 +29,10 @@ impl GraphicsSystem {
         // ceiling can influence the render targets / effect pipelines sized at
         // backend init. Held on self for later (e.g. the menu's preset label).
         self.gpu_profile = self.detect_gpu_profile();
+        // Published so readouts outside the graphics system (the editor's Health
+        // panel) can size live VRAM against the device's budget without reaching
+        // for the backend itself.
+        ctx.insert_resource(self.gpu_profile);
         // Resolve the master quality preset. An ephemeral `CN_QUALITY_PRESET`
         // env override wins first and is never persisted, so a test / CI / GPU
         // smoke can force a preset (e.g. `custom` for no clamp) without touching

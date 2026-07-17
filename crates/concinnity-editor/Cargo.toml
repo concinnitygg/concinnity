@@ -27,6 +27,7 @@ concinnity-engine = { path = "../concinnity-engine" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-cook = { path = "../concinnity-cook" }
 concinnity-core = { path = "../concinnity-core" }
+concinnity-memory = { path = "../concinnity-memory" }
 concinnity-templates = { path = "../concinnity-templates" }
 
 argon2 = "0.5"
