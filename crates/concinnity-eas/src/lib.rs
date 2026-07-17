@@ -5,13 +5,21 @@
 // the generic primitives only: entities, typed storage columns, change ticks,
 // component masks and a join index, resources, events, the deferred command
 // buffer, and system access sets for conflict-free scheduling. The concrete
-// component
-// set is registered by concinnity-core through the define_components! macro;
-// nothing here knows about meshes, blobs, or rendering.
+// component set is registered by concinnity-core through the define_components!
+// macro; nothing here knows about meshes, blobs, or rendering.
 //
 // Closed-world by design: EAS stores only the component types the project
 // defines, registered at compile time. There is no TypeId-keyed type erasure
 // and no open-world insert of arbitrary external types.
+
+#![no_std]
+
+extern crate alloc;
+
+// The test harness (and the join micro-bench) still want std.
+#[cfg(test)]
+#[macro_use]
+extern crate std;
 
 mod access;
 mod column;

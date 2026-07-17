@@ -5,8 +5,9 @@
 // so a frame driver never maintains a per-type rotation list (a queue missing
 // from such a list would buffer its events forever).
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use core::any::{Any, TypeId};
 
 use crate::event::Events;
 
@@ -32,7 +33,7 @@ impl<E: 'static> AnyEventQueue for Events<E> {
 
 #[derive(Default)]
 pub struct EventStore {
-    queues: HashMap<TypeId, Box<dyn AnyEventQueue>>,
+    queues: BTreeMap<TypeId, Box<dyn AnyEventQueue>>,
 }
 
 impl EventStore {

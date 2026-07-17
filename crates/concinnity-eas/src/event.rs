@@ -11,6 +11,8 @@
 // stores the next id it has not yet seen; reading yields every buffered event
 // at or past the cursor and advances it.
 
+use alloc::vec::Vec;
+
 pub struct Events<E> {
     // Two frame buffers. `newest` indexes the one new events go into; the other
     // holds the previous frame's events, still readable.

@@ -8,6 +8,11 @@
 // COMPILE pipeline -- including world.jsonl parsing and expansion -- lives in
 // `concinnity-cook`; core has no dependency on it. Core depends on no graphics
 // backend, windowing, physics, or audio crate.
+
+// Required by `concinnity_eas::define_component_storage!`, whose expansion names
+// `::alloc::vec::Vec` so the macro stays usable from a no_std crate.
+extern crate alloc;
+
 pub mod assets;
 pub mod blob;
 pub mod build;

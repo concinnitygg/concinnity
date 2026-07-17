@@ -147,7 +147,7 @@ macro_rules! define_component_storage {
             // whole C column empties at once, so no per-row tail patch is needed
             // for C; only each owner's C entry in the join is cleared.
             #[allow(dead_code)]
-            pub fn drain<C: $slot>(&mut self) -> ::std::vec::Vec<C> {
+            pub fn drain<C: $slot>(&mut self) -> ::alloc::vec::Vec<C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let owners = C::slot(self).entities().to_vec();
                 let tick = self.change_tick.bump();
@@ -276,6 +276,7 @@ macro_rules! define_component_storage {
 
 #[cfg(test)]
 mod tests {
+    use std::vec::Vec;
     // `pub` so the generated `pub` columns don't expose a more-private type
     // (the real engine's component types are `pub`, so this never bites there).
     #[derive(Default, Debug, PartialEq, Clone, Copy)]

@@ -13,6 +13,9 @@
 // concern. Fresh entity ids are reserved lock-free via `Entities::reserve`, so
 // a spawned handle is usable in the same frame it is recorded.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use crate::entity::{Entities, Entity};
 
 type WorldFn<W> = Box<dyn FnOnce(&mut W) + Send>;

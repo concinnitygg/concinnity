@@ -10,8 +10,10 @@
 // only) for command recording on worker threads. `flush` materializes reserved
 // ids into the metadata table before they are looked up.
 
-use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use alloc::vec::Vec;
+
+use core::num::NonZeroU32;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // Generation 1 is the first valid generation; the NonZeroU32 niche keeps a
 // zeroed handle invalid and Option<Entity> at 8 bytes.

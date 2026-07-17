@@ -14,6 +14,8 @@
 // behind, so a missed `clear` can never leak the previous occupant's components
 // into the new one.
 
+use alloc::vec::Vec;
+
 use crate::entity::Entity;
 use crate::mask::{ComponentId, ComponentMask};
 

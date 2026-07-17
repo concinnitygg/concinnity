@@ -18,6 +18,9 @@
 // (transform) column, so the partner read is a real scattered access in the
 // hashmap and probe paths, not a coincidental sequential one.
 
+use std::println;
+use std::vec::Vec;
+
 use std::collections::HashMap;
 
 use crate::column::Column;
@@ -226,11 +229,11 @@ fn join_probe_microbench() {
 
     println!("\njoin microbench: {n} entities, {renderable} renderable, {reps} reps/strategy");
     for (name, f) in strategies {
-        let warm = std::hint::black_box(f(&b));
+        let warm = core::hint::black_box(f(&b));
         let start = std::time::Instant::now();
         let mut last = 0u64;
         for _ in 0..reps {
-            last = std::hint::black_box(f(&b));
+            last = core::hint::black_box(f(&b));
         }
         let elapsed = start.elapsed();
         assert_eq!(last, warm, "{name} is not deterministic");

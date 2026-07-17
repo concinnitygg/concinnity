@@ -10,7 +10,9 @@
 // like a plain Vec. Mutable access goes through
 // `values_mut`, which stamps the change tick because any element may be written.
 
-use std::ops::Deref;
+use alloc::vec::Vec;
+
+use core::ops::Deref;
 
 use crate::entity::Entity;
 use crate::tick::Tick;
@@ -87,7 +89,7 @@ impl<T> Column<T> {
     pub fn drain(&mut self, tick: Tick) -> Vec<T> {
         self.entities.clear();
         self.changed = tick;
-        std::mem::take(&mut self.data)
+        core::mem::take(&mut self.data)
     }
 
     // Empty the column without returning the values.

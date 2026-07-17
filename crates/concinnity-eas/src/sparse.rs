@@ -9,6 +9,9 @@
 // The sparse side is paged so a single large entity index does not allocate one
 // giant Vec; only the touched pages exist.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use crate::entity::Entity;
 
 const PAGE: usize = 1024;
@@ -54,7 +57,7 @@ impl<T> SparseColumn<T> {
         if row != EMPTY {
             let row = row as usize;
             self.dense_entities[row] = entity;
-            return Some(std::mem::replace(&mut self.dense[row], value));
+            return Some(core::mem::replace(&mut self.dense[row], value));
         }
         let row = self.dense.len() as u32;
         self.dense.push(value);

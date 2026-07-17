@@ -7,12 +7,13 @@
 // Values are only required to be `Any`, not `Send`, so a main-thread-only
 // resource (the Metal backend) can live here alongside the rest.
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use core::any::{Any, TypeId};
 
 #[derive(Default)]
 pub struct Resources {
-    map: HashMap<TypeId, Box<dyn Any>>,
+    map: BTreeMap<TypeId, Box<dyn Any>>,
 }
 
 impl Resources {
