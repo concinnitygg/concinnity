@@ -16,7 +16,7 @@ use crate::gfx::backend::QualitySettings;
 
 use super::context::MtlContext;
 use super::init::effects::{
-    EffectFlags, EffectSettings, QualityEffectsBundle, build_quality_effects,
+    EffectDimensions, EffectFlags, EffectSettings, QualityEffectsBundle, build_quality_effects,
 };
 use super::init::pipelines::make_vertex_descriptor;
 use super::post::build_gbuffer_prepass_pipeline;
@@ -47,14 +47,20 @@ impl MtlContext {
         let taa_effective = q.taa && !upscaling_active;
         let needs_velocity = taa_effective || upscaling_active;
         let has_instanced = self.instanced_pipeline_state.is_some();
-        let render_w = self.hdr_targets.width;
-        let render_h = self.hdr_targets.height;
+        // Output dimensions come from the live bloom chain, which was built at
+        // them; the rebuilt pool sizes `bloom_top` off the same pair, so the new
+        // top mip drops back into the chain unchanged below.
+        let dims = EffectDimensions {
+            render_w: self.hdr_targets.width,
+            render_h: self.hdr_targets.height,
+            output_w: self.bloom_targets.width,
+            output_h: self.bloom_targets.height,
+        };
 
         let bundle = match build_quality_effects(
             &self.device,
             &make_vertex_descriptor(),
-            render_w,
-            render_h,
+            dims,
             EffectSettings {
                 ssao: &q.ssao,
                 ssr: &q.ssr,
@@ -126,6 +132,14 @@ impl MtlContext {
         self.taa.history_valid = false;
         self.ssao = ssao;
         self.transient_pool = transient_pool;
+        // The rebuilt pool holds a fresh `bloom_top`, so the bloom chain's top
+        // mip (a handle into the old pool) is stale. Re-point it rather than
+        // rebuilding the chain: the extent is unchanged, so the mips below it
+        // are still correct.
+        match self.transient_pool.bloom_top() {
+            Ok(top) => self.bloom_targets.mips[0] = top,
+            Err(e) => tracing::error!("apply_quality_settings: {e}"),
+        }
         self.ssr = ssr;
         self.gbuffer = gbuffer;
         self.ssgi = ssgi;

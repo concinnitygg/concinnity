@@ -332,9 +332,10 @@ pub struct MtlContext {
     // pass, and the composite's unconditional top-mip bind stays 1x1 black.
     pub(super) bloom_pipelines: Option<BloomPipelines>,
     // Pool backing the render graph's transient textures
-    // (`gfx::render_graph::alias`). Owns `ao_output` today (relocated off SSAO);
-    // a later stage aliases it with `bloom_top` on one `MTLHeap` slot. Rebuilt on
-    // resize. See [`TransientTexturePool`].
+    // (`gfx::render_graph::alias`). Owns `bloom_top` (which `bloom_targets`
+    // borrows as mip 0) and, when SSAO is on, `ao_output`; their disjoint
+    // lifetimes put them on one aliased `MTLHeap` slot. Rebuilt on resize. See
+    // [`TransientTexturePool`].
     pub(super) transient_pool: TransientTexturePool,
     // Post-process tunables (bloom intensity / threshold / knee). Pushed to
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`

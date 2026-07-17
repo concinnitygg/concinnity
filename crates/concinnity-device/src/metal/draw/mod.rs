@@ -1261,8 +1261,28 @@ impl MtlContext {
         // The bloom chain reads `scene_color`: at drawable size when the
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
-        if want_w != self.bloom_targets.width || want_h != self.bloom_targets.height {
-            self.bloom_targets = super::post::create_bloom_targets(&self.device, want_w, want_h)?;
+        let bloom_changed =
+            want_w != self.bloom_targets.width || want_h != self.bloom_targets.height;
+        // The transient pool backs `ao_output` (render-resolution) and
+        // `bloom_top` (half output-resolution), so either extent moving
+        // invalidates it. The bloom chain then rebuilds around the pool's fresh
+        // top mip; the per-frame bindless argument buffer re-encodes `ao_output`
+        // itself, so nothing else caches these handles.
+        if render_changed || bloom_changed {
+            self.transient_pool.rebuild(
+                &self.device,
+                &super::transient_pool::transient_slots(
+                    self.ssao.settings.is_some(),
+                    (render_w, render_h),
+                    super::post::bloom_top_extent(want_w, want_h),
+                ),
+            )?;
+            self.bloom_targets = super::post::create_bloom_targets(
+                &self.device,
+                want_w,
+                want_h,
+                self.transient_pool.bloom_top()?,
+            )?;
         }
         // The TAA history + velocity buffers are render-resolution. Stale
         // history can't be reprojected into the new resolution, so mark
@@ -1273,21 +1293,16 @@ impl MtlContext {
                 super::post::create_taa_targets(&self.device, render_w, render_h)?.to_vec();
             self.taa.history_valid = false;
         }
-        // The SSAO occlusion targets are render-resolution. Its depth + normal
-        // input now comes from the unified G-buffer pre-pass (below), so SSAO
-        // owns no G-buffer of its own.
+        // The SSAO kernel's raw-occlusion target is render-resolution. Its depth
+        // + normal input now comes from the unified G-buffer pre-pass (below),
+        // so SSAO owns no G-buffer of its own; its blurred output is the pool's
+        // `ao_output`, rebuilt above.
         if render_changed && self.ssao.settings.is_some() {
             self.ssao.targets = Some(super::post::create_ssao_targets(
                 &self.device,
                 render_w,
                 render_h,
             )?);
-            // `ao_output` (the blurred occlusion) lives in the transient pool;
-            // rebuild it at the new render resolution too.
-            self.transient_pool.rebuild(
-                &self.device,
-                &super::transient_pool::transient_specs(true, render_w, render_h),
-            )?;
         }
         // The SSR resolve-output target is render-resolution. Rebuilt when SSR,
         // SSGI, *or* RT reflections are on (RT reuses `ssr_targets.output`). The

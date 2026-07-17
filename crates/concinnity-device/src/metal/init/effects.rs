@@ -28,7 +28,7 @@ use crate::metal::particle::{
     ParticleEmitterGpuState, ParticlePipelines, build_emitter_gpu_state, build_particle_pipelines,
 };
 use crate::metal::post::{
-    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
+    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState, bloom_top_extent,
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_gbuffer_prepass_pipeline,
     build_reflection_blur_pipeline, build_reflection_composite_pipeline,
     build_rt_reflection_pipeline, build_ssao_pipeline, build_ssgi_composite_pipeline,
@@ -37,7 +37,7 @@ use crate::metal::post::{
     create_taa_targets,
 };
 use crate::metal::texture::create_fallback_texture;
-use crate::metal::transient_pool::{TransientTexturePool, transient_specs};
+use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
 // The toggle-controlled feature settings shared by [`build_effects`] and
 // [`build_quality_effects`] (the runtime quality rebuild forwards the same set).
@@ -109,8 +109,9 @@ pub(crate) struct EffectsBundle {
     // SSAO-owned pre-pass); the white fallback is always present.
     pub ssao: SsaoState,
 
-    // Render-graph transient texture pool (`gfx::render_graph::alias`). Owns
-    // `ao_output` when SSAO is on; empty otherwise.
+    // Render-graph transient texture pool (`gfx::render_graph::alias`). Always
+    // owns `bloom_top`, plus `ao_output` when SSAO is on; the two share one
+    // aliased heap slot. `bloom_targets.mips[0]` is a handle into it.
     pub transient_pool: TransientTexturePool,
 
     // SSR resolve + output target: built when SSR / SSGI / RT is on (RT reuses
@@ -197,11 +198,16 @@ pub(crate) struct QualityEffectsBundle {
 pub(crate) fn build_quality_effects(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    render_w: u32,
-    render_h: u32,
+    dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
 ) -> Result<QualityEffectsBundle, String> {
+    let EffectDimensions {
+        render_w,
+        render_h,
+        output_w,
+        output_h,
+    } = dims;
     let EffectSettings {
         ssao: ssao_settings,
         ssr: ssr_settings,
@@ -254,12 +260,17 @@ pub(crate) fn build_quality_effects(
         white: create_fallback_texture(device)?,
     };
 
-    // Render-graph transient texture pool. Stage 1 manages only `ao_output`
-    // (SSAO's blurred occlusion, render-resolution), relocated off SSAO so a
-    // later stage can place it and `bloom_top` on one aliased heap slot.
+    // Render-graph transient texture pool: `ao_output` (SSAO's blurred
+    // occlusion, render-resolution) and `bloom_top` (bloom mip 0, half output
+    // resolution), which the planner packs onto one aliased heap slot. Built
+    // before the bloom chain, which reads its top mip back out of the pool.
     let transient_pool = TransientTexturePool::build(
         device,
-        &transient_specs(ssao_settings.is_some(), render_w, render_h),
+        &transient_slots(
+            ssao_settings.is_some(),
+            (render_w, render_h),
+            bloom_top_extent(output_w, output_h),
+        ),
     )?;
 
     // SSR resolve: the ray-march resolve pipeline + its output target, built when
@@ -472,11 +483,10 @@ pub(crate) fn build_effects(
     flags: EffectFlags,
     world_content: WorldContentEffects,
 ) -> Result<EffectsBundle, String> {
+    // Render dimensions ride `dims` into `build_quality_effects`; only the
+    // output pair is used directly here, by the bloom chain.
     let EffectDimensions {
-        render_w,
-        render_h,
-        output_w,
-        output_h,
+        output_w, output_h, ..
     } = dims;
     let WorldContentEffects {
         fog_settings,
@@ -486,25 +496,13 @@ pub(crate) fn build_effects(
     // `flags` is Copy and moves intact into `build_quality_effects` below; this
     // local drives the bloom + world-content pipeline builds that stay here.
     let hot_reload = flags.hot_reload;
-    // Bloom chain + pipelines. Bloom samples whatever scene_color the post
-    // stack hands it: that's at output (drawable) resolution when MetalFX
-    // upscaling is on, native resolution otherwise. Sized off `output_w/h`
-    // so bloom stays crisp at the panel's pixel grid. Built for any world
-    // with a 3D scene (only its uniforms vary at runtime), so it is not part
-    // of the toggle-controlled subset; the targets exist regardless because
-    // the composite pass binds the top mip unconditionally (1x1 scene-less).
-    let bloom_targets = create_bloom_targets(device, output_w, output_h)?;
-    let bloom_pipelines = if scene {
-        Some(build_bloom_pipelines(device, hot_reload)?)
-    } else {
-        None
-    };
 
     // The toggle-controlled subset (TAA, SSAO, SSR, SSGI, RT resolve pipelines,
-    // auto-exposure, + the shared G-buffer pre-pass and SSAO transient pool).
+    // auto-exposure, + the shared G-buffer pre-pass and the transient pool).
     // Shared with the runtime rebuild (`apply_quality_settings`) so init and a
     // live toggle produce byte-identical resources. The skinned G-buffer
-    // pipeline + the RT acceleration structure are built below.
+    // pipeline + the RT acceleration structure are built below. Runs before the
+    // bloom chain, which takes its top mip from the pool this builds.
     let QualityEffectsBundle {
         taa_pipeline_state,
         taa_targets,
@@ -521,7 +519,23 @@ pub(crate) fn build_effects(
         auto_exposure_output,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(device, vert_desc, render_w, render_h, settings, flags)?;
+    } = build_quality_effects(device, vert_desc, dims, settings, flags)?;
+
+    // Bloom chain + pipelines. Bloom samples whatever scene_color the post
+    // stack hands it: that's at output (drawable) resolution when MetalFX
+    // upscaling is on, native resolution otherwise. Sized off `output_w/h`
+    // so bloom stays crisp at the panel's pixel grid. Built for any world
+    // with a 3D scene (only its uniforms vary at runtime), so it is not part
+    // of the toggle-controlled subset; the targets exist regardless because
+    // the composite pass binds the top mip unconditionally (1x1 scene-less).
+    // Mip 0 is the pool's `bloom_top`, which the pool always manages.
+    let bloom_targets =
+        create_bloom_targets(device, output_w, output_h, transient_pool.bloom_top()?)?;
+    let bloom_pipelines = if scene {
+        Some(build_bloom_pipelines(device, hot_reload)?)
+    } else {
+        None
+    };
 
     // Projected-decal pass. Built only when the world declares at least one
     // decal; with none, all four resources stay `None` and the pass is

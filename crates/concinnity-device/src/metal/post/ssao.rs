@@ -37,10 +37,14 @@ pub(crate) struct SsaoState {
     pub white: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
+// Pixel format of both occlusion targets: the kernel's raw output and the
+// blurred `ao_output` the transient pool backs. Single-channel visibility.
+pub(crate) const SSAO_OCCLUSION_FORMAT: MTLPixelFormat = MTLPixelFormat::R8Unorm;
+
 // Pipelines
 
 // Build one SSAO fullscreen-triangle pipeline (the GTAO kernel or the blur).
-// Both target a single-sample `R8Unorm` occlusion texture and share
+// Both target a single-sample occlusion texture and share
 // `ssao_fullscreen_vertex`; `fragment_entry` selects which fragment shader.
 pub(crate) fn build_ssao_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -54,7 +58,7 @@ pub(crate) fn build_ssao_pipeline(
         &library,
         "ssao_fullscreen_vertex",
         fragment_entry,
-        MTLPixelFormat::R8Unorm,
+        SSAO_OCCLUSION_FORMAT,
         FullscreenBlend::Replace,
     )
 }
@@ -86,7 +90,7 @@ pub(crate) fn create_ssao_targets(
         let desc = MTLTextureDescriptor::new();
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(MTLPixelFormat::R8Unorm);
+            desc.setPixelFormat(SSAO_OCCLUSION_FORMAT);
             desc.setWidth(w);
             desc.setHeight(h);
             desc.setUsage(sampled);
@@ -127,9 +131,9 @@ impl MtlContext {
         };
 
         // The blurred occlusion the main pass samples is the graph's `ao_output`
-        // transient, now owned by the pool (relocated off SSAO so a later stage
-        // can alias it with `bloom_top`). The pool always holds it when SSAO is
-        // on (both gate on the same setting).
+        // transient, owned by the pool so it can share a heap slot with
+        // `bloom_top`. The pool always holds it when SSAO is on (both gate on
+        // the same setting).
         let ao_output = self
             .transient_pool
             .texture_for("ao_output")

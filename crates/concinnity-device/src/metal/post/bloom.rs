@@ -18,10 +18,14 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
 };
 
+// Pixel format of every mip in the bloom chain, including the `bloom_top` mip
+// the transient pool backs.
+pub(crate) const BLOOM_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
+
 // Pipelines
 
 // The three fullscreen-triangle pipelines that make up the bloom chain. All
-// target single-sample `RGBA16Float` bloom mips; `upsample` blends additively
+// target single-sample `BLOOM_FORMAT` bloom mips; `upsample` blends additively
 // so each upsample pass accumulates onto the downsampled content already in
 // the destination mip.
 pub(crate) struct BloomPipelines {
@@ -51,7 +55,7 @@ pub(crate) fn build_bloom_pipelines(
             &library,
             "bloom_vertex_main",
             frag_name,
-            MTLPixelFormat::RGBA16Float,
+            BLOOM_FORMAT,
             blend,
         )
     };
@@ -71,7 +75,11 @@ pub(crate) fn build_bloom_pipelines(
 // each subsequent mip halves again. The prefilter + downsample passes fill
 // `mips[0..N]`, the additive upsample passes accumulate back down to
 // `mips[0]`, and the composite pass samples `mips[0]`. All mips are
-// single-sample `RGBA16Float`, `ShaderRead | RenderTarget`, GPU-private.
+// single-sample `BLOOM_FORMAT`, `ShaderRead | RenderTarget`, GPU-private.
+//
+// `mips[0]` is the graph's `bloom_top` transient and belongs to the transient
+// pool, which may back it with memory `ao_output` also uses; the chain only
+// borrows the handle. Every mip below it is committed and owned here.
 pub(crate) struct BloomTargets {
     // One texture per mip level, largest first. Always non-empty.
     pub mips: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
@@ -90,26 +98,36 @@ fn bloom_mip_count(width: u32, height: u32) -> u32 {
     levels.clamp(4, 6) as u32
 }
 
+// Extent of `mips[0]` for an HDR resolve target of `width`x`height`: half, at
+// least one texel. The transient pool sizes `bloom_top` through this, so the
+// pooled texture and the chain that binds it cannot drift apart.
+pub(crate) fn bloom_top_extent(width: u32, height: u32) -> (u32, u32) {
+    ((width.max(1) >> 1).max(1), (height.max(1) >> 1).max(1))
+}
+
 // Create the bloom mip chain for an HDR resolve target of `width`x`height`.
 // `mips[i]` has resolution `(width >> (i + 1), height >> (i + 1))`, floored
-// at one texel.
+// at one texel. `bloom_top` is the pool's `mips[0]`; the caller must have built
+// the pool at `bloom_top_extent(width, height)`.
 pub(crate) fn create_bloom_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
+    bloom_top: Retained<ProtocolObject<dyn MTLTexture>>,
 ) -> Result<BloomTargets, String> {
     let full_w = width.max(1);
     let full_h = height.max(1);
     let count = bloom_mip_count(full_w, full_h);
 
     let mut mips = Vec::with_capacity(count as usize);
-    for i in 0..count {
+    mips.push(bloom_top);
+    for i in 1..count {
         let mw = (full_w >> (i + 1)).max(1) as usize;
         let mh = (full_h >> (i + 1)).max(1) as usize;
         let desc = MTLTextureDescriptor::new();
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
+            desc.setPixelFormat(BLOOM_FORMAT);
             desc.setWidth(mw);
             desc.setHeight(mh);
             desc.setUsage(MTLTextureUsage(
