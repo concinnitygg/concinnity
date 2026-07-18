@@ -14,6 +14,7 @@
 // under the historical `crate::ecs::*` paths.
 pub mod asset_id;
 mod entity_index;
+mod payload_store;
 mod protocol;
 mod registry;
 mod system;
@@ -41,7 +42,10 @@ pub use system::{StepResult, System};
 // re-exports it under the historical `crate::ecs::decompose::EntityByName` path.
 pub use entity_index::EntityByName;
 
-use crate::blob::BlobData;
+// The payload-access seam systems reach through: keeps the ECS mechanism free
+// of blob file I/O (`crate::blob::BlobData` is the runtime implementor).
+pub use payload_store::PayloadStore;
+
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::profile::FrameProfile;
 use crate::result::CnResult;
@@ -128,10 +132,11 @@ pub struct PipelineContext<'a> {
     // Per-type component storage. Systems should not access this directly;
     // use `query`, `query_mut`, `drain`, or `push` instead.
     pub components: &'a mut ComponentStorage,
-    // In-memory blob payload store. Systems use `read_payload` to fetch
-    // compiled binary data, then call `release_blob` when done with it.
+    // Compiled-payload store. Systems use `read_payload` to fetch binary data,
+    // then call `release_blob` when done with it. A trait object so the ECS
+    // mechanism names no concrete blob store; the runtime passes `BlobData`.
     #[allow(dead_code)]
-    pub blob: &'a mut BlobData,
+    pub blob: &'a mut dyn PayloadStore,
     // Per-frame profiling data. `World::step` records each system's CPU step
     // time here; `GraphicsSystem` writes the backend `RenderStats` after its
     // draw call, and `StatHud` reads it back to drive the on-screen HUD.
@@ -316,7 +321,7 @@ impl<'a> PipelineContext<'a> {
     // Release the in-memory payload for an entire blob once all systems
     // that need it have finished (e.g. after GPU upload).
     //
-    // See `BlobData::release` for semantics.
+    // See `PayloadStore::release` for semantics.
     #[allow(dead_code)]
     pub fn release_blob(&mut self, blob_index: u32) {
         self.blob.release(blob_index);
@@ -448,12 +453,27 @@ macro_rules! define_components {
 mod tests {
     use super::*;
 
+    // A payload store holding nothing: every read errors, releases are no-ops.
+    // Lets the ECS tests exercise the context's payload forwarding without
+    // depending on the concrete `BlobData` (which lives host-side).
+    struct EmptyStore;
+
+    impl PayloadStore for EmptyStore {
+        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+            Err(CnResult::FileIo)
+        }
+        fn release(&mut self, _blob_index: u32) {}
+        fn disk_backed(&self) -> bool {
+            false
+        }
+    }
+
     // A standalone PipelineContext over empty storage, for exercising the
     // resource and event surfaces without a running world.
-    fn parts() -> (ComponentStorage, BlobData, FrameProfile, Resources) {
+    fn parts() -> (ComponentStorage, EmptyStore, FrameProfile, Resources) {
         (
             ComponentStorage::default(),
-            BlobData::empty(),
+            EmptyStore,
             FrameProfile::default(),
             Resources::new(),
         )
@@ -589,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn read_payload_errors_on_an_empty_blob_store() {
+    fn read_payload_and_release_forward_to_the_store() {
         let (mut c, mut b, mut p, mut r) = parts();
         let mut ctx = PipelineContext {
             components: &mut c,
@@ -602,8 +622,9 @@ mod tests {
             offset: 0,
             len: 4,
         };
+        // read_payload forwards the store's error verbatim.
         assert_eq!(ctx.read_payload(&loc).unwrap_err(), CnResult::FileIo);
-        // Releasing a blob that does not exist is a no-op.
+        // release_blob forwards without panicking.
         ctx.release_blob(0);
     }
 }

@@ -186,6 +186,22 @@ impl BlobData {
     }
 }
 
+// The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
+// adapter over the inherent API so the pure ECS mechanism names no blob type.
+impl crate::ecs::PayloadStore for BlobData {
+    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+        BlobData::read(self, locator)
+    }
+
+    fn release(&mut self, blob_index: u32) {
+        BlobData::release(self, blob_index)
+    }
+
+    fn disk_backed(&self) -> bool {
+        BlobData::disk_backed(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
