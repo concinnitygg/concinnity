@@ -482,6 +482,19 @@ impl World {
         for system in &mut self.systems {
             system.init(&mut ctx);
         }
+        // Every system has inited and cached the payloads it keeps; nothing
+        // reads compiled payloads at runtime. Free every blob section still
+        // resident: the shipped runtime's blob 0, the audio / SDF / terrain
+        // blobs the GraphicsSystem init sweep held back for their later
+        // consumers, and every blob in a world with no GraphicsSystem to run
+        // that sweep at all.
+        let freed = self.blob.release_all_resident();
+        if freed >= 1024 * 1024 {
+            tracing::info!(
+                "World: freed {} MiB of resident blob payloads after init",
+                freed / (1024 * 1024)
+            );
+        }
         Ok(())
     }
 

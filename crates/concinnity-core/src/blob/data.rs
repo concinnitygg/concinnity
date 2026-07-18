@@ -157,6 +157,25 @@ impl BlobData {
         }
     }
 
+    // Release every payload section still resident, called once every system
+    // has finished init. Systems read compiled payloads only during init and
+    // cache what they keep (GPU uploads, decoded audio clips, streaming
+    // sources that own their extracted bytes or re-read from disk), so nothing
+    // consults `BlobData` again at runtime -- the resident sections are dead
+    // weight past `World::start`. Never-loaded overflow slots are left as they
+    // are: they hold only a file path and were needed by no system. Returns the
+    // number of bytes freed.
+    pub fn release_all_resident(&mut self) -> usize {
+        let mut freed = 0;
+        for slot in &mut self.slots {
+            if let BlobSlot::Loaded(bytes) = slot {
+                freed += bytes.len();
+                *slot = BlobSlot::Released;
+            }
+        }
+        freed
+    }
+
     // true if the blob's payload is resident in memory right now; an
     // `Unloaded` overflow blob reports false until its first read
     pub fn is_loaded(&self, blob_index: u32) -> bool {
@@ -231,6 +250,22 @@ mod tests {
         bd.release(0);
         assert!(!bd.is_loaded(0));
         assert!(bd.read(&locator(0, 0, 2)).is_err());
+    }
+
+    #[test]
+    fn release_all_resident_frees_loaded_sections() {
+        // Blob 0 resident, blob 1 a deferred (never-loaded) overflow slot.
+        let mut bd = BlobData::from_blob_files(b"abcd".to_vec(), vec!["/nonexistent/cn/1".into()]);
+        assert!(bd.is_loaded(0));
+        assert!(!bd.is_loaded(1));
+
+        let freed = bd.release_all_resident();
+        assert_eq!(freed, 4, "blob 0's four bytes were freed");
+        assert!(!bd.is_loaded(0));
+        // The freed section now errors on read rather than reloading.
+        assert!(bd.read(&locator(0, 0, 1)).is_err());
+        // A second sweep frees nothing (idempotent).
+        assert_eq!(bd.release_all_resident(), 0);
     }
 
     #[test]
