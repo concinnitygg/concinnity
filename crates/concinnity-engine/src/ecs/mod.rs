@@ -216,6 +216,17 @@ impl World {
         Self::new(BlobData::empty())
     }
 
+    // Pre-size the component columns from the blob manifest's per-type record
+    // counts, so the bulk `add` loop that follows never reallocates mid-push.
+    pub fn reserve_components(&mut self, counts: &[(u8, u32)]) {
+        for &(discriminant, count) in counts {
+            self.components.reserve(
+                concinnity_core::ecs::ComponentId::new(discriminant),
+                count as usize,
+            );
+        }
+    }
+
     // Add a component loaded from a blob def. Systems are not added this way:
     // they are internal and constructed by `build_internal_systems`.
     pub fn add(&mut self, component: ComponentAsset) {

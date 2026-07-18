@@ -81,18 +81,22 @@ mod tests {
     }
 
     fn meta() -> BlobMeta {
+        let defs = vec![def(3, vec![1, 2]), def(9, vec![])];
+        let resources = vec![ResourceRecord {
+            resource_kind: ResourceKind::AudioClip as u8,
+            handle: 0,
+            payload: Some(PayloadLocator {
+                blob_index: 0,
+                offset: 0,
+                len: 3,
+            }),
+            data_bytes: Vec::new(),
+        }];
+        let manifest = crate::WorldManifest::from_records(&defs, &resources);
         BlobMeta {
-            defs: vec![def(3, vec![1, 2]), def(9, vec![])],
-            resources: vec![ResourceRecord {
-                resource_kind: ResourceKind::AudioClip as u8,
-                handle: 0,
-                payload: Some(PayloadLocator {
-                    blob_index: 0,
-                    offset: 0,
-                    len: 3,
-                }),
-                data_bytes: Vec::new(),
-            }],
+            defs,
+            resources,
+            manifest,
         }
     }
 

@@ -64,6 +64,18 @@ impl<T> Column<T> {
         self.added
     }
 
+    // Pre-allocate capacity for `additional` more rows (data + entity ids),
+    // ahead of a bulk load.
+    pub fn reserve(&mut self, additional: usize) {
+        self.data.reserve(additional);
+        self.entities.reserve(additional);
+    }
+
+    // Rows the column can hold without reallocating.
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
     // Append a row. Stamps both ticks: the row is newly added and (trivially)
     // changed this tick.
     pub fn push(&mut self, entity: Entity, value: T, tick: Tick) {

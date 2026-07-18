@@ -50,9 +50,12 @@ impl App {
     // load assets and blob payload data from the primary blob and
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let (assets, resources, blob_data) = blob::load()?;
+        let (assets, resources, manifest, blob_data) = blob::load()?;
 
         let mut world = World::new(blob_data);
+        // The manifest's per-type counts size each column once up front, so
+        // the bulk load below never reallocates mid-push.
+        world.reserve_components(&manifest.component_counts);
         for asset in assets {
             world.add(asset);
         }

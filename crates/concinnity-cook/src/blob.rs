@@ -130,9 +130,13 @@ pub fn write_blobs(
 ) -> std::io::Result<PackResult> {
     fs::create_dir_all(concinnity_core::paths::data_dir())?;
 
+    // The manifest is derived from the very streams it summarizes, so the
+    // shipped copy is consistent by construction; the runtime re-derives and
+    // debug-asserts it at load.
     let primary_meta = || BlobMeta {
         defs: defs.to_vec(),
         resources: resources.to_vec(),
+        manifest: concinnity_blob::WorldManifest::from_records(defs, resources),
     };
 
     let mut blob_paths = Vec::new();

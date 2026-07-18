@@ -14,7 +14,7 @@ use crate::result::CnResult;
 mod data;
 
 pub use crate::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
-pub use concinnity_blob::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE};
+pub use concinnity_blob::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE, WorldManifest};
 pub use data::BlobData;
 
 // Format a blob file path for a given index under `.concinnity/data/`. Blob 0
@@ -86,42 +86,37 @@ fn report(path: &str, e: BlobError) -> CnResult {
     CnResult::FileIo
 }
 
-// Load the primary blob's defs and the `BlobData` payload store from the
+// Load the primary blob's metadata and the `BlobData` payload store from the
 // `.concinnity/data/` layout, without resolving defs into runtime `Asset`s
 // (that resolution depends on the client runtime registry, so it lives in the
 // client `blob::load` shim).
 //
-// Only blob 0's payload section is read here; overflow blobs start unloaded and
-// `BlobData::read()` pulls each from disk the first time a locator needs it.
-pub fn load_raw() -> Result<(Vec<BlobAssetDef>, Vec<ResourceRecord>, BlobData), CnResult> {
+// Only blob 0's payload section is read here; overflow blobs (named by the
+// manifest's `max_blob_index`) start unloaded and `BlobData::read()` pulls
+// each from disk the first time a locator needs it.
+pub fn load_raw() -> Result<(BlobMeta, BlobData), CnResult> {
     load_raw_from(blob_path)
 }
 
 // `load_raw` against an injected layout, so the eager/deferred split can be
 // exercised without the process-global data-dir anchor.
-fn load_raw_from(
-    blob_path: impl Fn(u32) -> String,
-) -> Result<(Vec<BlobAssetDef>, Vec<ResourceRecord>, BlobData), CnResult> {
+fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobData), CnResult> {
     let (meta, _payload_start) = read_cnb(&blob_path(0))?;
 
-    // Determine how many distinct blob indices are referenced so we know which
-    // overflow files exist. Both the component defs and the resource records
-    // address the payload section, so scan both streams.
-    let max_blob_index = meta
-        .defs
-        .iter()
-        .filter_map(|d| d.payload.as_ref())
-        .chain(meta.resources.iter().filter_map(|r| r.payload.as_ref()))
-        .map(|p| p.blob_index)
-        .max()
-        .unwrap_or(0);
+    // Cook derives the manifest from the very streams it summarizes, so a
+    // mismatch means a corrupt or hand-edited blob.
+    debug_assert_eq!(
+        meta.manifest,
+        WorldManifest::from_records(&meta.defs, &meta.resources),
+        "blob manifest does not match its record streams"
+    );
 
     let blob0_payload = read_payload_section(&blob_path(0))?;
     tracing::debug!("Loaded blob 0 payload ({} bytes)", blob0_payload.len());
-    let overflow_paths = (1..=max_blob_index).map(blob_path).collect();
+    let overflow_paths = (1..=meta.manifest.max_blob_index).map(blob_path).collect();
 
     let blob_data = BlobData::from_blob_files(blob0_payload, overflow_paths);
-    Ok((meta.defs, meta.resources, blob_data))
+    Ok((meta, blob_data))
 }
 
 // Load defs without resolving (for callers that apply overlays first)
@@ -198,19 +193,23 @@ mod tests {
                 .into_owned()
         };
 
-        // Blob 0: one def whose payload lives in overflow blob 1.
+        // Blob 0: one def whose payload lives in overflow blob 1. The manifest
+        // is derived exactly as cook derives it; `load_raw` trusts its
+        // `max_blob_index` to name the overflow file.
+        let defs = vec![BlobAssetDef {
+            name: None,
+            kind: AssetKind::Component,
+            discriminant: 1,
+            args_bytes: Vec::new(),
+            payload: Some(PayloadLocator {
+                blob_index: 1,
+                offset: 0,
+                len: 8,
+            }),
+        }];
         let meta = BlobMeta {
-            defs: vec![BlobAssetDef {
-                name: None,
-                kind: AssetKind::Component,
-                discriminant: 1,
-                args_bytes: Vec::new(),
-                payload: Some(PayloadLocator {
-                    blob_index: 1,
-                    offset: 0,
-                    len: 8,
-                }),
-            }],
+            manifest: WorldManifest::from_records(&defs, &[]),
+            defs,
             resources: Vec::new(),
         };
         std::fs::write(
@@ -224,14 +223,15 @@ mod tests {
         )
         .unwrap();
 
-        let (defs, resources, mut bd) = load_raw_from(path_for).expect("load");
-        assert_eq!(defs.len(), 1);
-        assert!(resources.is_empty());
+        let (meta, mut bd) = load_raw_from(path_for).expect("load");
+        assert_eq!(meta.defs.len(), 1);
+        assert!(meta.resources.is_empty());
+        assert_eq!(meta.manifest.component_counts, vec![(1, 1)]);
         assert!(bd.disk_backed());
         // Blob 0 resident, blob 1 deferred until its first read.
         assert!(bd.is_loaded(0));
         assert!(!bd.is_loaded(1));
-        let loc = defs[0].payload.clone().unwrap();
+        let loc = meta.defs[0].payload.clone().unwrap();
         assert_eq!(bd.read(&loc).expect("overflow read"), b"overflow");
         assert!(bd.is_loaded(1));
     }

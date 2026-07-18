@@ -56,6 +56,17 @@ macro_rules! define_component_storage {
                 entity
             }
 
+            // Pre-size a component's column ahead of a bulk load (e.g. from a
+            // blob manifest's per-type counts). Unknown ids are ignored.
+            pub fn reserve(&mut self, component: $crate::ComponentId, additional: usize) {
+                $(
+                    if component == $crate::ComponentId::new($disc) {
+                        self.$field.reserve(additional);
+                        return;
+                    }
+                )+
+            }
+
             // Allocate a bare entity that owns no components yet. Useful for
             // gameplay-only entities and as the target of later `insert_typed`.
             #[allow(dead_code)]
@@ -313,6 +324,20 @@ mod tests {
         Position => Position, 1,
         Velocity => Velocity, 2,
         Tag => Tag, 3,
+    }
+
+    // `reserve` pre-sizes exactly the addressed column; unknown ids are a
+    // no-op, and reserved capacity survives subsequent pushes.
+    #[test]
+    fn reserve_presizes_the_addressed_column() {
+        let mut s = TestStorage::default();
+        s.reserve(crate::ComponentId::new(1), 64);
+        assert!(s.Position.capacity() >= 64);
+        assert_eq!(s.Velocity.capacity(), 0, "other columns untouched");
+        s.reserve(crate::ComponentId::new(99), 64); // unregistered id: ignored
+        s.push_typed(Position(1));
+        assert!(s.Position.capacity() >= 64);
+        assert_eq!(s.len(), 1);
     }
 
     #[test]

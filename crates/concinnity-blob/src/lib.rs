@@ -44,7 +44,7 @@ mod schema;
 pub use encode::encode_cnb;
 pub use error::BlobError;
 pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
-pub use schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
+pub use schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord, WorldManifest};
 
 // The identity and payload-address types the records carry, owned by the
 // schema crate.
@@ -56,6 +56,7 @@ pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
 // is baked -- `RecordKind` and BlobAssetDef's `record` field left the schema.
 // v3: `args_bytes` / resource `data_bytes` are postcard-encoded components, not
 // JSON. v4: View became Screen (stack, input policy, layer fields) and element
-// `view` refs became `screen`.
-pub const BLOB_VERSION: u32 = 4;
+// `view` refs became `screen`. v5: `BlobMeta` gained the `WorldManifest`
+// shape summary.
+pub const BLOB_VERSION: u32 = 5;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)
