@@ -133,8 +133,7 @@ pub fn decimate_by_qem(
     }
 
     // 2. Unique undirected edges + initial half-edge collapse cost.
-    let mut edges: std::collections::HashSet<(u32, u32)> =
-        std::collections::HashSet::with_capacity(tris.len() * 3);
+    let mut edges: alloc::collections::BTreeSet<(u32, u32)> = alloc::collections::BTreeSet::new();
     for tri in &tris {
         for k in 0..3 {
             let a = tri[k];

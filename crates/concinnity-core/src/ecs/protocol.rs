@@ -46,7 +46,7 @@ pub struct MenuOverride(pub Option<bool>);
 // absent resource (the shipped runtime) leaves draw order at insertion order,
 // unchanged.
 #[derive(Debug, Clone, Default)]
-pub struct HudLayers(pub std::collections::HashMap<AssetId, i32>);
+pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
 
 // The active screen stack, published by UiInputSystem at init and whenever the
 // stack changes, and read a frame later (the same one-frame lag screen
@@ -59,7 +59,7 @@ pub struct HudLayers(pub std::collections::HashMap<AssetId, i32>);
 // Absent / empty in a world with no active screen.
 #[derive(Debug, Clone, Default)]
 pub struct ScreenStack {
-    pub layers: std::collections::HashMap<AssetId, i32>,
+    pub layers: alloc::collections::BTreeMap<AssetId, i32>,
     pub pauses_world: bool,
     pub captures_input: bool,
 }

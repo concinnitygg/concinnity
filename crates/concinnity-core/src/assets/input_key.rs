@@ -336,7 +336,7 @@ mod tests {
     fn variant_names_are_unique() {
         // Names double as persisted identifiers, so no two variants may share
         // one (this also guards ALL_KEYS against an accidental duplicate).
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
         for key in ALL_KEYS {
             assert!(seen.insert(key.name()), "duplicate name {}", key.name());
         }

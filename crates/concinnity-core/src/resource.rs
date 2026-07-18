@@ -10,7 +10,7 @@
 // client re-exports them under `crate::resource::*`, alongside the engine-side
 // `install_resource_tables` that inserts them as World resources.
 
-use std::collections::HashSet;
+use alloc::collections::BTreeSet;
 
 use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord};
 
@@ -83,7 +83,7 @@ impl AudioClipTable {
     // Blob indices that hold an audio-clip payload. The graphics systems consult
     // this so they leave the audio blobs resident for `AudioSystem`, which inits
     // after them. Replaces the old core `audio_clip_blob_indices` component scan.
-    pub fn blob_indices(&self) -> HashSet<u32> {
+    pub fn blob_indices(&self) -> BTreeSet<u32> {
         self.0
             .iter()
             .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
@@ -121,7 +121,7 @@ impl TextureTable {
 
     // Blob indices that hold a texture payload, so the graphics systems can keep
     // the texture blobs resident. Mirrors `AudioClipTable::blob_indices`.
-    pub fn blob_indices(&self) -> HashSet<u32> {
+    pub fn blob_indices(&self) -> BTreeSet<u32> {
         self.0
             .iter()
             .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
@@ -210,7 +210,7 @@ impl FontTable {
 
     // Blob indices that hold a font payload, so the graphics systems keep the font
     // blobs resident. Mirrors `TextureTable::blob_indices`.
-    pub fn blob_indices(&self) -> HashSet<u32> {
+    pub fn blob_indices(&self) -> BTreeSet<u32> {
         self.0
             .iter()
             .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))

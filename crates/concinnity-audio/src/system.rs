@@ -567,7 +567,7 @@ mod tests {
                     scale: [1.0; 3],
                 },
             );
-            let mut by_name = std::collections::HashMap::new();
+            let mut by_name = std::collections::BTreeMap::new();
             by_name.insert(prop, e);
             ctx.insert_resource(EntityByName(by_name));
             e

@@ -832,7 +832,7 @@ mod tests {
                     index.0.insert(id, entity);
                 }
                 None => {
-                    let mut index = HashMap::new();
+                    let mut index = std::collections::BTreeMap::new();
                     index.insert(id, entity);
                     self.resources.insert(EntityByName(index));
                 }

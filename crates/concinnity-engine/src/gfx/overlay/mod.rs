@@ -443,7 +443,7 @@ mod tests {
     // A stack that owns SCREEN at `layer` and pauses the world.
     fn screen_stack(layer: i32) -> ScreenStack {
         ScreenStack {
-            layers: std::collections::HashMap::from([(SCREEN, layer)]),
+            layers: std::collections::BTreeMap::from([(SCREEN, layer)]),
             pauses_world: true,
             captures_input: true,
         }
@@ -645,7 +645,7 @@ mod tests {
         w.push(sprite(AssetId(2)));
         w.resources.insert(screen_stack(7));
         w.resources
-            .insert(HudLayers(std::collections::HashMap::from([(
+            .insert(HudLayers(std::collections::BTreeMap::from([(
                 AssetId(2),
                 3,
             )])));
@@ -713,7 +713,7 @@ mod tests {
         w.push(text_input(AssetId(4)));
         w.push(sprite(AssetId(1)));
         w.resources
-            .insert(HudLayers(std::collections::HashMap::from([(
+            .insert(HudLayers(std::collections::BTreeMap::from([(
                 AssetId(4),
                 2,
             )])));

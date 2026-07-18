@@ -4,7 +4,7 @@
 
 use crate::assets::{Screen, ScreenCommand, ScreenInput};
 use crate::ecs::asset_id::AssetId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // Multiplier that turns a Screen's authored `layer` into a draw-layer band:
 // stack position orders screens within a band, the authored layer orders the
@@ -121,7 +121,7 @@ impl ScreenRegistry {
     // position orders screens within it. Screen-less HUD elements sit at 0, so
     // a default (layer 0) screen draws above the HUD and a negative layer
     // below it.
-    pub(crate) fn layers(&self) -> HashMap<AssetId, i32> {
+    pub(crate) fn layers(&self) -> BTreeMap<AssetId, i32> {
         self.stack
             .iter()
             .enumerate()

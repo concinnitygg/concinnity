@@ -25,12 +25,10 @@ impl File {
     // `kind` from the path extension when unset. Run by cook at build time
     // (the baked blob record carries the result).
     pub fn bake(args: FileArgs) -> Self {
-        let kind = args.kind.clone().or_else(|| {
-            std::path::Path::new(&args.path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .and_then(FileKind::from_ext)
-        });
+        let kind = args
+            .kind
+            .clone()
+            .or_else(|| super::path_extension(&args.path).and_then(FileKind::from_ext));
         Self {
             asset_id: AssetId::default(),
             path: args.path,

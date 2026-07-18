@@ -13,7 +13,7 @@
 // parent) resolve through a name -> Entity index this pass also publishes as a
 // resource.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::assets::{
     Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup, Prop,
@@ -42,7 +42,9 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 
     // Name -> entity, over the full set, so a parent declared after its child
     // still resolves.
-    let mut by_name: HashMap<AssetId, Entity> = HashMap::with_capacity(props.len());
+    // Handed to `EntityByName` (a BTreeMap for a dependency-free, deterministic
+    // index); built here from the placement scan.
+    let mut by_name: BTreeMap<AssetId, Entity> = BTreeMap::new();
     for (entity, prop) in &props {
         by_name.insert(prop.asset_id, *entity);
     }

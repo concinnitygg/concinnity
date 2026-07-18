@@ -214,6 +214,18 @@ pub use concinnity_asset::DebugHud;
 pub use concinnity_asset::FpsCounter;
 pub use concinnity_asset::StatHud;
 
+// The file-name extension of a path (the chars after the last `.` of its final
+// component), or `None` when that component has no extension. A pure, no_std
+// stand-in for `Path::new(p).extension().and_then(|e| e.to_str())` over the
+// asset-relative source strings the asset types carry.
+pub(crate) fn path_extension(path: &str) -> Option<&str> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => Some(ext),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Uniform, low-level checks over the small data-only asset types: their
@@ -236,6 +248,18 @@ mod tests {
             offset: 0,
             len: 0,
         });
+    }
+
+    #[test]
+    fn path_extension_matches_std_path_semantics() {
+        assert_eq!(path_extension("foo.metal"), Some("metal"));
+        assert_eq!(path_extension("shaders/pbr.hlsl"), Some("hlsl"));
+        assert_eq!(path_extension("a.b.glsl"), Some("glsl"));
+        // No extension, a dotfile, and a dotted directory with an extensionless
+        // file all resolve to None, matching `Path::extension`.
+        assert_eq!(path_extension("plain"), None);
+        assert_eq!(path_extension(".bashrc"), None);
+        assert_eq!(path_extension("dir.v2/plain"), None);
     }
 
     #[test]

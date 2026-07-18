@@ -25,8 +25,8 @@ impl EditorHook {
 
     // The per-frame HUD draw layers: each panel at its focus-stack rank (higher
     // = more front), the top bar pinned above them all.
-    pub(super) fn compute_layers(&self) -> std::collections::HashMap<AssetId, i32> {
-        let mut layers = std::collections::HashMap::new();
+    pub(super) fn compute_layers(&self) -> std::collections::BTreeMap<AssetId, i32> {
+        let mut layers = std::collections::BTreeMap::new();
         for (rank, &key) in self.panel_order.iter().enumerate() {
             let layer = rank as i32 + 1;
             for id in Self::panel_ids(key) {

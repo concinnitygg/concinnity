@@ -12,7 +12,7 @@ use crate::assets::ProceduralMesh;
 // AudioClip / SdfVolume precedent of holding a blob resident for a later system.
 pub fn heightfield_blob_indices(
     ctx: &crate::ecs::PipelineContext,
-) -> std::collections::HashSet<u32> {
+) -> alloc::collections::BTreeSet<u32> {
     ctx.query::<ProceduralMesh>()
         .filter(|m| m.generator == "heightfield")
         .filter_map(|m| m.locator.as_ref().map(|l| l.blob_index))

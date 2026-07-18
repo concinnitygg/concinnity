@@ -54,7 +54,7 @@ impl Component for SdfVolume {
 /// `audio_clip_blob_indices` pattern.
 pub fn sdf_volume_blob_indices(
     ctx: &crate::ecs::PipelineContext,
-) -> std::collections::HashSet<u32> {
+) -> alloc::collections::BTreeSet<u32> {
     ctx.query::<SdfVolume>()
         .filter_map(|v| v.locator.as_ref().map(|l| l.blob_index))
         .collect()

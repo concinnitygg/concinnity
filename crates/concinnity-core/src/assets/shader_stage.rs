@@ -36,10 +36,7 @@ impl ShaderStageExt for ShaderStage {
         if self.source.is_empty() {
             return None;
         }
-        let ext = std::path::Path::new(&self.source)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = super::path_extension(&self.source).unwrap_or("");
         if platform.accepts_ext(ext) {
             Some(self.source.clone())
         } else {
