@@ -82,7 +82,7 @@ pub struct CursorState {
 // the effective on/off for that chip: the master "Display performance stats"
 // toggle AND the per-readout toggle from the video settings. Absent (a HUD-only
 // unit test with no GraphicsSystem) is treated as both shown.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HudPrefs {
     pub show_fps: bool,
     pub show_vram: bool,

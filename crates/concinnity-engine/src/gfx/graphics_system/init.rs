@@ -2613,6 +2613,8 @@ impl GraphicsSystem {
             settings_writer: None,
             scene_cmd_cursor: crate::ecs::EventCursor::default(),
             setting_cmd_cursor: crate::ecs::EventCursor::default(),
+            published_hud_prefs: None,
+            published_disabled_inputs: None,
         });
 
         // Hand the streaming pools built above to StreamingSystem: it drives

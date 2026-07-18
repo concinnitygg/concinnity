@@ -162,6 +162,17 @@ impl<'a> PipelineContext<'a> {
         self.components.values_mut::<C>().iter_mut()
     }
 
+    // Mutable iteration over all components of type C paired with their owning
+    // Entity (the mutable counterpart of `query_with_entity`), so a system can
+    // update each component and still know which entity owns it without first
+    // materializing the entity set into a Vec.
+    #[allow(dead_code)]
+    pub fn query_mut_with_entity<C: ComponentSlot>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, &mut C)> {
+        self.components.values_mut_with_entities::<C>()
+    }
+
     // Mutable slice of all components of type C. Unlike `query_mut` this
     // exposes the backing storage as a slice, which a system can hand to the
     // job pool for parallel per-component work.

@@ -220,6 +220,10 @@ pub struct UiInputSystem {
     // `screen:*` action fires) and reads ScreenCommands, so a command fired this
     // frame is applied on the next, the same one-frame lag the old drain had.
     screen_cmd_cursor: crate::ecs::EventCursor,
+    // Cached copy of the engine's `DisabledSettingRows`, refreshed only when the
+    // published resource changes so the hit-test loop reads an owned set without
+    // cloning the resource every frame (SettingsSystem republishes rarely).
+    disabled_rows_cache: std::collections::HashSet<String>,
 }
 
 impl UiInputSystem {
@@ -239,6 +243,7 @@ impl UiInputSystem {
             capturing: None,
             open_dropdown: None,
             screen_cmd_cursor: crate::ecs::EventCursor::default(),
+            disabled_rows_cache: std::collections::HashSet::new(),
         }
     }
 }
@@ -598,12 +603,21 @@ impl System for UiInputSystem {
         let mut start_open: Option<OpenRequest> = None;
         // Setting rows the engine disabled this frame (e.g. show_fps / show_vram
         // while the "Display performance stats" master is off): inert and grayed,
-        // like the init-time capability gating but driven at runtime. Cloned out
-        // so the resource borrow ends before the mutable region loop.
-        let disabled_rows: std::collections::HashSet<String> = ctx
-            .resource::<crate::ecs::DisabledSettingRows>()
-            .map(|d| d.0.clone())
-            .unwrap_or_default();
+        // like the init-time capability gating but driven at runtime. Refresh the
+        // owned cache only when the published set changes (a cheap set compare
+        // otherwise), so the resource borrow ends before the mutable region loop
+        // without cloning it every frame.
+        let disabled_changed = match ctx.resource::<crate::ecs::DisabledSettingRows>() {
+            Some(d) => d.0 != self.disabled_rows_cache,
+            None => !self.disabled_rows_cache.is_empty(),
+        };
+        if disabled_changed {
+            self.disabled_rows_cache = ctx
+                .resource::<crate::ecs::DisabledSettingRows>()
+                .map(|d| d.0.clone())
+                .unwrap_or_default();
+        }
+        let disabled_rows = &self.disabled_rows_cache;
         for entry in &mut self.regions {
             // A region is inert this frame when it cannot hover or fire:
             //   - the scrollbar thumb is being dragged (no region reacts),

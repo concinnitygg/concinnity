@@ -111,6 +111,13 @@ impl<T> Column<T> {
         self.entities.iter().copied().zip(self.data.iter())
     }
 
+    // Iterate rows mutably, paired with their owning entity. Stamps the change
+    // tick because any element may be written.
+    pub fn iter_mut_with_entities(&mut self, tick: Tick) -> impl Iterator<Item = (Entity, &mut T)> {
+        self.changed = tick;
+        self.entities.iter().copied().zip(self.data.iter_mut())
+    }
+
     // Whether the column changed since a system's last run, wrap-safe.
     pub fn changed_since(&self, last_run: Tick) -> bool {
         self.changed.is_newer_than(last_run)
@@ -203,5 +210,24 @@ mod tests {
         col.push(ids[1], "b", Tick(1));
         let pairs: Vec<(Entity, &str)> = col.iter_with_entities().map(|(e, v)| (e, *v)).collect();
         assert_eq!(pairs, vec![(ids[0], "a"), (ids[1], "b")]);
+    }
+
+    #[test]
+    fn iter_mut_with_entities_pairs_rows_and_stamps_change() {
+        let (_e, ids) = three();
+        let mut col: Column<u32> = Column::new();
+        col.push(ids[0], 10, Tick(1));
+        col.push(ids[1], 20, Tick(1));
+        let seen: Vec<Entity> = col
+            .iter_mut_with_entities(Tick(4))
+            .map(|(e, v)| {
+                *v += 1;
+                e
+            })
+            .collect();
+        assert_eq!(seen, vec![ids[0], ids[1]]);
+        assert_eq!(&col[..], &[11, 21]);
+        assert!(col.changed_since(Tick(3)));
+        assert!(!col.changed_since(Tick(4)));
     }
 }

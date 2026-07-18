@@ -141,18 +141,18 @@ impl System for TextInputSystem {
         for ti in ctx.query_mut::<TextInput>() {
             if input.left_click {
                 ti.focused = ti.visible && Some(ti.asset_id) == hit_id;
-                if ti.focused {
-                    ti.caret = ti.content.chars().count();
-                }
             }
-            // Keep the caret valid even if `content` changed out from under us.
-            let n = ti.content.chars().count();
-            ti.caret = ti.caret.min(n);
-            if ti.focused
-                && ti.visible
-                && let Some(edit) = edit
-            {
-                apply_edit(&mut ti.content, &mut ti.caret, edit, ti.max_len as usize);
+            // Only the focused field's caret is edited or drawn, so only it needs
+            // the per-frame char-count walk. A click moves the caret to the end;
+            // otherwise clamp it in case `content` changed out from under us.
+            if ti.focused {
+                let n = ti.content.chars().count();
+                ti.caret = if input.left_click { n } else { ti.caret.min(n) };
+                if ti.visible
+                    && let Some(edit) = edit
+                {
+                    apply_edit(&mut ti.content, &mut ti.caret, edit, ti.max_len as usize);
+                }
             }
         }
 

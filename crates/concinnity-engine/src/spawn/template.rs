@@ -126,27 +126,36 @@ pub(super) struct DueSpawn {
 // A non-positive interval is inert (never spawns). A zero `lifetime` means the
 // copy is not auto-removed; otherwise it carries that countdown.
 pub(super) fn tick_spawners(ctx: &mut PipelineContext, dt: f32) -> Vec<DueSpawn> {
-    let spawners: Vec<(Entity, AssetId, f32, f32)> = ctx
-        .query_with_entity::<Spawner>()
-        .map(|(entity, s)| (entity, s.template, s.interval, s.lifetime))
-        .collect();
-    let mut due = Vec::new();
-    for (entity, template, interval, lifetime) in spawners {
-        if interval <= 0.0 {
+    // Advance every spawner's clock in place, recording only the ones that
+    // crossed at least one interval this step (template, lifetime, and how many
+    // copies are due). Steady-state frames where nothing fires allocate nothing.
+    let mut fired: Vec<(Entity, AssetId, f32, u32)> = Vec::new();
+    for (entity, spawner) in ctx.query_mut_with_entity::<Spawner>() {
+        if spawner.interval <= 0.0 {
             continue;
         }
+        spawner.elapsed += dt;
+        let mut count = 0;
+        while spawner.elapsed >= spawner.interval {
+            spawner.elapsed -= spawner.interval;
+            spawner.count += 1;
+            count += 1;
+        }
+        if count > 0 {
+            fired.push((entity, spawner.template, spawner.lifetime, count));
+        }
+    }
+    // Resolve each fired spawner's placement (its Transform) now that the mutable
+    // Spawner borrow is released, and expand to one DueSpawn per copy.
+    let mut due = Vec::new();
+    for (entity, template, lifetime, count) in fired {
         let transform = ctx.get::<Transform>(entity).copied().unwrap_or_default();
-        if let Some(spawner) = ctx.get_mut::<Spawner>(entity) {
-            spawner.elapsed += dt;
-            while spawner.elapsed >= interval {
-                spawner.elapsed -= interval;
-                spawner.count += 1;
-                due.push(DueSpawn {
-                    template,
-                    transform,
-                    lifetime: (lifetime > 0.0).then_some(lifetime),
-                });
-            }
+        for _ in 0..count {
+            due.push(DueSpawn {
+                template,
+                transform,
+                lifetime: (lifetime > 0.0).then_some(lifetime),
+            });
         }
     }
     due
@@ -154,22 +163,15 @@ pub(super) fn tick_spawners(ctx: &mut PipelineContext, dt: f32) -> Vec<DueSpawn>
 
 // Decrement every Lifetime by `dt` and return the entities whose countdown
 // reached zero this step, for the caller to despawn. Entities still alive keep
-// their decremented remaining. Pulling the expired list out (rather than
-// despawning inline) keeps this borrow read-only over the join and lets the
-// caller route each expiry through the same despawn cascade a DespawnRequest
-// uses.
+// their decremented remaining. Returning the expired list (rather than
+// despawning inline, which would mutate storage mid-iteration) lets the caller
+// route each expiry through the same despawn cascade a DespawnRequest uses.
 pub(super) fn tick_lifetimes(ctx: &mut PipelineContext, dt: f32) -> Vec<Entity> {
-    let entities: Vec<Entity> = ctx
-        .query_with_entity::<Lifetime>()
-        .map(|(entity, _)| entity)
-        .collect();
     let mut expired = Vec::new();
-    for entity in entities {
-        if let Some(life) = ctx.get_mut::<Lifetime>(entity) {
-            life.remaining -= dt;
-            if life.remaining <= 0.0 {
-                expired.push(entity);
-            }
+    for (entity, life) in ctx.query_mut_with_entity::<Lifetime>() {
+        life.remaining -= dt;
+        if life.remaining <= 0.0 {
+            expired.push(entity);
         }
     }
     expired

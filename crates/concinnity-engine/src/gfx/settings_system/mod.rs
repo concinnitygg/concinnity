@@ -111,6 +111,11 @@ pub(crate) struct SettingsState {
     // Cursors into the SceneCommand / SettingCommand queues.
     pub(crate) scene_cmd_cursor: crate::ecs::EventCursor,
     pub(crate) setting_cmd_cursor: crate::ecs::EventCursor,
+    // Last-published HUD state, so `publish_hud_state` only re-inserts the
+    // resources (rebuilding the disabled-rows set) when the inputs actually
+    // change rather than every frame. `None` until the first publish.
+    pub(crate) published_hud_prefs: Option<crate::ecs::HudPrefs>,
+    pub(crate) published_disabled_inputs: Option<(bool, bool)>,
 }
 
 #[derive(Debug, Default)]
@@ -195,26 +200,39 @@ impl SettingsState {
     // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
     // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
     // gray-out applied in the drain.
-    fn publish_hud_state(&self, ctx: &mut PipelineContext) {
-        ctx.insert_resource(crate::ecs::HudPrefs {
+    fn publish_hud_state(&mut self, ctx: &mut PipelineContext) {
+        // Both resources are pure functions of a few settings fields and persist
+        // in the resource map once inserted, so republish only when the inputs
+        // change -- steady-state frames skip the HashSet + String allocations the
+        // disabled-rows set would otherwise churn every frame.
+        let prefs = crate::ecs::HudPrefs {
             show_fps: self.perf_stats && self.show_fps,
             show_vram: self.perf_stats && self.show_vram,
-        });
-        let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {
-            std::collections::HashSet::new()
-        } else {
-            ["show_fps", "show_vram"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
         };
-        // The Resolution row only applies in fullscreen (windowed sizes
-        // come from the window, borderless covers the display), so it is
-        // inert in the other modes; its gray-out is applied on the
-        // window-mode change (and at init) via `set_rows_grayed`.
-        if self.window_args.mode != crate::assets::WindowMode::Fullscreen {
-            disabled_rows.insert("resolution".to_string());
+        if self.published_hud_prefs != Some(prefs) {
+            ctx.insert_resource(prefs);
+            self.published_hud_prefs = Some(prefs);
         }
-        ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
+
+        // The Resolution row only applies in fullscreen (windowed sizes come from
+        // the window, borderless covers the display), so it is inert in the other
+        // modes. The disabled-rows set is fully determined by these two inputs.
+        let is_fullscreen = self.window_args.mode == crate::assets::WindowMode::Fullscreen;
+        let inputs = (self.perf_stats, is_fullscreen);
+        if self.published_disabled_inputs != Some(inputs) {
+            let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {
+                std::collections::HashSet::new()
+            } else {
+                ["show_fps", "show_vram"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            };
+            if !is_fullscreen {
+                disabled_rows.insert("resolution".to_string());
+            }
+            ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
+            self.published_disabled_inputs = Some(inputs);
+        }
     }
 }

@@ -169,6 +169,17 @@ macro_rules! define_component_storage {
                 C::slot_mut(self).values_mut(tick)
             }
 
+            // Mutable iteration over every component of type C paired with its
+            // owning entity, stamping the change tick because any element may be
+            // written. The mutable counterpart of the read-only column scan.
+            #[allow(dead_code)]
+            pub fn values_mut_with_entities<C: $slot>(
+                &mut self,
+            ) -> impl Iterator<Item = ($crate::Entity, &mut C)> {
+                let tick = self.change_tick.bump();
+                C::slot_mut(self).iter_mut_with_entities(tick)
+            }
+
             // Borrow one entity's component C, if it has one.
             #[allow(dead_code)]
             pub fn get<C: $slot>(&self, entity: $crate::Entity) -> Option<&C> {

@@ -177,6 +177,8 @@ impl Fixture {
             settings_writer: Some(writer),
             scene_cmd_cursor: Default::default(),
             setting_cmd_cursor: Default::default(),
+            published_hud_prefs: None,
+            published_disabled_inputs: None,
         };
 
         Fixture {

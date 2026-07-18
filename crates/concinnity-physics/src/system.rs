@@ -444,12 +444,6 @@ impl System for PhysicsSystem {
                 )
             })
             .unwrap_or(([0.0, self.floor_y, 0.0], 0.0, 0.0, [0.0; 3], false, false));
-        // Entity positions for the pickup reach test, read from the Transform
-        // column.
-        let entity_positions: HashMap<Entity, [f32; 3]> = ctx
-            .query_with_entity::<Transform>()
-            .map(|(e, t)| (e, t.position))
-            .collect();
 
         // camera-space basis vectors
         let fwd_flat = [-cam_yaw.sin(), 0.0, -cam_yaw.cos()];
@@ -501,6 +495,12 @@ impl System for PhysicsSystem {
                 held_changed = Some((pp.entity, false));
             } else {
                 // pickup: nearest carriable prop within reach the player faces.
+                // Entity positions for the reach test, read from the Transform
+                // column only on the interact edge (not every frame).
+                let entity_positions: HashMap<Entity, [f32; 3]> = ctx
+                    .query_with_entity::<Transform>()
+                    .map(|(e, t)| (e, t.position))
+                    .collect();
                 let mut best: Option<(f32, usize)> = None;
                 for (idx, pp) in self.prop_bodies.iter().enumerate() {
                     if !pp.pickup {
