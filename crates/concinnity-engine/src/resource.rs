@@ -87,9 +87,11 @@ pub struct MeshSources(pub Vec<MeshSource>);
 // shipped runtime (`App::load_blob`), the editor's in-memory build, and the
 // examples' `compile_world` all call it, so a resource kind that migrates into
 // the stream gets wired into every host by adding one line here. Systems then
-// read their table by handle. Dev-only source catalogues (hot-reload) stay with
-// the debug path that captures them, not here.
-pub fn install_resource_tables(world: &mut crate::ecs::World, records: &[ResourceRecord]) {
+// read their table by handle. Each builder MOVES its kind's data bytes out of
+// the records, so the caller's record vec is spent scaffolding afterwards.
+// Dev-only source catalogues (hot-reload) stay with the debug path that
+// captures them, not here.
+pub fn install_resource_tables(world: &mut crate::ecs::World, records: &mut [ResourceRecord]) {
     log_resource_footprint(records);
     world.insert_resource(AudioClipTable::from_records(records));
     world.insert_resource(TextureTable::from_records(records));
@@ -193,7 +195,7 @@ mod tests {
     #[test]
     fn install_wires_every_kind_table_into_the_world() {
         let mut world = crate::ecs::World::new_empty();
-        install_resource_tables(&mut world, &records());
+        install_resource_tables(&mut world, &mut records());
 
         assert_eq!(table_lens(&world), [1, 2, 3, 4, 5, 6, 7, 8]);
 
@@ -209,7 +211,7 @@ mod tests {
     #[test]
     fn install_with_no_records_installs_empty_tables() {
         let mut world = crate::ecs::World::new_empty();
-        install_resource_tables(&mut world, &[]);
+        install_resource_tables(&mut world, &mut []);
         assert_eq!(table_lens(&world), [0; 8]);
     }
 }

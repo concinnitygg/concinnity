@@ -29,8 +29,10 @@ pub struct ResourceEntry {
 // Build a dense per-kind table from the blob's resource stream, indexed by
 // handle: `table[handle]` is that resource's entry. Records of other kinds are
 // ignored; a missing handle yields a default entry so indexing by any handle in
-// range never panics.
-pub fn resource_table(records: &[ResourceRecord], kind: ResourceKind) -> Vec<ResourceEntry> {
+// range never panics. Each record's data bytes are MOVED into its entry (a
+// record belongs to exactly one kind, so the per-kind builders never contend);
+// the records are spent scaffolding once every table is built.
+pub fn resource_table(records: &mut [ResourceRecord], kind: ResourceKind) -> Vec<ResourceEntry> {
     let tag = kind as u8;
     let Some(max_handle) = records
         .iter()
@@ -41,10 +43,10 @@ pub fn resource_table(records: &[ResourceRecord], kind: ResourceKind) -> Vec<Res
         return Vec::new();
     };
     let mut table = vec![ResourceEntry::default(); max_handle as usize + 1];
-    for record in records.iter().filter(|r| r.resource_kind == tag) {
+    for record in records.iter_mut().filter(|r| r.resource_kind == tag) {
         table[record.handle as usize] = ResourceEntry {
             payload: record.payload.clone(),
-            data_bytes: record.data_bytes.clone(),
+            data_bytes: std::mem::take(&mut record.data_bytes),
         };
     }
     table
@@ -59,7 +61,7 @@ pub struct AudioClipTable(pub Vec<ResourceEntry>);
 
 impl AudioClipTable {
     // Build the table from the blob's resource stream.
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::AudioClip))
     }
 
@@ -98,7 +100,7 @@ pub struct TextureTable(pub Vec<ResourceEntry>);
 
 impl TextureTable {
     // Build the table from the blob's resource stream.
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::Texture))
     }
 
@@ -134,7 +136,7 @@ impl TextureTable {
 pub struct ColorLutTable(pub Vec<ResourceEntry>);
 
 impl ColorLutTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::ColorLut))
     }
 
@@ -160,7 +162,7 @@ impl ColorLutTable {
 pub struct EnvironmentMapTable(pub Vec<ResourceEntry>);
 
 impl EnvironmentMapTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::EnvironmentMap))
     }
 
@@ -185,7 +187,7 @@ impl EnvironmentMapTable {
 pub struct FontTable(pub Vec<ResourceEntry>);
 
 impl FontTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::Font))
     }
 
@@ -225,7 +227,7 @@ impl FontTable {
 pub struct MeshTable(pub Vec<ResourceEntry>);
 
 impl MeshTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::Mesh))
     }
 
@@ -258,7 +260,7 @@ impl MeshTable {
 pub struct SkinnedMeshTable(pub Vec<ResourceEntry>);
 
 impl SkinnedMeshTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::SkinnedMesh))
     }
 
@@ -289,7 +291,7 @@ impl SkinnedMeshTable {
 pub struct MaterialTable(pub Vec<ResourceEntry>);
 
 impl MaterialTable {
-    pub fn from_records(records: &[ResourceRecord]) -> Self {
+    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
         Self(resource_table(records, ResourceKind::Material))
     }
 
@@ -328,12 +330,12 @@ mod tests {
     fn table_is_dense_by_handle_and_ignores_other_kinds() {
         // Handles out of order, interleaved with another kind; the table places
         // each clip at its handle index and drops the mesh record.
-        let records = vec![
+        let mut records = vec![
             rec(ResourceKind::AudioClip, 1, 0),
             rec(ResourceKind::Mesh, 0, 5),
             rec(ResourceKind::AudioClip, 0, 0),
         ];
-        let table = AudioClipTable::from_records(&records);
+        let table = AudioClipTable::from_records(&mut records);
         assert_eq!(table.0.len(), 2);
         assert!(table.locator(0).is_some());
         assert!(table.locator(1).is_some());
@@ -343,7 +345,7 @@ mod tests {
 
     #[test]
     fn empty_stream_yields_an_empty_table() {
-        let table = AudioClipTable::from_records(&[]);
+        let table = AudioClipTable::from_records(&mut []);
         assert!(table.0.is_empty());
         assert!(table.blob_indices().is_empty());
         assert_eq!(table.locators().count(), 0);
@@ -351,11 +353,11 @@ mod tests {
 
     #[test]
     fn blob_indices_collects_every_payload_blob() {
-        let records = vec![
+        let mut records = vec![
             rec(ResourceKind::AudioClip, 0, 0),
             rec(ResourceKind::AudioClip, 1, 3),
         ];
-        let table = AudioClipTable::from_records(&records);
+        let table = AudioClipTable::from_records(&mut records);
         let mut indices: Vec<u32> = table.blob_indices().into_iter().collect();
         indices.sort_unstable();
         assert_eq!(indices, vec![0, 3]);
@@ -365,12 +367,12 @@ mod tests {
     fn texture_table_is_dense_by_handle_and_ignores_other_kinds() {
         // A texture record and an audio record interleaved; the texture table
         // keeps only the textures, placed at their handle index.
-        let records = vec![
+        let mut records = vec![
             rec(ResourceKind::Texture, 1, 2),
             rec(ResourceKind::AudioClip, 0, 9),
             rec(ResourceKind::Texture, 0, 1),
         ];
-        let table = TextureTable::from_records(&records);
+        let table = TextureTable::from_records(&mut records);
         assert_eq!(table.len(), 2);
         assert!(table.locator(0).is_some());
         assert!(table.locator(1).is_some());
@@ -378,6 +380,6 @@ mod tests {
         let mut indices: Vec<u32> = table.blob_indices().into_iter().collect();
         indices.sort_unstable();
         assert_eq!(indices, vec![1, 2]);
-        assert!(TextureTable::from_records(&[]).is_empty());
+        assert!(TextureTable::from_records(&mut []).is_empty());
     }
 }

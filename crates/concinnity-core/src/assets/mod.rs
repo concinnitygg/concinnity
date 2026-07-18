@@ -14,6 +14,7 @@
 mod anim_graph;
 mod anim_params;
 mod animation;
+mod application;
 mod audio_command;
 mod camera3d;
 mod camera_probe;
@@ -70,6 +71,7 @@ pub use anim_graph::{
 };
 pub use anim_params::AnimParams;
 pub use animation::Animation;
+pub use application::Application;
 pub use audio_command::AudioCommand;
 pub use camera_probe::CameraProbe;
 pub use camera3d::Camera3D;
@@ -115,7 +117,7 @@ pub use concinnity_asset::SsgiResolution;
 pub use concinnity_asset::UpscaleQuality;
 #[allow(unused_imports)]
 pub use concinnity_asset::UpscalerBackend;
-pub use concinnity_asset::{AppLimits, Application};
+pub use concinnity_asset::{AppLimits, ApplicationArgs};
 pub use concinnity_asset::{AudioCue, CueKind};
 pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
 pub use concinnity_asset::{FileArgs, FileKind};

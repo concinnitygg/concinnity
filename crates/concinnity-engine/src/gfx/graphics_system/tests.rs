@@ -174,26 +174,30 @@ impl WorldBuilder {
         });
     }
 
-    fn build(self) -> TestWorld {
+    fn build(mut self) -> TestWorld {
         let mut resources = Resources::new();
         // The renderer reads the shared texture pool from this table, exactly as
         // the runtime does after loading the blob's resource stream.
         resources.insert(crate::resource::TextureTable::from_records(
-            &self.texture_records,
+            &mut self.texture_records,
         ));
         resources.insert(crate::resource::MaterialTable::from_records(
-            &self.material_records,
+            &mut self.material_records,
         ));
-        resources.insert(crate::resource::MeshTable::from_records(&self.mesh_records));
-        resources.insert(crate::resource::FontTable::from_records(&self.font_records));
+        resources.insert(crate::resource::MeshTable::from_records(
+            &mut self.mesh_records,
+        ));
+        resources.insert(crate::resource::FontTable::from_records(
+            &mut self.font_records,
+        ));
         resources.insert(crate::resource::ColorLutTable::from_records(
-            &self.color_lut_records,
+            &mut self.color_lut_records,
         ));
         resources.insert(crate::resource::EnvironmentMapTable::from_records(
-            &self.env_map_records,
+            &mut self.env_map_records,
         ));
         resources.insert(crate::resource::SkinnedMeshTable::from_records(
-            &self.skinned_records,
+            &mut self.skinned_records,
         ));
         TestWorld {
             components: self.components,

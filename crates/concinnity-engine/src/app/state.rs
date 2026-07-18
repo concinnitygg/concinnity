@@ -50,7 +50,7 @@ impl App {
     // load assets and blob payload data from the primary blob and
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let (assets, resources, manifest, blob_data) = blob::load()?;
+        let (assets, mut resources, manifest, blob_data) = blob::load()?;
 
         let mut world = World::new(blob_data);
         // The manifest's per-type counts size each column once up front, so
@@ -62,7 +62,7 @@ impl App {
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.
-        crate::resource::install_resource_tables(&mut world, &resources);
+        crate::resource::install_resource_tables(&mut world, &mut resources);
         self.world = world;
         Ok(())
     }
@@ -176,7 +176,6 @@ mod tests {
                 max_memory_mb: 512,
                 job_threads: 2,
             },
-            ..Default::default()
         });
         app.start().unwrap();
 
@@ -242,7 +241,6 @@ mod tests {
                 max_memory_mb: 256,
                 job_threads: 1,
             },
-            ..Default::default()
         });
         app.load_world(world);
 

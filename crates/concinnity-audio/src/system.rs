@@ -375,9 +375,9 @@ mod tests {
             handle
         }
 
-        fn seal(self) -> SealedAudio {
+        fn seal(mut self) -> SealedAudio {
             let mut resources = Resources::new();
-            resources.insert(AudioClipTable::from_records(&self.clips));
+            resources.insert(AudioClipTable::from_records(&mut self.clips));
             SealedAudio {
                 components: self.components,
                 blob: BlobData::new(vec![Some(self.section)]),

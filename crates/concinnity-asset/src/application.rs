@@ -1,4 +1,6 @@
-// Application distribution metadata schema.
+// Application distribution metadata schema. The runtime component keeps only
+// the resource budgets (see the core assets module); everything else here is
+// consumed at build / export time and never ships in the blob.
 
 use alloc::string::{String, ToString};
 
@@ -22,7 +24,7 @@ use alloc::string::{String, ToString};
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct Application {
+pub struct ApplicationArgs {
     /// Display name of the application: the game's window title, the exported
     /// archive and executable name, and the macOS bundle display name.
     pub name: String,
@@ -60,7 +62,7 @@ pub struct AppLimits {
     pub job_threads: u32,
 }
 
-impl Default for Application {
+impl Default for ApplicationArgs {
     fn default() -> Self {
         Self {
             name: "Concinnity".to_string(),

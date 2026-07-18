@@ -106,7 +106,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let color_lut_source = scan_color_lut_source(&loaded.assets);
     let environment_map_source = scan_environment_map_source(&loaded.assets);
 
-    let result = build_compiled(loaded.assets, None)?;
+    let mut result = build_compiled(loaded.assets, None)?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = World::new(crate::blob::BlobData::new(payload_sections));
@@ -125,7 +125,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
-    crate::resource::install_resource_tables(&mut world, &result.resources);
+    crate::resource::install_resource_tables(&mut world, &mut result.resources);
     // Dev-only source catalogues for the hot-reload watcher (see the scan above).
     world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
     world.insert_resource(crate::resource::EnvironmentMapSources(

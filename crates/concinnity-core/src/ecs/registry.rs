@@ -106,7 +106,7 @@ macro_rules! for_each_component {
             StoryImport       => $crate::assets::StoryImport { gen, build_only },
             AudioCue          => $crate::assets::AudioCue { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("screen", "Screen")] },
             Story             => $crate::assets::Story { gen, external, id },
-            Application       => $crate::assets::Application { gen, external, singleton },
+            Application       => $crate::assets::Application { manual, external, singleton, args: ApplicationArgs },
             AnimGraph         => $crate::assets::AnimGraph { gen, external, id },
             AnimParams        => $crate::assets::AnimParams { runtime, build: anim_params },
             CharacterRig      => $crate::assets::CharacterRig { runtime, build: character_rig },

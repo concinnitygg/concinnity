@@ -36,7 +36,7 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
     let loaded: LoadedWorld =
         prepare_world(content).map_err(|errs| report_validation_errors(&errs))?;
 
-    let result = build_compiled(loaded.assets, None)?;
+    let mut result = build_compiled(loaded.assets, None)?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = World::new(BlobData::new(payload_sections));
@@ -60,7 +60,7 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
     // not in `defs`, so without this the renderer sees an empty texture pool and
     // every material's albedo handle resolves out of range. Same call the shipped
     // runtime's `App::load_blob` makes.
-    concinnity_engine::resource::install_resource_tables(&mut world, &result.resources);
+    concinnity_engine::resource::install_resource_tables(&mut world, &mut result.resources);
 
     Ok(world)
 }

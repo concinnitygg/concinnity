@@ -4,7 +4,7 @@
 
 - [AnimGraph](AnimGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
-- [Application](Application.md) - Names and identifies the application for distribution.
+- [Application](Application.md) - Runtime half of the Application asset: the process resource budgets.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.

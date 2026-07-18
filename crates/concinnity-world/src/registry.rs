@@ -377,6 +377,9 @@ pub fn bake_divergent(
         ComponentType::Room => bake!(crate::assets::Room, crate::assets::RoomArgs),
         ComponentType::File => bake!(crate::assets::File, crate::assets::FileArgs),
         ComponentType::Spawner => bake!(crate::assets::Spawner, crate::assets::SpawnerArgs),
+        ComponentType::Application => {
+            bake!(crate::assets::Application, crate::assets::ApplicationArgs)
+        }
         _ => Ok(None),
     }
 }
