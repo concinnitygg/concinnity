@@ -61,7 +61,7 @@ impl StatePlay {
     // The playable members, in weight order.
     pub fn members(&self) -> &[ClipPlay] {
         match self {
-            StatePlay::Clip(play) => std::slice::from_ref(play),
+            StatePlay::Clip(play) => core::slice::from_ref(play),
             StatePlay::Blend1D(b) => &b.plays,
             StatePlay::Blend2D(b) => &b.plays,
         }
@@ -69,7 +69,7 @@ impl StatePlay {
 
     pub fn members_mut(&mut self) -> &mut [ClipPlay] {
         match self {
-            StatePlay::Clip(play) => std::slice::from_mut(play),
+            StatePlay::Clip(play) => core::slice::from_mut(play),
             StatePlay::Blend1D(b) => &mut b.plays,
             StatePlay::Blend2D(b) => &mut b.plays,
         }

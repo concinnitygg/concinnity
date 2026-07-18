@@ -26,7 +26,7 @@ pub enum StepResult {
 // world components (via the system's own `new(..)`), so a system is never
 // loaded from or written to a blob. `init` runs once at `World::start`; `step`
 // runs every tick.
-pub trait System: Sized + std::fmt::Debug + 'static {
+pub trait System: Sized + core::fmt::Debug + 'static {
     fn init(&mut self, _ctx: &mut PipelineContext) {}
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult;
 }

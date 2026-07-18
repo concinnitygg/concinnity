@@ -233,8 +233,8 @@ pub fn compact_for_streaming(
     };
     let seed_v_count = (seed_vtx_bytes as usize) / VERTEX_STRIDE;
     let seed_i_count = (seed_idx_bytes as usize) / INDEX_STRIDE;
-    new_v.extend(std::iter::repeat_n(zero_v, seed_v_count));
-    new_i.extend(std::iter::repeat_n(0u32, seed_i_count));
+    new_v.extend(core::iter::repeat_n(zero_v, seed_v_count));
+    new_i.extend(core::iter::repeat_n(0u32, seed_i_count));
 
     *vertices = new_v;
     *indices = new_i;

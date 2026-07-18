@@ -69,7 +69,7 @@ fn from_to(a: Vec3, b: Vec3) -> Mat3 {
         // Parallel or anti-parallel: no rotation, or a half-turn about any
         // axis perpendicular to `a`.
         None if dot(a, b) > 0.0 => MAT3_IDENTITY,
-        None => rotate_about(any_perpendicular(a), std::f32::consts::PI),
+        None => rotate_about(any_perpendicular(a), core::f32::consts::PI),
     }
 }
 

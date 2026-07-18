@@ -140,7 +140,7 @@ mod tests {
             0.5,
             0.3,
         );
-        rig.yaw = std::f32::consts::FRAC_PI_2;
+        rig.yaw = core::f32::consts::FRAC_PI_2;
         let d = rig.world_delta([0.0, 0.0, -1.0]);
         assert!((d[0] + 1.0).abs() < 1e-4, "{d:?}");
         assert!(d[1].abs() < 1e-4 && d[2].abs() < 1e-4, "{d:?}");
@@ -159,7 +159,7 @@ mod tests {
             scale: [1.0, 1.0, 1.0],
         };
         let mut rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
-        rig.yaw = std::f32::consts::FRAC_PI_2;
+        rig.yaw = core::f32::consts::FRAC_PI_2;
         let d = rig.world_delta([0.0, 0.0, -1.0]);
         assert!((d[2] - 1.0).abs() < 1e-4, "{d:?}");
         assert!(d[0].abs() < 1e-4 && d[1].abs() < 1e-4, "{d:?}");

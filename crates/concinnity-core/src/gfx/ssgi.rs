@@ -169,7 +169,7 @@ mod tests {
     fn params_derive_stride_and_thickness_from_configured_steps() {
         // 12 units over the default 12 steps -> a 1-unit stride.
         let s = SsgiSettings::resolve(0.6, 12.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 1.6);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
         assert!((p.stride - 1.0).abs() < 1.0e-5);
         assert!((p.thickness - THICKNESS_SCALE).abs() < 1.0e-5);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
@@ -181,14 +181,14 @@ mod tests {
 
         // Halving the step count doubles the stride (same reach, fewer samples).
         let s = SsgiSettings::resolve(0.6, 12.0, DEFAULT_RAYS, 6, 1);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 1.6);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
         assert!((p.stride - 2.0).abs() < 1.0e-5);
     }
 
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 0.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0);
         assert!(p.aspect >= MIN_ASPECT);
     }
 }

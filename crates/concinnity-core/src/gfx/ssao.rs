@@ -76,7 +76,7 @@ mod tests {
     fn params_compute_tan_half_fov() {
         let s = SsaoSettings::resolve(0.5, 1.0);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
-        let p = s.params(std::f32::consts::FRAC_PI_2, 1.6);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
         assert!((p.tan_half_fov_y - 1.0).abs() < 1.0e-5);
         assert_eq!(p.aspect, 1.6);
         assert_eq!(p.radius, 0.5);
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsaoSettings::resolve(0.5, 1.0);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 0.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0);
         assert!(p.aspect >= MIN_RADIUS);
     }
 }

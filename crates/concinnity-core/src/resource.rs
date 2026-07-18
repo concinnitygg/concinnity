@@ -46,7 +46,7 @@ pub fn resource_table(records: &mut [ResourceRecord], kind: ResourceKind) -> Vec
     for record in records.iter_mut().filter(|r| r.resource_kind == tag) {
         table[record.handle as usize] = ResourceEntry {
             payload: record.payload.clone(),
-            data_bytes: std::mem::take(&mut record.data_bytes),
+            data_bytes: core::mem::take(&mut record.data_bytes),
         };
     }
     table

@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn params_derive_stride_and_thickness_from_distance() {
         let s = SsrSettings::resolve(0.7, 48.0);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 6.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 6.0);
         // 48 units over 48 steps -> a 1-unit stride.
         assert!((p.stride - 1.0).abs() < 1.0e-5);
         assert!((p.thickness - THICKNESS_SCALE).abs() < 1.0e-5);
@@ -149,14 +149,14 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 0.0, IDENTITY, [0.0; 3], 0.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, IDENTITY, [0.0; 3], 0.0);
         assert!(p.aspect >= MIN_ASPECT);
     }
 
     #[test]
     fn params_pass_through_ibl_fallback_inputs() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(std::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 7.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 7.0);
         assert_eq!(p.prefilter_mip_count, 7.0);
         // Identity rotation + a zero camera position leaves the matrix identity.
         assert_eq!(p.inv_view, IDENTITY);
@@ -169,7 +169,7 @@ mod tests {
         // world point for reflection-probe box projection.
         let s = SsrSettings::resolve(0.7, 40.0);
         let p = s.params(
-            std::f32::consts::FRAC_PI_2,
+            core::f32::consts::FRAC_PI_2,
             1.6,
             IDENTITY,
             [3.0, 4.0, 5.0],

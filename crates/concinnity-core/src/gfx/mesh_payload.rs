@@ -481,7 +481,7 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<DeserialisedSkinned
                 bytes.len()
             ));
         }
-        let name = std::str::from_utf8(&bytes[cur..name_end])
+        let name = core::str::from_utf8(&bytes[cur..name_end])
             .map_err(|e| format!("joint name is not valid utf-8: {}", e))?
             .to_string();
         cur = name_end;
@@ -787,7 +787,7 @@ mod tests {
         // stride) and as the static RT vertex format, so the field offsets
         // must match exactly. The main/shadow passes consume it through a
         // vertex descriptor declaring the same 0/12/24/36/48 attribute offsets.
-        use std::mem::{offset_of, size_of};
+        use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<Vertex>(), 56);
         assert_eq!(offset_of!(Vertex, pos), 0);
         assert_eq!(offset_of!(Vertex, normal), 12);
@@ -803,7 +803,7 @@ mod tests {
         // packed_float4 fields must line up byte-for-byte with this 80-byte
         // struct. The main/shadow skinned passes consume it through a vertex
         // descriptor declaring the same attribute offsets.
-        use std::mem::{offset_of, size_of};
+        use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<SkinnedVertex>(), 80);
         assert_eq!(offset_of!(SkinnedVertex, pos), 0);
         assert_eq!(offset_of!(SkinnedVertex, normal), 12);

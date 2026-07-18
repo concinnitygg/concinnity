@@ -1345,7 +1345,7 @@ impl SkinnedDrawObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{align_of, offset_of, size_of};
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn gpu_object_data_layout_matches_msl() {

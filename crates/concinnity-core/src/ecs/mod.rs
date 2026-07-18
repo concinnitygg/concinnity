@@ -79,7 +79,7 @@ pub enum AssetPayload {
 // identity/payload hooks. All authoring metadata (origin, payload kind,
 // reference fields, args schema, validators) lives in the build-side registry
 // (concinnity-world), derived from the `for_each_component!` metadata blocks.
-pub trait Component: Sized + Send + std::fmt::Debug + 'static {
+pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     const NAME: &'static str;
 
     // Reconstruct this component from a blob record, whose bytes are the
@@ -151,7 +151,7 @@ pub struct PipelineContext<'a> {
 impl<'a> PipelineContext<'a> {
     // Immutable iteration over all components of type C.
     #[allow(dead_code)]
-    pub fn query<C: ComponentSlot>(&self) -> std::slice::Iter<'_, C> {
+    pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
         C::slot(self.components).iter()
     }
 
@@ -163,7 +163,7 @@ impl<'a> PipelineContext<'a> {
 
     // Mutable iteration over all components of type C.
     #[allow(dead_code)]
-    pub fn query_mut<C: ComponentSlot>(&mut self) -> std::slice::IterMut<'_, C> {
+    pub fn query_mut<C: ComponentSlot>(&mut self) -> core::slice::IterMut<'_, C> {
         self.components.values_mut::<C>().iter_mut()
     }
 
@@ -271,19 +271,19 @@ impl<'a> PipelineContext<'a> {
     }
 
     // Borrow the singleton resource of type T, if present.
-    pub fn resource<T: std::any::Any>(&self) -> Option<&T> {
+    pub fn resource<T: core::any::Any>(&self) -> Option<&T> {
         self.resources.get::<T>()
     }
 
     // Mutably borrow the singleton resource of type T, if present.
     #[allow(dead_code)]
-    pub fn resource_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+    pub fn resource_mut<T: core::any::Any>(&mut self) -> Option<&mut T> {
         self.resources.get_mut::<T>()
     }
 
     // Install (or replace) the singleton resource of type T, returning the
     // previous instance if one was present.
-    pub fn insert_resource<T: std::any::Any>(&mut self, value: T) -> Option<T> {
+    pub fn insert_resource<T: core::any::Any>(&mut self, value: T) -> Option<T> {
         self.resources.insert(value)
     }
 

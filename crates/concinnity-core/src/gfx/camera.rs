@@ -42,8 +42,8 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
 pub fn look(yaw: f32, pitch: f32, dyaw: f32, dpitch: f32) -> (f32, f32) {
     let new_yaw = yaw + dyaw;
     let new_pitch = (pitch + dpitch).clamp(
-        -std::f32::consts::FRAC_PI_2 + 0.01,
-        std::f32::consts::FRAC_PI_2 - 0.01,
+        -core::f32::consts::FRAC_PI_2 + 0.01,
+        core::f32::consts::FRAC_PI_2 - 0.01,
     );
     (new_yaw, new_pitch)
 }

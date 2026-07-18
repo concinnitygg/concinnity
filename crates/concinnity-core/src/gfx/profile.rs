@@ -108,7 +108,7 @@ impl FrameProfile {
     // that just finished becomes the readable snapshot and the accumulator
     // is cleared for the new frame.
     pub fn begin_frame(&mut self) {
-        std::mem::swap(&mut self.last, &mut self.current);
+        core::mem::swap(&mut self.last, &mut self.current);
         self.current.clear();
     }
 

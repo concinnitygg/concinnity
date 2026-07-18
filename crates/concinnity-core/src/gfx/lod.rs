@@ -144,8 +144,8 @@ pub fn decimate_by_qem(
         }
     }
 
-    let mut heap: std::collections::BinaryHeap<HeapEdge> =
-        std::collections::BinaryHeap::with_capacity(edges.len());
+    let mut heap: alloc::collections::BinaryHeap<HeapEdge> =
+        alloc::collections::BinaryHeap::with_capacity(edges.len());
     for (lo, hi) in edges {
         let q = quadrics[lo as usize].add(quadrics[hi as usize]);
         let cost_lo = q.eval(positions[lo as usize]);
@@ -273,7 +273,7 @@ impl PartialEq for HeapEdge {
 impl Eq for HeapEdge {}
 
 impl Ord for HeapEdge {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // Reverse for min-heap. NaN sinks to the bottom (treated as max).
         let a = if self.cost.is_nan() {
             f32::INFINITY
@@ -286,14 +286,14 @@ impl Ord for HeapEdge {
             other.cost
         };
         b.partial_cmp(&a)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .unwrap_or(core::cmp::Ordering::Equal)
             .then_with(|| other.survivor.cmp(&self.survivor))
             .then_with(|| other.deleted.cmp(&self.deleted))
     }
 }
 
 impl PartialOrd for HeapEdge {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }

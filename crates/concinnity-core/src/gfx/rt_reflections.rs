@@ -135,7 +135,7 @@ mod tests {
     fn params_carry_camera_and_sun_inputs() {
         let s = RtReflectionSettings::resolve(0.8, 40.0);
         let p = s.params(RtParamsInputs {
-            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
             inv_view_rot: IDENTITY,
             cam_pos: [3.0, 4.0, 5.0],
@@ -160,7 +160,7 @@ mod tests {
         // reconstructed view-space hit point lifts to the right world point.
         let s = RtReflectionSettings::resolve(0.8, 40.0);
         let p = s.params(RtParamsInputs {
-            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
             inv_view_rot: IDENTITY,
             cam_pos: [3.0, 4.0, 5.0],
@@ -177,7 +177,7 @@ mod tests {
     fn params_floor_a_degenerate_aspect() {
         let s = RtReflectionSettings::resolve(0.7, 40.0);
         let p = s.params(RtParamsInputs {
-            fov_y_radians: std::f32::consts::FRAC_PI_2,
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 0.0,
             inv_view_rot: IDENTITY,
             cam_pos: [0.0, 0.0, 0.0],
