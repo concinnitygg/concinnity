@@ -1,6 +1,6 @@
 // Semantic validation of an expanded world: per-asset arg checks, cross-asset
-// reference checks, and world-level graphics rules. Structural validation
-// (name/type present, known type, unique names) happens earlier in
+// reference checks, and world-shape rules (crate::check::shape). Structural
+// validation (name/type present, known type, unique names) happens earlier in
 // crate::world::load_world.
 //
 // The checks here are pure JSON-shape validation. A few asset types validate
@@ -17,6 +17,7 @@ pub mod prop;
 pub mod scene_reel;
 pub mod sdf_volume;
 pub mod shader;
+pub(crate) mod shape;
 pub mod voxel_chunk;
 pub mod voxel_world;
 
@@ -96,7 +97,7 @@ pub fn check_world_with(
         errors.extend(ref_errors);
     }
 
-    check_graphics_rules(assets, &mut errors);
+    shape::check_shape(assets, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -109,31 +110,6 @@ pub fn check_world_with(
 // that have the compilers available (cook) compose theirs in instead.
 pub fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
     check_world_with(assets, &|_, _, _| Ok(()))
-}
-
-// World-level graphics constraints. These depend on the set of assets as a
-// whole rather than any single asset's args.
-fn check_graphics_rules(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let norm = |a: &WorldJsonlAsset| a.asset_type.to_lowercase().replace('_', "");
-
-    // A rendering world (one with a GraphicsConfig) needs a vertex ShaderStage
-    // to drive its geometry pipeline. Companion injection supplies a default
-    // vertex + fragment pair for any world that declares no ShaderStage at all,
-    // so this only fires when the world declares an incomplete shader set.
-    let has_graphics = assets.iter().any(|a| norm(a) == "graphicsconfig");
-    if has_graphics {
-        let has_vertex_stage = assets.iter().any(|a| {
-            norm(a) == "shaderstage"
-                && a.args.get("kind").and_then(|v| v.as_str()) == Some("vertex")
-        });
-        if !has_vertex_stage {
-            errors.push(
-                "world renders (has a GraphicsConfig) but has no vertex ShaderStage, \
-                 add a ShaderStage with kind \"vertex\" and a `source` path"
-                    .to_string(),
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -156,9 +132,10 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_with_vertex_stage_passes_graphics_rules() {
+    fn graphics_config_with_full_render_stack_passes_graphics_rules() {
         let assets = vec![
             asset("gfx", "GraphicsConfig", serde_json::json!({})),
+            asset("win", "Window", serde_json::json!({})),
             asset(
                 "vert",
                 "ShaderStage",

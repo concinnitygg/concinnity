@@ -1767,6 +1767,23 @@ mod tests {
         assert!(sprite_visible(&world, MENU_BG), "the row menu shows");
     }
 
+    // Cook `ty` blank in a minimal world: alongside a GraphicsConfig so the
+    // world renders, except for singletons, which cook alone (the fixed
+    // GraphicsConfig line would collide with the GraphicsConfig probe under
+    // the singleton shape rule; a lone singleton still cooks, as a
+    // non-rendering world when it is not itself the renderer config).
+    fn cook_blank(ty: &str) -> std::io::Result<()> {
+        let world = if is_singleton(ty) {
+            format!("{{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n")
+        } else {
+            format!(
+                "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
+                 {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
+            )
+        };
+        crate::build_pipeline_from_str(&world, None).map(|_| ())
+    }
+
     // Every offered add-type is a real External type whose default args cook in a
     // minimal rendering world. This is the guard the curated list leans on: a type
     // that needs a source file or a required cross-reference (Mesh, AudioClip,
@@ -1785,12 +1802,7 @@ mod tests {
                     "{ty} must be a known component or resource asset type"
                 );
             }
-            let world = format!(
-                "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
-                 {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
-            );
-            crate::build_pipeline_from_str(&world, None)
-                .unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
+            cook_blank(ty).unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
         }
     }
 
@@ -1830,14 +1842,7 @@ mod tests {
         let excluded: std::collections::HashSet<&str> = EXCLUDED.iter().copied().collect();
         for (_t, reg) in ComponentType::addable_types() {
             let ty = reg.type_name;
-            let cooks = crate::build_pipeline_from_str(
-                &format!(
-                    "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
-                     {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
-                ),
-                None,
-            )
-            .is_ok();
+            let cooks = cook_blank(ty).is_ok();
             if !cooks {
                 // Needs a source / required reference: never offerable blank, and it
                 // does not belong in the EXCLUDED (cooks-but-curated-out) list.
