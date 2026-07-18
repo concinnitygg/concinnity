@@ -398,8 +398,18 @@ impl DxContext {
         // [gfx/render_graph/frame.rs::build_frame_graph](../../gfx/render_graph/frame.rs);
         // see [directx/graph_exec.rs](../graph_exec.rs) for the DirectX
         // executor that routes each `PassId` to its `encode_*` method.
-        let frame_graph =
-            build_frame_graph(&seed_inputs).map_err(|e| format!("frame-graph compile: {e}"))?;
+        // Reuse the cached compiled graph when this frame's inputs match the ones
+        // it was built from (the common case: graph topology changes only when a
+        // feature toggles or a target resizes). `take`n out of the cache (the
+        // `borrow_mut` guard drops at the end of this statement) so the owned graph
+        // no longer borrows `self`; a mismatch (or a cold cache) rebuilds.
+        let cached_graph = self.frame_graph_cache.borrow_mut().take();
+        let frame_graph = match cached_graph {
+            Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
+            _ => {
+                build_frame_graph(&seed_inputs).map_err(|e| format!("frame-graph compile: {e}"))?
+            }
+        };
         let frame_params = GraphFrameParams {
             cmd: end_cmd,
             frame_idx,
@@ -427,6 +437,9 @@ impl DxContext {
             visible: &visible,
         };
         let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
+        // Cache the compiled graph under this frame's inputs so the next frame with
+        // matching inputs skips the rebuild.
+        *self.frame_graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
         // Hi-Z pyramid: read this frame's main depth buffer, write the
         // mip chain that *next* frame's cull dispatch consults. Runs inline

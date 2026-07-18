@@ -1254,6 +1254,16 @@ pub struct VkContext {
     // top of record_frame and returned at the bottom so the heap allocation
     // is reused across frames instead of `Vec::with_capacity`'d each tick.
     pub(super) visible_scratch: Vec<u32>,
+    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was
+    // built from. `build_frame_graph` is a pure function of those inputs (which
+    // change only when a feature toggles or a target resizes), so a frame whose
+    // inputs match the cached key reuses the compiled graph instead of rebuilding
+    // it. Taken out during `execute_graph` (which needs `&mut self`) and put back
+    // after, so a steady scene compiles the graph once and reuses it thereafter.
+    pub(super) frame_graph_cache: Option<(
+        crate::gfx::render_graph::FrameGraphInputs,
+        crate::gfx::render_graph::CompiledGraph,
+    )>,
     pub(super) clear_color: [f32; 4],
     pub(super) view_matrix: [[f32; 4]; 4],
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = no

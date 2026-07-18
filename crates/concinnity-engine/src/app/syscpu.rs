@@ -130,13 +130,38 @@ mod imp {
 mod tests {
     use super::*;
 
-    // On a supported platform the process has burned some CPU getting here.
+    // On a supported platform the query must return a clock that advances as the
+    // process burns CPU. A single reading can land inside one scheduler tick
+    // (Windows `GetProcessTimes` is ~15ms granular), so spin until it moves
+    // rather than assuming any time has accumulated yet.
     #[test]
     fn query_returns_a_plausible_value() {
-        if cfg!(any(unix, windows)) {
-            let cpu = process_cpu_time().expect("CPU query works on this platform");
-            assert!(cpu > Duration::ZERO, "process should have used some CPU");
+        if !cfg!(any(unix, windows)) {
+            return;
         }
+
+        let start = process_cpu_time().expect("CPU query works on this platform");
+
+        // Burn CPU until the reading advances, bounded so a broken query fails
+        // the test instead of hanging it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut work: u64 = 0;
+        let latest = loop {
+            for _ in 0..4096 {
+                work = work.wrapping_mul(2_654_435_761).wrapping_add(1);
+            }
+            let now = process_cpu_time().expect("CPU query keeps working");
+            assert!(now >= start, "process CPU time must be non-decreasing");
+            if now > start || Instant::now() >= deadline {
+                break now;
+            }
+        };
+        std::hint::black_box(work);
+
+        assert!(
+            latest > start,
+            "process CPU time should advance while the test burns CPU"
+        );
     }
 
     // A rate needs two readings, so the first sample only primes the sampler.

@@ -641,7 +641,15 @@ impl VkContext {
         //  visible-set compute (Vulkan forbids compute inside a
         //  render pass, so Cull must come before any render-pass
         //  dispatch from the executor).
-        let graph = build_frame_graph(&seed_inputs).map_err(|e| format!("frame graph: {e}"))?;
+        // Reuse the cached compiled graph when this frame's inputs match the ones
+        // it was built from (the common case: graph topology changes only when a
+        // feature toggles or a target resizes). Taken out of the cache so the later
+        // `&mut self` execute_graph does not conflict with a borrow of it; put back
+        // after execution. A mismatch (or a cold cache) rebuilds.
+        let graph = match self.frame_graph_cache.take() {
+            Some((cached_inputs, cached_graph)) if cached_inputs == seed_inputs => cached_graph,
+            _ => build_frame_graph(&seed_inputs).map_err(|e| format!("frame graph: {e}"))?,
+        };
         let params = GraphFrameParams {
             cmd,
             image_index,
@@ -664,6 +672,9 @@ impl VkContext {
         // record into `cmd` (the outer "end" buffer). The whole frame is
         // submitted as `[start, ...pass_bufs, end]` by `draw_frame`.
         let pass_bufs = self.execute_graph(&graph, &params)?;
+        // Cache the compiled graph under this frame's inputs so the next frame with
+        // matching inputs skips the rebuild.
+        self.frame_graph_cache = Some((seed_inputs, graph));
 
         // Hi-Z occlusion: reduce this frame's main depth into the depth-mip
         // pyramid that next frame's `Cull` dispatch consults. Runs inline on

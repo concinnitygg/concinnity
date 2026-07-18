@@ -3689,6 +3689,7 @@ impl VkContext {
             always_draw_member,
             draw_slots,
             visible_scratch: Vec::new(),
+            frame_graph_cache: None,
             draw_objects,
             clear_color,
             view_matrix: IDENTITY4,

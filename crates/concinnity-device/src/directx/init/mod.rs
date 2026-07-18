@@ -2174,6 +2174,7 @@ impl DxContext {
             always_draw_member,
             draw_slots,
             visible_scratch: RefCell::new(Vec::new()),
+            frame_graph_cache: RefCell::new(None),
             draw_objects,
             instanced: DxInstanced {
                 root_sig: main_instanced_root_sig,
