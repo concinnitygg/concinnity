@@ -900,7 +900,7 @@ impl GraphicsSystem {
                 if crate::build::shader::builtin_shader_source(&raw).is_some() {
                     return;
                 }
-                let resolved = crate::assets::shader_stage::resolve_runtime_source_path(&raw);
+                let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
                 shader_stage_source_map.entries.push(
                     super::hot_reload_sources::ShaderStageSourceEntry {
                         kind,

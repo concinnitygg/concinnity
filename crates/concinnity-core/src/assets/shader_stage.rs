@@ -27,7 +27,7 @@ pub trait ShaderStageExt {
 
 impl ShaderStageExt for ShaderStage {
     fn current_platform_source(&self) -> Option<String> {
-        let platform = crate::build::Platform::current();
+        let platform = crate::platform::Platform::current();
         if let Some(sources) = &self.sources
             && let Some(src) = sources.get(platform.key())
         {
@@ -48,28 +48,6 @@ impl ShaderStageExt for ShaderStage {
     }
 }
 
-/// Apply the same bare-filename fallback the build pipeline runs when
-/// compiling a `ShaderStage`'s shader source to a raw
-/// shader source string: bare filenames are searched in
-/// `.concinnity/assets/` (recursively), then fall back to a direct path
-/// under the same directory. Paths that already contain a directory
-/// component are returned unchanged. Used by the asset hot-reload subsystem
-/// to convert a `ShaderStage`'s declared source into the on-disk path the
-/// watcher subscribes to + the runtime recompile reads.
-pub fn resolve_runtime_source_path(raw: &str) -> String {
-    let p = std::path::Path::new(raw);
-    if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = crate::paths::find_in_assets(raw) {
-            return path;
-        }
-        return crate::paths::assets_dir()
-            .join(raw)
-            .to_string_lossy()
-            .into_owned();
-    }
-    raw.to_string()
-}
-
 impl Component for ShaderStage {
     const NAME: &'static str = "ShaderStage";
 
@@ -84,7 +62,7 @@ impl Component for ShaderStage {
 
 /// Returns the platform key used to look up entries in the `sources` map.
 pub fn platform_key() -> &'static str {
-    crate::build::Platform::current().key()
+    crate::platform::Platform::current().key()
 }
 
 #[cfg(test)]
@@ -130,17 +108,5 @@ mod tests {
             locator: None,
         };
         assert!(stage.current_platform_source().is_some());
-    }
-
-    #[test]
-    fn resolver_keeps_paths_with_a_directory_component() {
-        // A path that already contains a directory is returned verbatim; the
-        // bare-filename branch consults process-global asset anchors and is left
-        // to integration coverage. The build-side `resolve_source_path_for`
-        // (which takes a `BuildCtx`) is covered in concinnity-cook.
-        assert_eq!(
-            resolve_runtime_source_path("shaders/x.metal"),
-            "shaders/x.metal"
-        );
     }
 }

@@ -1,10 +1,9 @@
-// src/build/asset.rs
-//
-// The shader `Platform` selector. It stays in the runtime foundation because
-// the engine selects a `ShaderStage`'s current-platform source at runtime.
-// The build-time context `BuildCtx` and the `BuildAsset` compile trait live in
-// `concinnity-cook`; the JSON-args source selection lives in concinnity-world
-// (`source_args`).
+// The shader `Platform` selector: which shader source language the running
+// backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
+// foundation rather than the build module -- the engine picks a `ShaderStage`'s
+// current-platform source at runtime, and the build pipeline reuses the same
+// selection at compile time. Re-exported as `crate::build::Platform` for the
+// build-side callers.
 
 // Shader source language families supported by the engine. Each variant
 // matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).
