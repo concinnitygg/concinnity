@@ -44,7 +44,7 @@ use super::{
 // from the live `MtlContext` state and consumed by `build_frame_graph`
 // so the conditional-inclusion decisions made here match what the
 // executor will dispatch.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FrameGraphInputs {
     // `true` when a `ShadowStage` is in the world (i.e. the backend's
     // shadow pipeline + cascade uniforms are live). Skips the Shadow

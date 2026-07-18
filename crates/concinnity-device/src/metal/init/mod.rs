@@ -1252,6 +1252,7 @@ impl MtlContext {
             object_scratch: Vec::new(),
             draw_args_scratch: Vec::new(),
             prev_model_scratch: Vec::new(),
+            frame_graph_cache: None,
             water_pipeline,
             water_pipeline_rt,
             water_pipeline_rt_textured,

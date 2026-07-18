@@ -583,6 +583,16 @@ pub struct MtlContext {
     // Reused scratch for the per-frame `prev_model` build, same
     // pattern as `object_scratch`.
     pub(super) prev_model_scratch: Vec<[[f32; 4]; 4]>,
+    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was
+    // built from. `build_frame_graph` is a pure function of those inputs (which
+    // change only when a feature toggles or a target resizes), so a frame whose
+    // inputs match the cached key reuses the compiled graph instead of rebuilding
+    // it. Taken out during `execute_graph` (which needs `&mut self`) and put back
+    // after, so a steady scene compiles the graph once and reuses it thereafter.
+    pub(super) frame_graph_cache: Option<(
+        crate::gfx::render_graph::FrameGraphInputs,
+        crate::gfx::render_graph::CompiledGraph,
+    )>,
     // Transparent water-surface pipeline. `Some` only when the world
     // declared ≥1 `WaterSurface`; the transparent pass executor short-
     // circuits otherwise.

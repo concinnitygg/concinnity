@@ -680,8 +680,16 @@ impl MtlContext {
             // scene above) -> Composite (presents the overlay).
             world_hidden,
         };
-        let graph = crate::gfx::render_graph::build_frame_graph(&graph_inputs)
-            .map_err(|e| format!("frame graph: {}", e))?;
+        // Reuse the cached compiled graph when this frame's inputs match the
+        // ones it was built from (the common case: graph topology changes only
+        // when a feature toggles or a target resizes). Taken out of the cache so
+        // the later `&mut self` execute_graph does not conflict with a borrow of
+        // it; put back after execution. A mismatch (or a cold cache) rebuilds.
+        let graph = match self.frame_graph_cache.take() {
+            Some((cached_inputs, cached_graph)) if cached_inputs == graph_inputs => cached_graph,
+            _ => crate::gfx::render_graph::build_frame_graph(&graph_inputs)
+                .map_err(|e| format!("frame graph: {}", e))?,
+        };
         // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
         // a local so `params` owns a handle rather than borrowing `self.skinned`
         // across the `&mut self` execute_graph call (every other GraphFrameParams
@@ -753,6 +761,9 @@ impl MtlContext {
             rt_reflection_params: rt_reflection_params.as_ref(),
         };
         self.execute_graph(&graph, &params)?;
+        // Cache the compiled graph under this frame's inputs so the next frame
+        // with matching inputs skips the rebuild.
+        self.frame_graph_cache = Some((graph_inputs, graph));
 
         // Hi-Z pyramid: reduce this frame's main depth buffer into the mip
         // chain the *next* frame's phase-1 cull dispatch consults. Encoded on

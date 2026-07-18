@@ -214,12 +214,47 @@ impl StreamPlanner {
             .filter(|(_, it)| it.state == StreamState::Unloaded)
             .map(|(id, _)| id)
             .collect();
+        if candidates.is_empty() {
+            return plan;
+        }
         candidates.sort_by(|&a, &b| {
             self.items[a]
                 .score
                 .partial_cmp(&self.items[b].score)
                 .unwrap_or(core::cmp::Ordering::Equal)
         });
+
+        // Residents in eviction order (worst first): highest score, then
+        // least-recently-touched, then lowest id -- the exact order the old
+        // per-victim `worst_resident` scan produced, precomputed once so
+        // eviction is a forward cursor walk rather than an O(resident) rescan
+        // per victim. Committed evictions are always a prefix of this list
+        // (candidates are best-first and evict worst-first, so each candidate
+        // extends the evicted prefix), which a single `evicted` cursor tracks.
+        let mut residents: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.state == StreamState::Resident)
+            .map(|(id, _)| id)
+            .collect();
+        residents.sort_by(|&a, &b| {
+            let (ia, ib) = (&self.items[a], &self.items[b]);
+            ib.score
+                .partial_cmp(&ia.score)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(ia.last_touch.cmp(&ib.last_touch))
+                .then(a.cmp(&b))
+        });
+
+        // Running occupancy / resident-byte totals, seeded once and updated only
+        // when a load actually commits -- matching the old per-candidate
+        // recompute, which reflected only committed state (a candidate that did
+        // not fit left the pool untouched).
+        let mut occ = self.occupied();
+        let mut resident_bytes = self.resident_bytes();
+        // Front of `residents` already evicted (committed) this call.
+        let mut evicted = 0usize;
 
         for &id in &candidates {
             if plan.to_load.len() >= self.load_budget {
@@ -228,27 +263,27 @@ impl StreamPlanner {
             let cand_score = self.items[id].score;
             let cand_bytes = self.items[id].bytes;
 
-            // Tentatively pick victims -- worst-scored resident first, and only
-            // ones strictly farther than the candidate -- until the candidate
-            // would fit under both the count cap and the byte budget. Track the
-            // occupancy and resident-byte totals as if each tentative victim
-            // were already gone; commit only if the candidate actually fits.
-            let mut occ = self.occupied();
-            let mut resident_bytes = self.resident_bytes();
-            let mut victims: Vec<usize> = Vec::new();
+            // Tentatively shed the next worst residents past the committed
+            // prefix -- only ones strictly farther than the candidate -- until
+            // it would fit under both the count cap and the byte budget. The
+            // tentative totals start from the committed ones; commit only if the
+            // candidate actually fits.
+            let mut tent_occ = occ;
+            let mut tent_bytes = resident_bytes;
+            let mut cursor = evicted;
             let fits = loop {
-                let count_ok = occ < self.resident_cap;
+                let count_ok = tent_occ < self.resident_cap;
                 let byte_ok = self
                     .byte_budget
-                    .is_none_or(|b| resident_bytes + cand_bytes <= b);
+                    .is_none_or(|b| tent_bytes + cand_bytes <= b);
                 if count_ok && byte_ok {
                     break true;
                 }
-                match self.worst_resident(&plan.to_evict, &victims) {
-                    Some(victim) if self.items[victim].score > cand_score => {
-                        occ -= 1;
-                        resident_bytes -= self.items[victim].bytes;
-                        victims.push(victim);
+                match residents.get(cursor) {
+                    Some(&victim) if self.items[victim].score > cand_score => {
+                        tent_occ -= 1;
+                        tent_bytes -= self.items[victim].bytes;
+                        cursor += 1;
                     }
                     // No farther resident left to shed: this candidate cannot
                     // be placed.
@@ -257,12 +292,18 @@ impl StreamPlanner {
             };
 
             if fits {
-                for &victim in &victims {
+                for &victim in &residents[evicted..cursor] {
                     self.items[victim].state = StreamState::Unloaded;
                     plan.to_evict.push(victim);
                 }
+                evicted = cursor;
                 self.items[id].state = StreamState::Pending;
                 plan.to_load.push(id);
+                // Commit: the evictions are now real, and the new load occupies
+                // a slot (Pending; its bytes are not counted until it becomes
+                // Resident, matching `resident_bytes()`).
+                occ = tent_occ + 1;
+                resident_bytes = tent_bytes;
             } else if self.byte_budget.is_none() {
                 // Count-only: candidates are score-sorted, so if the best
                 // remaining one cannot displace the worst resident, none can.
@@ -281,34 +322,6 @@ impl StreamPlanner {
             .iter()
             .filter(|it| it.state != StreamState::Unloaded)
             .count()
-    }
-
-    // The resident item with the worst (highest) score, breaking ties toward
-    // the least-recently-touched. Items in either `excluded` slice are skipped
-    // so a single `plan` call never evicts the same victim twice (one slice is
-    // the committed evictions, the other this candidate's tentative picks).
-    fn worst_resident(&self, excluded: &[usize], tentative: &[usize]) -> Option<usize> {
-        let mut worst: Option<usize> = None;
-        for (id, item) in self.items.iter().enumerate() {
-            if item.state != StreamState::Resident
-                || excluded.contains(&id)
-                || tentative.contains(&id)
-            {
-                continue;
-            }
-            match worst {
-                None => worst = Some(id),
-                Some(w) => {
-                    let cur = &self.items[w];
-                    let better_victim = item.score > cur.score
-                        || (item.score == cur.score && item.last_touch < cur.last_touch);
-                    if better_victim {
-                        worst = Some(id);
-                    }
-                }
-            }
-        }
-        worst
     }
 }
 
@@ -583,5 +596,159 @@ mod tests {
         assert!(plan.to_load.is_empty());
         assert!(plan.to_evict.is_empty());
         assert_eq!(p.state(0), Some(StreamState::Resident));
+    }
+
+    // The worst (highest-score, then least-recently-touched, then lowest-id)
+    // resident not already excluded -- the original per-victim scan, kept here
+    // as the reference the optimized `plan` is checked against.
+    fn worst_resident_ref(
+        items: &[Item],
+        excluded: &[usize],
+        tentative: &[usize],
+    ) -> Option<usize> {
+        let mut worst: Option<usize> = None;
+        for (id, item) in items.iter().enumerate() {
+            if item.state != StreamState::Resident
+                || excluded.contains(&id)
+                || tentative.contains(&id)
+            {
+                continue;
+            }
+            match worst {
+                None => worst = Some(id),
+                Some(w) => {
+                    let better = item.score > items[w].score
+                        || (item.score == items[w].score && item.last_touch < items[w].last_touch);
+                    if better {
+                        worst = Some(id);
+                    }
+                }
+            }
+        }
+        worst
+    }
+
+    // The pre-optimization `plan` algorithm (per-candidate O(resident) rescans),
+    // used only to verify the optimized version is behavior-identical.
+    fn plan_reference(
+        items: &mut [Item],
+        load_budget: usize,
+        resident_cap: usize,
+        byte_budget: Option<u64>,
+    ) -> StreamPlan {
+        let mut plan = StreamPlan::default();
+        let mut candidates: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.state == StreamState::Unloaded)
+            .map(|(id, _)| id)
+            .collect();
+        candidates.sort_by(|&a, &b| {
+            items[a]
+                .score
+                .partial_cmp(&items[b].score)
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+        for &id in &candidates {
+            if plan.to_load.len() >= load_budget {
+                break;
+            }
+            let cand_score = items[id].score;
+            let cand_bytes = items[id].bytes;
+            let mut occ = items
+                .iter()
+                .filter(|it| it.state != StreamState::Unloaded)
+                .count();
+            let mut resident_bytes: u64 = items
+                .iter()
+                .filter(|it| it.state == StreamState::Resident)
+                .map(|it| it.bytes)
+                .sum();
+            let mut victims: Vec<usize> = Vec::new();
+            let fits = loop {
+                let count_ok = occ < resident_cap;
+                let byte_ok = byte_budget.is_none_or(|b| resident_bytes + cand_bytes <= b);
+                if count_ok && byte_ok {
+                    break true;
+                }
+                match worst_resident_ref(items, &plan.to_evict, &victims) {
+                    Some(victim) if items[victim].score > cand_score => {
+                        occ -= 1;
+                        resident_bytes -= items[victim].bytes;
+                        victims.push(victim);
+                    }
+                    _ => break false,
+                }
+            };
+            if fits {
+                for &victim in &victims {
+                    items[victim].state = StreamState::Unloaded;
+                    plan.to_evict.push(victim);
+                }
+                items[id].state = StreamState::Pending;
+                plan.to_load.push(id);
+            } else if byte_budget.is_none() {
+                break;
+            }
+        }
+        plan
+    }
+
+    // The optimized `plan` must produce the exact same load / evict decisions
+    // and resulting item states as the reference across many random scenarios
+    // with heavy score and LRU ties, byte budget on and off, at and over cap.
+    #[test]
+    fn plan_matches_reference_on_random_scenarios() {
+        // Deterministic LCG so the test is reproducible and needs no rng dep.
+        let mut seed: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as u32
+        };
+
+        for _ in 0..4000 {
+            let count = (next() % 12) as usize;
+            let items: Vec<Item> = (0..count)
+                .map(|_| {
+                    let state = match next() % 3 {
+                        0 => StreamState::Unloaded,
+                        1 => StreamState::Pending,
+                        _ => StreamState::Resident,
+                    };
+                    Item {
+                        state,
+                        // Small ranges so scores and last_touch tie often.
+                        score: (next() % 6) as f32,
+                        last_touch: (next() % 4) as u64,
+                        bytes: (next() % 20) as u64,
+                    }
+                })
+                .collect();
+            let load_budget = ((next() % 5) + 1) as usize;
+            let resident_cap = ((next() % 8) + 1) as usize;
+            let byte_budget = if next() % 2 == 0 {
+                None
+            } else {
+                Some((next() % 60) as u64)
+            };
+
+            let mut ref_items = items.clone();
+            let ref_plan = plan_reference(&mut ref_items, load_budget, resident_cap, byte_budget);
+
+            let mut p = StreamPlanner {
+                items: items.clone(),
+                load_budget,
+                resident_cap,
+                byte_budget,
+            };
+            let got = p.plan();
+
+            assert_eq!(got, ref_plan, "plan differs (count={count})");
+            for (i, (a, b)) in p.items.iter().zip(ref_items.iter()).enumerate() {
+                assert_eq!(a.state, b.state, "state[{i}] differs (count={count})");
+            }
+        }
     }
 }
