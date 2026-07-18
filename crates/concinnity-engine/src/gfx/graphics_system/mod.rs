@@ -272,6 +272,10 @@ pub struct GraphicsSystem {
     occlusion_two_pass: bool,
     texture_cap: u32,
     texture_budget: u32,
+    // Reused scratch + change-tracking for the per-frame transform propagation
+    // (`draw_list::propagate_transforms_cached`): buffers are refilled in place
+    // and the pass is skipped on frames where no Transform / Parent changed.
+    transform_cache: crate::gfx::draw_list::TransformCache,
     // Test-only injection seam: pre-resolved settings, a fabricated GPU
     // profile, and a mock backend factory, so unit tests can drive
     // run_init / run_step without a GPU device or the on-disk settings store.
@@ -419,6 +423,7 @@ impl GraphicsSystem {
             occlusion_two_pass: false,
             texture_cap: 96,
             texture_budget: 4,
+            transform_cache: crate::gfx::draw_list::TransformCache::default(),
             #[cfg(test)]
             test_hooks: None,
         }

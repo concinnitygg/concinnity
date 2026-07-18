@@ -180,6 +180,14 @@ macro_rules! define_component_storage {
                 C::slot_mut(self).iter_mut_with_entities(tick)
             }
 
+            // The change tick of C's column: the tick at which any C was last
+            // inserted, removed, or mutably accessed. Read-only, so it never
+            // bumps the tick itself.
+            #[allow(dead_code)]
+            pub fn changed_tick<C: $slot>(&self) -> $crate::Tick {
+                C::slot(self).changed_tick()
+            }
+
             // Borrow one entity's component C, if it has one.
             #[allow(dead_code)]
             pub fn get<C: $slot>(&self, entity: $crate::Entity) -> Option<&C> {

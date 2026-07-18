@@ -129,8 +129,9 @@ impl GraphicsSystem {
                 // changed since last frame (physics, camera interact, reparent):
                 // resolve each entity's GlobalTransform from Transform + Parent
                 // (top-down so parents propagate to children), then push it to the
-                // entity's GPU draw slots.
-                draw_list::propagate_transforms(ctx);
+                // entity's GPU draw slots. The cached path reuses its scratch and
+                // skips the resolve entirely when no Transform / Parent changed.
+                draw_list::propagate_transforms_cached(ctx, &mut self.transform_cache);
                 for (_entity, global, handle) in
                     ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()
                 {

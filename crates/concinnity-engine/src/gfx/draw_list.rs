@@ -218,6 +218,92 @@ pub(crate) fn propagate_transforms(ctx: &mut crate::ecs::PipelineContext) {
     }
 }
 
+// Reused scratch plus change-tracking for the per-frame transform propagation.
+// GraphicsSystem owns one and passes it to `propagate_transforms_cached` each
+// frame: the three working buffers are cleared and refilled in place (no
+// per-frame allocation once they reach steady-state capacity), and propagation
+// is skipped entirely on frames where neither the Transform nor the Parent
+// column changed since the last recompute -- so a static scene recomputes and
+// re-uploads nothing.
+#[derive(Default)]
+pub(crate) struct TransformCache {
+    parents: std::collections::HashMap<crate::ecs::Entity, crate::ecs::Entity>,
+    locals: Vec<(crate::ecs::Entity, [[f32; 4]; 4])>,
+    world: std::collections::HashMap<crate::ecs::Entity, [[f32; 4]; 4]>,
+    // (Transform column tick, Parent column tick) observed at the last recompute.
+    // `None` until the first propagation, which always runs.
+    last_ticks: Option<(crate::ecs::Tick, crate::ecs::Tick)>,
+}
+
+impl TransformCache {
+    // Recompute world matrices into the reused buffers from the live Transform +
+    // Parent columns. Same fixed-point resolution as `resolve_world_matrices`,
+    // but writing into `self`'s retained-capacity buffers instead of fresh ones.
+    fn resolve(&mut self, ctx: &crate::ecs::PipelineContext) {
+        use crate::assets::{Parent, Transform};
+
+        self.parents.clear();
+        self.locals.clear();
+        self.world.clear();
+        for (entity, parent) in ctx.query_with_entity::<Parent>() {
+            self.parents.insert(entity, parent.0);
+        }
+        for (entity, transform) in ctx.query_with_entity::<Transform>() {
+            self.locals.push((entity, transform.model_matrix()));
+        }
+        loop {
+            let mut progressed = false;
+            for (entity, local) in &self.locals {
+                if self.world.contains_key(entity) {
+                    continue;
+                }
+                let resolved = match self.parents.get(entity) {
+                    None => Some(*local),
+                    Some(parent) => self.world.get(parent).map(|pw| mat_mul4(*pw, *local)),
+                };
+                if let Some(matrix) = resolved {
+                    self.world.insert(*entity, matrix);
+                    progressed = true;
+                }
+            }
+            if !progressed || self.world.len() == self.locals.len() {
+                break;
+            }
+        }
+        for (entity, local) in &self.locals {
+            self.world.entry(*entity).or_insert(*local);
+        }
+    }
+}
+
+// Per-frame transform propagation with the reused scratch + change-tracking in
+// `cache`. Writes each entity's GlobalTransform from its Transform + Parent
+// chain, exactly as `propagate_transforms`, but skips the whole pass when
+// neither source column changed since the last recompute (the GlobalTransforms
+// written then still stand). Used by GraphicsSystem's per-frame step; the
+// uncached `propagate_transforms` remains for the one-shot reparent recompose.
+pub(crate) fn propagate_transforms_cached(
+    ctx: &mut crate::ecs::PipelineContext,
+    cache: &mut TransformCache,
+) {
+    use crate::assets::{Parent, Transform};
+
+    let ticks = (
+        ctx.changed_tick::<Transform>(),
+        ctx.changed_tick::<Parent>(),
+    );
+    if cache.last_ticks == Some(ticks) {
+        return;
+    }
+    cache.resolve(ctx);
+    for (entity, matrix) in &cache.world {
+        if let Some(global) = ctx.get_mut::<crate::assets::GlobalTransform>(*entity) {
+            global.0 = *matrix;
+        }
+    }
+    cache.last_ticks = Some(ticks);
+}
+
 // Re-parent an entity at runtime: detach it from its current parent (if any),
 // attach it under `new_parent` (or leave it a root when `None`), keep both
 // parents' Children lists in sync, and recompose world matrices so the new
@@ -1050,6 +1136,119 @@ mod tests {
             child_g,
             mat_mul4(parent_t.model_matrix(), child_t.model_matrix()),
             "child world = parent_world * local"
+        );
+    }
+
+    // The cached per-frame path resolves the same parent-then-child composition
+    // as the uncached `propagate_transforms`.
+    #[test]
+    fn cached_propagation_matches_the_uncached_path() {
+        use crate::assets::{GlobalTransform, Parent, Transform};
+        use crate::blob::BlobData;
+        use crate::ecs::{ComponentStorage, PipelineContext, Resources};
+        use crate::gfx::profile::FrameProfile;
+
+        let parent_t = Transform {
+            position: [1.0, 2.0, 3.0],
+            rotation_deg: [0.0, 30.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+        };
+        let child_t = Transform {
+            position: [0.0, 0.0, 1.0],
+            rotation_deg: [10.0, 0.0, 5.0],
+            scale: [2.0, 2.0, 2.0],
+        };
+
+        let mut components = ComponentStorage::default();
+        let mut blob = BlobData::empty();
+        let mut profile = FrameProfile::default();
+        let mut resources = Resources::new();
+        let mut ctx = PipelineContext {
+            components: &mut components,
+            blob: &mut blob,
+            profile: &mut profile,
+            resources: &mut resources,
+        };
+
+        let parent_e = ctx.components.spawn();
+        ctx.insert(parent_e, parent_t);
+        ctx.insert(parent_e, GlobalTransform::default());
+        let child_e = ctx.components.spawn();
+        ctx.insert(child_e, child_t);
+        ctx.insert(child_e, Parent(parent_e));
+        ctx.insert(child_e, GlobalTransform::default());
+
+        let mut cache = TransformCache::default();
+        propagate_transforms_cached(&mut ctx, &mut cache);
+
+        assert_eq!(
+            ctx.components.get::<GlobalTransform>(parent_e).unwrap().0,
+            parent_t.model_matrix()
+        );
+        assert_eq!(
+            ctx.components.get::<GlobalTransform>(child_e).unwrap().0,
+            mat_mul4(parent_t.model_matrix(), child_t.model_matrix())
+        );
+    }
+
+    // The cached path skips the resolve (and the GlobalTransform writes) on
+    // frames where no Transform / Parent changed, and recomputes once one does.
+    #[test]
+    fn cached_propagation_skips_until_a_transform_changes() {
+        use crate::assets::{GlobalTransform, Transform};
+        use crate::blob::BlobData;
+        use crate::ecs::{ComponentStorage, PipelineContext, Resources};
+        use crate::gfx::profile::FrameProfile;
+
+        let mut components = ComponentStorage::default();
+        let mut blob = BlobData::empty();
+        let mut profile = FrameProfile::default();
+        let mut resources = Resources::new();
+        let mut ctx = PipelineContext {
+            components: &mut components,
+            blob: &mut blob,
+            profile: &mut profile,
+            resources: &mut resources,
+        };
+
+        let e = ctx.components.spawn();
+        let t0 = Transform {
+            position: [1.0, 0.0, 0.0],
+            rotation_deg: [0.0; 3],
+            scale: [1.0; 3],
+        };
+        ctx.insert(e, t0);
+        ctx.insert(e, GlobalTransform::default());
+
+        let mut cache = TransformCache::default();
+        propagate_transforms_cached(&mut ctx, &mut cache);
+        assert_eq!(
+            ctx.components.get::<GlobalTransform>(e).unwrap().0,
+            t0.model_matrix()
+        );
+
+        // A GlobalTransform write does not dirty the Transform column, so the
+        // next pass must skip and leave the (deliberately corrupted) value.
+        ctx.get_mut::<GlobalTransform>(e).unwrap().0 = IDENTITY4;
+        propagate_transforms_cached(&mut ctx, &mut cache);
+        assert_eq!(
+            ctx.components.get::<GlobalTransform>(e).unwrap().0,
+            IDENTITY4,
+            "unchanged Transform => propagation skipped"
+        );
+
+        // Mutating the Transform dirties its column; the next pass recomputes.
+        let t1 = Transform {
+            position: [0.0, 5.0, 0.0],
+            rotation_deg: [0.0; 3],
+            scale: [1.0; 3],
+        };
+        *ctx.get_mut::<Transform>(e).unwrap() = t1;
+        propagate_transforms_cached(&mut ctx, &mut cache);
+        assert_eq!(
+            ctx.components.get::<GlobalTransform>(e).unwrap().0,
+            t1.model_matrix(),
+            "changed Transform => propagation recomputed"
         );
     }
 

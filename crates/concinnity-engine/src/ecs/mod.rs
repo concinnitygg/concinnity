@@ -23,7 +23,7 @@ pub mod schedule;
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
     Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshHandle,
-    PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, asset_id,
+    PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, Tick, asset_id,
 };
 
 // Renderer-free per-frame protocol resources, moved to concinnity-core so the
