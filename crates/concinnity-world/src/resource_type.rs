@@ -89,7 +89,7 @@ pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
 // registry), plus the uniform authoring operations over it. The per-type compile
 // dispatch is hand-written in concinnity-cook (each type compiles differently).
 macro_rules! define_resource_asset_type {
-    ( $( $variant:ident => $ty:path { resource: $kind:ident $(, $flag:ident)* $(,)? } ),+ $(,)? ) => {
+    ( $( $variant:ident => $ty:path { resource: $kind:ident $($meta:tt)* } ),+ $(,)? ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum ResourceAssetType {
             $( $variant ),+
@@ -119,9 +119,21 @@ macro_rules! define_resource_asset_type {
                     } ),+
                 }
             }
-            #[allow(dead_code)]
             pub fn all() -> &'static [ResourceAssetType] {
                 &[ $( Self::$variant ),+ ]
+            }
+            // The structural flags shared with the component registry: see
+            // `ComponentType::{useful_blank, renders}`. Resource assets are
+            // never singletons.
+            pub fn useful_blank(self) -> bool {
+                match self {
+                    $( Self::$variant => crate::registry::__meta_useful_blank!($($meta)*) ),+
+                }
+            }
+            pub fn renders(self) -> bool {
+                match self {
+                    $( Self::$variant => crate::registry::__meta_renders!($($meta)*) ),+
+                }
             }
         }
     };
@@ -243,6 +255,25 @@ mod tests {
             Some(ResourceKind::AudioClip)
         );
         assert_eq!(asset_resource_kind("PointLight"), None);
+    }
+
+    // The structural flags on the resource registry: Material and Font are the
+    // blank-useful addables, EnvironmentMap is the lone render-implying kind.
+    #[test]
+    fn resource_structural_flags_mark_the_curated_sets() {
+        let flagged = |f: fn(ResourceAssetType) -> bool| -> Vec<&'static str> {
+            ResourceAssetType::all()
+                .iter()
+                .copied()
+                .filter(|&t| f(t))
+                .map(ResourceAssetType::as_str)
+                .collect()
+        };
+        assert_eq!(
+            flagged(ResourceAssetType::useful_blank),
+            ["Font", "Material"]
+        );
+        assert_eq!(flagged(ResourceAssetType::renders), ["EnvironmentMap"]);
     }
 
     #[test]

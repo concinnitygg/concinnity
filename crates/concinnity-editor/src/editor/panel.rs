@@ -26,6 +26,11 @@
 // is open. Hovering a name also reveals a triple-dot button opening a small
 // Delete menu.
 
+use std::sync::OnceLock;
+
+use concinnity_cook::ComponentType;
+use concinnity_cook::resource_handles::ResourceAssetType;
+
 use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -46,83 +51,70 @@ use super::asset_list::{
 };
 pub(crate) use super::asset_list::{ListRow, MAX_ROWS};
 
-// The addable asset types the "+" picker offers: every External (user-declarable)
-// type that (a) recompiles cleanly when added with default args and (b) is useful
-// when added blank. `add_types_cook_with_default_args` guards (a) by running every
-// entry through the real cook pipeline; `add_types_are_the_curated_blank_useful_addable_set`
-// guards the whole boundary -- every addable-and-cooks-blank type must be either
-// here or in that test's EXCLUDED list (with a reason), so a newly registered type
-// is a deliberate choice, never a silent omission. The mix spans lights / scene
-// effects, procedural geometry, a camera, referenced library assets (Material /
-// Font / BlockType), a UI layer (View), UI widgets, UI interaction (HitRegion) +
-// input (KeyBinding), a HUD element (FpsCounter), and audio. Most entries are
-// naturally multi-instance; a few are effectively singletons where a second
-// instance is harmlessly ignored (only the first enabled VolumetricFog draws; the
-// first Camera3D is the active one), which is fine because the common action is
-// adding the first one to a world that lacks it.
-// The types held back cook blank but are not useful blank: world-config singletons
-// (GraphicsConfig, PhysicsConfig, Window, Application, ...) want an edit-or-add flow
-// rather than a blind append; engine-injected HUDs (DebugHud / StatHud) are added by
-// `cn build`, not by hand; and types defined by a nested array or a source file
-// (Model, Scene, Story, LayoutContainer's rows, ...) are inert until the nested /
-// source form controls exist. Types that cannot even cook blank -- needing a source
-// or a required cross-reference (Mesh / AudioClip / Joint) -- can never be offered.
-pub(crate) const ADD_TYPES: &[&str] = &[
-    // Lights + scene effects.
-    "PointLight",
-    "DirectionalLight",
-    "ParticleEmitter",
-    "Decal",
-    "ReflectionProbe",
-    "VolumetricFog",
-    "GlassPanel",
-    "WaterSurface",
-    // Geometry + camera.
-    "Room",
-    "Camera3D",
-    // Library assets (referenced by other assets, by name).
-    "Material",
-    "Font",
-    "BlockType",
-    // UI structure + widgets.
-    "Screen",
-    "Sprite",
-    "TextLabel",
-    "TextInput",
-    // UI interaction + input.
-    "HitRegion",
-    "KeyBinding",
-    // UI HUD.
-    "FpsCounter",
-    // Audio.
-    "AudioEmitter",
-    "AudioCue",
-];
+// The addable asset types the "+" picker offers for a plain add: every type
+// flagged `useful_blank` in the registry (both the component and resource-asset
+// lists). The flag marks a type that (a) recompiles cleanly when added with
+// default args and (b) is useful when added blank; the choices are guarded here
+// by `add_types_cook_with_default_args` (runs every offered type through the
+// real cook pipeline) and `add_types_are_the_curated_blank_useful_addable_set`
+// (every addable-and-cooks-blank type must be flagged or in that test's
+// EXCLUDED list with a reason, so a newly registered type is a deliberate
+// choice, never a silent omission). Types that cook blank but stay unflagged:
+// world-config singletons want the edit-or-add flow below, engine-injected
+// HUDs (DebugHud / StatHud) are added by `cn build`, and types defined by a
+// nested array or a source file (Model, Scene, Story, ...) are inert until the
+// nested / source form controls exist. Types that cannot even cook blank --
+// needing a source or a required cross-reference (Mesh / AudioClip / Joint) --
+// can never be flagged.
+pub(crate) fn add_types() -> impl Iterator<Item = &'static str> {
+    static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    TYPES
+        .get_or_init(|| {
+            let components = ComponentType::all()
+                .iter()
+                .filter(|t| t.useful_blank())
+                .map(|t| t.as_str());
+            let resources = ResourceAssetType::all()
+                .iter()
+                .filter(|t| t.useful_blank())
+                .map(|t| t.as_str());
+            components.chain(resources).collect()
+        })
+        .iter()
+        .copied()
+}
 
-// World-config singletons: exactly one instance belongs to a world. They are
-// offered in the "+" picker alongside `ADD_TYPES`, but picking one EDITS the
-// world's existing instance when it has one and only ADDS when it does not (the
-// hook's `open_form` is handed the existing entry's index) -- an edit-or-add flow,
-// never a blind second append. Held out of `ADD_TYPES` so the plain add path can
-// keep assuming multi-instance. Like the addables, each must cook blank (guarded).
-pub(crate) const CONFIG_TYPES: &[&str] = &[
-    "GraphicsConfig",
-    "PhysicsConfig",
-    "PostProcessConfig",
-    "StreamingConfig",
-    "Window",
-    "Application",
-];
+// The world-config singletons (the registry's `singleton` flag on declarable
+// types): exactly one instance belongs to a world. They are offered in the "+"
+// picker alongside `add_types`, but picking one EDITS the world's existing
+// instance when it has one and only ADDS when it does not (the hook's
+// `open_form` is handed the existing entry's index) -- an edit-or-add flow,
+// never a blind second append. Held apart from `add_types` so the plain add
+// path can keep assuming multi-instance. Like the addables, each must cook
+// blank (guarded).
+pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
+    static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    TYPES
+        .get_or_init(|| {
+            ComponentType::all()
+                .iter()
+                .filter(|t| t.singleton() && t.addable())
+                .map(|t| t.as_str())
+                .collect()
+        })
+        .iter()
+        .copied()
+}
 
 // Whether `ty` is a world-config singleton (edit-or-add rather than blind append).
 pub(crate) fn is_singleton(ty: &str) -> bool {
-    CONFIG_TYPES.contains(&ty)
+    ComponentType::parse(ty).is_some_and(|t| t.singleton())
 }
 
 // Every type the "+" picker offers: the multi-instance addables plus the config
 // singletons.
 pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
-    ADD_TYPES.iter().chain(CONFIG_TYPES.iter()).copied()
+    add_types().chain(config_types())
 }
 
 // The label of the "all assets" filter option (the default), shown first in the
@@ -1578,7 +1570,7 @@ mod tests {
 
     #[test]
     fn picker_option_maps_to_a_scrolled_index() {
-        let opts: Vec<String> = ADD_TYPES.iter().map(|s| s.to_string()).collect();
+        let opts: Vec<String> = add_types().map(str::to_string).collect();
         let fx = Fixture {
             combo_options: opts,
             list_rows: vec![],
@@ -1806,7 +1798,8 @@ mod tests {
     // args AND are useful when added blank: no world-config singleton (those want an
     // edit-or-add flow), no engine-injected HUD, and no type whose value is a nested
     // array / source file it can't be given here. Enforced so a newly-registered
-    // addable-and-blank-useful type is a deliberate ADD_TYPES choice, not forgotten.
+    // addable-and-blank-useful type is a deliberate `useful_blank` flag choice in
+    // the registry, not forgotten.
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         isolate_state_dir();
@@ -1856,7 +1849,7 @@ mod tests {
             }
             assert!(
                 offered.contains(ty) ^ excluded.contains(ty),
-                "{ty} cooks blank: add it to ADD_TYPES or to the EXCLUDED list (with a reason), not both/neither"
+                "{ty} cooks blank: flag it `useful_blank` in the registry or add it to the EXCLUDED list (with a reason), not both/neither"
             );
         }
     }

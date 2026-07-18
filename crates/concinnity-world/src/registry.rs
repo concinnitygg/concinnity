@@ -126,6 +126,30 @@ macro_rules! __meta_refs {
     ($t:tt $($r:tt)*) => { __meta_refs!($($r)*) };
 }
 
+// The bare structural flags: `singleton` (at most one instance belongs to a
+// world), `useful_blank` (meaningful when declared with only default args, so
+// authoring tools offer a plain add), and `renders` (presence implies the
+// world renders). `__meta_useful_blank` / `__meta_renders` are shared with the
+// resource-asset registry in `resource_type`.
+// The recursive arms are path-qualified so the shared scanners also expand
+// from other modules (`resource_type` invokes them by path).
+macro_rules! __meta_singleton {
+    () => { false };
+    (singleton $($r:tt)*) => { true };
+    ($t:tt $($r:tt)*) => { crate::registry::__meta_singleton!($($r)*) };
+}
+macro_rules! __meta_useful_blank {
+    () => { false };
+    (useful_blank $($r:tt)*) => { true };
+    ($t:tt $($r:tt)*) => { crate::registry::__meta_useful_blank!($($r)*) };
+}
+macro_rules! __meta_renders {
+    () => { false };
+    (renders $($r:tt)*) => { true };
+    ($t:tt $($r:tt)*) => { crate::registry::__meta_renders!($($r)*) };
+}
+pub(crate) use {__meta_renders, __meta_singleton, __meta_useful_blank};
+
 // Generate `ComponentType` and its authoring methods from the shared component
 // list. Invoked once, below, via `concinnity_core::for_each_component!`. All
 // authoring metadata (origin, payload, args schema, validators, reference
@@ -280,6 +304,27 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
+            // The structural flags, from the entry's metadata: `singleton`
+            // (at most one instance belongs to a world; authoring tools use an
+            // edit-or-add flow), `useful_blank` (meaningful when declared with
+            // only default args, so authoring tools offer a plain add), and
+            // `renders` (presence implies the world renders; drives the
+            // GraphicsConfig companion injection at build time).
+            pub fn singleton(self) -> bool {
+                match self {
+                    $( Self::$variant => __meta_singleton!($($meta)*) ),+
+                }
+            }
+            pub fn useful_blank(self) -> bool {
+                match self {
+                    $( Self::$variant => __meta_useful_blank!($($meta)*) ),+
+                }
+            }
+            pub fn renders(self) -> bool {
+                match self {
+                    $( Self::$variant => __meta_renders!($($meta)*) ),+
+                }
+            }
             #[allow(dead_code)]
             pub fn addable(self) -> bool {
                 self.registration().addable()
@@ -334,6 +379,21 @@ pub fn bake_divergent(
         ComponentType::Spawner => bake!(crate::assets::Spawner, crate::assets::SpawnerArgs),
         _ => Ok(None),
     }
+}
+
+// Whether an asset type's presence implies the world renders: the registry's
+// `renders` flag, across both the component and resource registries. Matches
+// by normalized name (case-insensitive, underscores stripped) so cook's
+// companion pass and authoring tools classify the same way.
+pub fn type_renders(asset_type: &str) -> bool {
+    let norm: String = asset_type.chars().filter(|c| *c != '_').collect();
+    let matches = |name: &str| name.eq_ignore_ascii_case(&norm);
+    ComponentType::all()
+        .iter()
+        .any(|t| t.renders() && matches(t.as_str()))
+        || crate::resource_type::ResourceAssetType::all()
+            .iter()
+            .any(|t| t.renders() && matches(t.as_str()))
 }
 
 #[cfg(test)]
@@ -572,6 +632,87 @@ mod tests {
                 }
             }
         }
+    }
+
+    // The structural flags mark the curated sets: the world-config singletons,
+    // the render-implying types (which must match the companion pass's
+    // GraphicsConfig triggers), and the blank-useful addables. Flag rules: a
+    // flagged type must be declarable (singletons and blank-addables are
+    // authored), and the two picker sets stay disjoint (a singleton uses the
+    // edit-or-add flow, never the plain add).
+    #[test]
+    fn structural_flags_mark_the_curated_sets() {
+        let flagged = |f: fn(ComponentType) -> bool| -> Vec<&'static str> {
+            ComponentType::all()
+                .iter()
+                .copied()
+                .filter(|&t| f(t))
+                .map(ComponentType::as_str)
+                .collect()
+        };
+        assert_eq!(
+            flagged(ComponentType::singleton),
+            [
+                "Window",
+                "GraphicsConfig",
+                "PostProcessConfig",
+                "StreamingConfig",
+                "PhysicsConfig",
+                "Application",
+            ]
+        );
+        assert_eq!(
+            flagged(ComponentType::renders),
+            [
+                "GraphicsConfig",
+                "Prop",
+                "TextLabel",
+                "InstancedProp",
+                "VoxelWorld",
+                "Sprite",
+                "WaterSurface",
+                "SdfVolume",
+                "LayoutContainer",
+                "StatHud",
+                "MainMenu",
+                "DebugHud",
+                "TextInput",
+            ]
+        );
+        for &ty in ComponentType::all() {
+            if ty.useful_blank() {
+                assert!(
+                    ty.addable(),
+                    "{} is offered for a plain add but is not External",
+                    ty.as_str()
+                );
+            }
+            if ty.singleton() {
+                assert!(
+                    ty.registration().serializable(),
+                    "{} is a singleton but never declarable",
+                    ty.as_str()
+                );
+            }
+            assert!(
+                !(ty.singleton() && ty.useful_blank()),
+                "{} cannot be both a singleton and a plain addable",
+                ty.as_str()
+            );
+        }
+    }
+
+    // The two-registry render classifier: exact names, forgiving spellings,
+    // resource-registry types, and non-renderers.
+    #[test]
+    fn type_renders_spans_both_registries() {
+        assert!(type_renders("TextLabel"));
+        assert!(type_renders("text_label"));
+        assert!(type_renders("GraphicsConfig"));
+        assert!(type_renders("EnvironmentMap"));
+        assert!(!type_renders("Window"));
+        assert!(!type_renders("Mesh"));
+        assert!(!type_renders("NotARealType"));
     }
 
     #[test]

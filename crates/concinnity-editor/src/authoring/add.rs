@@ -251,15 +251,12 @@ fn available_templates() -> String {
         .join(", ")
 }
 
-// Asset types that either declare the renderer or trigger its companion
-// injection (see `world::companion`). If any of these are already present
-// the world will start the GraphicsSystem on its own and no scaffold is
-// needed.
-const RENDERER_TRIGGER_TYPES: &[&str] = &["GraphicsConfig", "TextLabel", "Window"];
-
-// Whether the JSONL file at `world_path` already contains a renderer trigger.
-// Malformed lines are skipped silently: the regular load path will surface
-// any parse problems with full diagnostics.
+// Whether the JSONL file at `world_path` already renders on its own: it
+// declares GraphicsConfig or a type whose presence implies it at build time
+// (the registry's `renders` flag, which drives cook's GraphicsConfig companion
+// injection). When true the world will start the GraphicsSystem without any
+// scaffold. Malformed lines are skipped silently: the regular load path will
+// surface any parse problems with full diagnostics.
 fn has_renderer_trigger(world_path: &str) -> std::io::Result<bool> {
     let content = std::fs::read_to_string(world_path)?;
     Ok(jsonl_has_renderer_trigger(&content))
@@ -277,7 +274,7 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             Err(_) => continue,
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && RENDERER_TRIGGER_TYPES.contains(&t)
+            && concinnity_cook::registry::type_renders(t)
         {
             return true;
         }
@@ -544,8 +541,8 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         }
 
         // Text files become a TextLabel carrying the file contents. The label
-        // is its own renderer trigger (see RENDERER_TRIGGER_TYPES) and companion
-        // injection adds GraphicsSystem + a default Font, so a fresh
+        // is its own renderer trigger (the registry's `renders` flag) and
+        // companion injection adds GraphicsSystem + a default Font, so a fresh
         // `cn add notes.txt` lands a renderable world without a scaffold.
         //
         // `centered: true` is set explicitly here to match `cn init`'s output.
@@ -1083,10 +1080,20 @@ mod tests {
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
+    // A Prop implies the world renders: cook injects the GraphicsConfig marker
+    // for it, so no scaffold is needed.
     #[test]
-    fn renderer_trigger_matches_window() {
-        let jsonl = r#"{"name":"win","type":"Window","args":{}}"#;
+    fn renderer_trigger_matches_prop() {
+        let jsonl = r#"{"name":"crate","type":"Prop","args":{}}"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
+    }
+
+    // A bare Window does NOT start the renderer (cook injects no GraphicsConfig
+    // for it), so it is not a trigger.
+    #[test]
+    fn renderer_trigger_ignores_window() {
+        let jsonl = r#"{"name":"win","type":"Window","args":{}}"#;
+        assert!(!jsonl_has_renderer_trigger(jsonl));
     }
 
     #[test]
@@ -1101,8 +1108,6 @@ mod tests {
             r#"{"name":"mesh","type":"Mesh","args":{}}"#,
             "\n",
             r#"{"name":"model","type":"Model","args":{}}"#,
-            "\n",
-            r#"{"name":"prop","type":"Prop","args":{}}"#,
             "\n",
             r#"{"name":"cam","type":"Camera3D","args":{}}"#,
             "\n",
