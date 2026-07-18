@@ -11,7 +11,9 @@ use ash::vk;
 use crate::gfx::render_types::NO_NORMAL_MAP_SLOT;
 
 use super::super::context::*;
-use super::super::texture::{GpuUploadContext, upload_texture};
+use super::super::texture::{
+    GpuUploadContext, StreamedUploadRetire, upload_texture, upload_texture_deferred,
+};
 
 impl VkContext {
     pub(in crate::vulkan) fn write_object_image(
@@ -68,18 +70,26 @@ impl VkContext {
         };
     }
 
-    // Re-point every per-object / per-cluster descriptor set that samples
-    // texture-pool `slot`, at the (just-swapped) `self.textures[slot]` view.
-    // Albedo and normal maps share one pool, so a streamed texture may be an
-    // albedo for one draw (binding 0) and a normal map for another (binding 1);
-    // this re-points both wherever they resolve to `slot`.
-    fn rewrite_texture_slot(&self, slot: usize) {
+    // Whether a draw samples texture `slot` as its normal map, given the pool
+    // clamp. A real normal is a texture at its own handle; `NO_NORMAL_MAP_SLOT`
+    // samples the never-streamed flat-normal fallback and matches no streamed
+    // slot.
+    fn normal_is_slot(&self, nms: usize, slot: usize) -> bool {
+        let last = self.textures.len().saturating_sub(1);
+        nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot
+    }
+
+    // Re-point the per-object / per-cluster / per-skinned / chunk descriptor
+    // sets that sample texture-pool `slot` at the (just-swapped)
+    // `self.textures[slot]` view. Albedo and normal maps share one pool, so a
+    // streamed texture may be an albedo for one draw (binding 0) and a normal
+    // map for another (binding 1); this re-points both wherever they resolve
+    // to `slot`. These sets are only ever bound by the legacy (non-bindless)
+    // draw loops, so while the bindless pass drives every draw they are not
+    // referenced by pending command buffers and rewriting them needs no drain.
+    fn rewrite_legacy_object_sets(&self, slot: usize) {
         let last = self.textures.len().saturating_sub(1);
         let view = self.textures[slot].view;
-        // Whether a draw samples texture `slot` as its normal map. A real normal
-        // is a texture at its own handle; `NO_NORMAL_MAP_SLOT` samples the
-        // never-streamed flat-normal fallback and matches no streamed slot.
-        let normal_is_slot = |nms: usize| nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot;
         for (set, obj) in self
             .descriptors
             .object_sets
@@ -89,22 +99,9 @@ impl VkContext {
             if obj.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
-            if normal_is_slot(obj.normal_map_slot) {
+            if self.normal_is_slot(obj.normal_map_slot, slot) {
                 self.write_object_image(*set, 1, view);
             }
-        }
-        // The bindless pool addresses each texture at pool index == its handle,
-        // shared by albedo and normal sampling, so one re-point covers both.
-        for &set in &self.cull.bindless_sets {
-            self.write_pool_image(set, slot as u32, view);
-        }
-        // An in-flight reflection-probe bake holds its own copy of the texture
-        // pool set, built once at bake start and sampled across its staggered
-        // per-face draws. Streaming a texture in destroys the old view, so the
-        // bake set must be re-pointed too or its next face samples a destroyed
-        // view; the shared cull sets above do not cover it.
-        if let Some(rendering) = self.probe_rendering.as_ref() {
-            self.write_pool_image(rendering.bindless_set(), slot as u32, view);
         }
         for (set, cluster) in self
             .instanced
@@ -115,7 +112,7 @@ impl VkContext {
             if cluster.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
-            if normal_is_slot(cluster.normal_map_slot) {
+            if self.normal_is_slot(cluster.normal_map_slot, slot) {
                 self.write_object_image(*set, 1, view);
             }
         }
@@ -128,7 +125,7 @@ impl VkContext {
             if obj.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
             }
-            if normal_is_slot(obj.normal_map_slot) {
+            if self.normal_is_slot(obj.normal_map_slot, slot) {
                 self.write_object_image(*set, 1, view);
             }
         }
@@ -139,10 +136,23 @@ impl VkContext {
                 self.write_object_image(set, 0, view);
             }
             if let Some(chunk_nms) = self.chunk_stream.normal_map_slot
-                && normal_is_slot(chunk_nms)
+                && self.normal_is_slot(chunk_nms, slot)
             {
                 self.write_object_image(set, 1, view);
             }
+        }
+    }
+
+    // Re-point every descriptor that samples texture-pool `slot` and may be
+    // referenced by in-flight command buffers: the per-frame bindless pool
+    // copies plus the decal / clone / particle sets. Only legal under a device
+    // drain (the fallback streaming path and the `cn debug` hot-reload paths).
+    fn rewrite_bound_texture_sets(&self, slot: usize) {
+        let view = self.textures[slot].view;
+        // The bindless pool addresses each texture at pool index == its handle,
+        // shared by albedo and normal sampling, so one re-point covers both.
+        for &set in &self.cull.bindless_sets {
+            self.write_pool_image(set, slot as u32, view);
         }
         // Per-decal albedo descriptors. Walk the decal-side slot tracker;
         // a world with no decals pays nothing here.
@@ -150,6 +160,7 @@ impl VkContext {
         // Runtime clones (from `clone_static_draw_object`) carry their own
         // (albedo, normal) descriptor sets, so re-point those that sample this
         // slot as either.
+        let last = self.textures.len().saturating_sub(1);
         for (offset, &clone_tex) in self.clone_texture_slots.iter().enumerate() {
             let Some(&set) = self.clone_object_sets.get(offset) else {
                 continue;
@@ -158,7 +169,7 @@ impl VkContext {
                 self.write_object_image(set, 0, view);
             }
             if let Some(&clone_nms) = self.clone_normal_map_slots.get(offset)
-                && normal_is_slot(clone_nms)
+                && self.normal_is_slot(clone_nms, slot)
             {
                 self.write_object_image(set, 1, view);
             }
@@ -168,7 +179,54 @@ impl VkContext {
         self.rewrite_particle_albedo_slot(slot);
     }
 
+    // Re-point every descriptor that samples texture-pool `slot`. Only legal
+    // under a device drain. An in-flight reflection-probe bake needs no arm
+    // here: each bake face snapshots the live pool into its own set right
+    // before recording.
+    fn rewrite_texture_slot(&self, slot: usize) {
+        self.rewrite_legacy_object_sets(slot);
+        self.rewrite_bound_texture_sets(slot);
+    }
+
+    // Whether replacing pool `slot` must drain the device first: true when a
+    // descriptor that samples the slot may be referenced by pending command
+    // buffers AND cannot wait for the per-frame propagation. The bindless pool
+    // copies propagate per frame slot; everything the legacy loops bind is
+    // rewritten immediately while those loops are inert. What remains are the
+    // single-copy sets of passes that run regardless of the bindless path
+    // (decal / particle), the runtime-clone sets, and whole worlds where the
+    // bindless pass is off (custom-shader; every legacy set is then live).
+    fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
+        let bindless_active = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
+        if !bindless_active {
+            return true;
+        }
+        let last = self.textures.len().saturating_sub(1);
+        let clone_samples_slot = self.clone_slot_by_draw_idx.values().any(|&offset| {
+            self.clone_texture_slots
+                .get(offset)
+                .is_some_and(|&t| t.min(last) == slot)
+                || self
+                    .clone_normal_map_slots
+                    .get(offset)
+                    .is_some_and(|&n| self.normal_is_slot(n, slot))
+        });
+        clone_samples_slot || self.decal_samples_slot(slot) || self.particle_samples_slot(slot)
+    }
+
     // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
+    //
+    // The streaming fast path never stalls the device: the upload is
+    // submitted without waiting (later submissions on the queue order after
+    // its final barrier, so any frame recorded from here on samples it
+    // safely), the legacy object sets are re-pointed immediately (unbound
+    // while the bindless pass drives every draw), the per-frame bindless pool
+    // copies re-point one per frame as their fences retire, and the old image
+    // plus upload transients are parked on `stream_retires` until every
+    // consumer provably moved off them. When a pending-referenced single-copy
+    // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
+    // drains the device and rewrites everything in place, matching the
+    // hot-reload paths below.
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
@@ -183,38 +241,92 @@ impl VkContext {
                 self.textures.len()
             ));
         }
-        self.wait_idle();
-        let img = upload_texture(
-            &GpuUploadContext {
-                instance: &self.instance,
-                device: &self.device,
-                physical_device: self.physical_device,
-                command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
-            },
-            width,
-            height,
-            pixels,
-        )?;
-        // Swap in the new image, then rewrite every descriptor that samples
-        // this slot BEFORE destroying the old view. The previous order
-        // (destroy then rewrite) left a brief window where descriptor sets
-        // referenced an already-destroyed VkImageView, spec-permissible
-        // because vkUpdateDescriptorSets is write-only, but Vulkan validation
-        // layers and some drivers will flag this when the descriptor pool
-        // tracks live image-view handles per descriptor (the symptom is a
-        // device-lost in worlds combining texture streaming with a
-        // SkinnedMesh + VoxelWorld chunk material that share the
-        // object_set_layout).
+        let ctx = GpuUploadContext {
+            instance: &self.instance,
+            device: &self.device,
+            physical_device: self.physical_device,
+            command_pool: self.commands.command_pool,
+            queue: self.graphics_queue,
+        };
+        if self.streamed_slot_needs_drain(slot) {
+            self.wait_idle();
+            let img = upload_texture(&ctx, width, height, pixels)?;
+            // Swap in the new image, then rewrite every descriptor that
+            // samples this slot BEFORE destroying the old view. The reverse
+            // order left a brief window where descriptor sets referenced an
+            // already-destroyed VkImageView, which validation layers and some
+            // drivers flag even though vkUpdateDescriptorSets is write-only.
+            let old = std::mem::replace(&mut self.textures[slot], img);
+            self.rewrite_texture_slot(slot);
+            // The full rewrite covered every per-frame pool copy, so any
+            // propagation queued for this slot is already satisfied.
+            self.pool_rewrites.remove(slot);
+            old.destroy(&self.device);
+            return Ok(());
+        }
+        let (img, in_flight) = upload_texture_deferred(&ctx, width, height, pixels)?;
         let old = std::mem::replace(&mut self.textures[slot], img);
-        self.rewrite_texture_slot(slot);
-        old.destroy(&self.device);
+        self.rewrite_legacy_object_sets(slot);
+        self.pool_rewrites.queue(slot);
+        // `+ 1`: the swap lands between frames, after the previous frame's
+        // submit, so the first frame fence that covers the upload submission
+        // is the one signalled by the NEXT draw -- waited `frames_in_flight`
+        // ticks after that draw's own tick.
+        self.stream_retires.push(StreamedUploadRetire {
+            image: old,
+            staging_buf: in_flight.staging_buf,
+            staging_mem: in_flight.staging_mem,
+            cmd: in_flight.cmd,
+            retire_at: self.stream_frame + self.frames_in_flight as u64 + 1,
+        });
         Ok(())
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         self.update_texture_slot(slot, 1, 1, &[128, 128, 128, 255])
+    }
+
+    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
+    // right after frame slot `frame`'s fence wait: re-point this slot's
+    // bindless pool copy at any swapped slots (legal now -- the wait retired
+    // every command buffer that binds this copy), then free retires whose
+    // covering fence has signalled.
+    pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
+        self.stream_frame += 1;
+        if !self.pool_rewrites.is_empty() {
+            let last = self.textures.len().saturating_sub(1);
+            for slot in self.pool_rewrites.begin_frame() {
+                let view = self.textures[slot.min(last)].view;
+                if let Some(&set) = self.cull.bindless_sets.get(frame) {
+                    self.write_pool_image(set, slot as u32, view);
+                }
+            }
+        }
+        if !self.stream_retires.is_empty() {
+            let now = self.stream_frame;
+            let device = self.device.clone();
+            let pool = self.commands.command_pool;
+            let mut i = 0;
+            while i < self.stream_retires.len() {
+                if self.stream_retires[i].retire_at <= now {
+                    self.stream_retires.swap_remove(i).destroy(&device, pool);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    // Free every parked streamed-texture retire immediately. Only legal after
+    // a device drain; the world-reload and drop paths call this before
+    // tearing the pool down.
+    pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
+        let device = self.device.clone();
+        let pool = self.commands.command_pool;
+        for retire in self.stream_retires.drain(..) {
+            retire.destroy(&device, pool);
+        }
     }
 
     // Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.

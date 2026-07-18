@@ -52,6 +52,7 @@ pub mod rt_topology;
 pub mod scene_reel;
 pub mod shadow_schedule;
 pub mod skinned_pool;
+pub mod slot_rewrites;
 pub mod sprite;
 pub mod streaming;
 pub mod text;

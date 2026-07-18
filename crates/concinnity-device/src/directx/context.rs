@@ -232,9 +232,12 @@ pub(super) struct CullState {
     // frame-in-flight, persistently mapped. Rebuilt each frame.
     pub object_buffer_resources: Vec<ID3D12Resource>,
     pub object_buffer_ptrs: Vec<*mut u8>,
-    // Per-object SRV region base, bound to bindless root param [5] as the
-    // texture pool (pool index `2*i` / `2*i+1` = object `i`'s albedo/normal).
-    pub bindless_pool_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    // Flat-pool SRV region bases, one per frame in flight, bound to bindless
+    // root param [5] as the texture pool for the frame being recorded. The
+    // copies exist so a streamed texture swap rewrites the copy whose frame
+    // just fence-waited instead of draining the device (see
+    // `apply_streamed_texture_rewrites`).
+    pub bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
     // Cull compute pipeline; `cull_pso_phase2` is the two-pass-occlusion PSO
     // (same root signature as `cull_pso`).
     pub cull_root_sig: Option<ID3D12RootSignature>,
@@ -635,10 +638,13 @@ pub(super) struct DxDescriptors {
     pub srv_heap: ID3D12DescriptorHeap,
     pub srv_descriptor_size: usize,
     // Base slot of the flat deduplicated bindless pool: `[albedo SRVs..] ++
-    // [normal SRVs..]`. The bindless main pass and the RT hit shader address it
-    // by a flat index; the streaming-residency rewrite re-points the one SRV per
-    // swapped pool slot here (in addition to the legacy per-object pairs).
+    // [normal SRVs..]`, repeated once per frame in flight (`flat_pool_len`
+    // slots per copy). The bindless main pass and the RT hit shader address
+    // the current frame's copy by a flat index; the streaming-residency
+    // rewrite re-points the one SRV per swapped pool slot in each copy as its
+    // frame fence-waits (in addition to the legacy per-object pairs).
     pub flat_pool_base_slot: usize,
+    pub flat_pool_len: usize,
     // Base slot of the contiguous MAX_PROBES reflection-probe cube SRV block (the
     // bindless main shader's `probe_cubes` table). Filled with the sky prefilter
     // cube at init; a baked probe overwrites its slot. See [`super::probe`].
@@ -936,6 +942,20 @@ pub struct DxContext {
     pub(super) frame_sync: DxFrameSync,
     pub(super) current_frame: usize,
 
+    // Stall-free texture streaming. A streamed slot swap replaces the pool
+    // resource immediately but cannot rewrite the per-frame flat-pool SRV
+    // copies while their frames' lists are pending; `pool_rewrites` carries
+    // the slot to each frame's copy right after its fence wait
+    // (`apply_streamed_texture_rewrites`). The replaced resource and the
+    // upload's transients are parked on `stream_retires` against the
+    // monotonic `stream_frame` tick and released `FRAMES + 1` ticks later:
+    // by then every copy has been re-pointed, every list recorded against
+    // the old resource has retired, and the tick's fence wait covers the
+    // upload submission itself.
+    pub(super) pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue,
+    pub(super) stream_frame: u64,
+    pub(super) stream_retires: Vec<super::texture::StreamedUploadRetire>,
+
     // Draw state
     pub(super) draw_objects: Vec<DrawObject>,
     pub(super) cull_bvh: crate::gfx::bvh::Bvh,
@@ -1178,6 +1198,12 @@ impl DxContext {
             .map_err(|e| format!("SetEventOnCompletion: {e}"))?;
             unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
         }
+
+        // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
+        // the swapped-in resources (legal now -- the fence wait above retired
+        // every list that binds this copy), and release the old resources /
+        // upload transients whose covering fence has signalled.
+        self.apply_streamed_texture_rewrites(frame);
 
         // Advance the staggered reflection-probe bake. Called after the frame-slot
         // fence wait (so any in-flight capture resources are safe to recycle) and

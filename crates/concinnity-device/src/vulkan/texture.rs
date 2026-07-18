@@ -195,13 +195,17 @@ pub(super) fn create_image_view(
         .map_err(|e| format!("create_image_view: {e}"))
 }
 
-// Execute a short-lived command buffer and wait for it to complete.
-pub(super) fn one_shot_submit<F>(
+// Record and submit a short-lived command buffer without waiting for it.
+// Returns the still-executing command buffer; the caller must not free it (or
+// destroy anything it references) until the GPU provably retired it -- either
+// by a queue/device wait, or because a later fence on the same queue signalled
+// (fence signals cover all prior submissions on the queue).
+pub(super) fn one_shot_submit_nowait<F>(
     device: &Device,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     f: F,
-) -> Result<(), String>
+) -> Result<vk::CommandBuffer, String>
 where
     F: FnOnce(vk::CommandBuffer),
 {
@@ -224,8 +228,21 @@ where
     let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
     unsafe { device.queue_submit(queue, std::slice::from_ref(&submit_info), vk::Fence::null()) }
         .map_err(|e| format!("one_shot submit: {e}"))?;
-    unsafe { device.queue_wait_idle(queue) }.map_err(|e| format!("one_shot wait: {e}"))?;
+    Ok(cmd)
+}
 
+// Execute a short-lived command buffer and wait for it to complete.
+pub(super) fn one_shot_submit<F>(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    queue: vk::Queue,
+    f: F,
+) -> Result<(), String>
+where
+    F: FnOnce(vk::CommandBuffer),
+{
+    let cmd = one_shot_submit_nowait(device, command_pool, queue, f)?;
+    unsafe { device.queue_wait_idle(queue) }.map_err(|e| format!("one_shot wait: {e}"))?;
     unsafe { device.free_command_buffers(command_pool, std::slice::from_ref(&cmd)) };
     Ok(())
 }
@@ -436,16 +453,56 @@ pub(super) struct GpuUploadContext<'a> {
     pub queue: vk::Queue,
 }
 
+// The transient resources a deferred texture upload leaves in flight: the
+// staging buffer the copy reads from and the submitted one-shot command
+// buffer. Neither may be freed until the GPU retired the upload; the texture
+// streaming path parks these on `VkContext::stream_retires`.
+pub(super) struct UploadInFlight {
+    pub staging_buf: vk::Buffer,
+    pub staging_mem: vk::DeviceMemory,
+    pub cmd: vk::CommandBuffer,
+}
+
+// A streamed texture swap's GPU debris, freed once `VkContext::stream_frame`
+// reaches `retire_at`: the replaced pool image (pending frames may still
+// sample it, and the per-frame pool copies re-point over the next
+// `frames_in_flight` ticks) plus the upload's in-flight transients (still
+// executing when parked; covered by the first frame fence signalled after the
+// upload's submission).
+pub(super) struct StreamedUploadRetire {
+    pub image: GpuImage,
+    pub staging_buf: vk::Buffer,
+    pub staging_mem: vk::DeviceMemory,
+    pub cmd: vk::CommandBuffer,
+    pub retire_at: u64,
+}
+
+impl StreamedUploadRetire {
+    pub(super) fn destroy(&self, device: &Device, command_pool: vk::CommandPool) {
+        unsafe {
+            device.free_command_buffers(command_pool, std::slice::from_ref(&self.cmd));
+            device.destroy_buffer(self.staging_buf, None);
+            device.free_memory(self.staging_mem, None);
+        }
+        self.image.destroy(device);
+    }
+}
+
 // Upload RGBA pixel data to a device-local RGBA8_UNORM image with a full mip
-// chain. The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and every
-// level is uploaded so the texture minifies through hardware trilinear / aniso
-// selection instead of aliasing from a single mip-0 sample at a distance.
-pub(super) fn upload_texture(
+// chain, without waiting for the copy: the command buffer is submitted and
+// left executing. The final layout transition (TRANSFER_DST -> SHADER_READ_
+// ONLY, fragment-stage scope) orders every later submission on the same queue
+// after the copy, so the image is safe to sample from any subsequently
+// submitted frame; only freeing the returned in-flight resources needs GPU
+// retirement. The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and
+// every level is uploaded so the texture minifies through hardware trilinear /
+// aniso selection instead of aliasing from a single mip-0 sample at a distance.
+pub(super) fn upload_texture_deferred(
     ctx: &GpuUploadContext,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<GpuImage, String> {
+) -> Result<(GpuImage, UploadInFlight), String> {
     let &GpuUploadContext {
         instance,
         device,
@@ -526,7 +583,7 @@ pub(super) fn upload_texture(
     unsafe { device.bind_image_memory(image, memory, 0) }
         .map_err(|e| format!("bind_image_memory: {e}"))?;
 
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    let cmd = one_shot_submit_nowait(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
             device,
             cmd,
@@ -594,11 +651,6 @@ pub(super) fn upload_texture(
         );
     })?;
 
-    unsafe {
-        device.destroy_buffer(staging_buf, None);
-        device.free_memory(staging_mem, None);
-    }
-
     // View spanning every mip.
     let view = {
         let info = vk::ImageViewCreateInfo::default()
@@ -617,12 +669,38 @@ pub(super) fn upload_texture(
             .map_err(|e| format!("create_image_view: {e}"))?
     };
 
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok((
+        GpuImage {
+            image,
+            memory,
+            view,
+            aux_views: Vec::new(),
+        },
+        UploadInFlight {
+            staging_buf,
+            staging_mem,
+            cmd,
+        },
+    ))
+}
+
+// Synchronous `upload_texture_deferred`: waits for the copy, then frees the
+// transient upload resources. The init-time upload paths use this.
+pub(super) fn upload_texture(
+    ctx: &GpuUploadContext,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<GpuImage, String> {
+    let (img, in_flight) = upload_texture_deferred(ctx, width, height, pixels)?;
+    unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
+    unsafe {
+        ctx.device
+            .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
+        ctx.device.destroy_buffer(in_flight.staging_buf, None);
+        ctx.device.free_memory(in_flight.staging_mem, None);
+    }
+    Ok(img)
 }
 
 // Create a 1x1 opaque white RGBA texture (fallback when no albedo asset is present).

@@ -308,7 +308,10 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 // [5] is the bindless texture pool (per-object SRV region base).
-                cmd.SetGraphicsRootDescriptorTable(5, self.cull.bindless_pool_gpu);
+                cmd.SetGraphicsRootDescriptorTable(
+                    5,
+                    self.cull.bindless_pool_gpu[self.current_frame],
+                );
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
                 cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
                 // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
@@ -545,7 +548,10 @@ impl DxContext {
                     cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                     cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                     cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                    cmd.SetGraphicsRootDescriptorTable(5, self.cull.bindless_pool_gpu);
+                    cmd.SetGraphicsRootDescriptorTable(
+                        5,
+                        self.cull.bindless_pool_gpu[self.current_frame],
+                    );
                     cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
                     cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
                     cmd.SetGraphicsRootShaderResourceView(8, object_gva);
@@ -768,7 +774,10 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                cmd.SetGraphicsRootDescriptorTable(5, self.cull.bindless_pool_gpu);
+                cmd.SetGraphicsRootDescriptorTable(
+                    5,
+                    self.cull.bindless_pool_gpu[self.current_frame],
+                );
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
                 cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);

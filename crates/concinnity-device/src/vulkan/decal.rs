@@ -1077,6 +1077,17 @@ impl VkContext {
     // streaming-texture path when an evicted slot is replaced. Walks
     // `decals_state.decal_texture_slots` so a world with no decals pays
     // nothing.
+    // Whether any live decal's albedo set samples texture-pool `slot`. The
+    // streaming fast path checks this: decal sets are single-copy and bound
+    // whenever the decal pass runs, so a swap of a slot they sample must
+    // drain the device before rewriting.
+    pub(in crate::vulkan) fn decal_samples_slot(&self, slot: usize) -> bool {
+        match &self.decals_state {
+            Some(s) => s.decal_texture_slots.get().contains(&slot),
+            None => false,
+        }
+    }
+
     pub(in crate::vulkan) fn rewrite_decal_albedo_slot(&self, slot: usize) {
         let decals = match &self.decals_state {
             Some(s) => s,

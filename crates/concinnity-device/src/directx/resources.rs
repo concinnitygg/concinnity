@@ -277,34 +277,39 @@ impl DxContext {
         }
     }
 
-    // Re-point every per-object / per-cluster SRV that samples texture-pool
-    // `slot`, at the (just-swapped) `self.descriptors.textures[slot]` resource.
-    // Albedo and normal maps share one pool, so a streamed texture may be an
-    // albedo for one draw (the even SRV of its heap pair) and a normal map for
-    // another (the odd SRV); this re-points both wherever they resolve to `slot`.
-    fn rewrite_texture_slot(&self, slot: usize) {
+    // Whether a draw samples texture `slot` as its normal map, given the pool
+    // clamp. A real normal is a texture at its own handle; `NO_NORMAL_MAP_SLOT`
+    // samples the never-streamed flat-normal fallback and matches no streamed
+    // slot.
+    fn normal_is_slot(&self, nms: usize, slot: usize) -> bool {
+        let last = self.descriptors.textures.len().saturating_sub(1);
+        nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot
+    }
+
+    // Re-point the build-time per-object / per-cluster / per-skinned SRV pairs
+    // that sample texture-pool `slot`, at the (just-swapped)
+    // `self.descriptors.textures[slot]` resource. Albedo and normal maps share
+    // one pool, so a streamed texture may be an albedo for one draw (the even
+    // SRV of its heap pair) and a normal map for another (the odd SRV); this
+    // re-points both wherever they resolve to `slot`. These pairs are only
+    // referenced by the legacy (non-bindless) draw loops, so while the
+    // bindless pass drives every draw no pending list dereferences them and
+    // rewriting needs no drain. Runtime clones live in their own pool
+    // (`rewrite_bound_texture_srvs`); streamed `VoxelWorld` chunks share
+    // `chunk_srv_base_slot` and are fixed at `setup_chunk_streaming` time
+    // (skipped here).
+    fn rewrite_legacy_object_pairs(&self, slot: usize) {
         let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
-        // Whether a draw samples texture `slot` as its normal map. A real normal
-        // is a texture at its own handle; `NO_NORMAL_MAP_SLOT` samples the
-        // never-streamed flat-normal fallback and matches no streamed slot.
-        let normal_is_slot = |nms: usize| nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot;
-        // Per-object (albedo, normal) heap pairs: runtime clones live in their
-        // own pool; streamed `VoxelWorld` chunks share `chunk_srv_base_slot` and
-        // are fixed at `setup_chunk_streaming` time (skipped here); everything
-        // else is a build-time draw at `3 + obj_idx * 2`.
         for (obj_idx, obj) in self.draw_objects.iter().enumerate() {
-            let pair_base = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&obj_idx) {
-                self.clone.srv_base_slot + clone_offset * 2
-            } else if obj_idx >= self.n_objects {
+            if self.clone.slot_by_draw_idx.contains_key(&obj_idx) || obj_idx >= self.n_objects {
                 continue;
-            } else {
-                3 + obj_idx * 2
-            };
+            }
+            let pair_base = 3 + obj_idx * 2;
             if obj.texture_slot.min(last) == slot {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
-            if normal_is_slot(obj.normal_map_slot) {
+            if self.normal_is_slot(obj.normal_map_slot, slot) {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
@@ -314,7 +319,7 @@ impl DxContext {
             if cluster.texture_slot.min(last) == slot {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
-            if normal_is_slot(cluster.normal_map_slot) {
+            if self.normal_is_slot(cluster.normal_map_slot, slot) {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
@@ -323,18 +328,74 @@ impl DxContext {
             if obj.texture_slot.min(last) == slot {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
-            if normal_is_slot(obj.normal_map_slot) {
+            if self.normal_is_slot(obj.normal_map_slot, slot) {
                 write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
-        // Flat shared pool: the swapped resource has exactly one descriptor here
-        // (index == its handle), shared by albedo + normal sampling and by the RT
-        // hit shader, so one re-point refreshes every consumer at once.
-        write_rgba8_srv(
-            &self.device,
-            resource,
-            self.srv_slot_cpu(self.descriptors.flat_pool_base_slot + slot),
-        );
+    }
+
+    // Re-point every SRV that samples texture-pool `slot` and may be
+    // dereferenced by in-flight command lists: the runtime-clone pairs plus
+    // every per-frame flat-pool copy. Only legal under a device drain (the
+    // fallback streaming path and the `cn debug` hot-reload paths).
+    fn rewrite_bound_texture_srvs(&self, slot: usize) {
+        let last = self.descriptors.textures.len() - 1;
+        let resource = &self.descriptors.textures[slot];
+        for (&obj_idx, &clone_offset) in self.clone.slot_by_draw_idx.iter() {
+            let Some(obj) = self.draw_objects.get(obj_idx) else {
+                continue;
+            };
+            let pair_base = self.clone.srv_base_slot + clone_offset * 2;
+            if obj.texture_slot.min(last) == slot {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+            }
+            if self.normal_is_slot(obj.normal_map_slot, slot) {
+                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+            }
+        }
+        // Flat shared pool: the swapped resource has exactly one descriptor per
+        // frame copy (index == its handle), shared by albedo + normal sampling
+        // and by the RT hit shader, so one re-point per copy refreshes every
+        // consumer at once.
+        for f in 0..FRAMES {
+            write_rgba8_srv(
+                &self.device,
+                resource,
+                self.srv_slot_cpu(self.flat_pool_slot(f, slot)),
+            );
+        }
+    }
+
+    // Heap slot of pool index `slot` in frame `frame`'s flat-pool copy.
+    fn flat_pool_slot(&self, frame: usize, slot: usize) -> usize {
+        self.descriptors.flat_pool_base_slot + frame * self.descriptors.flat_pool_len + slot
+    }
+
+    // Re-point every SRV that samples texture-pool `slot`. Only legal under a
+    // device drain.
+    fn rewrite_texture_slot(&self, slot: usize) {
+        self.rewrite_legacy_object_pairs(slot);
+        self.rewrite_bound_texture_srvs(slot);
+    }
+
+    // Whether replacing pool `slot` must drain the device first: true when an
+    // SRV that samples the slot may be dereferenced by pending command lists
+    // AND cannot wait for the per-frame propagation. The flat-pool copies
+    // propagate per frame; the build-time pairs are rewritten immediately
+    // while the legacy loops are inert. What remains are the runtime-clone
+    // pairs and whole worlds where the bindless pass is off (custom-shader;
+    // every legacy pair is then live).
+    fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
+        let bindless_active = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
+        if !bindless_active {
+            return true;
+        }
+        let last = self.descriptors.textures.len().saturating_sub(1);
+        self.clone.slot_by_draw_idx.keys().any(|&draw_idx| {
+            self.draw_objects.get(draw_idx).is_some_and(|obj| {
+                obj.texture_slot.min(last) == slot || self.normal_is_slot(obj.normal_map_slot, slot)
+            })
+        })
     }
 
     // Replace texture-pool `slot` with freshly decoded RGBA8 pixels.
@@ -344,9 +405,16 @@ impl DxContext {
     // the texture pool every frame -- the D3D12 per-object / per-cluster SRVs
     // are baked into the descriptor heap at init, so a streamed swap must
     // rewrite every heap slot that samples this pool index (as an albedo or a
-    // normal map). `wait_idle` first guarantees no in-flight command list still
-    // reads the old descriptor (or the old resource) before it is overwritten
-    // and dropped.
+    // normal map). The streaming fast path never stalls the device: the
+    // upload is submitted without waiting (the in-order queue executes it
+    // before any later frame's lists), the build-time pairs are re-pointed
+    // immediately (undereferenced while the bindless pass drives every draw),
+    // the per-frame flat-pool copies re-point one per frame as their fences
+    // retire, and the old resource plus upload transients are parked on
+    // `stream_retires` until every consumer provably moved off them. When a
+    // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
+    // the swap instead drains the device and rewrites everything in place,
+    // matching the hot-reload paths below.
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
@@ -361,12 +429,62 @@ impl DxContext {
                 self.descriptors.textures.len()
             ));
         }
-        self.wait_idle();
-        let texture =
-            upload_texture_resource(&self.device, &self.command_queue, width, height, pixels)?;
-        self.descriptors.textures[slot] = texture;
-        self.rewrite_texture_slot(slot);
+        if self.streamed_slot_needs_drain(slot) {
+            self.wait_idle();
+            let texture =
+                upload_texture_resource(&self.device, &self.command_queue, width, height, pixels)?;
+            self.descriptors.textures[slot] = texture;
+            self.rewrite_texture_slot(slot);
+            // The full rewrite covered every flat-pool copy, so any propagation
+            // queued for this slot is already satisfied.
+            self.pool_rewrites.remove(slot);
+            return Ok(());
+        }
+        let (texture, in_flight) = upload_texture_resource_deferred(
+            &self.device,
+            &self.command_queue,
+            width,
+            height,
+            pixels,
+        )?;
+        let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
+        self.rewrite_legacy_object_pairs(slot);
+        self.pool_rewrites.queue(slot);
+        // `+ 1`: the swap lands between frames, after the previous frame's
+        // submit, so the first frame fence that covers the upload submission
+        // is the one signalled by the NEXT draw -- waited FRAMES ticks after
+        // that draw's own tick.
+        self.stream_retires
+            .push(super::texture::StreamedUploadRetire {
+                texture: old,
+                upload: in_flight.upload,
+                allocator: in_flight.allocator,
+                cmd: in_flight.cmd,
+                retire_at: self.stream_frame + FRAMES as u64 + 1,
+            });
         Ok(())
+    }
+
+    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
+    // right after frame slot `frame`'s fence wait: re-point this frame's
+    // flat-pool copy at any swapped slots (legal now -- the wait retired every
+    // list that dereferences this copy), then release retires whose covering
+    // fence has signalled (dropping the entry releases the COM references).
+    pub(super) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
+        self.stream_frame += 1;
+        if !self.pool_rewrites.is_empty() {
+            let last = self.descriptors.textures.len().saturating_sub(1);
+            for slot in self.pool_rewrites.begin_frame() {
+                let resource = &self.descriptors.textures[slot.min(last)];
+                write_rgba8_srv(
+                    &self.device,
+                    resource,
+                    self.srv_slot_cpu(self.flat_pool_slot(frame, slot)),
+                );
+            }
+        }
+        let now = self.stream_frame;
+        self.stream_retires.retain(|r| r.retire_at > now);
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.

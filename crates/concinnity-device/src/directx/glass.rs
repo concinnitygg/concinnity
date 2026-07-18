@@ -1116,7 +1116,10 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
                 cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());
                 if textured {
-                    cmd.SetGraphicsRootDescriptorTable(14, self.cull.bindless_pool_gpu);
+                    cmd.SetGraphicsRootDescriptorTable(
+                        14,
+                        self.cull.bindless_pool_gpu[self.current_frame],
+                    );
                 }
             }
             for &i in &order {

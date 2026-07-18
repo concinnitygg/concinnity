@@ -358,6 +358,33 @@ impl VkContext {
         Ok(())
     }
 
+    // Write the whole live texture pool into a bake face's bindless set
+    // (binding 1). Called right before the face records, so the face samples
+    // the pool as it stands this frame.
+    fn write_probe_face_pool(&self, set: vk::DescriptorSet) {
+        let pool_infos: Vec<vk::DescriptorImageInfo> = self
+            .textures
+            .iter()
+            .chain(self.normal_map_textures.iter())
+            .map(|img| {
+                vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(img.view)
+                    .sampler(self.linear_sampler)
+            })
+            .collect();
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(1)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&pool_infos);
+        unsafe {
+            self.device
+                .update_descriptor_sets(std::slice::from_ref(&write), &[])
+        };
+    }
+
     // Submit one cube face of the in-flight probe: a fresh command buffer that culls
     // for this face's frustum, draws the bindless main into the bake target, and
     // copies the resolved face into its readback buffer, on a per-face fence (polled,
@@ -396,12 +423,18 @@ impl VkContext {
                 b.hiz_set,
                 b.framebuffer,
                 b.global_sets[r.cursor],
-                b.bindless_set,
+                b.bindless_sets[r.cursor],
                 b.indirect_buf,
                 b.copy_source(),
                 b.readback_bufs[r.cursor],
             )
         };
+
+        // Snapshot the live texture pool into this face's set. The set has
+        // never been bound in a submitted command buffer (each face uses its
+        // own), so the write is legal without a drain, and a texture streamed
+        // in since the bake started is picked up here.
+        self.write_probe_face_pool(bindless_set);
 
         // A fresh command buffer + fence for this face, from the one-shot pool.
         // Register both in the `RenderingBake` the instant they exist so a later
@@ -854,14 +887,6 @@ impl RenderingBake {
         self.cursor.saturating_sub(1)
     }
 
-    // The texture-pool descriptor set this in-flight bake samples across its
-    // staggered per-face draws. Built once from the pool at bake start, so a
-    // streamed texture swap must re-point it (see `rewrite_texture_slot`) or its
-    // next face draw samples a destroyed image view.
-    pub(super) fn bindless_set(&self) -> vk::DescriptorSet {
-        self.bake.bindless_set
-    }
-
     // Free every owned GPU resource: the per-face command buffers (back to the
     // one-shot pool), the per-face fences, and the bake target / cull / sets. The
     // caller has ensured the GPU retired them (the last face's fence is signalled, or
@@ -910,7 +935,11 @@ struct BakeResources {
     status_mem: vk::DeviceMemory,
     pool: vk::DescriptorPool,
     cull_set: vk::DescriptorSet,
-    bindless_set: vk::DescriptorSet,
+    // One texture-pool set per face, written from the live pool right before
+    // that face records. A face's set is never touched after its submit, so a
+    // streamed texture swap mid-bake needs no rewrite of pending sets (and no
+    // device drain): the next face simply snapshots the current pool.
+    bindless_sets: Vec<vk::DescriptorSet>,
     hiz_set: Option<vk::DescriptorSet>,
     hiz_ubo: Option<(vk::Buffer, vk::DeviceMemory, *mut u8)>,
     global_sets: Vec<vk::DescriptorSet>,
@@ -1111,14 +1140,14 @@ impl BakeResources {
         // be freed in `destroy`.
         let mut hiz_ubo: Option<(vk::Buffer, vk::DeviceMemory, *mut u8)> = None;
 
-        // One dedicated descriptor pool for the bake's cull + bindless + global +
-        // Hi-Z sets.
+        // One dedicated descriptor pool for the bake's cull + per-face bindless +
+        // global + Hi-Z sets.
         let tex_pool = (ctx.textures.len() + ctx.normal_map_textures.len()) as u32;
         let has_hiz = ctx.cull.hiz.is_some();
         let uniform_count = PROBE_FACE_COUNT as u32 * 4 + u32::from(has_hiz);
-        let storage_count = 4 + 1;
+        let storage_count = 4 + PROBE_FACE_COUNT as u32;
         let sampler_count =
-            tex_pool + PROBE_FACE_COUNT as u32 * (4 + MAX_PROBES as u32) + u32::from(has_hiz);
+            PROBE_FACE_COUNT as u32 * (tex_pool + 4 + MAX_PROBES as u32) + u32::from(has_hiz);
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1130,7 +1159,7 @@ impl BakeResources {
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(sampler_count.max(1)),
         ];
-        let max_sets = 2 + PROBE_FACE_COUNT as u32 + u32::from(has_hiz);
+        let max_sets = 1 + 2 * PROBE_FACE_COUNT as u32 + u32::from(has_hiz);
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(max_sets);
@@ -1148,41 +1177,28 @@ impl BakeResources {
         write_storage(device, cull_set, 2, indirect_buf, indirect_size);
         write_storage(device, cull_set, 3, status_buf, status_size);
 
-        // Bindless set (set 1): object SSBO + the shared texture pool array.
-        let bindless_set = alloc_descriptor_sets(
-            device,
-            pool,
-            std::slice::from_ref(&ctx.cull.bindless_set_layout.unwrap()),
-        )?[0];
-        let pool_infos: Vec<vk::DescriptorImageInfo> = ctx
-            .textures
-            .iter()
-            .chain(ctx.normal_map_textures.iter())
-            .map(|img| {
-                vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(img.view)
-                    .sampler(ctx.linear_sampler)
-            })
-            .collect();
+        // Per-face bindless sets (set 1): object SSBO + the shared texture pool
+        // array. Only the SSBO is written here; each face's pool array is
+        // written from the live pool right before that face records
+        // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
+        // a pending set.
+        let bindless_layouts = vec![ctx.cull.bindless_set_layout.unwrap(); PROBE_FACE_COUNT];
+        let bindless_sets = alloc_descriptor_sets(device, pool, &bindless_layouts)?;
         {
             let obj_info = vk::DescriptorBufferInfo::default()
                 .buffer(object_buf)
                 .offset(0)
                 .range(object_size);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(bindless_set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&obj_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(bindless_set)
-                    .dst_binding(1)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&pool_infos),
-            ];
+            let writes: Vec<vk::WriteDescriptorSet> = bindless_sets
+                .iter()
+                .map(|&set| {
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&obj_info))
+                })
+                .collect();
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
 
@@ -1302,7 +1318,7 @@ impl BakeResources {
             status_mem,
             pool,
             cull_set,
-            bindless_set,
+            bindless_sets,
             hiz_set,
             hiz_ubo,
             global_sets,

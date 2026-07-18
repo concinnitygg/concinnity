@@ -767,14 +767,18 @@ impl DxContext {
         debug_assert_eq!(gpu_textures.len(), flat_albedo_count);
         debug_assert_eq!(gpu_normal_maps.len(), flat_normal_count);
         let last_tex = gpu_textures.len() - 1;
-        for (k, tex) in gpu_textures.iter().enumerate() {
-            write_rgba8_srv(&device, tex, slot_cpu(flat_pool_base_slot + k));
+        let flat_pool_len = flat_albedo_count + flat_normal_count;
+        for f in 0..FRAMES {
+            let copy_base = flat_pool_base_slot + f * flat_pool_len;
+            for (k, tex) in gpu_textures.iter().enumerate() {
+                write_rgba8_srv(&device, tex, slot_cpu(copy_base + k));
+            }
+            write_rgba8_srv(
+                &device,
+                &gpu_normal_maps[0],
+                slot_cpu(copy_base + flat_albedo_count),
+            );
         }
-        write_rgba8_srv(
-            &device,
-            &gpu_normal_maps[0],
-            slot_cpu(flat_pool_base_slot + flat_albedo_count),
-        );
 
         // Resolve the pool resource a `normal_map_slot` samples for the legacy
         // per-object / per-cluster SRV pairs: a real normal map is a texture in
@@ -1187,11 +1191,13 @@ impl DxContext {
             }
         }
 
-        // The bindless texture pool's first slot is the flat deduplicated pool
-        // base; pool index `texture_slot` lands on the albedo SRV and
+        // The bindless texture pool's base, one table handle per frame-in-flight
+        // copy; pool index `texture_slot` lands on the albedo SRV and
         // `albedo_count + normal_slot` on the normal SRV. The bindless main pass
-        // and the RT hit shader bind from here.
-        let bindless_pool_gpu = slot_gpu(flat_pool_base_slot);
+        // and the RT hit shader bind the recording frame's copy.
+        let bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = (0..FRAMES)
+            .map(|f| slot_gpu(flat_pool_base_slot + f * flat_pool_len))
+            .collect();
 
         // Only build the shadow PSO when shadows are enabled; the shadow pass
         // keys off `shadow_pso.is_some()`, so passing `None` when
@@ -1984,6 +1990,7 @@ impl DxContext {
                 srv_heap,
                 srv_descriptor_size,
                 flat_pool_base_slot,
+                flat_pool_len,
                 probe_cube_base_slot,
                 sampler_heap,
                 shadow_sampler_gpu,
@@ -2159,6 +2166,9 @@ impl DxContext {
                 fence_event,
             },
             current_frame: 0,
+            pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(FRAMES),
+            stream_frame: 0,
+            stream_retires: Vec::new(),
             cull_bvh,
             always_draw,
             always_draw_member,

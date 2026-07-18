@@ -41,7 +41,7 @@
 //   [ssgi_gi_srv_slot..]           (SSGI) gather-target SRV
 //   srv_slots                      total descriptor count (heap size)
 
-use crate::directx::context::{MAX_CLONE_DRAWS, MAX_SKINNED_OBJECTS};
+use crate::directx::context::{FRAMES, MAX_CLONE_DRAWS, MAX_SKINNED_OBJECTS};
 use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
 
@@ -182,13 +182,16 @@ impl SrvHeapLayout {
         // per pane by the glass pass.
         let planar_resolve_srv_base_slot =
             refl_composite_srv_base_slot + p.refl_composite_srv_extra;
-        // Flat deduplicated bindless pool: [albedo SRVs..] ++ [normal SRVs..].
-        // The bindless main pass and the RT hit shader bind their unbounded pool
-        // table base here and index it by a flat slot.
+        // Flat deduplicated bindless pool: [albedo SRVs..] ++ [normal SRVs..],
+        // one full copy per frame in flight. The bindless main pass and the RT
+        // hit shader bind the current frame's copy and index it by a flat slot.
+        // Per-frame copies let a streamed texture swap rewrite the copy whose
+        // frame just fence-waited (provably unreferenced) instead of draining
+        // the device to rewrite one shared region while lists reference it.
         let flat_pool_base_slot = planar_resolve_srv_base_slot + p.planar_resolve_srv_extra;
         // Reflection-probe cube array at the heap tail (MAX_PROBES contiguous cube
         // SRVs); a single descriptor table covers the whole block.
-        let probe_cube_base_slot = flat_pool_base_slot + p.albedo_count + p.normal_count;
+        let probe_cube_base_slot = flat_pool_base_slot + FRAMES * (p.albedo_count + p.normal_count);
         let srv_slots = probe_cube_base_slot + PROBE_CUBE_COUNT;
         Self {
             object_base_slot,
@@ -271,7 +274,10 @@ mod tests {
             (l.rt_output_srv_slot, p.rt_output_srv_extra),
             (l.refl_composite_srv_base_slot, p.refl_composite_srv_extra),
             (l.planar_resolve_srv_base_slot, p.planar_resolve_srv_extra),
-            (l.flat_pool_base_slot, p.albedo_count + p.normal_count),
+            (
+                l.flat_pool_base_slot,
+                FRAMES * (p.albedo_count + p.normal_count),
+            ),
             (l.probe_cube_base_slot, PROBE_CUBE_COUNT),
         ];
         let mut expected_base = GLOBAL_SRV_COUNT;

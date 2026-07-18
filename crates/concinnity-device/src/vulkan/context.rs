@@ -1295,6 +1295,21 @@ pub struct VkContext {
     // Deferred buffer destruction (text transient buffers)
     pub(super) deferred_destroy: RefCell<Vec<DeferredBuffer>>,
 
+    // Stall-free texture streaming. A streamed slot swap replaces
+    // `textures[slot]` immediately but cannot rewrite the per-frame bindless
+    // pool descriptors while their frames are pending; `pool_rewrites` carries
+    // the slot to each frame slot's copy right after its fence wait
+    // (`apply_streamed_texture_rewrites`). The replaced image and the upload's
+    // transient resources are parked on `stream_retires` against the monotonic
+    // `stream_frame` tick and freed `frames_in_flight + 1` ticks later: by then
+    // every pool copy has been re-pointed, every frame recorded against the old
+    // view has retired, and the tick's fence wait covers the upload submission
+    // itself (a swap lands between frames, after the previous frame's submit,
+    // so the frame-slot-keyed `deferred_destroy` drain would free it too soon).
+    pub(super) pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue,
+    pub(super) stream_frame: u64,
+    pub(super) stream_retires: Vec<StreamedUploadRetire>,
+
     // Window + input (native Win32 on Windows, GLFW on Linux). `Option` so a
     // `reload_world` can MOVE the live window (with its cursor / menu / keymap
     // state) into the successor context instead of opening a new OS window;
@@ -1420,6 +1435,14 @@ impl VkContext {
                 )
                 .map_err(|e| format!("wait fences: {e}"))?;
         }
+
+        // Streamed texture swaps: re-point this frame slot's bindless pool
+        // copy at the swapped-in views (legal now -- the fence wait above
+        // retired every command buffer that binds this slot's set), and free
+        // the old images / upload transients this slot parked on its previous
+        // trip (this slot's fence signalling also covers the older frames that
+        // last sampled them, and every pool copy has been re-pointed since).
+        self.apply_streamed_texture_rewrites(frame);
 
         // Advance the staggered reflection-probe bake one step. Runs here -- after
         // this frame's slot fence wait, before `record_frame` -- so any cube it
@@ -2074,6 +2097,9 @@ impl Drop for VkContext {
         for db in self.deferred_destroy.borrow().iter() {
             db.destroy(device);
         }
+
+        // Parked streamed-texture retires (`wait_idle` above covered them).
+        self.drain_stream_retires();
 
         // Sync (per-frame-in-flight semaphores + fences).
         self.frame_sync.destroy(device);

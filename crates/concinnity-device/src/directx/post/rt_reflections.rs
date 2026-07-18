@@ -552,7 +552,10 @@ impl DxContext {
             cmd.SetGraphicsRootDescriptorTable(7, gbuffer.roughness_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(8, self.prefilter_cube_srv_gpu());
             if textured {
-                cmd.SetGraphicsRootDescriptorTable(9, self.cull.bindless_pool_gpu);
+                cmd.SetGraphicsRootDescriptorTable(
+                    9,
+                    self.cull.bindless_pool_gpu[self.current_frame],
+                );
             }
             // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
             // the u16 skinned index buffer the trace fetches a skinned hit from.

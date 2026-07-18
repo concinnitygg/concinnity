@@ -20,12 +20,16 @@ pub(super) struct GpuResource {
 
 // One-shot command list helper
 
-// Execute f on a freshly allocated command list, submit, and wait for idle.
-pub(super) fn one_shot_submit<F>(
+// Record and submit a freshly allocated command list without waiting for it.
+// Returns the still-executing list and its allocator; the caller must keep
+// both alive (and any resource the list references) until the GPU provably
+// retired the work -- either by a fence wait, or because a later frame fence
+// on the same in-order queue signalled.
+pub(super) fn one_shot_submit_nowait<F>(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
     f: F,
-) -> Result<(), String>
+) -> Result<(ID3D12CommandAllocator, ID3D12GraphicsCommandList), String>
 where
     F: FnOnce(&ID3D12GraphicsCommandList),
 {
@@ -43,6 +47,19 @@ where
 
     let cmd_list: ID3D12CommandList = cmd.cast().map_err(|e| format!("one_shot cast: {e}"))?;
     unsafe { queue.ExecuteCommandLists(&[Some(cmd_list)]) };
+    Ok((allocator, cmd))
+}
+
+// Execute f on a freshly allocated command list, submit, and wait for idle.
+pub(super) fn one_shot_submit<F>(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    f: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&ID3D12GraphicsCommandList),
+{
+    let _keep_alive = one_shot_submit_nowait(device, queue, f)?;
 
     // Fence-wait for completion.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
@@ -189,16 +206,47 @@ pub(super) fn upload_buffer(
 
 // Texture helpers
 
-// Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture.
+// A streamed texture swap's GPU debris, released once `DxContext::stream_frame`
+// reaches `retire_at`: the replaced pool resource (pending lists may still
+// sample it, and the per-frame flat-pool copies re-point over the next FRAMES
+// ticks) plus the upload's staging buffer and one-shot allocator + list (still
+// executing when parked; covered by the first frame fence signalled after the
+// upload's submission). The handles are held only so dropping the entry
+// releases them (COM refcounts), hence never read.
+pub(super) struct StreamedUploadRetire {
+    #[allow(dead_code)]
+    pub texture: ID3D12Resource,
+    #[allow(dead_code)]
+    pub upload: ID3D12Resource,
+    #[allow(dead_code)]
+    pub allocator: ID3D12CommandAllocator,
+    #[allow(dead_code)]
+    pub cmd: ID3D12GraphicsCommandList,
+    pub retire_at: u64,
+}
+
+// The transient resources a deferred texture upload leaves in flight.
+pub(super) struct UploadInFlight {
+    pub upload: ID3D12Resource,
+    pub allocator: ID3D12CommandAllocator,
+    pub cmd: ID3D12GraphicsCommandList,
+}
+
+// Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture without waiting
+// for the copy: the command list is submitted and left executing. The final
+// transition to PIXEL_SHADER_RESOURCE orders every later submission on the
+// same in-order queue after the copy, so the texture is safe to sample from
+// any subsequently submitted frame; only releasing the returned in-flight
+// resources needs GPU retirement.
 // Returns just the resource; call `write_rgba8_srv` to bind it into a slot.
 // Multiple SRVs may reference the same resource (one per object using it).
-pub(super) fn upload_texture_resource(
+pub(super) fn upload_texture_resource_deferred(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<ID3D12Resource, String> {
+) -> Result<(ID3D12Resource, UploadInFlight), String> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -293,9 +341,10 @@ pub(super) fn upload_texture_resource(
     // texture pointer without an AddRef: the field is a `ManuallyDrop`, so a
     // `clone()` would never be released and would leak a reference to the transient
     // upload buffer (a real memory leak) and the destination texture (a VRAM leak
-    // under streaming eviction) on every upload. Both outlive the synchronous
-    // `CopyTextureRegion` calls.
-    one_shot_submit(device, queue, |cmd| {
+    // under streaming eviction) on every upload. Both outlive the recorded
+    // `CopyTextureRegion` calls (the upload buffer rides the returned in-flight
+    // handle until the GPU retires the copy).
+    let (allocator, cmd) = one_shot_submit_nowait(device, queue, |cmd| {
         let mut src = D3D12_TEXTURE_COPY_LOCATION {
             pResource: unsafe { std::mem::transmute_copy(&upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
@@ -327,6 +376,40 @@ pub(super) fn upload_texture_resource(
         unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
+    Ok((
+        texture,
+        UploadInFlight {
+            upload,
+            allocator,
+            cmd,
+        },
+    ))
+}
+
+// Synchronous `upload_texture_resource_deferred`: waits for the copy, then
+// drops the transient upload resources. The init-time upload paths use this.
+pub(super) fn upload_texture_resource(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<ID3D12Resource, String> {
+    let (texture, in_flight) =
+        upload_texture_resource_deferred(device, queue, width, height, pixels)?;
+    let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
+        .map_err(|e| format!("upload fence: {e}"))?;
+    let event =
+        unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
+            .map_err(|e| format!("upload event: {e}"))?;
+    unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("upload signal: {e}"))?;
+    if unsafe { fence.GetCompletedValue() } < 1 {
+        unsafe { fence.SetEventOnCompletion(1, event) }
+            .map_err(|e| format!("upload set event: {e}"))?;
+        unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
+    }
+    unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
+    drop(in_flight);
     Ok(texture)
 }
 

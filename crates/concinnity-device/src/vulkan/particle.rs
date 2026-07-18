@@ -1311,6 +1311,18 @@ impl VkContext {
     // hot-reloaded albedo swap recreates the view and leaves a dangling
     // descriptor unless every emitter sampling that slot is re-pointed. Called
     // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
+    // Whether any live emitter's render set samples texture-pool `slot`. The
+    // streaming fast path checks this: emitter sets are single-copy and bound
+    // whenever the particle pass runs, so a swap of a slot they sample must
+    // drain the device before rewriting.
+    pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
+        let last = self.textures.len().saturating_sub(1);
+        self.particle_emitter_state
+            .iter()
+            .flatten()
+            .any(|state| state.texture_slot.min(last) == slot)
+    }
+
     pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
         let Some(resources) = self.particle_resources.as_ref() else {
             return;
