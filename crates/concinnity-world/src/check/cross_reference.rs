@@ -6,22 +6,24 @@
 // acyclic. Every problem found is collected: validation never stops at the
 // first error, so the caller can report them all in one pass.
 //
-// Each referencing asset declares its own references by implementing
-// `CrossReferenced` in `asset_refs`; `cross_refs_for` dispatches to those impls
-// by type. The validator here only resolves a `RefKind` to the matching set of
-// asset names and detects Prop parent cycles. Adding a new referencing asset
-// means writing one impl there plus one arm in `cross_refs_for`.
+// Flat single-target references are validated generically from the registry's
+// `refs:` metadata (`validate_registry_refs`), so declaring a ref field on a
+// registry entry IS enforcing it -- the same metadata drives the editor's Ref
+// pickers. Only the structured references a flat (field, target) pair cannot
+// express remain hand-written: each such asset implements `CrossReferenced` in
+// `asset_refs` (lists, the polymorphic mesh sources, nested fields,
+// required-ness) and `cross_refs_for` dispatches to it by type. A hand impl
+// must not re-check a registry-declared field, or the problem reports twice.
 
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
 use crate::world::WorldJsonlAsset;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 // Dispatch reference extraction by normalized asset type. Every arm delegates
 // to a `CrossReferenced` impl in the named asset's file.
 fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Camera3D, DebugHud, Decal, FpsCounter, InstancedProp, Joint, Material, Model,
-        ParticleEmitter, Prop, Scene, SceneReel, StatHud, VoxelChunk, VoxelWorld,
+        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, SceneReel, VoxelChunk, VoxelWorld,
     };
     match type_norm {
         "animgraph" => AnimGraph::cross_refs(name, args),
@@ -29,18 +31,82 @@ fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<
         "prop" => Prop::cross_refs(name, args),
         "model" => Model::cross_refs(name, args),
         "scenereel" | "scenreel" => SceneReel::cross_refs(name, args),
-        "scene" => Scene::cross_refs(name, args),
         "instancedprop" | "instanced" => InstancedProp::cross_refs(name, args),
         "voxelchunk" | "chunk" => VoxelChunk::cross_refs(name, args),
         "voxelworld" => VoxelWorld::cross_refs(name, args),
-        "material" => Material::cross_refs(name, args),
-        "decal" => Decal::cross_refs(name, args),
         "joint" => Joint::cross_refs(name, args),
-        "particleemitter" | "particles" => ParticleEmitter::cross_refs(name, args),
-        "stathud" => StatHud::cross_refs(name, args),
-        "debughud" => DebugHud::cross_refs(name, args),
-        "fpscounter" => FpsCounter::cross_refs(name, args),
         _ => Vec::new(),
+    }
+}
+
+// One registry entry's declared flat references: its normalized type name,
+// its display name, and the (field, target type) pairs.
+type DeclaredRefs = (
+    String,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+// Resolve every flat reference the registries declare: for each asset type's
+// `refs:` metadata (component and resource registries alike), a non-empty
+// string in the named field must be a declared asset of the target type.
+// Name-sets are built once per distinct target; every target names a real
+// declarable type (guarded by `ref_fields_name_real_target_types`).
+fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    use crate::registry::ComponentType;
+    use crate::resource_type::ResourceAssetType;
+
+    let norm = |t: &str| t.to_lowercase().replace('_', "");
+
+    let ref_lists: Vec<DeclaredRefs> = ComponentType::all()
+        .iter()
+        .map(|t| (t.as_str(), t.ref_fields()))
+        .chain(
+            ResourceAssetType::all()
+                .iter()
+                .map(|t| (t.as_str(), t.ref_fields())),
+        )
+        .filter(|(_, refs)| !refs.is_empty())
+        .map(|(name, refs)| (norm(name), name, refs))
+        .collect();
+
+    let mut scopes: HashMap<&'static str, HashSet<&str>> = HashMap::new();
+    for (_, _, refs) in &ref_lists {
+        for &(_, target) in refs.iter() {
+            scopes.entry(target).or_insert_with(|| {
+                let target_norm = norm(target);
+                assets
+                    .iter()
+                    .filter(|a| norm(&a.asset_type) == target_norm)
+                    .map(|a| a.name.as_str())
+                    .collect()
+            });
+        }
+    }
+
+    for asset in assets {
+        let type_norm = norm(&asset.asset_type);
+        for (list_norm, ty_name, refs) in &ref_lists {
+            if *list_norm != type_norm {
+                continue;
+            }
+            for &(field, target) in refs.iter() {
+                let Some(referenced) = asset
+                    .args
+                    .get(field)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                if !scopes[target].contains(referenced) {
+                    errors.push(format!(
+                        "{} '{}': {} '{}' not found, add a {} asset with that name",
+                        ty_name, asset.name, field, referenced, target
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -48,14 +114,9 @@ fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<
 // validation pass; `contains` answers whether a reference resolves.
 struct RefScope<'a> {
     mesh_sources: HashSet<&'a str>,
-    textures: HashSet<&'a str>,
     materials: HashSet<&'a str>,
-    models: HashSet<&'a str>,
-    props: HashSet<&'a str>,
     scenes: HashSet<&'a str>,
-    camera3ds: HashSet<&'a str>,
     block_types: HashSet<&'a str>,
-    text_labels: HashSet<&'a str>,
     skinned_meshes: HashSet<&'a str>,
     animations: HashSet<&'a str>,
 }
@@ -85,14 +146,9 @@ impl<'a> RefScope<'a> {
 
         RefScope {
             mesh_sources,
-            textures: by_type(&|t| t == "texture"),
             materials: by_type(&|t| t == "material"),
-            models: by_type(&|t| t == "model"),
-            props: by_type(&|t| t == "prop"),
             scenes: by_type(&|t| t == "scene"),
-            camera3ds: by_type(&|t| t == "camera3d"),
             block_types: by_type(&|t| t == "blocktype" || t == "block"),
-            text_labels: by_type(&|t| t == "textlabel"),
             skinned_meshes: by_type(&|t| t == "skinnedmesh"),
             animations: by_type(&|t| t == "animation"),
         }
@@ -102,14 +158,9 @@ impl<'a> RefScope<'a> {
     fn contains(&self, kind: RefKind, name: &str) -> bool {
         match kind {
             RefKind::MeshSource => self.mesh_sources.contains(name),
-            RefKind::Texture => self.textures.contains(name),
             RefKind::Material => self.materials.contains(name),
-            RefKind::Model => self.models.contains(name),
-            RefKind::Prop => self.props.contains(name),
             RefKind::Scene => self.scenes.contains(name),
-            RefKind::CameraShot => self.camera3ds.contains(name),
             RefKind::BlockType => self.block_types.contains(name),
-            RefKind::TextLabel => self.text_labels.contains(name),
             RefKind::SkinnedMesh => self.skinned_meshes.contains(name),
             RefKind::Animation => self.animations.contains(name),
         }
@@ -120,6 +171,8 @@ impl<'a> RefScope<'a> {
 pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
     let scope = RefScope::build(assets);
+
+    validate_registry_refs(assets, &mut errors);
 
     for asset in assets {
         let type_norm = asset.asset_type.to_lowercase().replace('_', "");
@@ -1064,6 +1117,46 @@ mod tests {
         assets.remove(2); // drop the graph
         assets.remove(1); // and its clip (now unowned, which is fine)
         assert!(validate_cross_references(&assets).is_ok());
+    }
+
+    // The drift guard for the unified ref contract: EVERY (field, target)
+    // pair either registry declares -- component or resource asset -- is
+    // actually validated. A world holding only the referencing asset with a
+    // dangling name in that field must report it, so a declared-but-unchecked
+    // ref (the old asset_refs/registry drift) can never reappear.
+    #[test]
+    fn every_registry_ref_field_is_validated() {
+        use crate::registry::ComponentType;
+        use crate::resource_type::ResourceAssetType;
+
+        let all: Vec<(&str, &[(&str, &str)])> = ComponentType::all()
+            .iter()
+            .map(|t| (t.as_str(), t.ref_fields()))
+            .chain(
+                ResourceAssetType::all()
+                    .iter()
+                    .map(|t| (t.as_str(), t.ref_fields())),
+            )
+            .filter(|(_, refs)| !refs.is_empty())
+            .collect();
+        assert!(!all.is_empty());
+
+        for (ty, refs) in all {
+            for &(field, target) in refs {
+                let mut args = serde_json::Map::new();
+                args.insert(
+                    field.to_string(),
+                    serde_json::Value::String("ghost_ref".to_string()),
+                );
+                let probe = asset("probe", ty, serde_json::Value::Object(args));
+                let errs = validate_cross_references(&[probe]).unwrap_err();
+                assert!(
+                    errs.iter()
+                        .any(|e| e.contains("ghost_ref") && e.contains(field)),
+                    "{ty}.{field} (-> {target}): dangling reference not reported; got {errs:?}"
+                );
+            }
+        }
     }
 
     #[test]

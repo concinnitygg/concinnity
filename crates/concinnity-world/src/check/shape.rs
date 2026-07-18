@@ -10,9 +10,11 @@
 // authoring constraint.
 //
 // The rules are driven by the registry's structural metadata (the `singleton`
-// flag, the `refs:` fields targeting Screen / Scene / TextInput), so the
-// expansion passes, the editor, and these assertions share one source of
-// truth.
+// flag), so the expansion passes, the editor, and these assertions share one
+// source of truth. Reference RESOLUTION is not a shape rule: every registry
+// `refs:` field is resolved generically by the cross-reference validator
+// (`validate_registry_refs`); the rules here judge relationships between
+// assets that already resolve.
 
 use crate::registry::ComponentType;
 use crate::world::WorldJsonlAsset;
@@ -62,7 +64,6 @@ fn owning_screen<'a>(
 pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     check_singletons(assets, errors);
     check_initial_screens(assets, errors);
-    check_structural_refs(assets, errors);
     check_focus_ownership(assets, errors);
     check_renderable_contract(assets, errors);
 }
@@ -108,58 +109,12 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// Every explicit structural reference resolves: a field the registry declares
-// as targeting Screen, Scene, or TextInput must name a declared asset of that
-// type. No filler. Name-prefix membership needs no check here: it only fires
-// when the field is absent and can only bind to a declared name.
-fn check_structural_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let screens = names_of_type(assets, "screen");
-    let scenes = names_of_type(assets, "scene");
-    let text_inputs = names_of_type(assets, "textinput");
-    let scope_of = |target: &str| match target {
-        "Screen" => Some(&screens),
-        "Scene" => Some(&scenes),
-        "TextInput" => Some(&text_inputs),
-        _ => None,
-    };
-
-    for ty in ComponentType::all() {
-        let structural: Vec<(&str, &str)> = ty
-            .ref_fields()
-            .iter()
-            .copied()
-            .filter(|(_, target)| scope_of(target).is_some())
-            .collect();
-        if structural.is_empty() {
-            continue;
-        }
-        let type_norm = norm(ty.as_str());
-        for asset in assets.iter().filter(|a| norm(&a.asset_type) == type_norm) {
-            for &(field, target) in &structural {
-                let Some(referenced) = str_arg(asset, field) else {
-                    continue;
-                };
-                let scope = scope_of(target).expect("structural targets are pre-filtered");
-                if !scope.contains(referenced) {
-                    errors.push(format!(
-                        "{} '{}': {} '{}' does not name a declared {}",
-                        ty.as_str(),
-                        asset.name,
-                        field,
-                        referenced,
-                        target
-                    ));
-                }
-            }
-        }
-    }
-}
-
 // A Screen's `focus` must reference a TextInput on that same screen: an input
 // on another screen is not even visible while this one is up, so focusing it
 // would send keystrokes off-screen. An unowned (global) input is allowed. No
-// filler. Existence of the focus target is covered by the structural-ref rule;
-// this rule only judges ownership, so a dangling focus reports once.
+// filler. Existence of the focus target is covered by the generic registry-ref
+// resolution in the cross-reference validator; this rule only judges
+// ownership, so a dangling focus reports once.
 fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let screens = names_of_type(assets, "screen");
     for screen in assets.iter().filter(|a| norm(&a.asset_type) == "screen") {
@@ -292,46 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dangling_screen_reference_is_an_error() {
-        let mut assets = render_stack();
-        assets.push(asset(
-            "icon",
-            "Sprite",
-            serde_json::json!({"screen": "ghost"}),
-        ));
-        let errs = errors_for(&assets);
-        assert_eq!(errs.len(), 1, "{errs:?}");
-        assert!(errs[0].contains("Sprite 'icon'"));
-        assert!(errs[0].contains("'ghost'"));
-    }
-
-    #[test]
-    fn a_resolving_screen_reference_passes() {
-        let mut assets = render_stack();
-        assets.push(asset("menu", "Screen", serde_json::json!({})));
-        assets.push(asset(
-            "icon",
-            "Sprite",
-            serde_json::json!({"screen": "menu"}),
-        ));
-        assert!(errors_for(&assets).is_empty());
-    }
-
-    #[test]
-    fn a_dangling_prop_scene_reference_is_an_error() {
-        // No render stack: Prop shape rules apply without one (the renderable
-        // contract is a separate rule).
-        let assets = vec![
-            asset("day", "Scene", serde_json::json!({})),
-            asset("crate", "Prop", serde_json::json!({"scene": "night"})),
-        ];
-        let errs = errors_for(&assets);
-        assert_eq!(errs.len(), 1, "{errs:?}");
-        assert!(errs[0].contains("Prop 'crate'"));
-        assert!(errs[0].contains("declared Scene"));
-    }
-
-    #[test]
     fn focus_on_another_screens_input_is_an_error() {
         let mut assets = render_stack();
         assets.push(asset(
@@ -386,18 +301,18 @@ mod tests {
         assert!(errors_for(&assets).is_empty());
     }
 
+    // A dangling focus is a resolution failure, reported once by the generic
+    // registry-ref pass in the cross-reference validator; the ownership rule
+    // skips it rather than piling on a second error.
     #[test]
-    fn a_dangling_focus_reports_only_the_missing_reference() {
+    fn ownership_skips_a_dangling_focus() {
         let mut assets = render_stack();
         assets.push(asset(
             "menu",
             "Screen",
             serde_json::json!({"focus": "ghost"}),
         ));
-        let errs = errors_for(&assets);
-        assert_eq!(errs.len(), 1, "{errs:?}");
-        assert!(errs[0].contains("focus 'ghost'"), "{errs:?}");
-        assert!(errs[0].contains("declared TextInput"), "{errs:?}");
+        assert!(errors_for(&assets).is_empty());
     }
 
     #[test]
