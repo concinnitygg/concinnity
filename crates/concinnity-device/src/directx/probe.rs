@@ -895,6 +895,14 @@ impl DxContext {
             // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
             // reuse the bindless main PSO, which references it unconditionally.
             cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
+            // [13] ClusterParams + [14] the per-cluster light lists. These faces
+            // bind the `use_clusters = 0` copy: their viewpoint differs from the
+            // grid the main camera binned, so they iterate every local light.
+            cmd.SetGraphicsRootConstantBufferView(
+                13,
+                self.cluster_params_gva(self.current_frame, false),
+            );
+            cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
             cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
             // [10] probe cube array (valid -- filled with the sky) + [11] the EMPTY
             // ProbeSet (count 0), so a probe face samples only the sky, not other

@@ -1144,10 +1144,11 @@ impl BakeResources {
         // global + Hi-Z sets.
         let tex_pool = (ctx.textures.len() + ctx.normal_map_textures.len()) as u32;
         let has_hiz = ctx.cull.hiz.is_some();
-        let uniform_count = PROBE_FACE_COUNT as u32 * 4 + u32::from(has_hiz);
-        // 4 cull SSBOs + one bindless object SSBO per face + one binding-9
-        // local-light SSBO per global set.
-        let storage_count = 4 + PROBE_FACE_COUNT as u32 + PROBE_FACE_COUNT as u32;
+        // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
+        let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);
+        // 4 cull SSBOs + one bindless object SSBO per face + the binding-9
+        // local-light and binding-11 cluster-list SSBOs, one of each per global set.
+        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 3;
         let sampler_count =
             PROBE_FACE_COUNT as u32 * (tex_pool + 4 + MAX_PROBES as u32) + u32::from(has_hiz);
         let pool_sizes = [
@@ -1291,6 +1292,26 @@ impl BakeResources {
                 LOCAL_LIGHT_SSBO_BINDING,
                 ctx.uniforms.local_light_buffer,
                 ctx.uniforms.local_light_size,
+            );
+            // Bindings 10 + 11: the `use_clusters = 0` ClusterParams (a cube face
+            // does not match the main camera's grid) + the cluster lists, bound
+            // because the forward shader references them unconditionally.
+            let cluster_params_info = vk::DescriptorBufferInfo::default()
+                .buffer(ctx.light_cull.unclustered_buffer)
+                .offset(0)
+                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+            let cluster_write = vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&cluster_params_info));
+            unsafe { device.update_descriptor_sets(std::slice::from_ref(&cluster_write), &[]) };
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING,
+                ctx.light_cull.cluster_buffer,
+                super::light_cull::cluster_list_size(),
             );
         }
 

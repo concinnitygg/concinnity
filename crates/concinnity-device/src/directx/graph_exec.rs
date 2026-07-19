@@ -637,6 +637,14 @@ impl DxContext {
                     pass_id.name()
                 ));
             }
+            PassId::LightCull => {
+                // Bins the local lights into per-cluster index lists. The
+                // builder emits this node only when the world has local lights
+                // (matching `clustered_lighting_enabled`), and the RAW edge on
+                // `cluster_light_list` pins it before Main, which reads the
+                // same buffer.
+                self.encode_light_cull(cmd, params.frame_idx)?;
+            }
             PassId::SsrPrepass => {
                 // Merged into GBufferPrepass on DX: the builder emits the
                 // unified node (unified_gbuffer_prepass = true) and never this.

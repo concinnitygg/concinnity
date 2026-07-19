@@ -62,6 +62,19 @@ pub(in crate::vulkan) const PROBE_CUBE_ARRAY_BINDING: u32 = 8;
 // past `PROBE_CUBE_ARRAY_BINDING`.
 pub(in crate::vulkan) const LOCAL_LIGHT_SSBO_BINDING: u32 = 9;
 
+// Binding number of the clustered-lighting `ClusterParams` UBO in global set 0:
+// a count-1 UNIFORM_BUFFER in the fragment stage. The main camera binds this
+// frame's live params; the planar / probe re-renders bind the static
+// `use_clusters = 0` copy. Appended inline in `init.rs` alongside the probe cube
+// array + local-light SSBO, one past `LOCAL_LIGHT_SSBO_BINDING`.
+pub(in crate::vulkan) const CLUSTER_PARAMS_UBO_BINDING: u32 = 10;
+
+// Binding number of the per-cluster light-index list SSBO in global set 0: a
+// count-1 STORAGE_BUFFER in the fragment stage, written by the `LightCull`
+// compute pass. Appended inline in `init.rs`, one past
+// `CLUSTER_PARAMS_UBO_BINDING`.
+pub(in crate::vulkan) const CLUSTER_LIGHT_LIST_SSBO_BINDING: u32 = 11;
+
 // Per-object set (set 1): albedo at 0, normal map at 1.
 pub(in crate::vulkan) fn object_set() -> [Binding; 2] {
     use vk::DescriptorType as T;
@@ -143,6 +156,18 @@ mod tests {
     #[test]
     fn local_light_ssbo_binding_follows_probe_cube_array() {
         assert_eq!(LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING + 1);
+    }
+
+    // The clustered-lighting bindings continue the same gap-free run above the
+    // count-1 global-set table: probe cubes 8, local lights 9, ClusterParams 10,
+    // cluster lists 11. A reorder that collides them fails here.
+    #[test]
+    fn cluster_bindings_follow_local_light_ssbo() {
+        assert_eq!(CLUSTER_PARAMS_UBO_BINDING, LOCAL_LIGHT_SSBO_BINDING + 1);
+        assert_eq!(
+            CLUSTER_LIGHT_LIST_SSBO_BINDING,
+            CLUSTER_PARAMS_UBO_BINDING + 1
+        );
     }
 
     #[test]

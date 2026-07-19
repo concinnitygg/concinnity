@@ -101,6 +101,35 @@ StructuredBuffer<GpuObjectData> objects : register(t3);
 // Per-scene local lights (point + spot + area) for the forward pass. t1 is free
 // in the bindless root signature (only the legacy pass uses t1/t2 for textures).
 StructuredBuffer<GpuLight> local_lights : register(t1);
+
+// Per-cluster light-list stride: MAX_LIGHTS_PER_CLUSTER + 1 (slot 0 is the
+// count). Matches CLUSTER_LIGHT_LIST_STRIDE in render_types.rs.
+static const uint CLUSTER_LIGHT_LIST_STRIDE = 64u;
+
+// Clustered lighting params (matches ClusterParams in render_types.rs). Only
+// the grid dims / depth range / screen size map a fragment to its cluster; the
+// matrix and camera fields are the compute kernel's and go unread here. b4 is
+// the ProbeSet cbuffer (probe_common.hlsl), so this sits at b5.
+cbuffer ClusterBlock : register(b5)
+{
+    float4x4 cl_inv_view_proj;
+    float3   cl_cam_pos;
+    float    cl_z_near;
+    float3   cl_view_forward;
+    float    cl_z_far;
+    uint     cl_grid_x;
+    uint     cl_grid_y;
+    uint     cl_grid_z;
+    uint     cl_num_lights;
+    float    cl_screen_w;
+    float    cl_screen_h;
+    uint     cl_use_clusters;
+    uint     cl_pad;
+}
+
+// Per-cluster light-index lists the LightCull compute pass writes. t7.. is the
+// probe cube array, so this sits at t2.
+StructuredBuffer<uint> cluster_light_list : register(t2);
 // Unbounded bindless albedo + normal-map pool. `albedo_index` / `normal_index`
 // on the object record index it directly.
 Texture2D tex_pool[] : register(t0, space1);
@@ -350,8 +379,34 @@ float4 main(PsIn p) : SV_TARGET
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int j = 0; j < num_local_lights; j++)
+    // Clustered light iteration: when clustering is active (the main camera),
+    // map this fragment to its froxel cluster and shade only that cluster's
+    // binned lights. Planar / probe re-renders bind use_clusters = 0 (their
+    // viewpoint differs from the grid the main camera binned) and fall back to
+    // iterating every local light.
+    uint cluster_base = 0u;
+    int  local_count;
+    if (cl_use_clusters != 0u)
     {
+        uint cx = min(uint(p.sv_pos.x / cl_screen_w * float(cl_grid_x)), cl_grid_x - 1u);
+        uint cy = min(uint(p.sv_pos.y / cl_screen_h * float(cl_grid_y)), cl_grid_y - 1u);
+        float zd = max(p.view_depth, cl_z_near);
+        uint cz = min(uint(log(zd / cl_z_near) / log(cl_z_far / cl_z_near) * float(cl_grid_z)),
+                      cl_grid_z - 1u);
+        uint cid = cx + cy * cl_grid_x + cz * cl_grid_x * cl_grid_y;
+        cluster_base = cid * CLUSTER_LIGHT_LIST_STRIDE;
+        local_count = int(cluster_light_list[cluster_base]);
+    }
+    else
+    {
+        local_count = num_local_lights;
+    }
+
+    for (int jj = 0; jj < local_count; jj++)
+    {
+        int j = (cl_use_clusters != 0u)
+              ? int(cluster_light_list[cluster_base + 1u + uint(jj)])
+              : jj;
         float3 pos_w  = local_lights[j].position;
         float  range  = local_lights[j].range;
         float3 col    = local_lights[j].color;

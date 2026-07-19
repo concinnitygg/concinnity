@@ -13,11 +13,14 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
-use crate::gfx::render_types::{LightUniforms, ShadowUniforms, TextDrawCall};
+use crate::gfx::render_types::{
+    CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, ShadowUniforms,
+    TextDrawCall,
+};
 
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
-use super::math::{mat4_mul, perspective};
+use super::math::{mat4_inverse, mat4_mul, perspective};
 use super::texture::transition_barrier;
 
 mod composite;
@@ -268,9 +271,10 @@ impl DxContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
-            // Clustered light binning is Metal-only so far; DX iterates the local
-            // lights directly.
-            clustered_lighting_enabled: false,
+            // Clustered light binning. The compute pipeline is built only when
+            // the world has local lights to bin, so this also gates the
+            // `LightCull` graph node; otherwise the forward pass brute-forces.
+            clustered_lighting_enabled: self.light_cull.pso.is_some(),
         };
 
         // Compute the camera VPs the main + velocity passes consume.
@@ -319,6 +323,36 @@ impl DxContext {
             (None, None) => proj,
         };
         let vp_mat = mat4_mul(render_proj, self.view_matrix);
+
+        // Clustered light-binning params (main camera). The compute pass reads
+        // these to build each cluster's world-space AABB (un-jittered inverse VP
+        // + camera forward, matching the fog froxel convention) and the forward
+        // pass reads the grid dims / depth range / screen size to place a
+        // fragment. `use_clusters` is set only when the world has local lights;
+        // otherwise the forward pass iterates them all. Slot 1 of the same
+        // buffer holds the `use_clusters = 0` copy the planar / probe
+        // re-renders bind (written once at init).
+        let clustered = self.light_cull.pso.is_some();
+        let cluster_params = ClusterParams {
+            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view_matrix)),
+            cam_pos,
+            z_near: near.max(1e-3),
+            view_forward: [
+                -self.view_matrix[0][2],
+                -self.view_matrix[1][2],
+                -self.view_matrix[2][2],
+            ],
+            z_far: far,
+            grid_x: CLUSTER_GRID_X,
+            grid_y: CLUSTER_GRID_Y,
+            grid_z: CLUSTER_GRID_Z,
+            num_lights: self.uniforms.light_uniforms.num_local_lights.max(0) as u32,
+            screen_w: width as f32,
+            screen_h: height as f32,
+            use_clusters: u32::from(clustered),
+            _pad: 0,
+        };
+        self.write_cluster_params(frame_idx, &cluster_params);
 
         // Upload this frame's view UBO.
         // Fade the forward probe specular only when a resolve will actually

@@ -1073,6 +1073,39 @@ impl DxContext {
             buf
         };
 
+        // Clustered light binning. The per-cluster list + `ClusterParams` buffers
+        // are always allocated (the forward shaders reference them
+        // unconditionally, guarded by `use_clusters`); the compute pipeline is
+        // built only when the world has local lights to bin, which is also what
+        // gates the `LightCull` graph node.
+        let light_cull = {
+            use super::light_cull as lc;
+            let cluster_buffer = lc::build_cluster_light_buffer(&device)?;
+            let (params_resources, params_ptrs) =
+                lc::build_cluster_params_buffers(&device, FRAMES)?;
+            let (root_sig, pso) = if local_lights.is_empty() {
+                (None, None)
+            } else {
+                let cs = lc::compile_light_cull_shader(hot_reload)?;
+                let rs = dump_on_err(
+                    info_queue.as_ref(),
+                    lc::create_light_cull_root_signature(&device),
+                )?;
+                let pso = dump_on_err(
+                    info_queue.as_ref(),
+                    lc::create_light_cull_pso(&device, &rs, &cs),
+                )?;
+                (Some(rs), Some(pso))
+            };
+            lc::LightCullState {
+                root_sig,
+                pso,
+                cluster_buffer,
+                params_resources,
+                params_ptrs,
+            }
+        };
+
         // Shaders + root sigs + PSOs (main / shadow / instanced / text /
         // composite + bindless static main + GPU-cull compute). See
         // init/pipelines.rs.
@@ -2081,6 +2114,7 @@ impl DxContext {
             },
             main_root_sig,
             main_pso,
+            light_cull,
             cull: CullState {
                 main_bindless_root_sig,
                 main_bindless_pso,

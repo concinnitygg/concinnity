@@ -974,6 +974,22 @@ impl VkContext {
         // Empty scene keeps the 1-element placeholder (nothing copied in).
         upload_local_lights(&device, local_light_memory, &local_lights)?;
 
+        // Clustered light binning. The per-cluster list + `ClusterParams` buffers
+        // are always allocated (the forward shaders reference bindings 10 + 11
+        // unconditionally, guarded by `use_clusters`); the compute pipeline is
+        // built only when the world has local lights to bin, which is also what
+        // gates the `LightCull` graph node.
+        let light_cull = super::light_cull::build_light_cull(
+            &instance,
+            &device,
+            physical_device,
+            frames,
+            local_light_buffer,
+            local_light_buffer_size,
+            !local_lights.is_empty(),
+            hot_reload,
+        )?;
+
         //  IBL resources (always created so descriptor bindings 4/5 are valid)
         let cube_sampler = create_sampler_cube_linear(&device)?;
         let env_map = if let Some(bytes) = env_map_bytes {
@@ -1076,6 +1092,22 @@ impl VkContext {
             bindings.push(
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
+            // Binding 10: ClusterParams UBO + binding 11: the per-cluster
+            // light-index lists the LightCull compute pass writes.
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
@@ -1565,9 +1597,10 @@ impl VkContext {
         let mut pool_sizes = vec![
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                // global (4 per frame: view + light + shadow + ProbeSet) + shadow
-                // global (1 per frame) + gbuffer bindless GbView UBO (1 per frame).
-                .descriptor_count(n_frames * 4 + n_frames + gbuffer_sets_count),
+                // global (5 per frame: view + light + shadow + ProbeSet +
+                // ClusterParams) + shadow global (1 per frame) + gbuffer bindless
+                // GbView UBO (1 per frame).
+                .descriptor_count(n_frames * 5 + n_frames + gbuffer_sets_count),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 // per-obj(2) + per-frame {shadow + IBL irradiance + IBL
@@ -1607,8 +1640,9 @@ impl VkContext {
             + 3 * shadow_cull_set_count
             // GPU-driven G-buffer: one prev_model SSBO per frame.
             + gbuffer_sets_count
-            // Per-scene local-light SSBO: one descriptor per global set (per
-            // frame).
+            // Per-scene local-light SSBO + the per-cluster light-list SSBO: one
+            // of each per global set (per frame).
+            + n_frames
             + n_frames;
         if storage_count > 0 {
             pool_sizes.push(
@@ -1692,6 +1726,16 @@ impl VkContext {
                 .buffer(local_light_buffer)
                 .offset(0)
                 .range(local_light_buffer_size);
+            // Clustered lighting: this frame's live ClusterParams (binding 10)
+            // and the shared per-cluster light lists (binding 11).
+            let cluster_params_info = vk::DescriptorBufferInfo::default()
+                .buffer(light_cull.params_buffers[i])
+                .offset(0)
+                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+            let cluster_list_info = vk::DescriptorBufferInfo::default()
+                .buffer(light_cull.cluster_buffer)
+                .offset(0)
+                .range(super::light_cull::cluster_list_size());
             // Probe cube array (binding 8): every slot points at the IBL prefilter
             // cube until a probe bakes. No descriptor-indexing extension is
             // enabled, so every one of the MAX_PROBES descriptors must hold a valid
@@ -1759,6 +1803,18 @@ impl VkContext {
                     .dst_binding(super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&local_light_info)),
+                // Binding 10: ClusterParams UBO (this frame's live params).
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&cluster_params_info)),
+                // Binding 11: per-cluster light-index lists.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&cluster_list_info)),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
@@ -3218,6 +3274,8 @@ impl VkContext {
                     light_size: light_ubo_size,
                     local_light_buffer,
                     local_light_size: local_light_buffer_size,
+                    cluster_params_ubo: light_cull.unclustered_buffer,
+                    cluster_list_buffer: light_cull.cluster_buffer,
                     shadow_ubo,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
@@ -3508,6 +3566,7 @@ impl VkContext {
             text_sampler,
             main_pipeline,
             main_pipeline_layout,
+            light_cull,
             cull: VkCull {
                 bindless_pipeline,
                 bindless_pipeline_layout,

@@ -18,6 +18,7 @@ mod graph_exec;
 mod hiz;
 mod hot_reload;
 mod init;
+mod light_cull;
 mod math;
 mod parallel_encoder;
 mod particle;

@@ -19,6 +19,7 @@ mod hiz;
 mod hot_reload;
 mod init;
 mod input;
+mod light_cull;
 mod main;
 mod math;
 mod parallel_encoder;

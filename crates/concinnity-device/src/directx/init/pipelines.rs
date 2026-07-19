@@ -351,6 +351,28 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [10] Root CBV: ClusterParams at b4 (clustered lighting).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 4,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [11] Root SRV: per-cluster light-index lists at t8.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 8,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main root sig")
@@ -576,6 +598,29 @@ fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [13] Root CBV: ClusterParams at b5 (b4 is the ProbeSet cbuffer).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 5,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [14] Root SRV: per-cluster light-index lists at t2 (t7.. is the probe
+        // cube array).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 2,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
@@ -754,6 +799,28 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
                     ShaderRegister: 7,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [11] Root CBV: ClusterParams at b4 (clustered lighting).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 4,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [12] Root SRV: per-cluster light-index lists at t8.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 8,
                     RegisterSpace: 0,
                 },
             },

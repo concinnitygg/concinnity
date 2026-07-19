@@ -105,6 +105,34 @@ layout(std430, set = 0, binding = 9) readonly buffer LocalLightBlock {
     GpuLight local_lights[];
 } local_light_buf;
 
+// Per-cluster light-list stride: MAX_LIGHTS_PER_CLUSTER + 1 (slot 0 is the
+// count). Matches CLUSTER_LIGHT_LIST_STRIDE in render_types.rs.
+const uint CLUSTER_LIGHT_LIST_STRIDE = 64u;
+
+// Clustered lighting params (matches ClusterParams in render_types.rs). Only
+// the grid dims / depth range / screen size map a fragment to its cluster; the
+// matrix and camera fields are the compute kernel's and go unread here.
+layout(std140, set = 0, binding = 10) uniform ClusterBlock {
+    mat4  inv_view_proj;
+    vec3  cam_pos;
+    float z_near;
+    vec3  view_forward;
+    float z_far;
+    uint  grid_x;
+    uint  grid_y;
+    uint  grid_z;
+    uint  num_lights;
+    float screen_w;
+    float screen_h;
+    uint  use_clusters;
+    uint  _pad;
+} cluster;
+
+// Per-cluster light-index lists the LightCull compute pass writes.
+layout(std430, set = 0, binding = 11) readonly buffer ClusterListBlock {
+    uint cluster_list[];
+} cluster_list_buf;
+
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
 // record's albedo_index / normal_index address it directly.
 layout(set = 1, binding = 1) uniform sampler2D tex_pool[{POOL_SIZE}];
@@ -328,7 +356,33 @@ void main() {
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int i = 0; i < lights.num_local_lights; i++) {
+    // Clustered light iteration: when clustering is active (the main camera),
+    // map this fragment to its froxel cluster and shade only that cluster's
+    // binned lights. Planar / probe re-renders bind use_clusters = 0 (their
+    // viewpoint differs from the grid the main camera binned) and fall back to
+    // iterating every local light.
+    uint cluster_base = 0u;
+    int  local_count;
+    if (cluster.use_clusters != 0u) {
+        uint cx = min(uint(gl_FragCoord.x / cluster.screen_w * float(cluster.grid_x)),
+                      cluster.grid_x - 1u);
+        uint cy = min(uint(gl_FragCoord.y / cluster.screen_h * float(cluster.grid_y)),
+                      cluster.grid_y - 1u);
+        float zd = max(frag_view_depth, cluster.z_near);
+        uint cz = min(uint(log(zd / cluster.z_near) / log(cluster.z_far / cluster.z_near)
+                           * float(cluster.grid_z)),
+                      cluster.grid_z - 1u);
+        uint cid = cx + cy * cluster.grid_x + cz * cluster.grid_x * cluster.grid_y;
+        cluster_base = cid * CLUSTER_LIGHT_LIST_STRIDE;
+        local_count = int(cluster_list_buf.cluster_list[cluster_base]);
+    } else {
+        local_count = lights.num_local_lights;
+    }
+
+    for (int jj = 0; jj < local_count; jj++) {
+        int i = (cluster.use_clusters != 0u)
+              ? int(cluster_list_buf.cluster_list[cluster_base + 1u + uint(jj)])
+              : jj;
         vec3  pos_w   = local_light_buf.local_lights[i].position;
         float range   = local_light_buf.local_lights[i].range;
         vec3  col     = local_light_buf.local_lights[i].color;

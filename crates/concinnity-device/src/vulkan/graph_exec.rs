@@ -544,6 +544,14 @@ impl VkContext {
                 // cull; both feed Main, which the toposort orders after Cull.
                 self.encode_skin(cmd, params.frame_idx);
             }
+            PassId::LightCull => {
+                // Bins the local lights into per-cluster index lists. The builder
+                // emits this node only when the world has local lights (matching
+                // `clustered_lighting_enabled`), and the RAW edge on
+                // `cluster_light_list` pins it before Main, which reads the same
+                // buffer.
+                self.encode_light_cull(cmd, params.frame_idx);
+            }
             PassId::SsaoBlur => {
                 // The single graph node for the bundled `encode_ssao`
                 // dispatch: encodes the GTAO kernel + depth-aware blur over the

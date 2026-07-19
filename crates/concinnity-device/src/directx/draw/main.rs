@@ -308,6 +308,10 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                 // [12] root SRV: per-scene GpuLight storage buffer (t1).
                 cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
+                // [13] ClusterParams (b5) + [14] the per-cluster light lists
+                // (t2). The main camera shades from its cluster's binned lights.
+                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 // [5] is the bindless texture pool (per-object SRV region base).
@@ -364,6 +368,9 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                 // [9] root SRV: per-scene GpuLight storage buffer (t7).
                 cmd.SetGraphicsRootShaderResourceView(9, local_lights_gva);
+                // [10] ClusterParams (b4) + [11] the per-cluster light lists (t8).
+                cmd.SetGraphicsRootConstantBufferView(10, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(11, self.cluster_list_gva());
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
@@ -459,6 +466,9 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
                 // [10] root SRV: per-scene GpuLight storage buffer (t7).
                 cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
+                // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
+                cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
             }
 
             // Shared cluster cull + bucket iteration; the closures own
@@ -555,6 +565,13 @@ impl DxContext {
                     cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                     // [12] root SRV: per-scene GpuLight storage buffer (t1).
                     cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
+                    // [13] ClusterParams (b5) + [14] the per-cluster light lists
+                    // (t2). The main camera shades from its cluster's lights.
+                    cmd.SetGraphicsRootConstantBufferView(
+                        13,
+                        self.cluster_params_gva(frame_idx, true),
+                    );
+                    cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                     cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                     cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                     cmd.SetGraphicsRootDescriptorTable(
@@ -614,6 +631,9 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
                 // [10] root SRV: per-scene GpuLight storage buffer (t7).
                 cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
+                // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
+                cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
             }
 
             // Shared skinned traversal (gate + LOD pick); the closure owns
@@ -786,6 +806,10 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
                 // [12] root SRV: per-scene GpuLight storage buffer (t1).
                 cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
+                // [13] ClusterParams (b5) + [14] the per-cluster light lists
+                // (t2). The main camera shades from its cluster's binned lights.
+                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(

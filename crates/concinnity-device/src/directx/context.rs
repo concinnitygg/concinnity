@@ -813,6 +813,10 @@ pub struct DxContext {
     // GPU-driven cull + bindless static main pass. All `Some`/non-empty only
     // on the bindless path with build-time geometry. See [`CullState`].
     pub(super) cull: CullState,
+    // Clustered light binning: the compute pipeline (built only when the world
+    // has local lights), the per-cluster light-index buffer, and the per-frame
+    // `ClusterParams` constant buffers. See [`LightCullState`].
+    pub(super) light_cull: super::light_cull::LightCullState,
     pub(super) shadow_root_sig: Option<ID3D12RootSignature>,
     pub(super) shadow_pso: Option<ID3D12PipelineState>,
     pub(super) text_root_sig: ID3D12RootSignature,
@@ -2129,6 +2133,7 @@ impl Drop for DxContext {
         }
         // Unmap persistent CBV mappings (view + shadow).
         self.uniforms.unmap();
+        self.light_cull.unmap();
         unsafe { CloseHandle(self.frame_sync.fence_event) }.ok();
         // The remaining COM objects (device, swapchain, heaps, etc.) are reference-
         // counted and released automatically when the struct fields are dropped.

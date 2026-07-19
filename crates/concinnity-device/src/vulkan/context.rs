@@ -847,6 +847,10 @@ pub struct VkContext {
     // GPU-driven cull + bindless static main pass + two-pass Hi-Z occlusion
     // (pyramid + temporal state). See `VkCull`.
     pub(super) cull: VkCull,
+    // Clustered light binning: the compute pipeline (built only when the world
+    // has local lights), the per-cluster light-index buffer, and the
+    // `ClusterParams` UBOs. See `VkLightCull`.
+    pub(super) light_cull: super::light_cull::VkLightCull,
 
     pub(super) text_pipeline: Option<vk::Pipeline>,
     pub(super) text_pipeline_layout: vk::PipelineLayout,
@@ -2156,6 +2160,7 @@ impl Drop for VkContext {
         // descriptor sets are freed with the shared descriptor pool +
         // `two_pass_pool`.
         self.cull.destroy(device);
+        self.light_cull.destroy(device);
 
         // Composite pass resources.
         self.color_lut.destroy(device);

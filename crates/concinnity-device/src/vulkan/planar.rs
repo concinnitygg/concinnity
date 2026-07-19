@@ -338,6 +338,12 @@ pub(in crate::vulkan) struct PlanarLightingBindings {
     // shared static buffer, bound unchanged into every planar global set.
     pub(in crate::vulkan) local_light_buffer: vk::Buffer,
     pub(in crate::vulkan) local_light_size: u64,
+    // Clustered lighting (global set 0 bindings 10 + 11). A reflected view does
+    // not match the main camera's cluster grid, so these sets bind the static
+    // `use_clusters = 0` ClusterParams and fall back to iterating every light;
+    // the list SSBO is still bound because the shader references it.
+    pub(in crate::vulkan) cluster_params_ubo: vk::Buffer,
+    pub(in crate::vulkan) cluster_list_buffer: vk::Buffer,
     pub(in crate::vulkan) shadow_ubo: vk::Buffer,
     pub(in crate::vulkan) shadow_size: u64,
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
@@ -385,6 +391,8 @@ impl PlanarReflectionSet {
             light_size,
             local_light_buffer,
             local_light_size,
+            cluster_params_ubo,
+            cluster_list_buffer,
             shadow_ubo,
             shadow_size,
             shadow_map_view,
@@ -507,16 +515,18 @@ impl PlanarReflectionSet {
         // storage each) + one Hi-Z set (1 sampler + 1 UBO) when the world runs Hi-Z.
         let has_hiz = cull.hiz.is_some();
         let pool_sizes = [
+            // ring * (view + light + shadow + ProbeSet + ClusterParams) UBOs.
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count((ring * 4 + usize::from(has_hiz)).max(1) as u32),
+                .descriptor_count((ring * 5 + usize::from(has_hiz)).max(1) as u32),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count((ring * (4 + MAX_PROBES) + usize::from(has_hiz)).max(1) as u32),
-            // ring * 4 cull-set SSBOs + one binding-9 local-light SSBO per global set.
+            // ring * 4 cull-set SSBOs + the binding-9 local-light and binding-11
+            // cluster-list SSBOs, one of each per global set.
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count((ring * 4 + ring).max(1) as u32),
+                .descriptor_count((ring * 4 + ring + ring).max(1) as u32),
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
@@ -568,6 +578,26 @@ impl PlanarReflectionSet {
                 super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING,
                 local_light_buffer,
                 local_light_size,
+            );
+            // Bindings 10 + 11: the `use_clusters = 0` ClusterParams (a reflected
+            // view does not match the main camera's grid) + the cluster lists,
+            // bound because the forward shader references them unconditionally.
+            let cluster_params_info = vk::DescriptorBufferInfo::default()
+                .buffer(cluster_params_ubo)
+                .offset(0)
+                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+            let cluster_write = vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&cluster_params_info));
+            unsafe { device.update_descriptor_sets(std::slice::from_ref(&cluster_write), &[]) };
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING,
+                cluster_list_buffer,
+                super::light_cull::cluster_list_size(),
             );
         }
 
