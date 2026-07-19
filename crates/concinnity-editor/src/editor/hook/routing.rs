@@ -59,6 +59,8 @@ impl EditorHook {
     pub(super) fn hud_state(&self) -> HudState {
         HudState {
             dirty: self.dirty,
+            undo: self.can_undo(),
+            redo: self.can_redo(),
             view_open: self.view_open,
             visible: self.hud_visible,
         }
@@ -85,10 +87,10 @@ impl EditorHook {
     // claims it comes to the front. A press on a panel's title bar starts a drag.
     pub(super) fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
-        if let Some(a) = hud::hit_test(mx, my, true, self.dirty, vp[0]) {
+        if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
             // SAVE only writes to disk now; it neither rebuilds nor re-injects the
             // world, so an open form is left intact (no blank-field risk).
-            self.apply_top(a);
+            self.apply_top(a, world);
             self.combo = Combo::Closed;
             self.row_menu = None;
             return;

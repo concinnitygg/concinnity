@@ -121,7 +121,7 @@ fn hide_title_bar(world: &mut World) {
 }
 
 fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
-    let (save_rect, view_rect) = hud::layout(REF_W);
+    let bar = hud::layout(REF_W);
 
     world.add_component(button_sprite(
         hud::BAR_BG,
@@ -129,20 +129,18 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
         theme::CHROME_TINT,
         true,
     ));
-    world.add_component(button_sprite(
-        hud::SAVE_BUTTON,
-        save_rect,
-        theme::BUTTON_TINT,
-        true,
-    ));
-    world.add_component(button_sprite(
-        hud::VIEW_BUTTON,
-        view_rect,
-        theme::BUTTON_TINT,
-        true,
-    ));
-    world.add_component(centered_label(hud::SAVE_LABEL, "Save", save_rect, font));
-    world.add_component(centered_label(hud::VIEW_LABEL, "View", view_rect, font));
+    for (id, rect) in [
+        (hud::SAVE_BUTTON, bar.save),
+        (hud::VIEW_BUTTON, bar.view),
+        (hud::UNDO_BUTTON, bar.undo),
+        (hud::REDO_BUTTON, bar.redo),
+    ] {
+        world.add_component(button_sprite(id, rect, theme::BUTTON_TINT, true));
+    }
+    world.add_component(centered_label(hud::SAVE_LABEL, "Save", bar.save, font));
+    world.add_component(centered_label(hud::VIEW_LABEL, "View", bar.view, font));
+    world.add_component(centered_label(hud::UNDO_LABEL, "Undo", bar.undo, font));
+    world.add_component(centered_label(hud::REDO_LABEL, "Redo", bar.redo, font));
 }
 
 // Materialize a templates asset spec into a live component through the engine's

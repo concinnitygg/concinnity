@@ -84,9 +84,9 @@ fn starts_in_edit_mode_with_hud_shown() {
 fn view_button_and_view_rows_toggle_the_panels() {
     let mut h = hook(Vec::new());
     let mut world = World::new_empty();
-    h.apply_top(HudAction::ToggleView);
+    h.apply_top(HudAction::ToggleView, &mut world);
     assert!(h.view_open, "the View button shows the View panel");
-    h.apply_top(HudAction::ToggleView);
+    h.apply_top(HudAction::ToggleView, &mut world);
     assert!(!h.view_open, "a second click hides it");
     // Row 0 -> Assets, row 1 -> Preview, row 2 -> Templates.
     h.toggle_view_row(0, &mut world);
@@ -152,7 +152,7 @@ fn template_detail_rows_and_close() {
 #[test]
 fn entry_changes_request_a_preview_rebuild() {
     let mut h = hook(Vec::new());
-    h.apply_top(HudAction::ToggleView);
+    h.apply_top(HudAction::ToggleView, &mut World::new_empty());
     assert!(
         !h.rebuild_preview && !h.dirty,
         "a view toggle is not an entry change"
@@ -967,7 +967,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     assert!(!vis(&world, view::PANEL_BG) && !vis(&world, templates::PANEL_BG));
 
     // Frame 2: click the top-bar View button -> the View panel opens.
-    let (_, view_btn) = hud::layout(vp[0]);
+    let view_btn = hud::layout(vp[0]).view;
     set_input(
         &mut world,
         FrameInput {
@@ -2634,4 +2634,132 @@ fn a_broken_world_reports_its_error_on_the_expanded_tab() {
     assert!(h.expanded_groups.is_empty());
     let status = h.expanded_status.as_deref().expect("the failure surfaces");
     assert!(status.contains("NotARealAssetType"), "{status}");
+}
+
+// A committed edit becomes one undo step: undo restores the pre-edit list (and
+// clears dirty when that list matches the on-disk state), redo replays it.
+#[test]
+fn undo_reverts_a_committed_edit_and_redo_replays_it() {
+    let mut world = World::new_empty();
+    let mut h = hook(vec![entry("a", "Sprite")]);
+    assert!(!h.hud_state().undo && !h.hud_state().redo);
+
+    h.entries.push(entry("b", "Sprite"));
+    h.mark_changed();
+    assert!(h.dirty && h.hud_state().undo);
+
+    h.undo(&mut world);
+    assert_eq!(h.entries, vec![entry("a", "Sprite")]);
+    assert!(!h.dirty, "back at the on-disk list: Save chip clears");
+    assert!(
+        h.rebuild_preview,
+        "the restored list drives the live preview"
+    );
+    assert!(h.hud_state().redo);
+
+    h.redo(&mut world);
+    assert_eq!(h.entries, vec![entry("a", "Sprite"), entry("b", "Sprite")]);
+    assert!(h.dirty, "the replayed edit is unsaved again");
+}
+
+// Editing from an undone state forks the timeline: the redo branch is gone.
+#[test]
+fn an_edit_after_undo_drops_the_redo_branch() {
+    let mut world = World::new_empty();
+    let mut h = hook(Vec::new());
+    h.entries.push(entry("b", "Sprite"));
+    h.mark_changed();
+    h.undo(&mut world);
+    assert!(h.hud_state().redo);
+
+    h.entries.push(entry("c", "Sprite"));
+    h.mark_changed();
+    assert!(!h.hud_state().redo, "the new edit invalidates redo");
+    h.undo(&mut world);
+    assert!(h.entries.is_empty());
+}
+
+// A mark_changed that changed nothing (e.g. an Apply that staged no edits)
+// records no phantom undo step.
+#[test]
+fn a_no_change_mark_records_no_undo_step() {
+    let mut h = hook(vec![entry("a", "Sprite")]);
+    h.mark_changed();
+    assert!(!h.hud_state().undo, "nothing changed, nothing to undo");
+}
+
+// The open form and row menu index into `entries`; a history jump drops them so
+// they can never point at a removed or shifted row.
+#[test]
+fn undo_drops_entry_indexed_ui_state() {
+    let mut world = World::new_empty();
+    let mut h = hook(vec![entry("a", "Sprite")]);
+    h.entries.push(entry("b", "Sprite"));
+    h.mark_changed();
+    h.selected_type = Some("Sprite".to_string());
+    h.editing = Some(1);
+    h.row_menu = Some(1);
+
+    h.undo(&mut world);
+    assert_eq!(h.editing, None, "the form no longer targets a live row");
+    assert_eq!(h.selected_type, None);
+    assert_eq!(h.row_menu, None);
+}
+
+// Ctrl+Z / Ctrl+Y drive the history from the tick, but stand down while a text
+// field owns the keyboard or the world holds the cursor (play mode).
+#[test]
+fn ctrl_z_y_step_history_unless_typing_or_playing() {
+    use crate::assets::Key;
+    let step = |h: &mut EditorHook, key: Key| {
+        let mut world = world_with_input(FrameInput {
+            viewport: [1280.0, 720.0],
+            ctrl: true,
+            captured_key: Some(key),
+            ..Default::default()
+        });
+        h.tick(&mut world);
+    };
+    let mut h = hook(Vec::new());
+    h.entries.push(entry("b", "Sprite"));
+    h.mark_changed();
+
+    // Typing in the Story panel: the shortcut must not fire.
+    h.story_focus = true;
+    step(&mut h, Key::Z);
+    assert_eq!(
+        h.entries.len(),
+        1,
+        "suppressed while a text field is focused"
+    );
+    h.story_focus = false;
+
+    // Play mode: the world owns the keyboard.
+    h.world_capture = true;
+    step(&mut h, Key::Z);
+    assert_eq!(h.entries.len(), 1, "suppressed in play mode");
+    h.world_capture = false;
+
+    step(&mut h, Key::Z);
+    assert!(h.entries.is_empty(), "Ctrl+Z undoes the edit");
+    step(&mut h, Key::Y);
+    assert_eq!(h.entries.len(), 1, "Ctrl+Y redoes it");
+}
+
+// A successful SAVE re-baselines dirty tracking: undoing past it re-dirties,
+// redoing back to the saved list cleans the chip again.
+#[test]
+fn dirty_tracks_the_saved_list_across_history_jumps() {
+    let mut world = World::new_empty();
+    let mut h = hook(Vec::new());
+    h.entries.push(entry("b", "Sprite"));
+    h.mark_changed();
+    // Stand in for a successful SAVE (persist() would hit disk + the cook).
+    h.dirty = false;
+    h.saved = h.entries.clone();
+
+    h.undo(&mut world);
+    assert!(h.dirty, "behind the saved list is an unsaved state");
+    h.redo(&mut world);
+    assert!(!h.dirty, "redo back to the saved list clears the chip");
 }

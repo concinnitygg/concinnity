@@ -52,6 +52,7 @@ use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
+use super::history::History;
 use super::seeded_content;
 use crate::app::state::App;
 use crate::assets::FrameInput;
@@ -77,6 +78,13 @@ pub(crate) struct EditorHook {
     // The authored entry list (names live here, unlike the compiled blob). Edits
     // mutate this; SAVE serializes it back to `world_path`.
     entries: Vec<serde_json::Value>,
+    // Undo/redo stacks over `entries`. `baseline` mirrors `entries` as of the
+    // last committed edit (or undo/redo), so when `mark_changed` runs after a
+    // mutation it still holds the pre-edit list -- the undo snapshot. `saved`
+    // mirrors the on-disk state, so a history jump can recompute `dirty`.
+    history: History,
+    baseline: Vec<serde_json::Value>,
+    saved: Vec<serde_json::Value>,
     // Whether `entries` has changes not yet written to disk.
     dirty: bool,
     // Whether the world currently holds the cursor (play mode). Starts false:
@@ -287,6 +295,9 @@ impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
         Self {
             world_path,
+            history: History::default(),
+            baseline: entries.clone(),
+            saved: entries.clone(),
             entries,
             dirty: false,
             world_capture: false,
@@ -346,6 +357,20 @@ impl EditorHook {
     }
 }
 
+impl EditorHook {
+    // Whether any editor text control holds keyboard focus this frame: the
+    // header combo's filter field, an open edit form (its name / arg inputs
+    // always own focus while it shows), or a focused Lighting / Story / Import
+    // field. Undo/redo shortcuts stand down while typing.
+    fn text_focus_active(&self) -> bool {
+        self.combo != Combo::Closed
+            || self.selected_type.is_some()
+            || self.lighting_focus.is_some()
+            || self.story_focus
+            || self.import_focus
+    }
+}
+
 impl DebugHook for EditorHook {
     fn tick(&mut self, world: &mut World) {
         // Bring the Expanded tab's model up to date before anything reads it,
@@ -374,6 +399,16 @@ impl DebugHook for EditorHook {
                 self.drive_drag(input, vp);
                 if input.left_click && self.drag.is_none() {
                     self.route_click(input, vp, world);
+                }
+                // Ctrl+Z / Ctrl+Y step the entry list through the history,
+                // unless the world owns the keyboard (play mode) or a text
+                // field does (its own editing keys must win).
+                if input.ctrl && !self.world_capture && !self.text_focus_active() {
+                    match input.captured_key {
+                        Some(crate::assets::Key::Z) => self.undo(world),
+                        Some(crate::assets::Key::Y) => self.redo(world),
+                        _ => {}
+                    }
                 }
                 // Per-frame editing keys go to the frontmost open panel.
                 let front = self

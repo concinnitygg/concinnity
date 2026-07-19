@@ -13,6 +13,7 @@ mod form;
 mod form_panel;
 mod health;
 mod health_panel;
+mod history;
 mod hook;
 mod hud;
 mod import_panel;

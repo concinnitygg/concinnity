@@ -76,14 +76,65 @@ impl EditorHook {
 
     // Record an authored-entry change: the live preview needs a rebuild this frame
     // (`apply_world_swap` reloads the running world from the in-memory entries), and
-    // the change is not yet on disk (SAVE clears `dirty`).
+    // the change is not yet on disk (SAVE clears `dirty`). The pre-edit list still
+    // sits in `baseline` (only committed edits move it), so it becomes the undo
+    // snapshot; a call that changed nothing records no step.
     pub(super) fn mark_changed(&mut self) {
+        if self.baseline != self.entries {
+            let before = std::mem::replace(&mut self.baseline, self.entries.clone());
+            self.history.record(before);
+        }
         self.dirty = true;
         self.rebuild_preview = true;
         // The expansion follows the entries, so the Expanded tab's model is now
         // out of date. Recomputed by the frame drive if that tab is showing, so
         // a burst of edits costs one expansion rather than one each.
         self.expanded_stale = true;
+    }
+
+    // Step the entry list back / forward through the history stacks. No-ops at
+    // either end of the history.
+    pub(super) fn undo(&mut self, world: &mut World) {
+        if let Some(snap) = self.history.undo(self.entries.clone()) {
+            self.apply_history_jump(snap, world);
+        }
+    }
+
+    pub(super) fn redo(&mut self, world: &mut World) {
+        if let Some(snap) = self.history.redo(self.entries.clone()) {
+            self.apply_history_jump(snap, world);
+        }
+    }
+
+    pub(super) fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub(super) fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    // Install a history snapshot as the working entry list. Everything indexing
+    // into `entries` (the open form, the row menu, the browse scroll) may point
+    // at removed or shifted rows after a jump, so it is dropped or re-clamped;
+    // `dirty` is recomputed against the on-disk state so unwinding back to the
+    // saved list clears the Save chip.
+    fn apply_history_jump(&mut self, snap: Vec<serde_json::Value>, world: &mut World) {
+        self.entries = snap;
+        self.baseline = self.entries.clone();
+        self.dirty = self.entries != self.saved;
+        self.rebuild_preview = true;
+        self.expanded_stale = true;
+        self.close_form();
+        self.row_menu = None;
+        self.combo = Combo::Closed;
+        let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
+        self.list_scroll = self.list_scroll.min(max);
+        // The Lighting panel's text controls hold committed values; re-seed so
+        // they show the restored list, not the undone edit.
+        if self.lighting_open {
+            self.seed_lighting(world);
+        }
     }
 
     // SAVE: persist the working entries to disk (world.jsonl + recompiled blobs).
@@ -95,6 +146,7 @@ impl EditorHook {
         match self.persist() {
             Ok(()) => {
                 self.dirty = false;
+                self.saved = self.entries.clone();
                 tracing::info!("editor: saved {}", self.world_path);
             }
             Err(e) => tracing::error!("editor: save failed: {e}"),

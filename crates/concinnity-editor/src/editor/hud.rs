@@ -26,6 +26,10 @@ pub(crate) const SAVE_LABEL: AssetId = AssetId(ID_BASE + 1);
 pub(crate) const VIEW_BUTTON: AssetId = AssetId(ID_BASE + 2);
 pub(crate) const VIEW_LABEL: AssetId = AssetId(ID_BASE + 3);
 pub(crate) const BAR_BG: AssetId = AssetId(ID_BASE + 4);
+pub(crate) const UNDO_BUTTON: AssetId = AssetId(ID_BASE + 5);
+pub(crate) const UNDO_LABEL: AssetId = AssetId(ID_BASE + 6);
+pub(crate) const REDO_BUTTON: AssetId = AssetId(ID_BASE + 7);
+pub(crate) const REDO_LABEL: AssetId = AssetId(ID_BASE + 8);
 
 // Bar + button geometry, in window pixels. The bar spans the window top edge;
 // the chips sit vertically centered at its right end. On macOS the window's
@@ -35,6 +39,7 @@ pub(crate) const BAR_H: f32 = 40.0;
 pub(crate) const BTN_H: f32 = 26.0;
 const SAVE_W: f32 = 64.0;
 const VIEW_W: f32 = 72.0;
+const STEP_W: f32 = 56.0;
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 8.0;
 
@@ -46,11 +51,14 @@ pub(crate) const LABEL_TOP: f32 = BTN_H * 0.5 - theme::TEXT_HALF;
 const SAVE_TINT_ACTIVE: [f32; 4] = [0.72, 0.18, 0.22, 1.0];
 const LABEL_ACTIVE: [f32; 3] = [1.0, 1.0, 1.0];
 
-// Per-frame top-bar state the hook hands to `apply_layout`.
+// Per-frame top-bar state the hook hands to `apply_layout` and `hit_test`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HudState {
     // Are there unsaved edits (Save active)?
     pub dirty: bool,
+    // Is there a history step to unwind / replay (Undo / Redo active)?
+    pub undo: bool,
+    pub redo: bool,
     // Is the View panel open (accents the View chip)?
     pub view_open: bool,
     // Is the whole HUD shown (F1 toggle)?
@@ -62,6 +70,9 @@ pub(crate) struct HudState {
 pub(crate) enum HudAction {
     // The Save button, while there are edits to persist.
     Save,
+    // The Undo / Redo buttons, while their history stack has a step.
+    Undo,
+    Redo,
     // The View button: open / close the View panel.
     ToggleView,
     // A click on the bar that hits no chip: swallowed so it cannot reach the
@@ -69,13 +80,28 @@ pub(crate) enum HudAction {
     Consume,
 }
 
-// The Save and View chip rects (`[x, y, w, h]`, window pixels) for a `vw`-wide
-// window. Pure: the layout pass and the hit test both derive from it.
-pub(crate) fn layout(vw: f32) -> ([f32; 4], [f32; 4]) {
+// The chip rects (`[x, y, w, h]`, window pixels) for a `vw`-wide window,
+// packed right-to-left from the bar's right end. Pure: the layout pass and the
+// hit test both derive from it.
+pub(crate) struct BarLayout {
+    pub save: [f32; 4],
+    pub view: [f32; 4],
+    pub redo: [f32; 4],
+    pub undo: [f32; 4],
+}
+
+pub(crate) fn layout(vw: f32) -> BarLayout {
     let y = (BAR_H - BTN_H) * 0.5;
     let save = [vw - MARGIN - SAVE_W, y, SAVE_W, BTN_H];
     let view = [save[0] - GAP - VIEW_W, y, VIEW_W, BTN_H];
-    (save, view)
+    let redo = [view[0] - GAP * 2.0 - STEP_W, y, STEP_W, BTN_H];
+    let undo = [redo[0] - GAP - STEP_W, y, STEP_W, BTN_H];
+    BarLayout {
+        save,
+        view,
+        redo,
+        undo,
+    }
 }
 
 // The y where the body region (the floating panels' default anchors) begins:
@@ -86,15 +112,26 @@ pub(crate) fn body_top() -> f32 {
 
 // Resolve a top-bar click at `(mx, my)` for a `vw`-wide window. Pure -- the hook
 // maps the action to a method and updates its own flags. Returns `None` for a
-// click the top bar does not own (the hook then offers it to the panels).
-pub(crate) fn hit_test(mx: f32, my: f32, clicked: bool, dirty: bool, vw: f32) -> Option<HudAction> {
+// click the top bar does not own (the hook then offers it to the panels). An
+// inert chip (clean Save, empty history stack) swallows its click like the bar.
+pub(crate) fn hit_test(
+    mx: f32,
+    my: f32,
+    clicked: bool,
+    state: HudState,
+    vw: f32,
+) -> Option<HudAction> {
     if !clicked || vw <= 0.0 {
         return None;
     }
-    let (save, view) = layout(vw);
-    if dirty && point_in(mx, my, save) {
+    let bar = layout(vw);
+    if state.dirty && point_in(mx, my, bar.save) {
         Some(HudAction::Save)
-    } else if point_in(mx, my, view) {
+    } else if state.undo && point_in(mx, my, bar.undo) {
+        Some(HudAction::Undo)
+    } else if state.redo && point_in(mx, my, bar.redo) {
+        Some(HudAction::Redo)
+    } else if point_in(mx, my, bar.view) {
         Some(HudAction::ToggleView)
     } else if my < BAR_H && mx >= 0.0 && mx < vw {
         // The bar itself: swallow the click so it cannot fall through to the
@@ -121,7 +158,7 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     if vw <= 0.0 {
         return;
     }
-    let (save, view) = layout(vw);
+    let bar = layout(vw);
     let save_tint = if state.dirty {
         SAVE_TINT_ACTIVE
     } else {
@@ -137,6 +174,13 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     } else {
         theme::BUTTON_TINT
     };
+    let step_color = |avail: bool| {
+        if avail {
+            LABEL_ACTIVE
+        } else {
+            theme::LABEL_DIM
+        }
+    };
 
     place_sprite(
         world,
@@ -148,7 +192,7 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     place_rounded(
         world,
         SAVE_BUTTON,
-        save,
+        bar.save,
         save_tint,
         theme::CONTROL_RADIUS,
         true,
@@ -156,15 +200,31 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     place_rounded(
         world,
         VIEW_BUTTON,
-        view,
+        bar.view,
         view_tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_rounded(
+        world,
+        UNDO_BUTTON,
+        bar.undo,
+        theme::BUTTON_TINT,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_rounded(
+        world,
+        REDO_BUTTON,
+        bar.redo,
+        theme::BUTTON_TINT,
         theme::CONTROL_RADIUS,
         true,
     );
     place_label(
         world,
         SAVE_LABEL,
-        centered(save),
+        centered(bar.save),
         save_color,
         TextAlign::Center,
         true,
@@ -172,8 +232,24 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     place_label(
         world,
         VIEW_LABEL,
-        centered(view),
+        centered(bar.view),
         LABEL_ACTIVE,
+        TextAlign::Center,
+        true,
+    );
+    place_label(
+        world,
+        UNDO_LABEL,
+        centered(bar.undo),
+        step_color(state.undo),
+        TextAlign::Center,
+        true,
+    );
+    place_label(
+        world,
+        REDO_LABEL,
+        centered(bar.redo),
+        step_color(state.redo),
         TextAlign::Center,
         true,
     );
@@ -181,10 +257,10 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
 
 // Every injected top-bar sprite / label id, so the F1-hidden pass can blank it.
 fn all_sprite_ids() -> Vec<AssetId> {
-    vec![BAR_BG, SAVE_BUTTON, VIEW_BUTTON]
+    vec![BAR_BG, SAVE_BUTTON, VIEW_BUTTON, UNDO_BUTTON, REDO_BUTTON]
 }
 fn all_label_ids() -> Vec<AssetId> {
-    vec![SAVE_LABEL, VIEW_LABEL]
+    vec![SAVE_LABEL, VIEW_LABEL, UNDO_LABEL, REDO_LABEL]
 }
 
 // Every top-bar element id (sprites + labels), so the hook can pin the whole bar
@@ -235,6 +311,8 @@ mod tests {
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
         HudState {
             dirty,
+            undo: false,
+            redo: false,
             view_open: view,
             visible,
         }
@@ -271,48 +349,110 @@ mod tests {
             .expect("sprite present")
     }
 
-    // The two chips pack right-to-left inside the bar without overlapping.
+    // The chips pack right-to-left inside the bar without overlapping.
     #[test]
-    fn layout_packs_two_chips_inside_the_bar() {
-        let (save, view) = layout(1280.0);
-        assert_eq!(save[0] + save[2], 1280.0 - MARGIN, "Save inset from right");
-        assert_eq!(view[0] + view[2], save[0] - GAP, "View left of Save");
+    fn layout_packs_the_chips_inside_the_bar() {
+        let bar = layout(1280.0);
+        assert_eq!(
+            bar.save[0] + bar.save[2],
+            1280.0 - MARGIN,
+            "Save inset from right"
+        );
+        assert_eq!(
+            bar.view[0] + bar.view[2],
+            bar.save[0] - GAP,
+            "View left of Save"
+        );
         assert!(
-            save[1] > 0.0 && save[1] + save[3] < BAR_H,
+            bar.redo[0] + bar.redo[2] < bar.view[0],
+            "Redo left of View with a wider break"
+        );
+        assert_eq!(
+            bar.undo[0] + bar.undo[2],
+            bar.redo[0] - GAP,
+            "Undo left of Redo"
+        );
+        assert!(
+            bar.save[1] > 0.0 && bar.save[1] + bar.save[3] < BAR_H,
             "centered in bar"
         );
         assert!(body_top() > BAR_H, "panels anchor below the bar");
     }
 
+    fn mid(r: [f32; 4]) -> (f32, f32) {
+        (r[0] + r[2] * 0.5, r[1] + r[3] * 0.5)
+    }
+
     #[test]
     fn hit_test_resolves_each_control() {
-        let (save, view) = layout(1280.0);
-        let mid = |r: [f32; 4]| (r[0] + r[2] * 0.5, r[1] + r[3] * 0.5);
-        let (sx, sy) = mid(save);
-        assert_eq!(hit_test(sx, sy, true, true, 1280.0), Some(HudAction::Save));
+        let bar = layout(1280.0);
+        let (sx, sy) = mid(bar.save);
         assert_eq!(
-            hit_test(sx, sy, true, false, 1280.0),
+            hit_test(sx, sy, true, state(true, false, true), 1280.0),
+            Some(HudAction::Save)
+        );
+        assert_eq!(
+            hit_test(sx, sy, true, state(false, false, true), 1280.0),
             Some(HudAction::Consume),
             "a clean Save chip is inert; the bar still swallows the click"
         );
-        let (vx, vy) = mid(view);
+        let (vx, vy) = mid(bar.view);
         assert_eq!(
-            hit_test(vx, vy, true, false, 1280.0),
+            hit_test(vx, vy, true, state(false, false, true), 1280.0),
             Some(HudAction::ToggleView)
         );
         // Empty bar area: swallowed, never reaching the world behind the bar.
         assert_eq!(
-            hit_test(100.0, BAR_H * 0.5, true, false, 1280.0),
+            hit_test(100.0, BAR_H * 0.5, true, state(false, false, true), 1280.0),
             Some(HudAction::Consume)
         );
         // Below the bar is not top-bar territory: the click falls through.
-        assert_eq!(hit_test(1180.0, BAR_H + 10.0, true, false, 1280.0), None);
+        assert_eq!(
+            hit_test(
+                1180.0,
+                BAR_H + 10.0,
+                true,
+                state(false, false, true),
+                1280.0
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn hit_test_resolves_undo_redo_only_while_armed() {
+        let bar = layout(1280.0);
+        let armed = HudState {
+            undo: true,
+            redo: true,
+            ..state(false, false, true)
+        };
+        let (ux, uy) = mid(bar.undo);
+        let (rx, ry) = mid(bar.redo);
+        assert_eq!(hit_test(ux, uy, true, armed, 1280.0), Some(HudAction::Undo));
+        assert_eq!(hit_test(rx, ry, true, armed, 1280.0), Some(HudAction::Redo));
+        // Empty stacks: the chips are inert, the bar swallows the clicks.
+        let inert = state(false, false, true);
+        assert_eq!(
+            hit_test(ux, uy, true, inert, 1280.0),
+            Some(HudAction::Consume)
+        );
+        assert_eq!(
+            hit_test(rx, ry, true, inert, 1280.0),
+            Some(HudAction::Consume)
+        );
     }
 
     #[test]
     fn hit_test_ignores_non_clicks_and_zero_width() {
-        assert_eq!(hit_test(1240.0, 20.0, false, true, 1280.0), None);
-        assert_eq!(hit_test(0.0, 0.0, true, true, 0.0), None);
+        assert_eq!(
+            hit_test(1240.0, 20.0, false, state(true, false, true), 1280.0),
+            None
+        );
+        assert_eq!(
+            hit_test(0.0, 0.0, true, state(true, false, true), 0.0),
+            None
+        );
     }
 
     // The bar spans the window and the chips are shown, Save coloured by dirty.

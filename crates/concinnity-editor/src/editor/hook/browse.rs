@@ -146,9 +146,11 @@ impl EditorHook {
 
     // Route a resolved top-bar click: SAVE persists to disk (the live preview is
     // already current), the View button toggles the View panel.
-    pub(super) fn apply_top(&mut self, action: HudAction) {
+    pub(super) fn apply_top(&mut self, action: HudAction, world: &mut World) {
         match action {
             HudAction::Save => self.save(),
+            HudAction::Undo => self.undo(world),
+            HudAction::Redo => self.redo(world),
             HudAction::ToggleView => self.view_open = !self.view_open,
             // A bar click that hit no chip: swallowed (the caller already
             // dismisses any open overlays).
