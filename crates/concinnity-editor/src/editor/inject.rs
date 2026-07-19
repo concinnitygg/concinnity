@@ -82,6 +82,13 @@ pub(crate) fn editor_hud(world: &mut World) {
     for s in super::gizmo::sprites() {
         world.add_component(s);
     }
+    world.add_component(row_label(
+        super::gizmo::MODE_LABEL,
+        "",
+        [0.0, 0.0, 0.0, 0.0],
+        font,
+        false,
+    ));
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for key in PanelKey::ALL {
         let p = registry::panel(key);

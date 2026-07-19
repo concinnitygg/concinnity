@@ -17,6 +17,8 @@ use concinnity_core::gfx::pick::PickRay;
 const GIZMO_BASE: u32 = ID_BASE + 0xD00;
 // Per-axis element block: segments at +0..SEGMENTS, the tip handle after them.
 const AXIS_STRIDE: u32 = 0x10;
+// The mode caption beside the origin ("move" / "rotate" / "scale").
+pub(crate) const MODE_LABEL: AssetId = AssetId(GIZMO_BASE + 0x30);
 
 pub(crate) const SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
@@ -35,6 +37,50 @@ const AXIS_TINTS: [[f32; 4]; 3] = [
 ];
 
 pub(crate) const AXES: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+// What the gizmo edits. One shared handle skeleton; the mode decides the drag
+// math, the arg written back, and the tip shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GizmoMode {
+    #[default]
+    Translate,
+    Rotate,
+    Scale,
+}
+
+impl GizmoMode {
+    // The authored arg (and `Transform` field) this mode edits.
+    pub(crate) fn arg_key(self) -> &'static str {
+        match self {
+            GizmoMode::Translate => "position",
+            GizmoMode::Rotate => "rotation_deg",
+            GizmoMode::Scale => "scale",
+        }
+    }
+
+    pub(crate) fn caption(self) -> &'static str {
+        match self {
+            GizmoMode::Translate => "move",
+            GizmoMode::Rotate => "rotate",
+            GizmoMode::Scale => "scale",
+        }
+    }
+
+    // Tip shape per mode: soft square, circle, hard square.
+    fn tip_radius(self) -> f32 {
+        match self {
+            GizmoMode::Translate => 2.0,
+            GizmoMode::Rotate => TIP_PX * 0.5,
+            GizmoMode::Scale => 0.0,
+        }
+    }
+}
+
+// Wrap a degree delta into (-180, 180], keeping per-frame rotation steps
+// continuous across the atan2 seam.
+pub(crate) fn wrap_deg(d: f32) -> f32 {
+    -((-d + 180.0).rem_euclid(360.0) - 180.0)
+}
 
 fn segment_id(axis: usize, seg: usize) -> AssetId {
     AssetId(GIZMO_BASE + axis as u32 * AXIS_STRIDE + seg as u32)
@@ -180,9 +226,10 @@ fn square(id: AssetId, tint: [f32; 4]) -> Sprite {
     }
 }
 
-// Lay the dotted runs from just outside the origin to each tip and center the
-// tip handles on their projected points.
-pub(crate) fn place(world: &mut World, layout: &Layout) {
+// Lay the dotted runs from just outside the origin to each tip, center the
+// tip handles (shaped by the mode) on their projected points, and caption the
+// mode beside the origin.
+pub(crate) fn place(world: &mut World, layout: &Layout, mode: GizmoMode) {
     for axis in 0..3 {
         for seg in 0..SEGMENTS {
             // Segments start away from the origin so the runs do not overdraw
@@ -190,9 +237,22 @@ pub(crate) fn place(world: &mut World, layout: &Layout) {
             let f = (seg as f32 + 1.0) / (SEGMENTS as f32 + 1.0);
             let x = layout.origin[0] + (layout.tips[axis][0] - layout.origin[0]) * f;
             let y = layout.origin[1] + (layout.tips[axis][1] - layout.origin[1]) * f;
-            place_square(world, segment_id(axis, seg), [x, y], SEGMENT_PX);
+            place_square(world, segment_id(axis, seg), [x, y], SEGMENT_PX, 0.0);
         }
-        place_square(world, tip_id(axis), layout.tips[axis], TIP_PX);
+        place_square(
+            world,
+            tip_id(axis),
+            layout.tips[axis],
+            TIP_PX,
+            mode.tip_radius(),
+        );
+    }
+    if let Some(l) = super::widget::label_mut(world, MODE_LABEL) {
+        l.content = mode.caption().to_string();
+        l.x = layout.origin[0] + 12.0;
+        l.y = layout.origin[1] - 26.0;
+        l.color = super::theme::LABEL_DIM;
+        l.visible = true;
     }
 }
 
@@ -202,14 +262,16 @@ pub(crate) fn hide(world: &mut World) {
             s.visible = false;
         }
     }
+    super::widget::set_label_visible(world, MODE_LABEL, false);
 }
 
-fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32) {
+fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, radius: f32) {
     if let Some(s) = world.query_mut::<Sprite>().find(|s| s.asset_id == id) {
         s.x = center[0] - size * 0.5;
         s.y = center[1] - size * 0.5;
         s.width = size;
         s.height = size;
+        s.corner_radius = radius;
         s.visible = true;
     }
 }
@@ -288,6 +350,15 @@ mod tests {
             dir: [0.0, 0.0, -1.0],
         };
         assert_eq!(axis_drag_t([0.0, 0.0, -10.0], [0.0, 0.0, -1.0], &ray), None);
+    }
+
+    #[test]
+    fn wrap_deg_stays_in_half_open_range() {
+        assert_eq!(wrap_deg(0.0), 0.0);
+        assert_eq!(wrap_deg(180.0), 180.0);
+        assert!((wrap_deg(190.0) + 170.0).abs() < 1e-4);
+        assert!((wrap_deg(-190.0) - 170.0).abs() < 1e-4);
+        assert!((wrap_deg(720.0)).abs() < 1e-3);
     }
 
     #[test]

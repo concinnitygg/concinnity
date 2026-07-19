@@ -198,7 +198,9 @@ pub(crate) struct EditorHook {
     // frame (`hook/pick.rs`). `pick_last` is the transient repeat-click cycle.
     selected: Option<String>,
     pick_last: Option<pick::PickLast>,
-    // An active translate-gizmo drag (`hook/gizmo_drag.rs`), if any.
+    // The gizmo's edit mode (T/R/S keys) and an active drag
+    // (`hook/gizmo_drag.rs`), if any.
+    gizmo_mode: gizmo::GizmoMode,
     gizmo_drag: Option<gizmo_drag::GizmoDrag>,
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
@@ -361,6 +363,7 @@ impl EditorHook {
             vec_expanded: std::collections::HashSet::new(),
             selected: None,
             pick_last: None,
+            gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
             positions: [None; PANEL_COUNT],
             drag: None,
@@ -419,6 +422,22 @@ impl DebugHook for EditorHook {
                 }
                 if input.left_click && self.drag.is_none() && self.gizmo_drag.is_none() {
                     self.route_click(input, vp, world);
+                }
+                // T / R / S pick the gizmo's mode (translate / rotate /
+                // scale), under the same guards as the history shortcuts.
+                if !input.ctrl
+                    && !self.world_capture
+                    && !self.text_focus_active()
+                    && self.gizmo_drag.is_none()
+                {
+                    match input.captured_key {
+                        Some(crate::assets::Key::T) => {
+                            self.gizmo_mode = gizmo::GizmoMode::Translate;
+                        }
+                        Some(crate::assets::Key::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
+                        Some(crate::assets::Key::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
+                        _ => {}
+                    }
                 }
                 // Ctrl+Z / Ctrl+Y step the entry list through the history,
                 // unless the world owns the keyboard (play mode), a text

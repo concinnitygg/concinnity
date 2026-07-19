@@ -3055,3 +3055,149 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
     assert!((restored - f64::from(start[0])).abs() < 1e-3, "{restored}");
     assert!(!h.can_undo(), "the whole drag was one step");
 }
+
+// Shared rig for the rotate / scale drag tests: a prop down-left of the
+// camera axis (panel-free screen region), its live Transform entity, and the
+// EntityByName map the gizmo resolves through.
+fn gizmo_rig(start: [f32; 3]) -> (World, crate::ecs::Entity, EditorHook) {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("box_near");
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![(
+            id,
+            [start[0] - 1.0, start[1] - 1.0, start[2] - 1.0],
+            [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
+        )],
+    );
+    let entity = world.push(crate::assets::Transform {
+        position: start,
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    });
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(id, entity);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    for s in super::super::gizmo::sprites() {
+        world.add_component(s);
+    }
+    let h = hook(vec![serde_json::json!({
+        "name": "box_near", "type": "Prop", "args": { "position": start }
+    })]);
+    (world, entity, h)
+}
+
+fn drag_input(pos: [f32; 2], held: bool) -> FrameInput {
+    FrameInput {
+        viewport: [1280.0, 720.0],
+        mouse_x: pos[0],
+        mouse_y: pos[1],
+        left_button_down: held,
+        ..Default::default()
+    }
+}
+
+// Rotate mode: turning the mouse a quarter circle around the origin rotates
+// the prop 90 degrees about the grabbed axis, committed as one undo step.
+#[test]
+fn gizmo_rotate_drag_turns_the_prop() {
+    let start = [-6.11f32, -3.3, -5.0];
+    let (mut world, entity, mut h) = gizmo_rig(start);
+    h.gizmo_mode = gizmo::GizmoMode::Rotate;
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
+    // Grab the X tip (70 px right of the origin: screen angle 0)...
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some(), "rotate grab starts on the tip");
+    // ...and swing the cursor to straight below the origin: +90 degrees of
+    // screen angle. World X is perpendicular to the view (sign +1).
+    set_input(
+        &mut world,
+        drag_input([layout.origin[0], layout.origin[1] + 70.0], true),
+    );
+    h.tick(&mut world);
+    let live = world.get::<crate::assets::Transform>(entity).unwrap();
+    assert!(
+        (live.rotation_deg[0] - 90.0).abs() < 1.0,
+        "quarter turn about X: {}",
+        live.rotation_deg[0]
+    );
+    assert_eq!(live.position, start, "rotate leaves position alone");
+
+    // Release commits rotation_deg; undo removes it again.
+    set_input(
+        &mut world,
+        drag_input([layout.origin[0], layout.origin[1] + 70.0], false),
+    );
+    h.tick(&mut world);
+    let committed = h.entries[0]["args"]["rotation_deg"][0].as_f64().unwrap();
+    assert!((committed - 90.0).abs() < 1.0, "{committed}");
+    h.undo(&mut world);
+    assert!(
+        h.entries[0]["args"].get("rotation_deg").is_none(),
+        "one undo step restores the pre-drag entry"
+    );
+}
+
+// Scale mode: dragging the X tip half its run further out scales X by ~1.5,
+// leaving the other axes untouched.
+#[test]
+fn gizmo_scale_drag_stretches_one_axis() {
+    let start = [-6.11f32, -3.3, -5.0];
+    let (mut world, entity, mut h) = gizmo_rig(start);
+    h.gizmo_mode = gizmo::GizmoMode::Scale;
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some());
+    set_input(
+        &mut world,
+        drag_input([layout.tips[0][0] + 35.0, layout.tips[0][1]], true),
+    );
+    h.tick(&mut world);
+    let live = world.get::<crate::assets::Transform>(entity).unwrap();
+    assert!(
+        live.scale[0] > 1.3 && live.scale[0] < 1.7,
+        "X stretched ~1.5x: {}",
+        live.scale[0]
+    );
+    assert_eq!(live.scale[1], 1.0, "Y untouched");
+    assert_eq!(live.position, start, "scale leaves position alone");
+
+    set_input(
+        &mut world,
+        drag_input([layout.tips[0][0] + 35.0, layout.tips[0][1]], false),
+    );
+    h.tick(&mut world);
+    let committed = h.entries[0]["args"]["scale"][0].as_f64().unwrap();
+    assert!(committed > 1.3 && committed < 1.7, "{committed}");
+    h.undo(&mut world);
+    assert!(h.entries[0]["args"].get("scale").is_none());
+}
+
+// T / R / S switch the gizmo mode in edit mode, but never while typing.
+#[test]
+fn gizmo_mode_keys_switch_unless_typing() {
+    let mut h = hook(Vec::new());
+    let key = |h: &mut EditorHook, k: crate::assets::Key| {
+        let mut world = world_with_input(FrameInput {
+            viewport: [1280.0, 720.0],
+            captured_key: Some(k),
+            ..Default::default()
+        });
+        h.tick(&mut world);
+    };
+    key(&mut h, crate::assets::Key::R);
+    assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Rotate);
+    key(&mut h, crate::assets::Key::S);
+    assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Scale);
+    key(&mut h, crate::assets::Key::T);
+    assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
+
+    // A focused text field keeps the keys for typing.
+    h.story_focus = true;
+    key(&mut h, crate::assets::Key::R);
+    assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
+}
