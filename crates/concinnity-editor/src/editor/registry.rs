@@ -203,6 +203,10 @@ mod tests {
         for id in super::super::hud::all_ids() {
             claim(id, "top bar".to_string());
         }
+        claim(
+            super::super::highlight::OUTLINE,
+            "selection highlight".to_string(),
+        );
         for key in PanelKey::ALL {
             let p = panel(key);
             for id in p.sprite_ids() {

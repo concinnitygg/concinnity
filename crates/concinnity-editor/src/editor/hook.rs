@@ -52,6 +52,7 @@ use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
+use super::highlight;
 use super::history::History;
 use super::seeded_content;
 use crate::app::state::App;
@@ -190,9 +191,11 @@ pub(crate) struct EditorHook {
     // The paths of the form's non-colour vector fields currently disclosed into
     // per-element leaves. Cleared when the form opens / closes.
     vec_expanded: std::collections::HashSet<String>,
-    // The viewport-picked asset, if any (drives the selection flows in
-    // `hook/pick.rs`), and the last pick press for the repeat-click hit cycle.
-    selected: Option<AssetId>,
+    // The viewport-picked asset, if any, held by NAME: every live-preview
+    // rebuild resets the interner and re-interns names, so a stored AssetId
+    // could silently drift to a different asset. The name is re-resolved each
+    // frame (`hook/pick.rs`). `pick_last` is the transient repeat-click cycle.
+    selected: Option<String>,
     pick_last: Option<pick::PickLast>,
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
@@ -488,6 +491,9 @@ impl DebugHook for EditorHook {
                 p.hide(world);
             }
         }
+        // The selection ring rides the picked asset's projected bounds, under
+        // the panels (its id takes the default draw layer).
+        self.drive_highlight(world, vp, shown);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under

@@ -13,6 +13,7 @@ mod form;
 mod form_panel;
 mod health;
 mod health_panel;
+mod highlight;
 mod history;
 mod hook;
 mod hud;

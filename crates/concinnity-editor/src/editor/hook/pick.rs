@@ -63,20 +63,22 @@ impl EditorHook {
     // Open the picked asset for editing: an authored entry in the edit form
     // (with the assets UI up so the form is visible and its browse row
     // highlighted), a build-generated asset on the Expanded tab, where its "+"
-    // offers the copy-to-config promotion.
+    // offers the copy-to-config promotion. The selection is kept by name (see
+    // the `selected` field note).
     fn select_picked(&mut self, picked: AssetId, world: &mut World) {
-        self.selected = Some(picked);
         let table = crate::ecs::asset_id::name_table();
-        let Some(name) = table.get(picked.0 as usize) else {
+        let Some(name) = table.get(picked.0 as usize).cloned() else {
+            self.selected = None;
             return;
         };
+        self.selected = Some(name.clone());
         self.panel_open = true;
         self.combo = Combo::Closed;
         self.row_menu = None;
         if let Some(idx) = self
             .entries
             .iter()
-            .position(|e| entry_name(e) == Some(name))
+            .position(|e| entry_name(e) == Some(name.as_str()))
         {
             self.tab = Tab::Config;
             if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
@@ -86,8 +88,46 @@ impl EditorHook {
             self.tab = Tab::Expanded;
             self.expanded_stale = true;
             self.refresh_expanded_if_needed();
-            self.reveal_expanded(name);
+            self.reveal_expanded(&name);
         }
+    }
+
+    // Drive the selection ring: while the HUD is up in edit mode, project the
+    // selected asset's current AABB (from the PickIndex GraphicsSystem
+    // published last frame; the world is frozen in edit mode, so the one-frame
+    // lag is invisible) and place the border sprite over it. Anything
+    // unresolvable -- no selection, a renamed or deleted asset, the camera
+    // inside the box -- hides the ring.
+    pub(super) fn drive_highlight(&self, world: &mut World, vp: [f32; 2], shown: bool) {
+        let rect = if shown && !self.world_capture {
+            self.selected_rect(world, vp)
+        } else {
+            None
+        };
+        match rect {
+            Some(r) => highlight::place(world, r),
+            None => highlight::hide(world),
+        }
+    }
+
+    fn selected_rect(&self, world: &World, vp: [f32; 2]) -> Option<[f32; 4]> {
+        let name = self.selected.as_deref()?;
+        let id = crate::ecs::asset_id::name_table()
+            .iter()
+            .position(|n| n == name)?;
+        let index = world.resource::<crate::ecs::PickIndex>()?;
+        let entry = index
+            .entries
+            .iter()
+            .find(|e| e.asset_id == AssetId(id as u32))?;
+        let cam = world.query::<crate::assets::Camera3D>().next()?;
+        highlight::screen_rect(
+            &cam.view_matrix,
+            cam.fov_y_degrees.to_radians(),
+            vp,
+            entry.bb_min,
+            entry.bb_max,
+        )
     }
 
     // Unfold the group holding generated asset `name` and scroll its row into

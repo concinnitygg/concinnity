@@ -2785,6 +2785,7 @@ fn pick_world(
         interact_requested: false,
         controller: None,
     });
+    world.add_component(highlight::outline_sprite());
     world.insert_resource(crate::ecs::PickIndex {
         entries: picks
             .into_iter()
@@ -2834,7 +2835,7 @@ fn viewport_click_picks_the_nearest_prop_and_opens_its_form() {
     ]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected, Some(near), "nearest hit wins");
+    assert_eq!(h.selected.as_deref(), Some("box_near"), "nearest hit wins");
     assert!(h.panel_open, "the assets UI comes up around the form");
     assert_eq!(h.tab, Tab::Config);
     assert_eq!(h.editing, Some(0), "the form targets the picked entry");
@@ -2865,15 +2866,19 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
     ]);
 
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selected, Some(near));
+    assert_eq!(h.selected.as_deref(), Some("box_near"));
     click_at(&mut world, &mut h, [201.0, 601.0]);
     assert_eq!(
-        h.selected,
-        Some(far),
+        h.selected.as_deref(),
+        Some("box_far"),
         "a repeat click reaches the occluded box"
     );
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selected, Some(near), "the cycle wraps back to the front");
+    assert_eq!(
+        h.selected.as_deref(),
+        Some("box_near"),
+        "the cycle wraps back to the front"
+    );
 
     // Aim up-left, well away from both boxes and every panel: cleared.
     click_at(&mut world, &mut h, [400.0, 120.0]);
@@ -2894,7 +2899,7 @@ fn viewport_click_on_a_generated_asset_reveals_the_expanded_tab() {
     let mut h = hook(vec![entry("box_near", "Sprite")]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected, Some(generated));
+    assert_eq!(h.selected.as_deref(), Some("some_generated_asset"));
     assert!(h.panel_open);
     assert_eq!(h.tab, Tab::Expanded, "an unauthored pick goes to Expanded");
     assert_eq!(h.editing, None, "no form for a generated asset");
@@ -2908,10 +2913,52 @@ fn history_jumps_clear_the_pick_selection() {
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected, Some(id));
+    assert_eq!(h.selected.as_deref(), Some("box_near"));
 
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
     h.undo(&mut world);
     assert_eq!(h.selected, None, "a history jump drops the selection");
+}
+
+// The selection ring follows the picked asset's projected bounds and hides
+// outside edit mode.
+#[test]
+fn selection_ring_tracks_the_picked_asset() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("box_near");
+    let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
+    let mut h = hook(vec![entry("box_near", "Sprite")]);
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+
+    let ring = |world: &World| {
+        world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == highlight::OUTLINE)
+            .cloned()
+            .expect("outline sprite injected")
+    };
+    let s = ring(&world);
+    assert!(s.visible, "the ring shows on pick");
+    let (cx, cy) = (s.x + s.width * 0.5, s.y + s.height * 0.5);
+    assert!(
+        (cx - 640.0).abs() < 2.0 && (cy - 360.0).abs() < 2.0,
+        "ring centered on the box, got ({cx}, {cy})"
+    );
+    assert!(s.border_width > 0.0 && s.tint[3] == 0.0, "border-only ring");
+
+    // Play mode hides the ring; returning to edit mode restores it.
+    h.world_capture = true;
+    set_input(
+        &mut world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            ..Default::default()
+        },
+    );
+    h.tick(&mut world);
+    assert!(!ring(&world).visible, "hidden in play mode");
+    h.world_capture = false;
+    h.tick(&mut world);
+    assert!(ring(&world).visible, "back in edit mode it returns");
 }

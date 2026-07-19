@@ -60,7 +60,10 @@ pub fn build_sprite_calls(
             continue;
         }
         let [r, g, b, a] = s.tint;
-        if a <= 0.0 {
+        // A transparent fill still draws when a visible border is set: the
+        // border ring is the sprite (an outline, e.g. a selection highlight).
+        let border_only = s.border_width > 0.0 && s.border_color[3] > 0.0;
+        if a <= 0.0 && !border_only {
             continue;
         }
         let (x0, y0, x1, y1) = if s.screen.is_some() {
@@ -318,6 +321,40 @@ mod tests {
         }
         assert_eq!(calls[0].vertices[0].pos, [10.0, 20.0]);
         assert_eq!(calls[0].vertices[2].pos, [110.0, 70.0]);
+    }
+
+    // A fully transparent fill normally skips the sprite, but a visible
+    // border keeps it: the border ring alone draws (an outline sprite).
+    #[test]
+    fn transparent_fill_draws_when_a_border_is_set() {
+        let invisible = sprite(0.0, 0.0, 100.0, 50.0, [0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            build_sprite_calls(
+                &[&invisible],
+                Some(0),
+                &no_slots(),
+                [0.0, 0.0],
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty(),
+            "borderless transparent fill still skips"
+        );
+
+        let mut outline = sprite(0.0, 0.0, 100.0, 50.0, [0.0, 0.0, 0.0, 0.0]);
+        outline.border_width = 2.0;
+        outline.border_color = [0.2, 0.4, 0.9, 1.0];
+        let calls = build_sprite_calls(
+            &[&outline],
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        assert_eq!(calls.len(), 1, "the border ring draws");
+        // Border stroke geometry: the outer border rect plus the inset fill.
+        assert!(calls[0].vertices.len() > 4);
     }
 
     #[test]
