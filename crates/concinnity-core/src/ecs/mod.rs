@@ -25,7 +25,7 @@ mod system;
 // physics / audio subsystem crates can reach them; the client `ecs` module
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
-    CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
+    CursorState, DropdownView, FlyCam, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
     OpenDropdown, PickEntry, PickIndex, ScreenStack,
 };
 

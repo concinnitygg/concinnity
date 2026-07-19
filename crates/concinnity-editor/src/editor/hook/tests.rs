@@ -500,38 +500,47 @@ fn set_input(world: &mut World, input: FrameInput) {
     }
 }
 
-// Clicking the Preview panel's capture row hands the cursor to the world;
-// clicking again takes it back.
+// Clicking the Preview panel's capture row hands the cursor to the world
+// (clicking again takes it back); the fly row below toggles the fly camera,
+// and the two never hold the cursor together.
 #[test]
-fn preview_capture_row_click_toggles_play_mode() {
+fn preview_rows_toggle_play_mode_and_fly() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
     let o = h.origin(PanelKey::Preview, vp);
-    // Mid-row: the panel bottom carries a pad below the last row.
-    let row_y = o[1] + preview::size()[1] - 20.0;
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: o[0] + 10.0,
-        mouse_y: row_y,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
+    let row_mid = |i: usize| {
+        let r = super::super::list_panel::row_rect(o, 200.0, i);
+        [r[0] + 10.0, r[1] + r[3] * 0.5]
+    };
+    let click = |h: &mut EditorHook, world: &mut World, pos: [f32; 2]| {
+        set_input(
+            world,
+            FrameInput {
+                viewport: vp,
+                mouse_x: pos[0],
+                mouse_y: pos[1],
+                left_click: true,
+                left_button_down: true,
+                ..Default::default()
+            },
+        );
+        h.tick(world);
+    };
+    let mut world = world_with_input(FrameInput::default());
+
+    click(&mut h, &mut world, row_mid(0));
     assert!(h.world_capture, "the checkbox click enters play mode");
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: o[0] + 10.0,
-            mouse_y: row_y,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
+    click(&mut h, &mut world, row_mid(0));
     assert!(!h.world_capture, "a second click leaves it");
+
+    click(&mut h, &mut world, row_mid(1));
+    assert!(h.fly, "the fly row starts the fly camera");
+    assert!(!h.world_capture);
+    click(&mut h, &mut world, row_mid(0));
+    assert!(
+        h.world_capture && !h.fly,
+        "entering play mode ends the fly camera"
+    );
 }
 
 // Holding a panel's title bar drags it; the origin follows the cursor by the
@@ -3196,8 +3205,16 @@ fn gizmo_mode_keys_switch_unless_typing() {
     key(&mut h, crate::assets::Key::T);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
 
+    // F toggles the fly camera through the same guard.
+    key(&mut h, crate::assets::Key::F);
+    assert!(h.fly, "F starts the fly camera");
+    key(&mut h, crate::assets::Key::F);
+    assert!(!h.fly, "F again stops it");
+
     // A focused text field keeps the keys for typing.
     h.story_focus = true;
     key(&mut h, crate::assets::Key::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
+    key(&mut h, crate::assets::Key::F);
+    assert!(!h.fly, "typing keeps F");
 }

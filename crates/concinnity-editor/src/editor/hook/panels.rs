@@ -249,6 +249,15 @@ impl Panel for PreviewPanel {
         match preview::hit_test(mx, my, o) {
             Some(PreviewAction::ToggleCapture) => {
                 hook.world_capture = !hook.world_capture;
+                // Play mode and the fly camera are exclusive cursor owners.
+                if hook.world_capture {
+                    hook.fly = false;
+                    hook.fly_clock = None;
+                }
+                true
+            }
+            Some(PreviewAction::ToggleFly) => {
+                hook.toggle_fly();
                 true
             }
             Some(PreviewAction::Consume) => true,
@@ -256,7 +265,7 @@ impl Panel for PreviewPanel {
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        preview::apply(world, o, hook.world_capture, mouse);
+        preview::apply(world, o, hook.world_capture, hook.fly, mouse);
     }
     fn hide(&self, world: &mut World) {
         preview::hide_all(world);

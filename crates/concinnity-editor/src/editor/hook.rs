@@ -202,6 +202,10 @@ pub(crate) struct EditorHook {
     // (`hook/gizmo_drag.rs`), if any.
     gizmo_mode: gizmo::GizmoMode,
     gizmo_drag: Option<gizmo_drag::GizmoDrag>,
+    // The edit-mode fly camera (`hook/fly.rs`): on/off and the frame clock
+    // its integration steps against.
+    fly: bool,
+    fly_clock: Option<std::time::Instant>,
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
     // before use.
@@ -290,6 +294,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 mod browse;
 mod editing;
 mod edits;
+mod fly;
 mod gizmo_drag;
 mod import_edit;
 mod layout;
@@ -365,6 +370,8 @@ impl EditorHook {
             pick_last: None,
             gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
+            fly: false,
+            fly_clock: None,
             positions: [None; PANEL_COUNT],
             drag: None,
             // Back-to-front, matching the injected draw order (registry order:
@@ -401,10 +408,16 @@ impl DebugHook for EditorHook {
         self.health.sample(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
-            // Escape hands the cursor back to the editor (leaves play mode).
+            // Escape hands the cursor back to the editor (leaves play mode
+            // and the fly camera alike).
             if input.escape {
                 self.world_capture = false;
+                self.fly = false;
+                self.fly_clock = None;
             }
+            // The fly camera integrates before any routing: while it is on
+            // the cursor is captured, so no click or HUD press can arrive.
+            self.drive_fly(input, world);
             // F1 (an edge pulse) toggles the whole HUD.
             if input.hud_toggle {
                 self.hud_visible = !self.hud_visible;
@@ -436,6 +449,7 @@ impl DebugHook for EditorHook {
                         }
                         Some(crate::assets::Key::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
                         Some(crate::assets::Key::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
+                        Some(crate::assets::Key::F) => self.toggle_fly(),
                         _ => {}
                     }
                 }
@@ -494,7 +508,10 @@ impl DebugHook for EditorHook {
 
         // Drive the world's cursor / freeze state: edit mode (`Some(true)`) frees
         // the cursor and freezes the world; play mode (`Some(false)`) runs it.
+        // The fly flag layers on top: navigation input + cursor capture stay
+        // live while the frozen world is flown through.
         world.insert_resource(MenuOverride(Some(!self.world_capture)));
+        world.insert_resource(crate::ecs::FlyCam(self.fly && !self.world_capture));
 
         // Re-anchor + recolour the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());

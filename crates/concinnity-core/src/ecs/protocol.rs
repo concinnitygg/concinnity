@@ -64,6 +64,15 @@ pub struct ScreenStack {
     pub captures_input: bool,
 }
 
+// The editor's fly-camera state. While true (published only by the `cn
+// editor` HUD drive), InputSystem keeps the navigation keys and mouse deltas
+// live and GraphicsSystem captures the cursor even though the world is frozen
+// behind the editor's menu override -- the editor integrates Camera3D itself,
+// so the viewport can be flown without running the simulation. Absent / false
+// in a shipped runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlyCam(pub bool);
+
 // One pickable entity in the [PickIndex]: its asset id and current world-space
 // AABB. Ray-tested by the editor with `gfx::pick::ray_aabb`.
 #[derive(Debug, Clone, Copy)]

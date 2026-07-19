@@ -96,10 +96,13 @@ impl GraphicsSystem {
         }
         // In menu mode (a MainMenu over a controlled camera, or an editor
         // override), capture the cursor for the camera unless a menu is active.
-        // Edge-triggered in the backend, so this is cheap every frame and a no-op
-        // in a plain first-person world.
+        // The editor's fly camera captures despite the active override: the
+        // world stays frozen while the editor drives Camera3D from the
+        // captured deltas. Edge-triggered in the backend, so this is cheap
+        // every frame and a no-op in a plain first-person world.
         if self.menu_mode || menu_override.is_some() {
-            backend.set_camera_capture(!menu_active);
+            let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
+            backend.set_camera_capture(!menu_active || fly);
         }
 
         // Runtime decal / emitter spawn (`cn debug` only) is drained + dispatched

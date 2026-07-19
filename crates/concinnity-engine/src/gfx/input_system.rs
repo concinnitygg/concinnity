@@ -56,7 +56,11 @@ impl System for InputSystem {
         let screen_captures = ctx
             .resource::<crate::ecs::ScreenStack>()
             .is_some_and(|s| s.captures_input);
-        let gameplay = !menu_active && !screen_captures;
+        // The editor's fly camera keeps navigation live while its menu
+        // override freezes the world (the editor integrates the camera
+        // itself); a shipped runtime never publishes FlyCam.
+        let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
+        let gameplay = (!menu_active && !screen_captures) || fly;
 
         // Both readers query (not drain) the snapshot, so clear the previous
         // frame's first.
