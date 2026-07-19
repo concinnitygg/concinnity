@@ -11,6 +11,7 @@ mod expanded;
 mod file_dialog;
 mod form;
 mod form_panel;
+mod gizmo;
 mod health;
 mod health_panel;
 mod highlight;

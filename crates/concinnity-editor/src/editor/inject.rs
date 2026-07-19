@@ -75,10 +75,13 @@ pub(crate) fn editor_hud(world: &mut World) {
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.
     world.remove_all::<DebugHud>();
-    // The selection ring goes in first: overlay fallback draw order is
-    // insertion order, so it stays under every panel and the top bar even
-    // before the per-frame HudLayers publish.
+    // The selection ring and gizmo go in first: overlay fallback draw order is
+    // insertion order, so they stay under every panel and the top bar even
+    // before the per-frame HudLayers publish (the gizmo draws over the ring).
     world.add_component(super::highlight::outline_sprite());
+    for s in super::gizmo::sprites() {
+        world.add_component(s);
+    }
     let hidden = [0.0, 0.0, 0.0, 0.0];
     for key in PanelKey::ALL {
         let p = registry::panel(key);

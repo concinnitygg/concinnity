@@ -52,6 +52,7 @@ use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
+use super::gizmo;
 use super::highlight;
 use super::history::History;
 use super::seeded_content;
@@ -197,6 +198,8 @@ pub(crate) struct EditorHook {
     // frame (`hook/pick.rs`). `pick_last` is the transient repeat-click cycle.
     selected: Option<String>,
     pick_last: Option<pick::PickLast>,
+    // An active translate-gizmo drag (`hook/gizmo_drag.rs`), if any.
+    gizmo_drag: Option<gizmo_drag::GizmoDrag>,
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
     // before use.
@@ -285,6 +288,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 mod browse;
 mod editing;
 mod edits;
+mod gizmo_drag;
 mod import_edit;
 mod layout;
 mod pick;
@@ -357,6 +361,7 @@ impl EditorHook {
             vec_expanded: std::collections::HashSet::new(),
             selected: None,
             pick_last: None,
+            gizmo_drag: None,
             positions: [None; PANEL_COUNT],
             drag: None,
             // Back-to-front, matching the injected draw order (registry order:
@@ -407,13 +412,23 @@ impl DebugHook for EditorHook {
                 // when no drag is running -- the press that starts one must not
                 // also resolve to a control) routes to the bar and the panels.
                 self.drive_drag(input, vp);
-                if input.left_click && self.drag.is_none() {
+                // An in-flight gizmo drag follows the cursor, cancels on
+                // Escape, and commits on release, before any new press routes.
+                if self.gizmo_drag.is_some() {
+                    self.drive_gizmo_drag(input, vp, world);
+                }
+                if input.left_click && self.drag.is_none() && self.gizmo_drag.is_none() {
                     self.route_click(input, vp, world);
                 }
                 // Ctrl+Z / Ctrl+Y step the entry list through the history,
-                // unless the world owns the keyboard (play mode) or a text
-                // field does (its own editing keys must win).
-                if input.ctrl && !self.world_capture && !self.text_focus_active() {
+                // unless the world owns the keyboard (play mode), a text
+                // field does (its own editing keys must win), or a gizmo drag
+                // is mid-flight (its commit has not landed yet).
+                if input.ctrl
+                    && !self.world_capture
+                    && !self.text_focus_active()
+                    && self.gizmo_drag.is_none()
+                {
                     match input.captured_key {
                         Some(crate::assets::Key::Z) => self.undo(world),
                         Some(crate::assets::Key::Y) => self.redo(world),
@@ -492,8 +507,10 @@ impl DebugHook for EditorHook {
             }
         }
         // The selection ring rides the picked asset's projected bounds, under
-        // the panels (its id takes the default draw layer).
+        // the panels (its id takes the default draw layer); the translate
+        // gizmo draws over it when the selection is movable.
         self.drive_highlight(world, vp, shown);
+        self.drive_gizmo_draw(world, vp, shown);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under

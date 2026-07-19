@@ -303,12 +303,29 @@ impl World {
         self.components.values_mut::<C>().iter_mut()
     }
 
-    // Push a runtime-produced component into the matching typed slot. Mirror
-    // of `PipelineContext::push`; used by the `DebugHook::tick` drive to insert
-    // `Prop`s added by a world.jsonl hot-reload so subsequent systems see them.
+    // Push a runtime-produced component into the matching typed slot,
+    // returning its minted entity. Mirror of `PipelineContext::push`; used by
+    // the `DebugHook::tick` drive to insert `Prop`s added by a world.jsonl
+    // hot-reload so subsequent systems see them.
     #[allow(dead_code)]
-    pub fn push<C: ComponentSlot>(&mut self, c: C) {
-        self.components.push_typed(c);
+    pub fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
+        self.components.push_typed(c)
+    }
+
+    // Borrow one entity's component, for code holding a `World` directly.
+    // Mirror of `PipelineContext::get`; the editor's gizmo drive reads the
+    // selected entity's transforms through this.
+    #[allow(dead_code)]
+    pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
+        self.components.get::<C>(entity)
+    }
+
+    // Mutably borrow one entity's component. Mirror of
+    // `PipelineContext::get_mut`; the editor's gizmo drag moves the selected
+    // entity's `Transform` through this.
+    #[allow(dead_code)]
+    pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
+        self.components.get_mut::<C>(entity)
     }
 
     // Read-only join over two component types, for code holding a `World`

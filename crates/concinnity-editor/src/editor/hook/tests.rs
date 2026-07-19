@@ -2962,3 +2962,96 @@ fn selection_ring_tracks_the_picked_asset() {
     h.tick(&mut world);
     assert!(ring(&world).visible, "back in edit mode it returns");
 }
+
+// The full translate-gizmo loop: pick a prop, grab its X tip handle, drag
+// right, release. The live Transform follows during the drag; release commits
+// the moved position to the authored entry as ONE undo step, and Ctrl-class
+// undo restores the original position.
+#[test]
+fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("box_near");
+    // Down-left of the camera axis so the pick, the handles, and the drag all
+    // land in screen regions no default panel covers.
+    let start = [-6.11f32, -3.3, -5.0];
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![(
+            id,
+            [start[0] - 1.0, start[1] - 1.0, start[2] - 1.0],
+            [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
+        )],
+    );
+    let entity = world.push(crate::assets::Transform {
+        position: start,
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    });
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(id, entity);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    for s in super::super::gizmo::sprites() {
+        world.add_component(s);
+    }
+
+    let mut h = hook(vec![serde_json::json!({
+        "name": "box_near", "type": "Prop", "args": { "position": start }
+    })]);
+
+    // Pick the prop (projects to ~[200, 600] for this camera).
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    assert_eq!(h.selected.as_deref(), Some("box_near"));
+    let layout = h
+        .gizmo_layout(&world, [1280.0, 720.0])
+        .expect("movable selection shows the gizmo");
+
+    // Press the X tip handle: a drag starts, nothing re-picks.
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some(), "the tip press starts a drag");
+    assert!(!h.dirty, "no entry change until release");
+
+    // Drag 50 px right: the live Transform follows along world X.
+    set_input(
+        &mut world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            mouse_x: layout.tips[0][0] + 50.0,
+            mouse_y: layout.tips[0][1],
+            left_button_down: true,
+            ..Default::default()
+        },
+    );
+    h.tick(&mut world);
+    let live = world
+        .get::<crate::assets::Transform>(entity)
+        .expect("entity alive")
+        .position;
+    assert!(live[0] > start[0] + 0.3, "moved right: {}", live[0]);
+    assert!((live[1] - start[1]).abs() < 1e-3, "Y untouched");
+    assert!((live[2] - start[2]).abs() < 1e-3, "Z untouched");
+
+    // Release: the entry commits, one undo step, form refreshed.
+    set_input(
+        &mut world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            mouse_x: layout.tips[0][0] + 50.0,
+            mouse_y: layout.tips[0][1],
+            ..Default::default()
+        },
+    );
+    h.tick(&mut world);
+    assert!(h.gizmo_drag.is_none(), "release ends the drag");
+    assert!(h.dirty, "the move is an unsaved edit");
+    let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap();
+    assert!(
+        committed > f64::from(start[0]) + 0.3,
+        "entry follows: {committed}"
+    );
+
+    // One undo step restores the pre-drag position.
+    h.undo(&mut world);
+    let restored = h.entries[0]["args"]["position"][0].as_f64().unwrap();
+    assert!((restored - f64::from(start[0])).abs() < 1e-3, "{restored}");
+    assert!(!h.can_undo(), "the whole drag was one step");
+}

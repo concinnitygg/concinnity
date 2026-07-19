@@ -104,9 +104,13 @@ impl EditorHook {
                 return;
             }
         }
-        // Nothing claimed the press: offer it to the 3D view as a pick. Only
-        // edit mode gets here (`left_click` stays false while the world holds
-        // the cursor in play mode).
+        // Nothing claimed the press: the gizmo's tip handles get it first
+        // (grabbing a handle must not re-pick the object behind it), then the
+        // 3D view as a pick. Only edit mode gets here (`left_click` stays
+        // false while the world holds the cursor in play mode).
+        if self.try_gizmo_press(input, vp, world) {
+            return;
+        }
         self.click_world(input, world);
     }
 

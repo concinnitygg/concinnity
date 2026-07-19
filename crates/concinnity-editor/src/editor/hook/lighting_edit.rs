@@ -18,7 +18,7 @@ impl EditorHook {
     }
 
     // The authored args of entry `idx` (empty when the entry carries none).
-    fn entry_args(&self, idx: usize) -> serde_json::Map<String, serde_json::Value> {
+    pub(super) fn entry_args(&self, idx: usize) -> serde_json::Map<String, serde_json::Value> {
         self.entries[idx]
             .get("args")
             .and_then(|v| v.as_object())

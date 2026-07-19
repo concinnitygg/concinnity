@@ -161,8 +161,8 @@ impl EditorHook {
 }
 
 // The mouse ray from the world's live camera, or `None` in a camera-less
-// world (nothing 3D to pick).
-fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> Option<PickRay> {
+// world (nothing 3D to pick). Shared with the gizmo drag drive.
+pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> Option<PickRay> {
     let cam = world.query::<crate::assets::Camera3D>().next()?;
     screen_ray(
         &cam.view_matrix,
