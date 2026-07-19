@@ -104,6 +104,10 @@ impl EditorHook {
                 return;
             }
         }
+        // Nothing claimed the press: offer it to the 3D view as a pick. Only
+        // edit mode gets here (`left_click` stays false while the world holds
+        // the cursor in play mode).
+        self.click_world(input, world);
     }
 
     // Try to resolve a press against the panel registered at `key`: `false` when

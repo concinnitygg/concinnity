@@ -190,6 +190,10 @@ pub(crate) struct EditorHook {
     // The paths of the form's non-colour vector fields currently disclosed into
     // per-element leaves. Cleared when the form opens / closes.
     vec_expanded: std::collections::HashSet<String>,
+    // The viewport-picked asset, if any (drives the selection flows in
+    // `hook/pick.rs`), and the last pick press for the repeat-click hit cycle.
+    selected: Option<AssetId>,
+    pick_last: Option<pick::PickLast>,
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
     // before use.
@@ -280,6 +284,7 @@ mod editing;
 mod edits;
 mod import_edit;
 mod layout;
+mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
@@ -347,6 +352,8 @@ impl EditorHook {
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
             vec_expanded: std::collections::HashSet::new(),
+            selected: None,
+            pick_last: None,
             positions: [None; PANEL_COUNT],
             drag: None,
             // Back-to-front, matching the injected draw order (registry order:
