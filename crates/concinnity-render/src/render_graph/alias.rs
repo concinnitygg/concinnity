@@ -195,6 +195,8 @@ mod tests {
         unified_gbuffer_prepass: false,
         world_hidden: false,
         clustered_lighting_enabled: false,
+        shadowed_spot_count: 0,
+        spot_shadow_slice_size: 512,
     };
 
     // A transient texture desc of the given format at full drawable size.

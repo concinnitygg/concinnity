@@ -26,6 +26,19 @@ use crate::metal::context::MtlContext;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
 
+// The per-slice state every shadow sub-encoder binds before drawing. Grouped so
+// the sub-encoders take one argument instead of four, and so the spot shadow
+// pass can drive the same caster paths with its own matrix and pipeline.
+pub(in crate::metal) struct ShadowPassBinding<'a> {
+    pub pipeline: &'a ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
+    // Slot 0 of `uniforms.light_vps` is what `push.cascade_idx` selects. The
+    // cascade pass passes the context's CSM uniforms; the spot pass builds a
+    // one-matrix set holding that slice's projection.
+    pub uniforms: &'a ShadowUniforms,
+    pub push: ShadowPassPush,
+    pub slope_bias: f32,
+}
+
 impl MtlContext {
     // Choose which shadow cascades to re-render this frame and advance the
     // round-robin clock. Delegates to the shared `ShadowCascadeScheduler`
@@ -128,9 +141,14 @@ impl MtlContext {
             // Slope-scale bias scales with cascade to compensate for the
             // larger texel footprint of distant cascades.
             let slope_bias = 1.0 + cascade_idx as f32 * 0.5;
-            let push = ShadowPassPush {
-                cascade_idx: cascade_idx as u32,
-                _pad: [0; 3],
+            let bind = ShadowPassBinding {
+                pipeline: &shadow_pipeline,
+                uniforms: &self.shadow_uniforms,
+                push: ShadowPassPush {
+                    cascade_idx: cascade_idx as u32,
+                    _pad: [0; 3],
+                },
+                slope_bias,
             };
 
             if gpu_driven {
@@ -139,31 +157,19 @@ impl MtlContext {
                 // is `Some` here (gates `gpu_driven`).
                 total_draws += self.encode_shadow_cascade_indirect(
                     &shadow_enc,
-                    &push,
+                    &bind.push,
                     slope_bias,
                     cascade_idx,
                     object_buffer.expect("gpu_driven implies object_buffer"),
                     deformed_skinned,
                 );
             } else {
-                let count_static = self.encode_shadow_static_into(
-                    &shadow_enc,
-                    &shadow_pipeline,
-                    &push,
-                    slope_bias,
-                    cam_pos,
-                );
-                let count_instanced = self.encode_shadow_instanced_into(
-                    &shadow_enc,
-                    &shadow_pipeline,
-                    &push,
-                    slope_bias,
-                    cam_pos,
-                );
+                let count_static = self.encode_shadow_static_into(&shadow_enc, &bind, cam_pos);
+                let count_instanced =
+                    self.encode_shadow_instanced_into(&shadow_enc, &bind, cam_pos);
                 let count_skinned = self.encode_shadow_skinned_into(
                     &shadow_enc,
-                    &push,
-                    slope_bias,
+                    &bind,
                     cam_pos,
                     skinned_joint_bufs,
                 );
@@ -189,21 +195,19 @@ impl MtlContext {
     fn bind_shadow_pass_shared(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        shadow_pipeline: &ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
-        push: &ShadowPassPush,
-        slope_bias: f32,
+        bind: &ShadowPassBinding,
     ) {
-        enc.setRenderPipelineState(shadow_pipeline);
+        enc.setRenderPipelineState(bind.pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
-        enc.setDepthBias_slopeScale_clamp(0.005, slope_bias, 0.01);
+        enc.setDepthBias_slopeScale_clamp(0.005, bind.slope_bias, 0.01);
         unsafe {
             enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
+                std::ptr::NonNull::from(bind.uniforms).cast(),
                 std::mem::size_of::<ShadowUniforms>(),
                 0,
             );
             enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(push).cast(),
+                std::ptr::NonNull::from(&bind.push).cast(),
                 std::mem::size_of::<ShadowPassPush>(),
                 7,
             );
@@ -318,16 +322,14 @@ impl MtlContext {
     }
 
     // Encode the static-geometry shadow draws.
-    fn encode_shadow_static_into(
+    pub(in crate::metal) fn encode_shadow_static_into(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        shadow_pipeline: &ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
-        push: &ShadowPassPush,
-        slope_bias: f32,
+        bind: &ShadowPassBinding,
         cam_pos: [f32; 3],
     ) -> u32 {
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("shadow static"));
-        self.bind_shadow_pass_shared(enc, shadow_pipeline, push, slope_bias);
+        self.bind_shadow_pass_shared(enc, bind);
 
         let mut draw_calls: u32 = 0;
         for obj in &self.draw_objects {
@@ -371,19 +373,17 @@ impl MtlContext {
     // visually identical to an instanced shadow shader. Off-screen
     // instances can still cast shadows onto visible surfaces, so no
     // cluster-level cull here.
-    fn encode_shadow_instanced_into(
+    pub(in crate::metal) fn encode_shadow_instanced_into(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        shadow_pipeline: &ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
-        push: &ShadowPassPush,
-        slope_bias: f32,
+        bind: &ShadowPassBinding,
         cam_pos: [f32; 3],
     ) -> u32 {
         if self.instanced_clusters.is_empty() {
             return 0;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("shadow instanced"));
-        self.bind_shadow_pass_shared(enc, shadow_pipeline, push, slope_bias);
+        self.bind_shadow_pass_shared(enc, bind);
 
         let mut draw_calls: u32 = 0;
         for cluster in &self.instanced_clusters {
@@ -418,11 +418,10 @@ impl MtlContext {
 
     // Encode shadow draws for skinned meshes (deformed depth, drawn last
     // in the cascade).
-    fn encode_shadow_skinned_into(
+    pub(in crate::metal) fn encode_shadow_skinned_into(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        push: &ShadowPassPush,
-        slope_bias: f32,
+        bind: &ShadowPassBinding,
         cam_pos: [f32; 3],
         skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
     ) -> u32 {
@@ -438,11 +437,16 @@ impl MtlContext {
             return draw_calls;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("shadow skinned"));
-        // The skinned-shadow path uses its own pipeline; we still need the
-        // shared shadow uniforms + cascade push + depth state, so route
-        // through `bind_shadow_pass_shared` first: `setRenderPipelineState`
-        // below overwrites the pipeline binding with the skinned variant.
-        self.bind_shadow_pass_shared(enc, skinned_shadow_ps, push, slope_bias);
+        // The skinned path needs the same uniforms / push / depth state as the
+        // others but its own pipeline, so it binds the shared state with the
+        // skinned pipeline swapped in.
+        self.bind_shadow_pass_shared(
+            enc,
+            &ShadowPassBinding {
+                pipeline: skinned_shadow_ps,
+                ..*bind
+            },
+        );
         unsafe {
             enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
         }

@@ -509,6 +509,8 @@ impl VkContext {
             // the world has local lights to bin, so this also gates the
             // `LightCull` graph node; otherwise the forward pass brute-forces.
             clustered_lighting_enabled: self.light_cull.pipeline.is_some(),
+            shadowed_spot_count: 0,
+            spot_shadow_slice_size: 512,
         };
 
         //  Camera projection + per-frame view state. Computed before the main

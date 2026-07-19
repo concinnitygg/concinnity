@@ -580,12 +580,19 @@ impl MtlContext {
             // way the object buffer at binding 9 is), so this single bind covers
             // the legacy and GPU-driven paths and the planar / probe re-renders.
             enc.setFragmentBuffer_offset_atIndex(Some(&self.local_light_buffer), 0, 8);
+            // Per-slice spot shadow projections at fragment buffer(13), inherited
+            // by the ICB draws like the local lights above. The matching depth
+            // array is a discrete texture on the legacy path only; the bindless
+            // path reaches it through the BindlessTextures argument buffer,
+            // because discrete texture bindings break ICB compatibility.
+            enc.setFragmentBuffer_offset_atIndex(Some(&self.spot_shadow_buffer), 0, 13);
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
                 std::mem::size_of::<ShadowUniforms>(),
                 5,
             );
             enc.setFragmentTexture_atIndex(Some(self.shadow_map.as_ref()), 2);
+            enc.setFragmentTexture_atIndex(Some(self.spot_shadow_map.as_ref()), 14);
             enc.setFragmentSamplerState_atIndex(Some(self.shadow_sampler.as_ref()), 1);
             // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
             // and a shared linear-clamp sampler at sampler(2). Always bound; the

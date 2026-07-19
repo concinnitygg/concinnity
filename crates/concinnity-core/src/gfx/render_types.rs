@@ -36,6 +36,19 @@ pub const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
 // (the array length appears in the MSL/HLSL/GLSL source).
 pub const NUM_SHADOW_CASCADES: usize = 4;
 
+// Slices in the spot shadow map array: the number of spot lights that can cast
+// shadows at once. Spots past this still light the scene with `shadow_index`
+// left at -1. Hardcoded for the same reason as NUM_SHADOW_CASCADES.
+pub const MAX_SHADOWED_SPOTS: usize = 16;
+
+// Per-slice edge of the spot shadow map array, derived from the authored
+// directional `shadow_map_size` so one quality knob scales both. Quartered
+// because a spot's cone covers far less world area than a CSM cascade, and the
+// array multiplies the cost by MAX_SHADOWED_SPOTS.
+pub fn spot_shadow_slice_size(shadow_map_size: u32) -> u32 {
+    (shadow_map_size / 4).clamp(256, 1024)
+}
+
 // Maximum number of joints in a single skinned-mesh skeleton. Enforced
 // CPU-side as a clamp on each `SkinnedDrawObject.joint_count` and on the
 // matching `skinned_joint_matrices` Vec length. The skinned shaders read
@@ -369,6 +382,40 @@ pub struct ShadowUniforms {
 pub struct ShadowPassPush {
     pub cascade_idx: u32,
     pub _pad: [u32; 3],
+}
+
+// One shadowed spot light's slice of the spot shadow map array. Indexed by
+// `GpuLight.shadow_index`; the index doubles as the array slice. Uploaded once
+// per scene, since local lights are static.
+//
+// 80 bytes: the matrix fills the first four 16-byte lanes and the three scalars
+// plus a pad fill the fifth, so the MSL (float4x4 + floats), HLSL (no 16-byte
+// straddle), and GLSL std430 (mat4 align-16) layouts all agree.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct SpotShadowData {
+    // World -> light clip matrix for this spot, column-major.
+    pub light_vp: [[f32; 4]; 4],
+    // Constant depth offset applied when comparing against the stored depth.
+    pub depth_bias: f32,
+    // Offset along the surface normal before projecting, which suppresses
+    // shadow acne on surfaces near-parallel to the light.
+    pub normal_bias: f32,
+    pub _pad: [f32; 2],
+}
+
+impl SpotShadowData {
+    pub const ZERO: Self = SpotShadowData {
+        light_vp: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        depth_bias: 0.0,
+        normal_bias: 0.0,
+        _pad: [0.0; 2],
+    };
 }
 
 // Compact vertex type used exclusively by the text render pass.
@@ -1629,6 +1676,20 @@ mod tests {
         assert_eq!(offset_of!(ClusterParams, use_clusters), 120);
         assert_eq!(offset_of!(ClusterParams, _pad), 124);
         assert_eq!(size_of::<ClusterParams>() % 16, 0);
+    }
+
+    #[test]
+    fn spot_shadow_data_layout_matches_msl() {
+        // MSL `SpotShadowData` in default.metal: a float4x4 (16-aligned, 64 B)
+        // then three scalars sharing the fifth 16-byte lane. The Rust
+        // `[[f32; 4]; 4]` is only 4-aligned, so the trailing pad is what holds
+        // the struct at the 80 bytes MSL / HLSL / std430 all round to.
+        assert_eq!(size_of::<SpotShadowData>(), 80);
+        assert_eq!(offset_of!(SpotShadowData, light_vp), 0);
+        assert_eq!(offset_of!(SpotShadowData, depth_bias), 64);
+        assert_eq!(offset_of!(SpotShadowData, normal_bias), 68);
+        assert_eq!(offset_of!(SpotShadowData, _pad), 72);
+        assert_eq!(size_of::<SpotShadowData>() % 16, 0);
     }
 
     #[test]

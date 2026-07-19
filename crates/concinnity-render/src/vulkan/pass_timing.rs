@@ -111,6 +111,7 @@ mod tests {
             PassId::GBufferPrepass,
             PassId::ReflectionComposite,
             PassId::LightCull,
+            PassId::SpotShadow,
         ] {
             let (s, e) = pass_pair(0, variant);
             assert!(seen.insert(s), "duplicate start slot for {variant:?}");

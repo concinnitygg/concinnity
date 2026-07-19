@@ -49,13 +49,14 @@ pub const PASS_NAMES: [&str; PASS_COUNT] = [
     "gbuffer_prepass",
     "reflection_composite",
     "light_cull",
+    "spot_shadow",
 ];
 
 // Number of distinct passes the engine times. Sized to match
 // [`PASS_NAMES`]; the per-pass timing array in
 // [`crate::profile::RenderStats`] is sized to at least this many
 // slots.
-pub const PASS_COUNT: usize = 29;
+pub const PASS_COUNT: usize = 30;
 
 // One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
 // `[T; PASS_COUNT]` companion array.
@@ -187,6 +188,11 @@ pub enum PassId {
     // iterating every light. Runs when the world has local lights; Metal first,
     // the other backends follow. Writes a storage buffer Main reads (RAW edge).
     LightCull = 28,
+    // Depth-only render of each shadowed spot light's cone into one slice of the
+    // spot shadow map array. Local lights are static, so the projections are
+    // built once; only the depth contents refresh, one slice per frame under
+    // `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
+    SpotShadow = 29,
 }
 
 impl PassId {
@@ -238,6 +244,7 @@ mod tests {
         PassId::GBufferPrepass,
         PassId::ReflectionComposite,
         PassId::LightCull,
+        PassId::SpotShadow,
     ];
 
     // Expected timing name per variant. The match has no wildcard arm, so
@@ -274,6 +281,7 @@ mod tests {
             PassId::GBufferPrepass => "gbuffer_prepass",
             PassId::ReflectionComposite => "reflection_composite",
             PassId::LightCull => "light_cull",
+            PassId::SpotShadow => "spot_shadow",
         }
     }
 

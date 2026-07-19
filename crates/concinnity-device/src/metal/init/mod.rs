@@ -122,6 +122,7 @@ impl MtlContext {
                 },
             light_uniforms,
             local_lights,
+            spot_shadows,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -316,6 +317,45 @@ impl MtlContext {
                             MTLResourceOptions::StorageModeShared,
                         )
                         .ok_or("failed to create local-light buffer")?
+                }
+            }
+        };
+
+        // Spot shadow resources: one array slice per shadow-casting spot plus the
+        // per-slice projections. Local lights are static, so both are built once
+        // here and never rebuilt. A scene with no casting spot gets the 1x1
+        // fallback array (depth 1.0 = lit) and a placeholder buffer, since Metal
+        // rejects zero-length buffers and the fragment binding must stay valid.
+        let spot_shadow_count = spot_shadows.len() as u32;
+        let spot_shadow_map = if spot_shadows.is_empty() {
+            create_shadow_map_fallback(&device)?
+        } else {
+            create_shadow_map_array(
+                &device,
+                crate::gfx::render_types::spot_shadow_slice_size(shadow_map_size),
+                spot_shadow_count,
+            )?
+        };
+        let spot_shadow_buffer = {
+            use crate::gfx::render_types::SpotShadowData;
+            if spot_shadows.is_empty() {
+                device
+                    .newBufferWithLength_options(
+                        std::mem::size_of::<SpotShadowData>(),
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .ok_or("failed to create placeholder spot-shadow buffer")?
+            } else {
+                unsafe {
+                    let ptr = std::ptr::NonNull::new(spot_shadows.as_ptr() as *mut _)
+                        .ok_or("spot-shadow slice pointer is null")?;
+                    device
+                        .newBufferWithBytes_length_options(
+                            ptr,
+                            std::mem::size_of_val(spot_shadows.as_slice()),
+                            MTLResourceOptions::StorageModeShared,
+                        )
+                        .ok_or("failed to create spot-shadow buffer")?
                 }
             }
         };
@@ -1140,6 +1180,11 @@ impl MtlContext {
             shadow_scheduler: Default::default(),
             shadow_render_mask: 0,
             shadow_sampler,
+            spot_shadow_map,
+            spot_shadow_buffer,
+            spot_shadow_count,
+            spot_shadow_scheduler: Default::default(),
+            spot_shadow_render_mask: 0,
             shadow_uniforms: shadow_uniforms_init,
             shadow_light_dir,
             env_map,

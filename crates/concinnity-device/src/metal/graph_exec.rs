@@ -466,6 +466,9 @@ impl MtlContext {
                     raymarch_view.as_ref(),
                 )?
             }
+            PassId::SpotShadow => {
+                self.encode_spot_shadow_pass(cmd_buf, params.skinned_joint_bufs, params.cam_pos)?
+            }
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {

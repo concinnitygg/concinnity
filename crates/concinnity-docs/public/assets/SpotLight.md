@@ -25,3 +25,4 @@ not consider them.
 - `range`: A float. Maximum reach in world units; attenuation is zero at this distance. Defaults to `10.0`.
 - `inner_angle`: A float. Half-angle in degrees of the fully lit inner cone. Clamped to `outer_angle`. Defaults to `18.0`.
 - `outer_angle`: A float. Half-angle in degrees at which the cone fades to black. Clamped to (0, 89.9]. Defaults to `30.0`.
+- `cast_shadows`: A boolean. Whether this light casts shadows. Shadowed spots claim one slice of the spot shadow map in declaration order; once the slices are used up the remaining spots still light the scene but cast nothing. Defaults to `true`.

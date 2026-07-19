@@ -262,6 +262,21 @@ pub struct MtlContext {
     // slices to refresh and which to leave intact.
     pub(super) shadow_render_mask: u32,
     pub(super) shadow_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // Spot shadow map array: one Depth32Float slice per shadow-casting spot
+    // light, indexed by `GpuLight.shadow_index`. Always Some so the fragment
+    // shader's depth-array binding is valid; a 1x1 fallback (depth 1.0 = lit)
+    // stands in when no spot casts shadows.
+    pub(super) spot_shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
+    // Per-slice light-space projections, uploaded once (local lights are
+    // static). Empty when nothing casts, in which case the pass never runs.
+    pub(super) spot_shadow_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) spot_shadow_count: u32,
+    // Prime-then-round-robin refresh schedule over the spot slices, the spot
+    // analogue of `shadow_scheduler`.
+    pub(super) spot_shadow_scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    // Which spot slices re-render this frame; set once per frame in draw_frame
+    // and read by encode_spot_shadow_pass.
+    pub(super) spot_shadow_render_mask: u32,
     // Cascaded light VPs + split depths. The near cascade's VP refreshes every
     // frame; far cascades' VPs persist between their round-robin refreshes
     // (Hybrid mode) so each slice is sampled with the VP it was rendered with.

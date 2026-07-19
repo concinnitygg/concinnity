@@ -19,6 +19,7 @@ mod composite;
 // bake can name the shared main-pass param structs defined here.
 pub(in crate::metal) mod main;
 mod shadow;
+mod spot_shadow;
 
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
@@ -268,6 +269,10 @@ impl MtlContext {
                 }
             }
         }
+
+        // Spot shadow slices refresh on their own prime-then-round-robin clock;
+        // their projections are static, so only the depth contents redraw.
+        self.spot_shadow_render_mask = self.next_spot_shadow_mask();
 
         // Main pass prep: resize off-screen targets, then the visible set.
         // Resize the HDR targets if the drawable size changed (window resize
@@ -713,6 +718,10 @@ impl MtlContext {
             // cull pipeline is built iff so). The builder inserts LightCull
             // before Main and Main reads its per-cluster list buffer.
             clustered_lighting_enabled: clustered,
+            shadowed_spot_count: self.spot_shadow_count,
+            spot_shadow_slice_size: crate::gfx::render_types::spot_shadow_slice_size(
+                self.shadow_map_size,
+            ),
         };
         // Reuse the cached compiled graph when this frame's inputs match the
         // ones it was built from (the common case: graph topology changes only

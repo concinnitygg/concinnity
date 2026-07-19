@@ -3,21 +3,31 @@
 // Converts drained DirectionalLight, PointLight, and SpotLight asset components
 // into the GPU data the renderer consumes: the fixed LightUniforms uniform
 // (directional lights, ambient, and the legacy point array the raymarch / fog /
-// probe paths read) and the GpuLight storage buffer the clustered forward pass
-// iterates.
+// probe paths read), the GpuLight storage buffer the clustered forward pass
+// iterates, and the per-slice spot shadow projections.
 
 use crate::assets::{DirectionalLight, PointLight, SpotLight, SpotLightGeometry};
 use crate::render_types::{
     DirectionalLightData, GpuLight, LIGHT_KIND_POINT, LIGHT_KIND_SPOT, LightUniforms,
-    MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS, PointLightData,
+    MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS, PointLightData, SpotShadowData,
 };
+use crate::spot_shadow;
 
-// Packs point and spot lights into the per-scene GpuLight storage buffer the
-// forward pass reads. Both kinds share the MAX_LOCAL_LIGHTS budget (not the
-// 8-entry LightUniforms array); extras past the cap are dropped with a warning.
-// Point lights carry no cone data, so those fields stay at their neutral
+// The per-scene GPU light data: the storage buffer the clustered forward pass
+// iterates, plus one `SpotShadowData` per shadow map slice handed out. Kept
+// together because `GpuLight.shadow_index` indexes `spot_shadows`, an invariant
+// that would be easy to break if the two were built independently.
+pub struct LightData {
+    pub lights: Vec<GpuLight>,
+    pub spot_shadows: Vec<SpotShadowData>,
+}
+
+// Packs point and spot lights into the GpuLight storage buffer and assigns spot
+// shadow slices. Both kinds share the MAX_LOCAL_LIGHTS budget (not the 8-entry
+// LightUniforms array); extras past the cap are dropped with a warning. Point
+// lights carry no cone or shadow data, so those fields stay at their neutral
 // GpuLight::ZERO values.
-pub fn build_light_buffer(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> Vec<GpuLight> {
+pub fn build_light_data(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> LightData {
     let total = pt_lights.len() + spot_lights.len();
     if total > MAX_LOCAL_LIGHTS {
         tracing::warn!(
@@ -26,6 +36,9 @@ pub fn build_light_buffer(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -
             MAX_LOCAL_LIGHTS
         );
     }
+    let slices = spot_shadow::assign_spot_shadow_slices(spot_lights);
+    let spot_shadows = spot_shadow::build_spot_shadow_data(spot_lights, &slices);
+
     let points = pt_lights.iter().map(|l| GpuLight {
         position: l.position,
         range: l.range,
@@ -34,21 +47,39 @@ pub fn build_light_buffer(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -
         kind: LIGHT_KIND_POINT,
         ..GpuLight::ZERO
     });
-    let spots = spot_lights.iter().map(|l| GpuLight {
-        position: l.position,
-        range: l.range,
-        color: l.color,
-        intensity: l.intensity,
-        direction: l.unit_direction(),
-        kind: LIGHT_KIND_SPOT,
-        cos_inner: l.cos_inner(),
-        cos_outer: l.cos_outer(),
-        ..GpuLight::ZERO
-    });
-    points.chain(spots).take(MAX_LOCAL_LIGHTS).collect()
+    let spots = spot_lights
+        .iter()
+        .zip(&slices)
+        .map(|(l, &shadow_index)| GpuLight {
+            position: l.position,
+            range: l.range,
+            color: l.color,
+            intensity: l.intensity,
+            direction: l.unit_direction(),
+            kind: LIGHT_KIND_SPOT,
+            cos_inner: l.cos_inner(),
+            cos_outer: l.cos_outer(),
+            shadow_index,
+            ..GpuLight::ZERO
+        });
+    let lights: Vec<GpuLight> = points.chain(spots).take(MAX_LOCAL_LIGHTS).collect();
+
+    // A spot dropped by the MAX_LOCAL_LIGHTS clamp must not leave a slice
+    // reserved for a light the forward pass will never see.
+    let kept = lights.iter().filter(|l| l.shadow_index >= 0).count();
+    let spot_shadows = if kept < spot_shadows.len() {
+        spot_shadows[..kept].to_vec()
+    } else {
+        spot_shadows
+    };
+
+    LightData {
+        lights,
+        spot_shadows,
+    }
 }
 
-// `local_lights` is the buffer `build_light_buffer` produced; its length is the
+// `local_lights` is the buffer `build_light_data` produced; its length is the
 // authoritative `num_local_lights` the forward pass iterates.
 pub fn build_light_uniforms(
     dir_lights: Vec<DirectionalLight>,
@@ -79,7 +110,7 @@ pub fn build_light_uniforms(
     let mut directional = [ZERO_DIR; MAX_DIRECTIONAL_LIGHTS];
     // The `point` array is the legacy subset the raymarch / fog / probe paths
     // read; the forward pass reads every light from the GpuLight buffer instead
-    // (see build_light_buffer), so exceeding MAX_POINT_LIGHTS is not an error.
+    // (see build_light_data), so exceeding MAX_POINT_LIGHTS is not an error.
     let mut point = [ZERO_PT; MAX_POINT_LIGHTS];
     let num_directional = dir_lights.len().min(MAX_DIRECTIONAL_LIGHTS);
     let num_point = pt_lights.len().min(MAX_POINT_LIGHTS);
@@ -156,7 +187,7 @@ mod tests {
 
     // The uniforms every test that does not exercise the local buffer wants.
     fn uniforms(dir_lights: Vec<DirectionalLight>, pt_lights: Vec<PointLight>) -> LightUniforms {
-        let local = build_light_buffer(&pt_lights, &[]);
+        let local = build_light_data(&pt_lights, &[]).lights;
         build_light_uniforms(dir_lights, pt_lights, &local, 1.0)
     }
 
@@ -228,7 +259,7 @@ mod tests {
     // to report them through num_local_lights.
     #[test]
     fn num_local_lights_counts_spot_lights() {
-        let local = build_light_buffer(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)]);
+        let local = build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)]).lights;
         let u = build_light_uniforms(vec![], vec![], &local, 1.0);
         assert_eq!(u.num_point, 0);
         assert_eq!(u.num_local_lights, 1);
@@ -236,7 +267,7 @@ mod tests {
 
     #[test]
     fn light_buffer_maps_point_light_fields() {
-        let buf = build_light_buffer(&[pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)], &[]);
+        let buf = build_light_data(&[pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)], &[]).lights;
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].position, [2.0, 3.0, 4.0]);
         assert_eq!(buf[0].color, [1.0, 0.8, 0.5]);
@@ -252,7 +283,8 @@ mod tests {
 
     #[test]
     fn light_buffer_maps_spot_light_fields() {
-        let buf = build_light_buffer(&[], &[spot([1.0, 5.0, 2.0], [0.0, -2.0, 0.0], 15.0, 30.0)]);
+        let buf =
+            build_light_data(&[], &[spot([1.0, 5.0, 2.0], [0.0, -2.0, 0.0], 15.0, 30.0)]).lights;
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].position, [1.0, 5.0, 2.0]);
         assert_eq!(buf[0].kind, LIGHT_KIND_SPOT);
@@ -266,23 +298,75 @@ mod tests {
 
     #[test]
     fn spot_inner_cone_clamped_to_the_outer_cone() {
-        let buf = build_light_buffer(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 60.0, 20.0)]);
+        let buf = build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 60.0, 20.0)]).lights;
         assert!((buf[0].cos_inner - buf[0].cos_outer).abs() < 1e-6);
     }
 
     #[test]
     fn spot_lights_follow_the_point_lights_in_the_buffer() {
-        let buf = build_light_buffer(
+        let buf = build_light_data(
             &[
                 pt([0.0; 3], [1.0; 3], 1.0, 5.0),
                 pt([1.0; 3], [1.0; 3], 1.0, 5.0),
             ],
             &[spot([2.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)],
-        );
+        )
+        .lights;
         assert_eq!(buf.len(), 3);
         assert_eq!(buf[0].kind, LIGHT_KIND_POINT);
         assert_eq!(buf[1].kind, LIGHT_KIND_POINT);
         assert_eq!(buf[2].kind, LIGHT_KIND_SPOT);
+    }
+
+    // GpuLight.shadow_index indexes spot_shadows, so the two must agree.
+    #[test]
+    fn shadow_indices_point_at_real_spot_shadow_entries() {
+        let mut casting = spot([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        casting.cast_shadows = true;
+        let mut dark = spot([3.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        dark.cast_shadows = false;
+        let data = build_light_data(
+            &[pt([0.0; 3], [1.0; 3], 1.0, 5.0)],
+            &[
+                casting,
+                dark,
+                spot([6.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0),
+            ],
+        );
+        // Point lights never cast; the two casting spots take slices 0 and 1.
+        assert_eq!(data.lights[0].shadow_index, -1);
+        assert_eq!(data.lights[1].shadow_index, 0);
+        assert_eq!(data.lights[2].shadow_index, -1);
+        assert_eq!(data.lights[3].shadow_index, 1);
+        assert_eq!(data.spot_shadows.len(), 2);
+        for l in &data.lights {
+            assert!(
+                l.shadow_index < data.spot_shadows.len() as i32,
+                "shadow_index stays in bounds of spot_shadows"
+            );
+        }
+    }
+
+    // A spot dropped by the MAX_LOCAL_LIGHTS clamp must not leave a shadow slice
+    // reserved for a light the forward pass never sees.
+    #[test]
+    fn clamped_spots_do_not_strand_shadow_slices() {
+        let points: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS - 1)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let spots: Vec<SpotLight> = (0..4)
+            .map(|i| {
+                let mut s = spot([i as f32, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+                s.cast_shadows = true;
+                s
+            })
+            .collect();
+        let data = build_light_data(&points, &spots);
+        assert_eq!(data.lights.len(), MAX_LOCAL_LIGHTS);
+        // Only one spot survived the clamp, so only its slice is kept.
+        assert_eq!(data.spot_shadows.len(), 1);
+        let max_index = data.lights.iter().map(|l| l.shadow_index).max().unwrap();
+        assert_eq!(max_index, 0);
     }
 
     #[test]
@@ -290,7 +374,7 @@ mod tests {
         let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 50)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
-        let buf = build_light_buffer(&lights, &[]);
+        let buf = build_light_data(&lights, &[]).lights;
         assert_eq!(buf.len(), MAX_POINT_LIGHTS + 50);
     }
 
@@ -299,7 +383,7 @@ mod tests {
         let lights: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS + 10)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
-        let buf = build_light_buffer(&lights, &[]);
+        let buf = build_light_data(&lights, &[]).lights;
         assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
     }
 
@@ -312,7 +396,7 @@ mod tests {
         let spots: Vec<SpotLight> = (0..4)
             .map(|i| spot([i as f32, 0.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0))
             .collect();
-        let buf = build_light_buffer(&points, &spots);
+        let buf = build_light_data(&points, &spots).lights;
         assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
         assert_eq!(buf[MAX_LOCAL_LIGHTS - 1].kind, LIGHT_KIND_SPOT);
     }

@@ -33,6 +33,10 @@ pub struct SpotLight {
     /// Half-angle in degrees at which the cone fades to black. Clamped to
     /// (0, 89.9].
     pub outer_angle: f32,
+    /// Whether this light casts shadows. Shadowed spots claim one slice of the
+    /// spot shadow map in declaration order; once the slices are used up the
+    /// remaining spots still light the scene but cast nothing.
+    pub cast_shadows: bool,
 }
 
 impl Default for SpotLight {
@@ -45,6 +49,7 @@ impl Default for SpotLight {
             range: 10.0,
             inner_angle: 18.0,
             outer_angle: 30.0,
+            cast_shadows: true,
         }
     }
 }

@@ -24,16 +24,12 @@
 // all use RH view matrices with [0, 1] depth in their orthographic
 // projections, so the same VPs are valid for every backend's shadow sampling.
 
+use crate::mat::{
+    IDENTITY4, add3, cross3, dot3, look_at, mat4_mul, normalize3, ortho_rh, scale3, sub3,
+};
 use crate::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 
 const SPLIT_LAMBDA: f32 = 0.5;
-
-const IDENTITY4: [[f32; 4]; 4] = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
 
 // Fallback uniforms used when no shadow pass is active: identity VPs and a
 // single split at +inf so the fragment shader always picks cascade 0 with a
@@ -220,78 +216,6 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
 
 // Right-handed look-at producing a column-major view matrix matching the
 // per-backend look_at helpers (Metal, Vulkan, DX all use the same convention).
-fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
-    let f = normalize3(sub3(centre, eye));
-    let r = normalize3(cross3(f, up));
-    let u = cross3(r, f);
-    [
-        [r[0], u[0], -f[0], 0.0],
-        [r[1], u[1], -f[1], 0.0],
-        [r[2], u[2], -f[2], 0.0],
-        [-dot3(r, eye), -dot3(u, eye), dot3(f, eye), 1.0],
-    ]
-}
-
-// Right-handed orthographic projection with depth mapped to [0, 1] -- shared
-// by Metal, Vulkan, and DirectX.
-fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
-    let rml = right - left;
-    let tmb = top - bottom;
-    let fmn = far - near;
-    [
-        [2.0 / rml, 0.0, 0.0, 0.0],
-        [0.0, 2.0 / tmb, 0.0, 0.0],
-        [0.0, 0.0, -1.0 / fmn, 0.0],
-        [
-            -(right + left) / rml,
-            -(top + bottom) / tmb,
-            -near / fmn,
-            1.0,
-        ],
-    ]
-}
-
-fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0_f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            for k in 0..4 {
-                out[col][row] += a[k][row] * b[col][k];
-            }
-        }
-    }
-    out
-}
-
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn scale3(v: [f32; 3], s: f32) -> [f32; 3] {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
-
-fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let len = dot3(v, v).sqrt().max(1e-6);
-    [v[0] / len, v[1] / len, v[2] / len]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

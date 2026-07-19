@@ -212,6 +212,12 @@ pub struct FrameGraphInputs {
     // lists Main reads (RAW edge). Metal only today; the other backends keep this
     // false and iterate the local lights directly.
     pub clustered_lighting_enabled: bool,
+    // Number of spot shadow map slices to render, i.e. how many spot lights cast
+    // shadows. Zero skips the SpotShadow pass and its imported array entirely.
+    pub shadowed_spot_count: u32,
+    // Per-slice edge of the spot shadow map array, so the imported resource
+    // carries its real dimensions.
+    pub spot_shadow_slice_size: u32,
 }
 
 impl FrameGraphInputs {
@@ -246,6 +252,8 @@ impl FrameGraphInputs {
             unified_gbuffer_prepass: false,
             world_hidden: false,
             clustered_lighting_enabled: false,
+            shadowed_spot_count: 0,
+            spot_shadow_slice_size: 512,
         }
     }
 }
@@ -307,6 +315,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             ssgi_enabled: false,
             rt_reflections_enabled: false,
             clustered_lighting_enabled: false,
+            shadowed_spot_count: 0,
+            spot_shadow_slice_size: 512,
             ..*inputs
         })
     } else {
@@ -432,13 +442,32 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // Main pass: reads optional shadow_map / draw_args / ao_output / cluster
-    // lights; writes the three HDR targets. Captures hdr_resolve_v1 (head of the
+    // Spot shadows: one depth-only render per shadowed spot into its slice of
+    // the spot shadow array. Like the cascade pass it precedes Main, which
+    // samples the array; backend-owned, so the import tracks dependencies only.
+    let spot_shadow_v1 = if inputs.shadowed_spot_count > 0 {
+        let spot_map = b.import_texture(
+            "spot_shadow_map",
+            spot_shadow_map_desc(inputs.spot_shadow_slice_size, inputs.shadowed_spot_count),
+        );
+        Some(
+            b.add_pass(PassId::SpotShadow, PassKind::Render)
+                .write_texture(spot_map),
+        )
+    } else {
+        None
+    };
+
+    // Main pass: reads optional shadow_map / spot_shadow_map / draw_args /
+    // ao_output / cluster lights; writes the three HDR targets. Captures hdr_resolve_v1 (head of the
     // hdr_resolve RMW chain, the version AutoExposure reads when two-pass
     // is off) and hdr_depth_v1 (the depth HizBuild reduces under two-pass).
     let (hdr_resolve_v1, hdr_depth_v1) = {
         let mut main = b.add_pass(PassId::Main, PassKind::Render);
         if let Some(h) = shadow_v1 {
+            main.read_texture(h);
+        }
+        if let Some(h) = spot_shadow_v1 {
             main.read_texture(h);
         }
         if let Some(h) = draw_args_v1 {
@@ -730,6 +759,17 @@ fn shadow_map_desc(size: u32) -> TextureDesc {
     }
 }
 
+fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {
+    TextureDesc {
+        width: TextureSize::Absolute(slice_size.max(1)),
+        height: TextureSize::Absolute(slice_size.max(1)),
+        format: PixelFormat::Depth32Float,
+        sample_count: 1,
+        array_layers: slices.max(1),
+        usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    }
+}
+
 fn hdr_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     TextureDesc {
         width: TextureSize::Absolute(inputs.hdr_width.max(1)),
@@ -920,6 +960,8 @@ mod tests {
             unified_gbuffer_prepass: false,
             world_hidden: false,
             clustered_lighting_enabled: false,
+            shadowed_spot_count: 0,
+            spot_shadow_slice_size: 512,
         }
     }
 

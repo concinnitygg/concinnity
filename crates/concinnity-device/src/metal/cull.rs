@@ -970,6 +970,12 @@ impl MtlContext {
             for i in 0..crate::metal::uniforms::MAX_PROBES {
                 enc.setTexture_atIndex(Some(self.probe_cube_or_sky(i)), count + 4 + i);
             }
+            // Spot shadow map array (1x1 fallback when nothing casts), just past
+            // the probe cubes.
+            enc.setTexture_atIndex(
+                Some(self.spot_shadow_map.as_ref()),
+                count + 4 + crate::metal::uniforms::MAX_PROBES,
+            );
         }
         Ok(Some(buf))
     }
@@ -991,6 +997,7 @@ impl MtlContext {
         }
         for tex in [
             &self.shadow_map,
+            &self.spot_shadow_map,
             &self.env_map.irradiance,
             &self.env_map.prefilter,
         ] {

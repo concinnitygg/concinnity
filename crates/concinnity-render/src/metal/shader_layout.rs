@@ -20,7 +20,7 @@ use std::mem::{offset_of, size_of};
 
 use crate::render_types::{
     ClusterParams, GpuLight, GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush,
-    ShadowUniforms,
+    ShadowUniforms, SpotShadowData,
 };
 
 use super::uniforms::{ModelUniforms, ViewUniforms};
@@ -107,6 +107,7 @@ pub fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
             (8, gpu_light_layout()),
             (9, gpu_object_data_layout()),
             (11, cluster_params_layout()),
+            (13, spot_shadow_data_layout()),
         ],
         EngineStage::Shadow => vec![
             (0, shadow_uniforms_layout()),
@@ -222,6 +223,18 @@ fn cluster_params_layout() -> ExpectedStruct {
             field!(ClusterParams, screen_w),
             field!(ClusterParams, screen_h),
             field!(ClusterParams, use_clusters),
+        ],
+    }
+}
+
+fn spot_shadow_data_layout() -> ExpectedStruct {
+    ExpectedStruct {
+        name: "SpotShadowData",
+        size: size_of::<SpotShadowData>(),
+        fields: vec![
+            field!(SpotShadowData, light_vp),
+            field!(SpotShadowData, depth_bias),
+            field!(SpotShadowData, normal_bias),
         ],
     }
 }

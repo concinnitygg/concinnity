@@ -242,6 +242,15 @@ struct GpuLight {
     float         _pad;
 };
 
+// One shadowed spot's slice of the spot shadow array. Matches the Rust
+// SpotShadowData in render_types.rs; indexed by GpuLight.shadow_index.
+struct SpotShadowData {
+    float4x4 light_vp;
+    float    depth_bias;
+    float    normal_bias;
+    float2   _pad;
+};
+
 struct LightUniforms {
     DirectionalLightData directional[4];
     PointLightData       point[8];
@@ -448,6 +457,54 @@ static float sample_cascade_pcf(
             float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
             float2 sample_uv = uv + rot * tex_size;
             sum += shadow_map.sample_compare(shadow_samp, sample_uv, cascade, ref);
+        }
+    }
+    return sum / SAMPLES;
+}
+
+// 3x3 PCF of one spot shadow slice. Returns [0, 1] (1.0 fully lit), and 1.0
+// outside the cone's light frustum so an unshadowed region is never darkened.
+// A smaller kernel than the cascade PCF: a spot slice covers far less world
+// area per texel, so the penumbra needs fewer taps.
+static float sample_spot_shadow(
+    int                     shadow_index,
+    float3                  world_pos,
+    float3                  normal,
+    constant SpotShadowData *spot_shadows,
+    depth2d_array<float>    spot_shadow_map,
+    sampler                 shadow_samp,
+    float2                  screen_xy
+) {
+    constant SpotShadowData &sd = spot_shadows[shadow_index];
+    // Offsetting along the normal before projecting pushes the sample off
+    // surfaces near-parallel to the light, where depth slope causes acne.
+    float3 biased = world_pos + normal * sd.normal_bias;
+    float4 light_clip = sd.light_vp * float4(biased, 1.0);
+    if (light_clip.w <= 0.0) {
+        return 1.0;
+    }
+    float3 ndc = light_clip.xyz / light_clip.w;
+    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+
+    float ref = ndc.z - sd.depth_bias;
+    float angle = hash_rotation(screen_xy);
+    float ca = cos(angle);
+    float sa = sin(angle);
+    float2 tex_size = float2(1.0) / float2(spot_shadow_map.get_width(),
+                                           spot_shadow_map.get_height());
+
+    float sum = 0.0;
+    constexpr int RADIUS = 1; // 3x3
+    constexpr float SAMPLES = float((2 * RADIUS + 1) * (2 * RADIUS + 1));
+    for (int dy = -RADIUS; dy <= RADIUS; dy++) {
+        for (int dx = -RADIUS; dx <= RADIUS; dx++) {
+            float2 off = float2(dx, dy);
+            float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
+            sum += spot_shadow_map.sample_compare(shadow_samp, uv + rot * tex_size,
+                                                  shadow_index, ref);
         }
     }
     return sum / SAMPLES;
@@ -756,6 +813,7 @@ static float4 shade_surface(
     float3                   emissive,
     constant LightUniforms  &lights,
     constant GpuLight       *local_lights,
+    constant SpotShadowData *spot_shadows,
     constant ClusterParams  &cluster,
     constant uint           *cluster_light_list,
     constant ShadowUniforms &shadow,
@@ -768,6 +826,7 @@ static float4 shade_surface(
     bool                     has_emissive_map,
     bool                     has_orm_map,
     depth2d_array<float>     shadow_map,
+    depth2d_array<float>     spot_shadow_map,
     texturecube<float>       irradiance_cube,
     texturecube<float>       prefilter_cube,
     array<texturecube<float>, MAX_PROBES> probe_cubes,
@@ -996,6 +1055,14 @@ static float4 shade_surface(
             float co = local_lights[j].cos_outer;
             float t  = clamp((cd - co) / max(ci - co, 1e-4), 0.0, 1.0);
             atten *= t * t;
+            // Only spots that claimed a shadow slice sample the array; the rest
+            // keep shadow_index at -1 and light without casting.
+            int si = local_lights[j].shadow_index;
+            if (si >= 0 && atten > 0.0) {
+                atten *= sample_spot_shadow(si, in.world_pos, N, spot_shadows,
+                                            spot_shadow_map, shadow_sampler,
+                                            in.position.xy);
+            }
         }
         float3 radiance = col * intens * atten;
 
@@ -1091,9 +1158,11 @@ fragment float4 fragment_main(
     constant GpuLight        *local_lights [[buffer(8)]],
     constant ClusterParams   &cluster  [[buffer(11)]],
     constant uint            *cluster_light_list [[buffer(12)]],
+    constant SpotShadowData  *spot_shadows [[buffer(13)]],
     texture2d<float>     tex            [[texture(0)]],
     texture2d<float>     normal_tex     [[texture(1)]],
     depth2d_array<float> shadow_map     [[texture(2)]],
+    depth2d_array<float> spot_shadow_map[[texture(14)]],
     texturecube<float>   irradiance_cube[[texture(3)]],
     texturecube<float>   prefilter_cube [[texture(4)]],
     texture2d<float>     ssao_tex       [[texture(5)]],
@@ -1120,11 +1189,11 @@ fragment float4 fragment_main(
         mat.roughness, mat.metallic, mat.macro_variation,
         mat.terrain_blend, mat.secondary_blend_sharpness,
         mat.tint, mat.emissive,
-        lights, local_lights, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
+        lights, local_lights, spot_shadows, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
         // No emissive / ORM maps on the legacy per-draw path: pass the albedo
         // as a dummy and gate both off so neither is sampled.
         tex, tex, false, false,
-        shadow_map, irradiance_cube,
+        shadow_map, spot_shadow_map, irradiance_cube,
         prefilter_cube, probe_cubes, ssao_tex, tex_sampler, shadow_sampler,
         cube_sampler);
 }
@@ -1148,6 +1217,8 @@ struct BindlessTextures {
     // keep the sky `prefilter`). Unused slices + the pre-bake state alias the sky
     // `prefilter`, so reflections are unchanged until a probe is baked.
     array<texturecube<float>, MAX_PROBES> probes [[id(BINDLESS_TEXTURE_COUNT + 4)]];
+    // Spot shadow map array: one depth slice per shadow-casting spot light.
+    depth2d_array<float> spot_shadow_map [[id(BINDLESS_TEXTURE_COUNT + 4 + MAX_PROBES)]];
 };
 
 // Fragment entry point for the bindless static main pass. Material scalars and
@@ -1167,6 +1238,7 @@ fragment float4 fragment_main_bindless(
     constant GpuLight         *local_lights [[buffer(8)]],
     constant ClusterParams    &cluster  [[buffer(11)]],
     constant uint             *cluster_light_list [[buffer(12)]],
+    constant SpotShadowData   *spot_shadows [[buffer(13)]],
     constant BindlessTextures &tex      [[buffer(7)]]
 ) {
     // Static engine samplers, declared inline. Parameters mirror the
@@ -1187,7 +1259,7 @@ fragment float4 fragment_main_bindless(
         obj.roughness, obj.metallic, obj.macro_variation,
         obj.terrain_blend, obj.secondary_blend_sharpness,
         obj.tint, obj.emissive,
-        lights, local_lights, cluster, cluster_light_list, shadow,
+        lights, local_lights, spot_shadows, cluster, cluster_light_list, shadow,
         tex.tex_pool[obj.albedo_index],
         tex.tex_pool[obj.normal_index],
         tex.tex_pool[obj.albedo_secondary_index],
@@ -1196,7 +1268,7 @@ fragment float4 fragment_main_bindless(
         tex.tex_pool[obj.orm_map_index],
         obj.emissive_map_index != 0,
         obj.orm_map_index != 0,
-        tex.shadow_map, tex.irradiance, tex.prefilter,
+        tex.shadow_map, tex.spot_shadow_map, tex.irradiance, tex.prefilter,
         tex.probes, tex.ssao,
         tex_sampler, shadow_sampler, cube_sampler);
 }

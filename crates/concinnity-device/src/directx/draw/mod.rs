@@ -275,6 +275,8 @@ impl DxContext {
             // the world has local lights to bin, so this also gates the
             // `LightCull` graph node; otherwise the forward pass brute-forces.
             clustered_lighting_enabled: self.light_cull.pso.is_some(),
+            shadowed_spot_count: 0,
+            spot_shadow_slice_size: 512,
         };
 
         // Compute the camera VPs the main + velocity passes consume.

@@ -15,7 +15,7 @@ use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
 use crate::particles::ParticleEmitterRecord;
 use crate::render_types::{
-    DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams,
+    DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams, SpotShadowData,
 };
 use crate::rt_reflections::RtReflectionSettings;
 use crate::ssao::SsaoSettings;
@@ -153,6 +153,10 @@ pub struct BackendInit<'a> {
     // point lights are also mirrored into `light_uniforms.point` for the
     // raymarch / fog / probe paths that still read the fixed array.
     pub local_lights: Vec<GpuLight>,
+    // One entry per spot shadow map slice, indexed by `GpuLight.shadow_index`.
+    // Empty when no spot light casts shadows, in which case the backend skips
+    // allocating the shadow array entirely.
+    pub spot_shadows: Vec<SpotShadowData>,
     pub shadows: ShadowParams,
     // Scene-sampler max anisotropy, clamped to the GPU's range at init.
     pub anisotropy: u32,
