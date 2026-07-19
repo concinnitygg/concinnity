@@ -320,6 +320,19 @@ impl MtlContext {
             }
         };
 
+        // Clustered-lighting resources: the per-cluster light-index buffer
+        // (always allocated so the forward pass has a valid fragment buffer(12)
+        // binding) and the binning compute pipeline (built only when the world
+        // has local lights to bin).
+        let cluster_light_buffer = super::light_cull::build_cluster_light_buffer(&device)?;
+        let light_cull_pipeline = if local_lights.is_empty() {
+            None
+        } else {
+            Some(super::light_cull::build_light_cull_pipeline(
+                &device, hot_reload,
+            )?)
+        };
+
         // upload textures; fall back to a 1x1 opaque white texture when none provided
         let gpu_textures = if textures.is_empty() {
             vec![create_fallback_texture(&device)?]
@@ -1193,6 +1206,11 @@ impl MtlContext {
                 froxel_pipeline: fog_froxel_pipeline,
                 froxel_volume: fog_froxel_volume,
             },
+            light_cull: super::light_cull::LightCullState {
+                pipeline: light_cull_pipeline,
+                cluster_buffer: cluster_light_buffer,
+            },
+            cluster_params: crate::gfx::render_types::ClusterParams::ZERO,
             particle: super::particle::ParticleState {
                 records: particles.into_iter().map(Some).collect(),
                 emitter_state: particle_emitter_state.into_iter().map(Some).collect(),

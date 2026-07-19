@@ -207,6 +207,11 @@ pub struct FrameGraphInputs {
     // an empty visible set so the surviving Main pass is a bare clear; the
     // opaque overlay then covers it.
     pub world_hidden: bool,
+    // `true` when the scene has local lights to cluster. The graph adds a
+    // `LightCull` compute pass before Main that bins the lights into per-cluster
+    // lists Main reads (RAW edge). Metal only today; the other backends keep this
+    // false and iterate the local lights directly.
+    pub clustered_lighting_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -240,6 +245,7 @@ impl FrameGraphInputs {
             rt_reflections_enabled: false,
             unified_gbuffer_prepass: false,
             world_hidden: false,
+            clustered_lighting_enabled: false,
         }
     }
 }
@@ -300,6 +306,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
             rt_reflections_enabled: false,
+            clustered_lighting_enabled: false,
             ..*inputs
         })
     } else {
@@ -411,8 +418,22 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // Main pass: reads optional shadow_map / draw_args / ao_output; writes
-    // the three HDR targets. Captures hdr_resolve_v1 (head of the
+    // Clustered light binning (compute): bins the scene's local lights into
+    // per-cluster index lists. Writes the imported cluster buffer; Main's read
+    // below pins LightCull before Main in the toposort. Backend-owned buffer, so
+    // the import is a dependency-tracking stub.
+    let cluster_lights_v1 = if inputs.clustered_lighting_enabled {
+        let cluster_lights = b.import_buffer("cluster_light_list", cluster_light_list_desc());
+        Some(
+            b.add_pass(PassId::LightCull, PassKind::Compute)
+                .write_buffer(cluster_lights),
+        )
+    } else {
+        None
+    };
+
+    // Main pass: reads optional shadow_map / draw_args / ao_output / cluster
+    // lights; writes the three HDR targets. Captures hdr_resolve_v1 (head of the
     // hdr_resolve RMW chain, the version AutoExposure reads when two-pass
     // is off) and hdr_depth_v1 (the depth HizBuild reduces under two-pass).
     let (hdr_resolve_v1, hdr_depth_v1) = {
@@ -421,6 +442,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             main.read_texture(h);
         }
         if let Some(h) = draw_args_v1 {
+            main.read_buffer(h);
+        }
+        if let Some(h) = cluster_lights_v1 {
             main.read_buffer(h);
         }
         if let Some(h) = ao_output_v1 {
@@ -745,6 +769,16 @@ fn cull_status_desc() -> BufferDesc {
     }
 }
 
+fn cluster_light_list_desc() -> BufferDesc {
+    // Per-cluster light-index lists LightCull writes and Main reads. An identity
+    // stub: the backend owns the real (persistent) buffer, so the graph only
+    // tracks the read/write dependency, not the allocation.
+    BufferDesc {
+        size_bytes: None,
+        usage: BufferUsage::STORAGE,
+    }
+}
+
 fn hiz_pyramid_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // R32Float depth-mip pyramid rebuilt mid-frame from phase-1 depth.
     // Identity stub: the executor owns the real mip-chain texture (the desc
@@ -885,6 +919,7 @@ mod tests {
             // (the DX / Vulkan backends). Unified-path tests set this true.
             unified_gbuffer_prepass: false,
             world_hidden: false,
+            clustered_lighting_enabled: false,
         }
     }
 

@@ -12,7 +12,7 @@ use objc2_metal::{
 use objc2_metal_kit::MTKView;
 
 use crate::gfx::render_types::{
-    DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
+    ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
 };
 
 use super::auto_exposure::AutoExposureGpu;
@@ -396,6 +396,13 @@ pub struct MtlContext {
     // pipeline, and the froxel-volume compute pipeline + 3D output volume.
     // See [`FogState`].
     pub(super) fog: FogState,
+    // Clustered-lighting state: the binning compute pipeline + the per-cluster
+    // light-index buffer. See [`LightCullState`].
+    pub(super) light_cull: super::light_cull::LightCullState,
+    // Per-frame clustered-lighting params (main camera), rebuilt each frame in
+    // draw_frame and bound to the light-cull pass + the forward pass. Mirrors
+    // shadow_uniforms' per-frame update + shared bind.
+    pub(super) cluster_params: ClusterParams,
     // Particle-system feature state: the per-emitter records (+ tombstone
     // free-list), the parallel per-emitter GPU pools, the shared compute +
     // render pipelines, and the per-frame timing bookkeeping. See

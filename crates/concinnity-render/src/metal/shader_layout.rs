@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
 
 use crate::render_types::{
-    GpuLight, GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush, ShadowUniforms,
+    ClusterParams, GpuLight, GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush,
+    ShadowUniforms,
 };
 
 use super::uniforms::{ModelUniforms, ViewUniforms};
@@ -105,6 +106,7 @@ pub fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
             (5, shadow_uniforms_layout()),
             (8, gpu_light_layout()),
             (9, gpu_object_data_layout()),
+            (11, cluster_params_layout()),
         ],
         EngineStage::Shadow => vec![
             (0, shadow_uniforms_layout()),
@@ -199,6 +201,27 @@ fn gpu_light_layout() -> ExpectedStruct {
             field!(GpuLight, cos_inner),
             field!(GpuLight, cos_outer),
             field!(GpuLight, shadow_index),
+        ],
+    }
+}
+
+fn cluster_params_layout() -> ExpectedStruct {
+    ExpectedStruct {
+        name: "ClusterParams",
+        size: size_of::<ClusterParams>(),
+        fields: vec![
+            field!(ClusterParams, inv_view_proj),
+            field!(ClusterParams, cam_pos),
+            field!(ClusterParams, z_near),
+            field!(ClusterParams, view_forward),
+            field!(ClusterParams, z_far),
+            field!(ClusterParams, grid_x),
+            field!(ClusterParams, grid_y),
+            field!(ClusterParams, grid_z),
+            field!(ClusterParams, num_lights),
+            field!(ClusterParams, screen_w),
+            field!(ClusterParams, screen_h),
+            field!(ClusterParams, use_clusters),
         ],
     }
 }

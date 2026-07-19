@@ -545,6 +545,36 @@ impl MtlContext {
                     z_far: fog.max_distance,
                     _pad: [0.0; 2],
                 });
+        // Clustered light-binning params (main camera). The compute pass reads
+        // these to build each cluster's world-space AABB (un-jittered inverse VP
+        // + camera forward, matching the fog froxel convention) and the forward
+        // pass reads the grid dims / depth range / screen size to place a
+        // fragment. `use_clusters` is set only when the world has local lights
+        // (the pipeline is built iff so); otherwise the forward pass brute-forces
+        // and the LightCull graph node is omitted. Stored on self so the shared
+        // main-pass bind can push it; a local copy feeds the LightCull arm.
+        let clustered = self.light_cull.pipeline.is_some();
+        let cluster_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view_matrix));
+        self.cluster_params = crate::gfx::render_types::ClusterParams {
+            inv_view_proj: cluster_inv_vp,
+            cam_pos,
+            z_near: near.max(1e-3),
+            view_forward: [
+                -self.view_matrix[0][2],
+                -self.view_matrix[1][2],
+                -self.view_matrix[2][2],
+            ],
+            z_far: far,
+            grid_x: crate::gfx::render_types::CLUSTER_GRID_X,
+            grid_y: crate::gfx::render_types::CLUSTER_GRID_Y,
+            grid_z: crate::gfx::render_types::CLUSTER_GRID_Z,
+            num_lights: self.light_uniforms.num_local_lights.max(0) as u32,
+            screen_w: render_w as f32,
+            screen_h: render_h as f32,
+            use_clusters: u32::from(clustered),
+            _pad: 0,
+        };
+        let cluster_params = self.cluster_params;
         // Velocity (motion vectors in the G-buffer pre-pass) is needed whenever
         // temporal reconstruction runs: that's TAA or the MetalFX upscaler.
         let velocity_active = self.taa.enabled || self.upscale.scaler.is_some();
@@ -679,6 +709,10 @@ impl MtlContext {
             // world pass off, collapsing to Main (a bare clear, fed the empty
             // scene above) -> Composite (presents the overlay).
             world_hidden,
+            // Clustered light binning runs when the world has local lights (the
+            // cull pipeline is built iff so). The builder inserts LightCull
+            // before Main and Main reads its per-cluster list buffer.
+            clustered_lighting_enabled: clustered,
         };
         // Reuse the cached compiled graph when this frame's inputs match the
         // ones it was built from (the common case: graph topology changes only
@@ -756,6 +790,11 @@ impl MtlContext {
             ssr_params: ssr_params.as_ref(),
             fog_params: fog_params.as_ref(),
             fog_froxel_params: fog_froxel_params.as_ref(),
+            cluster_params: if clustered {
+                Some(&cluster_params)
+            } else {
+                None
+            },
             ssao_params: ssao_params.as_ref(),
             ssgi_params: ssgi_params.as_ref(),
             rt_reflection_params: rt_reflection_params.as_ref(),

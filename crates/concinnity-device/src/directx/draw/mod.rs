@@ -268,6 +268,9 @@ impl DxContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
+            // Clustered light binning is Metal-only so far; DX iterates the local
+            // lights directly.
+            clustered_lighting_enabled: false,
         };
 
         // Compute the camera VPs the main + velocity passes consume.

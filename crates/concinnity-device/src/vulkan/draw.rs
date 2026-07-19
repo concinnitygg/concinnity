@@ -505,6 +505,9 @@ impl VkContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
+            // Clustered light binning is Metal-only so far; Vulkan iterates the
+            // local lights directly.
+            clustered_lighting_enabled: false,
         };
 
         //  Camera projection + per-frame view state. Computed before the main

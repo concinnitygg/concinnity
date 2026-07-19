@@ -207,6 +207,8 @@ impl MtlContext {
             return Ok(0);
         }
 
+        // Main camera: bind the per-cluster light lists once for every sub-path.
+        self.bind_clusters(&encoder, true);
         let count_static = self.encode_main_static_into(
             &encoder,
             &view_uniforms,
@@ -304,6 +306,9 @@ impl MtlContext {
             _end_pad: [0.0; 2],
         };
 
+        // Planar / probe re-render: the main camera's cluster grid does not match
+        // this viewpoint, so iterate every local light instead of the clusters.
+        self.bind_clusters(&encoder, false);
         let count_static = self.encode_main_static_into(
             &encoder,
             &view_uniforms,
@@ -398,6 +403,8 @@ impl MtlContext {
             _end_pad: [0.0; 2],
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);
+        // Main2 is the same main camera as phase 1, so it reads the clusters too.
+        self.bind_clusters(&encoder, true);
         let draw_calls = self.execute_bindless_static_icb(
             &encoder,
             obj_buf,
@@ -510,6 +517,36 @@ impl MtlContext {
     // helpers stay shape-compatible with a future parallel-encoder retry.
     // Returns false without touching the encoder when the world has no main
     // pipeline (no 3D scene content); the caller then skips its draws.
+    // Bind the clustered-lighting inputs the forward pass reads: the params at
+    // fragment buffer(11) + the per-cluster light-index list at buffer(12). Bound
+    // once per pass (the value is pass-level, shared by every geometry sub-path)
+    // on the shared encoder. `clustered` = true for the main camera (binds the
+    // live params); false for the planar / probe re-renders, which shade from a
+    // viewpoint the main camera's grid does not match and so fall back to
+    // iterating every local light (use_clusters cleared).
+    fn bind_clusters(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        clustered: bool,
+    ) {
+        let cluster_params = if clustered {
+            self.cluster_params
+        } else {
+            crate::gfx::render_types::ClusterParams {
+                use_clusters: 0,
+                ..self.cluster_params
+            }
+        };
+        unsafe {
+            enc.setFragmentBytes_length_atIndex(
+                std::ptr::NonNull::from(&cluster_params).cast(),
+                std::mem::size_of::<crate::gfx::render_types::ClusterParams>(),
+                11,
+            );
+            enc.setFragmentBuffer_offset_atIndex(Some(&self.light_cull.cluster_buffer), 0, 12);
+        }
+    }
+
     fn bind_main_pass_shared(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,

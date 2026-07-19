@@ -16,6 +16,20 @@ pub const MAX_LOCAL_LIGHTS: usize = 1024;
 // lights extend this without changing the 64-byte record layout.
 pub const LIGHT_KIND_POINT: u32 = 0;
 
+// Clustered forward lighting froxel grid. The screen is tiled
+// CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;
+// a compute pass bins the local lights into per-cluster index lists the forward
+// pass reads instead of iterating every light.
+pub const CLUSTER_GRID_X: u32 = 16;
+pub const CLUSTER_GRID_Y: u32 = 9;
+pub const CLUSTER_GRID_Z: u32 = 24;
+pub const CLUSTER_COUNT: u32 = CLUSTER_GRID_X * CLUSTER_GRID_Y * CLUSTER_GRID_Z;
+// Per-cluster light-index list capacity. Each cluster occupies
+// CLUSTER_LIGHT_LIST_STRIDE u32 slots: slot 0 is the count, slots 1.. are light
+// indices into the GpuLight buffer. Lights past the cap are dropped.
+pub const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
+pub const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
+
 // Number of cascades the directional shadow pre-pass renders into the shadow
 // map array. Hardcoded because changing N requires re-compiling the shaders
 // (the array length appears in the MSL/HLSL/GLSL source).
@@ -246,6 +260,64 @@ impl LightUniforms {
         num_point: 0,
         ambient_intensity: 1.0,
         num_local_lights: 0,
+    };
+}
+
+// Per-frame uniform for the clustered light-binning compute pass and the forward
+// pass that reads the per-cluster lists. The compute kernel unprojects each
+// cluster's screen tile through `inv_view_proj` and walks camera rays to the
+// slice's near/far depth to build a world-space AABB (same convention as the fog
+// froxel kernel), then tests each GpuLight sphere against it. The forward pass
+// reads the grid dims + depth range + screen size to map a fragment to its
+// cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
+// 16-byte lanes. Must match the ClusterParams struct in the .metal / .hlsl /
+// .glsl light-cull and forward shaders.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct ClusterParams {
+    // Inverse view-projection; unprojects a clip-space corner to world space.
+    pub inv_view_proj: [[f32; 4]; 4],
+    // Camera world position; ray origin for the cluster-AABB build.
+    pub cam_pos: [f32; 3],
+    // Camera near plane in view units (positive distance).
+    pub z_near: f32,
+    // Camera forward axis (world space, unit); projects a ray onto view depth.
+    pub view_forward: [f32; 3],
+    // Far bound of the clustered range in view units (positive distance).
+    pub z_far: f32,
+    pub grid_x: u32,
+    pub grid_y: u32,
+    pub grid_z: u32,
+    // Number of valid GpuLight entries the kernel bins.
+    pub num_lights: u32,
+    // Render-target size in pixels; maps a fragment's `position.xy` to a tile.
+    pub screen_w: f32,
+    pub screen_h: f32,
+    // 1 = the forward pass reads the per-cluster list (main camera); 0 = it
+    // falls back to iterating all `num_lights` lights (planar / probe re-renders,
+    // whose viewpoint differs from the grid the main camera binned).
+    pub use_clusters: u32,
+    pub _pad: u32,
+}
+
+impl ClusterParams {
+    // Neutral params for context construction before the first per-frame update.
+    // use_clusters = 0 so the forward pass falls back to brute-force iteration
+    // until a real frame's camera fills the grid.
+    pub const ZERO: Self = Self {
+        inv_view_proj: [[0.0; 4]; 4],
+        cam_pos: [0.0; 3],
+        z_near: 0.0,
+        view_forward: [0.0; 3],
+        z_far: 0.0,
+        grid_x: CLUSTER_GRID_X,
+        grid_y: CLUSTER_GRID_Y,
+        grid_z: CLUSTER_GRID_Z,
+        num_lights: 0,
+        screen_w: 0.0,
+        screen_h: 0.0,
+        use_clusters: 0,
+        _pad: 0,
     };
 }
 
@@ -1532,6 +1604,30 @@ mod tests {
         assert_eq!(offset_of!(GpuLight, cos_outer), 52);
         assert_eq!(offset_of!(GpuLight, shadow_index), 56);
         assert_eq!(offset_of!(GpuLight, _pad), 60);
+    }
+
+    #[test]
+    fn cluster_params_layout_matches_msl() {
+        // MSL `ClusterParams` in the light-cull + forward shaders: a float4x4
+        // (16-aligned, 64 B) then packed_float3 cam_pos + z_near and packed_float3
+        // view_forward + z_far filling two 16-byte lanes, then the grid / count /
+        // screen scalars. packed_float3 keeps cam_pos / view_forward at the packed
+        // offsets; a plain float3 would promote to a 16-byte lane and shift them.
+        assert_eq!(size_of::<ClusterParams>(), 128);
+        assert_eq!(offset_of!(ClusterParams, inv_view_proj), 0);
+        assert_eq!(offset_of!(ClusterParams, cam_pos), 64);
+        assert_eq!(offset_of!(ClusterParams, z_near), 76);
+        assert_eq!(offset_of!(ClusterParams, view_forward), 80);
+        assert_eq!(offset_of!(ClusterParams, z_far), 92);
+        assert_eq!(offset_of!(ClusterParams, grid_x), 96);
+        assert_eq!(offset_of!(ClusterParams, grid_y), 100);
+        assert_eq!(offset_of!(ClusterParams, grid_z), 104);
+        assert_eq!(offset_of!(ClusterParams, num_lights), 108);
+        assert_eq!(offset_of!(ClusterParams, screen_w), 112);
+        assert_eq!(offset_of!(ClusterParams, screen_h), 116);
+        assert_eq!(offset_of!(ClusterParams, use_clusters), 120);
+        assert_eq!(offset_of!(ClusterParams, _pad), 124);
+        assert_eq!(size_of::<ClusterParams>() % 16, 0);
     }
 
     #[test]

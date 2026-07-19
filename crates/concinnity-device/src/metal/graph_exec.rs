@@ -69,7 +69,8 @@ use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture}
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_graph::{CompiledGraph, PassId};
 use crate::gfx::render_types::{
-    FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams, TextDrawCall,
+    ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
+    TextDrawCall,
 };
 
 use super::context::MtlContext;
@@ -163,6 +164,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // FogFroxel compute pass + the Fog fragment shader sample path both
     // consume it.
     pub fog_froxel_params: Option<&'a FogFroxelParams>,
+    // Clustered light-binning params. `Some` only when the `LightCull` pass is
+    // in the graph this frame (matches `FrameGraphInputs::clustered_lighting_enabled`).
+    pub cluster_params: Option<&'a ClusterParams>,
     // SSAO kernel + blur params. `Some` only when the `SsaoBlur` pass
     // is in the graph this frame (matches `FrameGraphInputs::ssao_enabled`).
     pub ssao_params: Option<&'a SsaoParams>,
@@ -620,6 +624,12 @@ impl MtlContext {
                         "graph executor: FogFroxel pass requires fog_froxel_params but none was supplied",
                     )?;
                 self.encode_fog_froxel(cmd_buf, fog_params, fog_froxel_params)?
+            }
+            PassId::LightCull => {
+                let cluster_params = params.cluster_params.ok_or(
+                    "graph executor: LightCull pass requires cluster_params but none was supplied",
+                )?;
+                self.encode_light_cull(cmd_buf, cluster_params)?
             }
             PassId::ParticlesDraw => {
                 // Bundles ParticlesSim (compute) + ParticlesDraw

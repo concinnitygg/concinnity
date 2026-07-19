@@ -22,6 +22,7 @@ mod hot_reload;
 mod init;
 mod input;
 mod instanced;
+mod light_cull;
 mod parallel_encoder;
 mod particle;
 mod pass_timing;

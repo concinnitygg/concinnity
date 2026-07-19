@@ -48,13 +48,14 @@ pub const PASS_NAMES: [&str; PASS_COUNT] = [
     "rt_reflections",
     "gbuffer_prepass",
     "reflection_composite",
+    "light_cull",
 ];
 
 // Number of distinct passes the engine times. Sized to match
 // [`PASS_NAMES`]; the per-pass timing array in
 // [`crate::profile::RenderStats`] is sized to at least this many
 // slots.
-pub const PASS_COUNT: usize = 28;
+pub const PASS_COUNT: usize = 29;
 
 // One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
 // `[T; PASS_COUNT]` companion array.
@@ -179,6 +180,13 @@ pub enum PassId {
     // it over the scene). It carries its own timing slot so its cost is visible
     // separately from the trace/march that precedes it. Metal only.
     ReflectionComposite = 27,
+    // Clustered light-binning compute pass. Once per frame, before Main: bins the
+    // scene's local lights (the GpuLight buffer) into a per-cluster index list
+    // over a screen-tiled, exponential-depth froxel grid, which the forward pass
+    // reads to shade each fragment from only its cluster's lights instead of
+    // iterating every light. Runs when the world has local lights; Metal first,
+    // the other backends follow. Writes a storage buffer Main reads (RAW edge).
+    LightCull = 28,
 }
 
 impl PassId {
@@ -229,6 +237,7 @@ mod tests {
         PassId::RtReflections,
         PassId::GBufferPrepass,
         PassId::ReflectionComposite,
+        PassId::LightCull,
     ];
 
     // Expected timing name per variant. The match has no wildcard arm, so
@@ -264,6 +273,7 @@ mod tests {
             PassId::RtReflections => "rt_reflections",
             PassId::GBufferPrepass => "gbuffer_prepass",
             PassId::ReflectionComposite => "reflection_composite",
+            PassId::LightCull => "light_cull",
         }
     }
 

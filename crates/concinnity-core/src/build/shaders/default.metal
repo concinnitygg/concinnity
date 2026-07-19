@@ -253,6 +253,29 @@ struct LightUniforms {
     int num_local;
 };
 
+// Per-cluster light-list stride: MAX_LIGHTS_PER_CLUSTER + 1 (slot 0 is the
+// count). Matches CLUSTER_LIGHT_LIST_STRIDE in render_types.rs.
+constant uint CLUSTER_LIGHT_LIST_STRIDE = 64u;
+
+// Clustered lighting params (matches ClusterParams in render_types.rs). The
+// forward pass reads the grid dims + depth range + screen size to map a fragment
+// to its cluster; the matrix / cam fields are the compute kernel's, unused here.
+struct ClusterParams {
+    float4x4      inv_view_proj;
+    packed_float3 cam_pos;
+    float         z_near;
+    packed_float3 view_forward;
+    float         z_far;
+    uint          grid_x;
+    uint          grid_y;
+    uint          grid_z;
+    uint          num_lights;
+    float         screen_w;
+    float         screen_h;
+    uint          use_clusters;
+    uint          _pad;
+};
+
 struct ShadowUniforms {
     float4x4 light_vps[NUM_SHADOW_CASCADES];
     // x..w = view-space far depth for cascades 0..3
@@ -730,6 +753,8 @@ static float4 shade_surface(
     float3                   emissive,
     constant LightUniforms  &lights,
     constant GpuLight       *local_lights,
+    constant ClusterParams  &cluster,
+    constant uint           *cluster_light_list,
     constant ShadowUniforms &shadow,
     texture2d<float>         tex,
     texture2d<float>         normal_tex,
@@ -923,7 +948,33 @@ static float4 shade_surface(
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int j = 0; j < lights.num_local; j++) {
+    // Clustered light iteration: when clustering is active (the main camera), map
+    // this fragment to its froxel cluster and shade only that cluster's binned
+    // lights. Planar / probe re-renders bind use_clusters = 0 (their viewpoint
+    // differs from the grid the main camera binned) and fall back to iterating
+    // every local light.
+    uint cluster_base = 0u;
+    int  local_count;
+    if (cluster.use_clusters != 0u) {
+        uint cx = min(uint(in.position.x / cluster.screen_w * float(cluster.grid_x)),
+                      cluster.grid_x - 1u);
+        uint cy = min(uint(in.position.y / cluster.screen_h * float(cluster.grid_y)),
+                      cluster.grid_y - 1u);
+        float zd = max(in.view_depth, cluster.z_near);
+        uint cz = min(uint(log(zd / cluster.z_near) / log(cluster.z_far / cluster.z_near)
+                           * float(cluster.grid_z)),
+                      cluster.grid_z - 1u);
+        uint cid = cx + cy * cluster.grid_x + cz * cluster.grid_x * cluster.grid_y;
+        cluster_base = cid * CLUSTER_LIGHT_LIST_STRIDE;
+        local_count = int(cluster_light_list[cluster_base]);
+    } else {
+        local_count = lights.num_local;
+    }
+
+    for (int jj = 0; jj < local_count; jj++) {
+        int j = (cluster.use_clusters != 0u)
+              ? int(cluster_light_list[cluster_base + 1u + uint(jj)])
+              : jj;
         float3 pos_w  = local_lights[j].position;
         float  range  = local_lights[j].range;
         float3 col    = local_lights[j].color;
@@ -1026,6 +1077,8 @@ fragment float4 fragment_main(
     constant ShadowUniforms  &shadow   [[buffer(5)]],
     constant ProbeSet        &probes   [[buffer(6)]],
     constant GpuLight        *local_lights [[buffer(8)]],
+    constant ClusterParams   &cluster  [[buffer(11)]],
+    constant uint            *cluster_light_list [[buffer(12)]],
     texture2d<float>     tex            [[texture(0)]],
     texture2d<float>     normal_tex     [[texture(1)]],
     depth2d_array<float> shadow_map     [[texture(2)]],
@@ -1055,7 +1108,7 @@ fragment float4 fragment_main(
         mat.roughness, mat.metallic, mat.macro_variation,
         mat.terrain_blend, mat.secondary_blend_sharpness,
         mat.tint, mat.emissive,
-        lights, local_lights, shadow, tex, normal_tex, tex, normal_tex,
+        lights, local_lights, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
         // No emissive / ORM maps on the legacy per-draw path: pass the albedo
         // as a dummy and gate both off so neither is sampled.
         tex, tex, false, false,
@@ -1100,6 +1153,8 @@ fragment float4 fragment_main_bindless(
     constant ProbeSet         &probes   [[buffer(6)]],
     constant GpuObjectData    *objects  [[buffer(9)]],
     constant GpuLight         *local_lights [[buffer(8)]],
+    constant ClusterParams    &cluster  [[buffer(11)]],
+    constant uint             *cluster_light_list [[buffer(12)]],
     constant BindlessTextures &tex      [[buffer(7)]]
 ) {
     // Static engine samplers, declared inline. Parameters mirror the
@@ -1120,7 +1175,7 @@ fragment float4 fragment_main_bindless(
         obj.roughness, obj.metallic, obj.macro_variation,
         obj.terrain_blend, obj.secondary_blend_sharpness,
         obj.tint, obj.emissive,
-        lights, local_lights, shadow,
+        lights, local_lights, cluster, cluster_light_list, shadow,
         tex.tex_pool[obj.albedo_index],
         tex.tex_pool[obj.normal_index],
         tex.tex_pool[obj.albedo_secondary_index],
