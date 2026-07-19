@@ -398,6 +398,8 @@ mod tests {
             screen: None,
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 

@@ -57,6 +57,7 @@ pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
 // v3: `args_bytes` / resource `data_bytes` are postcard-encoded components, not
 // JSON. v4: View became Screen (stack, input policy, layer fields) and element
 // `view` refs became `screen`. v5: `BlobMeta` gained the `WorldManifest`
-// shape summary. v6: Application bakes only its runtime limits.
-pub const BLOB_VERSION: u32 = 6;
+// shape summary. v6: Application bakes only its runtime limits. v7: Sprite
+// gained `border_width` / `border_color`.
+pub const BLOB_VERSION: u32 = 7;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)

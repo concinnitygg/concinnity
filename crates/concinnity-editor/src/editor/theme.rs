@@ -20,6 +20,11 @@ pub(crate) const CONTROL_RADIUS: f32 = 5.0;
 // tint, title bars included (no separate title strip).
 pub(crate) const CHROME_TINT: [f32; 4] = [0.11, 0.11, 0.14, 0.97];
 
+// A hairline border framing every floating panel, a step lighter than the
+// chrome surface so the panel reads as a raised edge against the scene behind.
+pub(crate) const PANEL_BORDER_WIDTH: f32 = 1.5;
+pub(crate) const PANEL_BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
+
 // Row / option interaction states.
 pub(crate) const HOVER_TINT: [f32; 4] = [0.24, 0.27, 0.36, 0.9];
 pub(crate) const SELECTED_TINT: [f32; 4] = [0.18, 0.28, 0.46, 1.0];

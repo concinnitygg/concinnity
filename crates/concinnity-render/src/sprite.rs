@@ -120,13 +120,34 @@ pub fn build_sprite_calls(
             1.0
         };
         let radius = (s.corner_radius * scale).min(w / 2.0).min(h / 2.0);
-        let (vertices, indices) = if radius > 0.5 {
-            rounded_rect_geometry(x0, y0, x1, y1, radius, a, v)
+        let border = (s.border_width * scale).min(w / 2.0).min(h / 2.0);
+        let (vertices, indices) = if border > 0.5 && s.border_color[3] > 0.0 {
+            // Border stroke: an outer rounded rect in the border colour, with the
+            // tinted fill inset by the stroke width drawn on top so a ring of the
+            // border colour is left showing around it.
+            let [br, bg, bb, ba] = s.border_color;
+            let border_v = |x: f32, y: f32, alpha: f32| TextVertex {
+                pos: [x, y],
+                uv: [-1.0, alpha],
+                color: [br, bg, bb],
+                mode: 0.0,
+            };
+            let (mut vertices, mut indices) = rect_geometry(x0, y0, x1, y1, radius, ba, border_v);
+            let base = vertices.len() as u16;
+            let (fill_verts, fill_indices) = rect_geometry(
+                x0 + border,
+                y0 + border,
+                x1 - border,
+                y1 - border,
+                (radius - border).max(0.0),
+                a,
+                v,
+            );
+            vertices.extend(fill_verts);
+            indices.extend(fill_indices.into_iter().map(|i| i + base));
+            (vertices, indices)
         } else {
-            (
-                vec![v(x0, y0, a), v(x1, y0, a), v(x1, y1, a), v(x0, y1, a)],
-                vec![0, 1, 2, 0, 2, 3],
-            )
+            rect_geometry(x0, y0, x1, y1, radius, a, v)
         };
         calls.push(TextDrawCall {
             vertices,
@@ -139,6 +160,32 @@ pub fn build_sprite_calls(
         });
     }
     calls
+}
+
+// A rectangle's geometry: a feathered rounded rect when the radius is set,
+// otherwise a plain two-triangle quad. Shared by the fill and the border ring.
+fn rect_geometry(
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    radius: f32,
+    alpha: f32,
+    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
+) -> (Vec<TextVertex>, Vec<u16>) {
+    if radius > 0.5 {
+        rounded_rect_geometry(x0, y0, x1, y1, radius, alpha, v)
+    } else {
+        (
+            vec![
+                v(x0, y0, alpha),
+                v(x1, y0, alpha),
+                v(x1, y1, alpha),
+                v(x0, y1, alpha),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        )
+    }
 }
 
 // Arc steps per rounded corner. Six segments keep a 10-15 px UI radius
@@ -229,6 +276,8 @@ mod tests {
             screen: None,
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -337,6 +386,75 @@ mod tests {
         assert!((min_x - 100.0).abs() < 1e-3);
         // The corner point itself is never touched: the arc cuts it off.
         assert!(!vs.iter().any(|v| v.pos == [100.0, 100.0]));
+    }
+
+    #[test]
+    fn bordered_sprite_emits_a_border_ring_and_an_inset_fill() {
+        let mut s = sprite(100.0, 100.0, 200.0, 120.0, [0.1, 0.2, 0.3, 1.0]);
+        s.border_width = 2.0;
+        s.border_color = [0.8, 0.4, 0.2, 1.0];
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        assert_eq!(calls.len(), 1);
+        let vs = &calls[0].vertices;
+        // Both the border-coloured outer layer and the tinted fill are present.
+        assert!(
+            vs.iter().any(|v| v.color == [0.8, 0.4, 0.2]),
+            "border colour present"
+        );
+        assert!(
+            vs.iter().any(|v| v.color == [0.1, 0.2, 0.3]),
+            "fill colour present"
+        );
+        // The border reaches the authored outer edge; the tinted fill is inset
+        // by the stroke width on every side.
+        let outer_min_x = vs.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
+        let outer_max_x = vs.iter().map(|v| v.pos[0]).fold(f32::MIN, f32::max);
+        assert!(
+            (outer_min_x - 100.0).abs() < 1e-3,
+            "border at the left edge"
+        );
+        assert!(
+            (outer_max_x - 300.0).abs() < 1e-3,
+            "border at the right edge"
+        );
+        let fill_min_x = vs
+            .iter()
+            .filter(|v| v.color == [0.1, 0.2, 0.3])
+            .map(|v| v.pos[0])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            (fill_min_x - 102.0).abs() < 1e-3,
+            "fill inset by the stroke width"
+        );
+    }
+
+    #[test]
+    fn zero_border_stays_a_single_layer() {
+        let mut s = sprite(0.0, 0.0, 100.0, 100.0, [0.2, 0.3, 0.4, 1.0]);
+        // A colour but no width draws no border (just the fill quad).
+        s.border_width = 0.0;
+        s.border_color = [1.0, 0.0, 0.0, 1.0];
+        let calls = build_sprite_calls(
+            &[&s],
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        assert_eq!(
+            calls[0].vertices.len(),
+            4,
+            "one plain quad, no border layer"
+        );
+        assert!(calls[0].vertices.iter().all(|v| v.color == [0.2, 0.3, 0.4]));
     }
 
     #[test]

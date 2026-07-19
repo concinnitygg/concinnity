@@ -251,6 +251,18 @@ mod sprite {
         assert!(!s.follow_cursor);
         assert_eq!(s.fit, SpriteFit::Fit);
         assert_eq!(s.corner_radius, 0.0);
+        assert_eq!(s.border_width, 0.0);
+    }
+
+    #[test]
+    fn border_round_trips() {
+        let json = r#"{"border_width":1.5,"border_color":[0.5,0.25,0.75,1.0]}"#;
+        let s: Sprite = serde_json::from_str(json).unwrap();
+        assert_eq!(s.border_width, 1.5);
+        assert_eq!(s.border_color, [0.5, 0.25, 0.75, 1.0]);
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["border_width"], 1.5);
+        assert_eq!(back["border_color"][0], 0.5);
     }
 
     #[test]

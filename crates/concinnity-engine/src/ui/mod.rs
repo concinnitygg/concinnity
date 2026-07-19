@@ -2192,6 +2192,8 @@ mod tests {
             screen: Some(screen_id),
             fit: crate::assets::SpriteFit::Fit,
             corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 1.0],
         });
         world.start().unwrap();
 
@@ -3173,6 +3175,8 @@ mod tests {
                 screen: Some(screen),
                 fit: crate::assets::SpriteFit::Fit,
                 corner_radius: 0.0,
+                border_width: 0.0,
+                border_color: [0.0, 0.0, 0.0, 1.0],
             });
         }
         world.add_component(KeyBinding {

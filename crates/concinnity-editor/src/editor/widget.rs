@@ -26,16 +26,20 @@ const CLOSE_GLYPH_COLOR: [f32; 3] = [0.88, 0.89, 0.92];
 // glyph instead of filling the bar.
 const CLOSE_INSET: f32 = 4.0;
 
-// Draw a panel's rounded background surface (the unified chrome tint).
+// Draw a panel's rounded background surface (the unified chrome tint) framed by
+// the shared hairline border.
 pub(crate) fn place_panel(world: &mut World, id: AssetId, rect: [f32; 4]) {
-    place_rounded(
-        world,
-        id,
-        rect,
-        theme::CHROME_TINT,
-        theme::PANEL_RADIUS,
-        true,
-    );
+    if let Some(s) = sprite_mut(world, id) {
+        s.x = rect[0];
+        s.y = rect[1];
+        s.width = rect[2];
+        s.height = rect[3];
+        s.tint = theme::CHROME_TINT;
+        s.corner_radius = theme::PANEL_RADIUS;
+        s.border_width = theme::PANEL_BORDER_WIDTH;
+        s.border_color = theme::PANEL_BORDER_TINT;
+        s.visible = true;
+    }
 }
 
 // Draw a panel's title-bar heading, left-aligned and vertically centered. The
@@ -151,6 +155,7 @@ pub(crate) fn place_rounded(
         s.height = rect[3];
         s.tint = tint;
         s.corner_radius = radius;
+        s.border_width = 0.0;
         s.visible = visible;
     }
 }
@@ -322,6 +327,8 @@ mod tests {
         );
         assert_eq!(bg.tint, theme::CHROME_TINT);
         assert_eq!(bg.corner_radius, theme::PANEL_RADIUS);
+        assert_eq!(bg.border_width, theme::PANEL_BORDER_WIDTH);
+        assert_eq!(bg.border_color, theme::PANEL_BORDER_TINT);
     }
 
     #[test]

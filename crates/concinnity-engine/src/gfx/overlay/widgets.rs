@@ -52,6 +52,8 @@ pub(super) fn build_dropdown_overlay(
         screen: screen.screen,
         fit: crate::assets::SpriteFit::Fit,
         corner_radius: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 1.0],
     };
 
     // Border quad (a little larger, drawn first) then the panel fill on top.
@@ -215,6 +217,8 @@ pub(super) fn build_text_input_overlay(
         screen: ti.screen,
         fit: ti.fit,
         corner_radius: ti.corner_radius,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 1.0],
     };
     let mut sprites = vec![bg];
 
@@ -279,6 +283,8 @@ pub(super) fn build_text_input_overlay(
             screen: ti.screen,
             fit: ti.fit,
             corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 1.0],
         });
     }
 

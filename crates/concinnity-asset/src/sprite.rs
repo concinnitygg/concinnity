@@ -61,6 +61,14 @@ pub struct Sprite {
     /// arc (clamped to half the sprite's shorter side). The rounded edge is
     /// softly anti-aliased.
     pub corner_radius: f32,
+    /// Border stroke width in the sprite's own pixel space, drawn just inside
+    /// the sprite's outline and following its rounded corners. `0` draws no
+    /// border; larger values inset the tinted fill by this width and paint the
+    /// ring in `border_color` (clamped to half the sprite's shorter side).
+    pub border_width: f32,
+    /// RGBA colour of the border stroke, each channel in [0, 1]. Ignored when
+    /// `border_width` is `0`.
+    pub border_color: [f32; 4],
 }
 
 /// How a screen-owned overlay element (a [Sprite](#sprite), [TextLabel](#textlabel),
@@ -105,6 +113,8 @@ impl Default for Sprite {
             screen: None,
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }
