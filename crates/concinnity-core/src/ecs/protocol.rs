@@ -64,6 +64,26 @@ pub struct ScreenStack {
     pub captures_input: bool,
 }
 
+// One pickable entity in the [PickIndex]: its asset id and current world-space
+// AABB. Ray-tested by the editor with `gfx::pick::ray_aabb`.
+#[derive(Debug, Clone, Copy)]
+pub struct PickEntry {
+    pub asset_id: AssetId,
+    pub bb_min: [f32; 3],
+    pub bb_max: [f32; 3],
+}
+
+// The per-frame viewport-picking index: every renderable prop entity's asset id
+// and world-space AABB, refreshed by GraphicsSystem from the live transforms.
+// Opt-in: GraphicsSystem only builds it when the resource is already present at
+// init (the `cn editor` HUD injection inserts an empty one), so a shipped
+// runtime never pays for it. Rooms, instanced clusters, and voxel chunks are
+// not indexed; picking targets authored prop placements.
+#[derive(Debug, Clone, Default)]
+pub struct PickIndex {
+    pub entries: Vec<PickEntry>,
+}
+
 // The latest sampled cursor state (window pixels, top-left origin), published
 // by InputSystem after each poll. GraphicsSystem reads it when building the
 // next frame's draw list: `follow_cursor` sprites are positioned a frame after

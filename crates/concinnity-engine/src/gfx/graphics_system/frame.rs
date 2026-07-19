@@ -140,6 +140,32 @@ impl GraphicsSystem {
                     }
                 }
 
+                // Refresh the editor's viewport-pick index from the freshly
+                // propagated transforms. Candidates exist only when the editor
+                // opted in at init (an injected PickIndex resource); a shipped
+                // runtime skips this entirely. A despawned entity simply drops
+                // out of the index.
+                if !self.pick_candidates.is_empty() {
+                    let entries: Vec<crate::ecs::PickEntry> = self
+                        .pick_candidates
+                        .iter()
+                        .filter_map(|c| {
+                            let global = ctx.get::<crate::assets::GlobalTransform>(c.entity)?;
+                            let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(
+                                c.local_min,
+                                c.local_max,
+                                global.0,
+                            );
+                            Some(crate::ecs::PickEntry {
+                                asset_id: c.asset_id,
+                                bb_min,
+                                bb_max,
+                            })
+                        })
+                        .collect();
+                    ctx.insert_resource(crate::ecs::PickIndex { entries });
+                }
+
                 // Push the latest skinned poses to the GPU. AnimationSystem
                 // wrote them into the SkeletonPose components on the previous
                 // tick; the one-frame lag is invisible at animation rates.

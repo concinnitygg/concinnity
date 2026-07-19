@@ -66,6 +66,11 @@ fn hud_font(world: &World) -> Option<FontHandle> {
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
     hide_title_bar(world);
+    // Opt in to viewport picking: GraphicsSystem captures pick candidates at
+    // start only when this resource is already present, then refreshes it each
+    // frame with world-space AABBs. Runs on every injection, so a live-preview
+    // rebuild keeps the index alive.
+    world.insert_resource(crate::ecs::PickIndex::default());
     // The editor HUD replaces the baked-in debug HUD (both would answer F1):
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.

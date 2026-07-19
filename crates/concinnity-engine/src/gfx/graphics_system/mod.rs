@@ -48,6 +48,16 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 // Metal, so sampling right after the draw is freshest). Camera3DSystem queries
 // the deposit to update Camera3D, then writes the new view matrix back in time
 // for the next frame, so it runs after both.
+
+// One viewport-pick candidate captured at init: the prop's asset id, its
+// entity (the live GlobalTransform source), and its local-space bounds.
+struct PickCandidate {
+    asset_id: AssetId,
+    entity: crate::ecs::Entity,
+    local_min: [f32; 3],
+    local_max: [f32; 3],
+}
+
 pub struct GraphicsSystem {
     window_args: WindowArgs,
     clear_color: [f32; 4],
@@ -145,6 +155,11 @@ pub struct GraphicsSystem {
     sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
+    // Viewport-pick candidates captured at init, one per prop entity, only
+    // when a `PickIndex` resource was present (the editor's opt-in). The frame
+    // step refreshes the published index from these + the live transforms;
+    // empty in a shipped runtime, which skips the refresh entirely.
+    pick_candidates: Vec<PickCandidate>,
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, and voxel-world chunks), each `Some` only when a
     // `StreamingConfig` / `VoxelWorld` was declared and the backend supports it
@@ -385,6 +400,7 @@ impl GraphicsSystem {
             sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
+            pick_candidates: Vec::new(),
             texture_streamer: None,
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),

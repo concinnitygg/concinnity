@@ -1744,14 +1744,15 @@ impl GraphicsSystem {
             );
         }
 
-        let (
-            all_vertices,
-            all_indices,
+        let draw_list::DrawListData {
+            vertices: all_vertices,
+            indices: all_indices,
             mut draw_objects,
             instanced_clusters,
             prop_draw_indices,
             mesh_handle_to_draws,
-        ) = match draw_list::build_draw_list(draw_list::DrawListInputs {
+            prop_local_bounds,
+        } = match draw_list::build_draw_list(draw_list::DrawListInputs {
             items: &items,
             instanced_props: &instanced_props,
             world_mats: &world_mats,
@@ -1773,6 +1774,12 @@ impl GraphicsSystem {
         // GlobalTransform (its init world matrix), so the per-frame push reads
         // these. prop_entities is column-aligned with prop_draw_indices and
         // world_mats; prop_draw_indices is consumed here and then dropped.
+        // When a PickIndex resource is present (the editor injects one before
+        // start; a shipped runtime never does), also capture each prop's pick
+        // candidate so the frame step can refresh the index from the live
+        // transforms.
+        self.pick_candidates.clear();
+        let want_pick = ctx.resource::<crate::ecs::PickIndex>().is_some();
         for (i, &entity) in prop_entities.iter().enumerate() {
             let draws: Vec<u32> = prop_draw_indices[i]
                 .iter()
@@ -1780,6 +1787,15 @@ impl GraphicsSystem {
                 .collect();
             ctx.insert(entity, crate::assets::RenderHandle { draws });
             ctx.insert(entity, crate::assets::GlobalTransform(world_mats[i]));
+            if want_pick {
+                let (local_min, local_max) = prop_local_bounds[i];
+                self.pick_candidates.push(super::PickCandidate {
+                    asset_id: items[i].asset_id,
+                    entity,
+                    local_min,
+                    local_max,
+                });
+            }
         }
 
         // Asset hot-reload mesh map: cross-reference the file-backed source

@@ -3800,3 +3800,39 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         );
     }
 }
+
+// Viewport picking is opt-in: with a PickIndex resource present at init (the
+// editor injects one), init captures a candidate per prop and the step
+// publishes the index with world-space bounds; without it, nothing is captured
+// and nothing is published.
+#[test]
+fn pick_index_publishes_world_bounds_only_when_opted_in() {
+    // Opted in: the quad prop at [1,2,3] indexes with its translated bounds.
+    let (_state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world.resources.insert(crate::ecs::PickIndex::default());
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    assert_eq!(gs.pick_candidates.len(), 1, "one candidate per prop");
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+
+    let index = world
+        .resources
+        .get::<crate::ecs::PickIndex>()
+        .expect("step publishes the index");
+    assert_eq!(index.entries.len(), 1);
+    let e = &index.entries[0];
+    assert_eq!(e.asset_id, PROP);
+    // Unit quad local bounds x/z in [0,1], y = 0, translated by [1,2,3].
+    assert_eq!(e.bb_min, [1.0, 2.0, 3.0]);
+    assert_eq!(e.bb_max, [2.0, 2.0, 4.0]);
+
+    // Not opted in: no candidates, and the resource never appears.
+    let (_state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    assert!(gs.pick_candidates.is_empty());
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
+}

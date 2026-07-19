@@ -17,6 +17,7 @@ pub mod lod;
 pub mod mesh_payload;
 pub mod mesh_seed;
 pub mod overlay;
+pub mod pick;
 pub mod profile;
 pub mod range_alloc;
 pub mod render_types;

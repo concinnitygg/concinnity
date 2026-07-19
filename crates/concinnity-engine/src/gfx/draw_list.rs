@@ -42,17 +42,19 @@ pub(crate) type MeshGeometryMaps = (
     std::collections::HashMap<AssetId, usize>,
 );
 
-// Output of `build_draw_list`: shared vertex/index buffers, draw objects,
-// GPU-instanced clusters, the per-prop draw-index table, and the mesh-handle
-// to draw-slot map for hot-reload.
-pub(crate) type DrawListData = (
-    Vec<Vertex>,
-    Vec<u32>,
-    Vec<DrawObject>,
-    Vec<InstancedCluster>,
-    Vec<Vec<usize>>,
-    std::collections::HashMap<usize, Vec<usize>>,
-);
+// Output of `build_draw_list`. `prop_draw_indices` and `prop_local_bounds`
+// are column-aligned with the input `items`; `mesh_handle_to_draws` backs
+// hot-reload. A prop whose meshes carry no vertices gets the non-finite
+// UNCULLED_BB as its local bounds (unpickable, uncullable).
+pub(crate) struct DrawListData {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+    pub draw_objects: Vec<DrawObject>,
+    pub instanced_clusters: Vec<InstancedCluster>,
+    pub prop_draw_indices: Vec<Vec<usize>>,
+    pub mesh_handle_to_draws: std::collections::HashMap<usize, Vec<usize>>,
+    pub prop_local_bounds: Vec<([f32; 3], [f32; 3])>,
+}
 
 // One appended mesh's placement in the shared buffers: vertex_offset,
 // vertex_count, index_offset, index_count, LOD slices, and local AABB min/max.
@@ -623,6 +625,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     let mut draw_objects: Vec<DrawObject> = Vec::new();
     let mut instanced_clusters: Vec<InstancedCluster> = Vec::new();
     let mut prop_draw_indices: Vec<Vec<usize>> = Vec::new();
+    let mut prop_local_bounds: Vec<([f32; 3], [f32; 3])> = Vec::new();
     // Map every mesh-source handle to the draw slots that received a copy of
     // its geometry. Hot-reload (`cn debug` only) walks this to know which slots
     // to overwrite when the source `.glb` changes. The `Vec<usize>` accumulates
@@ -693,6 +696,16 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     for (item_idx, item) in items.iter().enumerate() {
         let model_mat = world_mats[item_idx];
         let mut prop_idxs: Vec<usize> = Vec::new();
+        // Union of this prop's sub-mesh local bounds (all in the same model
+        // space). NaN sentinels from empty meshes fall out of min/max.
+        let mut prop_min = [f32::INFINITY; 3];
+        let mut prop_max = [f32::NEG_INFINITY; 3];
+        let mut union_local = |mn: [f32; 3], mx: [f32; 3]| {
+            for i in 0..3 {
+                prop_min[i] = prop_min[i].min(mn[i]);
+                prop_max[i] = prop_max[i].max(mx[i]);
+            }
+        };
 
         if let Some(model_id) = item.model {
             // multi-mesh model path: one draw object per sub-mesh
@@ -757,6 +770,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     } else {
                         crate::gfx::frustum::transform_aabb(local_min, local_max, model_mat)
                     };
+                union_local(local_min, local_max);
                 prop_idxs.push(draw_objects.len());
                 mesh_handle_to_draws
                     .entry(sub_mesh)
@@ -840,6 +854,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 } else {
                     crate::gfx::frustum::transform_aabb(local_min, local_max, model_mat)
                 };
+            union_local(local_min, local_max);
             prop_idxs.push(draw_objects.len());
             mesh_handle_to_draws
                 .entry(mesh_handle)
@@ -865,6 +880,15 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         }
 
         prop_draw_indices.push(prop_idxs);
+        let finite = prop_min
+            .iter()
+            .chain(prop_max.iter())
+            .all(|v| v.is_finite());
+        prop_local_bounds.push(if finite {
+            (prop_min, prop_max)
+        } else {
+            UNCULLED_BB
+        });
     }
 
     // InstancedProp -> one GPU-instanced cluster per InstancedProp.
@@ -1050,14 +1074,15 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         });
     }
 
-    Some((
-        all_vertices,
-        all_indices,
+    Some(DrawListData {
+        vertices: all_vertices,
+        indices: all_indices,
         draw_objects,
         instanced_clusters,
         prop_draw_indices,
         mesh_handle_to_draws,
-    ))
+        prop_local_bounds,
+    })
 }
 
 #[cfg(test)]
@@ -1415,19 +1440,26 @@ mod tests {
             ],
         };
 
-        let (verts, idxs, draw_objects, clusters, _prop_idxs, mesh_handle_to_draws) =
-            build_draw_list(DrawListInputs {
-                items: &[],
-                instanced_props: &[inst],
-                world_mats: &[],
-                model_map: &std::collections::HashMap::new(),
-                mesh_geometry: &mesh_geometry,
-                room_geometry: &[],
-                texture_count: 0,
-                material_map: &std::collections::HashMap::new(),
-                always_resident_meshes: &std::collections::HashSet::new(),
-            })
-            .expect("build_draw_list");
+        let data = build_draw_list(DrawListInputs {
+            items: &[],
+            instanced_props: &[inst],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_count: 0,
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+        let DrawListData {
+            vertices: verts,
+            indices: idxs,
+            draw_objects,
+            instanced_clusters: clusters,
+            mesh_handle_to_draws,
+            ..
+        } = data;
 
         // Cluster mesh appended exactly once into the shared buffers.
         assert_eq!(verts.len(), 4);
@@ -1471,19 +1503,23 @@ mod tests {
             instances: Vec::new(),
         };
 
-        let (_verts, _idxs, draw_objects, clusters, _prop_idxs, _mesh_handle_to_draws) =
-            build_draw_list(DrawListInputs {
-                items: &[],
-                instanced_props: &[inst],
-                world_mats: &[],
-                model_map: &std::collections::HashMap::new(),
-                mesh_geometry: &mesh_geometry,
-                room_geometry: &[],
-                texture_count: 0,
-                material_map: &std::collections::HashMap::new(),
-                always_resident_meshes: &std::collections::HashSet::new(),
-            })
-            .expect("build_draw_list");
+        let data = build_draw_list(DrawListInputs {
+            items: &[],
+            instanced_props: &[inst],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_count: 0,
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+        let DrawListData {
+            draw_objects,
+            instanced_clusters: clusters,
+            ..
+        } = data;
 
         assert!(draw_objects.is_empty());
         assert!(clusters.is_empty());
@@ -1514,7 +1550,7 @@ mod tests {
         let mut always_resident = std::collections::HashSet::new();
         always_resident.insert(0usize);
 
-        let (_v, _i, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+        let data = build_draw_list(DrawListInputs {
             items: &items,
             instanced_props: &[],
             world_mats: &world_mats,
@@ -1526,6 +1562,7 @@ mod tests {
             always_resident_meshes: &always_resident,
         })
         .expect("build_draw_list");
+        let DrawListData { draw_objects, .. } = data;
 
         assert_eq!(draw_objects.len(), 1);
         // UNCULLED_BB is all-NaN; `cullable()` returns false in that case.
@@ -1644,19 +1681,27 @@ mod tests {
             (3usize, 4usize, MaterialUniforms::DEFAULT),
         );
 
-        let (verts, idxs, draw_objects, clusters, prop_idxs, mesh_handle_to_draws) =
-            build_draw_list(DrawListInputs {
-                items: &[model_item(AssetId(1))],
-                instanced_props: &[],
-                world_mats: &[IDENTITY4],
-                model_map: &model_map,
-                mesh_geometry: &mesh_geometry,
-                room_geometry: &[],
-                texture_count: 0,
-                material_map: &material_map,
-                always_resident_meshes: &std::collections::HashSet::new(),
-            })
-            .expect("build_draw_list");
+        let data = build_draw_list(DrawListInputs {
+            items: &[model_item(AssetId(1))],
+            instanced_props: &[],
+            world_mats: &[IDENTITY4],
+            model_map: &model_map,
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_count: 0,
+            material_map: &material_map,
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+        let DrawListData {
+            vertices: verts,
+            indices: idxs,
+            draw_objects,
+            instanced_clusters: clusters,
+            prop_draw_indices: prop_idxs,
+            mesh_handle_to_draws,
+            ..
+        } = data;
 
         assert!(clusters.is_empty());
         // Two sub-meshes -> two draws, both belonging to the one prop.
@@ -1681,19 +1726,24 @@ mod tests {
     fn build_draw_list_auto_renders_unreferenced_mesh() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
-        let (_v, _i, draw_objects, _c, prop_idxs, mesh_handle_to_draws) =
-            build_draw_list(DrawListInputs {
-                items: &[],
-                instanced_props: &[],
-                world_mats: &[],
-                model_map: &std::collections::HashMap::new(),
-                mesh_geometry: &mesh_geometry,
-                room_geometry: &[],
-                texture_count: 0,
-                material_map: &std::collections::HashMap::new(),
-                always_resident_meshes: &std::collections::HashSet::new(),
-            })
-            .expect("build_draw_list");
+        let data = build_draw_list(DrawListInputs {
+            items: &[],
+            instanced_props: &[],
+            world_mats: &[],
+            model_map: &std::collections::HashMap::new(),
+            mesh_geometry: &mesh_geometry,
+            room_geometry: &[],
+            texture_count: 0,
+            material_map: &std::collections::HashMap::new(),
+            always_resident_meshes: &std::collections::HashSet::new(),
+        })
+        .expect("build_draw_list");
+        let DrawListData {
+            draw_objects,
+            prop_draw_indices: prop_idxs,
+            mesh_handle_to_draws,
+            ..
+        } = data;
 
         assert!(prop_idxs.is_empty(), "no props drove this draw");
         assert_eq!(draw_objects.len(), 1);
@@ -1728,7 +1778,7 @@ mod tests {
 
         // Handle 6 must land inside the pool; a 7-texture pool (slots 0..=6)
         // makes it the last valid slot.
-        let (rv, ri, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+        let data = build_draw_list(DrawListInputs {
             items: &[],
             instanced_props: &[],
             world_mats: &[],
@@ -1740,6 +1790,12 @@ mod tests {
             always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
+        let DrawListData {
+            vertices: rv,
+            indices: ri,
+            draw_objects,
+            ..
+        } = data;
 
         assert_eq!(draw_objects.len(), 1);
         let d = &draw_objects[0];
@@ -1770,7 +1826,7 @@ mod tests {
             is_dynamic: false,
         };
 
-        let (_v, _i, draw_objects, _c, _p, _m) = build_draw_list(DrawListInputs {
+        let data = build_draw_list(DrawListInputs {
             items: &[item],
             instanced_props: &[],
             world_mats: &[IDENTITY4],
@@ -1782,6 +1838,7 @@ mod tests {
             always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
+        let DrawListData { draw_objects, .. } = data;
 
         assert_eq!(draw_objects.len(), 1);
         assert_eq!(draw_objects[0].texture_slot, 2);

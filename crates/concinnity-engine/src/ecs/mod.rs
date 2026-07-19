@@ -32,7 +32,7 @@ pub use concinnity_core::ecs::{
 // (engine systems and the editor's hook drive).
 pub use concinnity_core::ecs::{
     CursorState, DropdownView, FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride,
-    OpenDropdown, ScreenStack,
+    OpenDropdown, PickEntry, PickIndex, ScreenStack,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
