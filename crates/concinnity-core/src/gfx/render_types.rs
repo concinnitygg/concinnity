@@ -6,6 +6,16 @@
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 pub const MAX_POINT_LIGHTS: usize = 8;
 
+// Capacity of the per-scene local-light storage buffer the forward pass reads.
+// Distinct from MAX_POINT_LIGHTS, which still bounds the fixed LightUniforms
+// point array consumed by the raymarch / fog / probe paths. Lights past this
+// cap are dropped with a warning.
+pub const MAX_LOCAL_LIGHTS: usize = 1024;
+
+// GpuLight.kind discriminants. Only point lights exist today; spot and area
+// lights extend this without changing the 64-byte record layout.
+pub const LIGHT_KIND_POINT: u32 = 0;
+
 // Number of cascades the directional shadow pre-pass renders into the shadow
 // map array. Hardcoded because changing N requires re-compiling the shaders
 // (the array length appears in the MSL/HLSL/GLSL source).
@@ -131,6 +141,47 @@ pub struct PointLightData {
     pub intensity: f32,
 }
 
+// One local light in the per-scene storage buffer the forward pass iterates
+// (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
+// packed_float3 sits inside one lane with no GPU alignment promotion. Must match
+// the GpuLight struct in every .metal / .hlsl / .glsl shader.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct GpuLight {
+    // World-space position (point / spot).
+    pub position: [f32; 3],
+    // Maximum reach in metres; attenuation reaches zero at this distance.
+    pub range: f32,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    // Unit vector the light points along (spot / area). Zero for a point light.
+    pub direction: [f32; 3],
+    // LIGHT_KIND_* discriminant.
+    pub kind: u32,
+    // Spot cone: cosine of the inner (full-bright) and outer (cutoff) half-angles.
+    // Both zero for a point light; the shader gates the cone term on `kind`.
+    pub cos_inner: f32,
+    pub cos_outer: f32,
+    // Index into the spot shadow atlas, or -1 when the light casts no shadow.
+    pub shadow_index: i32,
+    pub _pad: f32,
+}
+
+impl GpuLight {
+    pub const ZERO: Self = Self {
+        position: [0.0; 3],
+        range: 0.0,
+        color: [0.0; 3],
+        intensity: 0.0,
+        direction: [0.0; 3],
+        kind: LIGHT_KIND_POINT,
+        cos_inner: 0.0,
+        cos_outer: 0.0,
+        shadow_index: -1,
+        _pad: 0.0,
+    };
+}
+
 const ZERO_DIR_LIGHT: DirectionalLightData = DirectionalLightData {
     direction: [0.0; 3],
     intensity: 0.0,
@@ -160,7 +211,11 @@ pub struct LightUniforms {
     // areas the directional light cannot reach. Occupies the first of the two
     // trailing pad words, so the 400-byte layout is unchanged.
     pub ambient_intensity: f32,
-    pub _pad: f32,
+    // Number of valid entries in the GpuLight storage buffer the forward pass
+    // reads. Occupies the second trailing pad word, so the 400-byte layout is
+    // unchanged. The raymarch / fog / probe paths ignore it and read `num_point`
+    // against the fixed `point` array instead.
+    pub num_local_lights: i32,
 }
 
 impl LightUniforms {
@@ -190,7 +245,7 @@ impl LightUniforms {
         num_directional: 1,
         num_point: 0,
         ambient_intensity: 1.0,
-        _pad: 0.0,
+        num_local_lights: 0,
     };
 }
 
@@ -1449,14 +1504,34 @@ mod tests {
         // MSL `LightUniforms` in default.metal (and `RaymarchLights` in
         // raymarch_helpers.metal, which is bound from this same Rust struct):
         // DirectionalLightData[4] then PointLightData[8] then two ints, then
-        // ambient_intensity + one pad word in the trailing 16-byte block.
+        // ambient_intensity + num_local_lights in the trailing 16-byte block.
+        // The raymarch struct declares the last word as a float pad it never
+        // reads; both occupy the same 4 bytes at offset 396.
         assert_eq!(size_of::<LightUniforms>(), 400);
         assert_eq!(offset_of!(LightUniforms, directional), 0);
         assert_eq!(offset_of!(LightUniforms, point), 128);
         assert_eq!(offset_of!(LightUniforms, num_directional), 384);
         assert_eq!(offset_of!(LightUniforms, num_point), 388);
         assert_eq!(offset_of!(LightUniforms, ambient_intensity), 392);
-        assert_eq!(offset_of!(LightUniforms, _pad), 396);
+        assert_eq!(offset_of!(LightUniforms, num_local_lights), 396);
+    }
+
+    #[test]
+    fn gpu_light_layout_matches_msl() {
+        // MSL `GpuLight` in default.metal uses packed_float3 for `position`,
+        // `color`, and `direction` so the 64-byte stride matches; a plain float3
+        // would promote to a 16-byte lane and shift every following field.
+        assert_eq!(size_of::<GpuLight>(), 64);
+        assert_eq!(offset_of!(GpuLight, position), 0);
+        assert_eq!(offset_of!(GpuLight, range), 12);
+        assert_eq!(offset_of!(GpuLight, color), 16);
+        assert_eq!(offset_of!(GpuLight, intensity), 28);
+        assert_eq!(offset_of!(GpuLight, direction), 32);
+        assert_eq!(offset_of!(GpuLight, kind), 44);
+        assert_eq!(offset_of!(GpuLight, cos_inner), 48);
+        assert_eq!(offset_of!(GpuLight, cos_outer), 52);
+        assert_eq!(offset_of!(GpuLight, shadow_index), 56);
+        assert_eq!(offset_of!(GpuLight, _pad), 60);
     }
 
     #[test]

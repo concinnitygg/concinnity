@@ -225,6 +225,11 @@ pub struct MtlContext {
     pub(super) normal_map_textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,
+    // Per-scene local lights (point + spot + area) for the clustered forward
+    // pass, bound at fragment buffer(8). Always holds at least one element (a
+    // neutral placeholder when the scene declares no local lights) so the
+    // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
+    pub(super) local_light_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(super) sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     // Shadow map resources.
     // shadow_pipeline_state is None when no ShadowStage was declared or

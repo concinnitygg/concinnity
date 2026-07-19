@@ -334,6 +334,10 @@ pub(in crate::vulkan) struct PlanarConfig {
 pub(in crate::vulkan) struct PlanarLightingBindings {
     pub(in crate::vulkan) light_ubo: vk::Buffer,
     pub(in crate::vulkan) light_size: u64,
+    // Per-scene local-light SSBO (global set 0 binding 9) + its byte size; the
+    // shared static buffer, bound unchanged into every planar global set.
+    pub(in crate::vulkan) local_light_buffer: vk::Buffer,
+    pub(in crate::vulkan) local_light_size: u64,
     pub(in crate::vulkan) shadow_ubo: vk::Buffer,
     pub(in crate::vulkan) shadow_size: u64,
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
@@ -379,6 +383,8 @@ impl PlanarReflectionSet {
         let PlanarLightingBindings {
             light_ubo,
             light_size,
+            local_light_buffer,
+            local_light_size,
             shadow_ubo,
             shadow_size,
             shadow_map_view,
@@ -497,8 +503,8 @@ impl PlanarReflectionSet {
         }
 
         // One pool: the per-(plane, frame) global sets (4 UBO + 4 sampler + the cube
-        // array each) + the per-(plane, frame) cull sets (4 storage each) + one Hi-Z
-        // set (1 sampler + 1 UBO) when the world runs Hi-Z.
+        // array + the local-light SSBO each) + the per-(plane, frame) cull sets (4
+        // storage each) + one Hi-Z set (1 sampler + 1 UBO) when the world runs Hi-Z.
         let has_hiz = cull.hiz.is_some();
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -507,9 +513,10 @@ impl PlanarReflectionSet {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count((ring * (4 + MAX_PROBES) + usize::from(has_hiz)).max(1) as u32),
+            // ring * 4 cull-set SSBOs + one binding-9 local-light SSBO per global set.
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count((ring * 4).max(1) as u32),
+                .descriptor_count((ring * 4 + ring).max(1) as u32),
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
@@ -554,6 +561,14 @@ impl PlanarReflectionSet {
                     .image_info(&probe_cube_sky),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
+            // Binding 9: the shared per-scene local-light SSBO.
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING,
+                local_light_buffer,
+                local_light_size,
+            );
         }
 
         // Per-(plane, frame) cull sets: read the frame's object + draw-args SSBOs

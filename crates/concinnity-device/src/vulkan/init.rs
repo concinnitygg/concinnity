@@ -90,6 +90,9 @@ impl VkContext {
                     color_lut_bytes,
                 },
             light_uniforms,
+            // Per-scene local lights uploaded once into a static SSBO below
+            // (global set 0 binding 9).
+            local_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -859,6 +862,13 @@ impl VkContext {
         let view_ubo_size = std::mem::size_of::<super::draw::ViewUniforms>() as u64;
         let light_ubo_size = std::mem::size_of::<LightUniforms>() as u64;
         let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+        // Per-scene local-light SSBO (global set 0 binding 9): created once from
+        // `local_lights` and never updated per-frame. A zero-length buffer is
+        // invalid, so an empty scene gets a 1-element placeholder;
+        // `num_local_lights == 0` keeps the shader from reading it. Mirrors the
+        // Metal `local_light_buffer`.
+        let local_light_buffer_size =
+            (local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64;
 
         let mut view_ubo_buffers = Vec::with_capacity(frames);
         let mut view_ubo_memories = Vec::with_capacity(frames);
@@ -924,6 +934,15 @@ impl VkContext {
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
+        // Static per-scene local-light SSBO; uploaded once below, never per-frame.
+        let (local_light_buffer, local_light_memory) = create_buffer(
+            &instance,
+            &device,
+            physical_device,
+            local_light_buffer_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
 
         // Per-frame CSM updates use the first directional light's direction;
         // we cache it here at init so subsequent frames don't have to look it
@@ -952,6 +971,8 @@ impl VkContext {
         let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
         upload_shadow_uniforms(&device, shadow_ubo_memory, &shadow_uniforms)?;
         upload_light_uniforms(&device, light_ubo_memory, &light_uniforms)?;
+        // Empty scene keeps the 1-element placeholder (nothing copied in).
+        upload_local_lights(&device, local_light_memory, &local_lights)?;
 
         //  IBL resources (always created so descriptor bindings 4/5 are valid)
         let cube_sampler = create_sampler_cube_linear(&device)?;
@@ -1049,6 +1070,14 @@ impl VkContext {
                     .binding(super::descriptor_layout::PROBE_CUBE_ARRAY_BINDING)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .descriptor_count(super::probe_uniforms::MAX_PROBES as u32)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
+            // Binding 9: per-scene local-light SSBO (count-1 STORAGE_BUFFER, FS).
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             );
             unsafe {
@@ -1577,7 +1606,10 @@ impl VkContext {
             + 4 * bindless_sets_count
             + 3 * shadow_cull_set_count
             // GPU-driven G-buffer: one prev_model SSBO per frame.
-            + gbuffer_sets_count;
+            + gbuffer_sets_count
+            // Per-scene local-light SSBO: one descriptor per global set (per
+            // frame).
+            + n_frames;
         if storage_count > 0 {
             pool_sizes.push(
                 vk::DescriptorPoolSize::default()
@@ -1654,6 +1686,12 @@ impl VkContext {
                 .buffer(probe_set_ubo_buffers[i])
                 .offset(0)
                 .range(probe_set_ubo_size);
+            // Local-light SSBO (binding 9): the single static buffer, bound into
+            // every frame's global set.
+            let local_light_info = vk::DescriptorBufferInfo::default()
+                .buffer(local_light_buffer)
+                .offset(0)
+                .range(local_light_buffer_size);
             // Probe cube array (binding 8): every slot points at the IBL prefilter
             // cube until a probe bakes. No descriptor-indexing extension is
             // enabled, so every one of the MAX_PROBES descriptors must hold a valid
@@ -1715,6 +1753,12 @@ impl VkContext {
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&probe_cube_infos),
+                // Binding 9: per-scene local-light SSBO.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::LOCAL_LIGHT_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&local_light_info)),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
@@ -3172,6 +3216,8 @@ impl VkContext {
                 crate::vulkan::planar::PlanarLightingBindings {
                     light_ubo,
                     light_size: light_ubo_size,
+                    local_light_buffer,
+                    local_light_size: local_light_buffer_size,
                     shadow_ubo,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
@@ -3667,6 +3713,9 @@ impl VkContext {
                 probe_set_ubo_ptrs,
                 light_ubo,
                 light_ubo_memory,
+                local_light_buffer,
+                local_light_memory,
+                local_light_size: local_light_buffer_size,
                 light_uniforms,
             },
             frame_sync: VkFrameSync {

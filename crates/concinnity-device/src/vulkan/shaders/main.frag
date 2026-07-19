@@ -25,13 +25,37 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
 struct DirLight  { vec4 dir_i; vec4 col; };   // dir_i.xyz=dir, .w=intensity; col.xyz=color
 struct PointLight{ vec4 pos_r; vec4 col_i; }; // pos_r.xyz=pos, .w=range;   col_i.xyz=color, .w=intensity
 
+// One local light in the per-scene storage buffer (set 0, binding 9). Matches
+// the Rust GpuLight in render_types.rs; the scalar after each vec3 keeps the
+// std430 layout at the 64-byte packed stride (vec3 is 16-aligned in std430).
+struct GpuLight {
+    vec3  position;
+    float range;
+    vec3  color;
+    float intensity;
+    vec3  direction;
+    uint  kind;
+    float cos_inner;
+    float cos_outer;
+    int   shadow_index;
+    float _pad;
+};
+
 layout(std140, set = 0, binding = 1) uniform LightBlock {
     DirLight   dir[4];
     PointLight pt[8];
     int num_dir;
     int num_pt;
-    float _lpad0; float _lpad1;
+    float _lpad0;
+    // Valid entry count in the local-light SSBO (Rust num_local_lights, offset
+    // 396); the forward loop reads it against the storage buffer below.
+    int num_local_lights;
 } lights;
+
+// Per-scene local lights (point + spot + area) for the forward pass.
+layout(std430, set = 0, binding = 9) readonly buffer LocalLightBlock {
+    GpuLight local_lights[];
+} local_light_buf;
 
 layout(std140, set = 0, binding = 2) uniform ShadowBlock {
     mat4 light_vps[4];
@@ -295,11 +319,11 @@ void main() {
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int i = 0; i < lights.num_pt; i++) {
-        vec3  pos_w   = lights.pt[i].pos_r.xyz;
-        float range   = lights.pt[i].pos_r.w;
-        vec3  col     = lights.pt[i].col_i.xyz;
-        float intens  = lights.pt[i].col_i.w;
+    for (int i = 0; i < lights.num_local_lights; i++) {
+        vec3  pos_w   = local_light_buf.local_lights[i].position;
+        float range   = local_light_buf.local_lights[i].range;
+        vec3  col     = local_light_buf.local_lights[i].color;
+        float intens  = local_light_buf.local_lights[i].intensity;
 
         vec3  L    = normalize(pos_w - frag_world_pos);
         float dist = length(pos_w - frag_world_pos);

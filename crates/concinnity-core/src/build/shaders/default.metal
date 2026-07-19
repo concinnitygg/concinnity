@@ -224,6 +224,21 @@ struct PointLightData {
     float         intensity;
 };
 
+// One local light in the storage buffer bound at fragment buffer(8). Matches the
+// Rust GpuLight in render_types.rs; packed_float3 keeps the 64-byte stride.
+struct GpuLight {
+    packed_float3 position;
+    float         range;
+    packed_float3 color;
+    float         intensity;
+    packed_float3 direction;
+    uint          kind;
+    float         cos_inner;
+    float         cos_outer;
+    int           shadow_index;
+    float         _pad;
+};
+
 struct LightUniforms {
     DirectionalLightData directional[4];
     PointLightData       point[8];
@@ -233,7 +248,9 @@ struct LightUniforms {
     // the physical ambient untouched; >1 lifts shadow fill. Occupies the first
     // trailing pad word so the layout still matches the Rust LightUniforms.
     float ambient_intensity;
-    float _pad;
+    // Valid entry count in the buffer at buffer(8). Occupies the second trailing
+    // pad word (matching the Rust num_local_lights).
+    int num_local;
 };
 
 struct ShadowUniforms {
@@ -712,6 +729,7 @@ static float4 shade_surface(
     float3                   tint,
     float3                   emissive,
     constant LightUniforms  &lights,
+    constant GpuLight       *local_lights,
     constant ShadowUniforms &shadow,
     texture2d<float>         tex,
     texture2d<float>         normal_tex,
@@ -905,11 +923,11 @@ static float4 shade_surface(
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int j = 0; j < lights.num_point; j++) {
-        float3 pos_w  = lights.point[j].position;
-        float  range  = lights.point[j].range;
-        float3 col    = lights.point[j].color;
-        float  intens = lights.point[j].intensity;
+    for (int j = 0; j < lights.num_local; j++) {
+        float3 pos_w  = local_lights[j].position;
+        float  range  = local_lights[j].range;
+        float3 col    = local_lights[j].color;
+        float  intens = local_lights[j].intensity;
 
         float3 delta = pos_w - in.world_pos;
         float  dist  = length(delta);
@@ -1007,6 +1025,7 @@ fragment float4 fragment_main(
     constant LightUniforms   &lights   [[buffer(4)]],
     constant ShadowUniforms  &shadow   [[buffer(5)]],
     constant ProbeSet        &probes   [[buffer(6)]],
+    constant GpuLight        *local_lights [[buffer(8)]],
     texture2d<float>     tex            [[texture(0)]],
     texture2d<float>     normal_tex     [[texture(1)]],
     depth2d_array<float> shadow_map     [[texture(2)]],
@@ -1036,7 +1055,7 @@ fragment float4 fragment_main(
         mat.roughness, mat.metallic, mat.macro_variation,
         mat.terrain_blend, mat.secondary_blend_sharpness,
         mat.tint, mat.emissive,
-        lights, shadow, tex, normal_tex, tex, normal_tex,
+        lights, local_lights, shadow, tex, normal_tex, tex, normal_tex,
         // No emissive / ORM maps on the legacy per-draw path: pass the albedo
         // as a dummy and gate both off so neither is sampled.
         tex, tex, false, false,
@@ -1080,6 +1099,7 @@ fragment float4 fragment_main_bindless(
     constant ShadowUniforms   &shadow   [[buffer(5)]],
     constant ProbeSet         &probes   [[buffer(6)]],
     constant GpuObjectData    *objects  [[buffer(9)]],
+    constant GpuLight         *local_lights [[buffer(8)]],
     constant BindlessTextures &tex      [[buffer(7)]]
 ) {
     // Static engine samplers, declared inline. Parameters mirror the
@@ -1100,7 +1120,7 @@ fragment float4 fragment_main_bindless(
         obj.roughness, obj.metallic, obj.macro_variation,
         obj.terrain_blend, obj.secondary_blend_sharpness,
         obj.tint, obj.emissive,
-        lights, shadow,
+        lights, local_lights, shadow,
         tex.tex_pool[obj.albedo_index],
         tex.tex_pool[obj.normal_index],
         tex.tex_pool[obj.albedo_secondary_index],

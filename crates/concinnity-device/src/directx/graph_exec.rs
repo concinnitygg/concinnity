@@ -170,6 +170,8 @@ pub(in crate::directx) struct MainPassCamera<'a> {
 pub(in crate::directx) struct FrameGpuBuffers {
     pub view_gva: u64,
     pub light_gva: u64,
+    // GVA of the static per-scene GpuLight storage buffer (root SRV).
+    pub local_lights_gva: u64,
     pub shadow_ubo_gva: u64,
 }
 
@@ -223,6 +225,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // buffer. Consumed by Main (and any future pass that lights the
     // scene).
     pub light_gva: u64,
+    // GPU virtual address of the static per-scene `GpuLight` storage
+    // buffer. Consumed by Main's bindless + legacy sub-passes as a root SRV.
+    pub local_lights_gva: u64,
     // Jittered camera view-projection matrix (sub-pixel Halton jitter
     // applied when TAA is on). Consumed by Main and Velocity (the
     // jittered VP path); when SSR-prepass migrates it shares this.
@@ -678,6 +683,7 @@ impl DxContext {
                     FrameGpuBuffers {
                         view_gva: params.view_gva,
                         light_gva: params.light_gva,
+                        local_lights_gva: params.local_lights_gva,
                         shadow_ubo_gva: params.shadow_ubo_gva,
                     },
                     params.visible,
@@ -818,6 +824,7 @@ impl DxContext {
                     FrameGpuBuffers {
                         view_gva: params.view_gva,
                         light_gva: params.light_gva,
+                        local_lights_gva: params.local_lights_gva,
                         shadow_ubo_gva: params.shadow_ubo_gva,
                     },
                 );

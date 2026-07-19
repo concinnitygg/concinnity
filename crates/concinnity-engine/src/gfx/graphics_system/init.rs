@@ -1664,11 +1664,10 @@ impl GraphicsSystem {
             .as_ref()
             .map(|c| c.ambient_intensity())
             .unwrap_or(1.0);
-        let light_uniforms = lights::build_light_uniforms(
-            ctx.drain::<DirectionalLight>(),
-            ctx.drain::<PointLight>(),
-            ambient_intensity,
-        );
+        let dir_lights = ctx.drain::<DirectionalLight>();
+        let pt_lights = ctx.drain::<PointLight>();
+        let local_lights = lights::build_light_buffer(&pt_lights);
+        let light_uniforms = lights::build_light_uniforms(dir_lights, pt_lights, ambient_intensity);
 
         let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
 
@@ -2207,6 +2206,7 @@ impl GraphicsSystem {
                 color_lut_bytes: color_lut_bytes.as_deref(),
             },
             light_uniforms,
+            local_lights,
             shadows: ShadowParams {
                 map_size: self.shadow_map_size,
                 update: self.shadow_update,

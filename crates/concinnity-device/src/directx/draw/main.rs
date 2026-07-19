@@ -207,6 +207,7 @@ impl DxContext {
         let FrameGpuBuffers {
             view_gva,
             light_gva,
+            local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
         let depth_dsv = self.depth_dsv;
@@ -305,6 +306,8 @@ impl DxContext {
                 cmd.SetGraphicsRootSignature(bindless_root);
                 cmd.SetGraphicsRootConstantBufferView(1, view_gva);
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
+                // [12] root SRV: per-scene GpuLight storage buffer (t1).
+                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 // [5] is the bindless texture pool (per-object SRV region base).
@@ -359,6 +362,8 @@ impl DxContext {
                 cmd.SetGraphicsRootSignature(&self.main_root_sig);
                 cmd.SetGraphicsRootConstantBufferView(1, view_gva);
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
+                // [9] root SRV: per-scene GpuLight storage buffer (t7).
+                cmd.SetGraphicsRootShaderResourceView(9, local_lights_gva);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
@@ -452,6 +457,8 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
                 // [9] SSAO occlusion SRV (or 1x1 white fallback).
                 cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
+                // [10] root SRV: per-scene GpuLight storage buffer (t7).
+                cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
             }
 
             // Shared cluster cull + bucket iteration; the closures own
@@ -546,6 +553,8 @@ impl DxContext {
                     ]);
                     cmd.SetGraphicsRootConstantBufferView(1, view_gva);
                     cmd.SetGraphicsRootConstantBufferView(2, light_gva);
+                    // [12] root SRV: per-scene GpuLight storage buffer (t1).
+                    cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
                     cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                     cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                     cmd.SetGraphicsRootDescriptorTable(
@@ -603,6 +612,8 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
                 // [9] SSAO occlusion SRV (or 1x1 white fallback).
                 cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
+                // [10] root SRV: per-scene GpuLight storage buffer (t7).
+                cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
             }
 
             // Shared skinned traversal (gate + LOD pick); the closure owns
@@ -718,6 +729,7 @@ impl DxContext {
         let FrameGpuBuffers {
             view_gva,
             light_gva,
+            local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
         let depth_dsv = self.depth_dsv;
@@ -772,6 +784,8 @@ impl DxContext {
                 cmd.SetGraphicsRootSignature(bindless_root);
                 cmd.SetGraphicsRootConstantBufferView(1, view_gva);
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
+                // [12] root SRV: per-scene GpuLight storage buffer (t1).
+                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
 
 use crate::render_types::{
-    GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush, ShadowUniforms,
+    GpuLight, GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush, ShadowUniforms,
 };
 
 use super::uniforms::{ModelUniforms, ViewUniforms};
@@ -103,6 +103,7 @@ pub fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
             (3, material_uniforms_layout()),
             (4, light_uniforms_layout()),
             (5, shadow_uniforms_layout()),
+            (8, gpu_light_layout()),
             (9, gpu_object_data_layout()),
         ],
         EngineStage::Shadow => vec![
@@ -180,6 +181,24 @@ fn light_uniforms_layout() -> ExpectedStruct {
             field!(LightUniforms, point),
             field!(LightUniforms, num_directional),
             field!(LightUniforms, num_point),
+        ],
+    }
+}
+
+fn gpu_light_layout() -> ExpectedStruct {
+    ExpectedStruct {
+        name: "GpuLight",
+        size: size_of::<GpuLight>(),
+        fields: vec![
+            field!(GpuLight, position),
+            field!(GpuLight, range),
+            field!(GpuLight, color),
+            field!(GpuLight, intensity),
+            field!(GpuLight, direction),
+            field!(GpuLight, kind),
+            field!(GpuLight, cos_inner),
+            field!(GpuLight, cos_outer),
+            field!(GpuLight, shadow_index),
         ],
     }
 }

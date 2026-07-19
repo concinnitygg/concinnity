@@ -365,10 +365,11 @@ impl DxContext {
             visible.extend_from_slice(&self.always_draw);
         }
 
-        let (view_gva, light_gva) = unsafe {
+        let (view_gva, light_gva, local_lights_gva) = unsafe {
             (
                 self.uniforms.view_ubo_resources[frame_idx].GetGPUVirtualAddress(),
                 self.uniforms.light_ubo.GetGPUVirtualAddress(),
+                self.uniforms.local_light_buffer.GetGPUVirtualAddress(),
             )
         };
 
@@ -426,6 +427,7 @@ impl DxContext {
             shadow_ubo_gva,
             view_gva,
             light_gva,
+            local_lights_gva,
             vp_mat,
             cur_vp,
             frustum: &frustum,
@@ -514,6 +516,24 @@ pub(super) fn upload_light_uniforms(
             size,
         );
         light_ubo.Unmap(0, None);
+    }
+    Ok(())
+}
+
+// One-shot upload of the per-scene local-light list into its static storage
+// buffer. Sibling of `upload_light_uniforms`: same Map / copy / Unmap path, run
+// once at init (the buffer is never rewritten per frame).
+pub(super) fn upload_local_lights(
+    buffer: &ID3D12Resource,
+    lights: &[crate::gfx::render_types::GpuLight],
+) -> Result<(), String> {
+    let bytes = std::mem::size_of_val(lights);
+    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+        .map_err(|e| format!("map local-light buffer: {e}"))?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(lights.as_ptr() as *const u8, ptr as *mut u8, bytes);
+        buffer.Unmap(0, None);
     }
     Ok(())
 }

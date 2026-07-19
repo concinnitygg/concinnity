@@ -113,6 +113,7 @@ impl DxContext {
                     color_lut_bytes,
                 },
             light_uniforms,
+            local_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -1050,6 +1051,27 @@ impl DxContext {
             }
         }
         upload_light_uniforms(&light_ubo, &light_uniforms)?;
+
+        // Per-scene local-light storage buffer: a single UPLOAD resource filled
+        // once from `local_lights` and never rewritten per frame (mirrors the
+        // `light_ubo` single-upload path, not the per-frame object buffer). An
+        // empty scene still allocates a one-element placeholder; the shader's
+        // `num_local_lights == 0` guard keeps it from being read.
+        let local_light_buffer = {
+            use crate::gfx::render_types::GpuLight;
+            let size =
+                align256((local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64);
+            let buf = create_buffer(
+                &device,
+                size,
+                D3D12_HEAP_TYPE_UPLOAD,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+            )?;
+            if !local_lights.is_empty() {
+                upload_local_lights(&buf, &local_lights)?;
+            }
+            buf
+        };
 
         // Shaders + root sigs + PSOs (main / shadow / instanced / text /
         // composite + bindless static main + GPU-cull compute). See
@@ -2052,6 +2074,7 @@ impl DxContext {
                 view_ubo_resources,
                 view_ubo_ptrs,
                 light_ubo,
+                local_light_buffer,
                 light_uniforms,
                 shadow_ubo_resources,
                 shadow_ubo_ptrs,

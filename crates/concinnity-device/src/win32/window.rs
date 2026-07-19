@@ -348,7 +348,7 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
 
 // Resize the window's content area (windowed mode only). AdjustWindowRect
 // converts the desired client size to the full window rect; WM_SIZE then drives
-// ResizeBuffers. Unverified on Windows (see the note above).
+// ResizeBuffers.
 pub(crate) fn do_set_window_size(state: &mut WindowState, width: u32, height: u32) {
     let hwnd = state.hwnd;
     unsafe {

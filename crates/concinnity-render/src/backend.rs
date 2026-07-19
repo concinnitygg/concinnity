@@ -1298,6 +1298,7 @@ mod tests {
                 color_lut_bytes: None,
             },
             light_uniforms: crate::render_types::LightUniforms::DEFAULT,
+            local_lights: Vec::new(),
             shadows: ShadowParams {
                 map_size: 0,
                 update: crate::assets::ShadowUpdate::default(),

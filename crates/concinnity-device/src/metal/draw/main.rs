@@ -538,6 +538,11 @@ impl MtlContext {
                 std::mem::size_of::<crate::gfx::render_types::LightUniforms>(),
                 4,
             );
+            // Local-light storage buffer at fragment buffer(8). Encoder-bound
+            // buffers are inherited by the ICB-executed bindless draws (the same
+            // way the object buffer at binding 9 is), so this single bind covers
+            // the legacy and GPU-driven paths and the planar / probe re-renders.
+            enc.setFragmentBuffer_offset_atIndex(Some(&self.local_light_buffer), 0, 8);
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
                 std::mem::size_of::<ShadowUniforms>(),

@@ -58,6 +58,22 @@ cbuffer ShadowBlock : register(b3)
 struct DirLight   { float4 dir_i;  float4 col;   };
 struct PointLight { float4 pos_r;  float4 col_i; };
 
+// One local light in the per-scene storage buffer (register t3). Matches the
+// Rust GpuLight in render_types.rs (64 bytes).
+struct GpuLight
+{
+    float3 position;
+    float  range;
+    float3 color;
+    float  intensity;
+    float3 direction;
+    uint   kind;
+    float  cos_inner;
+    float  cos_outer;
+    int    shadow_index;
+    float  _pad;
+};
+
 cbuffer LightBlock : register(b2)
 {
     DirLight   dir[4];
@@ -68,7 +84,9 @@ cbuffer LightBlock : register(b2)
     // a no-op. First trailing pad word, so the cbuffer still matches the Rust
     // LightUniforms layout.
     float ambient_intensity;
-    float _lpad1;
+    // Valid entry count in the local_lights buffer (Rust num_local_lights,
+    // offset 396); the forward loop reads it against the storage buffer below.
+    int num_local_lights;
 }
 
 Texture2DArray<float>  shadow_map      : register(t0);
@@ -76,6 +94,11 @@ SamplerComparisonState shadow_sampler  : register(s0);
 Texture2D              albedo_tex      : register(t1);
 SamplerState           linear_sampler  : register(s1);
 Texture2D              normal_tex      : register(t2);
+// Per-scene local lights (point + spot + area) for the forward pass. Register
+// t7: the instanced + skinned passes that share this shader bind t3 to their
+// VS matrix / joint buffers, and t0..t6 are otherwise taken (shadow, albedo,
+// normal, SSAO, IBL cubes).
+StructuredBuffer<GpuLight> local_lights : register(t7);
 // Blurred SSAO occlusion (1x1 white when SSAO is disabled).
 Texture2D              ssao_tex        : register(t4);
 TextureCube            irradiance_cube : register(t5);
@@ -292,12 +315,12 @@ float4 main(PsIn p) : SV_TARGET
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int j = 0; j < num_pt; j++)
+    for (int j = 0; j < num_local_lights; j++)
     {
-        float3 pos_w  = pt[j].pos_r.xyz;
-        float  range  = pt[j].pos_r.w;
-        float3 col    = pt[j].col_i.xyz;
-        float  intens = pt[j].col_i.w;
+        float3 pos_w  = local_lights[j].position;
+        float  range  = local_lights[j].range;
+        float3 col    = local_lights[j].color;
+        float  intens = local_lights[j].intensity;
         float3 L      = normalize(pos_w - p.world_pos);
         float  dist   = length(pos_w - p.world_pos);
         float  atten  = clamp(1.0 - (dist / range), 0.0, 1.0);

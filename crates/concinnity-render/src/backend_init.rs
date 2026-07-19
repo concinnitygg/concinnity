@@ -14,7 +14,9 @@ use crate::auto_exposure::AutoExposureSettings;
 use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
 use crate::particles::ParticleEmitterRecord;
-use crate::render_types::{DrawObject, InstancedCluster, LightUniforms, PostProcessParams};
+use crate::render_types::{
+    DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams,
+};
 use crate::rt_reflections::RtReflectionSettings;
 use crate::ssao::SsaoSettings;
 use crate::ssgi::SsgiSettings;
@@ -146,6 +148,11 @@ pub struct BackendInit<'a> {
     pub shaders: ShaderBytes<'a>,
     pub media: MediaPayloads<'a>,
     pub light_uniforms: LightUniforms,
+    // Every local light (point + spot + area) for the clustered forward pass,
+    // uploaded to a per-scene GpuLight storage buffer. The first MAX_POINT_LIGHTS
+    // point lights are also mirrored into `light_uniforms.point` for the
+    // raymarch / fog / probe paths that still read the fixed array.
+    pub local_lights: Vec<GpuLight>,
     pub shadows: ShadowParams,
     // Scene-sampler max anisotropy, clamped to the GPU's range at init.
     pub anisotropy: u32,

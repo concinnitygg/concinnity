@@ -851,6 +851,7 @@ impl DxContext {
         let bindless_pso = self.cull.main_bindless_pso.as_ref().unwrap();
         let bindless_root = self.cull.main_bindless_root_sig.as_ref().unwrap();
         let cull_sig = self.cull.cull_command_signature.as_ref().unwrap();
+        let local_lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
 
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
@@ -891,6 +892,9 @@ impl DxContext {
             cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
             cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
             cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+            // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
+            // reuse the bindless main PSO, which references it unconditionally.
+            cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
             cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
             // [10] probe cube array (valid -- filled with the sky) + [11] the EMPTY
             // ProbeSet (count 0), so a probe face samples only the sky, not other

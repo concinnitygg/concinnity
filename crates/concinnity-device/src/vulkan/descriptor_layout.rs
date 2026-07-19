@@ -54,6 +54,14 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 8] {
 // cannot express it. Sits exactly one past the count-1 `global_set()` table.
 pub(in crate::vulkan) const PROBE_CUBE_ARRAY_BINDING: u32 = 8;
 
+// Binding number of the per-scene local-light storage buffer (SSBO) in global
+// set 0: a `readonly buffer LocalLightBlock { GpuLight local_lights[]; }`,
+// count-1 STORAGE_BUFFER in the fragment stage, created once at init and bound
+// static. Appended to the global layout inline in `init.rs` alongside the probe
+// cube array (which caps the count-1 `global_set()` table at binding 7), one
+// past `PROBE_CUBE_ARRAY_BINDING`.
+pub(in crate::vulkan) const LOCAL_LIGHT_SSBO_BINDING: u32 = 9;
+
 // Per-object set (set 1): albedo at 0, normal map at 1.
 pub(in crate::vulkan) fn object_set() -> [Binding; 2] {
     use vk::DescriptorType as T;
@@ -126,6 +134,15 @@ mod tests {
     #[test]
     fn probe_cube_array_binding_follows_global_set() {
         assert_eq!(PROBE_CUBE_ARRAY_BINDING, global_set().len() as u32);
+    }
+
+    // The local-light SSBO binding sits exactly one past the probe cube array, so
+    // the two inline-appended bindings (probe cubes at 8, local lights at 9) stay
+    // gap-free above the count-1 global-set table. A reorder that collides them
+    // fails here.
+    #[test]
+    fn local_light_ssbo_binding_follows_probe_cube_array() {
+        assert_eq!(LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING + 1);
     }
 
     #[test]

@@ -721,6 +721,15 @@ pub(super) struct VkUniforms {
     // object descriptor set.
     pub(super) light_ubo: vk::Buffer,
     pub(super) light_ubo_memory: vk::DeviceMemory,
+    // Single per-scene local-light storage buffer (SSBO), uploaded once at init
+    // and bound at global set 0 binding 9. Static like `light_ubo` (never
+    // rewritten per-frame).
+    pub(super) local_light_buffer: vk::Buffer,
+    pub(super) local_light_memory: vk::DeviceMemory,
+    // Byte size of `local_light_buffer`, kept so passes that rebind the global
+    // set from `ctx` (probe bake) can set the SSBO descriptor range without the
+    // original `local_lights` slice.
+    pub(super) local_light_size: u64,
     // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
     // change can mutate `ambient_intensity` and re-upload. The light UBO is a
     // single (not per-frame) buffer, so `set_ambient_intensity` `wait_idle`s
@@ -730,8 +739,8 @@ pub(super) struct VkUniforms {
 }
 
 impl VkUniforms {
-    // Destroy the per-frame view UBOs (unmapping first) + the light UBO. Called
-    // from `VkContext::drop` after `wait_idle`.
+    // Destroy the per-frame view UBOs (unmapping first) + the light UBO + the
+    // local-light SSBO. Called from `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, device: &Device) {
         unsafe {
             for (&buf, &mem) in self
@@ -754,6 +763,8 @@ impl VkUniforms {
             }
             device.destroy_buffer(self.light_ubo, None);
             device.free_memory(self.light_ubo_memory, None);
+            device.destroy_buffer(self.local_light_buffer, None);
+            device.free_memory(self.local_light_memory, None);
         }
     }
 }
@@ -1884,7 +1895,7 @@ impl VkContext {
 
     // Switch window mode / resize at runtime. The GLFW work lives in window.rs;
     // the framebuffer-size change drives a swapchain rebuild via the present
-    // path's OUT_OF_DATE handling. Code-only on macOS; verify on Linux/Windows.
+    // path's OUT_OF_DATE handling.
     pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
         self.window_mut().set_window_mode(mode);
     }
@@ -1909,7 +1920,7 @@ impl VkContext {
     }
 
     // Replace the live post-process parameters, pushed to the bloom + composite
-    // shaders each frame. Code-only on macOS; verify on Linux/Windows.
+    // shaders each frame.
     pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
         self.post_process = params;
     }

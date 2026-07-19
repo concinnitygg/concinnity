@@ -338,6 +338,19 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [9] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (matches
+        // default_frag.hlsl; t3 is the instanced/skinned VS matrix SRV in the
+        // shared instanced root signature, so the lights sit at t7).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 7,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main root sig")
@@ -551,6 +564,18 @@ fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [12] Root SRV: per-scene StructuredBuffer<GpuLight> at t1 (matches
+        // main_bindless_frag.hlsl).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 1,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
@@ -717,6 +742,19 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
                 DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                     NumDescriptorRanges: 1,
                     pDescriptorRanges: &ssao_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [10] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (PS). The VS
+        // matrix / joint SRV holds t3, so the local lights sit at t7 to match
+        // default_frag.hlsl and the static main root signature.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 7,
+                    RegisterSpace: 0,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,

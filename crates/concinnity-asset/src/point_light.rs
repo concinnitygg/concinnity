@@ -2,7 +2,9 @@
 
 /// A spherical point light with quadratic distance attenuation.
 ///
-/// Up to 8 point lights may be declared; extras beyond 8 are silently ignored.
+/// The forward renderer lights every surface from all declared point lights (up
+/// to a large per-scene budget). Secondary effects (volumetric fog, SDF
+/// raymarching, and reflection-probe capture) still consider only the first 8.
 ///
 /// ```jsonl
 /// {"name":"lamp","type":"PointLight","args":{"position":[2.0,2.5,-3.0],"color":[1.0,0.8,0.5],"intensity":8.0,"range":6.0}}

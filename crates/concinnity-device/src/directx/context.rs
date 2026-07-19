@@ -516,6 +516,10 @@ pub(super) struct DxUniforms {
     pub view_ubo_resources: Vec<ID3D12Resource>,
     pub view_ubo_ptrs: Vec<*mut u8>,
     pub light_ubo: ID3D12Resource,
+    // Per-scene local-light storage buffer bound as a root SRV by the main
+    // pass. Static: filled once at init from `BackendInit.local_lights` and
+    // never rewritten (not persistently mapped, so it stays out of `unmap`).
+    pub local_light_buffer: ID3D12Resource,
     // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
     // change can mutate `ambient_intensity` and re-upload. The light buffer is a
     // single (not per-frame) UPLOAD resource, so `set_ambient_intensity`
@@ -1889,7 +1893,7 @@ impl DxContext {
 
     // Switch window mode / resize at runtime (windowed / borderless / fullscreen
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
-    // path picks up the resulting WM_SIZE. Code-only on macOS; verify on Windows.
+    // path picks up the resulting WM_SIZE.
     pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
         do_set_window_mode(self.win_mut(), mode);
     }
@@ -1919,7 +1923,7 @@ impl DxContext {
     }
 
     // Replace the live post-process parameters, pushed to the bloom + composite
-    // shaders each frame. Code-only on macOS; verify on Windows.
+    // shaders each frame.
     pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
         self.post_process = params;
     }

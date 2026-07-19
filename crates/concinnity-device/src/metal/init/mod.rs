@@ -121,6 +121,7 @@ impl MtlContext {
                     color_lut_bytes,
                 },
             light_uniforms,
+            local_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -288,6 +289,34 @@ impl MtlContext {
                         MTLResourceOptions::StorageModeShared,
                     )
                     .ok_or("failed to create index buffer")?
+            }
+        };
+
+        // Per-scene local-light storage buffer bound to the forward pass at
+        // fragment buffer(8). Metal rejects a zero-length buffer, so a scene with
+        // no local lights gets a one-element placeholder; num_local_lights == 0
+        // keeps the shader from reading it.
+        let local_light_buffer = {
+            use crate::gfx::render_types::GpuLight;
+            if local_lights.is_empty() {
+                device
+                    .newBufferWithLength_options(
+                        std::mem::size_of::<GpuLight>(),
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .ok_or("failed to create placeholder local-light buffer")?
+            } else {
+                unsafe {
+                    let ptr = std::ptr::NonNull::new(local_lights.as_ptr() as *mut _)
+                        .ok_or("local-light slice pointer is null")?;
+                    device
+                        .newBufferWithBytes_length_options(
+                            ptr,
+                            std::mem::size_of_val(local_lights.as_slice()),
+                            MTLResourceOptions::StorageModeShared,
+                        )
+                        .ok_or("failed to create local-light buffer")?
+                }
             }
         };
 
@@ -1087,6 +1116,7 @@ impl MtlContext {
             textures: gpu_textures,
             normal_map_textures: gpu_normal_maps,
             light_uniforms,
+            local_light_buffer,
             sampler,
             shadow_pipeline_state,
             shadow_map,

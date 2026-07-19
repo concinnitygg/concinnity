@@ -30,6 +30,22 @@ const float REFLECTION_ROUGHNESS_CUT = 0.6;
 struct DirLight  { vec4 dir_i; vec4 col; };
 struct PointLight{ vec4 pos_r; vec4 col_i; };
 
+// One local light in the per-scene storage buffer (set 0, binding 9). Matches
+// the Rust GpuLight in render_types.rs; the scalar after each vec3 keeps the
+// std430 layout at the 64-byte packed stride (vec3 is 16-aligned in std430).
+struct GpuLight {
+    vec3  position;
+    float range;
+    vec3  color;
+    float intensity;
+    vec3  direction;
+    uint  kind;
+    float cos_inner;
+    float cos_outer;
+    int   shadow_index;
+    float _pad;
+};
+
 layout(std140, set = 0, binding = 1) uniform LightBlock {
     DirLight   dir[4];
     PointLight pt[8];
@@ -37,7 +53,10 @@ layout(std140, set = 0, binding = 1) uniform LightBlock {
     int num_pt;
     // Indirect-ambient multiplier (PostProcessConfig.ambient_intensity); 1.0 is
     // a no-op. First trailing pad word, matching the Rust LightUniforms layout.
-    float ambient_intensity; float _lpad1;
+    float ambient_intensity;
+    // Valid entry count in the local-light SSBO (Rust num_local_lights, offset
+    // 396); the forward loop reads it against the storage buffer below.
+    int num_local_lights;
 } lights;
 
 layout(std140, set = 0, binding = 2) uniform ShadowBlock {
@@ -80,6 +99,11 @@ struct GpuObjectData {
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBlock {
     GpuObjectData objects[];
 } obj_buf;
+
+// Per-scene local lights (point + spot + area) for the forward pass.
+layout(std430, set = 0, binding = 9) readonly buffer LocalLightBlock {
+    GpuLight local_lights[];
+} local_light_buf;
 
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
 // record's albedo_index / normal_index address it directly.
@@ -304,11 +328,11 @@ void main() {
         Lo += (diff + spec) * radiance * NdL * s;
     }
 
-    for (int i = 0; i < lights.num_pt; i++) {
-        vec3  pos_w   = lights.pt[i].pos_r.xyz;
-        float range   = lights.pt[i].pos_r.w;
-        vec3  col     = lights.pt[i].col_i.xyz;
-        float intens  = lights.pt[i].col_i.w;
+    for (int i = 0; i < lights.num_local_lights; i++) {
+        vec3  pos_w   = local_light_buf.local_lights[i].position;
+        float range   = local_light_buf.local_lights[i].range;
+        vec3  col     = local_light_buf.local_lights[i].color;
+        float intens  = local_light_buf.local_lights[i].intensity;
 
         vec3  L    = normalize(pos_w - frag_world_pos);
         float dist = length(pos_w - frag_world_pos);

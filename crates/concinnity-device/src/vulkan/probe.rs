@@ -25,7 +25,7 @@
 use ash::vk;
 
 use super::context::{HDR_FORMAT, VkContext};
-use super::descriptor_layout::PROBE_CUBE_ARRAY_BINDING;
+use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
 use super::draw::ViewUniforms;
 use super::hiz::CullHizParams;
 use super::probe_uniforms::{MAX_PROBES, ProbeSet, ProbeUniforms};
@@ -1145,7 +1145,9 @@ impl BakeResources {
         let tex_pool = (ctx.textures.len() + ctx.normal_map_textures.len()) as u32;
         let has_hiz = ctx.cull.hiz.is_some();
         let uniform_count = PROBE_FACE_COUNT as u32 * 4 + u32::from(has_hiz);
-        let storage_count = 4 + PROBE_FACE_COUNT as u32;
+        // 4 cull SSBOs + one bindless object SSBO per face + one binding-9
+        // local-light SSBO per global set.
+        let storage_count = 4 + PROBE_FACE_COUNT as u32 + PROBE_FACE_COUNT as u32;
         let sampler_count =
             PROBE_FACE_COUNT as u32 * (tex_pool + 4 + MAX_PROBES as u32) + u32::from(has_hiz);
         let pool_sizes = [
@@ -1282,6 +1284,14 @@ impl BakeResources {
                     .image_info(&probe_cube_sky),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
+            // Binding 9: the shared static per-scene local-light SSBO.
+            write_storage(
+                device,
+                set,
+                LOCAL_LIGHT_SSBO_BINDING,
+                ctx.uniforms.local_light_buffer,
+                ctx.uniforms.local_light_size,
+            );
         }
 
         // Six readback buffers (one RGBA16F face each, tightly packed).
