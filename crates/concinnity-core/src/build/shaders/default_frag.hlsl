@@ -60,6 +60,9 @@ struct PointLight { float4 pos_r;  float4 col_i; };
 
 // One local light in the per-scene storage buffer (register t3). Matches the
 // Rust GpuLight in render_types.rs (64 bytes).
+// GpuLight.kind discriminants (LIGHT_KIND_* in render_types.rs).
+static const uint LIGHT_KIND_SPOT = 1u;
+
 struct GpuLight
 {
     float3 position;
@@ -379,6 +382,16 @@ float4 main(PsIn p) : SV_TARGET
         float  dist   = length(pos_w - p.world_pos);
         float  atten  = clamp(1.0 - (dist / range), 0.0, 1.0);
         atten *= atten;
+        // Spot cone: full brightness inside cos_inner, squared fade to black at
+        // cos_outer. Point lights leave both at zero and skip this.
+        if (local_lights[j].kind == LIGHT_KIND_SPOT)
+        {
+            float cd = dot(local_lights[j].direction, -L);
+            float ci = local_lights[j].cos_inner;
+            float co = local_lights[j].cos_outer;
+            float t  = saturate((cd - co) / max(ci - co, 1e-4));
+            atten *= t * t;
+        }
         float3 radiance = col * intens * atten;
         float3 H   = normalize(V + L);
         float  NdL = max(dot(N, L), 0.0);

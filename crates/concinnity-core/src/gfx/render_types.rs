@@ -12,9 +12,10 @@ pub const MAX_POINT_LIGHTS: usize = 8;
 // cap are dropped with a warning.
 pub const MAX_LOCAL_LIGHTS: usize = 1024;
 
-// GpuLight.kind discriminants. Only point lights exist today; spot and area
-// lights extend this without changing the 64-byte record layout.
+// GpuLight.kind discriminants. Area lights extend this without changing the
+// 64-byte record layout.
 pub const LIGHT_KIND_POINT: u32 = 0;
+pub const LIGHT_KIND_SPOT: u32 = 1;
 
 // Clustered forward lighting froxel grid. The screen is tiled
 // CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;

@@ -131,7 +131,9 @@ pub use controls_command::ControlsCommand;
 pub use despawn_request::DespawnRequest;
 pub use file::File;
 pub use frame_input::FrameInput;
-pub use geometry::{GlassPanelGeometry, InstancedPropGeometry, PropGeometry};
+pub use geometry::{
+    GlassPanelGeometry, InstancedPropGeometry, PropGeometry, SPOT_MAX_ANGLE_DEG, SpotLightGeometry,
+};
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;
 pub use lifetime::Lifetime;
@@ -160,6 +162,7 @@ pub use setting_command::{SettingCommand, SettingOp};
 // the asset through `SdfVolume` only.
 pub use concinnity_asset::Slider;
 pub use concinnity_asset::SpawnerArgs;
+pub use concinnity_asset::SpotLight;
 pub use concinnity_asset::StoryImport;
 pub use concinnity_asset::StreamingConfig;
 pub use concinnity_asset::TextInput;

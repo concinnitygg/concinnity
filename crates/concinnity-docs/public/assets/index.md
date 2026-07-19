@@ -57,6 +57,7 @@
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
+- [SpotLight](SpotLight.md) - A cone-shaped local light: a point light restricted to the cone around `direction`, with a soft edge between `inner_angle` and `outer_angle`.
 - [Sprite](Sprite.md) - Screen-space 2D rectangle drawn as a UI overlay each frame.
 - [StatHud](StatHud.md) - Requests the default on-screen stats HUD. Drives a set of [TextLabel](TextLabel.md) chips with live engine stats, refreshed on a fixed interval.
 - [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.

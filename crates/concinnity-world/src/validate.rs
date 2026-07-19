@@ -8,8 +8,8 @@
 
 use crate::assets::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
-    Material, ParticleEmitter, PointLight, Prop, ReflectionProbe, RigidBody, SdfVolume,
-    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    Material, ParticleEmitter, PointLight, Prop, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG,
+    SdfVolume, SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 
 // The wave ceiling lives in core (`concinnity_core::assets::MAX_WATER_WAVES`,
@@ -76,6 +76,15 @@ pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
 pub fn point_light(mut args: PointLight) -> PointLight {
     args.intensity = args.intensity.max(0.0);
     args.range = args.range.max(0.0);
+    args
+}
+
+pub fn spot_light(mut args: SpotLight) -> SpotLight {
+    args.intensity = args.intensity.max(0.0);
+    args.range = args.range.max(0.0);
+    args.direction = args.unit_direction();
+    args.outer_angle = args.outer_angle.clamp(0.0, SPOT_MAX_ANGLE_DEG);
+    args.inner_angle = args.inner_angle.clamp(0.0, args.outer_angle);
     args
 }
 

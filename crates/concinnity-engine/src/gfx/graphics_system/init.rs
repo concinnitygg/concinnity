@@ -4,8 +4,8 @@
 use crate::assets::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, SdfVolume,
-    ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, StreamingConfig, TextLabel,
-    VolumetricFog, VoxelWorld, WaterSurface, Window,
+    ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, SpotLight, StreamingConfig,
+    TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -1666,8 +1666,10 @@ impl GraphicsSystem {
             .unwrap_or(1.0);
         let dir_lights = ctx.drain::<DirectionalLight>();
         let pt_lights = ctx.drain::<PointLight>();
-        let local_lights = lights::build_light_buffer(&pt_lights);
-        let light_uniforms = lights::build_light_uniforms(dir_lights, pt_lights, ambient_intensity);
+        let spot_lights = ctx.drain::<SpotLight>();
+        let local_lights = lights::build_light_buffer(&pt_lights, &spot_lights);
+        let light_uniforms =
+            lights::build_light_uniforms(dir_lights, pt_lights, &local_lights, ambient_intensity);
 
         let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
 

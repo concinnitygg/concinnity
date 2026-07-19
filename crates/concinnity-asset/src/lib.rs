@@ -94,6 +94,7 @@ mod shader_stage;
 mod skinned_mesh;
 mod slider;
 mod spawner;
+mod spot_light;
 mod sprite;
 mod stat_hud;
 mod story;
@@ -164,6 +165,7 @@ pub use shader_stage::{ShaderKind, ShaderStage};
 pub use skinned_mesh::{CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData};
 pub use slider::Slider;
 pub use spawner::SpawnerArgs;
+pub use spot_light::SpotLight;
 pub use sprite::{Sprite, SpriteFit};
 pub use stat_hud::StatHud;
 pub use story::{

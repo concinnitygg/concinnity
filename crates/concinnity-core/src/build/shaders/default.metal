@@ -224,6 +224,9 @@ struct PointLightData {
     float         intensity;
 };
 
+// GpuLight.kind discriminants (LIGHT_KIND_* in render_types.rs).
+constant uint LIGHT_KIND_SPOT = 1u;
+
 // One local light in the storage buffer bound at fragment buffer(8). Matches the
 // Rust GpuLight in render_types.rs; packed_float3 keeps the 64-byte stride.
 struct GpuLight {
@@ -985,6 +988,15 @@ static float4 shade_surface(
         float3 L     = normalize(delta);
         float  atten = clamp(1.0 - dist / range, 0.0, 1.0);
         atten        = atten * atten;
+        // Spot cone: full brightness inside cos_inner, squared fade to black at
+        // cos_outer. Point lights leave both at zero and skip this.
+        if (local_lights[j].kind == LIGHT_KIND_SPOT) {
+            float cd = dot(float3(local_lights[j].direction), -L);
+            float ci = local_lights[j].cos_inner;
+            float co = local_lights[j].cos_outer;
+            float t  = clamp((cd - co) / max(ci - co, 1e-4), 0.0, 1.0);
+            atten *= t * t;
+        }
         float3 radiance = col * intens * atten;
 
         float3 H   = normalize(V + L);

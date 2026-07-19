@@ -15,7 +15,8 @@ mod text;
 pub use interaction::hit_region;
 pub use layout::{panel, screen};
 pub use scene::{
-    camera, directional_light, environment_map_sky, point_light, post_process, room, volumetric_fog,
+    camera, directional_light, environment_map_sky, point_light, post_process, room, spot_light,
+    volumetric_fog,
 };
 pub use sprite::sprite;
 pub use text::{font, menu_label, text_input, text_label};

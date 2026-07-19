@@ -35,6 +35,28 @@ pub fn point_light(
         .set("range", range)
 }
 
+// A spot light of `color` (RGB) at `position` aimed along `direction`, with
+// `intensity`, falloff `range`, and a cone that fades from `cone[0]` to `cone[1]`
+// (inner and outer half-angles, in degrees).
+pub fn spot_light(
+    name: impl Into<String>,
+    color: [f32; 3],
+    position: [f32; 3],
+    direction: [f32; 3],
+    intensity: f32,
+    range: f32,
+    cone: [f32; 2],
+) -> AssetSpec {
+    AssetSpec::new(name, "SpotLight")
+        .set("color", color)
+        .set("position", position)
+        .set("direction", direction)
+        .set("intensity", intensity)
+        .set("range", range)
+        .set("inner_angle", cone[0])
+        .set("outer_angle", cone[1])
+}
+
 // An image-based-lighting environment generated from the procedural sky (no .hdr
 // source needed).
 pub fn environment_map_sky(name: impl Into<String>) -> AssetSpec {
@@ -104,6 +126,27 @@ mod tests {
         // f32 -> f64 widening is exact only for representable values, so compare
         // against the same widening rather than an f64 literal.
         assert_eq!(field("intensity"), Some(&ArgValue::Float(1.1f32 as f64)));
+    }
+
+    #[test]
+    fn spot_light_splits_the_cone_into_its_two_angles() {
+        let s = spot_light(
+            "lamp",
+            [1.0, 0.9, 0.7],
+            [0.0, 4.0, 0.0],
+            [0.0, -1.0, 0.0],
+            20.0,
+            10.0,
+            [18.0, 30.0],
+        );
+        assert_eq!(s.asset_type, "SpotLight");
+        let field = |k: &str| s.fields.iter().find(|(key, _)| key == k).map(|(_, v)| v);
+        assert_eq!(
+            field("direction"),
+            Some(&ArgValue::floats(&[0.0, -1.0, 0.0]))
+        );
+        assert_eq!(field("inner_angle"), Some(&ArgValue::Float(18.0f32 as f64)));
+        assert_eq!(field("outer_angle"), Some(&ArgValue::Float(30.0f32 as f64)));
     }
 
     #[test]

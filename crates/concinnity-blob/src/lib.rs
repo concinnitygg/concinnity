@@ -58,6 +58,7 @@ pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
 // JSON. v4: View became Screen (stack, input policy, layer fields) and element
 // `view` refs became `screen`. v5: `BlobMeta` gained the `WorldManifest`
 // shape summary. v6: Application bakes only its runtime limits. v7: Sprite
-// gained `border_width` / `border_color`.
-pub const BLOB_VERSION: u32 = 7;
+// gained `border_width` / `border_color`. v8: SpotLight joined the component
+// registry, shifting every tag after PointLight.
+pub const BLOB_VERSION: u32 = 8;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)

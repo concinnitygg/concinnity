@@ -33,6 +33,9 @@ struct PointLight{ vec4 pos_r; vec4 col_i; };
 // One local light in the per-scene storage buffer (set 0, binding 9). Matches
 // the Rust GpuLight in render_types.rs; the scalar after each vec3 keeps the
 // std430 layout at the 64-byte packed stride (vec3 is 16-aligned in std430).
+// GpuLight.kind discriminants (LIGHT_KIND_* in render_types.rs).
+const uint LIGHT_KIND_SPOT = 1u;
+
 struct GpuLight {
     vec3  position;
     float range;
@@ -392,6 +395,15 @@ void main() {
         float dist = length(pos_w - frag_world_pos);
         float atten = clamp(1.0 - (dist / range), 0.0, 1.0);
         atten *= atten;
+        // Spot cone: full brightness inside cos_inner, squared fade to black at
+        // cos_outer. Point lights leave both at zero and skip this.
+        if (local_light_buf.local_lights[i].kind == LIGHT_KIND_SPOT) {
+            float cd = dot(local_light_buf.local_lights[i].direction, -L);
+            float ci = local_light_buf.local_lights[i].cos_inner;
+            float co = local_light_buf.local_lights[i].cos_outer;
+            float t  = clamp((cd - co) / max(ci - co, 1e-4), 0.0, 1.0);
+            atten *= t * t;
+        }
         vec3 radiance = col * intens * atten;
 
         vec3  H   = normalize(V + L);
