@@ -61,6 +61,7 @@ pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
 // gained `border_width` / `border_color`. v8: SpotLight joined the component
 // registry, shifting every tag after PointLight. v9: RectAreaLight joined the
 // registry, shifting every tag after SpotLight. v10: Reaction joined the end
-// of the component registry.
-pub const BLOB_VERSION: u32 = 10;
+// of the component registry. v11: TriggerVolume joined after it, and
+// ReactionSource gained enter/exit variants.
+pub const BLOB_VERSION: u32 = 11;
 pub const HEADER_SIZE: usize = 16; // magic(4) + version(4) + meta_len(8)

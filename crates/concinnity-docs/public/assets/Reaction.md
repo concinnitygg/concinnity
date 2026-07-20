@@ -26,7 +26,7 @@ the world clock.
 
 ## Parameters
 
-- `on`: An object. The event that fires this reaction: `"start"` (world start), `{"timer": {"interval": seconds, "repeat": bool}}`, or `{"variable": "name"}` (the named variable changed value).
+- `on`: An object. The event that fires this reaction: `"start"` (world start), `{"timer": {"interval": seconds, "repeat": bool}}`, `{"variable": "name"}` (the named variable changed value), or `{"enter": "volume"}` / `{"exit": "volume"}` (something crossed the named [TriggerVolume](TriggerVolume.md)).
 - `conditions`: An array of [Condition](Condition.md) objects. Conditions on shared variables; every one must pass for the reaction to fire. An empty list always passes.
 - `actions`: An array of objects. The actions run, in order, each time the reaction fires.
 - `once`: A boolean. Fire at most once per run.

@@ -68,6 +68,7 @@
 - [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
+- [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
 - [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
@@ -124,6 +125,7 @@
 - [StoryStage](StoryStage.md) - The stage dressing current at a page or choice menu: the backdrop and the character portraits standing on stage.
 - [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [TextLabel](TextLabel.md) relative to its `x`.
+- [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler backend selector for `PostProcessConfig.temporal_upscaling`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific backend and fall back when it is unavailable. DLSS (NVIDIA NGX) and XeSS (Intel) are DirectX-only; Metal uses MetalFX and Vulkan has no upscaler yet, so both treat any value as their native path.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.

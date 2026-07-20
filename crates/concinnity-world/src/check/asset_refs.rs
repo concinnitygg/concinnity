@@ -34,6 +34,7 @@ pub enum RefKind {
     Animation,
     AudioClip,
     Screen,
+    TriggerVolume,
     // Any declared asset, whatever its type (runtime targets like a despawned
     // entity or a spawn template are addressed by bare name).
     AnyAsset,
@@ -472,14 +473,36 @@ impl CrossReferenced for Reaction {
             }
         }
 
-        // A `variable` source watching an unnamed variable never fires.
-        if let Some(source) = args.get("on")
-            && let Some(var) = source.get("variable")
-            && var.as_str().unwrap_or("").is_empty()
-        {
-            refs.push(CrossRef::Issue(format!(
-                "Reaction '{name}': `variable` source requires a variable name"
-            )));
+        if let Some(source) = args.get("on") {
+            // A `variable` source watching an unnamed variable never fires.
+            if let Some(var) = source.get("variable")
+                && var.as_str().unwrap_or("").is_empty()
+            {
+                refs.push(CrossRef::Issue(format!(
+                    "Reaction '{name}': `variable` source requires a variable name"
+                )));
+            }
+            // An enter/exit source must name a declared TriggerVolume.
+            for verb in ["enter", "exit"] {
+                match source.get(verb) {
+                    Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                        refs.push(CrossRef::Resolve {
+                            kind: RefKind::TriggerVolume,
+                            target: target.clone(),
+                            error: format!(
+                                "Reaction '{name}': `{verb}` volume '{target}' not found, \
+                                 add a TriggerVolume asset with that name"
+                            ),
+                        });
+                    }
+                    Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                        refs.push(CrossRef::Issue(format!(
+                            "Reaction '{name}': `{verb}` source requires a TriggerVolume name"
+                        )));
+                    }
+                    _ => {}
+                }
+            }
         }
 
         refs

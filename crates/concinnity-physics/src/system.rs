@@ -2,12 +2,13 @@
 //
 // The Rapier rigid-body simulation. An internal system (not a declarable
 // asset): the engine schedule constructs one when the world declares a
-// `PhysicsConfig`, a `RigidBody`, or a `PropBody`, reading the optional
-// `PhysicsConfig` for the floor / terrain.
+// `PhysicsConfig`, a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading
+// the optional `PhysicsConfig` for the floor / terrain.
 
 use crate::{BodyHandle, ColliderShape, PhysicsWorld};
 use concinnity_core::assets::{
     Camera3D, Collider, Held, Joint, PhysicsConfig, Pickup, PropBody, RigidBody, Transform,
+    TriggerFilter, TriggerVolume, VolumeEvent,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -65,6 +66,9 @@ pub struct PhysicsSystem {
     prop_bodies: Vec<PropPhysics>,
     // Index into `prop_bodies` of the prop currently being carried.
     held: Option<usize>,
+    // Sensor tag -> the TriggerVolume it senses for, with its filter. Tags are
+    // the volume's AssetId, stamped into the sensor collider's user_data.
+    sensor_filters: HashMap<u64, (AssetId, TriggerFilter)>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +145,7 @@ impl PhysicsSystem {
             root_cursor: EventCursor::default(),
             prop_bodies: Vec::new(),
             held: None,
+            sensor_filters: HashMap::new(),
         }
     }
 
@@ -275,6 +280,20 @@ impl System for PhysicsSystem {
                     STATIC_FRICTION,
                 );
             }
+        }
+
+        // Sensor regions: one fixed sensor body per TriggerVolume, tagged with
+        // the volume's AssetId so step's crossing drain maps back to it.
+        let volumes: Vec<TriggerVolume> = ctx.query::<TriggerVolume>().cloned().collect();
+        for volume in &volumes {
+            let shape = crate::collider_shape(&volume.collider, [1.0; 3]);
+            let tag = u64::from(volume.asset_id.0);
+            world.add_sensor(&shape, volume.position, volume.rotation_deg, tag);
+            self.sensor_filters
+                .insert(tag, (volume.asset_id, volume.detects));
+        }
+        if !volumes.is_empty() {
+            tracing::debug!("PhysicsSystem: {} trigger volume(s)", volumes.len());
         }
 
         // Prop name -> BodyHandle, populated alongside `self.prop_bodies`.
@@ -593,6 +612,32 @@ impl System for PhysicsSystem {
 
         // advance the simulation
         world.step(dt);
+
+        // publish the sensor boundary crossings that pass their volume's
+        // filter. A crossing whose body was removed this same step has no
+        // `other` to classify, so only an `any` volume reports it.
+        let crossings = world.drain_sensor_crossings();
+        for crossing in crossings {
+            let Some(&(volume, filter)) = self.sensor_filters.get(&crossing.tag) else {
+                continue;
+            };
+            let passes = match filter {
+                TriggerFilter::Player => crossing.other.is_some_and(|h| {
+                    self.player.as_ref().is_some_and(|p| p.handle == h)
+                        || self.rigs.iter().any(|r| r.handle == h)
+                }),
+                TriggerFilter::Props => crossing
+                    .other
+                    .is_some_and(|h| self.prop_bodies.iter().any(|p| p.handle == h)),
+                TriggerFilter::Any => true,
+            };
+            if passes {
+                ctx.events_mut::<VolumeEvent>().send(VolumeEvent {
+                    volume,
+                    entered: crossing.entered,
+                });
+            }
+        }
 
         // read dynamic prop transforms back out, keyed by entity
         let prop_updates: Vec<(Entity, [f32; 3], [f32; 3])> = self

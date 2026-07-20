@@ -125,8 +125,9 @@ pub(crate) fn debug_hud(world: &World) -> Option<SystemAsset> {
 
 // PhysicsSystem: present whenever the world has physics content, namely a
 // `PhysicsConfig` (optional floor / terrain tuning), a `RigidBody` (character
-// capsule), or a `PropBody` (dynamic prop). Reads the `PhysicsConfig` if
-// present, otherwise a flat-floor default.
+// capsule), a `PropBody` (dynamic prop), or a `TriggerVolume` (sensor
+// region). Reads the `PhysicsConfig` if present, otherwise a flat-floor
+// default.
 pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
     let needs = world
         .query::<crate::assets::PhysicsConfig>()
@@ -134,6 +135,10 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
         .is_some()
         || world.query::<crate::assets::RigidBody>().next().is_some()
         || world.query::<crate::assets::PropBody>().next().is_some()
+        || world
+            .query::<crate::assets::TriggerVolume>()
+            .next()
+            .is_some()
         // A skinned mesh with a character capsule needs the rig drive
         // (the CharacterRig itself is published later, by GraphicsSystem
         // init, so gate on the baked resource data).

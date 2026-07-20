@@ -5,7 +5,7 @@
 use super::*;
 use crate::assets::{
     CmpOp, Condition, DespawnRequest, Reaction, ReactionAction, ReactionSource, SpawnRequest,
-    StoryCommand, StoryPlayback,
+    StoryCommand, StoryPlayback, VolumeEvent,
 };
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
@@ -340,6 +340,84 @@ fn story_action_sends_the_playback_command() {
     let cmds: Vec<&StoryCommand> = events.read(&mut cursor).into_iter().collect();
     assert_eq!(cmds.len(), 1);
     assert!(matches!(cmds[0], StoryCommand::Start));
+}
+
+#[test]
+fn enter_source_fires_on_matching_crossings_only() {
+    let mut world = world_with(vec![Reaction {
+        on: ReactionSource::Enter(Some(AssetId(5))),
+        actions: vec![despawn(7)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    // No crossing: nothing fires.
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    // A matching enter fires once.
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: true,
+    });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+
+    // An exit of the same volume, or an enter of another, does not.
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: false,
+    });
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(6),
+        entered: true,
+    });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+}
+
+#[test]
+fn exit_source_fires_on_the_way_out() {
+    let mut world = world_with(vec![Reaction {
+        on: ReactionSource::Exit(Some(AssetId(5))),
+        actions: vec![despawn(7)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: false,
+    });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn crossings_survive_a_menu_pause() {
+    let mut world = world_with(vec![Reaction {
+        on: ReactionSource::Enter(Some(AssetId(5))),
+        actions: vec![despawn(7)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    // The crossing lands while the menu is open: the paused step drains it
+    // but holds it, and the first unpaused step fires it.
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: true,
+    });
+    world.ctx().insert_resource(crate::ecs::MenuActive(true));
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    world.ctx().insert_resource(crate::ecs::MenuActive(false));
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
 }
 
 // A declared Reaction gates the internal system on, and the menu freeze

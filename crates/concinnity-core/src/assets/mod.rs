@@ -44,6 +44,7 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
+mod volume_event;
 
 // Per-instance components an entity is composed from: its placement, render
 // description, collision, hierarchy, and gameplay tags.
@@ -155,6 +156,7 @@ pub use concinnity_asset::SceneImport;
 pub use concinnity_asset::SceneReel;
 pub use concinnity_asset::{Condition, Reaction, ReactionAction, ReactionSource, StoryPlayback};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
+pub use concinnity_asset::{TriggerFilter, TriggerVolume};
 pub use reparent_request::ReparentRequest;
 pub use room::Room;
 pub use scene_command::SceneCommand;
@@ -193,6 +195,7 @@ pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;
+pub use volume_event::VolumeEvent;
 // `MAX_WATER_WAVES` stays in core: the build-side water-surface validator
 // (concinnity-world) reaches it on every backend, and the Metal water encoder
 // also reaches `WaterWave` through the asset crate.

@@ -34,8 +34,10 @@ pub struct Reaction {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The event that fires this reaction: `"start"` (world start), `{"timer":
-    /// {"interval": seconds, "repeat": bool}}`, or `{"variable": "name"}` (the
-    /// named variable changed value).
+    /// {"interval": seconds, "repeat": bool}}`, `{"variable": "name"}` (the
+    /// named variable changed value), or `{"enter": "volume"}` / `{"exit":
+    /// "volume"}` (something crossed the named
+    /// [TriggerVolume](#triggervolume)).
     pub on: ReactionSource,
     /// Conditions on shared variables; every one must pass for the reaction to
     /// fire. An empty list always passes.
@@ -70,6 +72,10 @@ pub enum ReactionSource {
     },
     /// Fires whenever the named shared variable changes value.
     Variable(String),
+    /// Fires when something enters the named [TriggerVolume](#triggervolume).
+    Enter(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    /// Fires when something leaves the named [TriggerVolume](#triggervolume).
+    Exit(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
 }
 
 /// A test against one shared variable, gating a [Reaction](#reaction). An
@@ -222,6 +228,12 @@ mod tests {
 
         let r: Reaction = serde_json::from_str(r#"{"on":{"variable":"score"}}"#).unwrap();
         assert_eq!(r.on, ReactionSource::Variable("score".into()));
+
+        // Compiled-args form: crossing sources carry a resolved id integer.
+        let r: Reaction = serde_json::from_str(r#"{"on":{"enter":5}}"#).unwrap();
+        assert_eq!(r.on, ReactionSource::Enter(Some(AssetId(5))));
+        let r: Reaction = serde_json::from_str(r#"{"on":{"exit":5}}"#).unwrap();
+        assert_eq!(r.on, ReactionSource::Exit(Some(AssetId(5))));
     }
 
     #[test]

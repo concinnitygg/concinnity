@@ -121,6 +121,70 @@ pub struct RayHit {
     pub distance: f32,
 }
 
+// One boundary crossing of a sensor region recorded during a step: something
+// began or stopped overlapping the sensor tagged `tag` (the caller's value
+// from [`PhysicsWorld::add_sensor`]). `other` is the crossing body, `None`
+// when it was removed from the simulation in the same step.
+#[derive(Debug, Clone, Copy)]
+pub struct SensorCrossing {
+    pub tag: u64,
+    pub other: Option<BodyHandle>,
+    pub entered: bool,
+}
+
+// Collects sensor boundary crossings from inside the Rapier pipeline; drained
+// after each step by `drain_sensor_crossings`. Handles resolve to tags and
+// parent bodies here, inside the callback, while the collider set still
+// contains both sides of the pair.
+#[derive(Default)]
+struct SensorEventSink {
+    crossings: std::sync::Mutex<Vec<SensorCrossing>>,
+}
+
+impl EventHandler for SensorEventSink {
+    fn handle_collision_event(
+        &self,
+        _bodies: &RigidBodySet,
+        colliders: &ColliderSet,
+        event: CollisionEvent,
+        _contact_pair: Option<&ContactPair>,
+    ) {
+        let (h1, h2, entered) = match event {
+            CollisionEvent::Started(h1, h2, _) => (h1, h2, true),
+            CollisionEvent::Stopped(h1, h2, _) => (h1, h2, false),
+        };
+        // Either side may be one of our sensors (two overlapping sensors
+        // record a crossing each); a collider already removed this step
+        // resolves to None.
+        let record = |sensor: ColliderHandle, other: ColliderHandle| {
+            let Some(sensor) = colliders.get(sensor).filter(|c| c.is_sensor()) else {
+                return;
+            };
+            let other = colliders
+                .get(other)
+                .and_then(|c| c.parent())
+                .map(BodyHandle);
+            self.crossings.lock().unwrap().push(SensorCrossing {
+                tag: sensor.user_data as u64,
+                other,
+                entered,
+            });
+        };
+        record(h1, h2);
+        record(h2, h1);
+    }
+
+    fn handle_contact_force_event(
+        &self,
+        _dt: Real,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        _contact_pair: &ContactPair,
+        _total_force_magnitude: Real,
+    ) {
+    }
+}
+
 // One Rapier rigid-body simulation.
 pub struct PhysicsWorld {
     bodies: RigidBodySet,
@@ -135,6 +199,7 @@ pub struct PhysicsWorld {
     ccd_solver: CCDSolver,
     gravity: Vector,
     character: KinematicCharacterController,
+    sensor_events: SensorEventSink,
 }
 
 impl std::fmt::Debug for PhysicsWorld {
@@ -163,6 +228,7 @@ impl PhysicsWorld {
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, -gravity, 0.0),
             character: KinematicCharacterController::default(),
+            sensor_events: SensorEventSink::default(),
         }
     }
 
@@ -244,6 +310,40 @@ impl PhysicsWorld {
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
         BodyHandle(handle)
+    }
+
+    // Add an immovable sensor region: it detects overlap (recorded as
+    // `SensorCrossing`s with the caller's `tag`) but never collides. The
+    // kinematic-vs-fixed pair is enabled explicitly so the position-kinematic
+    // character capsules set it off; rapier excludes fixed-vs-fixed pairs, so
+    // static geometry never does.
+    pub fn add_sensor(
+        &mut self,
+        shape: &ColliderShape,
+        pos: [f32; 3],
+        euler_deg: [f32; 3],
+        tag: u64,
+    ) -> BodyHandle {
+        let body = RigidBodyBuilder::fixed()
+            .pose(Pose::from_parts(to_vec(pos), to_rotation(euler_deg)))
+            .build();
+        let handle = self.bodies.insert(body);
+        let collider = Self::collider_builder(shape)
+            .sensor(true)
+            .active_events(ActiveEvents::COLLISION_EVENTS)
+            .active_collision_types(
+                ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
+            )
+            .user_data(tag as u128)
+            .build();
+        self.colliders
+            .insert_with_parent(collider, handle, &mut self.bodies);
+        BodyHandle(handle)
+    }
+
+    // The sensor boundary crossings recorded by the last `step`, oldest first.
+    pub fn drain_sensor_crossings(&mut self) -> Vec<SensorCrossing> {
+        std::mem::take(&mut *self.sensor_events.crossings.lock().unwrap())
     }
 
     // Add the player character capsule as a position-kinematic body. `center`
@@ -362,7 +462,7 @@ impl PhysicsWorld {
             &mut self.multibody_joints,
             &mut self.ccd_solver,
             &(),
-            &(),
+            &self.sensor_events,
         );
     }
 
@@ -798,6 +898,117 @@ mod tests {
         // Bodies should only slide along Y: X/Z drift should be near zero.
         assert!(pos[0].abs() < 0.05, "ball drifted on X: {}", pos[0]);
         assert!(pos[2].abs() < 0.05, "ball drifted on Z: {}", pos[2]);
+    }
+
+    #[test]
+    fn sensor_records_a_dynamic_body_passing_through() {
+        let mut world = PhysicsWorld::new(G);
+        world.add_sensor(
+            &ColliderShape::Cuboid {
+                half_extents: [1.0, 1.0, 1.0],
+            },
+            [0.0, 2.0, 0.0],
+            [0.0; 3],
+            7,
+        );
+        // A ball dropped from above the sensor falls straight through it (no
+        // floor), so the run records one enter and one exit.
+        let ball = free_ball(&mut world, [0.0, 6.0, 0.0]);
+        let mut entered = false;
+        let mut exited = false;
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+            for crossing in world.drain_sensor_crossings() {
+                assert_eq!(crossing.tag, 7);
+                assert_eq!(crossing.other, Some(ball));
+                if crossing.entered {
+                    entered = true;
+                } else {
+                    assert!(entered, "exit before enter");
+                    exited = true;
+                }
+            }
+        }
+        assert!(entered && exited, "entered={entered} exited={exited}");
+    }
+
+    #[test]
+    fn sensor_detects_the_kinematic_character_capsule() {
+        let mut world = PhysicsWorld::new(G);
+        world.add_sensor(
+            &ColliderShape::Cuboid {
+                half_extents: [1.0, 1.0, 1.0],
+            },
+            [5.0, 1.0, 0.0],
+            [0.0; 3],
+            9,
+        );
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
+        world.step(1.0 / 60.0);
+        let _ = world.drain_sensor_crossings();
+
+        world.set_kinematic_translation(capsule, [5.0, 1.0, 0.0]);
+        let mut entered = false;
+        for _ in 0..5 {
+            world.step(1.0 / 60.0);
+            for crossing in world.drain_sensor_crossings() {
+                if crossing.tag == 9 && crossing.entered {
+                    assert_eq!(crossing.other, Some(capsule));
+                    entered = true;
+                }
+            }
+        }
+        assert!(entered, "kinematic-vs-fixed sensor pair should report");
+
+        world.set_kinematic_translation(capsule, [0.0, 1.0, 0.0]);
+        let mut exited = false;
+        for _ in 0..5 {
+            world.step(1.0 / 60.0);
+            exited |= world
+                .drain_sensor_crossings()
+                .iter()
+                .any(|c| c.tag == 9 && !c.entered);
+        }
+        assert!(exited, "leaving the region should report an exit");
+    }
+
+    #[test]
+    fn sensor_blocks_nothing() {
+        let mut world = PhysicsWorld::new(G);
+        ground(&mut world, 0.0);
+        // A sensor spanning the resting spot: the box must fall through it and
+        // settle on the floor as if it were not there.
+        world.add_sensor(
+            &ColliderShape::Cuboid {
+                half_extents: [2.0, 2.0, 2.0],
+            },
+            [0.0, 2.0, 0.0],
+            [0.0; 3],
+            3,
+        );
+        let body = world.add_dynamic(
+            &ColliderShape::Cuboid {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            [0.0, 6.0, 0.0],
+            [0.0; 3],
+            DynamicParams {
+                mass: 1.0,
+                friction: 0.5,
+                restitution: 0.0,
+                gravity_scale: 1.0,
+                linear_damping: 0.0,
+            },
+        );
+        for _ in 0..240 {
+            world.step(1.0 / 60.0);
+        }
+        let (pos, _) = world.body_pose(body);
+        assert!(
+            (pos[1] - 0.5).abs() < 0.1,
+            "box should rest on the floor through the sensor, y = {}",
+            pos[1]
+        );
     }
 
     #[test]

@@ -84,7 +84,7 @@ crate::define_systems! {
     },
     PhysicsSystem => concinnity_physics::PhysicsSystem {
         gate: schedule::physics,
-        present_when: "the world declares a PhysicsConfig, RigidBody, or PropBody, or a skinned mesh bakes a character capsule",
+        present_when: "the world declares a PhysicsConfig, RigidBody, PropBody, or TriggerVolume, or a skinned mesh bakes a character capsule",
     },
     Camera3DSystem => crate::gfx::camera_controller::Camera3DSystem {
         gate: schedule::camera3d,

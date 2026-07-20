@@ -123,6 +123,7 @@ struct RefScope<'a> {
     animations: HashSet<&'a str>,
     audio_clips: HashSet<&'a str>,
     screens: HashSet<&'a str>,
+    trigger_volumes: HashSet<&'a str>,
     all_names: HashSet<&'a str>,
 }
 
@@ -158,6 +159,7 @@ impl<'a> RefScope<'a> {
             animations: by_type(&|t| t == "animation"),
             audio_clips: by_type(&|t| t == "audioclip"),
             screens: by_type(&|t| t == "screen"),
+            trigger_volumes: by_type(&|t| t == "triggervolume"),
             all_names: assets.iter().map(|a| a.name.as_str()).collect(),
         }
     }
@@ -173,6 +175,7 @@ impl<'a> RefScope<'a> {
             RefKind::Animation => self.animations.contains(name),
             RefKind::AudioClip => self.audio_clips.contains(name),
             RefKind::Screen => self.screens.contains(name),
+            RefKind::TriggerVolume => self.trigger_volumes.contains(name),
             RefKind::AnyAsset => self.all_names.contains(name),
         }
     }
@@ -1168,6 +1171,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reaction_enter_volume_resolves_against_trigger_volumes() {
+        let volume = asset("zone", "TriggerVolume", serde_json::json!({}));
+        let ok = asset(
+            "opens",
+            "Reaction",
+            serde_json::json!({"on":{"enter":"zone"},"actions":[]}),
+        );
+        assert!(validate_cross_references(&[volume.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "opens",
+            "Reaction",
+            serde_json::json!({"on":{"exit":"ghost_zone"},"actions":[]}),
+        );
+        assert!(err_text(&[volume, ghost]).contains("ghost_zone"));
+    }
+
+    #[test]
+    fn reaction_action_refs_are_validated() {
+        let mesh = asset(
+            "box_mesh",
+            "ProceduralMesh",
+            serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
+        );
+        let prop = asset("crate", "Prop", serde_json::json!({"mesh":"box_mesh"}));
+        let ok = asset(
+            "spawner_rule",
+            "Reaction",
+            serde_json::json!({"actions":[{"spawn":{"template":"crate"}}]}),
+        );
+        assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "spawner_rule",
+            "Reaction",
+            serde_json::json!({"actions":[{"despawn":{"target":"ghost_prop"}}]}),
+        );
+        assert!(err_text(&[mesh, prop, ghost]).contains("ghost_prop"));
     }
 
     #[test]
