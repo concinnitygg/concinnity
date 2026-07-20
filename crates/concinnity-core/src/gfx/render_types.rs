@@ -12,10 +12,15 @@ pub const MAX_POINT_LIGHTS: usize = 8;
 // cap are dropped with a warning.
 pub const MAX_LOCAL_LIGHTS: usize = 1024;
 
-// GpuLight.kind discriminants. Area lights extend this without changing the
-// 64-byte record layout.
+// GpuLight.kind discriminants.
 pub const LIGHT_KIND_POINT: u32 = 0;
 pub const LIGHT_KIND_SPOT: u32 = 1;
+pub const LIGHT_KIND_AREA: u32 = 2;
+
+// Capacity of the per-scene AreaLightData table. Area lights are far heavier to
+// shade than point or spot lights (a polygon integral per fragment), so the cap
+// is deliberately well under MAX_LOCAL_LIGHTS.
+pub const MAX_AREA_LIGHTS: usize = 64;
 
 // Clustered forward lighting froxel grid. The screen is tiled
 // CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;
@@ -192,7 +197,11 @@ pub struct GpuLight {
     pub cos_outer: f32,
     // Index into the spot shadow atlas, or -1 when the light casts no shadow.
     pub shadow_index: i32,
-    pub _pad: f32,
+    // Index into the AreaLightData table for an area light, or -1 for a point /
+    // spot light. A rect needs two edge vectors that do not fit in the spare
+    // fields here, so the extra data lives in a parallel table (the same shape
+    // `shadow_index` uses for the spot shadow slices).
+    pub data_index: i32,
 }
 
 impl GpuLight {
@@ -206,7 +215,7 @@ impl GpuLight {
         cos_inner: 0.0,
         cos_outer: 0.0,
         shadow_index: -1,
-        _pad: 0.0,
+        data_index: -1,
     };
 }
 
@@ -415,6 +424,35 @@ impl SpotShadowData {
         depth_bias: 0.0,
         normal_bias: 0.0,
         _pad: [0.0; 2],
+    };
+}
+
+// One rectangular area light's extent, indexed by `GpuLight.data_index`. The
+// centre is the GpuLight's `position` and the emitting direction its
+// `direction`; only the two in-plane edge vectors and the sidedness flag need
+// the extra room.
+//
+// 32 bytes: a scalar follows each vec3 so the MSL (packed_float3), HLSL (float3,
+// no 16-byte straddle), and GLSL std430 (vec3 align-16) layouts all agree.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct AreaLightData {
+    // Half-width times the panel's width axis, in world units.
+    pub right: [f32; 3],
+    // 1 when the panel emits from both faces, 0 when it emits only along
+    // `GpuLight.direction`.
+    pub two_sided: u32,
+    // Half-height times the panel's height axis, in world units.
+    pub up: [f32; 3],
+    pub _pad: f32,
+}
+
+impl AreaLightData {
+    pub const ZERO: Self = AreaLightData {
+        right: [0.0; 3],
+        two_sided: 0,
+        up: [0.0; 3],
+        _pad: 0.0,
     };
 }
 
@@ -1651,7 +1689,7 @@ mod tests {
         assert_eq!(offset_of!(GpuLight, cos_inner), 48);
         assert_eq!(offset_of!(GpuLight, cos_outer), 52);
         assert_eq!(offset_of!(GpuLight, shadow_index), 56);
-        assert_eq!(offset_of!(GpuLight, _pad), 60);
+        assert_eq!(offset_of!(GpuLight, data_index), 60);
     }
 
     #[test]
@@ -1676,6 +1714,18 @@ mod tests {
         assert_eq!(offset_of!(ClusterParams, use_clusters), 120);
         assert_eq!(offset_of!(ClusterParams, _pad), 124);
         assert_eq!(size_of::<ClusterParams>() % 16, 0);
+    }
+
+    #[test]
+    fn area_light_data_layout_matches_msl() {
+        // MSL `AreaLightData` in default.metal: packed_float3 right + two_sided
+        // filling one 16-byte lane, then packed_float3 up + pad filling the next.
+        assert_eq!(size_of::<AreaLightData>(), 32);
+        assert_eq!(offset_of!(AreaLightData, right), 0);
+        assert_eq!(offset_of!(AreaLightData, two_sided), 12);
+        assert_eq!(offset_of!(AreaLightData, up), 16);
+        assert_eq!(offset_of!(AreaLightData, _pad), 28);
+        assert_eq!(size_of::<AreaLightData>() % 16, 0);
     }
 
     #[test]

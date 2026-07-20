@@ -8,8 +8,9 @@
 
 use crate::assets::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
-    Material, ParticleEmitter, PointLight, Prop, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG,
-    SdfVolume, SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
+    SPOT_MAX_ANGLE_DEG, SdfVolume, SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk,
+    WaterSurface, WaterWave,
 };
 
 // The wave ceiling lives in core (`concinnity_core::assets::MAX_WATER_WAVES`,
@@ -85,6 +86,23 @@ pub fn spot_light(mut args: SpotLight) -> SpotLight {
     args.direction = args.unit_direction();
     args.outer_angle = args.outer_angle.clamp(0.0, SPOT_MAX_ANGLE_DEG);
     args.inner_angle = args.inner_angle.clamp(0.0, args.outer_angle);
+    args
+}
+
+pub fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
+    args.intensity = args.intensity.max(0.0);
+    args.range = args.range.max(0.0);
+    // A degenerate normal would collapse the panel's tangent frame; a zero
+    // half-extent would collapse its area and divide by zero in the integrator.
+    let n = args.normal;
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    args.normal = if len < 1e-6 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [n[0] / len, n[1] / len, n[2] / len]
+    };
+    args.half_size[0] = args.half_size[0].max(1e-3);
+    args.half_size[1] = args.half_size[1].max(1e-3);
     args
 }
 

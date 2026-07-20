@@ -266,6 +266,9 @@ pub struct MtlContext {
     // light, indexed by `GpuLight.shadow_index`. Always Some so the fragment
     // shader's depth-array binding is valid; a 1x1 fallback (depth 1.0 = lit)
     // stands in when no spot casts shadows.
+    // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
+    // Uploaded once; a one-element placeholder when the world declares none.
+    pub(super) area_light_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(super) spot_shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
     // Per-slice light-space projections, uploaded once (local lights are
     // static). Empty when nothing casts, in which case the pass never runs.

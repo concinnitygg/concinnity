@@ -123,6 +123,7 @@ impl MtlContext {
             light_uniforms,
             local_lights,
             spot_shadows,
+            area_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -356,6 +357,34 @@ impl MtlContext {
                             MTLResourceOptions::StorageModeShared,
                         )
                         .ok_or("failed to create spot-shadow buffer")?
+                }
+            }
+        };
+
+        // Per-scene rect area-light table, indexed by `GpuLight.data_index`.
+        // Static like the lights themselves, so it uploads once. Metal rejects a
+        // zero-length buffer, so a world with no area light gets a one-element
+        // placeholder the shader never reads (every data_index stays -1).
+        let area_light_buffer = {
+            use crate::gfx::render_types::AreaLightData;
+            if area_lights.is_empty() {
+                device
+                    .newBufferWithLength_options(
+                        std::mem::size_of::<AreaLightData>(),
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .ok_or("failed to create placeholder area-light buffer")?
+            } else {
+                unsafe {
+                    let ptr = std::ptr::NonNull::new(area_lights.as_ptr() as *mut _)
+                        .ok_or("area-light slice pointer is null")?;
+                    device
+                        .newBufferWithBytes_length_options(
+                            ptr,
+                            std::mem::size_of_val(area_lights.as_slice()),
+                            MTLResourceOptions::StorageModeShared,
+                        )
+                        .ok_or("failed to create area-light buffer")?
                 }
             }
         };
@@ -1180,6 +1209,7 @@ impl MtlContext {
             shadow_scheduler: Default::default(),
             shadow_render_mask: 0,
             shadow_sampler,
+            area_light_buffer,
             spot_shadow_map,
             spot_shadow_buffer,
             spot_shadow_count,

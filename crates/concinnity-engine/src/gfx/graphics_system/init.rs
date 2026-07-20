@@ -3,9 +3,9 @@
 
 use crate::assets::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
-    Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, SdfVolume,
-    ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, SpotLight, StreamingConfig,
-    TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
+    Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
+    SdfVolume, ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, SpotLight,
+    StreamingConfig, TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -1667,7 +1667,8 @@ impl GraphicsSystem {
         let dir_lights = ctx.drain::<DirectionalLight>();
         let pt_lights = ctx.drain::<PointLight>();
         let spot_lights = ctx.drain::<SpotLight>();
-        let light_data = lights::build_light_data(&pt_lights, &spot_lights);
+        let rect_lights = ctx.drain::<RectAreaLight>();
+        let light_data = lights::build_light_data(&pt_lights, &spot_lights, &rect_lights);
         let light_uniforms = lights::build_light_uniforms(
             dir_lights,
             pt_lights,
@@ -2214,6 +2215,7 @@ impl GraphicsSystem {
             light_uniforms,
             local_lights: light_data.lights,
             spot_shadows: light_data.spot_shadows,
+            area_lights: light_data.area_lights,
             shadows: ShadowParams {
                 map_size: self.shadow_map_size,
                 update: self.shadow_update,

@@ -586,6 +586,10 @@ impl MtlContext {
             // path reaches it through the BindlessTextures argument buffer,
             // because discrete texture bindings break ICB compatibility.
             enc.setFragmentBuffer_offset_atIndex(Some(&self.spot_shadow_buffer), 0, 13);
+            // Rect area-light extents at fragment buffer(14), indexed by
+            // GpuLight.data_index. Inherited by the ICB draws like the buffers
+            // above, so this one bind covers every main-pass variant.
+            enc.setFragmentBuffer_offset_atIndex(Some(&self.area_light_buffer), 0, 14);
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
                 std::mem::size_of::<ShadowUniforms>(),

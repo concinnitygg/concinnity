@@ -15,7 +15,8 @@ use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
 use crate::particles::ParticleEmitterRecord;
 use crate::render_types::{
-    DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams, SpotShadowData,
+    AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams,
+    SpotShadowData,
 };
 use crate::rt_reflections::RtReflectionSettings;
 use crate::ssao::SsaoSettings;
@@ -157,6 +158,9 @@ pub struct BackendInit<'a> {
     // Empty when no spot light casts shadows, in which case the backend skips
     // allocating the shadow array entirely.
     pub spot_shadows: Vec<SpotShadowData>,
+    // One entry per rectangular area light, indexed by `GpuLight.data_index`.
+    // Empty when the world declares none.
+    pub area_lights: Vec<AreaLightData>,
     pub shadows: ShadowParams,
     // Scene-sampler max anisotropy, clamped to the GPU's range at init.
     pub anisotropy: u32,

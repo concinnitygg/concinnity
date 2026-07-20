@@ -146,6 +146,7 @@ pub use root_motion_event::RootMotion;
 pub use concinnity_asset::PropBody;
 #[allow(unused_imports)]
 pub use concinnity_asset::PropCollider;
+pub use concinnity_asset::RectAreaLight;
 pub use concinnity_asset::ReflectionProbe;
 pub use concinnity_asset::RigidBody;
 pub use concinnity_asset::RoomArgs;

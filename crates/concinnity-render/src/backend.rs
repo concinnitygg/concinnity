@@ -1300,6 +1300,7 @@ mod tests {
             light_uniforms: crate::render_types::LightUniforms::DEFAULT,
             local_lights: Vec::new(),
             spot_shadows: Vec::new(),
+            area_lights: Vec::new(),
             shadows: ShadowParams {
                 map_size: 0,
                 update: crate::assets::ShadowUpdate::default(),

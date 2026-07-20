@@ -1,34 +1,43 @@
 // src/lights.rs
 //
-// Converts drained DirectionalLight, PointLight, and SpotLight asset components
-// into the GPU data the renderer consumes: the fixed LightUniforms uniform
-// (directional lights, ambient, and the legacy point array the raymarch / fog /
-// probe paths read), the GpuLight storage buffer the clustered forward pass
-// iterates, and the per-slice spot shadow projections.
+// Converts drained DirectionalLight, PointLight, SpotLight, and RectAreaLight
+// asset components into the GPU data the renderer consumes: the fixed
+// LightUniforms uniform (directional lights, ambient, and the legacy point array
+// the raymarch / fog / probe paths read), the GpuLight storage buffer the
+// clustered forward pass iterates, the per-slice spot shadow projections, and
+// the rect area-light extents.
 
-use crate::assets::{DirectionalLight, PointLight, SpotLight, SpotLightGeometry};
+use crate::area_light;
+use crate::assets::{DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry};
 use crate::render_types::{
-    DirectionalLightData, GpuLight, LIGHT_KIND_POINT, LIGHT_KIND_SPOT, LightUniforms,
-    MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS, PointLightData, SpotShadowData,
+    AreaLightData, DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT,
+    LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
+    PointLightData, SpotShadowData,
 };
 use crate::spot_shadow;
 
 // The per-scene GPU light data: the storage buffer the clustered forward pass
-// iterates, plus one `SpotShadowData` per shadow map slice handed out. Kept
-// together because `GpuLight.shadow_index` indexes `spot_shadows`, an invariant
-// that would be easy to break if the two were built independently.
+// iterates, plus the side tables it indexes into. Kept together because
+// `GpuLight.shadow_index` indexes `spot_shadows` and `GpuLight.data_index`
+// indexes `area_lights` -- invariants that would be easy to break if the three
+// were built independently.
 pub struct LightData {
     pub lights: Vec<GpuLight>,
     pub spot_shadows: Vec<SpotShadowData>,
+    pub area_lights: Vec<AreaLightData>,
 }
 
-// Packs point and spot lights into the GpuLight storage buffer and assigns spot
-// shadow slices. Both kinds share the MAX_LOCAL_LIGHTS budget (not the 8-entry
-// LightUniforms array); extras past the cap are dropped with a warning. Point
-// lights carry no cone or shadow data, so those fields stay at their neutral
-// GpuLight::ZERO values.
-pub fn build_light_data(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> LightData {
-    let total = pt_lights.len() + spot_lights.len();
+// Packs point, spot, and rect area lights into the GpuLight storage buffer and
+// assigns their side-table slots. All three share the MAX_LOCAL_LIGHTS budget
+// (not the 8-entry LightUniforms array); extras past the cap are dropped with a
+// warning. Unused fields stay at their neutral GpuLight::ZERO values, so a point
+// light carries no cone, shadow, or area data.
+pub fn build_light_data(
+    pt_lights: &[PointLight],
+    spot_lights: &[SpotLight],
+    rect_lights: &[RectAreaLight],
+) -> LightData {
+    let total = pt_lights.len() + spot_lights.len() + rect_lights.len();
     if total > MAX_LOCAL_LIGHTS {
         tracing::warn!(
             "GraphicsSystem: {} local lights declared; only {} are supported -- extras ignored",
@@ -38,6 +47,8 @@ pub fn build_light_data(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> 
     }
     let slices = spot_shadow::assign_spot_shadow_slices(spot_lights);
     let spot_shadows = spot_shadow::build_spot_shadow_data(spot_lights, &slices);
+    let slots = area_light::assign_area_light_slots(rect_lights);
+    let area_lights = area_light::build_area_light_data(rect_lights, &slots);
 
     let points = pt_lights.iter().map(|l| GpuLight {
         position: l.position,
@@ -62,7 +73,24 @@ pub fn build_light_data(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> 
             shadow_index,
             ..GpuLight::ZERO
         });
-    let lights: Vec<GpuLight> = points.chain(spots).take(MAX_LOCAL_LIGHTS).collect();
+    let areas = rect_lights
+        .iter()
+        .zip(&slots)
+        .map(|(l, &data_index)| GpuLight {
+            position: l.centre,
+            range: l.range,
+            color: l.color,
+            intensity: l.intensity,
+            direction: l.normal,
+            kind: LIGHT_KIND_AREA,
+            data_index,
+            ..GpuLight::ZERO
+        });
+    let lights: Vec<GpuLight> = points
+        .chain(spots)
+        .chain(areas)
+        .take(MAX_LOCAL_LIGHTS)
+        .collect();
 
     // A spot dropped by the MAX_LOCAL_LIGHTS clamp must not leave a slice
     // reserved for a light the forward pass will never see.
@@ -73,9 +101,19 @@ pub fn build_light_data(pt_lights: &[PointLight], spot_lights: &[SpotLight]) -> 
         spot_shadows
     };
 
+    // An area light dropped by the MAX_LOCAL_LIGHTS clamp must not leave a table
+    // entry the forward pass will never reach.
+    let kept_areas = lights.iter().filter(|l| l.data_index >= 0).count();
+    let area_lights = if kept_areas < area_lights.len() {
+        area_lights[..kept_areas].to_vec()
+    } else {
+        area_lights
+    };
+
     LightData {
         lights,
         spot_shadows,
+        area_lights,
     }
 }
 
@@ -187,7 +225,7 @@ mod tests {
 
     // The uniforms every test that does not exercise the local buffer wants.
     fn uniforms(dir_lights: Vec<DirectionalLight>, pt_lights: Vec<PointLight>) -> LightUniforms {
-        let local = build_light_data(&pt_lights, &[]).lights;
+        let local = build_light_data(&pt_lights, &[], &[]).lights;
         build_light_uniforms(dir_lights, pt_lights, &local, 1.0)
     }
 
@@ -259,7 +297,8 @@ mod tests {
     // to report them through num_local_lights.
     #[test]
     fn num_local_lights_counts_spot_lights() {
-        let local = build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)]).lights;
+        let local =
+            build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)], &[]).lights;
         let u = build_light_uniforms(vec![], vec![], &local, 1.0);
         assert_eq!(u.num_point, 0);
         assert_eq!(u.num_local_lights, 1);
@@ -267,7 +306,8 @@ mod tests {
 
     #[test]
     fn light_buffer_maps_point_light_fields() {
-        let buf = build_light_data(&[pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)], &[]).lights;
+        let buf =
+            build_light_data(&[pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)], &[], &[]).lights;
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].position, [2.0, 3.0, 4.0]);
         assert_eq!(buf[0].color, [1.0, 0.8, 0.5]);
@@ -283,8 +323,12 @@ mod tests {
 
     #[test]
     fn light_buffer_maps_spot_light_fields() {
-        let buf =
-            build_light_data(&[], &[spot([1.0, 5.0, 2.0], [0.0, -2.0, 0.0], 15.0, 30.0)]).lights;
+        let buf = build_light_data(
+            &[],
+            &[spot([1.0, 5.0, 2.0], [0.0, -2.0, 0.0], 15.0, 30.0)],
+            &[],
+        )
+        .lights;
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].position, [1.0, 5.0, 2.0]);
         assert_eq!(buf[0].kind, LIGHT_KIND_SPOT);
@@ -298,7 +342,8 @@ mod tests {
 
     #[test]
     fn spot_inner_cone_clamped_to_the_outer_cone() {
-        let buf = build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 60.0, 20.0)]).lights;
+        let buf =
+            build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 60.0, 20.0)], &[]).lights;
         assert!((buf[0].cos_inner - buf[0].cos_outer).abs() < 1e-6);
     }
 
@@ -310,6 +355,7 @@ mod tests {
                 pt([1.0; 3], [1.0; 3], 1.0, 5.0),
             ],
             &[spot([2.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)],
+            &[],
         )
         .lights;
         assert_eq!(buf.len(), 3);
@@ -332,6 +378,7 @@ mod tests {
                 dark,
                 spot([6.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0),
             ],
+            &[],
         );
         // Point lights never cast; the two casting spots take slices 0 and 1.
         assert_eq!(data.lights[0].shadow_index, -1);
@@ -361,7 +408,7 @@ mod tests {
                 s
             })
             .collect();
-        let data = build_light_data(&points, &spots);
+        let data = build_light_data(&points, &spots, &[]);
         assert_eq!(data.lights.len(), MAX_LOCAL_LIGHTS);
         // Only one spot survived the clamp, so only its slice is kept.
         assert_eq!(data.spot_shadows.len(), 1);
@@ -369,12 +416,70 @@ mod tests {
         assert_eq!(max_index, 0);
     }
 
+    fn area(centre: [f32; 3], half_size: [f32; 2]) -> RectAreaLight {
+        RectAreaLight {
+            centre,
+            half_size,
+            ..RectAreaLight::default()
+        }
+    }
+
+    // GpuLight.data_index indexes area_lights, so the two must agree, and area
+    // lights must not disturb the spot shadow indices.
+    #[test]
+    fn area_lights_follow_the_other_kinds_and_index_their_table() {
+        let mut casting = spot([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        casting.cast_shadows = true;
+        let data = build_light_data(
+            &[pt([0.0; 3], [1.0; 3], 1.0, 5.0)],
+            &[casting],
+            &[
+                area([2.0, 3.0, 0.0], [1.0, 2.0]),
+                area([5.0; 3], [1.0, 1.0]),
+            ],
+        );
+        assert_eq!(data.lights.len(), 4);
+        assert_eq!(data.lights[2].kind, LIGHT_KIND_AREA);
+        assert_eq!(data.lights[3].kind, LIGHT_KIND_AREA);
+        assert_eq!(data.lights[2].data_index, 0);
+        assert_eq!(data.lights[3].data_index, 1);
+        assert_eq!(data.area_lights.len(), 2);
+        // Point and spot lights carry no area data; the spot keeps its slice.
+        assert_eq!(data.lights[0].data_index, -1);
+        assert_eq!(data.lights[1].data_index, -1);
+        assert_eq!(data.lights[1].shadow_index, 0);
+        for l in &data.lights {
+            assert!(l.data_index < data.area_lights.len() as i32);
+        }
+    }
+
+    // The area light's centre and emitting direction ride the GpuLight record.
+    #[test]
+    fn area_light_centre_and_normal_map_onto_the_gpu_light() {
+        let mut l = area([1.0, 2.0, 3.0], [1.0, 1.0]);
+        l.normal = [0.0, 0.0, 1.0];
+        let data = build_light_data(&[], &[], &[l]);
+        assert_eq!(data.lights[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(data.lights[0].direction, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn clamped_area_lights_do_not_strand_table_entries() {
+        let points: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS - 1)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let areas: Vec<RectAreaLight> = (0..4).map(|_| area([0.0; 3], [1.0, 1.0])).collect();
+        let data = build_light_data(&points, &[], &areas);
+        assert_eq!(data.lights.len(), MAX_LOCAL_LIGHTS);
+        assert_eq!(data.area_lights.len(), 1);
+    }
+
     #[test]
     fn light_buffer_carries_more_than_the_legacy_cap() {
         let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 50)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
-        let buf = build_light_data(&lights, &[]).lights;
+        let buf = build_light_data(&lights, &[], &[]).lights;
         assert_eq!(buf.len(), MAX_POINT_LIGHTS + 50);
     }
 
@@ -383,7 +488,7 @@ mod tests {
         let lights: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS + 10)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
-        let buf = build_light_data(&lights, &[]).lights;
+        let buf = build_light_data(&lights, &[], &[]).lights;
         assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
     }
 
@@ -396,7 +501,7 @@ mod tests {
         let spots: Vec<SpotLight> = (0..4)
             .map(|i| spot([i as f32, 0.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0))
             .collect();
-        let buf = build_light_data(&points, &spots).lights;
+        let buf = build_light_data(&points, &spots, &[]).lights;
         assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
         assert_eq!(buf[MAX_LOCAL_LIGHTS - 1].kind, LIGHT_KIND_SPOT);
     }

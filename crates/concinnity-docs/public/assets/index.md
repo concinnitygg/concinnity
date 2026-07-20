@@ -44,6 +44,7 @@
 - [ProceduralMesh](ProceduralMesh.md) - Geometry built by a named generator at compile time. Use for standard shapes.
 - [Prop](Prop.md) - A scene object: places geometry at a world-space transform.
 - [PropBody](PropBody.md) - Makes a companion [Prop](Prop.md) a dynamic physics body.
+- [RectAreaLight](RectAreaLight.md) - A rectangular area light: a glowing panel that lights the scene from its whole surface rather than from a single point.
 - [ReflectionProbe](ReflectionProbe.md) - A localized reflection probe. The renderer captures the surrounding scene into a cubemap from `position` and uses it for the specular reflection on glossy surfaces within the influence box (`position` plus or minus `half_extents`). The box is also the parallax-correction volume, so a reflection stays anchored to the surrounding geometry as the camera moves.
 - [RigidBody](RigidBody.md) - Gives a player [Camera3D](Camera3D.md) gravity, jumping, and a grounded character body.
 - [Room](Room.md) - A self-contained room (floor, ceiling, four walls), with optional texturing.

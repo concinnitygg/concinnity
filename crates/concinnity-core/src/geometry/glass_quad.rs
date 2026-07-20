@@ -30,6 +30,21 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 // shared `(pos, normal, color, uv)` layout the mesh builders use) and 6
 // indices (two triangles). `color` is a white placeholder; the glass
 // fragment shader ignores per-vertex colour.
+// Orthonormal (width, height) axes spanning the plane of `n`, which must be
+// unit length. Shared with the rectangular area light so a panel and a light
+// with the same normal agree on which way is "across".
+pub fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    // A world up reference that is not parallel to the normal.
+    let up_ref = if n[1].abs() > 0.99 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let tangent = normalize(cross(up_ref, n));
+    let bitangent = cross(n, tangent); // already unit
+    (tangent, bitangent)
+}
+
 pub fn build_glass_quad(
     centre: [f32; 3],
     normal: [f32; 3],
@@ -39,15 +54,7 @@ pub fn build_glass_quad(
     let hw = half_size[0].max(1e-3);
     let hh = half_size[1].max(1e-3);
 
-    // Pick a world up reference that is not parallel to the normal, then build
-    // an orthonormal tangent frame in the panel plane.
-    let up_ref = if n[1].abs() > 0.99 {
-        [1.0, 0.0, 0.0]
-    } else {
-        [0.0, 1.0, 0.0]
-    };
-    let tangent = normalize(cross(up_ref, n)); // width axis
-    let bitangent = cross(n, tangent); // height axis (already unit)
+    let (tangent, bitangent) = plane_basis(n);
 
     let corner = |su: f32, sv: f32| -> [f32; 3] {
         [

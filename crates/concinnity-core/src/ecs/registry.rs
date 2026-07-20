@@ -48,6 +48,7 @@ macro_rules! for_each_component {
             DirectionalLight  => $crate::assets::DirectionalLight { gen, external, useful_blank, validate: directional_light },
             PointLight        => $crate::assets::PointLight { gen, external, useful_blank, validate: point_light },
             SpotLight         => $crate::assets::SpotLight { gen, external, useful_blank, validate: spot_light },
+            RectAreaLight     => $crate::assets::RectAreaLight { gen, external, useful_blank, validate: rect_area_light },
             ProceduralMesh    => $crate::assets::ProceduralMesh { gen, external, compiled, id },
             Model             => $crate::assets::Model { gen, external, id },
             Scene             => $crate::assets::Scene { gen, external, id, refs: [("camera_shot", "Camera3D")] },

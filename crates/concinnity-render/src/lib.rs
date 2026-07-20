@@ -19,8 +19,9 @@ pub use concinnity_core::gfx::{
 // crate:: paths: asset data types (`Decal`, `ParticleEmitter`, `Key`, ...), the
 // stable `AssetId` newtype (`ecs::asset_id`), and the runtime environment-map
 // bake helpers the reflection-probe payload builder calls (`build::environment_map`).
-pub(crate) use concinnity_core::{assets, build, ecs};
+pub(crate) use concinnity_core::{assets, build, ecs, geometry};
 
+pub mod area_light;
 pub mod backend;
 pub mod backend_init;
 pub mod bvh;
