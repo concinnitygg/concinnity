@@ -23,6 +23,10 @@ pub enum SettingOp {
     // Bind the named action (the command's setting) to this key. Sent once when
     // the user presses a key while a rebind row is capturing.
     Rebind(Key),
+    // Bind the named gamepad action (the command's `pad_*` setting) to this
+    // button. Sent once when the user presses a button while a gamepad rebind
+    // row is capturing.
+    RebindButton(crate::assets::GamepadButton),
 }
 
 // Runtime-only event sent by UiInputSystem when a "setting:*" action fires.

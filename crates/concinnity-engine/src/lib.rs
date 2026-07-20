@@ -34,6 +34,7 @@ pub use concinnity_core::paths::set_writable_state_dir;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;
+pub(crate) mod input;
 // Declarative when/if/then logic (Reaction components + the shared Variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
 pub(crate) mod logic;

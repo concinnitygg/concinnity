@@ -40,6 +40,10 @@ pub(crate) struct SettingsState {
     // rebind rows), pushed to the backend on each rebind (with a swap).
     pub(crate) keymap: crate::gfx::keymap::KeyMap,
     pub(crate) rebind_rows: Vec<crate::gfx::graphics_system::RebindViz>,
+    // Live gamepad action -> button map (the source of truth for the gamepad
+    // rebind rows), carried to InputSystem via ControlsCommand on each rebind.
+    pub(crate) gamepad_map: crate::assets::GamepadMap,
+    pub(crate) pad_rebind_rows: Vec<crate::gfx::graphics_system::PadRebindViz>,
     pub(crate) sliders: Vec<crate::gfx::graphics_system::SliderViz>,
     // Cycle rows' setting key -> value-label id, captured at init, so a change
     // can relabel a row other than the one clicked.

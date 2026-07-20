@@ -1,27 +1,101 @@
 // src/gfx/input_system.rs
 //
-// Samples the window backend's input once per frame and publishes the
-// `FrameInput` snapshot (as a resource and as the component column) plus the
-// `CursorState` resource. Runs immediately after GraphicsSystem in the
-// schedule: on Metal the OS event pump runs inside draw_frame, so sampling
-// right after the draw snapshots every event that arrived up to and including
-// this frame's pump -- the same freshness the sample had when it sat at the
-// end of GraphicsSystem's own step. Every input consumer (camera controllers,
-// UI, text input) runs later in the same tick.
+// Samples the window backend's input once per frame, merges the active
+// gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
+// as the component column) plus the `CursorState` resource. Runs immediately
+// after GraphicsSystem in the schedule: on Metal the OS event pump runs inside
+// draw_frame, so sampling right after the draw snapshots every event that
+// arrived up to and including this frame's pump -- the same freshness the
+// sample had when it sat at the end of GraphicsSystem's own step. Every input
+// consumer (camera controllers, UI, text input) runs later in the same tick.
+//
+// The gamepad is polled here, not per render backend, so all backends share
+// one implementation. Digital buttons merge into the existing boolean fields
+// (d-pad onto the movement keys, the bound buttons onto sprint / jump /
+// interact, Start onto escape); the sticks publish as the analog
+// `move_axis` / `look_axis` fields.
 
-use crate::assets::FrameInput;
+use crate::assets::{FrameInput, GamepadButton, GamepadMap};
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
+use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
+use concinnity_render::input::RenderInput;
 
 #[derive(Debug, Default)]
-pub struct InputSystem;
+pub struct InputSystem {
+    gamepad: GamepadSource,
+    pad: PadState,
+    map: GamepadMap,
+    deadzone: f32,
+    // Cursor into the Events<ControlsCommand> queue (live settings changes).
+    controls_cursor: crate::ecs::EventCursor,
+}
 
 impl InputSystem {
     pub fn new() -> Self {
-        Self
+        Self {
+            deadzone: crate::gfx::settings::DEFAULT_GAMEPAD_DEADZONE,
+            ..Self::default()
+        }
+    }
+}
+
+// Merge the window's keyboard/mouse snapshot with the gamepad snapshot under
+// the gameplay gate. Pure, so the merge and gating are unit-tested without a
+// backend; the caller fills in the viewport.
+fn compose_frame_input(
+    raw: &RenderInput,
+    pad: &PadSnapshot,
+    map: GamepadMap,
+    gameplay: bool,
+) -> FrameInput {
+    let axis = |v: [f32; 2]| if gameplay { v } else { [0.0, 0.0] };
+    FrameInput {
+        forward: (raw.forward || pad.held(GamepadButton::DpadUp)) && gameplay,
+        backward: (raw.backward || pad.held(GamepadButton::DpadDown)) && gameplay,
+        left: (raw.left || pad.held(GamepadButton::DpadLeft)) && gameplay,
+        right: (raw.right || pad.held(GamepadButton::DpadRight)) && gameplay,
+        sprint: (raw.sprint || pad.held(map.sprint)) && gameplay,
+        interact: (raw.interact || pad.pressed(map.interact)) && gameplay,
+        jump: (raw.jump || pad.pressed(map.jump)) && gameplay,
+        move_axis: axis(pad.move_axis),
+        look_axis: axis(pad.look_axis),
+        mouse_dx: if gameplay { raw.mouse_dx } else { 0.0 },
+        mouse_dy: if gameplay { raw.mouse_dy } else { 0.0 },
+        // Not gated by `gameplay`: a scrollable menu still scrolls
+        // while it is open (the camera is what freezes behind it).
+        scroll_delta: raw.scroll_delta,
+        mouse_x: raw.mouse_x,
+        mouse_y: raw.mouse_y,
+        left_click: raw.left_click,
+        left_button_down: raw.left_button_down,
+        viewport: [0.0, 0.0],
+        hud_toggle: raw.hud_toggle,
+        // Start mirrors Escape (pause / back), so like `raw.escape` it stays
+        // live while a menu is open.
+        escape: raw.escape || pad.pressed(GamepadButton::Start),
+        // Not gated by `gameplay`: a story's Ctrl fast-forward works
+        // while its stage (a view) is up, like the rebind capture below.
+        ctrl: raw.ctrl,
+        // Not gated by `gameplay`: the rebind captures work while the
+        // settings menu is open (the camera is what freezes behind it).
+        captured_key: raw.captured_key,
+        captured_button: pad.first_pressed(),
+        // Not gated by `gameplay`: text-input fields type while a menu
+        // (or the in-engine editor) is up, like the rebind capture.
+        typed_char: raw.typed_char,
     }
 }
 
 impl System for InputSystem {
+    fn init(&mut self, _ctx: &mut PipelineContext) {
+        // Persisted settings-menu choices override the engine defaults.
+        let settings = crate::config::Settings::load();
+        self.map = settings.controls.gamepad_map.unwrap_or_default();
+        if let Some(dz) = settings.controls.gamepad_deadzone {
+            self.deadzone = dz;
+        }
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // No parked backend (graphics failed, or the editor transplanted it
         // away): nothing to sample; consumers keep the last snapshot.
@@ -42,6 +116,21 @@ impl System for InputSystem {
             pos: (raw.mouse_x, raw.mouse_y),
             outside_window: cursor_outside,
         });
+
+        // Live controls changes (a gamepad rebind or deadzone slider) sent by
+        // SettingsSystem earlier this tick.
+        if let Some(events) = ctx.events::<crate::assets::ControlsCommand>() {
+            for cmd in events.read(&mut self.controls_cursor) {
+                if let Some(map) = cmd.gamepad_map {
+                    self.map = map;
+                }
+                if let Some(dz) = cmd.gamepad_deadzone {
+                    self.deadzone = dz;
+                }
+            }
+        }
+        self.gamepad.poll(&mut self.pad);
+        let pad = self.pad.snapshot(self.deadzone);
 
         // While a world-pausing screen is open (the overlay build published
         // the state earlier this tick), freeze gameplay input so the camera
@@ -66,34 +155,8 @@ impl System for InputSystem {
         // frame's first.
         let _ = ctx.drain::<FrameInput>();
         let frame_input = FrameInput {
-            forward: raw.forward && gameplay,
-            backward: raw.backward && gameplay,
-            left: raw.left && gameplay,
-            right: raw.right && gameplay,
-            sprint: raw.sprint && gameplay,
-            interact: raw.interact && gameplay,
-            jump: raw.jump && gameplay,
-            mouse_dx: if gameplay { raw.mouse_dx } else { 0.0 },
-            mouse_dy: if gameplay { raw.mouse_dy } else { 0.0 },
-            // Not gated by `gameplay`: a scrollable menu still scrolls
-            // while it is open (the camera is what freezes behind it).
-            scroll_delta: raw.scroll_delta,
-            mouse_x: raw.mouse_x,
-            mouse_y: raw.mouse_y,
-            left_click: raw.left_click,
-            left_button_down: raw.left_button_down,
             viewport: [vp_w, vp_h],
-            hud_toggle: raw.hud_toggle,
-            escape: raw.escape,
-            // Not gated by `gameplay`: a story's Ctrl fast-forward works
-            // while its stage (a view) is up, like the rebind capture below.
-            ctrl: raw.ctrl,
-            // Not gated by `gameplay`: the rebind capture works while the
-            // settings menu is open (the camera is what freezes behind it).
-            captured_key: raw.captured_key,
-            // Not gated by `gameplay`: text-input fields type while a menu
-            // (or the in-engine editor) is up, like the rebind capture.
-            typed_char: raw.typed_char,
+            ..compose_frame_input(&raw, &pad, self.map, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI
@@ -102,5 +165,133 @@ impl System for InputSystem {
         ctx.push(frame_input);
 
         StepResult::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::gamepad::{PadAxis, PadEvent};
+
+    fn pad_snapshot(events: &[PadEvent]) -> PadSnapshot {
+        let mut state = PadState::default();
+        state.ingest(PadEvent::Connected { pad: 0 });
+        for &e in events {
+            state.ingest(e);
+        }
+        state.snapshot(0.15)
+    }
+
+    fn press(button: GamepadButton) -> PadEvent {
+        PadEvent::Button {
+            pad: 0,
+            button,
+            pressed: true,
+        }
+    }
+
+    #[test]
+    fn gamepad_buttons_merge_into_the_boolean_fields() {
+        let pad = pad_snapshot(&[
+            press(GamepadButton::DpadUp),
+            press(GamepadMap::DEFAULT.jump),
+            press(GamepadMap::DEFAULT.sprint),
+            press(GamepadMap::DEFAULT.interact),
+            press(GamepadButton::Start),
+        ]);
+        let input = compose_frame_input(&RenderInput::default(), &pad, GamepadMap::DEFAULT, true);
+        assert!(input.forward, "d-pad up drives forward");
+        assert!(input.jump && input.sprint && input.interact);
+        assert!(input.escape, "Start mirrors Escape");
+        assert!(!input.backward && !input.left && !input.right);
+    }
+
+    #[test]
+    fn keyboard_fields_pass_through_unchanged() {
+        let raw = RenderInput {
+            forward: true,
+            sprint: true,
+            mouse_dx: 3.0,
+            mouse_dy: -2.0,
+            scroll_delta: 1.5,
+            ..Default::default()
+        };
+        let input = compose_frame_input(&raw, &PadSnapshot::default(), GamepadMap::DEFAULT, true);
+        assert!(input.forward && input.sprint);
+        assert_eq!(input.mouse_dx, 3.0);
+        assert_eq!(input.mouse_dy, -2.0);
+        assert_eq!(input.scroll_delta, 1.5);
+        assert_eq!(input.move_axis, [0.0, 0.0]);
+        assert_eq!(input.captured_button, None);
+    }
+
+    #[test]
+    fn rebound_map_routes_buttons_to_their_actions() {
+        let mut map = GamepadMap::DEFAULT;
+        map.rebind(crate::assets::GamepadAction::Jump, GamepadButton::North);
+        let pad = pad_snapshot(&[press(GamepadButton::North)]);
+        let input = compose_frame_input(&RenderInput::default(), &pad, map, true);
+        assert!(input.jump, "jump follows the rebound button");
+        let default_pad = pad_snapshot(&[press(GamepadButton::South)]);
+        let input = compose_frame_input(&RenderInput::default(), &default_pad, map, true);
+        assert!(!input.jump, "the old button no longer jumps");
+    }
+
+    #[test]
+    fn menu_gate_freezes_gameplay_but_keeps_capture_and_escape() {
+        let pad = pad_snapshot(&[
+            press(GamepadButton::DpadUp),
+            press(GamepadMap::DEFAULT.jump),
+            press(GamepadButton::Start),
+            PadEvent::Axis {
+                pad: 0,
+                axis: PadAxis::LeftY,
+                value: 1.0,
+            },
+            PadEvent::Axis {
+                pad: 0,
+                axis: PadAxis::RightX,
+                value: 1.0,
+            },
+        ]);
+        let raw = RenderInput {
+            forward: true,
+            mouse_dx: 5.0,
+            ..Default::default()
+        };
+        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, false);
+        // Movement, jump, axes, and mouse deltas all freeze behind the menu.
+        assert!(!input.forward && !input.jump);
+        assert_eq!(input.move_axis, [0.0, 0.0]);
+        assert_eq!(input.look_axis, [0.0, 0.0]);
+        assert_eq!(input.mouse_dx, 0.0);
+        // The rebind capture and Escape stay live for the menu itself. South
+        // precedes Start in declaration order, so it is the captured button.
+        assert_eq!(input.captured_button, Some(GamepadMap::DEFAULT.jump));
+        assert!(input.escape);
+    }
+
+    #[test]
+    fn stick_axes_publish_when_gameplay_is_live() {
+        let pad = pad_snapshot(&[
+            PadEvent::Axis {
+                pad: 0,
+                axis: PadAxis::LeftY,
+                value: 1.0,
+            },
+            PadEvent::Axis {
+                pad: 0,
+                axis: PadAxis::RightY,
+                value: 1.0,
+            },
+        ]);
+        let input = compose_frame_input(&RenderInput::default(), &pad, GamepadMap::DEFAULT, true);
+        assert!(
+            (input.move_axis[1] - 1.0).abs() < 1e-6,
+            "{:?}",
+            input.move_axis
+        );
+        // Stick up looks up: negative Y in the mouse-delta convention.
+        assert!(input.look_axis[1] < -0.9, "{:?}", input.look_axis);
     }
 }

@@ -331,23 +331,30 @@ impl GraphicsSystem {
     // HitRegions; they are still present here.
     pub(super) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
         let mut rows: Vec<RebindViz> = Vec::new();
+        let mut pad_rows: Vec<super::PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let Some(key) = rebind_key_of(&r.action) else {
+            let (Some(key), Some(value_id)) = (rebind_key_of(&r.action), r.label) else {
                 continue;
             };
-            let (Some(action), Some(value_id)) =
-                (crate::gfx::keymap::Bindable::from_setting_key(key), r.label)
-            else {
-                continue;
-            };
-            rows.push(RebindViz { action, value_id });
+            // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
+            // a gamepad rebind row.
+            if let Some(action) = crate::gfx::keymap::Bindable::from_setting_key(key) {
+                rows.push(RebindViz { action, value_id });
+            } else if let Some(action) = crate::assets::GamepadAction::from_setting_key(key) {
+                pad_rows.push(super::PadRebindViz { action, value_id });
+            }
         }
-        // Sync each value label to the live bound key (persisted or default).
+        // Sync each value label to the live binding (persisted or default).
         for row in &rows {
             let name = self.keymap.get(row.action).display_name();
             set_label_content(ctx, row.value_id, name);
         }
+        for row in &pad_rows {
+            let name = self.gamepad_map.get(row.action).display_name();
+            set_label_content(ctx, row.value_id, name);
+        }
         self.rebind_rows = rows;
+        self.pad_rebind_rows = pad_rows;
     }
 
     // Capture each cycle row's setting key -> value-label id, so a runtime change
@@ -477,12 +484,20 @@ impl GraphicsSystem {
             "auto_exposure_min_ev" => self.post_config.auto_exposure_min_ev,
             "auto_exposure_max_ev" => self.post_config.auto_exposure_max_ev,
             "auto_exposure_speed" => self.post_config.auto_exposure_speed,
-            // Mouse sensitivity lives in the controls store (radians/pixel), not
-            // the render params; read the persisted value or the authored default.
+            // The controls sliders live in the controls store, not the render
+            // params; read the persisted value or the engine default.
             "mouse_sensitivity" => crate::config::Settings::load()
                 .controls
                 .mouse_sensitivity
                 .unwrap_or(settings::DEFAULT_MOUSE_SENSITIVITY),
+            "gamepad_look_sensitivity" => crate::config::Settings::load()
+                .controls
+                .gamepad_look_sensitivity
+                .unwrap_or(settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY),
+            "gamepad_deadzone" => crate::config::Settings::load()
+                .controls
+                .gamepad_deadzone
+                .unwrap_or(settings::DEFAULT_GAMEPAD_DEADZONE),
             // FOV lives in the graphics store (degrees); read the persisted value
             // or the authored default.
             "fov" => crate::config::Settings::load()

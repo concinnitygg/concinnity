@@ -33,6 +33,7 @@ concinnity-physics = { path = "../concinnity-physics" }
 concinnity-audio = { path = "../concinnity-audio" }
 
 ciborium = "0.2"
+gilrs = "0.11.2"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 ctrlc = "3.5.2"
 serde = { version = "1", features = ["derive"] }

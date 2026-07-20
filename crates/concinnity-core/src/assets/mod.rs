@@ -23,6 +23,8 @@ mod controls_command;
 mod despawn_request;
 mod file;
 mod frame_input;
+mod gamepad_button;
+mod gamepad_map;
 mod geometry;
 mod ground_probes;
 mod input_key;
@@ -135,6 +137,8 @@ pub use controls_command::ControlsCommand;
 pub use despawn_request::DespawnRequest;
 pub use file::File;
 pub use frame_input::FrameInput;
+pub use gamepad_button::GamepadButton;
+pub use gamepad_map::{GamepadAction, GamepadMap};
 pub use geometry::{
     GlassPanelGeometry, InstancedPropGeometry, PropGeometry, SPOT_MAX_ANGLE_DEG, SpotLightGeometry,
 };

@@ -17,4 +17,14 @@ pub struct ControlsCommand {
     // New camera vertical field of view, in degrees. None leaves it unchanged.
     // Applied live to every Camera3D by the camera controller.
     pub fov_y_degrees: Option<f32>,
+    // New gamepad look sensitivity, in radians per second at full stick
+    // deflection. None leaves it unchanged. Applied live by the camera
+    // controller.
+    pub gamepad_look_sensitivity: Option<f32>,
+    // New gamepad stick deadzone as a deflection fraction in [0, 1]. None
+    // leaves it unchanged. Applied live by the input sampling.
+    pub gamepad_deadzone: Option<f32>,
+    // New gamepad action -> button map after a rebind. None leaves it
+    // unchanged. Applied live by the input sampling.
+    pub gamepad_map: Option<crate::assets::GamepadMap>,
 }

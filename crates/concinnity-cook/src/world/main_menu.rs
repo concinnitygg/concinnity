@@ -170,6 +170,23 @@ const CONTROLS_REBINDS: [(&str, &str); 7] = [
 // (Escape) carries cursor-release / menu semantics that are fixed per-backend,
 // so it is shown for reference rather than made rebindable.
 const CONTROLS_KEYS: [(&str, &str); 1] = [("Pause", "Esc")];
+// Gamepad sliders in the Controls "Gamepad" group: look-stick sensitivity
+// (1..100 mapped to a radians-per-second rate) and the radial stick deadzone
+// (shown as a percentage of deflection). Both applied live via ControlsCommand.
+const CONTROLS_PAD_SLIDERS: [(&str, &str); 2] = [
+    ("gamepad_look_sensitivity", "Stick Sensitivity"),
+    ("gamepad_deadzone", "Stick Deadzone"),
+];
+// Rebindable gamepad actions in the same group: (display label, setting key).
+// Each emits a clickable row that captures a button press; the setting keys
+// match `GamepadAction::setting_key`. Movement and look ride the sticks (with
+// the d-pad as a digital fallback) and pause rides Start, so only the
+// button-driven actions are rebindable.
+const CONTROLS_PAD_REBINDS: [(&str, &str); 3] = [
+    ("Sprint", "pad_sprint"),
+    ("Jump", "pad_jump"),
+    ("Interact", "pad_interact"),
+];
 // A non-centered settings tab sizes its rows from the menu button width; a
 // centered tab spans most of the window instead (see `SETTINGS_SIDE_MARGIN`).
 const SETTINGS_ROW_WIDTH_MULT: f32 = 1.85;
@@ -799,7 +816,29 @@ fn settings_body_rows(active: &str, profile: SettingsProfile) -> (Vec<BodyRow>, 
             for (i, &(action, key)) in CONTROLS_KEYS.iter().enumerate() {
                 rows.push(BodyRow::Key(action, key, i, -1));
             }
-            (rows, Vec::new())
+            // The gamepad rows sit in their own collapsible group. The rebind
+            // indices continue the keyboard rows' sequence so every rebind
+            // row's element names stay unique within the screen.
+            rows.push(BodyRow::GroupHeader(0, "Gamepad"));
+            for &(s, l) in &CONTROLS_PAD_SLIDERS {
+                rows.push(BodyRow::Slider(s, l, 0));
+            }
+            for (i, &(label, setting)) in CONTROLS_PAD_REBINDS.iter().enumerate() {
+                rows.push(BodyRow::Rebind(
+                    label,
+                    setting,
+                    CONTROLS_REBINDS.len() + i,
+                    0,
+                ));
+            }
+            (
+                rows,
+                vec![GroupSpec {
+                    gid: 0,
+                    title: "Gamepad",
+                    collapsed: true,
+                }],
+            )
         }
         // Video: the three core rows, then a "Quality" group holding the
         // render-feature toggles, then an "Advanced" group holding the
@@ -1333,6 +1372,10 @@ mod tests {
             ("Sprint", "key_sprint"),
             ("Jump", "key_jump"),
             ("Interact", "key_interact"),
+            // The gamepad rows continue the index sequence in their group.
+            ("Sprint", "pad_sprint"),
+            ("Jump", "pad_jump"),
+            ("Interact", "pad_interact"),
         ]
         .iter()
         .enumerate()
@@ -1355,12 +1398,24 @@ mod tests {
                 format!("m_settings_controls_rebind_val_{i}")
             );
         }
-        // Pause is read-only: no rebind HitRegion targets it.
+        // Pause is read-only: no rebind HitRegion beyond the rows above.
         assert!(
             !assets
                 .iter()
-                .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_7"))
+                .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_10"))
         );
+        // The gamepad rows sit under a collapsible group header alongside the
+        // stick sliders.
+        assert_eq!(
+            by_name(&assets, "m_settings_controls_grphdr_0")["args"]["content"],
+            "+ Gamepad"
+        );
+        // The stick sliders emit Slider specs (expanded by the slider pass).
+        let slider = by_name(&assets, "m_settings_controls_sld_gamepad_look_sensitivity");
+        assert_eq!(slider["type"], "Slider");
+        assert_eq!(slider["args"]["setting"], "gamepad_look_sensitivity");
+        let slider = by_name(&assets, "m_settings_controls_sld_gamepad_deadzone");
+        assert_eq!(slider["args"]["setting"], "gamepad_deadzone");
     }
 
     #[test]

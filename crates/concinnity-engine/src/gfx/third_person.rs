@@ -44,6 +44,8 @@ pub struct ThirdPersonSystem {
     move_speed: f32,
     sprint_multiplier: f32,
     mouse_sensitivity: f32,
+    // Gamepad look speed in radians per second at full stick deflection.
+    gamepad_look_sensitivity: f32,
     // From the follow block: the authored SkinnedMesh handle, which keys the
     // rig / graph correlation web directly.
     target: Option<SkinnedMeshHandle>,
@@ -74,6 +76,7 @@ impl ThirdPersonSystem {
             move_speed: controller.move_speed,
             sprint_multiplier: controller.sprint_multiplier,
             mouse_sensitivity: controller.mouse_sensitivity,
+            gamepad_look_sensitivity: crate::gfx::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
             target: follow.target,
             distance: follow.distance.max(0.1),
             height: follow.height,
@@ -99,6 +102,9 @@ impl System for ThirdPersonSystem {
         let settings = crate::config::Settings::load();
         if let Some(s) = settings.controls.mouse_sensitivity {
             self.mouse_sensitivity = s;
+        }
+        if let Some(s) = settings.controls.gamepad_look_sensitivity {
+            self.gamepad_look_sensitivity = s;
         }
         if let Some(fov) = settings.graphics.fov {
             for camera in ctx.query_mut::<Camera3D>() {
@@ -160,6 +166,9 @@ impl System for ThirdPersonSystem {
                 if let Some(s) = cmd.mouse_sensitivity {
                     self.mouse_sensitivity = s;
                 }
+                if let Some(s) = cmd.gamepad_look_sensitivity {
+                    self.gamepad_look_sensitivity = s;
+                }
                 if let Some(fov) = cmd.fov_y_degrees {
                     pending_fov = Some(fov);
                 }
@@ -187,11 +196,17 @@ impl System for ThirdPersonSystem {
         else {
             return StepResult::Continue;
         };
-        yaw -= input.mouse_dx * self.mouse_sensitivity;
-        pitch = (pitch - input.mouse_dy * self.mouse_sensitivity).clamp(
-            -std::f32::consts::FRAC_PI_2 + 0.01,
-            std::f32::consts::FRAC_PI_2 - 0.01,
-        );
+        // Pixel-based mouse deltas plus the rate-based right stick (deflection
+        // x radians/second x dt, so orbiting is frame-rate correct).
+        yaw -= input.mouse_dx * self.mouse_sensitivity
+            + input.look_axis[0] * self.gamepad_look_sensitivity * dt;
+        pitch = (pitch
+            - input.mouse_dy * self.mouse_sensitivity
+            - input.look_axis[1] * self.gamepad_look_sensitivity * dt)
+            .clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.01,
+                std::f32::consts::FRAC_PI_2 - 0.01,
+            );
 
         // Camera-relative movement intent on the ground plane.
         let fwd = [-yaw.sin(), 0.0_f32, -yaw.cos()];
@@ -213,6 +228,10 @@ impl System for ThirdPersonSystem {
             dir[0] -= right[0];
             dir[2] -= right[2];
         }
+        // The left stick rides the same bases; its magnitude survives into the
+        // commanded speed below, so partial deflection sets a slower gait.
+        dir[0] += fwd[0] * input.move_axis[1] + right[0] * input.move_axis[0];
+        dir[2] += fwd[2] * input.move_axis[1] + right[2] * input.move_axis[0];
         let norm = (dir[0] * dir[0] + dir[2] * dir[2]).sqrt();
         let moving = norm > 1.0e-4;
         if moving {
@@ -221,8 +240,11 @@ impl System for ThirdPersonSystem {
         }
 
         // Smooth the commanded speed toward the input target, time-correct.
+        // The key vectors have magnitude >= 1, so the clamp leaves keyboard
+        // movement at full speed; a partially deflected stick scales it down.
         let target_speed = if moving {
             self.move_speed
+                * norm.clamp(0.0, 1.0)
                 * if input.sprint {
                     self.sprint_multiplier
                 } else {

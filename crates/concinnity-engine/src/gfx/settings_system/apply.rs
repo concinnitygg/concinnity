@@ -76,6 +76,42 @@ impl SettingsState {
                 }
                 continue;
             }
+            // Gamepad rebind rows (`pad_*` settings) take a RebindButton op:
+            // the same bind-with-swap flow as the key rebinds above, but the
+            // live map travels to InputSystem as a ControlsCommand instead of
+            // a backend push (the gamepad is polled engine-side).
+            if let SettingOp::RebindButton(button) = cmd.op {
+                let Some(action) = crate::assets::GamepadAction::from_setting_key(&cmd.setting)
+                else {
+                    tracing::warn!("GraphicsSystem: unknown gamepad rebind '{}'", cmd.setting);
+                    continue;
+                };
+                let victim = self
+                    .gamepad_map
+                    .action_for_button(button)
+                    .filter(|&a| a != action);
+                self.gamepad_map.rebind(action, button);
+                ctx.events_mut::<crate::assets::ControlsCommand>().send(
+                    crate::assets::ControlsCommand {
+                        gamepad_map: Some(self.gamepad_map),
+                        ..Default::default()
+                    },
+                );
+                cfg.controls.gamepad_map = Some(self.gamepad_map);
+                cfg_dirty = true;
+                for act in [Some(action), victim].into_iter().flatten() {
+                    if let Some(value_id) = self
+                        .pad_rebind_rows
+                        .iter()
+                        .find(|r| r.action == act)
+                        .map(|r| r.value_id)
+                    {
+                        let name = self.gamepad_map.get(act).display_name();
+                        set_label_content(ctx, value_id, name);
+                    }
+                }
+                continue;
+            }
             // Slider settings (continuous) take a SetFraction op: apply
             // the value live to the post-process params, move the handle,
             // refresh the value label, and persist only on the commit
@@ -124,12 +160,12 @@ impl SettingsState {
                 // Apply live. The sub-quality sliders mutate the backend's
                 // stored *Settings via update_quality_params (re-read into a
                 // per-frame uniform, no pass rebuild). The post-process
-                // sliders push PostProcessParams. Mouse sensitivity is not a
-                // render param, so it skips both (handled below); the ambient
-                // re-push through update_post_process is harmless.
+                // sliders push PostProcessParams. The controls sliders are not
+                // render params, so they skip both (handled below); the
+                // ambient re-push through update_post_process is harmless.
                 if is_qparam {
                     backend.update_quality_params(gsys::derive_quality_settings(&self.post_config));
-                } else if cmd.setting != "mouse_sensitivity" && cmd.setting != "fov" {
+                } else if !settings::is_controls_slider(&cmd.setting) {
                     backend.update_post_process(self.post_process);
                 }
                 // Ambient (IBL) scale lives in LightUniforms, not
@@ -138,25 +174,32 @@ impl SettingsState {
                     self.ambient_intensity = stored;
                     backend.set_ambient_intensity(stored);
                 }
-                // Mouse sensitivity and FOV take effect on the camera, not
-                // the renderer: hand the new value across as a
-                // ControlsCommand the camera reads this tick (live, no
-                // restart). Each carries only the field it changed.
-                if cmd.setting == "mouse_sensitivity" {
-                    ctx.events_mut::<crate::assets::ControlsCommand>().send(
-                        crate::assets::ControlsCommand {
-                            mouse_sensitivity: Some(stored),
-                            fov_y_degrees: None,
-                        },
-                    );
-                }
-                if cmd.setting == "fov" {
-                    ctx.events_mut::<crate::assets::ControlsCommand>().send(
-                        crate::assets::ControlsCommand {
-                            mouse_sensitivity: None,
-                            fov_y_degrees: Some(stored),
-                        },
-                    );
+                // The controls sliders take effect on the camera / input
+                // sampling, not the renderer: hand the new value across as a
+                // ControlsCommand read this same tick (live, no restart).
+                // Each carries only the field it changed.
+                let controls_cmd = match cmd.setting.as_str() {
+                    "mouse_sensitivity" => Some(crate::assets::ControlsCommand {
+                        mouse_sensitivity: Some(stored),
+                        ..Default::default()
+                    }),
+                    "fov" => Some(crate::assets::ControlsCommand {
+                        fov_y_degrees: Some(stored),
+                        ..Default::default()
+                    }),
+                    "gamepad_look_sensitivity" => Some(crate::assets::ControlsCommand {
+                        gamepad_look_sensitivity: Some(stored),
+                        ..Default::default()
+                    }),
+                    "gamepad_deadzone" => Some(crate::assets::ControlsCommand {
+                        gamepad_deadzone: Some(stored),
+                        ..Default::default()
+                    }),
+                    _ => None,
+                };
+                if let Some(controls_cmd) = controls_cmd {
+                    ctx.events_mut::<crate::assets::ControlsCommand>()
+                        .send(controls_cmd);
                 }
                 // Move the handle to the new fraction.
                 if let Some((handle_id, track_x, track_w, handle_w)) = geom {
@@ -191,9 +234,13 @@ impl SettingsState {
                         "auto_exposure_min_ev" => cfg.graphics.auto_exposure_min_ev = Some(value),
                         "auto_exposure_max_ev" => cfg.graphics.auto_exposure_max_ev = Some(value),
                         "auto_exposure_speed" => cfg.graphics.auto_exposure_speed = Some(value),
-                        // Persist the radians/pixel value (what the
-                        // camera reads), not the 1..100 UI value.
+                        // Persist the applied values (what the camera / input
+                        // sampling read), not the 1..100 UI values.
                         "mouse_sensitivity" => cfg.controls.mouse_sensitivity = Some(stored),
+                        "gamepad_look_sensitivity" => {
+                            cfg.controls.gamepad_look_sensitivity = Some(stored)
+                        }
+                        "gamepad_deadzone" => cfg.controls.gamepad_deadzone = Some(stored),
                         // FOV persists the clamped degrees (a graphics
                         // preference, stored alongside the look sliders).
                         "fov" => cfg.graphics.fov = Some(stored),

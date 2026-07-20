@@ -36,6 +36,8 @@ const REBIND_LABEL: AssetId = AssetId(5);
 const VICTIM_LABEL: AssetId = AssetId(6);
 const RESOLUTION_LABEL: AssetId = AssetId(7);
 const TOGGLE_LABEL: AssetId = AssetId(8);
+const PAD_REBIND_LABEL: AssetId = AssetId(9);
+const PAD_VICTIM_LABEL: AssetId = AssetId(10);
 
 // The authored color the fixture's gray-able rows start at, so a restore is
 // distinguishable from a gray.
@@ -95,6 +97,8 @@ impl Fixture {
             (VICTIM_LABEL, "victim"),
             (RESOLUTION_LABEL, "resolution"),
             (TOGGLE_LABEL, "toggle"),
+            (PAD_REBIND_LABEL, "pad_rebind"),
+            (PAD_VICTIM_LABEL, "pad_victim"),
         ] {
             components.push_typed(TextLabel {
                 asset_id: id,
@@ -126,6 +130,17 @@ impl Fixture {
                 RebindViz {
                     action: Bindable::Backward,
                     value_id: VICTIM_LABEL,
+                },
+            ],
+            gamepad_map: crate::assets::GamepadMap::default(),
+            pad_rebind_rows: vec![
+                crate::gfx::graphics_system::PadRebindViz {
+                    action: crate::assets::GamepadAction::Jump,
+                    value_id: PAD_REBIND_LABEL,
+                },
+                crate::gfx::graphics_system::PadRebindViz {
+                    action: crate::assets::GamepadAction::Sprint,
+                    value_id: PAD_VICTIM_LABEL,
                 },
             ],
             sliders: vec![SliderViz {
@@ -242,6 +257,20 @@ impl Fixture {
             .find(|l| l.asset_id == id)
             .map(|l| l.color)
             .expect("label present")
+    }
+
+    // Every ControlsCommand the drain has sent, oldest first.
+    fn sent_controls(&mut self) -> Vec<ControlsCommand> {
+        self.world
+            .ctx()
+            .events::<ControlsCommand>()
+            .map(|e| {
+                e.read(&mut Default::default())
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -543,6 +572,91 @@ fn fov_slider_sends_a_controls_command() {
     assert!(sent[0].fov_y_degrees.is_some());
     assert!(sent[0].mouse_sensitivity.is_none());
     assert_eq!(f.persisted().graphics.fov, sent[0].fov_y_degrees);
+}
+
+// A gamepad rebind binds the action to the captured button, hands the new map
+// to InputSystem as a ControlsCommand, persists it, and relabels both the
+// rebound row and the action it took the button from.
+#[test]
+fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
+    use crate::assets::GamepadAction;
+    let mut f = Fixture::new();
+    let jump_button = f.state.gamepad_map.get(GamepadAction::Jump);
+    let sprint_button = f.state.gamepad_map.get(GamepadAction::Sprint);
+
+    f.apply(vec![SettingCommand {
+        setting: GamepadAction::Jump.setting_key().to_string(),
+        op: SettingOp::RebindButton(sprint_button),
+        value_label: None,
+        persist: true,
+    }]);
+
+    assert_eq!(f.state.gamepad_map.get(GamepadAction::Jump), sprint_button);
+    assert_eq!(
+        f.state.gamepad_map.get(GamepadAction::Sprint),
+        jump_button,
+        "the victim takes the rebound action's old button"
+    );
+    let sent = f.sent_controls();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].gamepad_map,
+        Some(f.state.gamepad_map),
+        "the live map travels to InputSystem"
+    );
+    assert_eq!(f.label(PAD_REBIND_LABEL), sprint_button.display_name());
+    assert_eq!(f.label(PAD_VICTIM_LABEL), jump_button.display_name());
+    assert_eq!(
+        f.persisted().controls.gamepad_map,
+        Some(f.state.gamepad_map)
+    );
+}
+
+// A button rebind naming a keyboard (or unknown) action is ignored.
+#[test]
+fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
+    let mut f = Fixture::new();
+    f.apply(vec![SettingCommand {
+        setting: Bindable::Forward.setting_key().to_string(),
+        op: SettingOp::RebindButton(crate::assets::GamepadButton::North),
+        value_label: None,
+        persist: true,
+    }]);
+
+    assert_eq!(f.state.gamepad_map, crate::assets::GamepadMap::default());
+    assert!(f.saved.lock().unwrap().is_empty(), "nothing persisted");
+}
+
+// The gamepad sliders travel as ControlsCommands and persist the applied
+// values: radians/second for the look sensitivity, the deflection fraction for
+// the deadzone (not their UI-scale values).
+#[test]
+fn gamepad_sliders_send_controls_commands_and_persist_applied_values() {
+    let mut f = Fixture::new();
+    f.apply(vec![
+        drag("gamepad_look_sensitivity", 1.0, true),
+        drag("gamepad_deadzone", 0.5, true),
+    ]);
+
+    let sent = f.sent_controls();
+    assert_eq!(sent.len(), 2);
+    let rate = sent[0].gamepad_look_sensitivity.expect("sensitivity sent");
+    assert!(
+        (rate - 6.0).abs() < 1e-5,
+        "full track is the max rate: {rate}"
+    );
+    let dz = sent[1].gamepad_deadzone.expect("deadzone sent");
+    assert!(
+        (dz - 0.2).abs() < 1e-5,
+        "mid track of 0..40% stores 0.2: {dz}"
+    );
+    assert!(
+        !f.saw(&Call::UpdatePostProcess),
+        "the gamepad sliders are not render params"
+    );
+    let cfg = f.persisted();
+    assert_eq!(cfg.controls.gamepad_look_sensitivity, Some(rate));
+    assert_eq!(cfg.controls.gamepad_deadzone, Some(dz));
 }
 
 // The frame-rate cap applies through the republished resource the App-level

@@ -87,6 +87,15 @@ pub(crate) const DEFAULT_MASTER_VOLUME: f32 = 1.0;
 // `MOUSE_SENSITIVITY_RANGE` and `slider_apply_value`.
 pub(crate) const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.0015;
 
+// Effective gamepad look sensitivity (radians per second at full stick
+// deflection) when the user has never chosen one. A slider (1..100 -> rate);
+// see `GAMEPAD_LOOK_RANGE` and `slider_apply_value`.
+pub(crate) const DEFAULT_GAMEPAD_LOOK_SENSITIVITY: f32 = 2.5;
+// Effective gamepad stick deadzone (deflection fraction) when the user has
+// never chosen one. A slider shown as a percentage; see
+// `GAMEPAD_DEADZONE_RANGE` and `slider_apply_value`.
+pub(crate) const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
+
 // WindowMode for an option index, and the index for a WindowMode. Order matches
 // WINDOW_MODE_OPTIONS, not the enum's declaration order.
 pub(crate) fn window_mode_at(index: usize) -> WindowMode {
@@ -357,7 +366,10 @@ pub(crate) fn cycle(index: usize, len: usize, op: SettingOp) -> usize {
         SettingOp::SetIndex(i) => i.min(len.saturating_sub(1)),
         // Next steps forward; the slider and rebind ops never reach a cycle
         // setting, so treating them as Next is harmless.
-        SettingOp::Next | SettingOp::SetFraction(_) | SettingOp::Rebind(_) => (index + 1) % len,
+        SettingOp::Next
+        | SettingOp::SetFraction(_)
+        | SettingOp::Rebind(_)
+        | SettingOp::RebindButton(_) => (index + 1) % len,
     }
 }
 
@@ -426,6 +438,17 @@ const MOUSE_SENSITIVITY_RANGE: (f32, f32) = (1.0, 100.0);
 const MOUSE_SENS_MIN: f32 = 0.0003;
 const MOUSE_SENS_MAX: f32 = 0.005;
 
+// Gamepad look-sensitivity slider: the same 1..100 UI scale, mapped linearly
+// to a radians-per-second rate at full stick deflection in
+// [GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX]. The engine default sits mid-track.
+const GAMEPAD_LOOK_RANGE: (f32, f32) = (1.0, 100.0);
+const GAMEPAD_LOOK_MIN: f32 = 0.5;
+const GAMEPAD_LOOK_MAX: f32 = 6.0;
+
+// Gamepad deadzone slider: shown as a percentage of stick deflection, stored
+// as the fraction the radial deadzone consumes.
+const GAMEPAD_DEADZONE_RANGE: (f32, f32) = (0.0, 40.0);
+
 // Field-of-view slider: a vertical FOV in degrees applied directly (the slider
 // value IS the degrees, so `slider_apply_value` only clamps and the recover is
 // the identity) to every Camera3D's `fov_y_degrees`. The range spans a narrow to
@@ -456,9 +479,21 @@ pub(crate) fn slider_range(key: &str) -> Option<(f32, f32)> {
         "auto_exposure_max_ev" => Some(AE_MAX_EV_RANGE),
         "auto_exposure_speed" => Some(AE_SPEED_RANGE),
         "mouse_sensitivity" => Some(MOUSE_SENSITIVITY_RANGE),
+        "gamepad_look_sensitivity" => Some(GAMEPAD_LOOK_RANGE),
+        "gamepad_deadzone" => Some(GAMEPAD_DEADZONE_RANGE),
         "fov" => Some(FOV_RANGE),
         _ => None,
     }
+}
+
+// Whether `key` is a slider that acts on the camera / input path rather than a
+// render param: its live apply travels as a ControlsCommand (or a graphics
+// store write for FOV) and must skip the post-process push.
+pub(crate) fn is_controls_slider(key: &str) -> bool {
+    matches!(
+        key,
+        "mouse_sensitivity" | "fov" | "gamepad_look_sensitivity" | "gamepad_deadzone"
+    )
 }
 
 // The setting value at a `0.0..=1.0` fraction of its range, or `None` for a
@@ -491,8 +526,10 @@ pub(crate) fn format_slider_value(key: &str, value: f32) -> String {
         "ssr_max_distance" | "ssgi_max_distance" | "ssao_radius" => format!("{value:.1} m"),
         // [0, 1] strengths read more naturally as a percentage.
         "vignette" | "lut_strength" => format!("{}%", (value * 100.0).round() as i32),
-        // Mouse sensitivity is a whole-number 1..100 scale.
-        "mouse_sensitivity" => format!("{}", value.round() as i32),
+        // The sensitivity sliders are whole-number 1..100 scales.
+        "mouse_sensitivity" | "gamepad_look_sensitivity" => format!("{}", value.round() as i32),
+        // The stick deadzone reads as a percentage of deflection.
+        "gamepad_deadzone" => format!("{}%", value.round() as i32),
         // Field of view reads in whole degrees.
         "fov" => format!("{}\u{00b0}", value.round() as i32),
         _ => format!("{value:.2}"),
@@ -530,6 +567,15 @@ pub(crate) fn slider_apply_value(key: &str, value: f32) -> f32 {
             let v = value.clamp(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1);
             MOUSE_SENS_MIN + (MOUSE_SENS_MAX - MOUSE_SENS_MIN) * (v - 1.0) / 99.0
         }
+        // 1..100 UI value -> radians/second at full deflection, linearly.
+        "gamepad_look_sensitivity" => {
+            let v = value.clamp(GAMEPAD_LOOK_RANGE.0, GAMEPAD_LOOK_RANGE.1);
+            GAMEPAD_LOOK_MIN + (GAMEPAD_LOOK_MAX - GAMEPAD_LOOK_MIN) * (v - 1.0) / 99.0
+        }
+        // Percentage shown -> deflection fraction stored.
+        "gamepad_deadzone" => {
+            value.clamp(GAMEPAD_DEADZONE_RANGE.0, GAMEPAD_DEADZONE_RANGE.1) / 100.0
+        }
         // FOV is stored as degrees, only clamped to the slider range.
         "fov" => value.clamp(FOV_RANGE.0, FOV_RANGE.1),
         _ => value,
@@ -547,6 +593,12 @@ pub(crate) fn slider_recover_value(key: &str, stored: f32) -> f32 {
         "mouse_sensitivity" => {
             1.0 + (stored - MOUSE_SENS_MIN) / (MOUSE_SENS_MAX - MOUSE_SENS_MIN) * 99.0
         }
+        // radians/second -> 1..100 UI value (inverse of the apply mapping).
+        "gamepad_look_sensitivity" => {
+            1.0 + (stored - GAMEPAD_LOOK_MIN) / (GAMEPAD_LOOK_MAX - GAMEPAD_LOOK_MIN) * 99.0
+        }
+        // Deflection fraction stored -> percentage shown.
+        "gamepad_deadzone" => stored * 100.0,
         _ => stored,
     }
 }

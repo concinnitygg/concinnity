@@ -22,6 +22,7 @@ use std::collections::HashMap;
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
 // Shown in a rebind row's value label while it waits for the user to press a key.
 const REBIND_PROMPT: &str = "Press a key...";
+const PAD_REBIND_PROMPT: &str = "Press a button...";
 
 // Per-hit-region bookkeeping stored after init().
 #[derive(Debug)]
@@ -436,23 +437,35 @@ impl System for UiInputSystem {
             return StepResult::Continue;
         }
 
-        // A pending key rebind (a Controls-tab rebind row was clicked) consumes
-        // the whole frame: the next pressed key binds it, Escape cancels (and
-        // restores the row's previous text), otherwise it keeps waiting. No
-        // clicks, hover, or other key bindings fire while capturing.
+        // A pending rebind (a Controls-tab rebind row was clicked) consumes
+        // the whole frame: the next pressed key (or gamepad button, for a
+        // `pad_*` row) binds it, Escape cancels (and restores the row's
+        // previous text), otherwise it keeps waiting. No clicks, hover, or
+        // other key bindings fire while capturing; input of the other kind is
+        // ignored, so a stray key press never lands in a button row.
         if self.capturing.is_some() {
+            let wants_button = self
+                .capturing
+                .as_ref()
+                .is_some_and(|c| c.setting_key.starts_with("pad_"));
+            let op = if wants_button {
+                input.captured_button.map(SettingOp::RebindButton)
+            } else {
+                input.captured_key.map(SettingOp::Rebind)
+            };
             if input.escape {
                 self.cancel_capture(ctx);
-            } else if let Some(key) = input.captured_key {
+            } else if let Some(op) = op {
                 let cap = self.capturing.take().expect("capturing is some");
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
                     setting: cap.setting_key,
-                    op: SettingOp::Rebind(key),
+                    op,
                     value_label: cap.value_label,
                     persist: true,
                 });
-                // GraphicsSystem rewrites the value label to the bound key when
-                // it reads the command next tick; the prompt shows until then.
+                // GraphicsSystem rewrites the value label to the new binding
+                // when it reads the command next tick; the prompt shows until
+                // then.
             }
             return StepResult::Continue;
         }
@@ -741,8 +754,9 @@ impl System for UiInputSystem {
             }
         }
 
-        // Begin a key rebind capture for a clicked rebind row: stash the value
-        // label's current text (to restore on cancel) and show the prompt.
+        // Begin a rebind capture for a clicked rebind row: stash the value
+        // label's current text (to restore on cancel) and show the prompt for
+        // the input kind the row captures.
         if let Some((setting_key, value_label)) = start_capture {
             let prev_text = value_label
                 .and_then(|id| {
@@ -752,7 +766,12 @@ impl System for UiInputSystem {
                 })
                 .unwrap_or_default();
             if let Some(id) = value_label {
-                self.set_label_text(ctx, id, REBIND_PROMPT);
+                let prompt = if setting_key.starts_with("pad_") {
+                    PAD_REBIND_PROMPT
+                } else {
+                    REBIND_PROMPT
+                };
+                self.set_label_text(ctx, id, prompt);
             }
             self.capturing = Some(Capture {
                 setting_key,

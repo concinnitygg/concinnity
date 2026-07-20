@@ -582,6 +582,10 @@ impl GraphicsSystem {
         // Pushed to the backend after it is built (below) and used to sync the
         // Controls-tab rebind row labels (`init_rebind_rows`).
         self.keymap = user_settings.controls.keymap.unwrap_or_default();
+        // Gamepad button map: same override rule; InputSystem loads its own
+        // copy at its init, so this one only drives the rebind row labels and
+        // the SettingsState handoff.
+        self.gamepad_map = user_settings.controls.gamepad_map.unwrap_or_default();
         // Snapshot of the resolved quality toggles for the value-label arm below
         // (a copy, matching the other snapshot locals, so the closure does not
         // borrow self while ctx is borrowed mutably).
@@ -2596,6 +2600,8 @@ impl GraphicsSystem {
         ctx.insert_resource(crate::gfx::settings_system::SettingsState {
             keymap: self.keymap,
             rebind_rows: std::mem::take(&mut self.rebind_rows),
+            gamepad_map: self.gamepad_map,
+            pad_rebind_rows: std::mem::take(&mut self.pad_rebind_rows),
             sliders: std::mem::take(&mut self.sliders),
             cycle_value_labels: std::mem::take(&mut self.cycle_value_labels),
             post_process: self.post_process,

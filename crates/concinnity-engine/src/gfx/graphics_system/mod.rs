@@ -235,6 +235,13 @@ pub struct GraphicsSystem {
     // HitRegions. Maps each rebindable action to its value `TextLabel`, so a
     // rebind (and the swap it may trigger) can refresh both affected row labels.
     rebind_rows: Vec<RebindViz>,
+    // Live gamepad action -> button map. Seeded at init from the persisted
+    // `ControlsSettings.gamepad_map` or the engine default; InputSystem applies
+    // it (the gamepad is polled engine-side, so no backend push).
+    gamepad_map: crate::assets::GamepadMap,
+    // Gamepad rebind rows in the world, captured at init from their
+    // `setting:pad_*:rebind` HitRegions, like `rebind_rows`.
+    pad_rebind_rows: Vec<PadRebindViz>,
     // Device capability flags, queried from the backend once it is built. Drives
     // the capability gating at init: a settings row whose feature the device
     // cannot provide (e.g. ray-traced reflections without hardware ray tracing)
@@ -304,6 +311,14 @@ pub struct GraphicsSystem {
 // handed to SettingsState, which drives the live rebind drain.
 pub(crate) struct RebindViz {
     pub(crate) action: crate::gfx::keymap::Bindable,
+    pub(crate) value_id: AssetId,
+}
+
+// One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`: built at
+// init (`init_pad_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
+// and handed to SettingsState for the button-rebind drain.
+pub(crate) struct PadRebindViz {
+    pub(crate) action: crate::assets::GamepadAction,
     pub(crate) value_id: AssetId,
 }
 
@@ -419,6 +434,8 @@ impl GraphicsSystem {
             clip_rects: std::collections::HashMap::new(),
             keymap: crate::gfx::keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
+            gamepad_map: crate::assets::GamepadMap::default(),
+            pad_rebind_rows: Vec::new(),
             // All-capable until the backend reports otherwise at init.
             caps: crate::gfx::backend::DeviceCapabilities::ALL,
             // Conservative until probed at init.

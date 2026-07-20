@@ -260,6 +260,19 @@ pub struct ControlsSettings {
     // active backend decodes physical keys through this map.
     #[serde(default)]
     pub keymap: Option<crate::gfx::keymap::KeyMap>,
+    // Gamepad look sensitivity in radians per second at full stick deflection.
+    // `None` uses the engine default. Applied when the camera controller
+    // initializes and live via ControlsCommand.
+    #[serde(default)]
+    pub gamepad_look_sensitivity: Option<f32>,
+    // Gamepad stick deadzone as a deflection fraction in [0, 1]. `None` uses
+    // the engine default. Applied by the input sampling.
+    #[serde(default)]
+    pub gamepad_deadzone: Option<f32>,
+    // Gamepad action button bindings (sprint/jump/interact). `None` uses the
+    // engine defaults (L3/South/West). Applied by the input sampling.
+    #[serde(default)]
+    pub gamepad_map: Option<crate::assets::GamepadMap>,
 }
 
 impl Settings {
@@ -368,6 +381,12 @@ mod tests {
                 keymap: Some(crate::gfx::keymap::KeyMap {
                     forward: crate::assets::Key::Up,
                     ..crate::gfx::keymap::KeyMap::default()
+                }),
+                gamepad_look_sensitivity: Some(3.0),
+                gamepad_deadzone: Some(0.2),
+                gamepad_map: Some(crate::assets::GamepadMap {
+                    jump: crate::assets::GamepadButton::East,
+                    ..crate::assets::GamepadMap::default()
                 }),
             },
         };

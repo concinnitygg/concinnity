@@ -26,6 +26,9 @@ pub struct Camera3DSystem {
     move_speed: f32,
     sprint_multiplier: f32,
     mouse_sensitivity: f32,
+    // Gamepad look speed in radians per second at full stick deflection
+    // (rate-based, unlike the per-pixel mouse sensitivity).
+    gamepad_look_sensitivity: f32,
     player_radius: f32,
     bounds_min: [f32; 3],
     bounds_max: [f32; 3],
@@ -48,6 +51,7 @@ impl Camera3DSystem {
             move_speed: c.move_speed,
             sprint_multiplier: c.sprint_multiplier,
             mouse_sensitivity: c.mouse_sensitivity,
+            gamepad_look_sensitivity: crate::gfx::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
             player_radius: c.player_radius,
             bounds_min: c.bounds_min,
             bounds_max: c.bounds_max,
@@ -78,6 +82,9 @@ impl System for Camera3DSystem {
         let settings = crate::config::Settings::load();
         if let Some(s) = settings.controls.mouse_sensitivity {
             self.mouse_sensitivity = s;
+        }
+        if let Some(s) = settings.controls.gamepad_look_sensitivity {
+            self.gamepad_look_sensitivity = s;
         }
         if let Some(fov) = settings.graphics.fov {
             for camera in ctx.query_mut::<Camera3D>() {
@@ -112,6 +119,9 @@ impl System for Camera3DSystem {
                 if let Some(s) = cmd.mouse_sensitivity {
                     self.mouse_sensitivity = s;
                 }
+                if let Some(s) = cmd.gamepad_look_sensitivity {
+                    self.gamepad_look_sensitivity = s;
+                }
                 if let Some(fov) = cmd.fov_y_degrees {
                     pending_fov = Some(fov);
                 }
@@ -142,9 +152,14 @@ impl System for Camera3DSystem {
             if let Some(fov) = pending_fov {
                 camera.fov_y_degrees = fov;
             }
-            // mouse look
-            camera.yaw -= input.mouse_dx * self.mouse_sensitivity;
-            camera.pitch = (camera.pitch - input.mouse_dy * self.mouse_sensitivity).clamp(
+            // Look: pixel-based mouse deltas plus the rate-based right stick
+            // (deflection x radians/second x dt, so it is frame-rate correct).
+            let look_dx = input.mouse_dx * self.mouse_sensitivity
+                + input.look_axis[0] * self.gamepad_look_sensitivity * dt;
+            let look_dy = input.mouse_dy * self.mouse_sensitivity
+                + input.look_axis[1] * self.gamepad_look_sensitivity * dt;
+            camera.yaw -= look_dx;
+            camera.pitch = (camera.pitch - look_dy).clamp(
                 -std::f32::consts::FRAC_PI_2 + 0.01,
                 std::f32::consts::FRAC_PI_2 - 0.01,
             );
@@ -197,6 +212,11 @@ impl System for Camera3DSystem {
                 target[0] -= right[0] * speed;
                 target[2] -= right[2] * speed;
             }
+            // The left stick rides the same bases: partial deflection walks
+            // proportionally slower (the axis magnitude is at most 1).
+            target[0] += (fwd[0] * input.move_axis[1] + right[0] * input.move_axis[0]) * speed;
+            target[1] += fwd[1] * input.move_axis[1] * speed;
+            target[2] += (fwd[2] * input.move_axis[1] + right[2] * input.move_axis[0]) * speed;
             // Free-fly: jump is "rise"; no down key, descend by pitching down + W.
             if self.free_fly && input.jump {
                 target[1] += speed;
@@ -358,7 +378,7 @@ mod tests {
         // NEW sensitivity (0.005), not the controller's 0.001.
         world.events_mut::<ControlsCommand>().send(ControlsCommand {
             mouse_sensitivity: Some(0.005),
-            fov_y_degrees: None,
+            ..Default::default()
         });
         world.add_component(FrameInput {
             mouse_dx: 10.0,
@@ -400,8 +420,8 @@ mod tests {
         // A FOV-only command applies this tick; a sensitivity-only command does
         // not disturb the FOV.
         world.events_mut::<ControlsCommand>().send(ControlsCommand {
-            mouse_sensitivity: None,
             fov_y_degrees: Some(90.0),
+            ..Default::default()
         });
         world.add_component(FrameInput::default());
         world.step();
@@ -417,7 +437,7 @@ mod tests {
 
         world.events_mut::<ControlsCommand>().send(ControlsCommand {
             mouse_sensitivity: Some(0.004),
-            fov_y_degrees: None,
+            ..Default::default()
         });
         world.step();
         let fov2 = world

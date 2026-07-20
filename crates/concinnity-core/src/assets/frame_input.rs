@@ -26,6 +26,22 @@ pub struct FrameInput {
     /// and [captured_key](#structfield.captured_key) it is not frozen while a
     /// menu is open.
     pub ctrl: bool,
+    /// Gamepad left-stick movement vector `[x, y]`: `x` is rightward strafe,
+    /// `y` is forward. Radial deadzone applied, magnitude at most 1, so partial
+    /// deflection walks slower. `[0.0, 0.0]` with no gamepad; frozen (zeroed)
+    /// while a menu is open, like the movement keys.
+    pub move_axis: [f32; 2],
+    /// Gamepad right-stick look vector `[x, y]` in the mouse-delta sign
+    /// convention (positive `x` looks right, positive `y` looks down), with
+    /// deadzone and response curve applied, magnitude at most 1. Unlike the
+    /// pixel-based mouse deltas this is a deflection rate: consumers scale it
+    /// by their look speed and the frame time. Frozen while a menu is open.
+    pub look_axis: [f32; 2],
+    /// The gamepad button pressed this frame, for one frame, or `None`.
+    /// Surfaced regardless of menu state (like
+    /// [captured_key](#structfield.captured_key)) so the settings menu can
+    /// capture a button for rebinding.
+    pub captured_button: Option<crate::assets::GamepadButton>,
     /// Accumulated horizontal mouse movement since the last frame (pixels).
     pub mouse_dx: f32,
     /// Accumulated vertical mouse movement since the last frame (pixels).
