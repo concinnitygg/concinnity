@@ -41,7 +41,8 @@ struct GpuLight {
     float cos_inner;
     float cos_outer;
     int   shadow_index;
-    float _pad;
+    // Index into the AreaLightData table for an area light, else -1.
+    int   data_index;
 };
 
 layout(std140, set = 0, binding = 1) uniform LightBlock {
@@ -121,6 +122,34 @@ struct SpotShadowData {
 layout(std430, set = 0, binding = 13) readonly buffer SpotShadowBlock {
     SpotShadowData spot_shadows[];
 } spot_shadow_buf;
+
+// GpuLight.kind discriminant for a rectangular area light.
+const uint LIGHT_KIND_AREA = 2u;
+
+// One rectangular area light's extent, indexed by GpuLight.data_index. Matches
+// the Rust AreaLightData in render_types.rs; the centre and emitting direction
+// ride the GpuLight itself. The edges are pre-scaled by the half-extents, so the
+// corners are centre +/- right +/- up.
+struct AreaLightData {
+    vec3 right;
+    uint two_sided;
+    vec3 up;
+    float _pad;
+};
+
+layout(std430, set = 0, binding = 14) readonly buffer AreaLightBlock {
+    AreaLightData area_lights[];
+} area_light_buf;
+
+// The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
+layout(set = 0, binding = 15) uniform sampler2D ltc_matrix;
+layout(set = 0, binding = 16) uniform sampler2D ltc_magnitude;
+
+// Edge of the LTC lookup tables, and the scale / bias that map [0, 1] onto texel
+// centres. Must match LTC_LUT_SIZE in concinnity-render's ltc module.
+const float LTC_LUT_SIZE  = 64.0;
+const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
+const float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
 
 layout(set = 0, binding = 4) uniform samplerCube irradiance_cube;
 layout(set = 0, binding = 5) uniform samplerCube prefilter_cube;
@@ -252,6 +281,74 @@ float sample_spot_shadow(int shadow_index, vec3 world_pos, vec3 normal, vec2 scr
         }
     }
     return sum / SAMPLES;
+}
+
+// Clip a quad against the horizon plane z = 0, keeping the part above it.
+// Sutherland-Hodgman rather than the usual hardcoded 16-case table: a quad cut
+// by one plane yields at most 5 vertices, and the loop form cannot be got wrong
+// case by case. Mirrors clip_quad_to_horizon in concinnity-render's
+// ltc::polygon, which is unit-tested against brute-force integration.
+int clip_quad_to_horizon(vec3 quad[4], out vec3 clipped[5]) {
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        vec3 current  = quad[i];
+        vec3 previous = quad[(i + 3) % 4];
+        bool current_in  = current.z > 0.0;
+        bool previous_in = previous.z > 0.0;
+        if (current_in != previous_in) {
+            float t = previous.z / (previous.z - current.z);
+            clipped[n++] = vec3(previous.xy + t * (current.xy - previous.xy), 0.0);
+        }
+        if (current_in) {
+            clipped[n++] = current;
+        }
+    }
+    return n;
+}
+
+// Twice the contribution of one edge of the spherical polygon. The cross
+// product's z carries the sign, so a reversed winding flips the whole sum, which
+// is what tells a front-facing polygon from a back-facing one.
+float integrate_edge(vec3 v1, vec3 v2) {
+    float cos_theta = clamp(dot(v1, v2), -1.0, 1.0);
+    float theta     = acos(cos_theta);
+    float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
+    float ratio     = (sin_theta > 1e-4) ? (theta / sin_theta) : 1.0;
+    return cross(v1, v2).z * ratio;
+}
+
+// Fraction of the clamped-cosine distribution the quad covers, in [0, 1].
+// `m_inv` is the LTC inverse transform, or the identity for the diffuse term.
+float ltc_evaluate(vec3 N, vec3 V, vec3 P, mat3 m_inv, vec3 corners[4], bool two_sided) {
+    // Shading frame with the normal on +z and the first tangent in the view
+    // plane, matching how the table was fitted.
+    vec3 t1 = normalize(V - N * dot(V, N));
+    vec3 t2 = cross(N, t1);
+
+    vec3 quad[4];
+    for (int i = 0; i < 4; i++) {
+        vec3 d = corners[i] - P;
+        quad[i] = m_inv * vec3(dot(t1, d), dot(t2, d), dot(N, d));
+    }
+
+    vec3 clipped[5];
+    int n = clip_quad_to_horizon(quad, clipped);
+    if (n < 3) {
+        return 0.0;
+    }
+    for (int k = 0; k < n; k++) {
+        clipped[k] = normalize(clipped[k]);
+    }
+
+    float sum = 0.0;
+    for (int e = 0; e < n; e++) {
+        sum += integrate_edge(clipped[e], clipped[(e + 1) % n]);
+    }
+
+    // The edge sum is twice the irradiance; dividing by pi normalises the
+    // clamped cosine, so the covered fraction is sum / (2 * pi).
+    float form_factor = sum / (2.0 * PI);
+    return two_sided ? abs(form_factor) : max(-form_factor, 0.0);
 }
 
 float sample_cascade_pcf(int cascade, vec3 world_pos, vec2 screen_xy) {
@@ -441,6 +538,62 @@ void main() {
         float range   = local_light_buf.local_lights[i].range;
         vec3  col     = local_light_buf.local_lights[i].color;
         float intens  = local_light_buf.local_lights[i].intensity;
+
+        // Area lights integrate the whole panel rather than a single direction,
+        // so they replace the point / spot BRDF evaluation entirely.
+        if (local_light_buf.local_lights[i].kind == LIGHT_KIND_AREA) {
+            int ai = local_light_buf.local_lights[i].data_index;
+            if (ai < 0) {
+                continue;
+            }
+            vec3 centre = pos_w;
+            vec3 right  = area_light_buf.area_lights[ai].right;
+            vec3 up     = area_light_buf.area_lights[ai].up;
+            bool two_sided = area_light_buf.area_lights[ai].two_sided != 0u;
+
+            // Range is a cutoff measured from the panel centre, matching the
+            // sphere the clustered cull bins this light with. The physical
+            // falloff is already in the form factor: the panel subtends a
+            // smaller solid angle further away.
+            float centre_dist = length(centre - frag_world_pos);
+            float window = clamp(1.0 - centre_dist / range, 0.0, 1.0);
+            window = window * window;
+            if (window <= 0.0) {
+                continue;
+            }
+
+            vec3 corners[4];
+            corners[0] = centre - right - up;
+            corners[1] = centre + right - up;
+            corners[2] = centre + right + up;
+            corners[3] = centre - right + up;
+
+            // Diffuse needs no lookup: it is the polygon integral under the
+            // plain clamped cosine, i.e. an identity transform.
+            float diffuse_ff = ltc_evaluate(N, V, frag_world_pos, mat3(1.0), corners, two_sided);
+
+            // Specular applies the fitted transform before the same integral.
+            vec2 lut_uv = vec2(roughness, sqrt(clamp(1.0 - NdV, 0.0, 1.0)));
+            lut_uv = lut_uv * LTC_LUT_SCALE + LTC_LUT_BIAS;
+            vec4 t1 = textureLod(ltc_matrix, lut_uv, 0.0);
+            vec2 t2 = textureLod(ltc_magnitude, lut_uv, 0.0).xy;
+            // The table stores the inverse normalised so its middle entry is 1,
+            // packed as (m00, m20, m02, m22). GLSL mat3 takes COLUMNS (as MSL
+            // does), so this matches default.metal rather than the HLSL form.
+            mat3 m_inv = mat3(vec3(t1.x, 0.0, t1.y),
+                              vec3(0.0,  1.0, 0.0),
+                              vec3(t1.z, 0.0, t1.w));
+            float specular_ff = ltc_evaluate(N, V, frag_world_pos, m_inv, corners, two_sided);
+            // Schlick split baked into the table: t2.x weights the base
+            // reflectance, t2.y the grazing response.
+            vec3 area_spec = F0 * t2.x + (1.0 - F0) * t2.y;
+
+            vec3 area_radiance = col * intens * window;
+            vec3 area_kd = (1.0 - F0) * (1.0 - push.metallic);
+            Lo += area_radiance * (area_kd * albedo * diffuse_ff
+                                   + area_spec * specular_ff);
+            continue;
+        }
 
         vec3  L    = normalize(pos_w - frag_world_pos);
         float dist = length(pos_w - frag_world_pos);

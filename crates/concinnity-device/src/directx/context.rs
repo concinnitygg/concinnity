@@ -544,6 +544,21 @@ impl SpotShadowState {
     }
 }
 
+// Rectangular area lights: the per-scene `AreaLightData` table indexed by
+// `GpuLight.data_index`, plus the two LTC lookup tables the shading path
+// samples. All three are static for the world's lifetime. The tables are
+// scene-independent (fitted at build time), so they are uploaded even with no
+// area light declared -- the shader simply never samples them.
+pub(super) struct AreaLightState {
+    pub buffer: ID3D12Resource,
+    #[allow(dead_code)] // owns the resources the LTC table descriptors point at
+    pub ltc_matrix: GpuResource,
+    #[allow(dead_code)]
+    pub ltc_magnitude: GpuResource,
+    // Base of the 2-descriptor LTC table (matrix, then magnitude).
+    pub ltc_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
+
 // Volumetric fog. All fields `None`/default until the world declares a
 // `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
 // settings are cached so the per-frame encoder can build its `FogParams`
@@ -793,6 +808,9 @@ pub struct DxContext {
 
     // Spot shadow map resources. See [`SpotShadowState`].
     pub(super) spot_shadow: SpotShadowState,
+
+    // Rectangular area-light resources. See [`AreaLightState`].
+    pub(super) area_light: AreaLightState,
 
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1×1 grey fallback cubes and

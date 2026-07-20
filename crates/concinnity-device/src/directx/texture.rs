@@ -1701,6 +1701,147 @@ pub(super) fn upload_color_lut(
     })
 }
 
+// Upload a square float lookup table as a 2D texture. `components` selects the
+// format: 4 -> RGBA32F, 2 -> RG32F. Used for the two area-light LTC tables,
+// which are scene-independent (fitted at build time) and uploaded once at init.
+pub(super) fn upload_float_lut(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    size: u32,
+    components: u32,
+    texels: &[f32],
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+) -> Result<GpuResource, String> {
+    let n = size as usize;
+    let comp = components as usize;
+    let needed = n * n * comp;
+    if texels.len() < needed {
+        return Err(format!(
+            "float LUT data too short for {size}x{size}x{components}: {} floats, need {needed}",
+            texels.len()
+        ));
+    }
+    let format = match components {
+        4 => DXGI_FORMAT_R32G32B32A32_FLOAT,
+        2 => DXGI_FORMAT_R32G32_FLOAT,
+        other => return Err(format!("unsupported float LUT component count {other}")),
+    };
+
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: size as u64,
+        Height: size,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        ..Default::default()
+    };
+    let mut tex_opt: Option<ID3D12Resource> = None;
+    unsafe {
+        device.CreateCommittedResource(
+            &heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut tex_opt,
+        )
+    }
+    .map_err(|e| format!("create float LUT texture: {e}"))?;
+    let texture = tex_opt.ok_or_else(|| "create float LUT texture returned None".to_string())?;
+
+    let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_size: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut layout),
+            None,
+            None,
+            Some(&mut total_size),
+        );
+    }
+
+    let upload = create_buffer(
+        device,
+        total_size,
+        D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+    )?;
+
+    // Row-by-row to honour D3D12's row-pitch alignment.
+    let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+        .map_err(|e| format!("float LUT upload map: {e}"))?;
+    let src_row = n * comp;
+    let dst_pitch = layout.Footprint.RowPitch as usize;
+    for y in 0..n {
+        let src = &texels[y * src_row..y * src_row + src_row];
+        let dst =
+            unsafe { (map_ptr as *mut u8).add(layout.Offset as usize + y * dst_pitch) as *mut f32 };
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
+    }
+    unsafe { upload.Unmap(0, None) };
+
+    // `pResource` borrows without an AddRef; both resources outlive the
+    // synchronous copy (see `upload_color_lut`).
+    one_shot_submit(device, queue, |cmd| {
+        let src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: unsafe { std::mem::transmute_copy(&upload) },
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: layout,
+            },
+        };
+        let dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        unsafe {
+            cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+            let barrier = transition_barrier(
+                &texture,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            cmd.ResourceBarrier(&[barrier]);
+        }
+    })?;
+
+    let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_SRV {
+                MipLevels: 1,
+                ..Default::default()
+            },
+        },
+    };
+    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
+    Ok(GpuResource {
+        resource: texture,
+        srv_cpu,
+        srv_gpu,
+    })
+}
+
 // Build a 2×2×2 identity colour LUT so the composite pass always binds a valid
 // Texture3D even when the world declares no `ColorLut`. With the identity LUT
 // the grade is a no-op at any `lut_strength`. Mirrors

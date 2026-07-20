@@ -348,6 +348,12 @@ pub(in crate::vulkan) struct PlanarLightingBindings {
     // spot occludes a reflected view exactly as it does the main camera.
     pub(in crate::vulkan) spot_shadow_map_view: vk::ImageView,
     pub(in crate::vulkan) spot_shadow_data_buffer: vk::Buffer,
+    // Area lights (global set 0 bindings 14..16). Bound unchanged: a panel lights
+    // a reflected view exactly as it does the main camera.
+    pub(in crate::vulkan) area_light_buffer: vk::Buffer,
+    pub(in crate::vulkan) ltc_matrix_view: vk::ImageView,
+    pub(in crate::vulkan) ltc_magnitude_view: vk::ImageView,
+    pub(in crate::vulkan) ltc_sampler: vk::Sampler,
     pub(in crate::vulkan) shadow_ubo: vk::Buffer,
     pub(in crate::vulkan) shadow_size: u64,
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
@@ -399,6 +405,10 @@ impl PlanarReflectionSet {
             cluster_list_buffer,
             spot_shadow_map_view,
             spot_shadow_data_buffer,
+            area_light_buffer,
+            ltc_matrix_view,
+            ltc_magnitude_view,
+            ltc_sampler,
             shadow_ubo,
             shadow_size,
             shadow_map_view,
@@ -527,13 +537,13 @@ impl PlanarReflectionSet {
                 .descriptor_count((ring * 5 + usize::from(has_hiz)).max(1) as u32),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count((ring * (5 + MAX_PROBES) + usize::from(has_hiz)).max(1) as u32),
+                .descriptor_count((ring * (7 + MAX_PROBES) + usize::from(has_hiz)).max(1) as u32),
             // ring * 4 cull-set SSBOs + the binding-9 local-light, binding-11
-            // cluster-list and binding-13 spot-shadow SSBOs, one of each per
-            // global set.
+            // cluster-list, binding-13 spot-shadow and binding-14 area-light
+            // SSBOs, one of each per global set.
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count((ring * 4 + ring + ring + ring).max(1) as u32),
+                .descriptor_count((ring * 4 + ring + ring + ring + ring).max(1) as u32),
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
@@ -622,6 +632,21 @@ impl PlanarReflectionSet {
                 spot_shadow_data_buffer,
                 vk::WHOLE_SIZE,
             );
+            // Bindings 14..16: the area-light table and its two LTC lookups.
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::AREA_LIGHT_SSBO_BINDING,
+                area_light_buffer,
+                vk::WHOLE_SIZE,
+            );
+            let ltc_m = img_info(ltc_matrix_view, ltc_sampler);
+            let ltc_g = img_info(ltc_magnitude_view, ltc_sampler);
+            let ltc_writes = [
+                sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
+                sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
+            ];
+            unsafe { device.update_descriptor_sets(&ltc_writes, &[]) };
         }
 
         // Per-(plane, frame) cull sets: read the frame's object + draw-args SSBOs

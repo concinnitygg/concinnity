@@ -1147,11 +1147,11 @@ impl BakeResources {
         // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
         let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);
         // 4 cull SSBOs + one bindless object SSBO per face + the binding-9
-        // local-light, binding-11 cluster-list and binding-13 spot-shadow SSBOs,
-        // one of each per global set.
-        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 4;
+        // local-light, binding-11 cluster-list, binding-13 spot-shadow and
+        // binding-14 area-light SSBOs, one of each per global set.
+        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 5;
         let sampler_count =
-            PROBE_FACE_COUNT as u32 * (tex_pool + 5 + MAX_PROBES as u32) + u32::from(has_hiz);
+            PROBE_FACE_COUNT as u32 * (tex_pool + 7 + MAX_PROBES as u32) + u32::from(has_hiz);
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1330,6 +1330,21 @@ impl BakeResources {
                 ctx.spot_shadow.data_buffer,
                 vk::WHOLE_SIZE,
             );
+            // Bindings 14..16: the area-light table and its two LTC lookups.
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::AREA_LIGHT_SSBO_BINDING,
+                ctx.area_light.buffer,
+                vk::WHOLE_SIZE,
+            );
+            let ltc_m = img_info(ctx.area_light.ltc_matrix.view, ctx.area_light.sampler);
+            let ltc_g = img_info(ctx.area_light.ltc_magnitude.view, ctx.area_light.sampler);
+            let ltc_writes = [
+                sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
+                sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
+            ];
+            unsafe { device.update_descriptor_sets(&ltc_writes, &[]) };
         }
 
         // Six readback buffers (one RGBA16F face each, tightly packed).

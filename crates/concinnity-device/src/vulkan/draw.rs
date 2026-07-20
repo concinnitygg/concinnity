@@ -7,7 +7,7 @@
 use ash::vk;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
-use crate::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms, TextDrawCall};
+use crate::gfx::render_types::{LightUniforms, ShadowUniforms, TextDrawCall};
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
@@ -862,21 +862,22 @@ pub(super) fn upload_light_uniforms(
 // An empty scene leaves the 1-element placeholder buffer untouched
 // (num_local_lights == 0 keeps the shader from reading it). Mirrors the single
 // upload path of upload_light_uniforms; the SSBO is never rewritten per-frame.
-pub(super) fn upload_local_lights(
+pub(super) fn upload_static_records<T: Copy>(
     device: &ash::Device,
-    local_light_memory: vk::DeviceMemory,
-    lights: &[GpuLight],
+    memory: vk::DeviceMemory,
+    records: &[T],
+    label: &str,
 ) -> Result<(), String> {
-    if lights.is_empty() {
+    if records.is_empty() {
         return Ok(());
     }
-    let size = std::mem::size_of_val(lights) as u64;
+    let size = std::mem::size_of_val(records) as u64;
     unsafe {
         let ptr = device
-            .map_memory(local_light_memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map local light ssbo: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(lights.as_ptr() as *const u8, ptr, size as usize);
-        device.unmap_memory(local_light_memory);
+            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+            .map_err(|e| format!("map {label} ssbo: {e}"))? as *mut u8;
+        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr, size as usize);
+        device.unmap_memory(memory);
     }
     Ok(())
 }

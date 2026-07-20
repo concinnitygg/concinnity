@@ -903,10 +903,11 @@ impl DxContext {
                 self.cluster_params_gva(self.current_frame, false),
             );
             cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-            // [15] + [16] the spot shadow projections and depth array. Bound
-            // like any other main-pass face: a shadowed spot lights a probe
-            // capture with the same cone occlusion the main camera sees.
-            self.bind_spot_shadow(cmd, super::draw::SpotShadowParams::BINDLESS);
+            // [15]..[18] the spot shadow projections + depth array and the
+            // area-light table + LTC lookups. Bound like any other main-pass
+            // face: a shadowed spot occludes a probe capture, and an area light
+            // lights it, exactly as they do for the main camera.
+            self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
             cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
             // [10] probe cube array (valid -- filled with the sky) + [11] the EMPTY
             // ProbeSet (count 0), so a probe face samples only the sky, not other

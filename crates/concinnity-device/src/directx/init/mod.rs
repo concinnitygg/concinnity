@@ -115,6 +115,7 @@ impl DxContext {
             light_uniforms,
             local_lights,
             spot_shadows,
+            area_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -447,6 +448,7 @@ impl DxContext {
             flat_pool_base_slot,
             probe_cube_base_slot,
             spot_shadow_srv_slot,
+            ltc_srv_base_slot,
             srv_slots,
         } = heap_layout::SrvHeapLayout::compute(&heap_layout::SrvHeapParams {
             n_objects,
@@ -680,6 +682,51 @@ impl DxContext {
             unsafe { buf.Unmap(0, None) };
             buf
         };
+
+        // Per-scene rectangular area lights: the edge vectors that do not fit in
+        // `GpuLight`, indexed by its `data_index`. A world with no area light
+        // still gets a one-element buffer, since the shader never reads it
+        // (`data_index` stays -1) but the root SRV must be valid.
+        let area_light_data = if area_lights.is_empty() {
+            vec![crate::gfx::render_types::AreaLightData::ZERO]
+        } else {
+            area_lights.clone()
+        };
+        let area_light_buffer = {
+            use crate::gfx::render_types::AreaLightData;
+            let size = align256((area_light_data.len() * size_of::<AreaLightData>()) as u64);
+            let buf = create_buffer(
+                &device,
+                size,
+                D3D12_HEAP_TYPE_UPLOAD,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+            )?;
+            upload_static_records(&buf, &area_light_data, "area-light")?;
+            buf
+        };
+
+        // Area-light LTC tables. Scene-independent (they depend only on the
+        // build-time fit), so they are created unconditionally and the shader
+        // simply never samples them when no area light is declared.
+        let ltc_size = crate::gfx::ltc::LTC_LUT_SIZE as u32;
+        let ltc_matrix_texture = upload_float_lut(
+            &device,
+            &command_queue,
+            ltc_size,
+            4,
+            crate::gfx::ltc::matrix_texels(),
+            slot_cpu(ltc_srv_base_slot),
+            slot_gpu(ltc_srv_base_slot),
+        )?;
+        let ltc_magnitude_texture = upload_float_lut(
+            &device,
+            &command_queue,
+            ltc_size,
+            2,
+            crate::gfx::ltc::magnitude_texels(),
+            slot_cpu(ltc_srv_base_slot + 1),
+            slot_gpu(ltc_srv_base_slot + 1),
+        )?;
 
         // IBL cubemaps (irradiance + prefilter)
         // When env_map_bytes is Some, deserialise the EnvironmentMap payload and
@@ -2139,6 +2186,12 @@ impl DxContext {
                 slice_size: spot_shadow_slice_size,
                 scheduler: Default::default(),
                 render_mask: 0,
+            },
+            area_light: super::context::AreaLightState {
+                buffer: area_light_buffer,
+                ltc_matrix: ltc_matrix_texture,
+                ltc_magnitude: ltc_magnitude_texture,
+                ltc_table_gpu: slot_gpu(ltc_srv_base_slot),
             },
             env_map,
             color_lut,

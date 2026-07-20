@@ -565,28 +565,38 @@ pub(super) fn upload_light_uniforms(
 // Root parameter indices for the spot shadow binds, which differ per root
 // signature because each grew a different number of earlier parameters.
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct SpotShadowParams {
+pub(in crate::directx) struct LocalLightParams {
     // Root SRV carrying the `SpotShadowData` buffer.
-    pub buffer: u32,
-    // Descriptor table carrying the depth array SRV.
-    pub table: u32,
+    pub spot_buffer: u32,
+    // Descriptor table carrying the spot shadow depth array SRV.
+    pub spot_table: u32,
+    // Root SRV carrying the `AreaLightData` buffer.
+    pub area_buffer: u32,
+    // Descriptor table carrying the two LTC lookup tables.
+    pub ltc_table: u32,
 }
 
-impl SpotShadowParams {
+impl LocalLightParams {
     // Legacy static main root signature.
     pub const MAIN: Self = Self {
-        buffer: 12,
-        table: 13,
+        spot_buffer: 12,
+        spot_table: 13,
+        area_buffer: 14,
+        ltc_table: 15,
     };
     // Shared instanced + skinned root signature.
     pub const INSTANCED: Self = Self {
-        buffer: 13,
-        table: 14,
+        spot_buffer: 13,
+        spot_table: 14,
+        area_buffer: 15,
+        ltc_table: 16,
     };
     // Bindless main root signature.
     pub const BINDLESS: Self = Self {
-        buffer: 15,
-        table: 16,
+        spot_buffer: 15,
+        spot_table: 16,
+        area_buffer: 17,
+        ltc_table: 18,
     };
 }
 

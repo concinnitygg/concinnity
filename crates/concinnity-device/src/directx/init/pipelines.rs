@@ -245,6 +245,15 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
+    // [15] table: the two area-light LTC tables at t12..t13, contiguous in the
+    // heap so one range covers both.
+    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 2,
+        BaseShaderRegister: 12, // t12..t13
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
 
     let params = [
         // [0] Root constants: model mat4 + material = 28 DWORDs at b0
@@ -405,6 +414,28 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [14] Root SRV: per-scene StructuredBuffer<AreaLightData> at t11.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 11,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [15] table: the area-light LTC tables at t12..t13.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &ltc_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main root sig")
@@ -490,6 +521,14 @@ fn create_main_bindless_root_signature(
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
         BaseShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 1, // t16
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    // [18] table: the area-light LTC tables, past the spot shadow array.
+    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 2,
+        BaseShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 3, // t18..t19
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -686,6 +725,28 @@ fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [17] Root SRV: per-scene StructuredBuffer<AreaLightData> at t17.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 2, // t17,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [18] table: the area-light LTC tables at t18..t19.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &ltc_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
@@ -748,6 +809,14 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
         BaseShaderRegister: 10, // t10
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    // [16] table: the area-light LTC tables at t12..t13 (matches the main layout).
+    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 2,
+        BaseShaderRegister: 12, // t12..t13
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -917,6 +986,28 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
                 DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                     NumDescriptorRanges: 1,
                     pDescriptorRanges: &spot_shadow_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [15] Root SRV: per-scene StructuredBuffer<AreaLightData> at t11.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 11,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [16] table: the area-light LTC tables at t12..t13.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &ltc_srv_range,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,

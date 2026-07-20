@@ -40,6 +40,7 @@
 //   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
 //   [ssgi_gi_srv_slot..]           (SSGI) gather-target SRV
 //   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
+//   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //   srv_slots                      total descriptor count (heap size)
 
 use crate::directx::context::{FRAMES, MAX_CLONE_DRAWS, MAX_SKINNED_OBJECTS};
@@ -132,6 +133,10 @@ pub(in crate::directx) struct SrvHeapLayout {
     // cubes as one contiguous 3-slot table, so slots 0..3 cannot take a fourth
     // member without splitting that table.
     pub spot_shadow_srv_slot: usize,
+    // The two area-light LTC lookup tables, contiguous so one 2-descriptor
+    // table covers both: [0] the inverse-transform matrix (RGBA32F), [1] the
+    // magnitude / Fresnel pair (RG32F).
+    pub ltc_srv_base_slot: usize,
     pub srv_slots: usize,
 }
 
@@ -201,7 +206,10 @@ impl SrvHeapLayout {
         // Spot shadow array SRV. Always reserved: a world with no shadowed spot
         // binds a 1x1 fallback array there so the descriptor is never unwritten.
         let spot_shadow_srv_slot = probe_cube_base_slot + PROBE_CUBE_COUNT;
-        let srv_slots = spot_shadow_srv_slot + 1;
+        // Area-light LTC tables. Scene-independent (fitted at build time), so
+        // they are always reserved and always uploaded.
+        let ltc_srv_base_slot = spot_shadow_srv_slot + 1;
+        let srv_slots = ltc_srv_base_slot + 2;
         Self {
             object_base_slot,
             hdr_srv_slot,
@@ -233,6 +241,7 @@ impl SrvHeapLayout {
             flat_pool_base_slot,
             probe_cube_base_slot,
             spot_shadow_srv_slot,
+            ltc_srv_base_slot,
             srv_slots,
         }
     }
@@ -253,7 +262,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 30] = [
+        let blocks: [(usize, usize); 31] = [
             (
                 l.object_base_slot,
                 p.n_objects * 2 + p.n_clusters * 2 + p.n_atlases.max(1),
@@ -290,6 +299,7 @@ mod tests {
             ),
             (l.probe_cube_base_slot, PROBE_CUBE_COUNT),
             (l.spot_shadow_srv_slot, 1),
+            (l.ltc_srv_base_slot, 2),
         ];
         let mut expected_base = GLOBAL_SRV_COUNT;
         for (i, (base, count)) in blocks.iter().enumerate() {

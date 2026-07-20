@@ -94,6 +94,7 @@ impl VkContext {
             // (global set 0 binding 9).
             local_lights,
             spot_shadows,
+            area_lights,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -653,6 +654,47 @@ impl VkContext {
             NUM_SHADOW_CASCADES as u32,
         )?;
 
+        // Rectangular area lights: the edge vectors that do not fit in
+        // `GpuLight`, indexed by its `data_index`, plus the two LTC tables the
+        // shading path samples. A world with no area light still gets a
+        // one-element buffer, since the shader never reads it (`data_index`
+        // stays -1) but the descriptor must be valid. The tables are
+        // scene-independent, so they are uploaded either way.
+        let area_light_data = if area_lights.is_empty() {
+            vec![crate::gfx::render_types::AreaLightData::ZERO]
+        } else {
+            area_lights.clone()
+        };
+        let area_light_size = std::mem::size_of_val(area_light_data.as_slice()) as u64;
+        let (area_light_buffer, area_light_memory) = create_buffer(
+            &instance,
+            &device,
+            physical_device,
+            area_light_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        upload_static_records(&device, area_light_memory, &area_light_data, "area-light")?;
+        let ltc_size = crate::gfx::ltc::LTC_LUT_SIZE as u32;
+        let ltc_upload = GpuUploadContext {
+            instance: &instance,
+            device: &device,
+            physical_device,
+            command_pool,
+            queue: graphics_queue,
+        };
+        let ltc_matrix_image =
+            upload_float_lut(&ltc_upload, ltc_size, 4, crate::gfx::ltc::matrix_texels())?;
+        let ltc_magnitude_image = upload_float_lut(
+            &ltc_upload,
+            ltc_size,
+            2,
+            crate::gfx::ltc::magnitude_texels(),
+        )?;
+        // Linear clamp-to-edge: the LUT is indexed by roughness / view angle, so
+        // an edge sample must not wrap.
+        let ltc_sampler = create_sampler_cube_linear(&device)?;
+
         // Spot shadow map array: one layer per shadow-casting spot, at a quarter
         // the cascade resolution (a spot slice covers a single cone, not a
         // view-frustum slab). Passing size 0 yields the 1x1 fallback, which is
@@ -993,7 +1035,7 @@ impl VkContext {
         upload_shadow_uniforms(&device, shadow_ubo_memory, &shadow_uniforms)?;
         upload_light_uniforms(&device, light_ubo_memory, &light_uniforms)?;
         // Empty scene keeps the 1-element placeholder (nothing copied in).
-        upload_local_lights(&device, local_light_memory, &local_lights)?;
+        upload_static_records(&device, local_light_memory, &local_lights, "local-light")?;
 
         // Clustered light binning. The per-cluster list + `ClusterParams` buffers
         // are always allocated (the forward shaders reference bindings 10 + 11
@@ -1149,6 +1191,26 @@ impl VkContext {
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             );
+            // Area lights: the per-scene table and the two LTC lookups.
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::AREA_LIGHT_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
+            for b in [
+                super::descriptor_layout::LTC_MATRIX_BINDING,
+                super::descriptor_layout::LTC_MAGNITUDE_BINDING,
+            ] {
+                bindings.push(
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(b)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                );
+            }
             unsafe {
                 device.create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
@@ -1658,13 +1720,13 @@ impl VkContext {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 // per-obj(2) + per-frame {shadow + spot shadow + IBL
-                // irradiance + IBL prefilter + SSAO occlusion} + per-frame probe
-                // cube array (MAX_PROBES) + text atlas + per-cluster(2) +
-                // per-frame composite(3: HDR resolve + bloom mip 0 + 3D colour
-                // LUT) + per-frame bindless texture pool.
+                // irradiance + IBL prefilter + SSAO occlusion + the 2 area-light
+                // LTC tables} + per-frame probe cube array (MAX_PROBES) + text
+                // atlas + per-cluster(2) + per-frame composite(3: HDR resolve +
+                // bloom mip 0 + 3D colour LUT) + per-frame bindless texture pool.
                 .descriptor_count(
                     n_obj * 2
-                        + n_frames * 5
+                        + n_frames * 7
                         + n_frames * super::probe_uniforms::MAX_PROBES as u32
                         + n_atlas
                         + n_cluster * 2
@@ -1694,9 +1756,10 @@ impl VkContext {
             + 3 * shadow_cull_set_count
             // GPU-driven G-buffer: one prev_model SSBO per frame.
             + gbuffer_sets_count
-            // Per-scene local-light SSBO, the per-cluster light-list SSBO, and
-            // the spot shadow projections SSBO: one of each per global set (per
-            // frame).
+            // Per-scene local-light SSBO, the per-cluster light-list SSBO, the
+            // spot shadow projections SSBO, and the area-light table: one of each
+            // per global set (per frame).
+            + n_frames
             + n_frames
             + n_frames
             + n_frames;
@@ -1762,6 +1825,18 @@ impl VkContext {
                 .buffer(spot_shadow.data_buffer)
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
+            let area_light_info = vk::DescriptorBufferInfo::default()
+                .buffer(area_light_buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+            let ltc_matrix_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(ltc_matrix_image.view)
+                .sampler(ltc_sampler);
+            let ltc_magnitude_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(ltc_magnitude_image.view)
+                .sampler(ltc_sampler);
             let irr_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(env_map.irradiance.view)
@@ -1893,6 +1968,23 @@ impl VkContext {
                     .dst_binding(super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&spot_shadow_data_info)),
+                // Binding 14: the per-scene area-light table.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::AREA_LIGHT_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&area_light_info)),
+                // Bindings 15 + 16: the two area-light LTC lookup tables.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::LTC_MATRIX_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&ltc_matrix_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::LTC_MAGNITUDE_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&ltc_magnitude_info)),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
@@ -3356,6 +3448,10 @@ impl VkContext {
                     cluster_list_buffer: light_cull.cluster_buffer,
                     spot_shadow_map_view: spot_shadow.map.view,
                     spot_shadow_data_buffer: spot_shadow.data_buffer,
+                    area_light_buffer,
+                    ltc_matrix_view: ltc_matrix_image.view,
+                    ltc_magnitude_view: ltc_magnitude_image.view,
+                    ltc_sampler,
                     shadow_ubo,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
@@ -3640,6 +3736,13 @@ impl VkContext {
                 render_mask: 0,
             },
             spot_shadow,
+            area_light: super::context::VkAreaLight {
+                buffer: area_light_buffer,
+                memory: area_light_memory,
+                ltc_matrix: ltc_matrix_image,
+                ltc_magnitude: ltc_magnitude_image,
+                sampler: ltc_sampler,
+            },
             textures: gpu_textures,
             normal_map_textures: gpu_normal_maps,
             text_atlas_textures: gpu_text_atlases,

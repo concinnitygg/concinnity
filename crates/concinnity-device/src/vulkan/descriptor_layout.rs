@@ -89,6 +89,21 @@ pub(in crate::vulkan) const SPOT_SHADOW_MAP_BINDING: u32 = 12;
 // `SPOT_SHADOW_MAP_BINDING`.
 pub(in crate::vulkan) const SPOT_SHADOW_DATA_SSBO_BINDING: u32 = 13;
 
+// Binding number of the per-scene `AreaLightData` storage buffer in global set
+// 0: a count-1 STORAGE_BUFFER in the fragment stage holding each rectangular
+// area light's in-plane edge vectors, indexed by `GpuLight.data_index`. Written
+// once at init (local lights are static). Appended inline in `init.rs`, one past
+// `SPOT_SHADOW_DATA_SSBO_BINDING`.
+pub(in crate::vulkan) const AREA_LIGHT_SSBO_BINDING: u32 = 14;
+
+// Binding numbers of the two area-light LTC lookup tables in global set 0, both
+// count-1 COMBINED_IMAGE_SAMPLER in the fragment stage: 15 is the inverse
+// transform (RGBA32F), 16 the magnitude / Fresnel pair (RG32F). Scene
+// independent (fitted at build time), so they are uploaded and bound even with
+// no area light declared.
+pub(in crate::vulkan) const LTC_MATRIX_BINDING: u32 = 15;
+pub(in crate::vulkan) const LTC_MAGNITUDE_BINDING: u32 = 16;
+
 // Per-object set (set 1): albedo at 0, normal map at 1.
 pub(in crate::vulkan) fn object_set() -> [Binding; 2] {
     use vk::DescriptorType as T;
@@ -190,6 +205,15 @@ mod tests {
     fn spot_shadow_bindings_follow_cluster_light_list() {
         assert_eq!(SPOT_SHADOW_MAP_BINDING, CLUSTER_LIGHT_LIST_SSBO_BINDING + 1);
         assert_eq!(SPOT_SHADOW_DATA_SSBO_BINDING, SPOT_SHADOW_MAP_BINDING + 1);
+    }
+
+    // The area-light bindings close the run: table 14, LTC matrix 15, LTC
+    // magnitude 16.
+    #[test]
+    fn area_light_bindings_follow_spot_shadow() {
+        assert_eq!(AREA_LIGHT_SSBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING + 1);
+        assert_eq!(LTC_MATRIX_BINDING, AREA_LIGHT_SSBO_BINDING + 1);
+        assert_eq!(LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING + 1);
     }
 
     #[test]

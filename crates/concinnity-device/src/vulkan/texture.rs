@@ -896,6 +896,157 @@ pub(super) fn upload_color_lut(
     })
 }
 
+// Upload a square float lookup table as a 2D image. `components` selects the
+// format: 4 -> R32G32B32A32_SFLOAT, 2 -> R32G32_SFLOAT. Used for the two
+// area-light LTC tables, which are scene-independent (fitted at build time) and
+// uploaded once at init.
+pub(super) fn upload_float_lut(
+    ctx: &GpuUploadContext<'_>,
+    size: u32,
+    components: u32,
+    texels: &[f32],
+) -> Result<GpuImage, String> {
+    let GpuUploadContext {
+        instance,
+        device,
+        physical_device,
+        command_pool,
+        queue,
+    } = *ctx;
+    let needed = (size as usize) * (size as usize) * components as usize;
+    if texels.len() < needed {
+        return Err(format!(
+            "float LUT data too short for {size}x{size}x{components}: {} floats, need {needed}",
+            texels.len()
+        ));
+    }
+    let format = match components {
+        4 => vk::Format::R32G32B32A32_SFLOAT,
+        2 => vk::Format::R32G32_SFLOAT,
+        other => return Err(format!("unsupported float LUT component count {other}")),
+    };
+
+    let byte_size = (needed * std::mem::size_of::<f32>()) as vk::DeviceSize;
+    let (staging_buf, staging_mem) = create_buffer(
+        instance,
+        device,
+        physical_device,
+        byte_size,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )?;
+    unsafe {
+        let ptr = device
+            .map_memory(staging_mem, 0, byte_size, vk::MemoryMapFlags::empty())
+            .map_err(|e| format!("map float LUT staging: {e}"))? as *mut f32;
+        std::ptr::copy_nonoverlapping(texels.as_ptr(), ptr, needed);
+        device.unmap_memory(staging_mem);
+    }
+
+    let img_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width: size,
+            height: size,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(format)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::TYPE_1);
+    let image = unsafe { device.create_image(&img_info, None) }
+        .map_err(|e| format!("create_image (float LUT): {e}"))?;
+    let reqs = unsafe { device.get_image_memory_requirements(image) };
+    let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(reqs.size)
+        .memory_type_index(find_memory_type(
+            instance,
+            physical_device,
+            reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?);
+    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .map_err(|e| format!("allocate_memory (float LUT): {e}"))?;
+    unsafe { device.bind_image_memory(image, memory, 0) }
+        .map_err(|e| format!("bind_image_memory (float LUT): {e}"))?;
+
+    one_shot_submit(device, command_pool, queue, |cmd| {
+        transition_image_layout(
+            device,
+            cmd,
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageAspectFlags::COLOR,
+        );
+        let copy_region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D::default())
+            .image_extent(vk::Extent3D {
+                width: size,
+                height: size,
+                depth: 1,
+            });
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                cmd,
+                staging_buf,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                std::slice::from_ref(&copy_region),
+            );
+        }
+        transition_image_layout(
+            device,
+            cmd,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageAspectFlags::COLOR,
+        );
+    })?;
+
+    unsafe {
+        device.destroy_buffer(staging_buf, None);
+        device.free_memory(staging_mem, None);
+    }
+
+    let view_info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+        );
+    let view = unsafe { device.create_image_view(&view_info, None) }
+        .map_err(|e| format!("create_image_view (float LUT): {e}"))?;
+
+    Ok(GpuImage {
+        image,
+        memory,
+        view,
+        aux_views: Vec::new(),
+    })
+}
+
 // Build a 2x2x2 identity colour LUT: the eight corners of the unit RGB cube.
 // Mirrors `metal/texture.rs::create_fallback_color_lut`. With the identity LUT
 // the composite grade is a no-op at any `lut_strength`, so the `sampler3D`

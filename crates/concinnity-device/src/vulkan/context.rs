@@ -178,6 +178,34 @@ impl VkSpotShadow {
     }
 }
 
+// Rectangular area lights: the per-scene `AreaLightData` table indexed by
+// `GpuLight.data_index`, plus the two LTC lookup tables the shading path
+// samples. All three are static for the world's lifetime. The tables are
+// scene-independent (fitted at build time), so they are uploaded even with no
+// area light declared -- the shader simply never samples them.
+pub(super) struct VkAreaLight {
+    pub(super) buffer: vk::Buffer,
+    pub(super) memory: vk::DeviceMemory,
+    pub(super) ltc_matrix: GpuImage,
+    pub(super) ltc_magnitude: GpuImage,
+    // Linear clamp-to-edge sampler for both tables.
+    pub(super) sampler: vk::Sampler,
+}
+
+impl VkAreaLight {
+    // Destroy every owned GPU object. Called from `VkContext::drop` after
+    // `wait_idle`.
+    pub(super) fn destroy(&self, device: &Device) {
+        self.ltc_matrix.destroy(device);
+        self.ltc_magnitude.destroy(device);
+        unsafe {
+            device.destroy_buffer(self.buffer, None);
+            device.free_memory(self.memory, None);
+            device.destroy_sampler(self.sampler, None);
+        }
+    }
+}
+
 // Skinned (skeletally animated) mesh resources, grouped off the flat `VkContext`
 // field soup. All `None` / empty until `upload_skinned` runs; with no
 // `SkinnedMesh` in the world every skinned pass is skipped. The joint matrices
@@ -894,6 +922,9 @@ pub struct VkContext {
 
     // Spot shadow map resources. See [`VkSpotShadow`].
     pub(super) spot_shadow: VkSpotShadow,
+
+    // Rectangular area-light resources. See [`VkAreaLight`].
+    pub(super) area_light: VkAreaLight,
 
     // Shared texture pool: every texture (albedo, normal map, emissive/ORM,
     // terrain secondary) lives here once at its handle, matching DX/Metal.
@@ -2205,6 +2236,7 @@ impl Drop for VkContext {
         // sampler).
         self.shadow.destroy(device);
         self.spot_shadow.destroy(device);
+        self.area_light.destroy(device);
 
         // IBL cubes + cube sampler.
         self.env_map.irradiance.destroy(device);

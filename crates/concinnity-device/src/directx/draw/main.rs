@@ -30,20 +30,27 @@ struct MainPush {
 }
 
 impl DxContext {
-    // Bind the spot shadow projections + depth array on whichever root signature
-    // is current. Both are static for the world's lifetime, so every main-pass
-    // site binds the same pair and only the parameter indices differ.
-    pub(in crate::directx) fn bind_spot_shadow(
+    // Bind the per-scene local-light side tables on whichever root signature is
+    // current: the spot shadow projections + depth array, and the area-light
+    // table + its two LTC lookups. All are static for the world's lifetime, so
+    // every main-pass site binds the same four and only the parameter indices
+    // differ. Kept as one call so a new side table reaches every site at once.
+    pub(in crate::directx) fn bind_local_light_tables(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        params: super::SpotShadowParams,
+        params: super::LocalLightParams,
     ) {
         unsafe {
             cmd.SetGraphicsRootShaderResourceView(
-                params.buffer,
+                params.spot_buffer,
                 self.spot_shadow.buffer.GetGPUVirtualAddress(),
             );
-            cmd.SetGraphicsRootDescriptorTable(params.table, self.spot_shadow.srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(params.spot_table, self.spot_shadow.srv_gpu);
+            cmd.SetGraphicsRootShaderResourceView(
+                params.area_buffer,
+                self.area_light.buffer.GetGPUVirtualAddress(),
+            );
+            cmd.SetGraphicsRootDescriptorTable(params.ltc_table, self.area_light.ltc_table_gpu);
         }
     }
 
@@ -329,7 +336,7 @@ impl DxContext {
                 // (t2). The main camera shades from its cluster's binned lights.
                 cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
                 cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                self.bind_spot_shadow(cmd, super::SpotShadowParams::BINDLESS);
+                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 // [5] is the bindless texture pool (per-object SRV region base).
@@ -389,7 +396,7 @@ impl DxContext {
                 // [10] ClusterParams (b4) + [11] the per-cluster light lists (t8).
                 cmd.SetGraphicsRootConstantBufferView(10, self.cluster_params_gva(frame_idx, true));
                 cmd.SetGraphicsRootShaderResourceView(11, self.cluster_list_gva());
-                self.bind_spot_shadow(cmd, super::SpotShadowParams::MAIN);
+                self.bind_local_light_tables(cmd, super::LocalLightParams::MAIN);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
@@ -488,7 +495,7 @@ impl DxContext {
                 // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
                 cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
                 cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
-                self.bind_spot_shadow(cmd, super::SpotShadowParams::INSTANCED);
+                self.bind_local_light_tables(cmd, super::LocalLightParams::INSTANCED);
             }
 
             // Shared cluster cull + bucket iteration; the closures own
@@ -592,7 +599,7 @@ impl DxContext {
                         self.cluster_params_gva(frame_idx, true),
                     );
                     cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                    self.bind_spot_shadow(cmd, super::SpotShadowParams::BINDLESS);
+                    self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                     cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                     cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                     cmd.SetGraphicsRootDescriptorTable(
@@ -655,7 +662,7 @@ impl DxContext {
                 // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
                 cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
                 cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
-                self.bind_spot_shadow(cmd, super::SpotShadowParams::INSTANCED);
+                self.bind_local_light_tables(cmd, super::LocalLightParams::INSTANCED);
             }
 
             // Shared skinned traversal (gate + LOD pick); the closure owns
@@ -832,7 +839,7 @@ impl DxContext {
                 // (t2). The main camera shades from its cluster's binned lights.
                 cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
                 cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                self.bind_spot_shadow(cmd, super::SpotShadowParams::BINDLESS);
+                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
                 cmd.SetGraphicsRootDescriptorTable(
