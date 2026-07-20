@@ -114,6 +114,7 @@ impl DxContext {
                 },
             light_uniforms,
             local_lights,
+            spot_shadows,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -355,12 +356,16 @@ impl DxContext {
 
         // DSV heap
         // Slots: [0] = main depth, [1..1+NUM_SHADOW_CASCADES] = per-cascade
-        // shadow DSVs (one slice each into the shadow map array), then the
+        // shadow DSVs (one slice each into the shadow map array),
+        // [..+MAX_SHADOWED_SPOTS] = per-spot shadow slice DSVs, then the
         // unified G-buffer pre-pass's private depth buffer.
         let dsv_heap: ID3D12DescriptorHeap = unsafe {
             device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-                NumDescriptors: 1 + NUM_SHADOW_CASCADES as u32 + gbuffer_dsv_extra as u32,
+                NumDescriptors: 1
+                    + NUM_SHADOW_CASCADES as u32
+                    + MAX_SHADOWED_SPOTS as u32
+                    + gbuffer_dsv_extra as u32,
                 ..Default::default()
             })
         }
@@ -372,6 +377,9 @@ impl DxContext {
         let main_dsv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: dsv_base.ptr };
         let shadow_dsv_base_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: dsv_base.ptr + dsv_descriptor_size,
+        };
+        let spot_shadow_dsv_base_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: dsv_base.ptr + (1 + NUM_SHADOW_CASCADES) * dsv_descriptor_size,
         };
 
         // CBV/SRV/UAV heap slot layout. The full per-block map + the
@@ -438,6 +446,7 @@ impl DxContext {
             planar_resolve_srv_base_slot,
             flat_pool_base_slot,
             probe_cube_base_slot,
+            spot_shadow_srv_slot,
             srv_slots,
         } = heap_layout::SrvHeapLayout::compute(&heap_layout::SrvHeapParams {
             n_objects,
@@ -590,6 +599,86 @@ impl DxContext {
             let fb =
                 create_fallback_shadow_array(&device, &command_queue, slot_cpu(0), slot_gpu(0))?;
             (Some(fb), Vec::new(), slot_gpu(0))
+        };
+
+        // Spot shadow map array: one slice per shadow-casting spot light, at a
+        // quarter the cascade resolution (a spot slice covers a single cone, not
+        // a view-frustum slab). Local lights are static, so the slice count and
+        // every light-space matrix are fixed here; only the depth refreshes.
+        // A world with no shadowed spot still binds a 1x1 fallback so the main
+        // pass's SRV is never unwritten.
+        let spot_shadow_slice_size =
+            crate::gfx::render_types::spot_shadow_slice_size(effective_shadow_size);
+        let (spot_shadow_resource, spot_shadow_dsvs) = if spot_shadows.is_empty() {
+            let fb = create_fallback_shadow_array(
+                &device,
+                &command_queue,
+                slot_cpu(spot_shadow_srv_slot),
+                slot_gpu(spot_shadow_srv_slot),
+            )?;
+            (Some(fb), Vec::new())
+        } else {
+            let (sm, dsvs) = create_shadow_map_array(
+                &device,
+                spot_shadow_slice_size,
+                spot_shadows.len() as u32,
+                spot_shadow_dsv_base_cpu,
+                dsv_descriptor_size,
+                slot_cpu(spot_shadow_srv_slot),
+                slot_gpu(spot_shadow_srv_slot),
+            )?;
+            (Some(sm), dsvs)
+        };
+        // The per-slice projections, uploaded once. A scene with no shadowed
+        // spot gets a one-element identity buffer: the shader never indexes it
+        // (every `shadow_index` is -1) but the root SRV must still be valid.
+        let spot_shadow_data = if spot_shadows.is_empty() {
+            vec![crate::gfx::render_types::SpotShadowData::ZERO]
+        } else {
+            spot_shadows.clone()
+        };
+        let spot_shadow_buffer = {
+            use crate::gfx::render_types::SpotShadowData;
+            let size = align256((spot_shadow_data.len() * size_of::<SpotShadowData>()) as u64);
+            let buf = create_buffer(
+                &device,
+                size,
+                D3D12_HEAP_TYPE_UPLOAD,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+            )?;
+            upload_static_records(&buf, &spot_shadow_data, "spot-shadow")?;
+            buf
+        };
+        // One `ShadowUniforms` per slice, each carrying that spot's matrix in
+        // `light_vps[0]`, so the shared shadow vertex shader renders a spot
+        // slice by pushing cascade_idx = 0. Written once: the projections never
+        // change, so unlike the cascade UBO this needs no per-frame ring.
+        let spot_shadow_ubo_stride = align256(size_of::<ShadowUniforms>() as u64);
+        let spot_shadow_ubo = {
+            let slots = spot_shadows.len().max(1) as u64;
+            let buf = create_buffer(
+                &device,
+                spot_shadow_ubo_stride * slots,
+                D3D12_HEAP_TYPE_UPLOAD,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+            )?;
+            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+                .map_err(|e| format!("map spot-shadow UBO: {e}"))?;
+            for (i, sd) in spot_shadows.iter().enumerate() {
+                let mut u = crate::gfx::csm::empty_shadow_uniforms();
+                u.light_vps[0] = sd.light_vp;
+                u.active_cascades = 1;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        &u as *const ShadowUniforms as *const u8,
+                        (ptr as *mut u8).add(i * spot_shadow_ubo_stride as usize),
+                        size_of::<ShadowUniforms>(),
+                    );
+                }
+            }
+            unsafe { buf.Unmap(0, None) };
+            buf
         };
 
         // IBL cubemaps (irradiance + prefilter)
@@ -1068,7 +1157,7 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             if !local_lights.is_empty() {
-                upload_local_lights(&buf, &local_lights)?;
+                upload_static_records(&buf, &local_lights, "local-light")?;
             }
             buf
         };
@@ -1446,7 +1535,8 @@ impl DxContext {
                 slot_gpu(gbuffer_srv_base_slot + 2),
             ),
             depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: dsv_base.ptr + (1 + NUM_SHADOW_CASCADES) * dsv_descriptor_size,
+                ptr: dsv_base.ptr
+                    + (1 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS) * dsv_descriptor_size,
             },
         };
 
@@ -2038,6 +2128,17 @@ impl DxContext {
                 scheduler: Default::default(),
                 render_mask: 0,
                 uniforms: crate::gfx::csm::empty_shadow_uniforms(),
+            },
+            spot_shadow: super::context::SpotShadowState {
+                resource: spot_shadow_resource,
+                dsvs: spot_shadow_dsvs,
+                srv_gpu: slot_gpu(spot_shadow_srv_slot),
+                buffer: spot_shadow_buffer,
+                ubo: spot_shadow_ubo,
+                ubo_stride: spot_shadow_ubo_stride,
+                slice_size: spot_shadow_slice_size,
+                scheduler: Default::default(),
+                render_mask: 0,
             },
             env_map,
             color_lut,

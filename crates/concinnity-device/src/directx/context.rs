@@ -493,6 +493,57 @@ pub(super) struct ShadowState {
     pub uniforms: ShadowUniforms,
 }
 
+// Spot shadow map resources: one depth array slice per shadow-casting spot
+// light, plus the `SpotShadowData` buffer holding each slice's light-space
+// projection. Local lights are static, so the slice assignment and every matrix
+// are decided once at init and only the depth contents refresh. A world with no
+// shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
+// the main pass's descriptors are always valid.
+pub(super) struct SpotShadowState {
+    pub resource: Option<GpuResource>,
+    // One DSV per shadowed spot; empty when the world has none.
+    pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    // `SpotShadowData` per slice, uploaded once at init.
+    pub buffer: ID3D12Resource,
+    // One `ShadowUniforms` per slice, carrying that spot's matrix in
+    // `light_vps[0]` so the shared shadow vertex shader can render a spot slice
+    // without a second pipeline or a second uniform layout. Written once at
+    // init: the projections are fixed for the world's lifetime, so unlike the
+    // cascade UBO this needs no per-frame copy.
+    pub ubo: ID3D12Resource,
+    // 256-byte-aligned distance between consecutive slices in `ubo`.
+    pub ubo_stride: u64,
+    pub slice_size: u32,
+    // Round-robin clock + primed set, advanced once per frame in record_frame.
+    pub scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    // Slices re-rendered this frame (bit `i` = slice `i`). Set in record_frame
+    // and read by encode_spot_shadow_pass.
+    pub render_mask: u32,
+}
+
+impl SpotShadowState {
+    // Slices actually handed out; the array, the DSV list, and the data buffer
+    // all carry exactly this many entries.
+    pub fn count(&self) -> u32 {
+        self.dsvs.len() as u32
+    }
+
+    // Advance the round-robin clock and record which slices re-render this
+    // frame. A no-op (mask stays 0) when the world has no shadowed spot.
+    pub fn advance(&mut self, every_frame: bool) {
+        let count = self.dsvs.len();
+        self.render_mask = self.scheduler.next_mask(every_frame, count);
+    }
+
+    // GPU address of slice `slice`'s baked `ShadowUniforms`.
+    pub fn slice_ubo_gva(&self, slice: u32) -> u64 {
+        debug_assert!(slice < self.count());
+        let base = unsafe { self.ubo.GetGPUVirtualAddress() };
+        base + slice as u64 * self.ubo_stride
+    }
+}
+
 // Volumetric fog. All fields `None`/default until the world declares a
 // `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
 // settings are cached so the per-frame encoder can build its `FogParams`
@@ -739,6 +790,9 @@ pub struct DxContext {
 
     // Shadow map resources. See [`ShadowState`].
     pub(super) shadow: ShadowState,
+
+    // Spot shadow map resources. See [`SpotShadowState`].
+    pub(super) spot_shadow: SpotShadowState,
 
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1×1 grey fallback cubes and
@@ -1505,6 +1559,15 @@ impl DxContext {
                 }
             }
         }
+
+        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
+        // so N shadowed spots cost one extra depth render per frame rather than
+        // N. No uniform refresh: the projections are static and were baked at
+        // init. A no-op (mask stays 0) when the world has no shadowed spot.
+        self.spot_shadow.advance(matches!(
+            self.shadow.update,
+            crate::assets::ShadowUpdate::EveryFrame
+        ));
 
         // 3. record_frame fans non-composite passes onto rayon workers
         //    (each records into its own cmd list from the per-pass pool)

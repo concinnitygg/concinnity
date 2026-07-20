@@ -130,6 +130,21 @@ cbuffer ClusterBlock : register(b4)
 // Per-cluster light-index lists the LightCull compute pass writes.
 StructuredBuffer<uint> cluster_light_list : register(t8);
 
+// One shadowed spot's slice of the spot shadow array (matches SpotShadowData in
+// render_types.rs); indexed by GpuLight.shadow_index, which doubles as the array
+// slice. t9/t10: t0..t8 are taken above and t3 belongs to the instanced/skinned
+// VS matrix buffer on the shared root signature.
+struct SpotShadowData
+{
+    float4x4 light_vp;
+    float    depth_bias;
+    float    normal_bias;
+    float2   _pad;
+};
+
+StructuredBuffer<SpotShadowData> spot_shadows    : register(t9);
+Texture2DArray<float>            spot_shadow_map : register(t10);
+
 // Blurred SSAO occlusion (1x1 white when SSAO is disabled).
 Texture2D              ssao_tex        : register(t4);
 TextureCube            irradiance_cube : register(t5);
@@ -200,6 +215,47 @@ float hash_rotation(float2 p)
 {
     float h = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
     return h * 6.2831853;
+}
+
+// 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
+// lit), and 1.0 outside the cone's light frustum so an unshadowed region is
+// never darkened. A smaller kernel than the cascade PCF: a spot slice covers
+// far less world area per texel. Mirrors `sample_spot_shadow` in default.metal.
+float sample_spot_shadow(int shadow_index, float3 world_pos, float3 normal,
+                         float2 screen_xy)
+{
+    SpotShadowData sd = spot_shadows[shadow_index];
+    // Offsetting along the normal before projecting pushes the sample off
+    // surfaces near-parallel to the light, where depth slope causes acne.
+    float3 biased = world_pos + normal * sd.normal_bias;
+    float4 light_clip = mul(sd.light_vp, float4(biased, 1.0));
+    if (light_clip.w <= 0.0)
+        return 1.0;
+    float3 ndc = light_clip.xyz / light_clip.w;
+    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        ndc.z < 0.0 || ndc.z > 1.0)
+        return 1.0;
+
+    float ref = ndc.z - sd.depth_bias;
+    float angle = hash_rotation(screen_xy);
+    float ca = cos(angle);
+    float sa = sin(angle);
+
+    uint w, h, elems, mips;
+    spot_shadow_map.GetDimensions(0, w, h, elems, mips);
+    float2 tex_size = 1.0 / float2((float)w, (float)h);
+
+    float sum = 0.0;
+    [unroll] for (int dy = -1; dy <= 1; dy++)
+    [unroll] for (int dx = -1; dx <= 1; dx++)
+    {
+        float2 off = float2(dx, dy);
+        float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
+        sum += spot_shadow_map.SampleCmpLevelZero(
+            shadow_sampler, float3(uv + rot * tex_size, (float)shadow_index), ref);
+    }
+    return sum / 9.0;
 }
 
 // 5x5 hash-rotated PCF of a single cascade. Returns the shadow factor in
@@ -391,6 +447,11 @@ float4 main(PsIn p) : SV_TARGET
             float co = local_lights[j].cos_outer;
             float t  = saturate((cd - co) / max(ci - co, 1e-4));
             atten *= t * t;
+            // Only spots that claimed a shadow slice sample the array; the rest
+            // keep shadow_index at -1 and light without casting.
+            int si = local_lights[j].shadow_index;
+            if (si >= 0 && atten > 0.0)
+                atten *= sample_spot_shadow(si, p.world_pos, N, p.sv_pos.xy);
         }
         float3 radiance = col * intens * atten;
         float3 H   = normalize(V + L);

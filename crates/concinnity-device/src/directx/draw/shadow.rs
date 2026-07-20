@@ -43,6 +43,20 @@ struct ShadowPipeline<'a> {
     root_sig: &'a ID3D12RootSignature,
 }
 
+// One shadow slice's draw state: the depth-only pipeline to draw with, the
+// uniform buffer holding its light-space matrices, and which `light_vps` entry
+// the vertex shader projects through. Grouping them keeps the caster
+// sub-encoders' argument lists short and lets the cascade pass and the spot
+// shadow pass share those encoders: a spot slice is just a binding whose
+// uniforms carry its own matrix in slot 0.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct ShadowPassBinding<'a> {
+    pub pso: &'a ID3D12PipelineState,
+    pub root_sig: &'a ID3D12RootSignature,
+    pub ubo_gva: u64,
+    pub slice_idx: u32,
+}
+
 impl DxContext {
     pub(in crate::directx) fn encode_shadow_pass(
         &self,
@@ -347,9 +361,158 @@ impl DxContext {
         }
     }
 
+    // Static + instanced depth-only casters for one shadow slice, drawn into
+    // whichever DSV the caller bound. Binds the pipeline, the shared geometry
+    // buffers, and `bind.ubo_gva`; the caller owns the render target and any
+    // depth clear. Shared by the cascade pass and the spot shadow pass, which
+    // differ only in which matrix `bind.slice_idx` selects.
+    pub(in crate::directx) fn encode_shadow_casters_into(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        bind: ShadowPassBinding<'_>,
+        cam_pos: [f32; 3],
+    ) {
+        unsafe {
+            cmd.SetPipelineState(bind.pso);
+            cmd.SetGraphicsRootSignature(bind.root_sig);
+            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
+
+            for obj in &self.draw_objects {
+                // A non-resident streamed mesh has no geometry in the shared
+                // buffers yet -- skip it everywhere.
+                if !obj.visible || !obj.resident {
+                    continue;
+                }
+                let push = ShadowPush {
+                    model: obj.model,
+                    cascade_idx: bind.slice_idx,
+                    _pad: [0; 3],
+                };
+                // Pick the LOD by camera distance; the shadow pass uses the same
+                // slice the main pass will, so silhouettes track when the runtime
+                // swaps to a coarser LOD.
+                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+                let (index_offset, index_count) = obj.active_lod(d);
+                cmd.SetGraphicsRoot32BitConstants(
+                    0,
+                    20,
+                    &push as *const ShadowPush as *const std::ffi::c_void,
+                    0,
+                );
+                cmd.DrawIndexedInstanced(
+                    index_count as u32,
+                    1,
+                    index_offset as u32,
+                    obj.base_vertex,
+                    0,
+                );
+                self.inc_draw_calls(1);
+            }
+
+            // Instanced clusters: iterate instances individually (cheap, visually
+            // identical to an instanced shadow shader). Reads the per-cluster LOD
+            // bucket layout cached at the top of record_frame by
+            // `build_instance_upload`, so the shadow pass picks the exact same LOD
+            // slice the main pass is about to draw; cascade-seam silhouettes stay
+            // coherent when the runtime swaps to a coarser LOD.
+            let layouts = self.instanced.bucket_layouts.read().unwrap();
+            for buckets in layouts.iter() {
+                for bucket in buckets.iter() {
+                    for &model in &bucket.instances {
+                        let push = ShadowPush {
+                            model,
+                            cascade_idx: bind.slice_idx,
+                            _pad: [0; 3],
+                        };
+                        cmd.SetGraphicsRoot32BitConstants(
+                            0,
+                            20,
+                            &push as *const ShadowPush as *const std::ffi::c_void,
+                            0,
+                        );
+                        cmd.DrawIndexedInstanced(
+                            bucket.index_count as u32,
+                            1,
+                            bucket.index_offset as u32,
+                            0,
+                            0,
+                        );
+                        self.inc_draw_calls(1);
+                    }
+                }
+            }
+        }
+    }
+
+    // Skinned depth-only casters for one shadow slice, drawn into whichever DSV
+    // the caller bound. Binds the skinned shadow pipeline and the deformed
+    // geometry; no depth clear, so skinned depth appends to whatever
+    // `encode_shadow_casters_into` already laid down. A no-op when the world has
+    // no skinned mesh.
+    pub(in crate::directx) fn encode_shadow_skinned_into(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        ubo_gva: u64,
+        slice_idx: u32,
+        frame_idx: usize,
+        cam_pos: [f32; 3],
+    ) {
+        let (Some(pso), Some(root_sig)) = (
+            self.skinned.shadow_pso.as_ref(),
+            self.skinned.shadow_root_sig.as_ref(),
+        ) else {
+            return;
+        };
+        if self.skinned.draw_objects.is_empty() {
+            return;
+        }
+        unsafe {
+            cmd.SetPipelineState(pso);
+            cmd.SetGraphicsRootSignature(root_sig);
+            cmd.IASetPrimitiveTopology(
+                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            );
+            cmd.IASetVertexBuffers(0, Some(&[self.skinned.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+            cmd.SetGraphicsRootConstantBufferView(1, ubo_gva);
+
+            for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+                if !obj.visible {
+                    continue;
+                }
+                // Skinned-mesh LOD: pick by camera distance (not light
+                // direction) so the shadow casts match the triangles main will
+                // rasterise. Per-cascade LOD would technically be cheaper for
+                // distant cascades, but matching main keeps cascade seams free
+                // of silhouette swaps. Mirrors Metal.
+                let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+                let (index_offset, index_count) = obj.active_lod(d);
+                let push = ShadowPush {
+                    model: obj.model,
+                    cascade_idx: slice_idx,
+                    _pad: [0; 3],
+                };
+                cmd.SetGraphicsRoot32BitConstants(
+                    0,
+                    20,
+                    &push as *const ShadowPush as *const std::ffi::c_void,
+                    0,
+                );
+                cmd.SetGraphicsRootShaderResourceView(2, self.skinned_joint_gva(frame_idx, i));
+                cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
+                self.inc_draw_calls(1);
+            }
+        }
+    }
+
     // Legacy CPU-driven shadow raster: per-cascade per-object `DrawIndexed` for
     // static + instanced (iterated per instance) + skinned casters. Used for
     // non-bindless worlds (custom shader) or worlds with no build-time geometry.
+    // Static + instanced run in one cascade sweep and skinned in a second, so
+    // each pipeline is set once; the skinned sweep does not re-clear, letting
+    // deformed depth append to the static depth via the LESS test.
     fn encode_shadow_pass_legacy(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -359,19 +522,25 @@ impl DxContext {
         render_mask: u32,
         pipeline: ShadowPipeline<'_>,
     ) {
-        let ShadowPipeline {
-            pso: shadow_pso,
-            root_sig: shadow_root_sig,
-        } = pipeline;
-        unsafe {
-            cmd.SetPipelineState(shadow_pso);
-            cmd.SetGraphicsRootSignature(shadow_root_sig);
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
-
-            // Bind this frame's shadow UBO at slot [1] once; all
-            // cascade passes share the same VPs (each picks via push).
-            cmd.SetGraphicsRootConstantBufferView(1, shadow_ubo_gva);
+        for cascade_idx in 0..NUM_SHADOW_CASCADES {
+            if render_mask & (1u32 << cascade_idx) == 0 {
+                continue;
+            }
+            let dsv = self.shadow.dsvs[cascade_idx];
+            unsafe {
+                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
+                cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
+            }
+            self.encode_shadow_casters_into(
+                cmd,
+                ShadowPassBinding {
+                    pso: pipeline.pso,
+                    root_sig: pipeline.root_sig,
+                    ubo_gva: shadow_ubo_gva,
+                    slice_idx: cascade_idx as u32,
+                },
+                cam_pos,
+            );
         }
 
         for cascade_idx in 0..NUM_SHADOW_CASCADES {
@@ -381,136 +550,14 @@ impl DxContext {
             let dsv = self.shadow.dsvs[cascade_idx];
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
-
-                for obj in &self.draw_objects {
-                    // A non-resident streamed mesh has no geometry in
-                    // the shared buffers yet -- skip it everywhere.
-                    if !obj.visible || !obj.resident {
-                        continue;
-                    }
-                    let push = ShadowPush {
-                        model: obj.model,
-                        cascade_idx: cascade_idx as u32,
-                        _pad: [0; 3],
-                    };
-                    // Pick the LOD by camera distance; the shadow pass uses
-                    // the same slice the main pass will, so silhouettes track
-                    // when the runtime swaps to a coarser LOD.
-                    let d = crate::gfx::lod::camera_distance(obj, cam_pos);
-                    let (index_offset, index_count) = obj.active_lod(d);
-                    cmd.SetGraphicsRoot32BitConstants(
-                        0,
-                        20,
-                        &push as *const ShadowPush as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.DrawIndexedInstanced(
-                        index_count as u32,
-                        1,
-                        index_offset as u32,
-                        obj.base_vertex,
-                        0,
-                    );
-                    self.inc_draw_calls(1);
-                }
-
-                // Instanced clusters: iterate instances individually
-                // (cheap, visually identical to an instanced shadow shader).
-                // Reads the per-cluster LOD bucket layout cached at the top
-                // of record_frame by `build_instance_upload`, so the
-                // shadow pass picks the exact same LOD slice the main pass
-                // is about to draw; cascade-seam silhouettes stay coherent
-                // when the runtime swaps to a coarser LOD.
-                let layouts = self.instanced.bucket_layouts.read().unwrap();
-                for buckets in layouts.iter() {
-                    for bucket in buckets.iter() {
-                        for &model in &bucket.instances {
-                            let push = ShadowPush {
-                                model,
-                                cascade_idx: cascade_idx as u32,
-                                _pad: [0; 3],
-                            };
-                            cmd.SetGraphicsRoot32BitConstants(
-                                0,
-                                20,
-                                &push as *const ShadowPush as *const std::ffi::c_void,
-                                0,
-                            );
-                            cmd.DrawIndexedInstanced(
-                                bucket.index_count as u32,
-                                1,
-                                bucket.index_offset as u32,
-                                0,
-                                0,
-                            );
-                            self.inc_draw_calls(1);
-                        }
-                    }
-                }
             }
-        }
-
-        // Skinned meshes: deformed depth, drawn after the static and
-        // instanced casters. Runs as a second cascade loop so the
-        // skinned shadow PSO is set once; the cascade DSVs are not
-        // re-cleared, so skinned depth appends to the static depth.
-        if let (Some(skinned_shadow_pso), Some(skinned_shadow_root_sig)) = (
-            self.skinned.shadow_pso.as_ref(),
-            self.skinned.shadow_root_sig.as_ref(),
-        ) && !self.skinned.draw_objects.is_empty()
-        {
-            unsafe {
-                cmd.SetPipelineState(skinned_shadow_pso);
-                cmd.SetGraphicsRootSignature(skinned_shadow_root_sig);
-                cmd.IASetPrimitiveTopology(
-                    windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-                );
-                cmd.IASetVertexBuffers(0, Some(&[self.skinned.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, shadow_ubo_gva);
-            }
-            for cascade_idx in 0..NUM_SHADOW_CASCADES {
-                if render_mask & (1u32 << cascade_idx) == 0 {
-                    continue;
-                }
-                let dsv = self.shadow.dsvs[cascade_idx];
-                unsafe {
-                    cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                }
-                for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
-                    if !obj.visible {
-                        continue;
-                    }
-                    // Skinned-mesh LOD: pick by camera distance (not
-                    // light direction) so the shadow casts match the
-                    // triangles main will rasterise. Per-cascade LOD
-                    // would technically be cheaper for distant
-                    // cascades, but matching main keeps cascade seams
-                    // free of silhouette swaps. Mirrors Metal.
-                    let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
-                    let (index_offset, index_count) = obj.active_lod(d);
-                    let push = ShadowPush {
-                        model: obj.model,
-                        cascade_idx: cascade_idx as u32,
-                        _pad: [0; 3],
-                    };
-                    unsafe {
-                        cmd.SetGraphicsRoot32BitConstants(
-                            0,
-                            20,
-                            &push as *const ShadowPush as *const std::ffi::c_void,
-                            0,
-                        );
-                        cmd.SetGraphicsRootShaderResourceView(
-                            2,
-                            self.skinned_joint_gva(frame_idx, i),
-                        );
-                        cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
-                        self.inc_draw_calls(1);
-                    }
-                }
-            }
+            self.encode_shadow_skinned_into(
+                cmd,
+                shadow_ubo_gva,
+                cascade_idx as u32,
+                frame_idx,
+                cam_pos,
+            );
         }
     }
 }

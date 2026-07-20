@@ -1147,10 +1147,11 @@ impl BakeResources {
         // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
         let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);
         // 4 cull SSBOs + one bindless object SSBO per face + the binding-9
-        // local-light and binding-11 cluster-list SSBOs, one of each per global set.
-        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 3;
+        // local-light, binding-11 cluster-list and binding-13 spot-shadow SSBOs,
+        // one of each per global set.
+        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 4;
         let sampler_count =
-            PROBE_FACE_COUNT as u32 * (tex_pool + 4 + MAX_PROBES as u32) + u32::from(has_hiz);
+            PROBE_FACE_COUNT as u32 * (tex_pool + 5 + MAX_PROBES as u32) + u32::from(has_hiz);
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1312,6 +1313,22 @@ impl BakeResources {
                 super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING,
                 ctx.light_cull.cluster_buffer,
                 super::light_cull::cluster_list_size(),
+            );
+            // Bindings 12 + 13: the spot shadow depth array + its per-slice
+            // projections, bound exactly as the main camera binds them.
+            let spot_img = img_info(ctx.spot_shadow.map.view, ctx.shadow.sampler);
+            let spot_write = sampler_write(
+                set,
+                super::descriptor_layout::SPOT_SHADOW_MAP_BINDING,
+                &spot_img,
+            );
+            unsafe { device.update_descriptor_sets(std::slice::from_ref(&spot_write), &[]) };
+            write_storage(
+                device,
+                set,
+                super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING,
+                ctx.spot_shadow.data_buffer,
+                vk::WHOLE_SIZE,
             );
         }
 

@@ -545,6 +545,20 @@ impl DxContext {
                     class: GraphResourceClass::DepthTarget,
                     resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 }),
+            // spot_shadow_map rests sampled, exactly like shadow_map above: the
+            // SpotShadow producer barrier opens it for the depth loop and the
+            // Main consumer returns it to sampled. Only imported when the world
+            // has shadowed spots, so the `dsvs` filter matches the graph gate.
+            "spot_shadow_map" => self
+                .spot_shadow
+                .resource
+                .as_ref()
+                .filter(|_| !self.spot_shadow.dsvs.is_empty())
+                .map(|s| DxBarrierTarget {
+                    resource: s.resource.clone(),
+                    class: GraphResourceClass::DepthTarget,
+                    resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                }),
             // fog_froxel_volume rests sampled (PIXEL_SHADER_RESOURCE): the
             // FogFroxel producer (Undefined -> Write) is the real
             // PIXEL_SHADER_RESOURCE -> UNORDERED_ACCESS open for the compute
@@ -674,6 +688,12 @@ impl DxContext {
                     params.cam_pos,
                     raymarch_view.as_ref(),
                 );
+            }
+            PassId::SpotShadow => {
+                // One depth-only render per scheduled spot slice. The builder
+                // emits this node only when the world has shadow-casting spots,
+                // and the RAW edge on `spot_shadow_map` pins it before Main.
+                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
             }
             PassId::AutoExposure => {
                 self.encode_auto_exposure(cmd, params.frame_idx);

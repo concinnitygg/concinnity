@@ -38,11 +38,17 @@ struct ShadowPush {
     _pad: [u32; 3],
 }
 
-// Depth-only shadow pipeline + its layout, bound once per legacy cascade body.
+// One shadow slice's draw state: the depth-only pipeline and its layout, the
+// descriptor set holding that slice's `ShadowUniforms`, and which `light_vps`
+// entry the vertex shader projects through. Grouping them lets the cascade pass
+// and the spot shadow pass share the legacy caster body: a spot slice is just a
+// binding whose set carries its own matrix in slot 0.
 #[derive(Clone, Copy)]
-struct ShadowLegacyPipeline {
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
+pub(in crate::vulkan) struct ShadowSliceBinding {
+    pub pipeline: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
+    pub set: vk::DescriptorSet,
+    pub slice_idx: u32,
 }
 
 impl VkContext {
@@ -142,16 +148,16 @@ impl VkContext {
             if gpu_driven {
                 self.encode_shadow_cascade_indirect(device, cmd, frame_idx, cascade_idx, cam_pos);
             } else {
-                self.encode_shadow_cascade_legacy(
-                    device,
+                self.encode_shadow_slice_legacy(
                     cmd,
-                    frame_idx,
-                    cascade_idx,
-                    cam_pos,
-                    ShadowLegacyPipeline {
+                    ShadowSliceBinding {
                         pipeline: shadow_pipeline,
                         layout: shadow_pl,
+                        set: self.shadow.global_sets[frame_idx],
+                        slice_idx: cascade_idx as u32,
                     },
+                    frame_idx,
+                    cam_pos,
                 );
             }
 
@@ -347,19 +353,20 @@ impl VkContext {
     // `cmd_draw_indexed` for static + instanced (iterated per instance) + skinned
     // casters. Used for non-bindless worlds (custom shader) or worlds with no
     // build-time geometry.
-    fn encode_shadow_cascade_legacy(
+    pub(in crate::vulkan) fn encode_shadow_slice_legacy(
         &self,
-        device: &Device,
         cmd: vk::CommandBuffer,
+        bind: ShadowSliceBinding,
         frame_idx: usize,
-        cascade_idx: usize,
         cam_pos: [f32; 3],
-        shadow: ShadowLegacyPipeline,
     ) {
-        let ShadowLegacyPipeline {
+        let device = &self.device;
+        let ShadowSliceBinding {
             pipeline: shadow_pipeline,
             layout: shadow_pl,
-        } = shadow;
+            set: shadow_set,
+            slice_idx,
+        } = bind;
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
 
@@ -369,7 +376,7 @@ impl VkContext {
                 vk::PipelineBindPoint::GRAPHICS,
                 shadow_pl,
                 0,
-                std::slice::from_ref(&self.shadow.global_sets[frame_idx]),
+                std::slice::from_ref(&shadow_set),
                 &[],
             );
 
@@ -394,7 +401,7 @@ impl VkContext {
                 let (index_offset, index_count) = obj.active_lod(d);
                 let push = ShadowPush {
                     model: obj.model,
-                    cascade_idx: cascade_idx as u32,
+                    cascade_idx: slice_idx,
                     _pad: [0; 3],
                 };
                 device.cmd_push_constants(
@@ -432,7 +439,7 @@ impl VkContext {
                     for &model in &bucket.instances {
                         let push = ShadowPush {
                             model,
-                            cascade_idx: cascade_idx as u32,
+                            cascade_idx: slice_idx,
                             _pad: [0; 3],
                         };
                         device.cmd_push_constants(
@@ -473,7 +480,7 @@ impl VkContext {
                     vk::PipelineBindPoint::GRAPHICS,
                     sk_pl,
                     0,
-                    std::slice::from_ref(&self.shadow.global_sets[frame_idx]),
+                    std::slice::from_ref(&shadow_set),
                     &[],
                 );
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
@@ -496,7 +503,7 @@ impl VkContext {
                     );
                     let push = ShadowPush {
                         model: obj.model,
-                        cascade_idx: cascade_idx as u32,
+                        cascade_idx: slice_idx,
                         _pad: [0; 3],
                     };
                     device.cmd_push_constants(

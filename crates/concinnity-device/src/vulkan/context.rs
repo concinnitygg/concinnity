@@ -115,6 +115,69 @@ impl VkShadow {
     }
 }
 
+// Spot shadow map resources: one depth array layer per shadow-casting spot
+// light, plus the `SpotShadowData` buffer holding each slice's light-space
+// projection. Local lights are static, so the slice assignment and every matrix
+// are decided once at init and only the depth contents refresh. A world with no
+// shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
+// the main pass's descriptors are always valid. Reuses the cascade pass's
+// render pass, pipeline, and comparison sampler.
+pub(super) struct VkSpotShadow {
+    pub(super) map: GpuImage,
+    // One framebuffer per shadowed spot; empty when the world has none.
+    pub(super) framebuffers: Vec<vk::Framebuffer>,
+    pub(super) slice_size: u32,
+    // `SpotShadowData` per slice, uploaded once at init.
+    pub(super) data_buffer: vk::Buffer,
+    pub(super) data_memory: vk::DeviceMemory,
+    // One `ShadowUniforms` per slice, each carrying that spot's matrix in
+    // `light_vps[0]` so the shared shadow vertex shader renders a spot slice by
+    // pushing cascade_idx = 0. Written once at init: the projections are fixed
+    // for the world's lifetime, so unlike the cascade UBO this needs no
+    // per-frame copy. One descriptor set per slice binds its own range.
+    pub(super) ubo: vk::Buffer,
+    pub(super) ubo_memory: vk::DeviceMemory,
+    pub(super) sets: Vec<vk::DescriptorSet>,
+    pub(super) descriptor_pool: vk::DescriptorPool,
+    // Round-robin clock + primed set, advanced once per frame in draw_frame.
+    pub(super) scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    // Slices re-rendered this frame (bit `i` = slice `i`).
+    pub(super) render_mask: u32,
+}
+
+impl VkSpotShadow {
+    // Slices actually handed out; the array layers, the framebuffers, and the
+    // data buffer all carry exactly this many entries.
+    pub(super) fn count(&self) -> u32 {
+        self.framebuffers.len() as u32
+    }
+
+    // Advance the round-robin clock and record which slices re-render this
+    // frame. A no-op (mask stays 0) when the world has no shadowed spot.
+    pub(super) fn advance(&mut self, every_frame: bool) {
+        let count = self.framebuffers.len();
+        self.render_mask = self.scheduler.next_mask(every_frame, count);
+    }
+
+    // Destroy every owned GPU object. Called from `VkContext::drop` after
+    // `wait_idle`; `sets` are freed with `descriptor_pool`.
+    pub(super) fn destroy(&self, device: &Device) {
+        unsafe {
+            for &fb in &self.framebuffers {
+                device.destroy_framebuffer(fb, None);
+            }
+            device.destroy_descriptor_pool(self.descriptor_pool, None);
+        }
+        self.map.destroy(device);
+        unsafe {
+            device.destroy_buffer(self.data_buffer, None);
+            device.free_memory(self.data_memory, None);
+            device.destroy_buffer(self.ubo, None);
+            device.free_memory(self.ubo_memory, None);
+        }
+    }
+}
+
 // Skinned (skeletally animated) mesh resources, grouped off the flat `VkContext`
 // field soup. All `None` / empty until `upload_skinned` runs; with no
 // `SkinnedMesh` in the world every skinned pass is skipped. The joint matrices
@@ -828,6 +891,9 @@ pub struct VkContext {
 
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
     pub(super) shadow: VkShadow,
+
+    // Spot shadow map resources. See [`VkSpotShadow`].
+    pub(super) spot_shadow: VkSpotShadow,
 
     // Shared texture pool: every texture (albedo, normal map, emissive/ORM,
     // terrain secondary) lives here once at its handle, matching DX/Metal.
@@ -2138,6 +2204,7 @@ impl Drop for VkContext {
         // Shadow (framebuffers, pipelines, layouts, map, render pass, UBO,
         // sampler).
         self.shadow.destroy(device);
+        self.spot_shadow.destroy(device);
 
         // IBL cubes + cube sampler.
         self.env_map.irradiance.destroy(device);

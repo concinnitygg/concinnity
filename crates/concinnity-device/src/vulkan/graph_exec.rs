@@ -510,6 +510,18 @@ impl VkContext {
                 class: GraphResourceClass::DepthTarget,
                 layer_count: self.shadow.framebuffers.len() as u32,
             }),
+            // spot_shadow_map rests sampled exactly like shadow_map above: the
+            // SpotShadow producer barrier opens it for the depth loop and the
+            // Main consumer returns it to sampled, over all spot layers. Only
+            // imported when the world has shadowed spots, so the framebuffer
+            // guard matches the graph gate.
+            "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => {
+                Some(VkBarrierTarget {
+                    image: self.spot_shadow.map.image,
+                    class: GraphResourceClass::DepthTarget,
+                    layer_count: self.spot_shadow.framebuffers.len() as u32,
+                })
+            }
             // fog_froxel_volume: the froxel kernel writes it (GENERAL) and the
             // fog fragment samples it (SHADER_READ_ONLY). Both transitions are
             // graph-driven: the producer (Undefined -> Write) is the real
@@ -634,6 +646,12 @@ impl VkContext {
             }
             PassId::Shadow => {
                 self.encode_shadow_pass(cmd, params.frame_idx, params.cam_pos, params.elapsed);
+            }
+            PassId::SpotShadow => {
+                // One depth-only render per scheduled spot slice. The builder
+                // emits this node only when the world has shadow-casting spots,
+                // and the RAW edge on `spot_shadow_map` pins it before Main.
+                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
             }
             PassId::Main => {
                 self.encode_main_pass(

@@ -75,6 +75,20 @@ pub(in crate::vulkan) const CLUSTER_PARAMS_UBO_BINDING: u32 = 10;
 // `CLUSTER_PARAMS_UBO_BINDING`.
 pub(in crate::vulkan) const CLUSTER_LIGHT_LIST_SSBO_BINDING: u32 = 11;
 
+// Binding number of the spot shadow depth array in global set 0: a count-1
+// `sampler2DArrayShadow` in the fragment stage, one layer per shadow-casting
+// spot. A world with no shadowed spot binds a 1x1 fallback array so the
+// descriptor is never left unwritten. Appended inline in `init.rs`, one past
+// `CLUSTER_LIGHT_LIST_SSBO_BINDING`.
+pub(in crate::vulkan) const SPOT_SHADOW_MAP_BINDING: u32 = 12;
+
+// Binding number of the per-slice `SpotShadowData` storage buffer in global set
+// 0: a count-1 STORAGE_BUFFER in the fragment stage holding each slice's
+// light-space projection, indexed by `GpuLight.shadow_index`. Written once at
+// init (local lights are static). Appended inline in `init.rs`, one past
+// `SPOT_SHADOW_MAP_BINDING`.
+pub(in crate::vulkan) const SPOT_SHADOW_DATA_SSBO_BINDING: u32 = 13;
+
 // Per-object set (set 1): albedo at 0, normal map at 1.
 pub(in crate::vulkan) fn object_set() -> [Binding; 2] {
     use vk::DescriptorType as T;
@@ -168,6 +182,14 @@ mod tests {
             CLUSTER_LIGHT_LIST_SSBO_BINDING,
             CLUSTER_PARAMS_UBO_BINDING + 1
         );
+    }
+
+    // The spot shadow bindings continue the same gap-free run: depth array 12,
+    // per-slice projections 13.
+    #[test]
+    fn spot_shadow_bindings_follow_cluster_light_list() {
+        assert_eq!(SPOT_SHADOW_MAP_BINDING, CLUSTER_LIGHT_LIST_SSBO_BINDING + 1);
+        assert_eq!(SPOT_SHADOW_DATA_SSBO_BINDING, SPOT_SHADOW_MAP_BINDING + 1);
     }
 
     #[test]

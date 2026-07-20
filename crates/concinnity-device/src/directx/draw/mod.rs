@@ -26,6 +26,7 @@ use super::texture::transition_barrier;
 mod composite;
 mod main;
 mod shadow;
+mod spot_shadow;
 mod text_upload;
 
 pub(super) use text_upload::TextUploadRing;
@@ -275,8 +276,10 @@ impl DxContext {
             // the world has local lights to bin, so this also gates the
             // `LightCull` graph node; otherwise the forward pass brute-forces.
             clustered_lighting_enabled: self.light_cull.pso.is_some(),
-            shadowed_spot_count: 0,
-            spot_shadow_slice_size: 512,
+            // Zero drops the SpotShadow node and its imported array from the
+            // graph entirely, which is the common case (no shadow-casting spot).
+            shadowed_spot_count: self.spot_shadow.count(),
+            spot_shadow_slice_size: self.spot_shadow.slice_size,
         };
 
         // Compute the camera VPs the main + velocity passes consume.
@@ -559,19 +562,49 @@ pub(super) fn upload_light_uniforms(
     Ok(())
 }
 
-// One-shot upload of the per-scene local-light list into its static storage
-// buffer. Sibling of `upload_light_uniforms`: same Map / copy / Unmap path, run
-// once at init (the buffer is never rewritten per frame).
-pub(super) fn upload_local_lights(
+// Root parameter indices for the spot shadow binds, which differ per root
+// signature because each grew a different number of earlier parameters.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct SpotShadowParams {
+    // Root SRV carrying the `SpotShadowData` buffer.
+    pub buffer: u32,
+    // Descriptor table carrying the depth array SRV.
+    pub table: u32,
+}
+
+impl SpotShadowParams {
+    // Legacy static main root signature.
+    pub const MAIN: Self = Self {
+        buffer: 12,
+        table: 13,
+    };
+    // Shared instanced + skinned root signature.
+    pub const INSTANCED: Self = Self {
+        buffer: 13,
+        table: 14,
+    };
+    // Bindless main root signature.
+    pub const BINDLESS: Self = Self {
+        buffer: 15,
+        table: 16,
+    };
+}
+
+// One-shot upload of a per-scene record list into its static storage buffer.
+// Sibling of `upload_light_uniforms`: same Map / copy / Unmap path, run once at
+// init for buffers that are never rewritten per frame (the local-light list and
+// the spot shadow projections). `label` names the buffer in the error.
+pub(super) fn upload_static_records<T: Copy>(
     buffer: &ID3D12Resource,
-    lights: &[crate::gfx::render_types::GpuLight],
+    records: &[T],
+    label: &str,
 ) -> Result<(), String> {
-    let bytes = std::mem::size_of_val(lights);
+    let bytes = std::mem::size_of_val(records);
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     unsafe { buffer.Map(0, None, Some(&mut ptr)) }
-        .map_err(|e| format!("map local-light buffer: {e}"))?;
+        .map_err(|e| format!("map {label} buffer: {e}"))?;
     unsafe {
-        std::ptr::copy_nonoverlapping(lights.as_ptr() as *const u8, ptr as *mut u8, bytes);
+        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr as *mut u8, bytes);
         buffer.Unmap(0, None);
     }
     Ok(())

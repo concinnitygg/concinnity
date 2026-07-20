@@ -102,6 +102,26 @@ layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadow_map;
 
 // IBL: irradiance + prefilter cubes, scene-wide. Bound to a 1x1 fallback
 // when no EnvironmentMap is present so the shader sampler is always valid.
+// Spot shadow depth array: one layer per shadow-casting spot, sampled with
+// depth-compare in `sample_spot_shadow` below. A 1x1 fallback array when the
+// world has no shadowed spot, so the descriptor is always valid.
+layout(set = 0, binding = 12) uniform sampler2DArrayShadow spot_shadow_map;
+
+// One shadowed spot's slice projection (matches SpotShadowData in
+// render_types.rs); indexed by GpuLight.shadow_index, which doubles as the
+// array layer. std430 so the mat4 + 4 trailing floats match the 80-byte Rust
+// and MSL layouts.
+struct SpotShadowData {
+    mat4  light_vp;
+    float depth_bias;
+    float normal_bias;
+    vec2  _pad;
+};
+
+layout(std430, set = 0, binding = 13) readonly buffer SpotShadowBlock {
+    SpotShadowData spot_shadows[];
+} spot_shadow_buf;
+
 layout(set = 0, binding = 4) uniform samplerCube irradiance_cube;
 layout(set = 0, binding = 5) uniform samplerCube prefilter_cube;
 
@@ -194,6 +214,46 @@ float hash_rotation(vec2 p) {
 // the shadow factor in [0, 1] (1.0 fully lit), or 1.0 when the fragment lies
 // outside this cascade's light frustum. Mirrors `sample_cascade_pcf` in
 // default.metal.
+// 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
+// lit), and 1.0 outside the cone's light frustum so an unshadowed region is
+// never darkened. A smaller kernel than the cascade PCF: a spot slice covers
+// far less world area per texel. Mirrors `sample_spot_shadow` in default.metal.
+float sample_spot_shadow(int shadow_index, vec3 world_pos, vec3 normal, vec2 screen_xy) {
+    SpotShadowData sd = spot_shadow_buf.spot_shadows[shadow_index];
+    // Offsetting along the normal before projecting pushes the sample off
+    // surfaces near-parallel to the light, where depth slope causes acne.
+    vec3 biased = world_pos + normal * sd.normal_bias;
+    vec4 light_clip = sd.light_vp * vec4(biased, 1.0);
+    if (light_clip.w <= 0.0) {
+        return 1.0;
+    }
+    vec3 ndc = light_clip.xyz / light_clip.w;
+    // Flip Y to match the negative-height viewport the spot pass renders with,
+    // exactly as the cascade PCF above does.
+    vec2 uv = vec2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+
+    float ref = ndc.z - sd.depth_bias;
+    float angle = hash_rotation(screen_xy);
+    float ca = cos(angle);
+    float sa = sin(angle);
+    vec2 tex_size = 1.0 / vec2(textureSize(spot_shadow_map, 0).xy);
+
+    float sum = 0.0;
+    const int RADIUS = 1; // 3x3
+    const float SAMPLES = float((2 * RADIUS + 1) * (2 * RADIUS + 1));
+    for (int dy = -RADIUS; dy <= RADIUS; dy++) {
+        for (int dx = -RADIUS; dx <= RADIUS; dx++) {
+            vec2 off = vec2(float(dx), float(dy));
+            vec2 rot = vec2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
+            sum += texture(spot_shadow_map, vec4(uv + rot * tex_size, float(shadow_index), ref));
+        }
+    }
+    return sum / SAMPLES;
+}
+
 float sample_cascade_pcf(int cascade, vec3 world_pos, vec2 screen_xy) {
     vec4 lc = shadow_uni.light_vps[cascade] * vec4(world_pos, 1.0);
     vec3 ndc = lc.xyz / lc.w;
@@ -394,6 +454,12 @@ void main() {
             float co = local_light_buf.local_lights[i].cos_outer;
             float t  = clamp((cd - co) / max(ci - co, 1e-4), 0.0, 1.0);
             atten *= t * t;
+            // Only spots that claimed a shadow slice sample the array; the rest
+            // keep shadow_index at -1 and light without casting.
+            int si = local_light_buf.local_lights[i].shadow_index;
+            if (si >= 0 && atten > 0.0) {
+                atten *= sample_spot_shadow(si, frag_world_pos, N, gl_FragCoord.xy);
+            }
         }
         vec3 radiance = col * intens * atten;
 

@@ -93,6 +93,7 @@ impl VkContext {
             // Per-scene local lights uploaded once into a static SSBO below
             // (global set 0 binding 9).
             local_lights,
+            spot_shadows,
             shadows:
                 ShadowParams {
                     map_size: shadow_map_size,
@@ -652,6 +653,26 @@ impl VkContext {
             NUM_SHADOW_CASCADES as u32,
         )?;
 
+        // Spot shadow map array: one layer per shadow-casting spot, at a quarter
+        // the cascade resolution (a spot slice covers a single cone, not a
+        // view-frustum slab). Passing size 0 yields the 1x1 fallback, which is
+        // what a world with no shadowed spot binds.
+        let spot_shadow_slice_size =
+            crate::gfx::render_types::spot_shadow_slice_size(effective_shadow_size);
+        let spot_shadow_map = create_shadow_map_array(
+            &instance,
+            &device,
+            physical_device,
+            command_pool,
+            graphics_queue,
+            if spot_shadows.is_empty() {
+                0
+            } else {
+                spot_shadow_slice_size
+            },
+            spot_shadows.len().max(1) as u32,
+        )?;
+
         //  Textures
         let gpu_textures: Vec<GpuImage> = if textures.is_empty() {
             vec![texture::create_fallback_white(
@@ -1112,6 +1133,22 @@ impl VkContext {
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             );
+            // Spot shadows: the depth array the forward pass compares against
+            // and the per-slice projections it projects through.
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::SPOT_SHADOW_MAP_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            );
             unsafe {
                 device.create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
@@ -1332,6 +1369,23 @@ impl VkContext {
             // loop nothing ever moves it out of that layout.
             (None, Vec::new())
         };
+
+        // Spot shadows reuse the cascade pass's depth-only render pass, pipeline
+        // and one-UBO set layout; only the framebuffers, the per-slice
+        // projections, and the per-slice uniform slots are their own. Built even
+        // with no shadowed spot (the 1x1 fallback array + a one-element buffer)
+        // so the main pass's bindings 12/13 are always valid.
+        let spot_shadow =
+            super::spot_shadow::build_spot_shadow(super::spot_shadow::SpotShadowBuild {
+                instance: &instance,
+                device: &device,
+                physical_device,
+                map: spot_shadow_map,
+                render_pass: shadow_render_pass,
+                set_layout: shadow_global_set_layout,
+                slice_size: spot_shadow_slice_size,
+                spot_shadows: &spot_shadows,
+            })?;
 
         // Text renders in the composite pass (post-tonemap, single-sample), so
         // its pipeline targets the composite render pass.
@@ -1603,14 +1657,14 @@ impl VkContext {
                 .descriptor_count(n_frames * 5 + n_frames + gbuffer_sets_count),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                // per-obj(2) + per-frame {shadow + IBL irradiance + IBL
-                // prefilter + SSAO occlusion} + per-frame probe cube array
-                // (MAX_PROBES) + text atlas + per-cluster(2) + per-frame
-                // composite(3: HDR resolve + bloom mip 0 + 3D colour LUT) +
-                // per-frame bindless texture pool.
+                // per-obj(2) + per-frame {shadow + spot shadow + IBL
+                // irradiance + IBL prefilter + SSAO occlusion} + per-frame probe
+                // cube array (MAX_PROBES) + text atlas + per-cluster(2) +
+                // per-frame composite(3: HDR resolve + bloom mip 0 + 3D colour
+                // LUT) + per-frame bindless texture pool.
                 .descriptor_count(
                     n_obj * 2
-                        + n_frames * 4
+                        + n_frames * 5
                         + n_frames * super::probe_uniforms::MAX_PROBES as u32
                         + n_atlas
                         + n_cluster * 2
@@ -1640,8 +1694,10 @@ impl VkContext {
             + 3 * shadow_cull_set_count
             // GPU-driven G-buffer: one prev_model SSBO per frame.
             + gbuffer_sets_count
-            // Per-scene local-light SSBO + the per-cluster light-list SSBO: one
-            // of each per global set (per frame).
+            // Per-scene local-light SSBO, the per-cluster light-list SSBO, and
+            // the spot shadow projections SSBO: one of each per global set (per
+            // frame).
+            + n_frames
             + n_frames
             + n_frames;
         if storage_count > 0 {
@@ -1696,6 +1752,16 @@ impl VkContext {
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(shadow_map.view)
                 .sampler(shadow_sampler);
+            // Same resting layout as the cascade array: the SpotShadow producer
+            // barrier opens it for the depth loop and Main returns it here.
+            let spot_shadow_img_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(spot_shadow.map.view)
+                .sampler(shadow_sampler);
+            let spot_shadow_data_info = vk::DescriptorBufferInfo::default()
+                .buffer(spot_shadow.data_buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
             let irr_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(env_map.irradiance.view)
@@ -1815,6 +1881,18 @@ impl VkContext {
                     .dst_binding(super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&cluster_list_info)),
+                // Binding 12: spot shadow depth array.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::SPOT_SHADOW_MAP_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&spot_shadow_img_info)),
+                // Binding 13: per-slice spot shadow projections.
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&spot_shadow_data_info)),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
@@ -3276,6 +3354,8 @@ impl VkContext {
                     local_light_size: local_light_buffer_size,
                     cluster_params_ubo: light_cull.unclustered_buffer,
                     cluster_list_buffer: light_cull.cluster_buffer,
+                    spot_shadow_map_view: spot_shadow.map.view,
+                    spot_shadow_data_buffer: spot_shadow.data_buffer,
                     shadow_ubo,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
@@ -3559,6 +3639,7 @@ impl VkContext {
                 scheduler: Default::default(),
                 render_mask: 0,
             },
+            spot_shadow,
             textures: gpu_textures,
             normal_map_textures: gpu_normal_maps,
             text_atlas_textures: gpu_text_atlases,

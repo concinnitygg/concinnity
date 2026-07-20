@@ -236,6 +236,15 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
+    // [13] table: spot shadow depth array at t10 (a 1x1 fallback array when the
+    // world has no shadow-casting spot).
+    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: 10, // t10
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
 
     let params = [
         // [0] Root constants: model mat4 + material = 28 DWORDs at b0
@@ -373,6 +382,29 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [12] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t9.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 9,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [13] table: spot shadow depth array at t10. A texture cannot be a root
+        // descriptor, so unlike the buffer above it needs a table.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &spot_shadow_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main root sig")
@@ -448,6 +480,16 @@ fn create_main_bindless_root_signature(
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: crate::directx::probe_uniforms::MAX_PROBES as u32,
         BaseShaderRegister: 7, // t7..
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    // [16] table: spot shadow depth array. The probe cube array above runs
+    // t7..t7+MAX_PROBES, so this clears it at t15/t16 rather than reusing the
+    // legacy shader's t10.
+    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 1, // t16
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -621,6 +663,29 @@ fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [15] Root SRV: per-slice StructuredBuffer<SpotShadowData>, past the
+        // probe cube array at t15.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32, // t15
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [16] table: spot shadow depth array at t16.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &spot_shadow_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
@@ -675,6 +740,14 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
         BaseShaderRegister: 4, // t4
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    // [14] table: spot shadow depth array at t10 (matches the main layout).
+    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: 10, // t10
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -822,6 +895,28 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
                     ShaderRegister: 8,
                     RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [13] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t9.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 9,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [14] table: spot shadow depth array at t10.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &spot_shadow_srv_range,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,

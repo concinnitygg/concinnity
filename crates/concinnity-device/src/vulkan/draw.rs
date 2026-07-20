@@ -408,6 +408,15 @@ impl VkContext {
             upload_shadow_uniforms(device, self.shadow.ubo_memory, &self.shadow.uniforms)?;
         }
 
+        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
+        // so N shadowed spots cost one extra depth render per frame rather than
+        // N. No uniform refresh: the projections are static and were baked at
+        // init. A no-op (mask stays 0) when the world has no shadowed spot.
+        self.spot_shadow.advance(matches!(
+            self.shadow.update,
+            crate::assets::ShadowUpdate::EveryFrame
+        ));
+
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skinned shadow + main passes read them. No-op when no
         // SkinnedMesh is declared.
@@ -509,8 +518,10 @@ impl VkContext {
             // the world has local lights to bin, so this also gates the
             // `LightCull` graph node; otherwise the forward pass brute-forces.
             clustered_lighting_enabled: self.light_cull.pipeline.is_some(),
-            shadowed_spot_count: 0,
-            spot_shadow_slice_size: 512,
+            // Zero drops the SpotShadow node and its imported array from the
+            // graph entirely, which is the common case (no shadow-casting spot).
+            shadowed_spot_count: self.spot_shadow.count(),
+            spot_shadow_slice_size: self.spot_shadow.slice_size,
         };
 
         //  Camera projection + per-frame view state. Computed before the main

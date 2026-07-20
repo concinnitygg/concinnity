@@ -35,6 +35,7 @@ mod render_pass;
 mod resources;
 mod screenshot;
 mod shadow;
+mod spot_shadow;
 mod swapchain;
 mod texture;
 mod transient_pool;
