@@ -14,8 +14,18 @@ pub struct Variables {
 }
 
 impl Variables {
+    // Rebuild the store from a persisted snapshot.
+    pub fn from_map(values: BTreeMap<String, i32>) -> Self {
+        Self { values }
+    }
+
     pub fn get(&self, name: &str) -> i32 {
         self.values.get(name).copied().unwrap_or(0)
+    }
+
+    // The full variable map, for persistence.
+    pub fn as_map(&self) -> &BTreeMap<String, i32> {
+        &self.values
     }
 
     // Assign `value`, or add it to the current value when `add` is true.

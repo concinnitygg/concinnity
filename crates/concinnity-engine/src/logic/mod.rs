@@ -1,13 +1,14 @@
 // src/logic/mod.rs
 //
 // ReactionSystem: declarative when/if/then logic. Each `Reaction` component
-// names an event source (world start, a timer, a variable change), conditions
-// over the shared `Variables` store, and a list of actions dispatched onto the
-// runtime's existing request queues:
+// names an event source (world start, a timer, a variable change, a volume
+// crossing, an interact press), conditions over the shared `Variables` store,
+// and a list of actions dispatched onto the runtime's existing request queues:
 //   mod.rs     system + the per-tick drive
 //   rules.rs   per-rule firing state and the fire decision
 //   actions.rs action -> request-queue dispatch
 //   vars.rs    the shared integer variable store
+//   save.rs    persisted state (the `save` action; restored at init)
 //
 // Scheduled before SpawnSystem so spawn/despawn requests fired this tick are
 // applied this same tick, and before SettingsSystem / StorySystem /
@@ -17,6 +18,7 @@
 // a menu is open (`MenuActive`, published by OverlaySystem earlier this tick),
 // like the rest of the world clock.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::assets::{InteractSignal, Reaction, VolumeEvent};
@@ -24,6 +26,7 @@ use crate::ecs::{EventCursor, PipelineContext, StepResult, System};
 
 mod actions;
 mod rules;
+mod save;
 mod vars;
 
 #[cfg(test)]
@@ -31,7 +34,7 @@ mod tests;
 
 pub use vars::Variables;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ReactionSystem {
     rules: Vec<rules::Rule>,
     // Delayed action runs: (rule index, seconds left).
@@ -45,8 +48,26 @@ pub struct ReactionSystem {
     // Events drained but not yet consumed by an unpaused tick.
     crossings: Vec<VolumeEvent>,
     presses: Vec<InteractSignal>,
+    // Where the persisted logic state lives (the project data directory).
+    save_dir: PathBuf,
     start_time: Option<Instant>,
     prev_elapsed: f32,
+}
+
+impl Default for ReactionSystem {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            pending: Vec::new(),
+            crossing_cursor: EventCursor::default(),
+            press_cursor: EventCursor::default(),
+            crossings: Vec::new(),
+            presses: Vec::new(),
+            save_dir: concinnity_core::paths::saves_dir(),
+            start_time: None,
+            prev_elapsed: 0.0,
+        }
+    }
 }
 
 impl ReactionSystem {
@@ -57,13 +78,48 @@ impl ReactionSystem {
 
 impl System for ReactionSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        ctx.insert_resource(Variables::default());
         self.rules = ctx
             .query::<Reaction>()
             .cloned()
             .map(rules::Rule::new)
             .collect();
-        tracing::info!("ReactionSystem: {} rule(s)", self.rules.len());
+
+        // Restore persisted state, but only in a world that saves: any other
+        // world starts fresh and never touches the state file.
+        let mut vars = Variables::default();
+        let mut restored = false;
+        if self.rules.iter().any(|r| r.def.saves_state())
+            && let Some(state) = save::read_save(&save::state_file(&self.save_dir))
+        {
+            vars = Variables::from_map(state.vars);
+            for (id, hash) in state.fired {
+                if let Some(rule) = self
+                    .rules
+                    .iter_mut()
+                    .find(|r| r.def.asset_id.0 == id && r.def_hash() == hash)
+                {
+                    rule.restore_fired();
+                }
+            }
+            restored = true;
+        }
+        // Baseline variable sources against the (possibly restored) values,
+        // so restoring a variable does not read as a change on tick one.
+        for rule in &mut self.rules {
+            rule.sync_variable_baseline(&vars);
+        }
+        let var_count = vars.as_map().len();
+        ctx.insert_resource(vars);
+
+        if restored {
+            tracing::info!(
+                "ReactionSystem: {} rule(s), restored {} variable(s)",
+                self.rules.len(),
+                var_count,
+            );
+        } else {
+            tracing::info!("ReactionSystem: {} rule(s)", self.rules.len());
+        }
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -119,6 +175,8 @@ impl ReactionSystem {
         self.crossings.clear();
         self.presses.clear();
 
+        let mut save_requested = false;
+
         // Delayed runs from earlier ticks: count down and execute the ones
         // now due. Conditions were checked at fire time, not re-checked here.
         // Before the append below, so a fresh delay starts counting next tick.
@@ -127,7 +185,7 @@ impl ReactionSystem {
             self.pending[idx].1 -= dt;
             if self.pending[idx].1 <= 0.0 {
                 let (rule, _) = self.pending.swap_remove(idx);
-                actions::execute(ctx, &self.rules[rule].def.actions);
+                save_requested |= actions::execute(ctx, &self.rules[rule].def.actions);
             } else {
                 idx += 1;
             }
@@ -138,8 +196,32 @@ impl ReactionSystem {
             if delay > 0.0 {
                 self.pending.push((i, delay));
             } else {
-                actions::execute(ctx, &self.rules[i].def.actions);
+                save_requested |= actions::execute(ctx, &self.rules[i].def.actions);
             }
+        }
+
+        // One write per tick, after every action has landed, so the file
+        // holds this tick's final variable values.
+        if save_requested {
+            self.write_state(ctx);
+        }
+    }
+
+    fn write_state(&self, ctx: &PipelineContext) {
+        let Some(vars) = ctx.resource::<Variables>() else {
+            return;
+        };
+        let state = save::LogicSave {
+            vars: vars.as_map().clone(),
+            fired: self
+                .rules
+                .iter()
+                .filter(|r| r.def.once && r.fired())
+                .map(|r| (r.def.asset_id.0, r.def_hash()))
+                .collect(),
+        };
+        if let Err(e) = save::write_save(&save::state_file(&self.save_dir), &state) {
+            tracing::warn!("ReactionSystem: state save failed: {e}");
         }
     }
 }

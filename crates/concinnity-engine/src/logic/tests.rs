@@ -472,6 +472,128 @@ fn show_and_hide_actions_send_visibility_requests() {
     assert!(reqs[1].visible);
 }
 
+// A unique per-test save directory, cleaned before use.
+fn save_dir(test: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cn-logic-{}-{}", std::process::id(), test));
+    std::fs::remove_dir_all(&dir).ok();
+    dir
+}
+
+// An initialized system persisting into `dir`.
+fn persisting_system(world: &mut TestWorld, dir: &std::path::Path) -> ReactionSystem {
+    let mut sys = ReactionSystem::new();
+    sys.save_dir = dir.to_path_buf();
+    sys.init(&mut world.ctx());
+    sys
+}
+
+fn counter_rule() -> Reaction {
+    Reaction {
+        asset_id: AssetId(1),
+        actions: vec![set("visits", 1, true), ReactionAction::Save],
+        once: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn save_action_persists_vars_and_fired_state_across_runs() {
+    let dir = save_dir("roundtrip");
+
+    let mut world = world_with(vec![counter_rule()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    sys.tick(&mut world.ctx(), 0.0);
+    assert_eq!(
+        world.ctx().resource::<Variables>().unwrap().get("visits"),
+        1
+    );
+
+    // A fresh run over the same world: the variable is restored and the
+    // fired `once` rule stays fired.
+    let mut world2 = world_with(vec![counter_rule()]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(
+        world2.ctx().resource::<Variables>().unwrap().get("visits"),
+        1,
+        "variable restored at init"
+    );
+    sys2.tick(&mut world2.ctx(), 0.0);
+    assert_eq!(
+        world2.ctx().resource::<Variables>().unwrap().get("visits"),
+        1,
+        "the fired once rule does not fire again"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn restored_variable_is_not_an_edge_for_variable_sources() {
+    let dir = save_dir("baseline");
+
+    let mut world = world_with(vec![counter_rule()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    sys.tick(&mut world.ctx(), 0.0);
+
+    // Second run adds a watcher on the restored variable: restoring is not a
+    // change, so it must not fire.
+    let watcher = Reaction {
+        asset_id: AssetId(2),
+        on: ReactionSource::Variable("visits".into()),
+        actions: vec![despawn(7)],
+        ..Default::default()
+    };
+    let mut world2 = world_with(vec![counter_rule(), watcher]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    let mut cursor = EventCursor::default();
+    sys2.tick(&mut world2.ctx(), 0.0);
+    assert_eq!(count::<DespawnRequest>(&mut world2, &mut cursor), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edited_rule_loses_its_persisted_fired_flag() {
+    let dir = save_dir("edited");
+
+    let mut world = world_with(vec![counter_rule()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    sys.tick(&mut world.ctx(), 0.0);
+
+    // Same asset id, different content: the flag no longer applies, so the
+    // rule fires once more.
+    let mut edited = counter_rule();
+    edited.actions[0] = set("visits", 5, true);
+    let mut world2 = world_with(vec![edited]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    sys2.tick(&mut world2.ctx(), 0.0);
+    assert_eq!(
+        world2.ctx().resource::<Variables>().unwrap().get("visits"),
+        6,
+        "restored 1 + refired add 5"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn worlds_without_a_save_action_never_read_state() {
+    let dir = save_dir("optin");
+
+    let mut world = world_with(vec![counter_rule()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    sys.tick(&mut world.ctx(), 0.0);
+
+    // Same directory, but no rule saves: the world starts fresh.
+    let mut world2 = world_with(vec![Reaction {
+        actions: vec![set("other", 1, false)],
+        ..Default::default()
+    }]);
+    let _sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(
+        world2.ctx().resource::<Variables>().unwrap().get("visits"),
+        0
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // A declared Reaction gates the internal system on, and the menu freeze
 // holds every firing until the menu closes.
 #[test]

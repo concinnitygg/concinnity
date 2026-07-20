@@ -9,7 +9,10 @@ use crate::assets::{
 };
 use crate::ecs::PipelineContext;
 
-pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) {
+// Runs the actions in order; returns whether a `save` action requested the
+// logic state be written (the system writes once at the end of its tick).
+pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) -> bool {
+    let mut save_requested = false;
     for action in actions {
         match action {
             ReactionAction::Set { name, value, add } => {
@@ -84,6 +87,8 @@ pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) {
                 ctx.events_mut::<VisibilityRequest>()
                     .send(VisibilityRequest { name, visible });
             }
+            ReactionAction::Save => save_requested = true,
         }
     }
+    save_requested
 }

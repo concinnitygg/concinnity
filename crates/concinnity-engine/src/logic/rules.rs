@@ -8,6 +8,8 @@ use crate::assets::{Condition, InteractSignal, Reaction, ReactionSource, VolumeE
 #[derive(Debug)]
 pub(super) struct Rule {
     pub(super) def: Reaction,
+    // Content hash of `def`, pairing persisted fired flags to this rule.
+    def_hash: u64,
     started: bool,
     fired_once: bool,
     cooldown_left: f32,
@@ -19,6 +21,7 @@ pub(super) struct Rule {
 impl Rule {
     pub(super) fn new(def: Reaction) -> Self {
         Self {
+            def_hash: super::save::def_hash(&def),
             def,
             started: false,
             fired_once: false,
@@ -26,6 +29,27 @@ impl Rule {
             timer_accum: 0.0,
             timer_done: false,
             last_value: 0,
+        }
+    }
+
+    pub(super) fn def_hash(&self) -> u64 {
+        self.def_hash
+    }
+
+    pub(super) fn fired(&self) -> bool {
+        self.fired_once
+    }
+
+    // Mark this rule as already fired (a persisted flag from a prior run).
+    pub(super) fn restore_fired(&mut self) {
+        self.fired_once = true;
+    }
+
+    // Re-baseline a variable source against restored values, so restoring a
+    // variable does not read as a change on the first tick.
+    pub(super) fn sync_variable_baseline(&mut self, vars: &Variables) {
+        if let ReactionSource::Variable(name) = &self.def.on {
+            self.last_value = vars.get(name);
         }
     }
 

@@ -189,6 +189,12 @@ pub enum ReactionAction {
         #[serde(default, deserialize_with = "de_opt_asset_ref")]
         target: Option<AssetId>,
     },
+    /// Write the world's logic state to disk: every shared variable, plus
+    /// which `once` reactions have fired. The state is restored the next time
+    /// the world starts, so a reaction gated on a saved variable carries
+    /// across runs. Timers, delays, and cooldowns restart fresh; entities are
+    /// not saved. A world with no `save` action never reads or writes state.
+    Save,
 }
 
 /// The [Story](#story) playback command a [Reaction](#reaction) action sends.
@@ -209,6 +215,14 @@ impl Reaction {
         self.actions
             .iter()
             .any(|a| matches!(a, ReactionAction::Sound { .. }))
+    }
+
+    /// Whether any action saves the world's logic state, so the runtime knows
+    /// to restore persisted state when the world starts.
+    pub fn saves_state(&self) -> bool {
+        self.actions
+            .iter()
+            .any(|a| matches!(a, ReactionAction::Save))
     }
 }
 
@@ -253,6 +267,17 @@ mod tests {
         assert_eq!(r.on, ReactionSource::Exit(Some(AssetId(5))));
         let r: Reaction = serde_json::from_str(r#"{"on":{"interact":5}}"#).unwrap();
         assert_eq!(r.on, ReactionSource::Interact(Some(AssetId(5))));
+    }
+
+    #[test]
+    fn save_action_parses_as_a_plain_string() {
+        let r: Reaction =
+            serde_json::from_str(r#"{"actions":[{"set":{"name":"n","value":1}},"save"]}"#).unwrap();
+        assert!(matches!(r.actions[1], ReactionAction::Save));
+        assert!(r.saves_state());
+
+        let quiet: Reaction = serde_json::from_str("{}").unwrap();
+        assert!(!quiet.saves_state());
     }
 
     #[test]
