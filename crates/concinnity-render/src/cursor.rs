@@ -47,6 +47,10 @@ const OUTLINE_OFFSETS: [(f32, f32); 8] = [
 const OUTLINE_RATIO: f32 = 0.085;
 // Arrow height in pixels when a cursor sprite leaves its size unset.
 const DEFAULT_CURSOR_PX: f32 = 22.0;
+// The cursor sorts above every other overlay layer: a screen stack or the
+// editor lifts its elements above 0, and at layer 0 the arrow would sort
+// beneath the menu it points at.
+const CURSOR_LAYER: i32 = i32::MAX;
 
 // Build the cursor draw calls (one mesh per visible `follow_cursor` sprite) at
 // the pointer. Each sprite's tint is the fill colour and its `height` the arrow
@@ -90,7 +94,7 @@ pub fn build_cursor_calls(
             atlas_slot,
             // The cursor is never clipped: it draws on top of everything.
             clip_rect: None,
-            layer: 0,
+            layer: CURSOR_LAYER,
         };
         // Outline first so the fill, appended after, composites on top of it
         // (the overlay draws indexed triangles in order, with no depth test).

@@ -776,6 +776,34 @@ mod tests {
         assert!(!frame.calls.is_empty(), "the arrow was shaped");
     }
 
+    // The arrow outranks every layered element: an active screen and the editor
+    // both lift their content above 0, and a layer-0 cursor would sort under
+    // the opaque menu backdrop it points at.
+    #[test]
+    fn the_ui_arrow_sorts_above_screen_and_editor_layers() {
+        let mut w = TestWorld::new();
+        w.push(backdrop(AssetId(1)));
+        w.push(sprite(AssetId(2)));
+        w.push(Sprite {
+            follow_cursor: true,
+            ..sprite(AssetId(3))
+        });
+        w.resources.insert(screen_stack(7));
+        w.resources
+            .insert(HudLayers(std::collections::BTreeMap::from([(
+                AssetId(2),
+                3,
+            )])));
+
+        let frame = w.build(0.0);
+        let layers: Vec<i32> = frame.calls.iter().map(|c| c.layer).collect();
+        let cursor = *layers.last().expect("the arrow was shaped");
+        assert!(
+            layers[..layers.len() - 1].iter().all(|l| *l < cursor),
+            "{layers:?}"
+        );
+    }
+
     // A transparent or hidden cursor sprite is not a menu cursor, so the system
     // cursor stays in charge.
     #[test]
