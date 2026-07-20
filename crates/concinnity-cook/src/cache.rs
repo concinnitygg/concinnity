@@ -71,7 +71,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // 4: baked resource data (`Material` data_bytes, the SkinnedMesh data tuple)
 //    switched JSON -> postcard alongside BLOB_VERSION 3; cached JSON bytes
 //    must not be replayed into a postcard blob.
-const CACHE_FORMAT_VERSION: u32 = 5;
+// 6: the SKMV skinned payload gained the optional MRPH morph-target block, so
+//    a mesh whose source carries morph targets compiles different bytes from
+//    unchanged args.
+const CACHE_FORMAT_VERSION: u32 = 6;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the component discriminant, the args JSON, a hash of every
@@ -146,6 +149,16 @@ pub fn expand_key(source: &str, args: &serde_json::Value) -> String {
     hasher.update(EXPAND_FORMAT_VERSION.to_le_bytes());
     if let Some(h) = file_content_hash(source) {
         hasher.update(h);
+    }
+    // A text `.gltf` pulls geometry and images from sibling files the source
+    // hash alone cannot see; fold their contents in so editing a referenced
+    // `.bin` or image re-expands the import.
+    if source.to_lowercase().ends_with(".gltf") {
+        for path in crate::gltf_source::referenced_files(source) {
+            if let Some(h) = file_content_hash(&path) {
+                hasher.update(h);
+            }
+        }
     }
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();
     hasher.update((args_bytes.len() as u64).to_le_bytes());
@@ -550,6 +563,35 @@ mod tests {
         // Editing the source file busts the key.
         std::fs::write(&file, b"second").unwrap();
         assert_ne!(base, expand_key(src, &args));
+    }
+
+    // A text `.gltf` SceneImport must re-expand when a referenced sibling file
+    // changes, even though the `.gltf` itself is untouched.
+    #[test]
+    fn expand_key_tracks_gltf_sibling_file_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("geo.bin"), b"first").unwrap();
+        let gltf = dir.path().join("scene.gltf");
+        std::fs::write(
+            &gltf,
+            serde_json::to_vec(&json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 5, "uri": "geo.bin"}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let src = gltf.to_str().unwrap();
+        let args = json!({ "prefix": "scn" });
+
+        let before = expand_key(src, &args);
+        assert_eq!(before, expand_key(src, &args));
+        std::fs::write(dir.path().join("geo.bin"), b"second").unwrap();
+        assert_ne!(
+            before,
+            expand_key(src, &args),
+            "editing a referenced .bin must bust the expansion key"
+        );
     }
 
     // Both key spaces share one directory and neither carries a prefix any

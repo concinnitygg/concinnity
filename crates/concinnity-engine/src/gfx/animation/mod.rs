@@ -76,6 +76,9 @@ pub struct AnimationReloadEntry {
     // Mirrors [`Animation::animation_name`] (precedence over index when
     // non-empty).
     pub animation_name: String,
+    // Mirrors [`Animation::sample_rate`]; the FBX reload path bakes at the
+    // same rate the build used.
+    pub sample_rate: f32,
     // Mirrors [`Animation::weight`]; the .glb has nothing equivalent, so
     // it's carried through the reload unchanged.
     pub weight: f32,
@@ -237,6 +240,7 @@ impl System for AnimationSystem {
                     source: anim.source.clone(),
                     animation_index: anim.animation_index,
                     animation_name: anim.animation_name.clone(),
+                    sample_rate: anim.sample_rate,
                     weight,
                     looping: anim.looping,
                 });
@@ -413,6 +417,41 @@ impl System for AnimationSystem {
                 ik::apply_chains(&pose.skeleton, &mut locals, &g.chains, frame);
             }
             pose.joint_matrices = pose.skeleton.skinning_matrices(&locals);
+
+            // Morph weights follow the same flat blend as the pose; clips
+            // without a morph track do not dilute the result. Graph-driven
+            // targets do not sample morph tracks.
+            if let TargetMode::Flat(flat) = &state.mode {
+                let mut acc: Vec<f32> = Vec::new();
+                let mut weight_sum = 0.0f32;
+                for (i, entry) in state.clips.iter().enumerate() {
+                    if entry.clip.morph_keys.is_empty() {
+                        continue;
+                    }
+                    let w = if state.clips.len() == 1 {
+                        1.0
+                    } else {
+                        flat.current_weights.get(i).copied().unwrap_or(0.0)
+                    };
+                    if w <= 0.0 {
+                        continue;
+                    }
+                    let sampled = entry.clip.sample_morph_weights(t, entry.clip.looping);
+                    if acc.len() < sampled.len() {
+                        acc.resize(sampled.len(), 0.0);
+                    }
+                    for (a, s) in acc.iter_mut().zip(sampled.iter()) {
+                        *a += s * w;
+                    }
+                    weight_sum += w;
+                }
+                if weight_sum > 0.0 {
+                    for a in &mut acc {
+                        *a /= weight_sum;
+                    }
+                    pose.morph_weights = acc;
+                }
+            }
         });
 
         // Refresh the ground-probe rays from the posed foot positions for

@@ -10,9 +10,10 @@ to four joints; an [Animation](Animation.md) targeting this mesh deforms it at
 runtime. With no animation the mesh renders in its bind pose.
 
 The geometry + skeleton may be authored inline (`vertices` / `indices` /
-`skeleton`) or imported from a binary glTF file with `source`. Only the
-`.glb` container is supported, and only the mesh + skeleton bind pose are
-imported (glTF animations are not yet brought in).
+`skeleton`) or imported with `source` from a glTF (`.glb` / `.gltf`) or
+binary `.fbx` file. The import fills the mesh, the skeleton bind pose,
+and (for glTF) any morph targets; animations are imported separately by
+[Animation](Animation.md) assets referencing the same file.
 
 The `skeleton` (joint hierarchy and bind pose) is provided as an arg
 (authored inline alongside `vertices`/`indices`, or filled in from the
@@ -31,6 +32,8 @@ supply them.
 - `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
 - `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list.
 - `indices`: An array of integers. Triangle index list.
+- `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets.
+- `morph_deltas`: An array of [MorphDelta](MorphDelta.md) objects. Dense morph-target deltas, target-major: entry `t * vertex_count + v` is target `t`'s delta for vertex `v`. Length must be `morph_target_names.len() * vertices.len()`. An [Animation](Animation.md) with a `morph_track` drives the per-target weights at runtime.
 - `material`: A string. [Material](Material.md); provides the albedo texture plus lighting parameters. Optional.
 - `texture`: A string. [Texture](Texture.md) (older path); ignored when `material` is set. Optional.
 - `position`: An array of 3 floats. World-space position.

@@ -94,6 +94,7 @@ mod tests {
             duration,
             looping: true,
             tracks: Vec::new(),
+            morph_keys: Vec::new(),
             root: Some(RootTrack {
                 keys: vec![
                     RootKey {
@@ -114,6 +115,7 @@ mod tests {
             duration,
             looping: true,
             tracks: Vec::new(),
+            morph_keys: Vec::new(),
             root: None,
         }
     }

@@ -99,6 +99,8 @@
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
 - [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [MainMenu](MainMenu.md).
+- [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
+- [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
 - [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. Names in `albedo` / `normal_map` are unresolved [Texture](Texture.md) references, resolved on the expanded Material.
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are unresolved references to other assets, resolved when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.

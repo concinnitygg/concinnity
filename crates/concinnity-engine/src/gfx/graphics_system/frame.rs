@@ -178,6 +178,9 @@ impl GraphicsSystem {
                 if !menu_active {
                     for pose in ctx.query::<crate::assets::SkeletonPose>() {
                         backend.update_skinned_pose(pose.skinned_index, &pose.joint_matrices);
+                        if !pose.morph_weights.is_empty() {
+                            backend.update_morph_weights(pose.skinned_index, &pose.morph_weights);
+                        }
                     }
                     // Push the model matrix for skinned instances that carry a
                     // Transform (the runtime-spawned ones), so a moved instance

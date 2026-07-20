@@ -79,13 +79,24 @@ impl ResourceAssetCompile for ResourceAssetType {
             | Self::EnvironmentMap
             | Self::ColorLut
             | Self::Mesh
-            | Self::SkinnedMesh => args
-                .get("source")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .into_iter()
-                .collect(),
+            | Self::SkinnedMesh => {
+                let mut files: Vec<String> = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .into_iter()
+                    .collect();
+                // A text `.gltf` reads sibling files (external buffers /
+                // images) the args never name; fold them into the cache key
+                // so editing one recompiles the payload.
+                if let Some(src) = files.first().cloned()
+                    && src.to_lowercase().ends_with(".gltf")
+                {
+                    files.extend(crate::gltf_source::referenced_files(&src));
+                }
+                files
+            }
             // A Font keys its TTF source under `path`, not `source`.
             Self::Font => args
                 .get("path")
@@ -151,6 +162,8 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
         &mesh.vertices,
         &mesh.indices,
         &skeleton,
+        &mesh.morph_target_names,
+        &mesh.morph_deltas,
         lod_levels,
         &mesh.lod_distances,
     )

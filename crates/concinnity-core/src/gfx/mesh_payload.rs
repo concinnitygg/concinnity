@@ -52,13 +52,16 @@ type DeserialisedStatic = (Vec<Vertex>, Vec<u16>, LodAlternates);
 // Deserialised skinned mesh: vertices, indices, and the bind-pose skeleton.
 type DeserialisedSkinned = (Vec<SkinnedVertex>, Vec<u16>, Vec<PayloadJoint>);
 
-// Deserialised skinned mesh plus its LOD alternates.
-type DeserialisedSkinnedLods = (
-    Vec<SkinnedVertex>,
-    Vec<u16>,
-    Vec<PayloadJoint>,
-    LodAlternates,
-);
+// A fully deserialised skinned payload, including the optional morph and
+// LOD blocks (empty when the payload carries none).
+#[derive(Clone, Debug, Default)]
+pub struct SkinnedPayload {
+    pub vertices: Vec<SkinnedVertex>,
+    pub indices: Vec<u16>,
+    pub joints: Vec<PayloadJoint>,
+    pub morphs: PayloadMorphs,
+    pub lods: LodAlternates,
+}
 
 // Serialise vertex and index slices into the packed binary payload format.
 // Each vertex tuple is (pos, normal, tangent, color, uv).
@@ -249,6 +252,38 @@ pub struct SkinnedVertex {
 // fails loudly instead of being misread.
 const SKINNED_MAGIC: &[u8; 4] = b"SKMV";
 
+// Magic for the optional morph-target block after the joint block.
+const MORPH_MAGIC: &[u8; 4] = b"MRPH";
+
+// One morph-target vertex delta as the GPU consumes it: position and normal
+// offsets added to the bind pose before skinning, scaled by the target's
+// weight. Plain tightly packed floats; the shader-side struct uses packed
+// types so the 24-byte stride matches.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct MorphDelta {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+}
+
+// Morph-target block of a skinned payload: target names plus dense
+// target-major deltas (`deltas[t * vertex_count + v]`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PayloadMorphs {
+    pub names: Vec<String>,
+    pub deltas: Vec<MorphDelta>,
+}
+
+impl PayloadMorphs {
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    pub fn target_count(&self) -> usize {
+        self.names.len()
+    }
+}
+
 // One joint of a skinned mesh's bind-pose skeleton, as stored in the
 // compiled payload. Mirrors `assets::skinned_mesh::JointDef` but lives in
 // `gfx` so the payload format stays self-contained: the build/runtime
@@ -287,18 +322,21 @@ pub fn serialise_skinned(
     indices: &[u16],
     joints: &[PayloadJoint],
 ) -> Vec<u8> {
-    serialise_skinned_with_lods(vertices, indices, joints, &[])
+    serialise_skinned_with_lods(vertices, indices, joints, &PayloadMorphs::default(), &[])
 }
 
-// Serialise a multi-LOD skinned mesh. The optional LOD trailer rides
-// after the joint block: magic `"LODS"`, `u32 alt_count`, then per
-// alternate `f32 switch_distance`, `u32 index_count`,
-// `index_count * 2` bytes of u16 indices. Empty `lod_alternates` matches
-// the single-LOD [`serialise_skinned`] output byte-for-byte.
+// Serialise a multi-LOD skinned mesh. Two optional blocks ride after the
+// joint block, each announced by a magic: `"MRPH"` (`u32 target_count`, per
+// target `u32 name_byte_len` + name UTF-8 bytes, then
+// `target_count * vertex_count * 24` bytes of dense f32 deltas) and `"LODS"`
+// (`u32 alt_count`, then per alternate `f32 switch_distance`,
+// `u32 index_count`, `index_count * 2` bytes of u16 indices). Empty morphs
+// and alternates match the legacy single-LOD payload byte-for-byte.
 pub fn serialise_skinned_with_lods(
     vertices: &[SkinnedVertex],
     indices: &[u16],
     joints: &[PayloadJoint],
+    morphs: &PayloadMorphs,
     lod_alternates: &[(f32, Vec<u16>)],
 ) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + 4 + vertices.len() * 80 + 4 + indices.len() * 2 + 4);
@@ -341,6 +379,20 @@ pub fn serialise_skinned_with_lods(
             buf.extend_from_slice(&x.to_le_bytes());
         }
     }
+    if !morphs.is_empty() {
+        buf.extend_from_slice(MORPH_MAGIC);
+        buf.extend_from_slice(&(morphs.names.len() as u32).to_le_bytes());
+        for name in &morphs.names {
+            let name_bytes = name.as_bytes();
+            buf.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(name_bytes);
+        }
+        for d in &morphs.deltas {
+            for x in d.position.iter().chain(d.normal.iter()) {
+                buf.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+    }
     if !lod_alternates.is_empty() {
         buf.extend_from_slice(LODS_MAGIC);
         buf.extend_from_slice(&(lod_alternates.len() as u32).to_le_bytes());
@@ -360,15 +412,15 @@ pub fn serialise_skinned_with_lods(
 // to carry it. The optional LOD trailer is parsed and discarded; callers
 // who need LOD alternates should use [`deserialise_skinned_with_lods`].
 pub fn deserialise_skinned(bytes: &[u8]) -> Result<DeserialisedSkinned, String> {
-    let (v, i, j, _) = deserialise_skinned_with_lods(bytes)?;
-    Ok((v, i, j))
+    let p = deserialise_skinned_with_lods(bytes)?;
+    Ok((p.vertices, p.indices, p.joints))
 }
 
 // Deserialise a packed skinned-mesh payload, also returning any optional
 // LOD trailer. Mirrors [`deserialise_with_lods`] for static meshes:
 // legacy single-LOD payloads have no trailer and produce an empty
 // alternates vec.
-pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<DeserialisedSkinnedLods, String> {
+pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, String> {
     if bytes.len() < 8 || &bytes[0..4] != SKINNED_MAGIC {
         return Err("skinned mesh payload missing SKMV magic header".to_string());
     }
@@ -507,6 +559,52 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<DeserialisedSkinned
         });
     }
 
+    // Optional morph-target block: names, then dense target-major deltas.
+    let mut morphs = PayloadMorphs::default();
+    if cur + 4 <= bytes.len() && &bytes[cur..cur + 4] == MORPH_MAGIC {
+        cur += 4;
+        let target_count = read_u32(&mut cur)? as usize;
+        for _ in 0..target_count {
+            let name_len = read_u32(&mut cur)? as usize;
+            let name_end = cur + name_len;
+            if name_end > bytes.len() {
+                return Err(format!(
+                    "skinned mesh payload too short for morph target name (need {} bytes, have {})",
+                    name_end,
+                    bytes.len()
+                ));
+            }
+            let name = core::str::from_utf8(&bytes[cur..name_end])
+                .map_err(|e| format!("morph target name is not valid utf-8: {}", e))?
+                .to_string();
+            cur = name_end;
+            morphs.names.push(name);
+        }
+        let delta_count = target_count * vertex_count;
+        let delta_bytes = delta_count * 24;
+        if cur + delta_bytes > bytes.len() {
+            return Err(format!(
+                "skinned mesh payload too short for {} morph deltas (need {} bytes, have {})",
+                delta_count,
+                cur + delta_bytes,
+                bytes.len()
+            ));
+        }
+        morphs.deltas.reserve(delta_count);
+        for _ in 0..delta_count {
+            let mut f = [0f32; 6];
+            for x in &mut f {
+                let end = cur + 4;
+                *x = f32::from_le_bytes(bytes[cur..end].try_into().unwrap());
+                cur = end;
+            }
+            morphs.deltas.push(MorphDelta {
+                position: [f[0], f[1], f[2]],
+                normal: [f[3], f[4], f[5]],
+            });
+        }
+    }
+
     // Optional LOD trailer (mirrors the static-mesh format): legacy
     // single-LOD payloads end at the joint block; if the next four bytes
     // are the `LODS` magic, the alternates follow.
@@ -537,7 +635,13 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<DeserialisedSkinned
         }
     }
 
-    Ok((vertices, indices, joints_out, alternates))
+    Ok(SkinnedPayload {
+        vertices,
+        indices,
+        joints: joints_out,
+        morphs,
+        lods: alternates,
+    })
 }
 
 // Deserialise a packed payload, also returning any optional LOD trailer.
@@ -815,11 +919,83 @@ mod tests {
     }
 
     #[test]
+    fn morph_delta_layout_matches_msl() {
+        // `MorphDelta` is read through a pointer by the deform passes
+        // (`MorphDelta` in rt_skin.metal, `VsMorphDelta` in default.metal),
+        // both declaring two packed_float3 fields at a 24-byte stride.
+        use core::mem::{offset_of, size_of};
+        assert_eq!(size_of::<MorphDelta>(), 24);
+        assert_eq!(offset_of!(MorphDelta, position), 0);
+        assert_eq!(offset_of!(MorphDelta, normal), 12);
+    }
+
+    #[test]
     fn deserialise_skinned_rejects_missing_magic() {
         // The static payload format has no magic header, so feeding one in
         // must be rejected rather than silently misread.
         let static_bytes = serialise(&[([0.0; 3], [0.0; 3], [0.0; 3], [1.0; 3], [0.0; 2])], &[]);
         assert!(deserialise_skinned(&static_bytes).is_err());
+    }
+
+    fn sample_skinned_vertex(pos: [f32; 3]) -> SkinnedVertex {
+        SkinnedVertex {
+            pos,
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0; 3],
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn skinned_payload_round_trips_the_morph_block() {
+        let vertices = vec![
+            sample_skinned_vertex([0.0, 0.0, 0.0]),
+            sample_skinned_vertex([1.0, 0.0, 0.0]),
+        ];
+        let joints = vec![PayloadJoint {
+            name: "root".to_string(),
+            parent: -1,
+            translation: [0.0; 3],
+            rotation_deg: [0.0; 3],
+            scale: [1.0; 3],
+        }];
+        let morphs = PayloadMorphs {
+            names: vec!["smile".to_string(), "blink".to_string()],
+            deltas: vec![
+                MorphDelta {
+                    position: [0.1, 0.2, 0.3],
+                    normal: [0.0, 0.0, 1.0],
+                },
+                MorphDelta::default(),
+                MorphDelta::default(),
+                MorphDelta {
+                    position: [-0.5, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                },
+            ],
+        };
+        let lods = vec![(9.0_f32, vec![0u16, 1, 0])];
+        let bytes = serialise_skinned_with_lods(&vertices, &[0, 1, 0], &joints, &morphs, &lods);
+        let p = deserialise_skinned_with_lods(&bytes).expect("deserialise");
+        assert_eq!(p.vertices.len(), 2);
+        assert_eq!(p.joints.len(), 1);
+        assert_eq!(p.morphs, morphs, "morph block must round-trip exactly");
+        assert_eq!(p.lods.len(), 1, "LOD trailer must survive after MRPH");
+        assert_eq!(p.lods[0].1, vec![0u16, 1, 0]);
+    }
+
+    #[test]
+    fn skinned_payload_without_morphs_is_byte_identical_to_legacy() {
+        let vertices = vec![sample_skinned_vertex([0.0, 0.0, 0.0])];
+        let legacy = serialise_skinned(&vertices, &[0, 0, 0], &[]);
+        let with_empty =
+            serialise_skinned_with_lods(&vertices, &[0, 0, 0], &[], &PayloadMorphs::default(), &[]);
+        assert_eq!(legacy, with_empty, "empty morphs must add no bytes");
+        let p = deserialise_skinned_with_lods(&legacy).expect("deserialise");
+        assert!(p.morphs.is_empty());
     }
 
     fn sample_static_verts() -> Vec<VertTuple> {

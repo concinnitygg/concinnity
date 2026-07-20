@@ -233,9 +233,10 @@ pub fn build_compiled(
     // already-imported skeletons; today both passes parse the .glb fresh,
     // but the ordering keeps that option open without an API churn.
     desugar_gltf_skinned_meshes(&mut assets, &gltf_cache)?;
+    desugar_fbx_skinned_meshes(&mut assets, &gltf_cache)?;
     desugar_gltf_meshes(&mut assets, &gltf_cache)?;
     desugar_fbx_meshes(&mut assets, &gltf_cache)?;
-    desugar_gltf_animations(&mut assets)?;
+    desugar_animation_imports(&mut assets)?;
     desugar_root_motion(&mut assets)?;
 
     // Intern every asset name to a dense AssetId in declaration order, then
@@ -501,7 +502,8 @@ fn probe_gltf_cache(
 // Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
 // and write the imported geometry + skeleton into the asset's inline
 // `vertices` / `indices` / `skeleton` args. A SkinnedMesh with no `source` is
-// left untouched, so an inline-authored mesh is byte-for-byte unchanged.
+// left untouched, so an inline-authored mesh is byte-for-byte unchanged;
+// `.fbx` sources belong to `desugar_fbx_skinned_meshes`.
 // Skips an asset whose cache probe found a precompiled payload: there is no
 // reason to parse the .glb when the bytes are already in hand.
 fn desugar_gltf_skinned_meshes(
@@ -518,7 +520,7 @@ fn desugar_gltf_skinned_meshes(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if source.is_empty() {
+        if source.is_empty() || source.to_lowercase().ends_with(".fbx") {
             continue;
         }
         // Cache probe found a compiled payload for this asset, no need
@@ -569,8 +571,98 @@ fn desugar_gltf_skinned_meshes(
             "skeleton".to_string(),
             encode("skeleton", serde_json::to_value(&imported.skeleton))?,
         );
+        if !imported.morph_target_names.is_empty() {
+            obj.insert(
+                "morph_target_names".to_string(),
+                encode(
+                    "morph_target_names",
+                    serde_json::to_value(&imported.morph_target_names),
+                )?,
+            );
+            obj.insert(
+                "morph_deltas".to_string(),
+                encode("morph_deltas", serde_json::to_value(&imported.morph_deltas))?,
+            );
+        }
         tracing::info!(
-            "Asset '{}': imported glTF '{}': {} vertices, {} indices, {} joints",
+            "Asset '{}': imported glTF '{}': {} vertices, {} indices, {} joints, {} morph target(s)",
+            asset.name,
+            source,
+            imported.vertices.len(),
+            imported.indices.len(),
+            imported.skeleton.len(),
+            imported.morph_target_names.len()
+        );
+    }
+    Ok(())
+}
+
+// Expand FBX-sourced SkinnedMesh assets in place, mirroring the glTF pass:
+// the file's first skinned geometry lands in the asset's inline `vertices` /
+// `indices` / `skeleton` args.
+fn desugar_fbx_skinned_meshes(
+    assets: &mut [WorldJsonlAsset],
+    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+) -> std::io::Result<()> {
+    for asset in assets.iter_mut() {
+        if asset.asset_type != SKINNED_MESH_TYPE {
+            continue;
+        }
+        let source = asset
+            .args
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !source.to_lowercase().ends_with(".fbx") {
+            continue;
+        }
+        if matches!(
+            gltf_cache.get(&asset.name),
+            Some(GltfCacheEntry { bytes: Some(_), .. })
+        ) {
+            continue;
+        }
+
+        let imported = crate::fbx::import_skinned_fbx(&source).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Asset '{}': FBX import failed: {}", asset.name, e),
+            )
+        })?;
+
+        let name = asset.name.clone();
+        let obj = asset.args.as_object_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Asset '{}': args is not a JSON object", name),
+            )
+        })?;
+        let encode = |field: &str, value: serde_json::Result<serde_json::Value>| {
+            value.map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Asset '{}': failed to encode imported {}: {}",
+                        name, field, e
+                    ),
+                )
+            })
+        };
+        obj.insert(
+            "vertices".to_string(),
+            encode("vertices", serde_json::to_value(&imported.vertices))?,
+        );
+        obj.insert(
+            "indices".to_string(),
+            encode("indices", serde_json::to_value(&imported.indices))?,
+        );
+        obj.insert(
+            "skeleton".to_string(),
+            encode("skeleton", serde_json::to_value(&imported.skeleton))?,
+        );
+        tracing::info!(
+            "Asset '{}': imported FBX '{}': {} vertices, {} indices, {} joints",
             asset.name,
             source,
             imported.vertices.len(),
@@ -596,7 +688,7 @@ fn desugar_gltf_meshes(
     // One split chunk: its vertices and index buffer.
     type Chunk = (Vec<VertexData>, Vec<u16>);
 
-    let mut parsed_cache: HashMap<String, gltf::Gltf> = HashMap::new();
+    let mut parsed_cache: HashMap<String, crate::gltf_source::GltfDoc> = HashMap::new();
     // Memoize the chunk split per (source, primitive_index) so an oversized
     // primitive that fans into N chunked Mesh assets is split exactly once.
     let mut chunk_cache: HashMap<(String, u32), Vec<Chunk>> = HashMap::new();
@@ -615,8 +707,9 @@ fn desugar_gltf_meshes(
             continue;
         }
         // `.fbx` sources are handled by `desugar_fbx_meshes`; this pass owns
-        // only the glTF container.
-        if !source.to_lowercase().ends_with(".glb") {
+        // only the glTF containers.
+        let lower = source.to_lowercase();
+        if !lower.ends_with(".glb") && !lower.ends_with(".gltf") {
             continue;
         }
         // Skip the .glb parse when the cache probe already produced bytes
@@ -876,13 +969,15 @@ fn desugar_fbx_meshes(
     Ok(())
 }
 
-// Expand glTF-sourced `Animation` assets in place: parse the `.glb`, pick the
-// animation by `animation_name` (preferred) or `animation_index`, and replace
-// the asset's `duration` + `tracks` with the imported data. An Animation with
-// no `source` is left untouched, so inline-authored clips are byte-for-byte
-// unchanged. Channels targeting non-joint nodes are dropped silently by the
-// importer.
-fn desugar_gltf_animations(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
+// Expand file-sourced `Animation` assets in place, dispatching on the source
+// extension: `.fbx` clips bake through the FBX importer (at the asset's
+// `sample_rate`), everything else parses as glTF. The clip is picked by
+// `animation_name` (preferred) or `animation_index` and the asset's
+// `duration` + `tracks` are replaced with the imported data. An Animation
+// with no `source` is left untouched, so inline-authored clips are
+// byte-for-byte unchanged. Channels targeting non-joint nodes are dropped
+// silently by the importers.
+fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
     use crate::assets::Animation;
     use crate::ecs::Component;
 
@@ -911,37 +1006,57 @@ fn desugar_gltf_animations(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
 
-        // Look up by name when authored; fall back to the numeric index.
-        let resolved_index = if !animation_name.is_empty() {
-            let names = crate::gltf::glb_animation_names(&source).map_err(|e| {
+        let imported = if source.to_lowercase().ends_with(".fbx") {
+            let sample_rate = asset
+                .args
+                .get("sample_rate")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(30.0) as f32;
+            crate::fbx::import_fbx_animation(
+                &source,
+                animation_index as u32,
+                &animation_name,
+                sample_rate,
+            )
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                )
+            })?
+        } else {
+            // Look up by name when authored; fall back to the numeric index.
+            let resolved_index = if !animation_name.is_empty() {
+                let names = crate::gltf::glb_animation_names(&source).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                    )
+                })?;
+                names
+                    .iter()
+                    .position(|n| n == &animation_name)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "Asset '{}': glTF '{}' has no animation named '{}' \
+                                 (file contains: {:?})",
+                                asset.name, source, animation_name, names
+                            ),
+                        )
+                    })?
+            } else {
+                animation_index
+            };
+
+            crate::gltf::import_glb_animation(&source, resolved_index).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Asset '{}': glTF import failed: {}", asset.name, e),
                 )
-            })?;
-            names
-                .iter()
-                .position(|n| n == &animation_name)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "Asset '{}': glTF '{}' has no animation named '{}' \
-                             (file contains: {:?})",
-                            asset.name, source, animation_name, names
-                        ),
-                    )
-                })?
-        } else {
-            animation_index
+            })?
         };
-
-        let imported = crate::gltf::import_glb_animation(&source, resolved_index).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': glTF import failed: {}", asset.name, e),
-            )
-        })?;
 
         // Convert ImportedAnimation -> the asset's serialised track shape.
         let tracks_json: Vec<serde_json::Value> = imported
@@ -976,14 +1091,25 @@ fn desugar_gltf_animations(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()
         })?;
         obj.insert("duration".to_string(), serde_json::json!(imported.duration));
         obj.insert("tracks".to_string(), serde_json::Value::Array(tracks_json));
+        if !imported.morph_track.is_empty() {
+            let morph_json: Vec<serde_json::Value> = imported
+                .morph_track
+                .iter()
+                .map(|k| serde_json::json!({"time": k.time, "weights": k.weights}))
+                .collect();
+            obj.insert(
+                "morph_track".to_string(),
+                serde_json::Value::Array(morph_json),
+            );
+        }
         tracing::info!(
-            "Asset '{}': imported glTF '{}' animation {} ('{}'): {:.3} s, {} track(s)",
+            "Asset '{}': imported '{}' animation '{}': {:.3} s, {} track(s), {} morph key(s)",
             asset.name,
             source,
-            resolved_index,
             imported.name,
             imported.duration,
             imported.tracks.len(),
+            imported.morph_track.len(),
         );
     }
     Ok(())
@@ -1726,7 +1852,7 @@ mod tests {
     // Animation with no `source` is left byte-for-byte unchanged: the
     // inline-authored path must not regress.
     #[test]
-    fn desugar_gltf_animations_skips_inline_clips() {
+    fn desugar_animation_imports_skips_inline_clips() {
         let original = serde_json::json!({
             "target": "flag",
             "duration": 2.0,
@@ -1737,7 +1863,7 @@ mod tests {
             asset_type: "Animation".to_string(),
             args: original.clone(),
         }];
-        desugar_gltf_animations(&mut assets).expect("desugar succeeds");
+        desugar_animation_imports(&mut assets).expect("desugar succeeds");
         assert_eq!(assets[0].args, original);
     }
 
@@ -1959,6 +2085,41 @@ mod tests {
         assert!(err.to_string().contains("Asset 'crate_mesh'"), "got: {err}");
     }
 
+    // The text `.gltf` container flows through the same desugar as `.glb`:
+    // geometry lands inline from the external `.bin` beside the source.
+    #[test]
+    fn desugar_gltf_meshes_imports_a_text_gltf_with_an_external_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("geo.bin"),
+            crate::glb::test_fixtures::static_triangle_bin(),
+        )
+        .unwrap();
+        let mut json = crate::glb::test_fixtures::static_triangle_json();
+        json["buffers"][0]["uri"] = "geo.bin".into();
+        let gltf = dir.path().join("tri.gltf");
+        std::fs::write(&gltf, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let mut assets = vec![wja(
+            "tri",
+            MESH_TYPE,
+            serde_json::json!({"source": gltf.to_str().unwrap(), "primitive_index": 0}),
+        )];
+        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        let vertices = assets[0].args.get("vertices").expect("inline vertices");
+        assert_eq!(vertices.as_array().unwrap().len(), 3);
+        assert_eq!(
+            assets[0]
+                .args
+                .get("indices")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
     #[test]
     fn desugar_fbx_meshes_missing_source_errors() {
         let mut assets = vec![wja(
@@ -1984,18 +2145,18 @@ mod tests {
     }
 
     #[test]
-    fn desugar_gltf_animations_missing_source_errors() {
+    fn desugar_animation_imports_missing_source_errors() {
         let mut assets = vec![wja(
             "walk",
             "Animation",
             serde_json::json!({"source": "/no/such/anim.glb"}),
         )];
-        let err = desugar_gltf_animations(&mut assets).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'walk'"), "got: {err}");
     }
 
     #[test]
-    fn desugar_gltf_animations_missing_named_clip_errors() {
+    fn desugar_animation_imports_missing_named_clip_errors() {
         // The by-name lookup also starts by reading the file, so a missing
         // source fails before the name search; the error still names the asset.
         let mut assets = vec![wja(
@@ -2003,7 +2164,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": "/no/such/anim.glb", "animation_name": "Run"}),
         )];
-        let err = desugar_gltf_animations(&mut assets).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'run'"), "got: {err}");
     }
 
@@ -2247,6 +2408,36 @@ mod tests {
             font.source_files(&serde_json::json!({"source": "x.ttf"}))
                 .is_empty()
         );
+    }
+
+    // A mesh whose source is a text `.gltf` reads sibling files the args never
+    // name; `source_files` must report them so an edited external buffer or
+    // image busts the payload cache.
+    #[test]
+    fn gltf_sources_fold_referenced_sibling_files_into_source_files() {
+        use crate::resource_handles::ResourceAssetType;
+
+        let dir = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 4, "uri": "geo.bin"}],
+            "images": [{"uri": "albedo.png"}]
+        });
+        let gltf_path = dir.path().join("tri.gltf");
+        std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let src = gltf_path.to_str().unwrap().to_string();
+
+        for rt in [ResourceAssetType::Mesh, ResourceAssetType::SkinnedMesh] {
+            let files = rt.source_files(&serde_json::json!({"source": src}));
+            assert_eq!(files.len(), 3, "{rt:?}: {files:?}");
+            assert_eq!(files[0], src);
+            assert!(files.iter().any(|f| f.ends_with("geo.bin")), "{files:?}");
+            assert!(files.iter().any(|f| f.ends_with("albedo.png")), "{files:?}");
+        }
+
+        // A `.glb` source reports only itself.
+        let glb = ResourceAssetType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}));
+        assert_eq!(glb, vec!["scene.glb".to_string()]);
     }
 
     // Dispatch coverage: compile_by_type / source_files_by_type route each

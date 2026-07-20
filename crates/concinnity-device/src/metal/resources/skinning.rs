@@ -70,6 +70,22 @@ pub(crate) struct SkinnedState {
     // interior mutation reachable from `encode_pass_into` must be atomic, like
     // `draw_calls_accum`. Reset to `false` on the main thread in `upload_skinned`.
     pub deformed_primed: std::sync::atomic::AtomicBool,
+    // Per-object morph-target bindings, parallel to `draw_objects`; `None`
+    // for a mesh without morph targets. Instance copies share their
+    // template's delta buffer.
+    pub morphs: Vec<Option<MorphBinding>>,
+    // Current morph weights per object, parallel to `draw_objects`; empty
+    // for objects without morph targets. Rewritten each frame by
+    // `update_morph_weights` and bound to the deform passes via set_bytes.
+    pub morph_weights: Vec<Vec<f32>>,
+}
+
+// GPU-resident morph data for one skinned mesh: the dense target-major delta
+// buffer (24-byte `MorphDelta` stride) and its target count.
+#[derive(Clone)]
+pub(crate) struct MorphBinding {
+    pub buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    pub target_count: u32,
 }
 
 // Skinned vertex layout: the 56-byte static attributes (pos / normal /
@@ -632,6 +648,70 @@ impl MtlContext {
         self.skinned.index_buffer = Some(skinned_index_buffer);
         self.skinned.draw_objects = draw_objects;
         Ok(())
+    }
+
+    // Upload morph-target delta buffers for the skinned draw objects.
+    // `morphs[i]` pairs with draw object `i`; instance copies share their
+    // template's `Arc`, so each unique delta set becomes one GPU buffer.
+    pub fn upload_skinned_morphs(
+        &mut self,
+        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) -> Result<(), String> {
+        use std::collections::HashMap;
+
+        let mut by_source: HashMap<usize, MorphBinding> = HashMap::new();
+        let mut bindings: Vec<Option<MorphBinding>> = Vec::with_capacity(morphs.len());
+        let mut weights: Vec<Vec<f32>> = Vec::with_capacity(morphs.len());
+        for m in &morphs {
+            let binding = match m {
+                None => None,
+                Some(data) => {
+                    let key = std::sync::Arc::as_ptr(data) as usize;
+                    let entry = match by_source.get(&key) {
+                        Some(b) => b.clone(),
+                        None => {
+                            let bytes = bytes_of_slice(&data.deltas);
+                            let buffer = unsafe {
+                                let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
+                                    .ok_or("morph delta slice is empty")?;
+                                self.device
+                                    .newBufferWithBytes_length_options(
+                                        ptr,
+                                        bytes.len(),
+                                        MTLResourceOptions::StorageModeShared,
+                                    )
+                                    .ok_or("failed to create morph delta buffer")?
+                            };
+                            let b = MorphBinding {
+                                buffer,
+                                target_count: data.target_count() as u32,
+                            };
+                            by_source.insert(key, b.clone());
+                            b
+                        }
+                    };
+                    Some(entry)
+                }
+            };
+            weights.push(vec![
+                0.0;
+                binding.as_ref().map_or(0, |b| b.target_count as usize)
+            ]);
+            bindings.push(binding);
+        }
+        self.skinned.morphs = bindings;
+        self.skinned.morph_weights = weights;
+        Ok(())
+    }
+
+    // Replace one skinned object's morph weights. Out-of-range indices and
+    // objects without morph targets are ignored; extra weights are dropped.
+    pub fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+        if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
+            for (i, w) in slot.iter_mut().enumerate() {
+                *w = weights.get(i).copied().unwrap_or(0.0);
+            }
+        }
     }
 
     // Replace the skinning matrices for one skinned object. Called each frame

@@ -183,7 +183,9 @@ pub use concinnity_asset::Texture;
 pub use concinnity_asset::VolumetricFog;
 pub use concinnity_asset::VoxelChunk;
 pub use concinnity_asset::VoxelWorld;
-pub use concinnity_asset::{CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData};
+pub use concinnity_asset::{
+    CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData,
+};
 pub use concinnity_asset::{
     CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,

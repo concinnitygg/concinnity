@@ -201,6 +201,7 @@ fn pose_fixture(xs: &[f32]) -> (Skeleton, Vec<AnimationClip>) {
         .iter()
         .map(|&x| AnimationClip {
             root: None,
+            morph_keys: Vec::new(),
             duration: 1.0,
             looping: true,
             tracks: vec![JointTrack {
@@ -377,6 +378,7 @@ fn synced_members_sample_at_shared_phase() {
                 },
             ],
         }],
+        morph_keys: Vec::new(),
     };
     let clips = [ramp(1.0), ramp(0.5)];
     let graph = CompiledGraph {

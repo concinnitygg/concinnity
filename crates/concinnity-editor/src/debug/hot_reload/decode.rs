@@ -173,13 +173,14 @@ pub(super) fn decode_asset_batch(
     // Wrapped in a Mutex so the par_iter texture loop can populate it from
     // worker threads; contention only fires the first time each unique
     // source is seen.
-    let parsed_glb_cache: Mutex<std::collections::HashMap<String, gltf::Gltf>> =
-        Mutex::new(std::collections::HashMap::new());
+    let parsed_glb_cache: Mutex<
+        std::collections::HashMap<String, concinnity_cook::gltf_source::GltfDoc>,
+    > = Mutex::new(std::collections::HashMap::new());
 
     // Helper: fetch (or parse + cache) the glTF doc for `source`. Returns a
-    // cloned `gltf::Gltf`: the underlying doc is reference-counted internally
-    // by the `gltf` crate, so the clone is cheap.
-    let load_glb = |source: &str| -> Result<gltf::Gltf, String> {
+    // cloned `GltfDoc`: the parsed document is reference-counted internally
+    // and the resolved buffers are `Arc`-backed, so the clone is cheap.
+    let load_glb = |source: &str| -> Result<concinnity_cook::gltf_source::GltfDoc, String> {
         if let Some(doc) = parsed_glb_cache.lock().unwrap().get(source) {
             return Ok(doc.clone());
         }
@@ -196,7 +197,8 @@ pub(super) fn decode_asset_batch(
     let texture_results: Vec<_> = textures
         .par_iter()
         .map(|entry| {
-            let decoded = if entry.source.to_lowercase().ends_with(".glb") {
+            let lower = entry.source.to_lowercase();
+            let decoded = if lower.ends_with(".glb") || lower.ends_with(".gltf") {
                 match load_glb(&entry.source) {
                     Ok(doc) => concinnity_cook::texture::decode_glb_image_from_doc(
                         &doc,

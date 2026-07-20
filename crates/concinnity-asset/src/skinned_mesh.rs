@@ -37,6 +37,17 @@ pub struct SkinnedVertexData {
     pub weights: [f32; 4],
 }
 
+/// One morph-target vertex delta: offsets added to the bind-pose position and
+/// normal, scaled by the target's weight at runtime.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MorphDelta {
+    /// Position offset `[x, y, z]` in model space.
+    pub position: [f32; 3],
+    /// Normal offset; the deformed normal is re-normalised after adding it.
+    pub normal: [f32; 3],
+}
+
 /// One joint of a skeleton's bind pose.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -74,9 +85,10 @@ impl Default for JointDef {
 /// runtime. With no animation the mesh renders in its bind pose.
 ///
 /// The geometry + skeleton may be authored inline (`vertices` / `indices` /
-/// `skeleton`) or imported from a binary glTF file with `source`. Only the
-/// `.glb` container is supported, and only the mesh + skeleton bind pose are
-/// imported (glTF animations are not yet brought in).
+/// `skeleton`) or imported with `source` from a glTF (`.glb` / `.gltf`) or
+/// binary `.fbx` file. The import fills the mesh, the skeleton bind pose,
+/// and (for glTF) any morph targets; animations are imported separately by
+/// [Animation](#animation) assets referencing the same file.
 ///
 /// The `skeleton` (joint hierarchy and bind pose) is provided as an arg
 /// (authored inline alongside `vertices`/`indices`, or filled in from the
@@ -103,6 +115,15 @@ pub struct SkinnedMesh {
     pub vertices: Vec<SkinnedVertexData>,
     /// Triangle index list.
     pub indices: Vec<u16>,
+    /// Morph-target names, one per target, in target order. Filled from the
+    /// source file's target names when importing; empty for a mesh without
+    /// morph targets.
+    pub morph_target_names: Vec<String>,
+    /// Dense morph-target deltas, target-major: entry `t * vertex_count + v`
+    /// is target `t`'s delta for vertex `v`. Length must be
+    /// `morph_target_names.len() * vertices.len()`. An [Animation](#animation)
+    /// with a `morph_track` drives the per-target weights at runtime.
+    pub morph_deltas: Vec<MorphDelta>,
     /// [Material](#material); provides the albedo texture plus lighting
     /// parameters.
     #[serde(deserialize_with = "de_opt_material_handle")]

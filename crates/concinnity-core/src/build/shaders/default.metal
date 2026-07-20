@@ -367,20 +367,51 @@ struct SkinnedVertex {
     float4  weights [[attribute(6)]];
 };
 
+// Morph-target delta (matches gfx::mesh_payload::MorphDelta, 24-byte stride)
+// and the per-draw morph parameters bound at buffer(10) for the skinned VS.
+struct VsMorphDelta {
+    packed_float3 position;
+    packed_float3 normal;
+};
+
+struct VsMorphParams {
+    uint  vertex_base;   // this object's first vertex in the shared buffer
+    uint  vertex_count;  // vertices in this object (delta-buffer stride)
+    uint  target_count;  // 0 = no morphing
+    uint  _pad;
+    float weights[64];   // one per target (MAX_MORPH_TARGETS)
+};
+
 vertex VertexOut vertex_main_skinned(
     SkinnedVertex in                 [[stage_in]],
+    uint vid                         [[vertex_id]],
     constant ViewUniforms  &view     [[buffer(0)]],
     constant ModelUniforms &model_u  [[buffer(2)]],
-    constant float4x4      *joints   [[buffer(8)]]
+    constant float4x4      *joints   [[buffer(8)]],
+    device const VsMorphDelta *deltas [[buffer(9)]],
+    constant VsMorphParams &morph    [[buffer(10)]]
 ) {
+    // Morph deltas apply in bind space before the skin matrix; the deltas
+    // buffer is target-major and indexed by the object-local vertex index.
+    float3 pos = in.pos;
+    float3 nrm = in.normal;
+    uint local = vid - morph.vertex_base;
+    for (uint t = 0; t < morph.target_count; ++t) {
+        float w = morph.weights[t];
+        if (fabs(w) < 1e-5) continue;
+        VsMorphDelta d = deltas[t * morph.vertex_count + local];
+        pos += w * float3(d.position);
+        nrm += w * float3(d.normal);
+    }
+
     // Linear blend skinning: weighted sum of the bound joints' matrices.
     float4x4 skin = in.weights.x * joints[in.joints.x]
                   + in.weights.y * joints[in.joints.y]
                   + in.weights.z * joints[in.joints.z]
                   + in.weights.w * joints[in.joints.w];
 
-    float4 skinned_pos     = skin * float4(in.pos, 1.0);
-    float3 skinned_normal  = (skin * float4(in.normal,  0.0)).xyz;
+    float4 skinned_pos     = skin * float4(pos, 1.0);
+    float3 skinned_normal  = (skin * float4(nrm,  0.0)).xyz;
     float3 skinned_tangent = (skin * float4(in.tangent, 0.0)).xyz;
 
     VertexOut out;

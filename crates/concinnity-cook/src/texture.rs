@@ -99,8 +99,8 @@ pub fn decode_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8
 // texture that builds also hot-reloads.
 pub fn decode_file_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let lower = source.to_lowercase();
-    if lower.ends_with(".glb") {
-        load_glb_image(source, image_index)
+    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+        load_gltf_image(source, image_index)
     } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
         load_jpg(source)
     } else if lower.ends_with(".dds") {
@@ -298,10 +298,10 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, pixels))
 }
 
-// Extract the indexed embedded image from a .glb. The image's bytes can live
-// either in a `bufferView` (typical) or as a data URI on `Source::Uri` (rare
-// for GLBs but legal). The MIME type selects the decoder.
-fn load_glb_image(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
+// Extract the indexed image from a `.glb` / `.gltf`. The image's bytes can
+// live in a `bufferView`, in an external file beside the source, or in a data
+// URI. The MIME type (or file extension) selects the decoder.
+fn load_gltf_image(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let doc = crate::glb::parse_glb(source)?;
     decode_glb_image_from_doc(&doc, source, image_index)
 }
@@ -312,41 +312,30 @@ fn load_glb_image(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>),
 // `HashMap<String, gltf::Gltf>` and calls this entry point per texture
 // instead of re-parsing the file 43+ times.
 pub fn decode_glb_image_from_doc(
-    doc: &gltf::Gltf,
+    doc: &crate::gltf_source::GltfDoc,
     source: &str,
     image_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let blob = doc.blob.as_deref();
-
     let image = doc
+        .doc
         .document
         .images()
         .nth(image_index as usize)
         .ok_or_else(|| format!("'{}': image_index {} is out of range", source, image_index))?;
 
-    let (bytes, mime_type): (Vec<u8>, String) = match image.source() {
+    let (bytes, mime_type): (Vec<u8>, Option<String>) = match image.source() {
         gltf::image::Source::View { view, mime_type } => {
-            let buf = view.buffer();
-            let backing = match buf.source() {
-                gltf::buffer::Source::Bin => blob.ok_or_else(|| {
-                    format!(
-                        "'{}': image {} references the binary chunk but the GLB has no blob",
-                        source, image_index
-                    )
-                })?,
-                gltf::buffer::Source::Uri(_) => {
-                    return Err(format!(
-                        "'{}': image {} lives in an external buffer; only embedded \
-                         GLB binary chunks are supported",
-                        source, image_index
-                    ));
-                }
-            };
+            let backing = doc.buffer_bytes(view.buffer()).ok_or_else(|| {
+                format!(
+                    "'{}': image {} references buffer data the container does not carry",
+                    source, image_index
+                )
+            })?;
             let start = view.offset();
             let end = start + view.length();
             if end > backing.len() {
                 return Err(format!(
-                    "'{}': image {} bufferView [{}, {}) exceeds blob size {}",
+                    "'{}': image {} bufferView [{}, {}) exceeds buffer size {}",
                     source,
                     image_index,
                     start,
@@ -354,27 +343,43 @@ pub fn decode_glb_image_from_doc(
                     backing.len()
                 ));
             }
-            (backing[start..end].to_vec(), mime_type.to_string())
+            (backing[start..end].to_vec(), Some(mime_type.to_string()))
         }
-        gltf::image::Source::Uri { .. } => {
-            return Err(format!(
-                "'{}': image {} uses an external URI; only embedded images in the \
-                 GLB binary chunk are supported",
-                source, image_index
-            ));
+        gltf::image::Source::Uri { uri, mime_type } => {
+            let bytes = doc
+                .external_bytes(uri)
+                .map_err(|e| format!("'{}': image {}: {}", source, image_index, e))?;
+            let mime = mime_type.map(str::to_string).or_else(|| mime_from_uri(uri));
+            (bytes, mime)
         }
     };
 
-    match mime_type.as_str() {
-        "image/png" => decode_png_bytes(&bytes)
+    match mime_type.as_deref() {
+        Some("image/png") | None => decode_png_bytes(&bytes)
             .map_err(|e| format!("'{}': image {}: {}", source, image_index, e)),
-        "image/jpeg" => decode_jpeg_bytes(&bytes)
+        Some("image/jpeg") => decode_jpeg_bytes(&bytes)
             .map_err(|e| format!("'{}': image {}: {}", source, image_index, e)),
-        other => Err(format!(
+        Some(other) => Err(format!(
             "'{}': image {} has unsupported MIME type '{}'; only image/png and \
              image/jpeg are handled",
             source, image_index, other
         )),
+    }
+}
+
+// Infer an image MIME type from a URI's extension (or a data URI's header)
+// when the glTF omits `mimeType`, which is optional for URI-sourced images.
+fn mime_from_uri(uri: &str) -> Option<String> {
+    if let Some(rest) = uri.strip_prefix("data:") {
+        return rest.split(&[';', ','][..]).next().map(str::to_string);
+    }
+    let lower = uri.to_lowercase();
+    if lower.ends_with(".png") {
+        Some("image/png".to_string())
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some("image/jpeg".to_string())
+    } else {
+        None
     }
 }
 
@@ -965,7 +970,7 @@ mod tests {
     fn decode_glb_image_reads_an_embedded_png() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[11, 22, 33, 44]);
         let glb = glb_with_png_image(&png_bytes, "image/png");
-        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&glb);
         let (w, h, px) = decode_glb_image_from_doc(&doc, "t.glb", 0).expect("decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(px, vec![11, 22, 33, 44]);
@@ -975,7 +980,7 @@ mod tests {
     fn decode_glb_image_rejects_an_out_of_range_index() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
         let glb = glb_with_png_image(&png_bytes, "image/png");
-        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 5).unwrap_err();
         assert!(err.contains("image_index 5 is out of range"), "got: {err}");
     }
@@ -988,9 +993,9 @@ mod tests {
             "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 16}],
             "images": [{"bufferView": 0, "mimeType": "image/png"}]
         });
-        let doc = gltf::Gltf::from_slice(&make_glb(&json, None)).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("has no blob"), "got: {err}");
+        assert!(err.contains("does not carry"), "got: {err}");
     }
 
     #[test]
@@ -1002,27 +1007,44 @@ mod tests {
             "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 4096}],
             "images": [{"bufferView": 0, "mimeType": "image/png"}]
         });
-        let doc = gltf::Gltf::from_slice(&make_glb(&json, Some(&[0u8; 4]))).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&make_glb(&json, Some(&[0u8; 4])));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("exceeds blob size"), "got: {err}");
+        assert!(err.contains("exceeds buffer size"), "got: {err}");
     }
 
     #[test]
-    fn decode_glb_image_rejects_an_external_uri_image() {
+    fn decode_glb_image_without_a_source_dir_rejects_an_external_uri() {
         let json = serde_json::json!({
             "asset": {"version": "2.0"},
             "images": [{"uri": "external.png"}]
         });
-        let doc = gltf::Gltf::from_slice(&make_glb(&json, None)).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("external URI"), "got: {err}");
+        assert!(err.contains("without a source directory"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_gltf_image_reads_an_external_file_beside_the_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[9, 8, 7, 255]);
+        std::fs::write(dir.path().join("albedo.png"), &png_bytes).expect("write png");
+        // No mimeType on purpose: it is optional for URI images and must be
+        // inferred from the extension.
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "images": [{"uri": "albedo.png"}]
+        });
+        let src = write_file(&dir, "scene.gltf", &serde_json::to_vec(&json).unwrap());
+        let (w, h, px) = decode_file_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px, vec![9, 8, 7, 255]);
     }
 
     #[test]
     fn decode_glb_image_rejects_an_unsupported_mime_type() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
         let glb = glb_with_png_image(&png_bytes, "image/webp");
-        let doc = gltf::Gltf::from_slice(&glb).expect("parse glb");
+        let doc = crate::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(err.contains("unsupported MIME type"), "got: {err}");
     }

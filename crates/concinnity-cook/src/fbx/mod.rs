@@ -16,6 +16,12 @@
 // DiffuseColor -> albedo, NormalMap -> normal, SpecularColor -> packed ORM
 // (occlusion/roughness/metalness), EmissiveColor -> emissive.
 
+mod anim;
+mod skin;
+
+pub use anim::{fbx_animation_names, import_fbx_animation};
+pub use skin::import_skinned_fbx;
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -131,6 +137,20 @@ fn arr_i32<'a>(n: &NodeHandle<'a>) -> Option<&'a [i32]> {
     }
 }
 
+fn arr_i64<'a>(n: &NodeHandle<'a>) -> Option<&'a [i64]> {
+    match n.attributes().first()? {
+        AttributeValue::ArrI64(v) => Some(v),
+        _ => None,
+    }
+}
+
+fn arr_f32<'a>(n: &NodeHandle<'a>) -> Option<&'a [f32]> {
+    match n.attributes().first()? {
+        AttributeValue::ArrF32(v) => Some(v),
+        _ => None,
+    }
+}
+
 // First string attribute of a named child node (e.g. RelativeFilename).
 fn child_str<'a>(n: &NodeHandle<'a>, name: &str) -> Option<&'a str> {
     n.first_child_by_name(name)
@@ -224,11 +244,49 @@ fn rot_z(deg: f64) -> Mat4 {
     m
 }
 
-// Compose an FBX node transform T * R * S. FBX `eEulerXYZ` applies X then Y
-// then Z, which is Rz * Ry * Rx for column vectors.
+// XYZ euler composition: X applied first, then Y, then Z, which is
+// Rz * Ry * Rx for column vectors. FBX PreRotation is always XYZ.
+fn rot_xyz(r_deg: [f64; 3]) -> Mat4 {
+    mat4_mul(rot_z(r_deg[2]), mat4_mul(rot_y(r_deg[1]), rot_x(r_deg[0])))
+}
+
+// Euler composition honouring an FBX RotationOrder enum: 0 XYZ, 1 XZY,
+// 2 YZX, 3 YXZ, 4 ZXY, 5 ZYX (application order; matrices multiply
+// right-to-left for column vectors). SphericXYZ (6) falls back to XYZ.
+fn rot_ordered(r_deg: [f64; 3], order: i32) -> Mat4 {
+    let x = rot_x(r_deg[0]);
+    let y = rot_y(r_deg[1]);
+    let z = rot_z(r_deg[2]);
+    let [a, b, c] = match order {
+        1 => [x, z, y],
+        2 => [y, z, x],
+        3 => [y, x, z],
+        4 => [z, x, y],
+        5 => [z, y, x],
+        _ => [x, y, z],
+    };
+    mat4_mul(c, mat4_mul(b, a))
+}
+
+// Compose an FBX node transform T * R * S with XYZ rotation order.
 fn trs_matrix(t: [f64; 3], r_deg: [f64; 3], s: [f64; 3]) -> Mat4 {
-    let r = mat4_mul(rot_z(r_deg[2]), mat4_mul(rot_y(r_deg[1]), rot_x(r_deg[0])));
-    mat4_mul(translate(t), mat4_mul(r, scale_mat(s)))
+    mat4_mul(translate(t), mat4_mul(rot_xyz(r_deg), scale_mat(s)))
+}
+
+// Scene-pose local transform of a node including its PreRotation and
+// RotationOrder: T * Rpre * R * S. Used for skeleton joints that carry no
+// cluster bind matrix.
+fn node_scene_local(model: &NodeHandle) -> Mat4 {
+    let Some(p70) = model.first_child_by_name("Properties70") else {
+        return IDENTITY;
+    };
+    let t = prop_vec3(&p70, "Lcl Translation").unwrap_or([0.0, 0.0, 0.0]);
+    let r = prop_vec3(&p70, "Lcl Rotation").unwrap_or([0.0, 0.0, 0.0]);
+    let s = prop_vec3(&p70, "Lcl Scaling").unwrap_or([1.0, 1.0, 1.0]);
+    let pre = prop_vec3(&p70, "PreRotation").unwrap_or([0.0, 0.0, 0.0]);
+    let order = prop_scalar(&p70, "RotationOrder").unwrap_or(0.0) as i32;
+    let rot = mat4_mul(rot_xyz(pre), rot_ordered(r, order));
+    mat4_mul(translate(t), mat4_mul(rot, scale_mat(s)))
 }
 
 // (node-local matrix, geometric-offset matrix) for a Model node.
@@ -271,17 +329,35 @@ fn resolve_texture_path(tex: &NodeHandle, fbx_dir: &Path) -> Option<String> {
     Some(joined.to_string_lossy().into_owned())
 }
 
-// Parse a binary FBX file into an [`FbxScene`].
-pub fn parse_fbx(path: &str) -> Result<FbxScene, String> {
+// Meters per FBX file unit, from GlobalSettings. FBX's native unit is the
+// centimeter: UnitScaleFactor 1.0 means cm, 100.0 means meters. The skinned
+// and animation importers normalize to meters so characters, capsules, and
+// root motion agree with the glTF path; the static-scene path keeps file
+// units (Bistro-era worlds are authored against them).
+fn unit_scale_to_meters(root: &NodeHandle) -> f32 {
+    let factor = root
+        .first_child_by_name("GlobalSettings")
+        .and_then(|gs| gs.first_child_by_name("Properties70"))
+        .and_then(|p| prop_scalar(&p, "UnitScaleFactor"))
+        .unwrap_or(1.0);
+    (factor / 100.0) as f32
+}
+
+// Read a binary FBX file into its v7.4/7.5 node tree.
+fn load_tree(path: &str) -> Result<fbxcel::tree::v7400::Tree, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("could not open '{path}': {e}"))?;
     let reader = std::io::BufReader::new(file);
-    let tree = match AnyTree::from_seekable_reader(reader)
+    match AnyTree::from_seekable_reader(reader)
         .map_err(|e| format!("'{path}': not a valid FBX file: {e}"))?
     {
-        AnyTree::V7400(_ver, tree, _footer) => tree,
-        _ => return Err(format!("'{path}': unsupported FBX version")),
-    };
+        AnyTree::V7400(_ver, tree, _footer) => Ok(tree),
+        _ => Err(format!("'{path}': unsupported FBX version")),
+    }
+}
 
+// Parse a binary FBX file into an [`FbxScene`].
+pub fn parse_fbx(path: &str) -> Result<FbxScene, String> {
+    let tree = load_tree(path)?;
     let root = tree.root();
     let objects = root
         .first_child_by_name("Objects")
@@ -884,6 +960,179 @@ mod tests {
     // parse_fbx error paths (a valid binary FBX fixture requires a writer we
     // do not link; the tree-walking import itself stays covered by the real
     // asset imports exercised in `cn add`).
+
+    // FBX-vs-glTF oracle: the same Blender rig exported to both containers
+    // must import the same skeleton and animation. Ignored by default; the
+    // fixture is a local Blender export under private/assets (git-ignored).
+    // Run with: cargo test -p concinnity-cook fbx_and_glb -- --ignored
+    #[test]
+    #[ignore = "needs the local Blender rig_oracle fixture under private/assets"]
+    fn fbx_and_glb_rig_imports_agree() {
+        use crate::gfx::skinning::JointPose;
+
+        let base = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../private/assets/models/rig_oracle"
+        );
+        let fbx_path = format!("{base}/rig.fbx");
+        let glb_path = format!("{base}/rig.glb");
+
+        let fbx = crate::fbx::import_skinned_fbx(&fbx_path).expect("fbx skinned import");
+        let glb = crate::gltf::import_skinned_glb(&glb_path).expect("glb skinned import");
+
+        // World matrix per joint name via the same JointPose math the runtime
+        // uses to rebuild bind poses.
+        fn worlds(skeleton: &[crate::assets::JointDef]) -> HashMap<String, Mat4> {
+            let mut w: Vec<Mat4> = Vec::with_capacity(skeleton.len());
+            let mut by_name = HashMap::new();
+            for j in skeleton {
+                let local = JointPose {
+                    translation: j.translation,
+                    rotation_deg: j.rotation_deg,
+                    scale: j.scale,
+                }
+                .to_matrix();
+                let world = if j.parent < 0 {
+                    local
+                } else {
+                    mat4_mul(w[j.parent as usize], local)
+                };
+                w.push(world);
+                by_name.insert(j.name.clone(), world);
+            }
+            by_name
+        }
+        let fbx_worlds = worlds(&fbx.skeleton);
+        let glb_worlds = worlds(&glb.skeleton);
+
+        // Bind: shared bones land at the same world positions.
+        for name in ["Root", "Tip"] {
+            let f = fbx_worlds.get(name).unwrap_or_else(|| {
+                panic!(
+                    "fbx skeleton missing '{name}' (has {:?})",
+                    fbx.skeleton.iter().map(|j| &j.name).collect::<Vec<_>>()
+                )
+            });
+            let g = glb_worlds.get(name).unwrap_or_else(|| {
+                panic!(
+                    "glb skeleton missing '{name}' (has {:?})",
+                    glb.skeleton.iter().map(|j| &j.name).collect::<Vec<_>>()
+                )
+            });
+            for i in 0..3 {
+                assert!(
+                    (f[3][i] - g[3][i]).abs() < 1e-2,
+                    "bind world position of '{name}' differs: fbx {:?} vs glb {:?}",
+                    f[3],
+                    g[3]
+                );
+            }
+        }
+
+        // Mesh: both containers carry the same cylinder, weighted to 2 bones,
+        // and the vertex bounds must agree in the shared bind frame.
+        assert!(!fbx.vertices.is_empty());
+        for v in &fbx.vertices {
+            let sum: f32 = v.weights.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-3, "weights must normalize: {v:?}");
+            assert!(v.joints.iter().all(|&j| (j as usize) < fbx.skeleton.len()));
+        }
+        fn bounds(verts: &[crate::assets::SkinnedVertexData]) -> ([f32; 3], [f32; 3]) {
+            let mut lo = [f32::MAX; 3];
+            let mut hi = [f32::MIN; 3];
+            for v in verts {
+                for i in 0..3 {
+                    lo[i] = lo[i].min(v.pos[i]);
+                    hi[i] = hi[i].max(v.pos[i]);
+                }
+            }
+            (lo, hi)
+        }
+        let (flo, fhi) = bounds(&fbx.vertices);
+        let (glo, ghi) = bounds(&glb.vertices);
+        for i in 0..3 {
+            assert!(
+                (flo[i] - glo[i]).abs() < 0.05 && (fhi[i] - ghi[i]).abs() < 0.05,
+                "vertex bounds differ: fbx {flo:?}..{fhi:?} vs glb {glo:?}..{ghi:?}"
+            );
+        }
+
+        // Animation: sample both clips at the same normalized times and
+        // compare the Tip joint's world position (its parent chain folds in
+        // every evaluated channel plus PreRotation composition).
+        let fbx_anim =
+            crate::fbx::import_fbx_animation(&fbx_path, 0, "", 30.0).expect("fbx animation");
+        let glb_anim = crate::gltf::import_glb_animation(&glb_path, 0).expect("glb animation");
+
+        fn sample(
+            tracks: &[crate::glb::ImportedAnimationTrack],
+            joint: usize,
+            t: f32,
+            bind: &crate::assets::JointDef,
+        ) -> Mat4 {
+            let bind_pose = JointPose {
+                translation: bind.translation,
+                rotation_deg: bind.rotation_deg,
+                scale: bind.scale,
+            };
+            let Some(track) = tracks.iter().find(|tr| tr.joint == joint) else {
+                return bind_pose.to_matrix();
+            };
+            let keys = &track.keys;
+            if t <= keys[0].time {
+                return keys[0].pose.to_matrix();
+            }
+            for pair in keys.windows(2) {
+                if t <= pair[1].time {
+                    let span = (pair[1].time - pair[0].time).max(1e-6);
+                    let f = (t - pair[0].time) / span;
+                    return pair[0].pose.blend_matrix(&pair[1].pose, f);
+                }
+            }
+            keys[keys.len() - 1].pose.to_matrix()
+        }
+
+        fn joint_world_at(
+            skeleton: &[crate::assets::JointDef],
+            tracks: &[crate::glb::ImportedAnimationTrack],
+            name: &str,
+            t: f32,
+        ) -> [f32; 3] {
+            let idx = skeleton
+                .iter()
+                .position(|j| j.name == name)
+                .expect("joint by name");
+            let mut chain: Vec<usize> = Vec::new();
+            let mut cur = idx as i32;
+            while cur >= 0 {
+                chain.push(cur as usize);
+                cur = skeleton[cur as usize].parent;
+            }
+            chain.reverse();
+            let mut world = IDENTITY;
+            for j in chain {
+                world = mat4_mul(world, sample(tracks, j, t, &skeleton[j]));
+            }
+            // The joint's world origin. FBX rigs may carry unit-compensation
+            // scale in ancestor frames, so a fixed local offset is not
+            // comparable across containers; the origin is. Root rotation
+            // sweeps the Tip origin, so rotation errors still surface.
+            transform_point(world, [0.0, 0.0, 0.0])
+        }
+
+        for f in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            let ft = f * fbx_anim.duration;
+            let gt = f * glb_anim.duration;
+            let fp = joint_world_at(&fbx.skeleton, &fbx_anim.tracks, "Tip", ft);
+            let gp = joint_world_at(&glb.skeleton, &glb_anim.tracks, "Tip", gt);
+            for i in 0..3 {
+                assert!(
+                    (fp[i] - gp[i]).abs() < 0.05,
+                    "animated Tip end at t={f}: fbx {fp:?} vs glb {gp:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn parse_fbx_reports_a_missing_file() {

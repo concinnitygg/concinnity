@@ -741,12 +741,16 @@ fn encode_skin_dispatch(
             (matrices, matrices.len())
         };
         let palette = upload_buffer(device, pal_slice, "RT skin palette")?;
+        // The RT seed dispatch runs at bind pose, before any weights exist;
+        // morphing happens in the per-frame main fold. `target_count == 0`
+        // leaves the morph slots unread, so a dummy binding satisfies them.
         let params = SkinParams {
             vertex_base: obj.vertex_base as u32,
             vertex_count: obj.vertex_count as u32,
             joint_count: joint_count as u32,
-            _pad: 0,
+            target_count: 0,
         };
+        let zero_weight = [0.0f32];
         unsafe {
             cenc.setBuffer_offset_atIndex(Some(skinned.vertex_buffer.as_ref()), 0, 0);
             cenc.setBuffer_offset_atIndex(Some(deformed_verts), 0, 1);
@@ -755,6 +759,12 @@ fn encode_skin_dispatch(
                 NonNull::from(&params).cast(),
                 std::mem::size_of::<SkinParams>(),
                 3,
+            );
+            cenc.setBuffer_offset_atIndex(Some(skinned.vertex_buffer.as_ref()), 0, 4);
+            cenc.setBytes_length_atIndex(
+                NonNull::from(&zero_weight).cast(),
+                std::mem::size_of_val(&zero_weight),
+                5,
             );
             cenc.dispatchThreads_threadsPerThreadgroup(
                 MTLSize {
@@ -821,11 +831,20 @@ impl crate::metal::context::MtlContext {
                 .get(i)
                 .map(|m| m.len().max(1))
                 .unwrap_or(1);
+            let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
             let params = SkinParams {
                 vertex_base: obj.vertex_base as u32,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: joint_count as u32,
-                _pad: 0,
+                target_count: morph.map_or(0, |m| m.target_count),
+            };
+            // Weights are tiny (one f32 per target); set_bytes avoids a ring.
+            // With no morph targets the slots get a dummy binding the kernel
+            // never reads (`target_count == 0`).
+            let zero_weight = [0.0f32];
+            let weights: &[f32] = match self.skinned.morph_weights.get(i) {
+                Some(w) if !w.is_empty() => w.as_slice(),
+                _ => &zero_weight,
             };
             unsafe {
                 cenc.setBuffer_offset_atIndex(Some(svb.as_ref()), 0, 0);
@@ -835,6 +854,13 @@ impl crate::metal::context::MtlContext {
                     NonNull::from(&params).cast(),
                     std::mem::size_of::<SkinParams>(),
                     3,
+                );
+                let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+                cenc.setBuffer_offset_atIndex(Some(delta_buf), 0, 4);
+                cenc.setBytes_length_atIndex(
+                    NonNull::from(&weights[0]).cast(),
+                    std::mem::size_of_val(weights),
+                    5,
                 );
                 cenc.dispatchThreads_threadsPerThreadgroup(
                     MTLSize {

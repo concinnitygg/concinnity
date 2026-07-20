@@ -28,6 +28,10 @@ pub struct SkeletonPose {
     /// Current skinning matrices, one per joint. Seeded to the bind pose
     /// (identity skinning) and overwritten by `AnimationSystem` each frame.
     pub joint_matrices: Vec<Mat4>,
+    /// Current morph-target weights, one per target of the mesh. Empty for a
+    /// mesh without morph targets or until a clip with a morph track drives
+    /// them.
+    pub morph_weights: Vec<f32>,
 }
 
 impl SkeletonPose {
@@ -40,6 +44,7 @@ impl SkeletonPose {
             skinned_index,
             skeleton,
             joint_matrices,
+            morph_weights: Vec::new(),
         }
     }
 }

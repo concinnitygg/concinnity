@@ -167,7 +167,7 @@ pub use screen::{Screen, ScreenInput};
 pub use scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use sdf_volume::{SDF_PARAMS_LEN, SdfVolume};
 pub use shader_stage::{ShaderKind, ShaderStage};
-pub use skinned_mesh::{CharacterCapsule, JointDef, SkinnedMesh, SkinnedVertexData};
+pub use skinned_mesh::{CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData};
 pub use slider::Slider;
 pub use spawner::SpawnerArgs;
 pub use spot_light::SpotLight;

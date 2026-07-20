@@ -53,6 +53,7 @@ mod tests {
     fn moving_clip(duration: f32, looping: bool, per: f32) -> ClipEntry {
         ClipEntry {
             clip: AnimationClip {
+                morph_keys: Vec::new(),
                 duration,
                 looping,
                 tracks: Vec::new(),
@@ -78,6 +79,7 @@ mod tests {
     fn rootless_clip(duration: f32) -> ClipEntry {
         ClipEntry {
             clip: AnimationClip {
+                morph_keys: Vec::new(),
                 duration,
                 looping: false,
                 tracks: Vec::new(),

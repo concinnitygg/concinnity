@@ -32,7 +32,7 @@ tracing = "0.1.44"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 fbxcel = { version = "0.9.0", default-features = false, features = ["tree"] }
 fontdue = "0.9"
-gltf = { version = "1", default-features = false, features = ["utils", "names"] }
+gltf = { version = "1", default-features = false, features = ["utils", "names", "extras"] }
 jpeg-decoder = "0.3"
 kira = "0.12"
 png = "0.18.1"

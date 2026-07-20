@@ -316,7 +316,7 @@ pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
-        Some("glb") | Some("fbx") => BootstrapKind::Scene,
+        Some("glb") | Some("gltf") | Some("fbx") => BootstrapKind::Scene,
         Some("txt") | Some("md") => BootstrapKind::Text,
         _ => BootstrapKind::None,
     }
@@ -429,7 +429,7 @@ fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<s
 // the picker the same day the CLI learns it;
 // `import_extension_groups_track_the_dispatch` fails if one drifts out.
 pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
-    ("Scenes", &["glb", "fbx"]),
+    ("Scenes", &["glb", "gltf", "fbx"]),
     ("Stories & text", &["md", "txt"]),
     ("Images", &["png", "jpg", "jpeg", "bmp", "tga", "gif"]),
     ("Audio", &["ogg", "wav", "mp3", "flac"]),
@@ -565,7 +565,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
         // world.jsonl stays compact (see concinnity_core::build::import).
-        "glb" | "fbx" => Ok(vec![import_entry("SceneImport", &stem, path_str)?]),
+        "glb" | "gltf" | "fbx" => Ok(vec![import_entry("SceneImport", &stem, path_str)?]),
 
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

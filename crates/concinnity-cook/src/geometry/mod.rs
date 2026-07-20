@@ -304,11 +304,22 @@ pub fn compile_skinned_mesh_payload_with_lods(
     vertex_data: &[crate::assets::SkinnedVertexData],
     indices: &[u16],
     skeleton: &[crate::assets::JointDef],
+    morph_target_names: &[String],
+    morph_deltas: &[crate::assets::MorphDelta],
     lod_levels: u32,
     lod_distances: &[f32],
 ) -> Result<Vec<u8>, String> {
     if vertex_data.is_empty() {
         return Err("SkinnedMesh requires at least one vertex".to_string());
+    }
+    if morph_deltas.len() != morph_target_names.len() * vertex_data.len() {
+        return Err(format!(
+            "SkinnedMesh morph_deltas has {} entries; {} target(s) x {} vertices requires {}",
+            morph_deltas.len(),
+            morph_target_names.len(),
+            vertex_data.len(),
+            morph_target_names.len() * vertex_data.len(),
+        ));
     }
     let tris = indices.len() / 3;
     for t in 0..tris {
@@ -413,10 +424,22 @@ pub fn compile_skinned_mesh_payload_with_lods(
         Vec::new()
     };
 
+    let morphs = crate::gfx::mesh_payload::PayloadMorphs {
+        names: morph_target_names.to_vec(),
+        deltas: morph_deltas
+            .iter()
+            .map(|d| crate::gfx::mesh_payload::MorphDelta {
+                position: d.position,
+                normal: d.normal,
+            })
+            .collect(),
+    };
+
     Ok(crate::gfx::mesh_payload::serialise_skinned_with_lods(
         &skinned,
         indices,
         &payload_joints,
+        &morphs,
         &alternates,
     ))
 }
@@ -1091,10 +1114,18 @@ mod tests {
             skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
             skinned_vertex([0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
         ];
-        let payload =
-            compile_skinned_mesh_payload_with_lods(&verts, &[0, 1, 2], &[joint("root")], 1, &[])
-                .unwrap();
-        let (out, indices, joints, alternates) = deserialise_skinned_with_lods(&payload).unwrap();
+        let payload = compile_skinned_mesh_payload_with_lods(
+            &verts,
+            &[0, 1, 2],
+            &[joint("root")],
+            &[],
+            &[],
+            1,
+            &[],
+        )
+        .unwrap();
+        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        let (out, indices, joints, alternates) = (p.vertices, p.indices, p.joints, p.lods);
         assert_eq!(indices, vec![0, 1, 2]);
         assert!(alternates.is_empty());
         assert_eq!(joints.len(), 1);
@@ -1109,21 +1140,36 @@ mod tests {
     #[test]
     fn skinned_mesh_rejects_empty_and_out_of_range_input() {
         assert!(
-            compile_skinned_mesh_payload_with_lods(&[], &[], &[joint("root")], 1, &[]).is_err()
+            compile_skinned_mesh_payload_with_lods(&[], &[], &[joint("root")], &[], &[], 1, &[])
+                .is_err()
         );
         let tri = [
             skinned_vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
             skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
             skinned_vertex([0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
         ];
-        let err =
-            compile_skinned_mesh_payload_with_lods(&tri, &[0, 1, 5], &[joint("root")], 1, &[])
-                .unwrap_err();
+        let err = compile_skinned_mesh_payload_with_lods(
+            &tri,
+            &[0, 1, 5],
+            &[joint("root")],
+            &[],
+            &[],
+            1,
+            &[],
+        )
+        .unwrap_err();
         assert!(err.contains("out of range"), "error was: {err}");
         // LOD distance count must match lod_levels - 1.
-        let err =
-            compile_skinned_mesh_payload_with_lods(&tri, &[0, 1, 2], &[joint("root")], 3, &[5.0])
-                .unwrap_err();
+        let err = compile_skinned_mesh_payload_with_lods(
+            &tri,
+            &[0, 1, 2],
+            &[joint("root")],
+            &[],
+            &[],
+            3,
+            &[5.0],
+        )
+        .unwrap_err();
         assert!(err.contains("lod_distances"), "error was: {err}");
     }
 
@@ -1150,10 +1196,18 @@ mod tests {
                 indices.extend_from_slice(&[a, b, d, d, c, a]);
             }
         }
-        let payload =
-            compile_skinned_mesh_payload_with_lods(&verts, &indices, &[joint("root")], 2, &[12.0])
-                .unwrap();
-        let (_, lod0, _, alternates) = deserialise_skinned_with_lods(&payload).unwrap();
+        let payload = compile_skinned_mesh_payload_with_lods(
+            &verts,
+            &indices,
+            &[joint("root")],
+            &[],
+            &[],
+            2,
+            &[12.0],
+        )
+        .unwrap();
+        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        let (lod0, alternates) = (p.indices, p.lods);
         assert_eq!(lod0.len(), indices.len());
         assert_eq!(alternates.len(), 1);
         assert_eq!(alternates[0].0, 12.0);

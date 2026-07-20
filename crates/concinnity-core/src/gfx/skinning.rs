@@ -491,6 +491,9 @@ pub struct AnimationClip {
     // When true, sampling past `duration` wraps; otherwise it holds the end.
     pub looping: bool,
     pub tracks: Vec<JointTrack>,
+    // Morph-target weight keys in time order: (time, one weight per target).
+    // Empty for clips that animate no morph targets.
+    pub morph_keys: Vec<(f32, Vec<f32>)>,
     // The character-displacement curve stripped from the root joint at build
     // time, when the clip opted into root motion. The pose tracks above keep
     // the root anchored; the runtime turns this curve's frame delta into
@@ -525,6 +528,39 @@ impl AnimationClip {
             }
         }
         locals
+    }
+
+    // Sample the morph-weight track at time `t`, lerping between the
+    // surrounding keys with the same wrap/clamp semantics as pose sampling.
+    // Empty when the clip has no morph keys.
+    pub fn sample_morph_weights(&self, t: f32, looping: bool) -> Vec<f32> {
+        if self.morph_keys.is_empty() {
+            return Vec::new();
+        }
+        let local_t = if looping && self.duration > 1e-6 {
+            t.rem_euclid(self.duration)
+        } else {
+            t.clamp(0.0, self.duration)
+        };
+        let first = &self.morph_keys[0];
+        if local_t <= first.0 {
+            return first.1.clone();
+        }
+        for pair in self.morph_keys.windows(2) {
+            if local_t <= pair[1].0 {
+                let span = (pair[1].0 - pair[0].0).max(1e-6);
+                let f = (local_t - pair[0].0) / span;
+                let n = pair[0].1.len().max(pair[1].1.len());
+                return (0..n)
+                    .map(|i| {
+                        let a = pair[0].1.get(i).copied().unwrap_or(0.0);
+                        let b = pair[1].1.get(i).copied().unwrap_or(0.0);
+                        a + (b - a) * f
+                    })
+                    .collect();
+            }
+        }
+        self.morph_keys[self.morph_keys.len() - 1].1.clone()
     }
 }
 
@@ -594,6 +630,36 @@ mod tests {
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn morph_weight_sampling_lerps_clamps_and_loops() {
+        let clip = AnimationClip {
+            duration: 1.0,
+            looping: false,
+            tracks: Vec::new(),
+            morph_keys: vec![(0.0, vec![0.0, 1.0]), (1.0, vec![1.0, 0.0])],
+            root: None,
+        };
+        assert!(clip.sample_morph_weights(-1.0, false)[0].abs() < 1e-6);
+        let mid = clip.sample_morph_weights(0.5, false);
+        assert!(approx(mid[0], 0.5) && approx(mid[1], 0.5));
+        assert!(
+            approx(clip.sample_morph_weights(5.0, false)[0], 1.0),
+            "clamps past the end"
+        );
+        // Looping wraps: t = 1.25 samples like t = 0.25.
+        let wrapped = clip.sample_morph_weights(1.25, true);
+        assert!(approx(wrapped[0], 0.25));
+
+        let empty = AnimationClip {
+            duration: 1.0,
+            looping: true,
+            tracks: Vec::new(),
+            morph_keys: Vec::new(),
+            root: None,
+        };
+        assert!(empty.sample_morph_weights(0.5, true).is_empty());
     }
 
     // A two-joint vertical chain: root at origin, child one unit up in y.
@@ -699,6 +765,7 @@ mod tests {
                     },
                 ],
             }],
+            morph_keys: Vec::new(),
         };
         // Halfway through: yaw should be 45 deg.
         let locals = clip.sample(1.0, &sk);
@@ -724,6 +791,7 @@ mod tests {
                     },
                 }],
             }],
+            morph_keys: Vec::new(),
         };
         // t = 2.5 wraps to 0.5: identical sample.
         let a = clip.sample(0.5, &sk);

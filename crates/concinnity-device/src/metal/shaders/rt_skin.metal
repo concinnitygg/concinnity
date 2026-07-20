@@ -32,12 +32,19 @@ struct VtxOut {
     packed_float2 uv;       // 48  (..56)
 };
 
+// Matches gfx::mesh_payload::MorphDelta (repr(C), 24-byte stride): a
+// bind-space position + normal offset, scaled by the target's weight.
+struct MorphDelta {
+    packed_float3 position; // 0
+    packed_float3 normal;   // 12 (..24)
+};
+
 // buffer(3): which slice of the shared buffers this dispatch deforms.
 struct SkinParams {
     uint vertex_base;   // first vertex of this object in the shared buffers
     uint vertex_count;  // vertices to deform this dispatch
     uint joint_count;   // palette size (joint indices are clamped below it)
-    uint _pad;
+    uint target_count;  // morph targets in buffer(4); 0 = no morphing
 };
 
 kernel void rt_skin(
@@ -45,11 +52,26 @@ kernel void rt_skin(
     device VtxOut*             dst     [[buffer(1)]],
     constant float4x4*         palette [[buffer(2)]],
     constant SkinParams&       p       [[buffer(3)]],
+    device const MorphDelta*   deltas  [[buffer(4)]],
+    constant float*            mweights [[buffer(5)]],
     uint                       gid     [[thread_position_in_grid]]
 ) {
     if (gid >= p.vertex_count) return;
     uint idx = p.vertex_base + gid;
     SkinnedVtxIn v = src[idx];
+
+    // Morph deltas apply in bind space, before the skin matrix; the deltas
+    // buffer is target-major and indexed by this object's LOCAL vertex index.
+    float3 pos = float3(v.pos);
+    float3 nrm = float3(v.normal);
+    for (uint t = 0; t < p.target_count; ++t) {
+        float w = mweights[t];
+        if (fabs(w) < 1e-5) continue;
+        MorphDelta d = deltas[t * p.vertex_count + gid];
+        pos += w * float3(d.position);
+        nrm += w * float3(d.normal);
+    }
+    nrm = normalize(nrm);
 
     uint last = p.joint_count == 0u ? 0u : p.joint_count - 1u;
     float4x4 skin = v.weights.x * palette[min((uint)v.joints[0], last)]
@@ -59,8 +81,8 @@ kernel void rt_skin(
     float3x3 skin3 = float3x3(skin[0].xyz, skin[1].xyz, skin[2].xyz);
 
     VtxOut o;
-    o.pos     = (skin * float4(float3(v.pos), 1.0)).xyz;
-    o.normal  = normalize(skin3 * float3(v.normal));
+    o.pos     = (skin * float4(pos, 1.0)).xyz;
+    o.normal  = normalize(skin3 * nrm);
     o.tangent = skin3 * float3(v.tangent);
     o.color   = v.color;
     o.uv      = v.uv;

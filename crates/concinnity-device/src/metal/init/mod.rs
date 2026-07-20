@@ -1336,6 +1336,8 @@ impl MtlContext {
                 skin_pipeline: None,
                 deformed: Vec::new(),
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
+                morphs: Vec::new(),
+                morph_weights: Vec::new(),
             },
             mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
             mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),

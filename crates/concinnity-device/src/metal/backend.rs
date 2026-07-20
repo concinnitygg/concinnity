@@ -83,6 +83,7 @@ impl RenderBackend for MtlContext {
         fn retire_draw_object(&mut self, draw_idx: usize);
         fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u16], draw_objects: Vec<SkinnedDrawObject>, vert_bytes: &[u8], frag_bytes: &[u8], shadow_bytes: &[u8]) -> Result<(), String>;
         fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
+        fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]);
         fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>);
         fn spawn_skinned_instance(&mut self, template_skinned_index: usize, model: [[f32; 4]; 4]) -> Option<usize>;
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
@@ -118,6 +119,18 @@ impl RenderBackend for MtlContext {
     }
 
     // Methods that are NOT a 1:1 forward; written out by hand.
+
+    // Trait method returns unit; the inherent returns Result (buffer
+    // allocation can fail), so the forwarder logs instead of propagating.
+    fn upload_skinned_morphs(
+        &mut self,
+        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) {
+        debug_assert_main_thread("upload_skinned_morphs");
+        if let Err(e) = MtlContext::upload_skinned_morphs(self, morphs) {
+            tracing::error!("Metal: morph target upload failed: {}", e);
+        }
+    }
 
     fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
         // Not in the guarded `forward!` block: draw_frame needs the

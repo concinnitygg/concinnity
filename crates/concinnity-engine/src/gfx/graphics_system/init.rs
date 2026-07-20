@@ -722,7 +722,7 @@ impl GraphicsSystem {
         // the whole animation correlation web.
         // Decoded geometry for one SkinnedMesh: its handle, interned name id,
         // the baked data, its vertices, LOD0 indices, the bind-pose skeleton,
-        // and LOD alternates.
+        // its morph targets, and LOD alternates.
         type SkinnedGeometry = (
             crate::ecs::SkinnedMeshHandle,
             AssetId,
@@ -730,6 +730,7 @@ impl GraphicsSystem {
             Vec<crate::gfx::mesh_payload::SkinnedVertex>,
             Vec<u16>,
             Vec<crate::assets::JointDef>,
+            crate::gfx::mesh_payload::PayloadMorphs,
             Vec<(f32, Vec<u16>)>,
         );
         let skinned_table = ctx
@@ -786,9 +787,11 @@ impl GraphicsSystem {
                 }
             };
             match crate::gfx::mesh_payload::deserialise_skinned_with_lods(&bytes) {
-                Ok((v, idx, payload_joints, alternates)) => {
-                    let skeleton = crate::geometry::payload_joints_to_defs(payload_joints);
-                    skinned_geometry.push((handle, name_id, sm, v, idx, skeleton, alternates));
+                Ok(p) => {
+                    let skeleton = crate::geometry::payload_joints_to_defs(p.joints);
+                    skinned_geometry.push((
+                        handle, name_id, sm, p.vertices, p.indices, skeleton, p.morphs, p.lods,
+                    ));
                 }
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
@@ -1183,12 +1186,17 @@ impl GraphicsSystem {
         // instance pool: each instance is a hidden bind-pose copy reserved from
         // SkinnedMesh.max_instances.
         let mut skinned_pool_reservations: Vec<(usize, usize)> = Vec::new();
+        // Morph-target data per skinned draw object; instance copies share
+        // their template's data through the Arc.
+        let mut skinned_morphs: Vec<
+            Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>,
+        > = Vec::new();
         // Asset hot-reload (`cn debug` only) needs the per-slot vertex region
         // + joint count so it can reject size + shape changes before pushing
         // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
         // fan-out), so one entry per asset.
         let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
-        for (handle, name_id, sm, verts, idxs, joint_defs, lod_alts) in &skinned_geometry {
+        for (handle, name_id, sm, verts, idxs, joint_defs, morphs, lod_alts) in &skinned_geometry {
             let (texture_slot, normal_map_slot, material) = if let Some(mat_id) = sm.material {
                 match material_map.get(&mat_id) {
                     Some(&(s, n, u)) => (s, n, u),
@@ -1258,7 +1266,9 @@ impl GraphicsSystem {
                 (lo, hi)
             };
 
+            let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
             let skinned_index = skinned_draw_objects.len();
+            skinned_morphs.push(mesh_morphs.clone());
             skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
                 vertex_base: base,
                 vertex_count: verts.len(),
@@ -1325,6 +1335,7 @@ impl GraphicsSystem {
                     });
                 }
                 let copy_skinned_index = skinned_draw_objects.len();
+                skinned_morphs.push(mesh_morphs.clone());
                 skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
                     vertex_base: copy_base,
                     vertex_count: verts.len(),
@@ -2474,6 +2485,9 @@ impl GraphicsSystem {
                     tracing::error!("GraphicsSystem: skinned geometry upload failed: {}", e);
                     self.failed = true;
                     return;
+                }
+                if skinned_morphs.iter().any(|m| m.is_some()) {
+                    backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs));
                 }
                 // Seed the backend's skinned instance pool with the hidden copies
                 // reserved above, so a runtime skinned spawn can claim one.

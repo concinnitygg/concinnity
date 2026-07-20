@@ -825,6 +825,23 @@ impl MtlContext {
         let draw_calls = self.draw_skinned_objects(enc, &sib, cam_pos, |enc, obj, i| {
             let model_uniforms = ModelUniforms { model: obj.model };
             let slot = obj.texture_slot.min(last_tex);
+            // Morph bindings for the VS: the delta buffer at 9 and the
+            // per-draw params + weights at 10. Objects without morph targets
+            // bind the shared VB as a dummy the shader never reads
+            // (`target_count == 0`).
+            let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
+            let mut morph_params = crate::metal::uniforms::VsMorphParams {
+                vertex_base: obj.vertex_base as u32,
+                vertex_count: obj.vertex_count as u32,
+                target_count: morph.map_or(0, |m| m.target_count),
+                _pad: 0,
+                weights: [0.0; crate::metal::uniforms::MAX_MORPH_TARGETS],
+            };
+            if let Some(w) = self.skinned.morph_weights.get(i) {
+                for (dst, src) in morph_params.weights.iter_mut().zip(w.iter()) {
+                    *dst = *src;
+                }
+            }
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model_uniforms).cast(),
@@ -832,6 +849,13 @@ impl MtlContext {
                     2,
                 );
                 enc.setVertexBuffer_offset_atIndex(Some(&skinned_joint_bufs[i]), 0, 8);
+                let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+                enc.setVertexBuffer_offset_atIndex(Some(delta_buf), 0, 9);
+                enc.setVertexBytes_length_atIndex(
+                    std::ptr::NonNull::from(&morph_params).cast(),
+                    std::mem::size_of::<crate::metal::uniforms::VsMorphParams>(),
+                    10,
+                );
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(&obj.material).cast(),
                     std::mem::size_of::<crate::gfx::render_types::MaterialUniforms>(),

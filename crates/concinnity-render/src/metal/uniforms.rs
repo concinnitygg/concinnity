@@ -471,6 +471,23 @@ pub struct RaymarchShadowCascade {
     pub _pad: [u32; 3],
 }
 
+// Morph-target cap per skinned mesh: the fixed weight-array length in the
+// skinned VS params (ARKit-style faces use ~52 targets).
+pub const MAX_MORPH_TARGETS: usize = 64;
+
+// Per-draw morph parameters for the legacy skinned vertex shader. Matches the
+// MSL `VsMorphParams` in default.metal: four uints then the weight array.
+// 272 bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VsMorphParams {
+    pub vertex_base: u32,
+    pub vertex_count: u32,
+    pub target_count: u32,
+    pub _pad: u32,
+    pub weights: [f32; MAX_MORPH_TARGETS],
+}
+
 // Per-dispatch parameters for the `rt_skin` compute kernel. Matches the MSL
 // `SkinParams` in `shaders/rt_skin.metal`. 16 bytes.
 #[repr(C)]
@@ -479,7 +496,8 @@ pub struct SkinParams {
     pub vertex_base: u32,
     pub vertex_count: u32,
     pub joint_count: u32,
-    pub _pad: u32,
+    // Morph targets bound at buffer(4)/(5); zero when the object has none.
+    pub target_count: u32,
 }
 
 #[cfg(test)]
@@ -786,12 +804,23 @@ mod tests {
     }
 
     #[test]
+    fn vs_morph_params_layout_matches_msl() {
+        // MSL `VsMorphParams` in default.metal: four uints then float[64].
+        assert_eq!(size_of::<VsMorphParams>(), 272);
+        assert_eq!(offset_of!(VsMorphParams, vertex_base), 0);
+        assert_eq!(offset_of!(VsMorphParams, vertex_count), 4);
+        assert_eq!(offset_of!(VsMorphParams, target_count), 8);
+        assert_eq!(offset_of!(VsMorphParams, _pad), 12);
+        assert_eq!(offset_of!(VsMorphParams, weights), 16);
+    }
+
+    #[test]
     fn skin_params_layout_matches_msl() {
         // MSL `SkinParams` in rt_skin.metal: four tightly packed uints.
         assert_eq!(size_of::<SkinParams>(), 16);
         assert_eq!(offset_of!(SkinParams, vertex_base), 0);
         assert_eq!(offset_of!(SkinParams, vertex_count), 4);
         assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, _pad), 12);
+        assert_eq!(offset_of!(SkinParams, target_count), 12);
     }
 }

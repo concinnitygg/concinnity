@@ -3015,6 +3015,7 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
         &vertices,
         &[0, 1, 2],
         &[joint("root", -1), joint("child", 0)],
+        &crate::gfx::mesh_payload::PayloadMorphs::default(),
         lods,
     )
 }

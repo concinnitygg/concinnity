@@ -219,8 +219,8 @@ pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
 // paths via temp files / rename sidecars; a coarse extension match is good
 // enough at V1 scale and gets debounced anyway. `.cube` covers ColorLut
 // sources, `.hdr` covers EnvironmentMap sources, `.jsonl` covers the world
-// file, `.md` covers StoryImport sources, alongside the texture / mesh
-// extensions.
+// file, `.md` covers StoryImport sources, `.bin` covers a text `.gltf`'s
+// external buffers, alongside the texture / mesh extensions.
 pub(super) fn is_asset_event(event: &Event) -> bool {
     if !matches!(
         event.kind,
@@ -232,7 +232,7 @@ pub(super) fn is_asset_event(event: &Event) -> bool {
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
         matches!(
             ext.to_ascii_lowercase().as_str(),
-            "png" | "jpg" | "jpeg" | "glb" | "cube" | "hdr" | "jsonl" | "md"
+            "png" | "jpg" | "jpeg" | "glb" | "gltf" | "bin" | "cube" | "hdr" | "jsonl" | "md"
         ) || is_shader_extension(ext)
     })
 }

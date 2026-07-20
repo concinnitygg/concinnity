@@ -39,7 +39,7 @@ type SkinnedImport = (
 // reload produces a byte-identical payload to the build pass. The third
 // component of the result is empty for `lod_levels <= 1`.
 pub fn decode_mesh_from_parsed_glb(
-    doc: &gltf::Gltf,
+    doc: &crate::gltf_source::GltfDoc,
     source: &str,
     primitive_index: u32,
     lod_levels: u32,
@@ -81,7 +81,7 @@ pub fn decode_mesh_from_parsed_glb(
 // same `JointDef` form the `SkinnedMesh` asset args carry; the reload helper
 // checks it against the init-time joint count before pushing to the GPU.
 pub fn decode_skinned_from_parsed_glb(
-    doc: &gltf::Gltf,
+    doc: &crate::gltf_source::GltfDoc,
     source: &str,
 ) -> Result<SkinnedImport, String> {
     let imported = crate::glb::import_skinned_from_doc(doc, source)?;
@@ -89,6 +89,8 @@ pub fn decode_skinned_from_parsed_glb(
         &imported.vertices,
         &imported.indices,
         &imported.skeleton,
+        &imported.morph_target_names,
+        &imported.morph_deltas,
         1,
         &[],
     )?;

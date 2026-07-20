@@ -329,6 +329,21 @@ pub trait RenderBackend: SceneControl + Send {
     ) -> Result<(), String>;
     fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
 
+    // Attach morph-target data to the skinned draw objects, called once after
+    // `upload_skinned`: `morphs[i]` belongs to draw object `i` (instance
+    // copies share their template's data via the `Arc`). Default no-op for a
+    // backend without a morph deformation path.
+    fn upload_skinned_morphs(
+        &mut self,
+        _morphs: Vec<Option<std::sync::Arc<crate::mesh_payload::PayloadMorphs>>>,
+    ) {
+    }
+
+    // Push a skinned object's current morph-target weights, sampled by the
+    // animation system each frame. A no-op when the index is out of range or
+    // the object carries no morph targets.
+    fn update_morph_weights(&mut self, _skinned_index: usize, _weights: &[f32]) {}
+
     // Runtime skinned spawn (pre-reserved instance pool): a backend pre-reserves
     // hidden bind-pose copies at load (`SkinnedMesh.max_instances`) and reveals
     // one per skinned SpawnRequest. The default no-op implementations are a

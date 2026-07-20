@@ -88,15 +88,16 @@ pub struct AnimationTrack {
 /// normalised weighted average). A single clip plays at full strength
 /// regardless of its `weight`.
 ///
-/// **glTF import.** A clip may be authored entirely by hand (`tracks` filled
-/// out, `source` left empty) or imported from the same `.glb` that backs the
-/// target [SkinnedMesh](#skinnedmesh). Set `source` to the `.glb` path and the
-/// build imports `duration` + `tracks` from it. `animation_index` picks one
-/// clip when the file contains several (default 0); `animation_name` names it
-/// for matching against the file's clip names: when set it takes precedence
-/// over the index. Channels whose target node is not a joint of the file's
-/// first skinned node are dropped. The same `.glb` should back the target
-/// [SkinnedMesh](#skinnedmesh) so the joint indices agree.
+/// **File import.** A clip may be authored entirely by hand (`tracks` filled
+/// out, `source` left empty) or imported from the same glTF (`.glb` /
+/// `.gltf`) or `.fbx` file that backs the target [SkinnedMesh](#skinnedmesh).
+/// Set `source` to the file path and the build imports `duration` + `tracks`
+/// from it. `animation_index` picks one clip when the file contains several
+/// (default 0); `animation_name` names it for matching against the file's
+/// clip names: when set it takes precedence over the index. FBX curves are
+/// baked at `sample_rate` keys per second. Channels whose target node is not
+/// a joint of the file's first skinned node are dropped. The same file should
+/// back the target [SkinnedMesh](#skinnedmesh) so the joint indices agree.
 ///
 /// ```jsonl
 /// // Inline:
@@ -113,15 +114,20 @@ pub struct Animation {
     /// The [SkinnedMesh](#skinnedmesh) asset this clip animates.
     #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
-    /// Optional path to a `.glb` file. When set, the build imports
-    /// `duration` + `tracks` from it; inline-authored clips leave this empty.
+    /// Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the
+    /// build imports `duration` + `tracks` from it; inline-authored clips
+    /// leave this empty.
     pub source: String,
     /// Index of the animation to import when `source` is set and the file
     /// contains several. Ignored when `animation_name` is non-empty.
     pub animation_index: u32,
-    /// Name of the animation to import. When set, the matching glTF animation
-    /// is looked up by name; takes precedence over `animation_index`.
+    /// Name of the animation to import. When set, the matching clip in the
+    /// source file is looked up by name; takes precedence over
+    /// `animation_index`.
     pub animation_name: String,
+    /// Keys per second baked from sources whose curves need resampling at
+    /// import (FBX). glTF keyframes pass through untouched. Default 30.
+    pub sample_rate: f32,
     /// Clip length in seconds. Overridden by glTF import.
     pub duration: f32,
     /// When true, playback wraps after `duration`.
@@ -150,6 +156,22 @@ pub struct Animation {
     pub root_track: Vec<crate::gfx::root_motion::RootKey>,
     /// Per-joint keyframe channels.
     pub tracks: Vec<AnimationTrack>,
+    /// Morph-target weight keys for the target mesh, in time order. Each key
+    /// holds one weight per morph target of the [SkinnedMesh](#skinnedmesh).
+    /// Filled by the glTF import; empty when the clip animates no morph
+    /// targets.
+    pub morph_track: Vec<MorphKey>,
+}
+
+/// One morph-weight keyframe of an [Animation](#animation): per-target
+/// weights at one sample time.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MorphKey {
+    /// Sample time in seconds from clip start.
+    pub time: f32,
+    /// One weight per morph target, in target order.
+    pub weights: Vec<f32>,
 }
 
 impl Default for Animation {
@@ -160,6 +182,7 @@ impl Default for Animation {
             source: String::new(),
             animation_index: 0,
             animation_name: String::new(),
+            sample_rate: 30.0,
             duration: 1.0,
             looping: true,
             weight: 1.0,
@@ -168,6 +191,7 @@ impl Default for Animation {
             root_motion_y: false,
             root_track: Vec::new(),
             tracks: Vec::new(),
+            morph_track: Vec::new(),
         }
     }
 }
@@ -193,6 +217,11 @@ impl Animation {
                         })
                         .collect(),
                 })
+                .collect(),
+            morph_keys: self
+                .morph_track
+                .iter()
+                .map(|k| (k.time, k.weights.clone()))
                 .collect(),
             root: (!self.root_track.is_empty()).then(|| crate::gfx::root_motion::RootTrack {
                 keys: self.root_track.clone(),

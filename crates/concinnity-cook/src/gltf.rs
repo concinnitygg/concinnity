@@ -1,10 +1,9 @@
 // src/build/gltf.rs
 //
-// Imports a skinned mesh + skeleton from a binary glTF (.glb) file into the
-// inline `SkinnedMesh` asset fields. Only the `.glb` container is handled:
-// buffer data must travel in the embedded GLB binary chunk, so a `.gltf` with
-// external or base64-URI buffers is rejected. glTF animations are not
-// imported: the mesh lands in its bind pose.
+// Imports a skinned mesh + skeleton from a glTF file (binary `.glb` or text
+// `.gltf` with external / data-URI buffers) into the inline `SkinnedMesh`
+// asset fields. glTF animations are not imported here: the mesh lands in its
+// bind pose.
 //
 // glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
 // list requires parents before children. Joints are therefore topologically
@@ -19,7 +18,7 @@ use crate::glb::{
     import_skinned_from_doc, parse_glb, resolve_source,
 };
 
-// Parse a binary glTF (`.glb`) file into inline `SkinnedMesh` geometry plus a
+// Parse a glTF file into inline `SkinnedMesh` geometry plus a
 // parents-before-children skeleton. The first node carrying both a mesh and a
 // skin is imported; other nodes, materials, cameras, and animations are
 // ignored.
@@ -31,8 +30,12 @@ pub fn import_skinned_glb(source: &str) -> Result<ImportedSkinnedMesh, String> {
 // Vertex count for the indexed primitive without reading any vertex data,
 // used by `cn add` to decide whether a primitive fits Concinnity's u16 index
 // limit or needs splitting.
-pub fn primitive_vertex_count(doc: &gltf::Gltf, primitive_index: u32) -> Option<usize> {
-    doc.document
+pub fn primitive_vertex_count(
+    doc: &crate::gltf_source::GltfDoc,
+    primitive_index: u32,
+) -> Option<usize> {
+    doc.doc
+        .document
         .meshes()
         .flat_map(|m| m.primitives())
         .nth(primitive_index as usize)

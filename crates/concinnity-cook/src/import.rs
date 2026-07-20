@@ -70,11 +70,11 @@ pub fn entries_from_scene(
         .unwrap_or_default();
     match ext.as_str() {
         "fbx" => entries_from_fbx(source, opts),
-        "glb" => entries_from_glb(source, opts),
+        "glb" | "gltf" => entries_from_glb(source, opts),
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "SceneImport source '{}': unsupported format '.{}' (supported: .fbx, .glb)",
+                "SceneImport source '{}': unsupported format '.{}' (supported: .fbx, .glb, .gltf)",
                 source, other
             ),
         )),
@@ -304,22 +304,16 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     Ok(entries)
 }
 
-// glTF (.glb) -> asset entries.
+// glTF (.glb / .gltf) -> asset entries.
 fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<serde_json::Value>> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{}': {}", path, e)))?;
-    let doc = gltf::Gltf::from_slice(&bytes).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("'{}': not a valid glTF/GLB file: {}", path, e),
-        )
-    })?;
+    let doc = crate::gltf_source::GltfDoc::parse_file(path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     let prefix = &opts.name_prefix;
     let mut entries: Vec<serde_json::Value> = Vec::new();
 
     // Textures: one entry per glTF image, referencing the GLB binary chunk.
-    for (i, _img) in doc.document.images().enumerate() {
+    for (i, _img) in doc.doc.document.images().enumerate() {
         let name = format!("{prefix}_tex_{i}");
         let mut args = serde_json::Map::new();
         args.insert("source".into(), serde_json::Value::String(path.to_string()));
@@ -348,6 +342,7 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
     }));
     let material_names: Vec<String> = doc
+        .doc
         .document
         .materials()
         .enumerate()
@@ -411,7 +406,7 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     // entries carrying the `chunk_index` the desugar pass will slice on.
     let mut primitive_counter: usize = 0;
     let mut mesh_to_submesh_refs: Vec<Vec<serde_json::Value>> = Vec::new();
-    for gltf_mesh in doc.document.meshes() {
+    for gltf_mesh in doc.doc.document.meshes() {
         let mut submesh_refs: Vec<serde_json::Value> = Vec::new();
         for primitive in gltf_mesh.primitives() {
             let prim_idx = primitive_counter;
@@ -493,9 +488,10 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     // The walk also accumulates a world-space AABB so the camera can be
     // framed to the scene's actual scale.
     let scene = doc
+        .doc
         .document
         .default_scene()
-        .or_else(|| doc.document.scenes().next());
+        .or_else(|| doc.doc.document.scenes().next());
     let mut scene_aabb: Option<([f32; 3], [f32; 3])> = None;
     if let Some(scene) = scene {
         let mut walk = SceneWalk {

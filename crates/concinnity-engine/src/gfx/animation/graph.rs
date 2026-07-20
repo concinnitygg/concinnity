@@ -158,6 +158,7 @@ mod tests {
     fn clip_entry() -> ClipEntry {
         ClipEntry {
             clip: crate::gfx::skinning::AnimationClip {
+                morph_keys: Vec::new(),
                 duration: 1.0,
                 looping: true,
                 tracks: Vec::new(),

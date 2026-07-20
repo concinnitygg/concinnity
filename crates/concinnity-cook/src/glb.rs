@@ -1,9 +1,8 @@
 // src/glb.rs
 //
-// Binary glTF (.glb) container parsing: turns a `.glb` file into the engine's
-// inline mesh / skeleton / animation forms. Only the `.glb` container is
-// handled: buffer data must travel in the embedded GLB binary chunk, so a
-// `.gltf` with external or base64-URI buffers is rejected.
+// glTF geometry / skeleton / animation import: turns a parsed glTF document
+// (binary `.glb` or text `.gltf`, see `crate::gltf_source`) into the engine's
+// inline mesh / skeleton / animation forms.
 //
 // glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
 // list requires parents before children. Joints are therefore topologically
@@ -18,6 +17,7 @@ use std::collections::HashMap;
 
 use crate::assets::{JointDef, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
+use crate::gltf_source::GltfDoc;
 
 // Neutral grey for vertex color, matches the wavefront/OBJ importer so
 // imported geometry takes the material albedo without tinting.
@@ -28,19 +28,19 @@ pub struct ImportedSkinnedMesh {
     pub vertices: Vec<SkinnedVertexData>,
     pub indices: Vec<u16>,
     pub skeleton: Vec<JointDef>,
+    // Morph-target names, one per target; empty when the mesh has none.
+    pub morph_target_names: Vec<String>,
+    // Dense target-major deltas: entry `t * vertices.len() + v`.
+    pub morph_deltas: Vec<crate::assets::MorphDelta>,
 }
 
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
 // asset hot-reload pass uses this directly so it can amortise the `.glb`
 // parse across every Mesh / SkinnedMesh entry that references the same file.
-pub fn import_skinned_from_doc(
-    doc: &gltf::Gltf,
-    source: &str,
-) -> Result<ImportedSkinnedMesh, String> {
-    let blob = doc.blob.as_deref();
-
+pub fn import_skinned_from_doc(doc: &GltfDoc, source: &str) -> Result<ImportedSkinnedMesh, String> {
     // The skinned mesh is the first node carrying both a mesh and a skin.
     let node = doc
+        .doc
         .document
         .nodes()
         .find(|n| n.mesh().is_some() && n.skin().is_some())
@@ -49,23 +49,59 @@ pub fn import_skinned_from_doc(
     let skin = node.skin().unwrap();
 
     let skeleton = import_skeleton(&skin)?;
-    let (vertices, indices) = import_geometry(&mesh, blob, &skeleton.remap)?;
+    let (vertices, indices, morph_deltas) = import_geometry(&mesh, doc, &skeleton.remap)?;
+    let target_count = if vertices.is_empty() {
+        0
+    } else {
+        morph_deltas.len() / vertices.len()
+    };
+    let morph_target_names = morph_target_names(&mesh, target_count);
 
     Ok(ImportedSkinnedMesh {
         vertices,
         indices,
         skeleton: skeleton.joints,
+        morph_target_names,
+        morph_deltas,
     })
 }
 
-// Parse a binary glTF file from disk. Shared by the skinned and static
-// importers; the desugar pass uses this directly so it can memoize one GLB
-// across many primitive/material/image lookups.
-pub fn parse_glb(source: &str) -> Result<gltf::Gltf, String> {
-    let path = resolve_source(source);
-    let bytes = std::fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
-    gltf::Gltf::from_slice(&bytes)
-        .map_err(|e| format!("'{}': not a valid glTF/GLB file: {}", path, e))
+// Target names from the mesh extras `targetNames` convention, padded or
+// truncated to `target_count`; a missing name falls back to `target_{i}`.
+fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String> {
+    let from_extras: Vec<String> = mesh
+        .extras()
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+        .and_then(|v| {
+            v.get("targetNames").map(|names| {
+                names
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|n| n.as_str().unwrap_or("").to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+        })
+        .unwrap_or_default();
+    (0..target_count)
+        .map(|i| {
+            from_extras
+                .get(i)
+                .filter(|n| !n.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("target_{i}"))
+        })
+        .collect()
+}
+
+// Parse a `.glb` or `.gltf` file from disk with every buffer resolved. Shared
+// by the skinned and static importers; the desugar pass uses this directly so
+// it can memoize one document across many primitive/material/image lookups.
+pub fn parse_glb(source: &str) -> Result<GltfDoc, String> {
+    GltfDoc::parse_file(source)
 }
 
 // Import the indexed primitive (flattened across glTF meshes in declaration
@@ -80,7 +116,7 @@ pub fn parse_glb(source: &str) -> Result<gltf::Gltf, String> {
 // u16 index limit; `cn add` pre-splits oversized primitives at add time so
 // the desugar pass never encounters one.
 pub fn import_static_glb_primitive_from_doc(
-    doc: &gltf::Gltf,
+    doc: &GltfDoc,
     source: &str,
     primitive_index: u32,
 ) -> Result<(Vec<VertexData>, Vec<u16>), String> {
@@ -106,13 +142,12 @@ pub fn import_static_glb_primitive_from_doc(
 // and the `cn add` splitting path; neither caller needs to repeat the
 // triangle-topology check or attribute reads.
 pub fn read_primitive_geometry(
-    doc: &gltf::Gltf,
+    doc: &GltfDoc,
     source: &str,
     primitive_index: u32,
 ) -> Result<(Vec<VertexData>, Vec<u32>), String> {
-    let blob = doc.blob.as_deref();
-
     let primitive = doc
+        .doc
         .document
         .meshes()
         .flat_map(|m| m.primitives())
@@ -133,22 +168,13 @@ pub fn read_primitive_geometry(
         ));
     }
 
-    // GLB-only: buffer data must be the embedded binary chunk. External or
-    // base64 buffer URIs resolve to None and fail the POSITION read below.
-    let get_buffer = |buffer: gltf::Buffer<'_>| -> Option<&[u8]> {
-        match buffer.source() {
-            gltf::buffer::Source::Bin => blob,
-            gltf::buffer::Source::Uri(_) => None,
-        }
-    };
-    let reader = primitive.reader(get_buffer);
+    let reader = primitive.reader(|b| doc.buffer_bytes(b));
 
     let positions: Vec<[f32; 3]> = reader
         .read_positions()
         .ok_or_else(|| {
             format!(
-                "'{}': primitive {} has no POSITION data (external .gltf buffers \
-                 are unsupported, re-export as .glb)",
+                "'{}': primitive {} has no POSITION data (missing buffer data)",
                 source, primitive_index
             )
         })?
@@ -371,25 +397,33 @@ fn topological_order(parents: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
     (order, remap)
 }
 
+// Concatenated skinned geometry of one glTF mesh: vertices, u16 indices, and
+// dense target-major morph deltas.
+type SkinnedGeometry = (
+    Vec<SkinnedVertexData>,
+    Vec<u16>,
+    Vec<crate::assets::MorphDelta>,
+);
+
+// One primitive's morph targets: per-vertex position and normal deltas.
+type PrimTargetDeltas = (Vec<[f32; 3]>, Vec<[f32; 3]>);
+
 fn import_geometry(
     mesh: &gltf::Mesh<'_>,
-    blob: Option<&[u8]>,
+    doc: &GltfDoc,
     remap: &[usize],
-) -> Result<(Vec<SkinnedVertexData>, Vec<u16>), String> {
+) -> Result<SkinnedGeometry, String> {
+    use crate::assets::MorphDelta;
+
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
-
-    // GLB-only: buffer data must be the embedded binary chunk. An external or
-    // base64-URI buffer resolves to `None` and fails the POSITION read below.
-    let get_buffer = |buffer: gltf::Buffer<'_>| -> Option<&[u8]> {
-        match buffer.source() {
-            gltf::buffer::Source::Bin => blob,
-            gltf::buffer::Source::Uri(_) => None,
-        }
-    };
+    // Per-target deltas kept parallel to `vertices`; a primitive that lacks a
+    // target other primitives declare contributes zero deltas for its range.
+    let mut targets: Vec<Vec<MorphDelta>> = Vec::new();
+    let mut tangent_deltas_seen = false;
 
     for primitive in mesh.primitives() {
-        let reader = primitive.reader(get_buffer);
+        let reader = primitive.reader(|b| doc.buffer_bytes(b));
 
         // A primitive with no JOINTS_0 is static geometry, skip it; the
         // SkinnedMesh asset only carries skinned vertices.
@@ -400,9 +434,7 @@ fn import_geometry(
         let positions: Vec<[f32; 3]> = reader
             .read_positions()
             .ok_or_else(|| {
-                "skinned primitive has no POSITION data (external .gltf buffers \
-                 are unsupported, re-export as .glb)"
-                    .to_string()
+                "skinned primitive has no POSITION data (missing buffer data)".to_string()
             })?
             .collect();
         let weights: Vec<[f32; 4]> = reader
@@ -420,6 +452,37 @@ fn import_geometry(
             .unwrap_or_default();
 
         let base = vertices.len() as u32;
+
+        let prim_targets: Vec<PrimTargetDeltas> = reader
+            .read_morph_targets()
+            .map(|(dp, dn, dt)| {
+                tangent_deltas_seen |= dt.is_some();
+                (
+                    dp.map(|it| it.collect()).unwrap_or_default(),
+                    dn.map(|it| it.collect()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        for t in 0..targets.len().max(prim_targets.len()) {
+            if targets.len() <= t {
+                targets.push(vec![MorphDelta::default(); base as usize]);
+            }
+            let dst = &mut targets[t];
+            match prim_targets.get(t) {
+                Some((dp, dn)) => {
+                    for i in 0..positions.len() {
+                        dst.push(MorphDelta {
+                            position: dp.get(i).copied().unwrap_or_default(),
+                            normal: dn.get(i).copied().unwrap_or_default(),
+                        });
+                    }
+                }
+                None => {
+                    dst.extend(std::iter::repeat_with(MorphDelta::default).take(positions.len()));
+                }
+            }
+        }
+
         for (i, &pos) in positions.iter().enumerate() {
             let raw = joints.get(i).copied().unwrap_or([0; 4]);
             let bound = |j: u16| -> u32 {
@@ -465,7 +528,16 @@ fn import_geometry(
     if vertices.is_empty() {
         return Err("glTF mesh has no skinned primitives (no JOINTS_0)".to_string());
     }
-    Ok((vertices, indices))
+    if tangent_deltas_seen {
+        tracing::info!("glTF morph targets carry tangent deltas; they are not imported");
+    }
+    let total = vertices.len();
+    let mut morph_deltas = Vec::with_capacity(targets.len() * total);
+    for mut t in targets {
+        t.resize(total, crate::assets::MorphDelta::default());
+        morph_deltas.extend(t);
+    }
+    Ok((vertices, indices, morph_deltas))
 }
 
 // glTF animation import
@@ -485,6 +557,13 @@ pub struct ImportedAnimationTrack {
     pub keys: Vec<ImportedKeyframe>,
 }
 
+// One morph-weight keyframe: per-target weights at one sample time.
+#[derive(Debug, Clone)]
+pub struct ImportedMorphKey {
+    pub time: f32,
+    pub weights: Vec<f32>,
+}
+
 // One animation extracted from a glTF file.
 #[derive(Debug, Clone)]
 pub struct ImportedAnimation {
@@ -495,6 +574,9 @@ pub struct ImportedAnimation {
     // Joint-targeted channels, deduplicated and merged across translation /
     // rotation / scale targets so each joint has at most one entry.
     pub tracks: Vec<ImportedAnimationTrack>,
+    // Morph-target weight keys for the skinned mesh node; empty when the
+    // clip animates no morph targets.
+    pub morph_track: Vec<ImportedMorphKey>,
 }
 
 // Same as [`import_glb_animations`] but takes a pre-parsed glTF document.
@@ -502,16 +584,16 @@ pub struct ImportedAnimation {
 // amortise the `.glb` parse across every Animation entry that references
 // the same file.
 pub fn import_glb_animations_from_doc(
-    doc: &gltf::Gltf,
+    doc: &GltfDoc,
     source: &str,
 ) -> Result<Vec<ImportedAnimation>, String> {
-    let skin = first_skin(doc, source)?;
+    let (mesh_node, skin) = first_skinned_node(doc, source)?;
     let skeleton = import_skeleton(&skin)?;
-    let blob = doc.blob.as_deref();
     Ok(doc
+        .doc
         .document
         .animations()
-        .map(|anim| import_animation(&anim, &skeleton, blob))
+        .map(|anim| import_animation(&anim, &skeleton, doc, mesh_node))
         .collect())
 }
 
@@ -522,7 +604,7 @@ pub fn import_glb_animations_from_doc(
 // desugar pass's selection logic exactly so a reload picks the same clip
 // the build chose at compile time.
 pub fn import_glb_animation_from_doc(
-    doc: &gltf::Gltf,
+    doc: &GltfDoc,
     source: &str,
     animation_index: u32,
     animation_name: &str,
@@ -559,11 +641,13 @@ pub fn import_glb_animation_from_doc(
 
 // First node in `doc` carrying both a mesh and a skin, the same node the
 // skinned-mesh importer picks, so both importers share one skeleton view.
-fn first_skin<'a>(doc: &'a gltf::Gltf, path: &str) -> Result<gltf::Skin<'a>, String> {
-    doc.document
+// Returns the node index too: morph-weight channels target the node itself.
+fn first_skinned_node<'a>(doc: &'a GltfDoc, path: &str) -> Result<(usize, gltf::Skin<'a>), String> {
+    doc.doc
+        .document
         .nodes()
         .find(|n| n.mesh().is_some() && n.skin().is_some())
-        .and_then(|n| n.skin())
+        .and_then(|n| n.skin().map(|s| (n.index(), s)))
         .ok_or_else(|| format!("'{}': no node with both a mesh and a skin", path))
 }
 
@@ -573,7 +657,8 @@ fn first_skin<'a>(doc: &'a gltf::Gltf, path: &str) -> Result<gltf::Skin<'a>, Str
 fn import_animation(
     anim: &gltf::Animation<'_>,
     skeleton: &ImportedSkeleton,
-    blob: Option<&[u8]>,
+    doc: &GltfDoc,
+    mesh_node: usize,
 ) -> ImportedAnimation {
     // joint index -> JointPose per sample time. Each channel writes only its
     // own property (T/R/S) and leaves the others at the bind pose, so we seed
@@ -589,10 +674,56 @@ fn import_animation(
 
     // joint index -> (time -> pose)
     let mut tracks: HashMap<usize, Vec<(f32, JointPose)>> = HashMap::new();
+    let mut morph_track: Vec<ImportedMorphKey> = Vec::new();
     let mut max_time: f32 = 0.0;
 
     for channel in anim.channels() {
         let target_node = channel.target().node().index();
+
+        // Morph-weight channels target the mesh node, not a joint.
+        if target_node == mesh_node
+            && channel.target().property() == gltf::animation::Property::MorphTargetWeights
+        {
+            let reader = channel.reader(|b| doc.buffer_bytes(b));
+            let times: Vec<f32> = match reader.read_inputs() {
+                Some(t) => t.collect(),
+                None => continue,
+            };
+            let Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(w)) =
+                reader.read_outputs()
+            else {
+                continue;
+            };
+            let flat: Vec<f32> = w.into_f32().collect();
+            if times.is_empty() || !flat.len().is_multiple_of(times.len()) {
+                continue;
+            }
+            for &t in &times {
+                max_time = max_time.max(t);
+            }
+            // CUBICSPLINE stores in-tangent / value / out-tangent per key;
+            // take the value, like `sampled` does for T/R/S channels.
+            let stride = flat.len() / times.len();
+            let (stride, offset) = match channel.sampler().interpolation() {
+                gltf::animation::Interpolation::CubicSpline if stride.is_multiple_of(3) => {
+                    (stride / 3, stride / 3)
+                }
+                _ => (stride, 0),
+            };
+            morph_track = times
+                .iter()
+                .enumerate()
+                .map(|(i, &time)| {
+                    let start = i * (stride + 2 * offset) + offset;
+                    ImportedMorphKey {
+                        time,
+                        weights: flat[start..start + stride].to_vec(),
+                    }
+                })
+                .collect();
+            continue;
+        }
+
         let Some(&skin_joint) = skeleton.node_to_joint.get(&target_node) else {
             // Channel targets a non-joint (camera, prop, mesh node), drop.
             continue;
@@ -602,10 +733,7 @@ fn import_animation(
             .get(skin_joint)
             .copied()
             .unwrap_or(skin_joint);
-        let reader = channel.reader(|buf| match buf.source() {
-            gltf::buffer::Source::Bin => blob,
-            gltf::buffer::Source::Uri(_) => None,
-        });
+        let reader = channel.reader(|b| doc.buffer_bytes(b));
         let times: Vec<f32> = match reader.read_inputs() {
             Some(t) => t.collect(),
             None => continue,
@@ -654,7 +782,8 @@ fn import_animation(
                     entry[i].1.scale = s;
                 }
             }
-            // Morph targets are not yet a Concinnity asset type; drop quietly.
+            // Weight channels on other nodes target meshes this import does
+            // not carry; drop them like any other non-joint channel.
             Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(_)) | None => continue,
         }
     }
@@ -676,10 +805,16 @@ fn import_animation(
         .collect();
     sorted_tracks.sort_by_key(|t| t.joint);
 
+    morph_track.sort_by(|a, b| {
+        a.time
+            .partial_cmp(&b.time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ImportedAnimation {
         name: anim.name().unwrap_or("").to_string(),
         duration: max_time.max(1e-3),
         tracks: sorted_tracks,
+        morph_track,
     }
 }
 
@@ -880,8 +1015,8 @@ pub(crate) mod test_fixtures {
         make_glb(&skinned_json(true, true, true), Some(&skinned_bin()))
     }
 
-    pub(crate) fn parse(bytes: &[u8]) -> gltf::Gltf {
-        gltf::Gltf::from_slice(bytes).expect("fixture GLB must parse")
+    pub(crate) fn parse(bytes: &[u8]) -> crate::gltf_source::GltfDoc {
+        crate::gltf_source::GltfDoc::from_slice(bytes, None, "fixture").expect("fixture must parse")
     }
 }
 
@@ -1205,6 +1340,42 @@ mod tests {
         assert!(err.contains("animation_index 1 out of range"), "got: {err}");
     }
 
+    // Morph fixtures: the local Blender export carries two shape keys with a
+    // keyed weights animation. Ignored by default (private/assets is local).
+    // Run with: cargo test -p concinnity-cook morph_fixture -- --ignored
+    #[test]
+    #[ignore = "needs the local Blender rig_oracle fixture under private/assets"]
+    fn morph_fixture_imports_deltas_names_and_weight_keys() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../private/assets/models/rig_oracle/rig_morph.glb"
+        );
+        let doc = parse_glb(path).expect("parse");
+        let mesh = import_skinned_from_doc(&doc, path).expect("skinned import");
+        assert_eq!(mesh.morph_target_names, vec!["bulge", "shift"]);
+        assert_eq!(mesh.morph_deltas.len(), 2 * mesh.vertices.len());
+        assert!(
+            mesh.morph_deltas
+                .iter()
+                .any(|d| d.position.iter().any(|c| c.abs() > 0.1)),
+            "bulge target must carry real position deltas"
+        );
+
+        let anims = import_glb_animations_from_doc(&doc, path).expect("animations");
+        let weighted = anims
+            .iter()
+            .find(|a| !a.morph_track.is_empty())
+            .expect("one clip carries the weights channel");
+        assert!(weighted.morph_track.len() >= 2);
+        assert!(weighted.morph_track.iter().all(|k| k.weights.len() == 2));
+        let max_bulge = weighted
+            .morph_track
+            .iter()
+            .map(|k| k.weights[0])
+            .fold(0.0f32, f32::max);
+        assert!((max_bulge - 1.0).abs() < 1e-3, "bulge peaks at 1.0");
+    }
+
     // parse_glb / resolve_source
 
     #[test]
@@ -1213,7 +1384,7 @@ mod tests {
         let path = dir.path().join("tri.glb");
         std::fs::write(&path, static_triangle_glb()).expect("write glb");
         let doc = parse_glb(path.to_str().unwrap()).expect("parse");
-        assert_eq!(doc.document.meshes().count(), 1);
+        assert_eq!(doc.doc.document.meshes().count(), 1);
     }
 
     #[test]

@@ -509,6 +509,7 @@ fn graph_freezes_while_menu_open() {
 // re-seat a bucket slot via `apply_reloaded_clip`.
 fn runtime_clip(duration: f32) -> crate::gfx::skinning::AnimationClip {
     crate::gfx::skinning::AnimationClip {
+        morph_keys: Vec::new(),
         duration,
         looping: true,
         tracks: Vec::new(),
