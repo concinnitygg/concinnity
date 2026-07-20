@@ -976,6 +976,15 @@ impl MtlContext {
                 Some(self.spot_shadow_map.as_ref()),
                 count + 4 + crate::metal::uniforms::MAX_PROBES,
             );
+            // The two area-light LTC tables follow the spot shadow array.
+            enc.setTexture_atIndex(
+                Some(self.ltc_matrix_texture.as_ref()),
+                count + 5 + crate::metal::uniforms::MAX_PROBES,
+            );
+            enc.setTexture_atIndex(
+                Some(self.ltc_magnitude_texture.as_ref()),
+                count + 6 + crate::metal::uniforms::MAX_PROBES,
+            );
         }
         Ok(Some(buf))
     }
@@ -998,6 +1007,8 @@ impl MtlContext {
         for tex in [
             &self.shadow_map,
             &self.spot_shadow_map,
+            &self.ltc_matrix_texture,
+            &self.ltc_magnitude_texture,
             &self.env_map.irradiance,
             &self.env_map.prefilter,
         ] {

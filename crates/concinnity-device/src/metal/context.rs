@@ -269,6 +269,12 @@ pub struct MtlContext {
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
     pub(super) area_light_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    // The two linearly-transformed-cosine lookup tables the area-light shading
+    // path samples: the inverse transforms (RGBA32Float) and the matching
+    // (albedo, Fresnel) pairs (RG32Float). Generated at build time, so these are
+    // scene-independent and created once.
+    pub(super) ltc_matrix_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub(super) ltc_magnitude_texture: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(super) spot_shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
     // Per-slice light-space projections, uploaded once (local lights are
     // static). Empty when nothing casts, in which case the pass never runs.

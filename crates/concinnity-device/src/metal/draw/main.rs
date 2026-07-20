@@ -597,6 +597,11 @@ impl MtlContext {
             );
             enc.setFragmentTexture_atIndex(Some(self.shadow_map.as_ref()), 2);
             enc.setFragmentTexture_atIndex(Some(self.spot_shadow_map.as_ref()), 14);
+            // Area-light LTC tables. The cube sampler at sampler(2) is a plain
+            // linear clamp-to-edge, which is what the lookup wants, so no extra
+            // sampler slot is needed.
+            enc.setFragmentTexture_atIndex(Some(self.ltc_matrix_texture.as_ref()), 15);
+            enc.setFragmentTexture_atIndex(Some(self.ltc_magnitude_texture.as_ref()), 16);
             enc.setFragmentSamplerState_atIndex(Some(self.shadow_sampler.as_ref()), 1);
             // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
             // and a shared linear-clamp sampler at sampler(2). Always bound; the

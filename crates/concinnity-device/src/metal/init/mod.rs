@@ -43,7 +43,7 @@ use super::math::IDENTITY4;
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::texture::{
     EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
-    create_fallback_texture, create_hdr_targets, create_shadow_map_array,
+    create_fallback_texture, create_hdr_targets, create_lut_texture, create_shadow_map_array,
     create_shadow_map_fallback, upload_color_lut, upload_environment_map, upload_texture,
 };
 
@@ -388,6 +388,22 @@ impl MtlContext {
                 }
             }
         };
+
+        // Area-light LTC tables. Scene-independent (they depend only on the
+        // build-time fit), so they are created unconditionally and the shader
+        // simply never samples them when no area light is declared.
+        let ltc_matrix_texture = create_lut_texture(
+            &device,
+            crate::gfx::ltc::matrix_texels(),
+            crate::gfx::ltc::LTC_LUT_SIZE as u32,
+            4,
+        )?;
+        let ltc_magnitude_texture = create_lut_texture(
+            &device,
+            crate::gfx::ltc::magnitude_texels(),
+            crate::gfx::ltc::LTC_LUT_SIZE as u32,
+            2,
+        )?;
 
         // Clustered-lighting resources: the per-cluster light-index buffer
         // (always allocated so the forward pass has a valid fragment buffer(12)
@@ -1210,6 +1226,8 @@ impl MtlContext {
             shadow_render_mask: 0,
             shadow_sampler,
             area_light_buffer,
+            ltc_matrix_texture,
+            ltc_magnitude_texture,
             spot_shadow_map,
             spot_shadow_buffer,
             spot_shadow_count,

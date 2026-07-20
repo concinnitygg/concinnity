@@ -22,7 +22,7 @@ pub(crate) mod gfx {
     };
     pub use concinnity_render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, fullscreen, hdr_output,
-        input, keymap, mipmap, parallel_ctx, particles, planar_reflection, reflection_probe,
+        input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection, reflection_probe,
         render_graph, rt_topology, scene_reel, shadow_schedule, skinned_pool, slot_rewrites,
         spot_shadow, transparent, volumetric_fog,
     };

@@ -226,6 +226,9 @@ struct PointLightData {
 
 // GpuLight.kind discriminants (LIGHT_KIND_* in render_types.rs).
 constant uint LIGHT_KIND_SPOT = 1u;
+constant uint LIGHT_KIND_AREA = 2u;
+
+constant float PI = 3.14159265359;
 
 // One local light in the storage buffer bound at fragment buffer(8). Matches the
 // Rust GpuLight in render_types.rs; packed_float3 keeps the 64-byte stride.
@@ -239,7 +242,8 @@ struct GpuLight {
     float         cos_inner;
     float         cos_outer;
     int           shadow_index;
-    float         _pad;
+    // Index into the AreaLightData table for an area light, else -1.
+    int           data_index;
 };
 
 // One shadowed spot's slice of the spot shadow array. Matches the Rust
@@ -250,6 +254,22 @@ struct SpotShadowData {
     float    normal_bias;
     float2   _pad;
 };
+
+// One rectangular area light's extent, indexed by GpuLight.data_index. Matches
+// the Rust AreaLightData in render_types.rs; the centre and emitting direction
+// ride the GpuLight itself.
+struct AreaLightData {
+    packed_float3 right;
+    uint          two_sided;
+    packed_float3 up;
+    float         _pad;
+};
+
+// Edge of the LTC lookup tables, and the scale / bias that map [0, 1] onto texel
+// centres. Must match LTC_LUT_SIZE in concinnity-render's ltc module.
+constant float LTC_LUT_SIZE  = 64.0;
+constant float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
+constant float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
 
 struct LightUniforms {
     DirectionalLightData directional[4];
@@ -510,6 +530,81 @@ static float sample_spot_shadow(
     return sum / SAMPLES;
 }
 
+// Clip a quad against the horizon plane z = 0, keeping the part above it.
+// Sutherland-Hodgman rather than the usual hardcoded 16-case table: a quad cut by
+// one plane yields at most 5 vertices, and the loop form cannot be got wrong case
+// by case. Mirrors clip_quad_to_horizon in concinnity-render's ltc::polygon,
+// which is unit-tested against brute-force integration.
+static int clip_quad_to_horizon(thread float3 *quad, thread float3 *out) {
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        float3 current  = quad[i];
+        float3 previous = quad[(i + 3) % 4];
+        bool current_in  = current.z > 0.0;
+        bool previous_in = previous.z > 0.0;
+        if (current_in != previous_in) {
+            float t = previous.z / (previous.z - current.z);
+            out[n++] = float3(previous.xy + t * (current.xy - previous.xy), 0.0);
+        }
+        if (current_in) {
+            out[n++] = current;
+        }
+    }
+    return n;
+}
+
+// Twice the contribution of one edge of the spherical polygon. The cross
+// product's z carries the sign, so a reversed winding flips the whole sum, which
+// is what tells a front-facing polygon from a back-facing one.
+static float integrate_edge(float3 v1, float3 v2) {
+    float cos_theta = clamp(dot(v1, v2), -1.0, 1.0);
+    float theta     = acos(cos_theta);
+    float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
+    float ratio     = (sin_theta > 1e-4) ? (theta / sin_theta) : 1.0;
+    return cross(v1, v2).z * ratio;
+}
+
+// Fraction of the clamped-cosine distribution the quad covers, in [0, 1].
+// `m_inv` is the LTC inverse transform, or the identity for the diffuse term.
+static float ltc_evaluate(
+    float3       N,
+    float3       V,
+    float3       P,
+    float3x3     m_inv,
+    thread float3 *corners,
+    bool         two_sided
+) {
+    // Shading frame with the normal on +z and the first tangent in the view
+    // plane, matching how the table was fitted.
+    float3 t1 = normalize(V - N * dot(V, N));
+    float3 t2 = cross(N, t1);
+
+    float3 quad[4];
+    for (int i = 0; i < 4; i++) {
+        float3 d = corners[i] - P;
+        quad[i] = m_inv * float3(dot(t1, d), dot(t2, d), dot(N, d));
+    }
+
+    float3 clipped[5];
+    int n = clip_quad_to_horizon(quad, clipped);
+    if (n < 3) {
+        return 0.0;
+    }
+    for (int i = 0; i < n; i++) {
+        clipped[i] = normalize(clipped[i]);
+    }
+
+    float sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        sum += integrate_edge(clipped[i], clipped[(i + 1) % n]);
+    }
+
+    // The edge sum is twice the irradiance; dividing by pi normalises the
+    // clamped cosine, so the covered fraction is sum / (2 * pi).
+    float form_factor = sum / (2.0 * PI);
+    return two_sided ? fabs(form_factor) : max(-form_factor, 0.0);
+}
+
 // Cascade-aware PCF with cross-cascade blending. Returns [0, 1] shadow factor:
 // 1.0 fully lit, 0.0 fully shadowed.
 static float shadow_factor_cascaded(
@@ -554,7 +649,6 @@ static float shadow_factor_cascaded(
     return shade;
 }
 
-constant float PI = 3.14159265359;
 
 // Surfaces rougher than this get no screen-space / ray-traced reflection (the
 // resolve and reflection_composite gate at the same value). Below it the
@@ -814,6 +908,7 @@ static float4 shade_surface(
     constant LightUniforms  &lights,
     constant GpuLight       *local_lights,
     constant SpotShadowData *spot_shadows,
+    constant AreaLightData  *area_lights,
     constant ClusterParams  &cluster,
     constant uint           *cluster_light_list,
     constant ShadowUniforms &shadow,
@@ -827,6 +922,8 @@ static float4 shade_surface(
     bool                     has_orm_map,
     depth2d_array<float>     shadow_map,
     depth2d_array<float>     spot_shadow_map,
+    texture2d<float>         ltc_matrix,
+    texture2d<float>         ltc_magnitude,
     texturecube<float>       irradiance_cube,
     texturecube<float>       prefilter_cube,
     array<texturecube<float>, MAX_PROBES> probe_cubes,
@@ -1042,6 +1139,64 @@ static float4 shade_surface(
         float3 col    = local_lights[j].color;
         float  intens = local_lights[j].intensity;
 
+        // Area lights integrate the whole panel rather than a single direction,
+        // so they replace the point / spot BRDF evaluation entirely.
+        if (local_lights[j].kind == LIGHT_KIND_AREA) {
+            int ai = local_lights[j].data_index;
+            if (ai < 0) {
+                continue;
+            }
+            float3 centre = pos_w;
+            float3 right  = float3(area_lights[ai].right);
+            float3 up     = float3(area_lights[ai].up);
+            bool two_sided = area_lights[ai].two_sided != 0u;
+
+            // Range is a cutoff measured from the panel centre, matching the
+            // sphere the clustered cull bins this light with. The physical
+            // falloff is already in the form factor: the panel subtends a
+            // smaller solid angle further away.
+            float centre_dist = length(centre - in.world_pos);
+            float window = clamp(1.0 - centre_dist / range, 0.0, 1.0);
+            window = window * window;
+            if (window <= 0.0) {
+                continue;
+            }
+
+            float3 corners[4];
+            corners[0] = centre - right - up;
+            corners[1] = centre + right - up;
+            corners[2] = centre + right + up;
+            corners[3] = centre - right + up;
+
+            // Diffuse needs no lookup: it is the polygon integral under the
+            // plain clamped cosine, i.e. an identity transform.
+            float diffuse_ff = ltc_evaluate(
+                N, V, in.world_pos, float3x3(1.0), corners, two_sided);
+
+            // Specular applies the fitted transform before the same integral.
+            float2 lut_uv = float2(roughness, sqrt(clamp(1.0 - NdV, 0.0, 1.0)));
+            lut_uv = lut_uv * LTC_LUT_SCALE + LTC_LUT_BIAS;
+            float4 t1 = ltc_matrix.sample(cube_sampler, lut_uv);
+            float2 t2 = ltc_magnitude.sample(cube_sampler, lut_uv).xy;
+            // The table stores the inverse normalised so its middle entry is 1;
+            // MSL matrices are column-major, so these are columns.
+            float3x3 m_inv = float3x3(
+                float3(t1.x, 0.0, t1.y),
+                float3(0.0,  1.0, 0.0),
+                float3(t1.z, 0.0, t1.w));
+            float specular_ff = ltc_evaluate(
+                N, V, in.world_pos, m_inv, corners, two_sided);
+            // Schlick split baked into the table: t2.x weights the base
+            // reflectance, t2.y the grazing response.
+            float3 area_spec = F0 * t2.x + (1.0 - F0) * t2.y;
+
+            float3 area_radiance = col * intens * window;
+            float3 area_kd = (1.0 - F0) * (1.0 - metallic);
+            Lo += area_radiance * (area_kd * albedo * diffuse_ff
+                                   + area_spec * specular_ff);
+            continue;
+        }
+
         float3 delta = pos_w - in.world_pos;
         float  dist  = length(delta);
         float3 L     = normalize(delta);
@@ -1159,10 +1314,13 @@ fragment float4 fragment_main(
     constant ClusterParams   &cluster  [[buffer(11)]],
     constant uint            *cluster_light_list [[buffer(12)]],
     constant SpotShadowData  *spot_shadows [[buffer(13)]],
+    constant AreaLightData   *area_lights [[buffer(14)]],
     texture2d<float>     tex            [[texture(0)]],
     texture2d<float>     normal_tex     [[texture(1)]],
     depth2d_array<float> shadow_map     [[texture(2)]],
     depth2d_array<float> spot_shadow_map[[texture(14)]],
+    texture2d<float>     ltc_matrix     [[texture(15)]],
+    texture2d<float>     ltc_magnitude  [[texture(16)]],
     texturecube<float>   irradiance_cube[[texture(3)]],
     texturecube<float>   prefilter_cube [[texture(4)]],
     texture2d<float>     ssao_tex       [[texture(5)]],
@@ -1189,11 +1347,11 @@ fragment float4 fragment_main(
         mat.roughness, mat.metallic, mat.macro_variation,
         mat.terrain_blend, mat.secondary_blend_sharpness,
         mat.tint, mat.emissive,
-        lights, local_lights, spot_shadows, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
+        lights, local_lights, spot_shadows, area_lights, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
         // No emissive / ORM maps on the legacy per-draw path: pass the albedo
         // as a dummy and gate both off so neither is sampled.
         tex, tex, false, false,
-        shadow_map, spot_shadow_map, irradiance_cube,
+        shadow_map, spot_shadow_map, ltc_matrix, ltc_magnitude, irradiance_cube,
         prefilter_cube, probe_cubes, ssao_tex, tex_sampler, shadow_sampler,
         cube_sampler);
 }
@@ -1219,6 +1377,10 @@ struct BindlessTextures {
     array<texturecube<float>, MAX_PROBES> probes [[id(BINDLESS_TEXTURE_COUNT + 4)]];
     // Spot shadow map array: one depth slice per shadow-casting spot light.
     depth2d_array<float> spot_shadow_map [[id(BINDLESS_TEXTURE_COUNT + 4 + MAX_PROBES)]];
+    // Area-light LTC tables: the inverse transforms and the (albedo, Fresnel)
+    // pairs.
+    texture2d<float> ltc_matrix    [[id(BINDLESS_TEXTURE_COUNT + 5 + MAX_PROBES)]];
+    texture2d<float> ltc_magnitude [[id(BINDLESS_TEXTURE_COUNT + 6 + MAX_PROBES)]];
 };
 
 // Fragment entry point for the bindless static main pass. Material scalars and
@@ -1239,6 +1401,7 @@ fragment float4 fragment_main_bindless(
     constant ClusterParams    &cluster  [[buffer(11)]],
     constant uint             *cluster_light_list [[buffer(12)]],
     constant SpotShadowData   *spot_shadows [[buffer(13)]],
+    constant AreaLightData    *area_lights [[buffer(14)]],
     constant BindlessTextures &tex      [[buffer(7)]]
 ) {
     // Static engine samplers, declared inline. Parameters mirror the
@@ -1259,7 +1422,7 @@ fragment float4 fragment_main_bindless(
         obj.roughness, obj.metallic, obj.macro_variation,
         obj.terrain_blend, obj.secondary_blend_sharpness,
         obj.tint, obj.emissive,
-        lights, local_lights, spot_shadows, cluster, cluster_light_list, shadow,
+        lights, local_lights, spot_shadows, area_lights, cluster, cluster_light_list, shadow,
         tex.tex_pool[obj.albedo_index],
         tex.tex_pool[obj.normal_index],
         tex.tex_pool[obj.albedo_secondary_index],
@@ -1268,7 +1431,8 @@ fragment float4 fragment_main_bindless(
         tex.tex_pool[obj.orm_map_index],
         obj.emissive_map_index != 0,
         obj.orm_map_index != 0,
-        tex.shadow_map, tex.spot_shadow_map, tex.irradiance, tex.prefilter,
+        tex.shadow_map, tex.spot_shadow_map, tex.ltc_matrix, tex.ltc_magnitude,
+        tex.irradiance, tex.prefilter,
         tex.probes, tex.ssao,
         tex_sampler, shadow_sampler, cube_sampler);
 }

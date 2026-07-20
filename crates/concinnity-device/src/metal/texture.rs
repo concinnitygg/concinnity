@@ -601,3 +601,60 @@ pub(super) fn create_hdr_targets(
         height: h as u32,
     })
 }
+
+// Create a 2-D float lookup texture from `texels`, which must hold
+// `size * size * components` values. Used for the LTC tables: `components` is 4
+// for the transform table and 2 for the magnitude table.
+pub(super) fn create_lut_texture(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    texels: &[f32],
+    size: u32,
+    components: usize,
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+    let needed = (size as usize) * (size as usize) * components;
+    if texels.len() < needed {
+        return Err(format!(
+            "LUT data too short for {size}x{size}x{components}: {} values, need {needed}",
+            texels.len()
+        ));
+    }
+    let format = match components {
+        2 => MTLPixelFormat::RG32Float,
+        4 => MTLPixelFormat::RGBA32Float,
+        n => return Err(format!("unsupported LUT component count {n}")),
+    };
+
+    let desc = MTLTextureDescriptor::new();
+    unsafe {
+        desc.setTextureType(MTLTextureType::Type2D);
+        desc.setPixelFormat(format);
+        desc.setWidth(size as usize);
+        desc.setHeight(size as usize);
+        desc.setUsage(MTLTextureUsage::ShaderRead);
+        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    }
+    let texture = device
+        .newTextureWithDescriptor(&desc)
+        .ok_or("failed to create LUT texture")?;
+
+    let bytes_per_row = (size as usize) * components * 4;
+    unsafe {
+        use objc2_metal::MTLRegion;
+        let region = MTLRegion {
+            origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            size: objc2_metal::MTLSize {
+                width: size as usize,
+                height: size as usize,
+                depth: 1,
+            },
+        };
+        let ptr = texels.as_ptr() as *mut std::ffi::c_void;
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+            region,
+            0,
+            std::ptr::NonNull::new(ptr).ok_or("LUT texel pointer is null")?,
+            bytes_per_row,
+        );
+    }
+    Ok(texture)
+}

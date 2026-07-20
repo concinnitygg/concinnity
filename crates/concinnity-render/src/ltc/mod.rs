@@ -18,6 +18,7 @@
 // `f0 * albedo + (1 - f0) * fresnel`.
 
 pub mod fit;
+pub mod polygon;
 
 use std::sync::OnceLock;
 
