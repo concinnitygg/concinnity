@@ -30,6 +30,7 @@ mod ground_probes;
 mod input_key;
 mod interact_signal;
 mod lifetime;
+mod nav_direction;
 mod play_cue;
 mod post_process_config;
 pub mod procedural_mesh;
@@ -145,6 +146,7 @@ pub use geometry::{
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;
 pub use lifetime::Lifetime;
+pub use nav_direction::NavDirection;
 pub use play_cue::PlayCue;
 pub use post_process_config::PostProcessResolve;
 pub use root_motion_event::RootMotion;

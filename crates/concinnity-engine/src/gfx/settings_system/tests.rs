@@ -479,6 +479,44 @@ fn slider_clamps_an_out_of_range_fraction() {
     assert_eq!(handle_x, 280.0, "pinned to the track's right end");
 }
 
+// A Next/Prev on a slider row (a focused row's Left/Right pulse) steps the
+// value a twentieth of the range from the handle's current position, clamped
+// at the ends, applying + persisting like a released drag.
+#[test]
+fn slider_steps_by_next_and_prev() {
+    let mut f = Fixture::new();
+    let handle_x = |f: &mut Fixture| {
+        f.world
+            .ctx()
+            .query::<Sprite>()
+            .find(|s| s.asset_id == HANDLE)
+            .map(|s| s.x)
+            .expect("handle present")
+    };
+    // Place the handle mid-track (fraction 0.5 = x 190 on the 180px travel).
+    f.apply(vec![drag("exposure", 0.5, true)]);
+    assert_eq!(handle_x(&mut f), 190.0);
+
+    f.apply(vec![cycle("exposure", SettingOp::Next)]);
+    assert!(
+        (handle_x(&mut f) - 199.0).abs() < 1.0e-3,
+        "Next steps +5% of the travel"
+    );
+    assert!(f.persisted().graphics.exposure_ev.is_some());
+
+    f.apply(vec![cycle("exposure", SettingOp::Prev)]);
+    assert!(
+        (handle_x(&mut f) - 190.0).abs() < 1.0e-3,
+        "Prev steps back down"
+    );
+
+    // Stepping far past the bottom clamps at the track's left end.
+    for _ in 0..25 {
+        f.apply(vec![cycle("exposure", SettingOp::Prev)]);
+    }
+    assert_eq!(handle_x(&mut f), 100.0);
+}
+
 // An unknown slider key is ignored.
 #[test]
 fn unknown_slider_is_ignored() {

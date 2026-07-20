@@ -42,6 +42,21 @@ pub struct FrameInput {
     /// [captured_key](#structfield.captured_key)) so the settings menu can
     /// capture a button for rebinding.
     pub captured_button: Option<crate::assets::GamepadButton>,
+    /// The UI-navigation pulse this frame, or `None`. A one-frame
+    /// [NavDirection](#navdirection) produced from a d-pad press (repeating
+    /// while held) or a deliberate left-stick deflection. Surfaced regardless
+    /// of menu state (like [captured_key](#structfield.captured_key)); menu
+    /// focus movement consumes it only while a screen is active, so during
+    /// play the d-pad and stick keep their movement meaning.
+    pub nav: Option<crate::assets::NavDirection>,
+    /// True for exactly one frame when the confirm button (South) is pressed.
+    /// Surfaced regardless of menu state; menus fire their focused control
+    /// from it while a screen is active.
+    pub confirm: bool,
+    /// True for exactly one frame when the back button (East) is pressed.
+    /// Surfaced regardless of menu state; menus treat it like Escape while a
+    /// screen is active.
+    pub back: bool,
     /// Accumulated horizontal mouse movement since the last frame (pixels).
     pub mouse_dx: f32,
     /// Accumulated vertical mouse movement since the last frame (pixels).

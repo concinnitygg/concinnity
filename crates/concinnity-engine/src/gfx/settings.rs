@@ -458,6 +458,9 @@ const FOV_RANGE: (f32, f32) = (50.0, 100.0);
 // Camera3D's authored default.
 pub(crate) const DEFAULT_FOV: f32 = 75.0;
 
+// Fraction of a slider's range one focused Left/Right pulse steps.
+pub(crate) const SLIDER_STEP_FRACTION: f32 = 0.05;
+
 // The (min, max) value range for a slider key, or `None` if the key is not a
 // slider setting.
 pub(crate) fn slider_range(key: &str) -> Option<(f32, f32)> {

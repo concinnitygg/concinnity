@@ -3,11 +3,13 @@
 // any `HitRegion`, `Screen`, or `KeyBinding`, then it processes hover/click,
 // screen overlays, and key bindings each frame.
 
+mod focus;
 mod screen;
 
 use crate::assets::{
-    FrameInput, HitRegion, Key, KeyBinding, SceneCommand, Screen, ScreenCommand, ScreenShown,
-    ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand, TextLabel,
+    FrameInput, HitRegion, Key, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
+    ScreenShown, ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand,
+    TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -225,6 +227,13 @@ pub struct UiInputSystem {
     // published resource changes so the hit-test loop reads an owned set without
     // cloning the resource every frame (SettingsSystem republishes rarely).
     disabled_rows_cache: std::collections::HashSet<String>,
+    // The gamepad/keyboard focus cursor, or `None` while the mouse drives the
+    // menu. While set, it styles + fires in place of hover, and any cursor
+    // movement dismisses it.
+    focus: Option<focus::FocusRef>,
+    // Last frame's cursor position, to detect the mouse movement that
+    // dismisses focus.
+    last_cursor: Option<(f32, f32)>,
 }
 
 impl UiInputSystem {
@@ -245,6 +254,8 @@ impl UiInputSystem {
             open_dropdown: None,
             screen_cmd_cursor: crate::ecs::EventCursor::default(),
             disabled_rows_cache: std::collections::HashSet::new(),
+            focus: None,
+            last_cursor: None,
         }
     }
 }
@@ -425,6 +436,46 @@ impl System for UiInputSystem {
             None => return StepResult::Continue,
         };
 
+        // While any visible TextInput has keyboard focus, typed keys belong to
+        // the field: ordinary KeyBindings and the focus pulses are suspended
+        // so typing cannot fire actions (screen toggles below stay live).
+        let typing = ctx
+            .query::<crate::assets::TextInput>()
+            .any(|t| t.visible && t.focused);
+
+        // The pad's menu pulses engage only while a capturing screen is
+        // active; during play the same buttons keep their gameplay meanings.
+        let screen_active = self.screens.top_capture().is_some();
+        // Mouse movement dismisses the focus cursor: the menu returns to
+        // hover-driven interaction until the next pulse.
+        let cursor_moved = self
+            .last_cursor
+            .is_some_and(|(px, py)| (input.mouse_x - px).abs() + (input.mouse_y - py).abs() > 2.0);
+        self.last_cursor = Some((input.mouse_x, input.mouse_y));
+        if cursor_moved {
+            self.focus = None;
+        }
+        // The keyboard arrows drive the same focus model as the pad pulse.
+        let nav = if screen_active && !typing {
+            input.nav.or(match input.captured_key {
+                Some(Key::Up) => Some(NavDirection::Up),
+                Some(Key::Down) => Some(NavDirection::Down),
+                Some(Key::Left) => Some(NavDirection::Left),
+                Some(Key::Right) => Some(NavDirection::Right),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        // Confirm fires the focused control: the pad's South button, or Enter
+        // while something is focused (an unfocused Enter still reaches the
+        // KeyBindings, e.g. a story's advance binding).
+        let enter_pressed = screen_active && !typing && input.captured_key == Some(Key::Enter);
+        let enter_confirm = enter_pressed && self.focus.is_some();
+        let confirm = (screen_active && !typing && input.confirm) || enter_confirm;
+        // The pad's East button backs out like Escape while a screen is up.
+        let ui_escape = input.escape || (input.back && screen_active);
+
         // An open settings dropdown's floating list overlays the menu and
         // consumes this frame: hover tracks the option under the cursor, a click
         // picks it (or, outside the list, dismisses), and Escape / a scroll close
@@ -432,7 +483,9 @@ impl System for UiInputSystem {
         // priority (Escape closes the list rather than the menu, a click on an
         // option does not fall through to the row behind it).
         if self.open_dropdown.is_some() {
-            self.step_open_dropdown(&input, ctx);
+            // Enter always picks inside the list, focused or not.
+            let pick = confirm || enter_pressed;
+            self.step_open_dropdown(&input, nav, pick, ui_escape, cursor_moved, ctx);
             self.publish_dropdown(ctx);
             return StepResult::Continue;
         }
@@ -471,10 +524,12 @@ impl System for UiInputSystem {
         }
 
         // A Screen's `toggle_key` opens / closes it from anywhere, ahead of
-        // ordinary KeyBindings and immune to the typing suppression below (so
-        // a console screen's own key still closes it while its field has
-        // focus). A matched toggle consumes the key press.
-        let pressed_key = if input.escape {
+        // ordinary KeyBindings and immune to the typing suppression (so a
+        // console screen's own key still closes it while its field has
+        // focus). A matched toggle consumes the key press. The pad's back
+        // pulse rides the Escape name, so it pops toggled screens and fires
+        // Escape bindings exactly like the key.
+        let pressed_key = if ui_escape {
             Some("Escape".to_string())
         } else {
             input.captured_key.map(|k| k.name().to_string())
@@ -488,13 +543,6 @@ impl System for UiInputSystem {
             !toggles.is_empty()
         });
 
-        // While any visible TextInput has keyboard focus, typed keys belong to
-        // the field: ordinary KeyBindings are suspended so typing cannot fire
-        // actions (screen toggles above stay live).
-        let typing = ctx
-            .query::<crate::assets::TextInput>()
-            .any(|t| t.visible && t.focused);
-
         // Handle KeyBindings before HitRegion clicks so an Esc-toggle-pause
         // beats a click that landed on the same frame. A binding scoped to a
         // screen only fires while that screen is on top of the stack. Escape is
@@ -502,9 +550,11 @@ impl System for UiInputSystem {
         // a `captured_key`); every other binding matches the one-frame pressed
         // key by its canonical name -- e.g. a story's Space / Enter advance
         // bindings. Rebind capture and an open dropdown already returned above,
-        // so this cannot steal a key those flows want.
+        // so this cannot steal a key those flows want; an Enter consumed as
+        // confirm never doubles into an Enter binding.
         if !toggled_key
             && !typing
+            && !enter_confirm
             && let Some(name) = pressed_key.as_deref()
         {
             let top = self.screens.top();
@@ -630,8 +680,20 @@ impl System for UiInputSystem {
                 .map(|d| d.0.clone())
                 .unwrap_or_default();
         }
+
+        // A nav pulse moves the focus cursor (or adjusts the focused value
+        // row); only pulse frames pay for the target derivation.
+        if let Some(dir) = nav {
+            self.step_focus(dir, active_screen, ctx);
+        }
+        // Confirm fires the focused region in the loop below; with no focus it
+        // falls back to a full-canvas region ("press anywhere" advance).
+        let focus_index = self.focus.as_ref().map(|f| f.index);
+        let confirm_fallback = confirm && focus_index.is_none();
+        let mut confirm_used = false;
+
         let disabled_rows = &self.disabled_rows_cache;
-        for entry in &mut self.regions {
+        for (i, entry) in self.regions.iter_mut().enumerate() {
             // A region is inert this frame when it cannot hover or fire:
             //   - the scrollbar thumb is being dragged (no region reacts),
             //   - it is a slider track (driven by the drag pass above),
@@ -667,8 +729,12 @@ impl System for UiInputSystem {
             } else {
                 false
             };
+            // A focused slider track stays in the pass so it shows the focus
+            // highlight; its confirm dispatch is a recognised no-op and the
+            // cursor cannot fire it while focus is set.
+            let pad_focused = focus_index == Some(i);
             let inert = thumb_active
-                || entry.slider_key.is_some()
+                || (entry.slider_key.is_some() && !pad_focused)
                 || entry.screen != active_screen
                 || (entry.scroll_row.is_some() && entry.hidden)
                 || disabled
@@ -702,7 +768,7 @@ impl System for UiInputSystem {
             };
             let group_toggle = entry.group_toggle;
             let r = &entry.region;
-            let mut hovered = if full_window {
+            let mut mouse_hovered = if full_window {
                 mx >= 0.0 && mx < vw && my >= 0.0 && my < vh
             } else {
                 qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height
@@ -712,8 +778,24 @@ impl System for UiInputSystem {
             if let Some((pi, _)) = entry.scroll_row
                 && let Some(band) = panel_bands.get(pi)
             {
-                hovered = hovered && point_in_rect(qx, qy, *band);
+                mouse_hovered = mouse_hovered && point_in_rect(qx, qy, *band);
             }
+            // While the focus cursor is set it owns the hover slot: the
+            // focused region styles + fires and the cursor's row does neither
+            // (mouse movement clears the focus first, so this never masks a
+            // live hover). Confirm with no focus falls through to a
+            // full-canvas region, once.
+            let hovered = if focus_index.is_some() {
+                pad_focused
+            } else {
+                mouse_hovered
+            };
+            let fallback_fire = confirm_fallback && full_window && !confirm_used;
+            let fire = if focus_index.is_some() {
+                pad_focused && confirm
+            } else {
+                (mouse_hovered && clicked) || fallback_fire
+            };
 
             // Apply hover styling on hover-in, restore the captured style on
             // hover-out.
@@ -725,7 +807,10 @@ impl System for UiInputSystem {
 
             entry.was_hovered = hovered;
 
-            if hovered && clicked {
+            if fire {
+                if fallback_fire {
+                    confirm_used = true;
+                }
                 // A group header toggles its panel's group (handled after the
                 // loop) instead of firing an action.
                 if let Some(gid) = group_toggle {
@@ -806,13 +891,23 @@ impl System for UiInputSystem {
 }
 
 impl UiInputSystem {
-    // Advance an open dropdown for one frame: track the option under the cursor,
-    // and on a click pick it (a SetIndex command) or dismiss (a click outside
-    // the list); Escape also dismisses. The wheel, the Up/Down arrow keys, and
-    // a scrollbar-thumb drag all scroll the shown window of a list longer than
+    // Advance an open dropdown for one frame: track the option under the
+    // cursor, and on a click pick it (a SetIndex command) or dismiss (a click
+    // outside the list); Escape / back also dismiss. Nav pulses move the
+    // selection highlight and confirm picks it, sharing the hover slot with
+    // the cursor (whichever moved last wins). The wheel and a scrollbar-thumb
+    // drag scroll the shown window of a list longer than
     // `dropdown::MAX_VISIBLE` (never dismissing). Clears `open_dropdown` when
     // the list closes.
-    fn step_open_dropdown(&mut self, input: &FrameInput, ctx: &mut PipelineContext) {
+    fn step_open_dropdown(
+        &mut self,
+        input: &FrameInput,
+        nav: Option<NavDirection>,
+        confirm: bool,
+        escape: bool,
+        cursor_moved: bool,
+        ctx: &mut PipelineContext,
+    ) {
         let Some(state) = self.open_dropdown.as_mut() else {
             return;
         };
@@ -834,13 +929,6 @@ impl UiInputSystem {
                 + input.scroll_delta * WHEEL_SCROLL_SPEED / item_h)
                 .clamp(0.0, max);
         }
-        // Up/Down arrows: scroll the window one row per press.
-        match input.captured_key {
-            Some(Key::Up) => state.scroll_rows = (state.scroll_rows - 1.0).clamp(0.0, max),
-            Some(Key::Down) => state.scroll_rows = (state.scroll_rows + 1.0).clamp(0.0, max),
-            _ => {}
-        }
-
         let layout = dropdown::layout(state.anchor, count);
 
         // Scrollbar-thumb drag: a press on the thumb grabs it (keeping the
@@ -869,16 +957,53 @@ impl UiInputSystem {
 
         let first = state.first();
         // Rows show options `first..`; hovered is the OPTION index. No hover
-        // while the thumb is dragged (the drag owns the cursor).
-        state.hovered = if dragging {
-            None
-        } else {
-            dropdown::item_at(&layout, qx, qy).map(|row| first + row)
-        };
+        // while the thumb is dragged (the drag owns the cursor); an idle
+        // cursor keeps the pulse-driven selection instead of re-asserting the
+        // stale position under it.
+        if dragging {
+            state.hovered = None;
+        } else if cursor_moved || input.left_click || input.scroll_delta != 0.0 {
+            state.hovered = dropdown::item_at(&layout, qx, qy).map(|row| first + row);
+        }
 
-        // Escape dismisses without changing the value.
-        if input.escape {
+        // Nav pulses move the selection highlight one option per pulse,
+        // scrolling the shown window along with it.
+        if let Some(dir) = nav
+            && !dragging
+        {
+            let cur = state.hovered.unwrap_or(state.selected);
+            let stepped = match dir {
+                NavDirection::Up => cur.saturating_sub(1),
+                NavDirection::Down => (cur + 1).min(count.saturating_sub(1)),
+                _ => cur,
+            };
+            state.hovered = Some(stepped);
+            let first = state.first();
+            if stepped < first {
+                state.scroll_rows = stepped as f32;
+            } else if stepped >= first + dropdown::MAX_VISIBLE {
+                state.scroll_rows = (stepped + 1 - dropdown::MAX_VISIBLE) as f32;
+            }
+        }
+
+        // Escape / back dismiss without changing the value.
+        if escape {
             self.open_dropdown = None;
+            return;
+        }
+        // Confirm picks the highlighted option (or re-picks the current value
+        // when nothing is highlighted yet), then closes.
+        if confirm {
+            let pick = state.hovered.unwrap_or(state.selected);
+            let setting = state.setting.clone();
+            let value_label = state.value_label;
+            self.open_dropdown = None;
+            ctx.events_mut::<SettingCommand>().send(SettingCommand {
+                setting,
+                op: SettingOp::SetIndex(pick),
+                value_label,
+                persist: true,
+            });
             return;
         }
         if input.left_click && !dragging {
@@ -974,13 +1099,136 @@ impl UiInputSystem {
         ctx.insert_resource(crate::ecs::OpenDropdown(screen));
     }
 
+    // Whether the engine disabled this region's setting row at runtime
+    // (mirrors the hit-test loop's gating).
+    fn row_disabled(&self, entry: &RegionEntry) -> bool {
+        !self.disabled_rows_cache.is_empty()
+            && entry
+                .region
+                .action
+                .strip_prefix("setting:")
+                .is_some_and(|rest| {
+                    self.disabled_rows_cache
+                        .contains(rest.split(':').next().unwrap_or(""))
+                })
+    }
+
+    // Advance the focus cursor for one directional pulse: Left/Right on a
+    // focused value row adjust its setting in place; any other pulse moves the
+    // focus to the nearest target, scrolling its panel row into the clip band.
+    fn step_focus(
+        &mut self,
+        dir: NavDirection,
+        active_screen: Option<AssetId>,
+        ctx: &mut PipelineContext,
+    ) {
+        // Follow-label regions with an empty label are hidden menu entries;
+        // resolve their label contents in one pass so they never focus.
+        let follow_labels: std::collections::HashSet<AssetId> = self
+            .regions
+            .iter()
+            .filter(|e| e.screen == active_screen)
+            .filter_map(|e| e.follow.map(|(id, _)| id))
+            .collect();
+        let empty_labels: std::collections::HashSet<AssetId> = if follow_labels.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            ctx.query::<TextLabel>()
+                .filter(|l| follow_labels.contains(&l.asset_id) && l.content.is_empty())
+                .map(|l| l.asset_id)
+                .collect()
+        };
+
+        // The focusable candidates: the active screen's live regions, minus
+        // collapsed rows, disabled rows, hidden follow-label entries, and
+        // full-canvas "press anywhere" regions (those fire from the confirm
+        // fallback, not a visible cursor). Out-of-band scrolled rows stay in,
+        // so navigation reaches below the fold and scrolls to it.
+        let candidates: Vec<focus::Candidate> = self
+            .regions
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                let collapsed = e.scroll_row.is_some() && e.hidden;
+                let follow_hidden = e.follow.is_some_and(|(id, _)| empty_labels.contains(&id));
+                let full_canvas = e.screen.is_some() && region_covers_canvas(&e.region);
+                e.screen == active_screen
+                    && !collapsed
+                    && !self.row_disabled(e)
+                    && !follow_hidden
+                    && !full_canvas
+            })
+            .map(|(i, e)| focus::Candidate {
+                index: i,
+                rect: [e.region.x, e.region.y, e.region.width, e.region.height],
+                action: e.region.action.clone(),
+            })
+            .collect();
+        let targets = focus::targets(&candidates);
+
+        // Re-anchor the stored rect to the focused region's live position (it
+        // reflows with its panel) before navigating from it.
+        if let Some(f) = self.focus.as_mut()
+            && let Some(t) = targets.iter().find(|t| t.index == f.index)
+        {
+            f.rect = t.rect;
+        }
+
+        // Left/Right on a focused value row adjust the setting in place, the
+        // same Prev/Next ops the row's stepper arrows fire (a slider steps by
+        // a fixed fraction of its range in the settings apply).
+        if matches!(dir, NavDirection::Left | NavDirection::Right)
+            && let Some(f) = self.focus.as_ref()
+            && let Some(t) = targets.iter().find(|t| t.index == f.index)
+            && let Some(key) = t.setting.clone()
+        {
+            let op = match dir {
+                NavDirection::Left => SettingOp::Prev,
+                _ => SettingOp::Next,
+            };
+            let value_label = self.regions[f.index].region.label;
+            ctx.events_mut::<SettingCommand>().send(SettingCommand {
+                setting: key,
+                op,
+                value_label,
+                persist: true,
+            });
+            return;
+        }
+
+        let Some(next) = focus::navigate(&targets, self.focus.as_ref(), dir) else {
+            return;
+        };
+        // A clamp onto a vanished region keeps the current anchor unchanged.
+        let Some(rect) = targets.iter().find(|t| t.index == next).map(|t| t.rect) else {
+            return;
+        };
+        self.focus = Some(focus::FocusRef { index: next, rect });
+
+        // Scroll the focused row's panel so the row sits inside the clip band
+        // (the layout solve at the end of the step clamps the offset).
+        if let Some((pi, _)) = self.regions[next].scroll_row
+            && let Some(panel) = self.panels.get_mut(pi)
+        {
+            let band = panel.band;
+            let top = rect[1];
+            let bottom = rect[1] + rect[3];
+            if top < band[1] {
+                panel.scroll -= band[1] - top;
+            } else if bottom > band[1] + band[3] {
+                panel.scroll += bottom - (band[1] + band[3]);
+            }
+        }
+    }
+
     fn apply_screen_command(&mut self, cmd: ScreenCommand, ctx: &mut PipelineContext) {
         let Some(transition) = self.screens.apply(cmd) else {
             return;
         };
-        // A stack change dismisses any open dropdown so its list never lingers
-        // over a different screen.
+        // A stack change dismisses any open dropdown and the focus cursor so
+        // neither lingers over a different screen.
         self.open_dropdown = None;
+        self.focus = None;
         self.apply_transition(transition, ctx);
         self.publish_screen_stack(ctx);
     }
@@ -1190,10 +1438,11 @@ impl UiInputSystem {
         Some([panel.track_x, thumb_y, panel.track_w, panel.thumb_h])
     }
 
-    // Apply scroll-wheel + arrow-key + scrollbar-thumb input to the active
-    // screen's panel. Returns true while the thumb is being dragged so the caller
-    // suppresses the slider + click passes. The solver clamps the resulting
-    // scroll offset.
+    // Apply scroll-wheel + scrollbar-thumb input to the active screen's panel.
+    // Returns true while the thumb is being dragged so the caller suppresses
+    // the slider + click passes. The solver clamps the resulting scroll
+    // offset. (The arrow keys move the focus cursor instead, which scrolls its
+    // own row into view.)
     fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
@@ -1211,21 +1460,6 @@ impl UiInputSystem {
             && point_in_rect(qx, qy, self.panels[pi].band)
         {
             self.panels[pi].scroll += input.scroll_delta * WHEEL_SCROLL_SPEED;
-        }
-
-        // Up/Down arrows: scroll the active panel one row per press (keyboard
-        // input needs no cursor position).
-        if let Some(pi) = active_panel {
-            let step = match input.captured_key {
-                Some(Key::Up) => -1.0,
-                Some(Key::Down) => 1.0,
-                _ => 0.0,
-            };
-            if step != 0.0 {
-                let panel = &mut self.panels[pi];
-                let row_h = panel.rows.first().map(|r| r.height).unwrap_or(0.0);
-                panel.scroll += step * row_h;
-            }
         }
 
         // Thumb drag: begin on the press edge over the thumb, then map the
@@ -2052,28 +2286,61 @@ mod tests {
         assert_eq!(dropdown_first(&world), 0, "the window jumps to the press");
     }
 
-    // The Up/Down arrow keys scroll the open list's window one row per press.
+    // The open list's highlighted option, from the published resource.
+    fn dropdown_hovered(world: &World) -> Option<usize> {
+        world
+            .resource::<crate::ecs::OpenDropdown>()
+            .and_then(|d| d.0.as_ref())
+            .expect("dropdown should be open")
+            .hovered
+    }
+
+    // Nav pulses (arrow keys / pad) move the open list's selection highlight,
+    // scrolling the shown window along with it, and Enter picks the
+    // highlighted option. The cursor stays put throughout, so the idle hover
+    // never re-asserts the row under it.
     #[test]
-    fn dropdown_arrow_keys_scroll_window() {
+    fn dropdown_nav_moves_selection_and_enter_picks() {
         let mut world = scrolled_dropdown_world();
         world.add_component(make_frame_input(500.0, 120.0, true));
         world.step();
         assert_eq!(dropdown_first(&world), 6);
 
-        world.add_component(FrameInput {
+        let pulse_down = || FrameInput {
+            mouse_x: 500.0,
+            mouse_y: 120.0,
             captured_key: Some(Key::Down),
             ..Default::default()
-        });
+        };
+
+        // Down steps from the current value (10); the window (6..14) holds.
+        world.add_component(pulse_down());
         world.step();
-        assert!(dropdown_is_open(&world), "arrow keys must not dismiss");
+        assert!(dropdown_is_open(&world), "nav must not dismiss");
+        assert_eq!(dropdown_hovered(&world), Some(11));
+        assert_eq!(dropdown_first(&world), 6);
+
+        // Walking to option 14 crosses the window's bottom edge: the window
+        // follows the selection.
+        for _ in 0..3 {
+            world.add_component(pulse_down());
+            world.step();
+        }
+        assert_eq!(dropdown_hovered(&world), Some(14));
         assert_eq!(dropdown_first(&world), 7);
 
+        // Enter picks the highlighted option and closes the list.
         world.add_component(FrameInput {
-            captured_key: Some(Key::Up),
+            mouse_x: 500.0,
+            mouse_y: 120.0,
+            captured_key: Some(Key::Enter),
             ..Default::default()
         });
         world.step();
-        assert_eq!(dropdown_first(&world), 6);
+        let cmds = produced_setting_commands(&world);
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0].op, SettingOp::SetIndex(14)));
+        assert!(!dropdown_is_open(&world));
     }
 
     // When a region's hover_scale equals its label's scale (what the generated
@@ -2796,7 +3063,8 @@ mod tests {
 
     // A panel whose content overflows its band, with scrollbar-track geometry
     // so the thumb is grabbable: three 40px rows (120px) in a 60px band, the
-    // track beside it (thumb = 30px, travel = 30px, max scroll = 60px).
+    // track beside it (thumb = 30px, travel = 30px, max scroll = 60px). Each
+    // row carries a setting region so focus navigation has targets.
     fn scrollbar_panel_world() -> (World, AssetId) {
         let mut world = World::new_empty();
         let screen = AssetId(60);
@@ -2808,6 +3076,23 @@ mod tests {
             ..Default::default()
         });
         world.add_component(panel_label(61, 0.0, screen, "Row0"));
+        for (i, y) in [0.0, 40.0, 80.0].into_iter().enumerate() {
+            world.add_component(HitRegion {
+                x: 0.0,
+                y,
+                width: 300.0,
+                height: 40.0,
+                label: None,
+                hover_color: None,
+                hover_scale: None,
+                action: format!("setting:row{i}:next"),
+                drag_handle: None,
+                screen: Some(screen),
+                disabled: false,
+                follow_label: false,
+                fit: crate::assets::SpriteFit::Fit,
+            });
+        }
         world.add_component(ScrollPanel {
             screen: Some(screen),
             x: 0.0,
@@ -2890,33 +3175,36 @@ mod tests {
         assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
     }
 
-    // The Up/Down arrow keys scroll the active panel one row per press,
-    // clamped to the content, with no cursor involvement.
+    // Nav pulses (arrow keys / pad) walk the panel's rows and scroll the
+    // focused row into the clip band, wrapping back to the top past the end.
     #[test]
-    fn arrow_keys_scroll_panel_content() {
+    fn nav_focus_walks_panel_rows_and_scrolls_them_into_view() {
         let (mut world, e0) = scrollbar_panel_world();
-
-        world.add_component(FrameInput {
+        let pulse_down = || FrameInput {
             captured_key: Some(Key::Down),
             ..Default::default()
-        });
+        };
+
+        // First pulse focuses the top row: everything already in view.
+        world.add_component(pulse_down());
         world.step();
-        assert_eq!(label_field(&world, e0, |l| l.y), -40.0);
+        assert_eq!(label_field(&world, e0, |l| l.y), 0.0);
 
-        // Another press would overshoot the 60px max: it clamps.
-        world.add_component(FrameInput {
-            captured_key: Some(Key::Down),
-            ..Default::default()
-        });
+        // The second row's bottom (80) pokes past the 60px band: the panel
+        // scrolls the overflow (20px) into view.
+        world.add_component(pulse_down());
+        world.step();
+        assert_eq!(label_field(&world, e0, |l| l.y), -20.0);
+
+        // The third row scrolls fully in (its bottom sat 40px past the band).
+        world.add_component(pulse_down());
         world.step();
         assert_eq!(label_field(&world, e0, |l| l.y), -60.0);
 
-        world.add_component(FrameInput {
-            captured_key: Some(Key::Up),
-            ..Default::default()
-        });
+        // Past the end the focus wraps to the top row, scrolling back up.
+        world.add_component(pulse_down());
         world.step();
-        assert_eq!(label_field(&world, e0, |l| l.y), -20.0);
+        assert_eq!(label_field(&world, e0, |l| l.y), 0.0);
     }
 
     // A rebind row: a value TextLabel showing the current key + a HitRegion over
@@ -3599,5 +3887,381 @@ mod tests {
         assert_eq!(slider_key_from_action("setting::drag"), None);
         assert_eq!(rebind_key_from_action("setting::rebind"), None);
         assert_eq!(open_key_from_action("setting::open"), None);
+    }
+
+    // A menu screen (id 90) with two buttons at y 100 / 200 whose labels take a
+    // hover color, plus a second screen (91) the first button navigates to.
+    fn focus_menu_world() -> World {
+        let mut world = World::new_empty();
+        let menu = AssetId(90);
+        world.add_component(Screen {
+            asset_id: menu,
+            initial: true,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        });
+        world.add_component(Screen {
+            asset_id: AssetId(91),
+            initial: false,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        });
+        for (id, y, action) in [
+            (1u32, 100.0f32, "screen:show:91"),
+            (2, 200.0, "screen:hide"),
+        ] {
+            world.add_component(panel_label(id, y, menu, "Btn"));
+            world.add_component(HitRegion {
+                x: 0.0,
+                y,
+                width: 200.0,
+                height: 40.0,
+                label: Some(AssetId(id)),
+                hover_color: Some([1.0, 0.85, 0.3]),
+                hover_scale: Some(1.0),
+                action: action.to_string(),
+                drag_handle: None,
+                screen: Some(menu),
+                disabled: false,
+                follow_label: false,
+                fit: crate::assets::SpriteFit::Fit,
+            });
+        }
+        world.start().unwrap();
+        world
+    }
+
+    // A nav pulse focuses the first button (styled like hover), further pulses
+    // walk the list, and confirm fires the focused button's action.
+    #[test]
+    fn nav_focuses_buttons_and_confirm_fires_the_focused_one() {
+        let mut world = focus_menu_world();
+
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 0.85, 0.3],
+            "first pulse focuses + styles the top button"
+        );
+
+        // The next pulse moves focus to the second button; the first restores.
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            label_field(&world, AssetId(2), |l| l.color),
+            [1.0, 0.85, 0.3]
+        );
+
+        // Back up to the first, then confirm: its action fires.
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Up),
+            ..Default::default()
+        });
+        world.step();
+        world.add_component(FrameInput {
+            confirm: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(matches!(
+            produced_screen_command(&world),
+            Some(ScreenCommand::Show(AssetId(91)))
+        ));
+    }
+
+    // Mouse movement dismisses the focus cursor: the focused label restores
+    // and a later confirm no longer fires anything.
+    #[test]
+    fn mouse_movement_dismisses_focus() {
+        let mut world = focus_menu_world();
+
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 0.85, 0.3]
+        );
+
+        // The cursor moves (well away from both buttons): focus clears.
+        world.add_component(make_frame_input(600.0, 600.0, false));
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 1.0, 1.0],
+            "moving the mouse restores the focused label"
+        );
+
+        world.add_component(FrameInput {
+            mouse_x: 600.0,
+            mouse_y: 600.0,
+            confirm: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(
+            produced_screen_command(&world).is_none(),
+            "no focus, nothing fires"
+        );
+    }
+
+    // A settings screen with a stepper row and a slider row: Left/Right on the
+    // focused row send Prev/Next for its setting instead of moving focus.
+    #[test]
+    fn focus_left_right_adjusts_value_rows() {
+        let mut world = World::new_empty();
+        let screen = AssetId(95);
+        world.add_component(Screen {
+            asset_id: screen,
+            initial: true,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        });
+        world.add_component(panel_label(1, 100.0, screen, "Vsync"));
+        world.add_component(panel_label(2, 200.0, screen, "50"));
+        // The stepper's two regions (prev + next) share the row.
+        for (x, suffix) in [(200.0, "prev"), (260.0, "next")] {
+            world.add_component(HitRegion {
+                x,
+                y: 100.0,
+                width: 50.0,
+                height: 40.0,
+                label: Some(AssetId(1)),
+                hover_color: Some([1.0, 0.85, 0.3]),
+                hover_scale: Some(1.0),
+                action: format!("setting:vsync:{suffix}"),
+                drag_handle: None,
+                screen: Some(screen),
+                disabled: false,
+                follow_label: false,
+                fit: crate::assets::SpriteFit::Fit,
+            });
+        }
+        world.add_component(HitRegion {
+            x: 200.0,
+            y: 200.0,
+            width: 110.0,
+            height: 40.0,
+            label: Some(AssetId(2)),
+            hover_color: Some([1.0, 0.85, 0.3]),
+            hover_scale: Some(1.0),
+            action: "setting:exposure:drag".to_string(),
+            drag_handle: None,
+            screen: Some(screen),
+            disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
+        });
+        world.start().unwrap();
+
+        // Focus the stepper row (its two regions read as one target).
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 0.85, 0.3]
+        );
+
+        // Right cycles forward, Left back; focus stays on the row.
+        for (dir, expect_prev) in [(NavDirection::Right, false), (NavDirection::Left, true)] {
+            world.add_component(FrameInput {
+                nav: Some(dir),
+                ..Default::default()
+            });
+            world.step();
+            let cmds = produced_setting_commands(&world);
+            let cmd = cmds.last().unwrap();
+            assert_eq!(cmd.setting, "vsync");
+            assert_eq!(
+                matches!(cmd.op, SettingOp::Prev),
+                expect_prev,
+                "Left sends Prev, Right sends Next"
+            );
+            assert!(cmd.persist);
+        }
+        assert_eq!(
+            label_field(&world, AssetId(1), |l| l.color),
+            [1.0, 0.85, 0.3],
+            "adjusting keeps the row focused"
+        );
+
+        // Down reaches the slider row (styled too); Right steps its setting.
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Down),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(
+            label_field(&world, AssetId(2), |l| l.color),
+            [1.0, 0.85, 0.3]
+        );
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Right),
+            ..Default::default()
+        });
+        world.step();
+        let cmds = produced_setting_commands(&world);
+        let cmd = cmds.last().unwrap();
+        assert_eq!(cmd.setting, "exposure");
+        assert!(matches!(cmd.op, SettingOp::Next));
+    }
+
+    // The pad's back pulse mirrors Escape only while a screen is active: with
+    // nothing open it must NOT open an Escape-toggled menu, and with the menu
+    // open it closes it.
+    #[test]
+    fn back_mirrors_escape_only_while_a_screen_is_active() {
+        let mut world = World::new_empty();
+        let menu = AssetId(97);
+        world.add_component(Screen {
+            asset_id: menu,
+            initial: false,
+            fade_in_secs: 0.0,
+            toggle_key: "Escape".to_string(),
+            ..Default::default()
+        });
+        world.start().unwrap();
+
+        // Back with no screen active: nothing opens.
+        world.add_component(FrameInput {
+            back: true,
+            ..Default::default()
+        });
+        world.step();
+        assert!(produced_screen_command(&world).is_none());
+
+        // Escape opens the menu (toggle); a frame applies it.
+        world.add_component(FrameInput {
+            escape: true,
+            ..Default::default()
+        });
+        world.step();
+        world.add_component(FrameInput::default());
+        world.step();
+        assert!(
+            world
+                .resource::<crate::ecs::ScreenStack>()
+                .is_some_and(|s| s.captures_input),
+            "escape toggles the menu open"
+        );
+
+        // Back now mirrors Escape: the toggle pops the menu.
+        world.add_component(FrameInput {
+            back: true,
+            ..Default::default()
+        });
+        world.step();
+        world.add_component(FrameInput::default());
+        world.step();
+        assert!(
+            world
+                .resource::<crate::ecs::ScreenStack>()
+                .is_some_and(|s| !s.captures_input),
+            "back closes the open menu"
+        );
+    }
+
+    // Confirm with no focus fires a full-canvas "press anywhere" region (a
+    // story stage's advance region), which is itself excluded from focus.
+    #[test]
+    fn confirm_without_focus_fires_a_full_canvas_region() {
+        let mut world = World::new_empty();
+        let stage = AssetId(98);
+        world.add_component(Screen {
+            asset_id: stage,
+            initial: true,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        });
+        world.add_component(HitRegion {
+            x: 0.0,
+            y: 0.0,
+            width: UI_REFERENCE_SIZE[0],
+            height: UI_REFERENCE_SIZE[1],
+            label: None,
+            hover_color: None,
+            hover_scale: None,
+            action: "story:advance".to_string(),
+            drag_handle: None,
+            screen: Some(stage),
+            disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
+        });
+        world.start().unwrap();
+
+        world.add_component(FrameInput {
+            confirm: true,
+            ..Default::default()
+        });
+        world.step();
+        let mut cursor = crate::ecs::EventCursor::default();
+        let advanced = world.events::<StoryCommand>().is_some_and(|e| {
+            e.read(&mut cursor)
+                .into_iter()
+                .any(|c| *c == StoryCommand::Advance)
+        });
+        assert!(advanced, "South advances the stage without a focus cursor");
+    }
+
+    // While a pad rebind row is capturing, the East button is a bindable
+    // button, not a back pulse: it binds instead of cancelling.
+    #[test]
+    fn pad_capture_binds_east_instead_of_backing_out() {
+        let mut world = World::new_empty();
+        let mut label = panel_label(7, 0.0, AssetId(0), "South");
+        label.screen = None;
+        world.add_component(label);
+        world.add_component(HitRegion {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 40.0,
+            label: Some(AssetId(7)),
+            hover_color: None,
+            hover_scale: None,
+            action: "setting:pad_jump:rebind".to_string(),
+            drag_handle: None,
+            screen: None,
+            disabled: false,
+            follow_label: false,
+            fit: crate::assets::SpriteFit::Fit,
+        });
+        world.start().unwrap();
+
+        // Click the row: capture begins.
+        world.add_component(make_frame_input(50.0, 20.0, true));
+        world.step();
+
+        // Press East (which also raises the back pulse): it binds.
+        world.add_component(FrameInput {
+            captured_button: Some(crate::assets::GamepadButton::East),
+            back: true,
+            ..Default::default()
+        });
+        world.step();
+        let cmds = produced_setting_commands(&world);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].setting, "pad_jump");
+        assert!(matches!(
+            cmds[0].op,
+            SettingOp::RebindButton(crate::assets::GamepadButton::East)
+        ));
     }
 }

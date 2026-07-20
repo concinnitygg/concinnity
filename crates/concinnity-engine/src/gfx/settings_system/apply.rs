@@ -40,8 +40,37 @@ impl SettingsState {
         // settings disk I/O.
         let mut cfg = self.settings_cache.take();
         let mut cfg_dirty = false;
-        for cmd in setting_cmds {
+        for mut cmd in setting_cmds {
             let cfg = cfg.get_or_insert_with(crate::config::Settings::load);
+            // A Next/Prev on a slider row steps its value by a twentieth of
+            // the range (a focused row's Left/Right), rewriting the op so the
+            // SetFraction arm below applies + persists it. The handle's
+            // position carries the current fraction: it is placed from the
+            // persisted value at init and moved on every change since.
+            if matches!(cmd.op, SettingOp::Next | SettingOp::Prev)
+                && settings::slider_range(&cmd.setting).is_some()
+            {
+                let Some(cur) = self
+                    .sliders
+                    .iter()
+                    .find(|s| s.key == cmd.setting)
+                    .and_then(|s| {
+                        let hx = ctx
+                            .query::<crate::assets::Sprite>()
+                            .find(|sp| sp.asset_id == s.handle_id)
+                            .map(|sp| sp.x)?;
+                        let travel = (s.track_w - s.handle_w).max(f32::EPSILON);
+                        Some(((hx - s.track_x) / travel).clamp(0.0, 1.0))
+                    })
+                else {
+                    continue;
+                };
+                let step = match cmd.op {
+                    SettingOp::Prev => -settings::SLIDER_STEP_FRACTION,
+                    _ => settings::SLIDER_STEP_FRACTION,
+                };
+                cmd.op = SettingOp::SetFraction((cur + step).clamp(0.0, 1.0));
+            }
             // Key-rebind settings (Controls tab) take a Rebind op: bind
             // the named action to the captured key, swapping with whatever
             // action held it, push the map to the backend, persist, and

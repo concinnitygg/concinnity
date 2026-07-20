@@ -15,10 +15,16 @@
 // interact, Start onto escape); the sticks publish as the analog
 // `move_axis` / `look_axis` fields.
 
-use crate::assets::{FrameInput, GamepadButton, GamepadMap};
+use crate::assets::{FrameInput, GamepadButton, GamepadMap, NavDirection};
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
+use crate::input::nav::NavRepeat;
 use concinnity_render::input::RenderInput;
+use std::time::Instant;
+
+// Frame dt ceiling for the nav auto-repeat, so a hitch or debugger pause never
+// counts as a long hold.
+const NAV_DT_MAX: f32 = 0.25;
 
 #[derive(Debug, Default)]
 pub struct InputSystem {
@@ -26,6 +32,10 @@ pub struct InputSystem {
     pad: PadState,
     map: GamepadMap,
     deadzone: f32,
+    // Auto-repeat state for the d-pad / stick navigation pulse.
+    nav: NavRepeat,
+    // Previous step's timestamp, for the nav repeat dt.
+    last_step: Option<Instant>,
     // Cursor into the Events<ControlsCommand> queue (live settings changes).
     controls_cursor: crate::ecs::EventCursor,
 }
@@ -46,6 +56,7 @@ fn compose_frame_input(
     raw: &RenderInput,
     pad: &PadSnapshot,
     map: GamepadMap,
+    nav: Option<NavDirection>,
     gameplay: bool,
 ) -> FrameInput {
     let axis = |v: [f32; 2]| if gameplay { v } else { [0.0, 0.0] };
@@ -80,6 +91,12 @@ fn compose_frame_input(
         // settings menu is open (the camera is what freezes behind it).
         captured_key: raw.captured_key,
         captured_button: pad.first_pressed(),
+        // Not gated by `gameplay`: menu focus movement + confirm/back consume
+        // these while a screen is active; during play UI ignores them and the
+        // buttons keep their merged meanings above.
+        nav,
+        confirm: pad.pressed(GamepadButton::South),
+        back: pad.pressed(GamepadButton::East),
         // Not gated by `gameplay`: text-input fields type while a menu
         // (or the in-engine editor) is up, like the rebind capture.
         typed_char: raw.typed_char,
@@ -132,6 +149,22 @@ impl System for InputSystem {
         self.gamepad.poll(&mut self.pad);
         let pad = self.pad.snapshot(self.deadzone);
 
+        // Shape the held d-pad + stick state into this frame's navigation
+        // pulse (auto-repeat needs a dt; a first frame or a hitch clamps).
+        let now = Instant::now();
+        let dt = self
+            .last_step
+            .map(|t| (now - t).as_secs_f32().min(NAV_DT_MAX))
+            .unwrap_or(0.0);
+        self.last_step = Some(now);
+        let dpad_held = [
+            pad.held(GamepadButton::DpadUp),
+            pad.held(GamepadButton::DpadDown),
+            pad.held(GamepadButton::DpadLeft),
+            pad.held(GamepadButton::DpadRight),
+        ];
+        let nav = self.nav.step(dpad_held, pad.move_axis, dt);
+
         // While a world-pausing screen is open (the overlay build published
         // the state earlier this tick), freeze gameplay input so the camera
         // does not drift behind the menu; the UI still gets the cursor
@@ -156,7 +189,7 @@ impl System for InputSystem {
         let _ = ctx.drain::<FrameInput>();
         let frame_input = FrameInput {
             viewport: [vp_w, vp_h],
-            ..compose_frame_input(&raw, &pad, self.map, gameplay)
+            ..compose_frame_input(&raw, &pad, self.map, nav, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI
@@ -199,7 +232,13 @@ mod tests {
             press(GamepadMap::DEFAULT.interact),
             press(GamepadButton::Start),
         ]);
-        let input = compose_frame_input(&RenderInput::default(), &pad, GamepadMap::DEFAULT, true);
+        let input = compose_frame_input(
+            &RenderInput::default(),
+            &pad,
+            GamepadMap::DEFAULT,
+            None,
+            true,
+        );
         assert!(input.forward, "d-pad up drives forward");
         assert!(input.jump && input.sprint && input.interact);
         assert!(input.escape, "Start mirrors Escape");
@@ -216,7 +255,13 @@ mod tests {
             scroll_delta: 1.5,
             ..Default::default()
         };
-        let input = compose_frame_input(&raw, &PadSnapshot::default(), GamepadMap::DEFAULT, true);
+        let input = compose_frame_input(
+            &raw,
+            &PadSnapshot::default(),
+            GamepadMap::DEFAULT,
+            None,
+            true,
+        );
         assert!(input.forward && input.sprint);
         assert_eq!(input.mouse_dx, 3.0);
         assert_eq!(input.mouse_dy, -2.0);
@@ -230,10 +275,10 @@ mod tests {
         let mut map = GamepadMap::DEFAULT;
         map.rebind(crate::assets::GamepadAction::Jump, GamepadButton::North);
         let pad = pad_snapshot(&[press(GamepadButton::North)]);
-        let input = compose_frame_input(&RenderInput::default(), &pad, map, true);
+        let input = compose_frame_input(&RenderInput::default(), &pad, map, None, true);
         assert!(input.jump, "jump follows the rebound button");
         let default_pad = pad_snapshot(&[press(GamepadButton::South)]);
-        let input = compose_frame_input(&RenderInput::default(), &default_pad, map, true);
+        let input = compose_frame_input(&RenderInput::default(), &default_pad, map, None, true);
         assert!(!input.jump, "the old button no longer jumps");
     }
 
@@ -259,7 +304,7 @@ mod tests {
             mouse_dx: 5.0,
             ..Default::default()
         };
-        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, false);
+        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
         // Movement, jump, axes, and mouse deltas all freeze behind the menu.
         assert!(!input.forward && !input.jump);
         assert_eq!(input.move_axis, [0.0, 0.0]);
@@ -285,7 +330,13 @@ mod tests {
                 value: 1.0,
             },
         ]);
-        let input = compose_frame_input(&RenderInput::default(), &pad, GamepadMap::DEFAULT, true);
+        let input = compose_frame_input(
+            &RenderInput::default(),
+            &pad,
+            GamepadMap::DEFAULT,
+            None,
+            true,
+        );
         assert!(
             (input.move_axis[1] - 1.0).abs() < 1e-6,
             "{:?}",
@@ -293,5 +344,30 @@ mod tests {
         );
         // Stick up looks up: negative Y in the mouse-delta convention.
         assert!(input.look_axis[1] < -0.9, "{:?}", input.look_axis);
+    }
+
+    #[test]
+    fn nav_confirm_and_back_pass_the_menu_gate() {
+        let pad = pad_snapshot(&[press(GamepadButton::South), press(GamepadButton::East)]);
+        let nav = Some(crate::assets::NavDirection::Down);
+        let input = compose_frame_input(
+            &RenderInput::default(),
+            &pad,
+            GamepadMap::DEFAULT,
+            nav,
+            false,
+        );
+        assert_eq!(input.nav, nav);
+        assert!(input.confirm, "South edge surfaces behind the menu");
+        assert!(input.back, "East edge surfaces behind the menu");
+        // The same fields surface during play too; UI just ignores them.
+        let input = compose_frame_input(
+            &RenderInput::default(),
+            &pad,
+            GamepadMap::DEFAULT,
+            nav,
+            true,
+        );
+        assert!(input.confirm && input.back);
     }
 }
