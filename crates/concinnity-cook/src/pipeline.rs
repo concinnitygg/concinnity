@@ -490,8 +490,8 @@ fn probe_gltf_cache(
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8;
-        let extra_sources = rt.source_files(&asset.args);
-        let key = crate::cache::payload_key(discriminant, &asset.args, &ctx, &extra_sources);
+        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
+        let key = crate::cache::payload_key(discriminant, &asset.args, &ctx, &inputs);
         let bytes = crate::cache::load(&key);
         out.insert(asset.name.clone(), GltfCacheEntry { key, bytes });
     }
@@ -1203,9 +1203,8 @@ fn compile_and_pack_payloads(
 
                 // Reuse a cached payload when the asset's inputs are unchanged;
                 // otherwise compile and populate the cache for the next build.
-                let extra_sources = source_files_by_type(ct, asset_args, &ctx);
-                let key =
-                    crate::cache::payload_key(*discriminant, asset_args, &ctx, &extra_sources);
+                let inputs = cache_inputs_by_type(ct, asset_args, &ctx);
+                let key = crate::cache::payload_key(*discriminant, asset_args, &ctx, &inputs);
                 if let Some(bytes) = crate::cache::load(&key) {
                     cache_hits.fetch_add(1, Ordering::Relaxed);
                     return Ok((*idx, bytes));
@@ -1256,12 +1255,14 @@ fn compile_and_pack_payloads(
             });
             continue;
         }
-        let extra_sources = rt.source_files(&asset.args);
+        // Every resource asset compiles identically on every backend, so its
+        // entry is shared across a DirectX and a Vulkan cook.
+        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
         let key = crate::cache::payload_key(
             RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
             &asset.args,
             &ctx,
-            &extra_sources,
+            &inputs,
         );
         let bytes = if let Some(bytes) = crate::cache::load(&key) {
             resource_hits += 1;
@@ -1362,25 +1363,37 @@ fn compile_by_type(
     }
 }
 
-// Dispatch `BuildAsset::source_files` by ComponentType. Mirrors
-// `compile_by_type` so the cache layer can fold the contents-hash of each
-// asset's referenced source files into its payload key. Types with no
-// `BuildAsset` impl, or with the trait default, contribute nothing.
-fn source_files_by_type(
+// Dispatch each asset's payload-cache contribution by ComponentType. Mirrors
+// `compile_by_type` so the cache layer can fold a hash of every input the
+// compile reads into its payload key. Types with no `BuildAsset` impl, or with
+// the trait default, contribute nothing.
+//
+// `source_files` and `TARGET_DEPENDENT` are read together per arm: a new
+// asset whose payload differs per backend cannot pick up one without the
+// other.
+fn cache_inputs_by_type(
     ct: ComponentType,
     args: &serde_json::Value,
     ctx: &crate::asset::BuildCtx<'_>,
-) -> Vec<String> {
-    use crate::asset::BuildAsset;
+) -> crate::asset::CacheInputs {
+    use crate::asset::{BuildAsset, CacheInputs};
     use crate::assets::{File, ProceduralMesh, Room, SdfVolume, ShaderStage, VoxelChunk};
+    macro_rules! inputs {
+        ($t:ty) => {
+            CacheInputs {
+                sources: <$t as BuildAsset>::source_files(args, ctx),
+                target_dependent: <$t as BuildAsset>::TARGET_DEPENDENT,
+            }
+        };
+    }
     match ct {
-        ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::source_files(args, ctx),
-        ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::source_files(args, ctx),
-        ComponentType::File => <File as BuildAsset>::source_files(args, ctx),
-        ComponentType::Room => <Room as BuildAsset>::source_files(args, ctx),
-        ComponentType::ShaderStage => <ShaderStage as BuildAsset>::source_files(args, ctx),
-        ComponentType::SdfVolume => <SdfVolume as BuildAsset>::source_files(args, ctx),
-        _ => Vec::new(),
+        ComponentType::ProceduralMesh => inputs!(ProceduralMesh),
+        ComponentType::VoxelChunk => inputs!(VoxelChunk),
+        ComponentType::File => inputs!(File),
+        ComponentType::Room => inputs!(Room),
+        ComponentType::ShaderStage => inputs!(ShaderStage),
+        ComponentType::SdfVolume => inputs!(SdfVolume),
+        _ => CacheInputs::extra(Vec::new()),
     }
 }
 
@@ -2133,9 +2146,12 @@ mod tests {
     }
 
     #[test]
-    fn source_files_by_type_defaults_to_empty() {
+    fn cache_inputs_by_type_defaults_to_empty_extras() {
+        use crate::asset::SourceFiles;
         let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
-        assert!(source_files_by_type(ct, &serde_json::json!({}), &ctx()).is_empty());
+        let inputs = cache_inputs_by_type(ct, &serde_json::json!({}), &ctx());
+        assert_eq!(inputs.sources, SourceFiles::Extra(Vec::new()));
+        assert!(!inputs.target_dependent);
     }
 
     // AudioClip compiles through `ResourceAssetType` now, not `compile_by_type`
@@ -2418,33 +2434,53 @@ mod tests {
         }
     }
 
-    // source_files_by_type routes to the two overriding wrappers: SdfVolume
-    // returns the resolved shader path, ShaderStage short-circuits built-ins
-    // and no-source to empty.
+    // cache_inputs_by_type routes to the two overriding wrappers. Both report
+    // `Only` -- the complete input set the current backend reads -- so an edit
+    // to a sibling backend's shader leaves this backend's payload cached.
     #[test]
-    fn source_files_by_type_covers_the_overriding_wrappers() {
+    fn cache_inputs_by_type_covers_the_overriding_wrappers() {
+        use crate::asset::{SourceFiles, SourceInput};
         let dir = tempfile::tempdir().expect("tempdir");
         let shader = dir.path().join("blob.metal");
         std::fs::write(&shader, b"x").expect("write shader");
         let path = shader.to_str().unwrap();
+
+        // SdfVolume reports the resolved path for the current backend, and
+        // transports it verbatim, so the compile target is not an input.
         let sdf_args = serde_json::json!({
             "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
         });
+        let sdf = cache_inputs_by_type(ct("SdfVolume"), &sdf_args, &ctx());
         assert_eq!(
-            source_files_by_type(ct("SdfVolume"), &sdf_args, &ctx()),
-            vec![path.to_string()]
+            sdf.sources,
+            SourceFiles::Only(vec![SourceInput::Path(path.to_string())])
         );
-        assert!(source_files_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).is_empty());
+        assert!(!sdf.target_dependent);
+        assert_eq!(
+            cache_inputs_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).sources,
+            SourceFiles::Only(Vec::new())
+        );
 
-        // A built-in shader name short-circuits to empty; so does no source.
-        assert!(
-            source_files_by_type(
-                ct("ShaderStage"),
-                &serde_json::json!({"source": "default.metal"}),
-                &ctx()
-            )
-            .is_empty()
-        );
-        assert!(source_files_by_type(ct("ShaderStage"), &serde_json::json!({}), &ctx()).is_empty());
+        // ShaderStage compiles its source, so the target is an input.
+        let no_source = cache_inputs_by_type(ct("ShaderStage"), &serde_json::json!({}), &ctx());
+        assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
+        assert!(no_source.target_dependent);
+
+        // A built-in is reported by name rather than path (it has none), so
+        // editing a shipped shader still busts the entry. Only one arm runs
+        // per build; no built-in GLSL shaders ship today, so on Vulkan the
+        // stage resolves nothing and the empty case above already covers it.
+        let builtin = match concinnity_core::build::Platform::current().key() {
+            "metal" => Some("default.metal"),
+            "hlsl" => Some("default_frag.hlsl"),
+            _ => None,
+        };
+        if let Some(name) = builtin {
+            let args = serde_json::json!({ "sources": { "metal": name, "hlsl": name } });
+            assert_eq!(
+                cache_inputs_by_type(ct("ShaderStage"), &args, &ctx()).sources,
+                SourceFiles::Only(vec![SourceInput::Builtin(name.to_string())])
+            );
+        }
     }
 }

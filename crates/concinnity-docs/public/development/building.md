@@ -183,7 +183,7 @@ Ubuntu; translate them to your distribution's equivalents as needed.
      libglfw3 libglfw3-dev \
      libwayland-dev libwayland-bin wayland-protocols \
      libx11-dev libxkbcommon-dev libxrandr-dev libxinerama-dev \
-     libxcursor-dev libxi-dev
+     libxcursor-dev libxi-dev libudev-dev
    ```
 
    - `build-essential`, `cmake`, `git`, `python3` — build `shaderc` (and GLFW)

@@ -13,7 +13,7 @@
 // error all fall back to a normal compile, so the cache can never break or
 // corrupt a build.
 
-use crate::asset::BuildCtx;
+use crate::asset::{BuildCtx, CacheInputs, SourceFiles, SourceInput};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
@@ -74,34 +74,58 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 const CACHE_FORMAT_VERSION: u32 = 5;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
-// format version, the active backend's shader platform, the component
-// discriminant, the args JSON, and a content hash of every source file the
-// args reference (see `referenced_files`). `extra_source_files` adds further
-// on-disk paths the asset's `BuildAsset::compile_payload` reads that the
-// generic JSON-string walk would miss (e.g. an `SdfVolume` fragment shader
-// resolved from the source-tree `assets/` directory). The platform is part of
-// the key because `BuildAsset::compile_payload` can short-circuit differently
-// per backend (e.g. a ShaderStage with no `glsl` source emits empty bytes only
-// under the Vulkan backend, which then compiles its inline GLSL), so an entry
-// compiled on one platform must not be returned to a build on another.
+// format version, the component discriminant, the args JSON, a hash of every
+// input the compile reads, and -- for assets that compile rather than
+// transport their source -- the active backend's shader platform.
+//
+// The key is content-addressed with no namespacing prefix: an asset that
+// compiles identically on every backend (a mesh, a texture, a font) produces
+// one entry shared by a DirectX and a Vulkan cook rather than a copy each.
+// Assets whose payload really does differ per backend separate themselves
+// through their inputs -- a differing source file, or the compile target when
+// `CacheInputs::target_dependent` is set.
 pub fn payload_key(
     discriminant: u8,
     args: &serde_json::Value,
     ctx: &BuildCtx<'_>,
-    extra_source_files: &[String],
+    inputs: &CacheInputs,
 ) -> String {
-    let mut files = referenced_files(args, ctx);
-    for path in extra_source_files {
-        if let Some(h) = file_content_hash(path) {
-            files.push((path.clone(), h));
+    let files = match &inputs.sources {
+        SourceFiles::Extra(extra) => {
+            let mut files = referenced_files(args, ctx);
+            for path in extra {
+                if let Some(h) = file_content_hash(path) {
+                    files.push((path.clone(), h));
+                }
+            }
+            files
+        }
+        SourceFiles::Only(inputs) => inputs.iter().filter_map(hash_source_input).collect(),
+    };
+    let target = inputs
+        .target_dependent
+        .then(|| concinnity_core::build::Platform::current().key());
+    key_from_parts(discriminant, args, &files, target)
+}
+
+// Hash one declared input into the (key, content-hash) pair `key_from_parts`
+// consumes. Mirrors how `referenced_files` treats each kind, so an asset that
+// reports its inputs explicitly hashes them the same way the generic walk
+// would have.
+fn hash_source_input(input: &SourceInput) -> Option<(String, [u8; 32])> {
+    match input {
+        SourceInput::Path(path) => file_content_hash(path).map(|h| (path.clone(), h)),
+        SourceInput::Builtin(name) => {
+            let src = concinnity_core::build::shader::builtin_shader_source(name)?;
+            let bare = Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name);
+            let mut h = Sha256::new();
+            h.update(src.as_bytes());
+            Some((format!("builtin:{bare}"), h.finalize().into()))
         }
     }
-    let base = key_from_parts(discriminant, args, &files);
-    format!(
-        "{}-{}",
-        concinnity_core::build::Platform::current().key(),
-        base
-    )
 }
 
 // Bump when the SceneImport expansion output shape changes (a new generated
@@ -113,10 +137,10 @@ const EXPAND_FORMAT_VERSION: u32 = 2;
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
 // deterministic function of the source file's contents, the import options,
 // and the expansion format version, so editing the source file or changing an
-// option busts the entry. Unlike `payload_key` this is platform-independent:
-// the entries are plain JSON with no per-backend branching. `load` / `store`
-// are shared with the payload cache (same `.concinnity/cache/` directory); the
-// `expand-` prefix keeps the two key spaces visibly distinct.
+// option busts the entry. Like `payload_key` this is platform-independent: the
+// entries are plain JSON with no per-backend branching. `load` / `store` are
+// shared with the payload cache (same `.concinnity/cache/` directory); the two
+// key spaces stay distinct because they hash structurally different inputs.
 pub fn expand_key(source: &str, args: &serde_json::Value) -> String {
     let mut hasher = Sha256::new();
     hasher.update(EXPAND_FORMAT_VERSION.to_le_bytes());
@@ -126,7 +150,7 @@ pub fn expand_key(source: &str, args: &serde_json::Value) -> String {
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();
     hasher.update((args_bytes.len() as u64).to_le_bytes());
     hasher.update(&args_bytes);
-    format!("expand-{:x}", hasher.finalize())
+    format!("{:x}", hasher.finalize())
 }
 
 // Read a cached payload for `key`, if one is present.
@@ -155,6 +179,7 @@ fn key_from_parts(
     discriminant: u8,
     args: &serde_json::Value,
     files: &[(String, [u8; 32])],
+    target: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(CACHE_FORMAT_VERSION.to_le_bytes());
@@ -163,6 +188,17 @@ fn key_from_parts(
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();
     hasher.update((args_bytes.len() as u64).to_le_bytes());
     hasher.update(&args_bytes);
+
+    // Absent and present-but-empty must not hash alike, so the discriminating
+    // byte goes in either way.
+    match target {
+        Some(t) => {
+            hasher.update([1u8]);
+            hasher.update((t.len() as u64).to_le_bytes());
+            hasher.update(t.as_bytes());
+        }
+        None => hasher.update([0u8]),
+    }
 
     // Sort so the key does not depend on JSON traversal order.
     let mut files = files.to_vec();
@@ -279,23 +315,30 @@ mod tests {
     #[test]
     fn key_is_stable_for_same_inputs() {
         let a = json!({"generator": "box", "half_extents": [1, 2, 3]});
-        assert_eq!(key_from_parts(7, &a, &[]), key_from_parts(7, &a, &[]));
+        assert_eq!(
+            key_from_parts(7, &a, &[], None),
+            key_from_parts(7, &a, &[], None)
+        );
     }
 
     #[test]
     fn key_changes_with_args_discriminant_and_files() {
         let a = json!({"generator": "box"});
         let b = json!({"generator": "sphere"});
-        let base = key_from_parts(1, &a, &[]);
-        assert_ne!(base, key_from_parts(1, &b, &[]), "args must affect the key");
+        let base = key_from_parts(1, &a, &[], None);
         assert_ne!(
             base,
-            key_from_parts(2, &a, &[]),
+            key_from_parts(1, &b, &[], None),
+            "args must affect the key"
+        );
+        assert_ne!(
+            base,
+            key_from_parts(2, &a, &[], None),
             "discriminant must affect the key"
         );
         assert_ne!(
             base,
-            key_from_parts(1, &a, &[("x.hdr".into(), [9u8; 32])]),
+            key_from_parts(1, &a, &[("x.hdr".into(), [9u8; 32])], None),
             "a referenced file must affect the key"
         );
     }
@@ -306,8 +349,29 @@ mod tests {
         let f1 = ("a.hdr".to_string(), [1u8; 32]);
         let f2 = ("b.hdr".to_string(), [2u8; 32]);
         assert_eq!(
-            key_from_parts(0, &a, &[f1.clone(), f2.clone()]),
-            key_from_parts(0, &a, &[f2, f1]),
+            key_from_parts(0, &a, &[f1.clone(), f2.clone()], None),
+            key_from_parts(0, &a, &[f2, f1], None),
+        );
+    }
+
+    // The compile target separates payloads that share every other input --
+    // the case that made the old `hlsl-` / `glsl-` filename prefixes
+    // load-bearing.
+    #[test]
+    fn key_changes_with_the_compile_target() {
+        let a = json!({"sources": {"hlsl": "shared.inc", "glsl": "shared.inc"}});
+        let hlsl = key_from_parts(1, &a, &[], Some("hlsl"));
+        let glsl = key_from_parts(1, &a, &[], Some("glsl"));
+        assert_ne!(hlsl, glsl, "the compile target must affect the key");
+        assert_ne!(
+            hlsl,
+            key_from_parts(1, &a, &[], None),
+            "a target-dependent key must differ from a target-independent one"
+        );
+        assert_ne!(
+            key_from_parts(1, &a, &[], Some("")),
+            key_from_parts(1, &a, &[], None),
+            "an empty target must not hash as no target"
         );
     }
 
@@ -318,9 +382,9 @@ mod tests {
         std::fs::write(&file, b"first").unwrap();
         let args = json!({ "source": file.to_str().unwrap() });
 
-        let before = payload_key(3, &args, &ctx(), &[]);
+        let before = payload_key(3, &args, &ctx(), &CacheInputs::extra(vec![]));
         std::fs::write(&file, b"second").unwrap();
-        let after = payload_key(3, &args, &ctx(), &[]);
+        let after = payload_key(3, &args, &ctx(), &CacheInputs::extra(vec![]));
         assert_ne!(
             before, after,
             "key must change when a referenced file changes"
@@ -343,9 +407,9 @@ mod tests {
         // can contribute the content hash.
         let args = json!({ "fragment_shader": "chrome" });
 
-        let before = payload_key(11, &args, &ctx(), std::slice::from_ref(&path));
+        let before = payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![path.clone()]));
         std::fs::write(&file, b"void shade(float) {}").unwrap();
-        let after = payload_key(11, &args, &ctx(), std::slice::from_ref(&path));
+        let after = payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![path.clone()]));
         assert_ne!(
             before, after,
             "an extra source file's contents must affect the key"
@@ -360,8 +424,8 @@ mod tests {
         let args = json!({ "fragment_shader": "chrome" });
         let missing = "/definitely/not/a/real/path.metal".to_string();
         assert_eq!(
-            payload_key(11, &args, &ctx(), &[]),
-            payload_key(11, &args, &ctx(), std::slice::from_ref(&missing)),
+            payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![])),
+            payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![missing])),
         );
     }
 
@@ -392,13 +456,69 @@ mod tests {
 
         // The key is a function of that hash, so any edit to the shader source
         // changes the key. A perturbed hash stands in for an edited shader.
-        let real_key = key_from_parts(5, &args, &files);
+        let real_key = key_from_parts(5, &args, &files, None);
         let edited = vec![("builtin:default.metal".to_string(), [0u8; 32])];
         assert_ne!(
             real_key,
-            key_from_parts(5, &args, &edited),
+            key_from_parts(5, &args, &edited, None),
             "editing a built-in shader source must change the key",
         );
+    }
+
+    // An asset reporting `Only` must hash a built-in exactly as the generic
+    // walk would, so editing a shipped shader still busts its entry.
+    #[test]
+    fn only_inputs_hash_a_builtin_like_the_generic_walk() {
+        let name = "default.metal";
+        let walked = referenced_files(&json!(name), &ctx());
+        let reported = hash_source_input(&SourceInput::Builtin(name.to_string()))
+            .expect("default.metal is built in");
+        assert_eq!(walked, vec![reported]);
+        assert!(
+            hash_source_input(&SourceInput::Builtin("not_a_builtin.metal".into())).is_none(),
+            "an unregistered name contributes nothing"
+        );
+    }
+
+    // `Only` replaces the generic args walk rather than adding to it: a path
+    // sitting in the args that the asset does not report is not hashed. This
+    // is what keeps an edit to the unused backend's shader from invalidating
+    // this backend's payload -- and what makes each `Only` impl load-bearing.
+    #[test]
+    fn only_inputs_replace_the_generic_args_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let used = dir.path().join("used.hlsl");
+        let unused = dir.path().join("unused.glsl");
+        std::fs::write(&used, b"used").unwrap();
+        std::fs::write(&unused, b"unused").unwrap();
+        let args = json!({"sources": {
+            "hlsl": used.to_str().unwrap(),
+            "glsl": unused.to_str().unwrap(),
+        }});
+        let only = |inputs: &CacheInputs| payload_key(9, &args, &ctx(), inputs);
+        let reported = CacheInputs {
+            sources: SourceFiles::Only(vec![SourceInput::Path(used.to_str().unwrap().to_string())]),
+            target_dependent: false,
+        };
+
+        let before = only(&reported);
+        std::fs::write(&unused, b"edited").unwrap();
+        assert_eq!(
+            before,
+            only(&reported),
+            "editing an unreported file must not affect the key"
+        );
+
+        std::fs::write(&used, b"edited").unwrap();
+        assert_ne!(
+            before,
+            only(&reported),
+            "editing a reported file must affect the key"
+        );
+
+        // The same args under the generic walk do pick the unused file up:
+        // `Only` is what narrows the input set, not the args themselves.
+        assert_eq!(referenced_files(&args, &ctx()).len(), 2);
     }
 
     #[test]
@@ -430,8 +550,17 @@ mod tests {
         // Editing the source file busts the key.
         std::fs::write(&file, b"second").unwrap();
         assert_ne!(base, expand_key(src, &args));
-        // Expansion keys are namespaced apart from payload keys.
-        assert!(base.starts_with("expand-"));
+    }
+
+    // Both key spaces share one directory and neither carries a prefix any
+    // more, so they stay distinct purely by hashing different preimages.
+    #[test]
+    fn expansion_and_payload_key_spaces_stay_distinct() {
+        let args = json!({ "prefix": "scn" });
+        assert_ne!(
+            expand_key("/no/such/scene.glb", &args),
+            payload_key(0, &args, &ctx(), &CacheInputs::extra(vec![])),
+        );
     }
 
     #[test]
@@ -458,13 +587,53 @@ mod tests {
         assert_eq!(load_in(&nested, "k").as_deref(), Some(&b"two"[..]));
     }
 
+    // Keys are bare content hashes. A platform-independent asset must produce
+    // the same filename on every backend so one entry is shared across a
+    // DirectX and a Vulkan cook instead of duplicated per backend.
     #[test]
-    fn payload_key_is_namespaced_by_platform() {
-        let key = payload_key(1, &json!({}), &ctx(), &[]);
-        let platform = concinnity_core::build::Platform::current().key();
+    fn payload_keys_are_bare_hashes_with_no_prefix() {
+        let key = payload_key(1, &json!({}), &ctx(), &CacheInputs::extra(vec![]));
+        assert_eq!(
+            key.len(),
+            64,
+            "key '{key}' must be a bare sha256 hex digest"
+        );
         assert!(
-            key.starts_with(&format!("{platform}-")),
-            "key '{key}' must carry the '{platform}-' platform prefix"
+            key.chars().all(|c| c.is_ascii_hexdigit()),
+            "key '{key}' must contain no namespacing prefix"
+        );
+        assert_eq!(
+            key,
+            key_from_parts(1, &json!({}), &[], None),
+            "a target-independent asset must not fold the platform into its key"
+        );
+    }
+
+    // A target-dependent asset does fold the platform in, so the two backends
+    // separate even when every other input matches.
+    #[test]
+    fn target_dependent_payload_keys_fold_in_the_platform() {
+        let args = json!({});
+        let dependent = CacheInputs {
+            sources: SourceFiles::Only(Vec::new()),
+            target_dependent: true,
+        };
+        let platform = concinnity_core::build::Platform::current().key();
+        assert_eq!(
+            payload_key(1, &args, &ctx(), &dependent),
+            key_from_parts(1, &args, &[], Some(platform)),
+        );
+        assert_ne!(
+            payload_key(1, &args, &ctx(), &dependent),
+            payload_key(
+                1,
+                &args,
+                &ctx(),
+                &CacheInputs {
+                    sources: SourceFiles::Only(Vec::new()),
+                    target_dependent: false,
+                }
+            ),
         );
     }
 
@@ -526,7 +695,6 @@ mod tests {
         let a = expand_key("/no/such/scene.glb", &args);
         let b = expand_key("/no/such/scene.glb", &args);
         assert_eq!(a, b);
-        assert!(a.starts_with("expand-"));
         assert_ne!(
             a,
             expand_key("/no/such/scene.glb", &json!({ "prefix": "x" }))

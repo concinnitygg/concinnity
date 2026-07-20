@@ -85,24 +85,35 @@ impl crate::asset::BuildAsset for ShaderStage {
         })
     }
 
-    // The cache's generic JSON-string walk only finds bare filenames via
-    // `find_in_assets` (which walks `.concinnity/assets/`). A `sources` entry
-    // with a directory component, or a bare filename that lives in
-    // `<artifacts_dir>` instead of `.concinnity/assets/`, is missed. Built-in
-    // shader names short-circuit through the generic walk's `builtin:` path
-    // so we skip them here.
-    fn source_files(args: &serde_json::Value, ctx: &crate::asset::BuildCtx<'_>) -> Vec<String> {
+    // The same source can be selected by more than one backend and still
+    // compile to different bytecode, so the compile target is an input.
+    const TARGET_DEPENDENT: bool = true;
+
+    // A stage compiles exactly one source: the current backend's. Reporting
+    // that source alone (rather than letting the cache's generic walk hash
+    // every path in `sources`) keeps an edit to the `.glsl` variant from
+    // invalidating the DirectX build's cached payload.
+    //
+    // An empty set is meaningful: on Vulkan a stage with no `glsl` source
+    // compiles nothing and emits empty bytes, so there is no input to hash.
+    fn source_files(
+        args: &serde_json::Value,
+        ctx: &crate::asset::BuildCtx<'_>,
+    ) -> crate::asset::SourceFiles {
+        use crate::asset::{SourceFiles, SourceInput};
         let Some(raw) = resolve_source_from_args(args) else {
-            return Vec::new();
+            return SourceFiles::Only(Vec::new());
         };
+        // A built-in has no filesystem path; its embedded source is hashed so
+        // editing a shipped shader and rebuilding the binary busts the entry.
         if concinnity_core::build::shader::builtin_shader_source(&raw).is_some() {
-            return Vec::new();
+            return SourceFiles::Only(vec![SourceInput::Builtin(raw)]);
         }
         let path = resolve_source_path_for(&raw, ctx);
         if std::path::Path::new(&path).exists() {
-            vec![path]
+            SourceFiles::Only(vec![SourceInput::Path(path)])
         } else {
-            Vec::new()
+            SourceFiles::Only(Vec::new())
         }
     }
 }

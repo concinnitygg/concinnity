@@ -92,17 +92,29 @@ impl crate::asset::BuildAsset for SdfVolume {
         })
     }
 
-    // The cache's generic JSON-string walk only resolves bare filenames
-    // (via `find_in_assets`) and cwd-relative paths. `fragment_shader` is
-    // typically a path with a directory component (e.g.
-    // `"shaders/chrome_blob.metal"`) under the source-tree `assets/` dir,
-    // which the generic walk misses. Without this override, editing the
-    // .metal file would not invalidate the cache and stale bytes would
-    // replay forever.
-    fn source_files(args: &serde_json::Value, ctx: &crate::asset::BuildCtx<'_>) -> Vec<String> {
+    // `TARGET_DEPENDENT` stays false: `compile_payload` transports the source
+    // bytes verbatim, so identical bytes yield an identical payload and two
+    // backends pointing at one file may correctly share a cache entry.
+
+    // Only the current backend's shader is read. Reporting it alone keeps an
+    // edit to a sibling backend's shader from invalidating this one, and
+    // covers the resolution the cache's generic walk misses: `fragment_shader`
+    // is typically a path with a directory component (e.g.
+    // `"shaders/chrome_blob.metal"`) under the source-tree `assets/` dir.
+    // Without it, editing that file would replay stale bytes forever.
+    fn source_files(
+        args: &serde_json::Value,
+        ctx: &crate::asset::BuildCtx<'_>,
+    ) -> crate::asset::SourceFiles {
+        use crate::asset::{SourceFiles, SourceInput};
         let Some(raw) = current_platform_source_arg(args) else {
-            return Vec::new();
+            return SourceFiles::Only(Vec::new());
         };
-        resolve_source_path(&raw, ctx).into_iter().collect()
+        SourceFiles::Only(
+            resolve_source_path(&raw, ctx)
+                .map(SourceInput::Path)
+                .into_iter()
+                .collect(),
+        )
     }
 }

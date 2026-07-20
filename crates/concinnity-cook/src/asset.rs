@@ -12,6 +12,35 @@
 use crate::ecs::Component;
 use crate::world::WorldJsonlAsset;
 
+// One input a `compile_payload` reads. `Path` is a file on disk, hashed by
+// contents; `Builtin` is an engine-shipped shader whose source is embedded in
+// the binary rather than living at a path, hashed by that embedded source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceInput {
+    Path(String),
+    Builtin(String),
+}
+
+// The on-disk inputs an asset's `compile_payload` reads, and how they relate to
+// the payload cache's generic walk of the args JSON.
+//
+// `Extra` adds to what the walk finds: the walk stays a conservative safety net
+// that over-approximates the input set, and the asset contributes only the
+// paths the walk would miss.
+//
+// `Only` replaces the walk entirely and is the complete input set. Use it when
+// the walk over-approximates in a way that matters -- a `ShaderStage` declaring
+// both an `.hlsl` and a `.glsl` source reads exactly one of them, so hashing
+// both makes an edit to the unused variant invalidate the other backend's
+// cached payload. The tradeoff is that the safety net is gone: an input this
+// list omits is not hashed at all, and a stale payload replays silently. Cover
+// each `Only` impl with a test asserting the set it reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceFiles {
+    Extra(Vec<String>),
+    Only(Vec<SourceInput>),
+}
+
 // Build-time context handed to each `BuildAsset` impl.
 pub struct BuildCtx<'a> {
     // The asset's declared name (used in error messages and as a key for
@@ -33,21 +62,54 @@ pub struct BuildCtx<'a> {
 pub trait BuildAsset: Component {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
 
-    // On-disk files this asset's `compile_payload` reads, beyond what the
-    // payload cache can derive from the args JSON. The cache layer mixes the
-    // contents-hash of each returned path into the per-asset cache key so an
-    // edit to one of those files invalidates the cached payload.
+    // True when identical source bytes compile to a different payload per
+    // backend, so the compile target is itself an input to the payload and
+    // belongs in the cache key. `ShaderStage` sets this: the same file can be
+    // selected by two backends (`Platform::accepts_ext` accepts any
+    // unrecognised extension, and a `sources` map entry is taken without an
+    // extension check at all) and compiles to DXIL on one and SPIR-V on the
+    // other.
     //
-    // Default is empty: appropriate for assets whose only inputs are the
-    // args themselves (or whose source paths are resolved by the cache's
-    // generic JSON string walk). Override when `compile_payload` reads a
-    // file at a path the generic walk would miss, e.g. `SdfVolume` reading
-    // `assets/shaders/<name>.metal` from the source tree, or any asset
-    // whose resolution rules differ from the cache's default lookup.
+    // Assets that transport their source verbatim leave this false, even when
+    // they select that source per backend: `SdfVolume` reads shader bytes
+    // straight through, so identical bytes yield an identical payload and two
+    // backends may correctly share one cache entry.
+    const TARGET_DEPENDENT: bool = false;
+
+    // The inputs this asset's `compile_payload` reads, relative to the payload
+    // cache's generic walk of the args JSON. The cache layer mixes a hash of
+    // each input into the per-asset cache key so an edit to one of them
+    // invalidates the cached payload.
     //
-    // Return only paths that exist on disk. The cache silently drops paths
-    // it can't read, so returning a placeholder is safe but pointless.
-    fn source_files(_args: &serde_json::Value, _ctx: &BuildCtx<'_>) -> Vec<String> {
-        Vec::new()
+    // Default is `Extra(vec![])`: appropriate for assets whose only inputs are
+    // the args themselves, or whose source paths the generic walk already
+    // resolves. Override with `Extra` when `compile_payload` reads a file at a
+    // path the walk would miss, or with `Only` when the walk over-approximates
+    // (see `SourceFiles`).
+    //
+    // Return only paths that exist on disk. The cache silently drops paths it
+    // can't read, so returning a placeholder is safe but pointless.
+    fn source_files(_args: &serde_json::Value, _ctx: &BuildCtx<'_>) -> SourceFiles {
+        SourceFiles::Extra(Vec::new())
+    }
+}
+
+// An asset's contribution to its payload cache key: the inputs its compile
+// reads, plus whether the compile target affects the output. Paired so the
+// dispatch that builds one builds the other, keeping a new platform-dependent
+// asset from silently inheriting `TARGET_DEPENDENT = false`.
+pub struct CacheInputs {
+    pub sources: SourceFiles,
+    pub target_dependent: bool,
+}
+
+impl CacheInputs {
+    // Inputs for an asset whose compile is platform-independent and whose
+    // source paths the cache's generic args walk resolves on its own.
+    pub fn extra(paths: Vec<String>) -> Self {
+        Self {
+            sources: SourceFiles::Extra(paths),
+            target_dependent: false,
+        }
     }
 }
