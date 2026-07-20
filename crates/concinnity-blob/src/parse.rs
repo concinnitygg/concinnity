@@ -4,16 +4,16 @@
 
 use crate::error::BlobError;
 use crate::schema::BlobMeta;
-use crate::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE};
+use crate::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH};
 
 // Parse a blob image's header and metadata block. Returns the metadata and the
 // offset at which the payload section begins.
 pub fn parse_cnb(data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
     let meta_len = parse_header(data)? as usize;
 
-    let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
-    if version != BLOB_VERSION {
-        return Err(BlobError::UnsupportedVersion(version));
+    let stored = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    if stored != SCHEMA_HASH {
+        return Err(BlobError::SchemaMismatch(stored));
     }
 
     let meta_end = HEADER_SIZE
@@ -127,27 +127,28 @@ mod tests {
     }
 
     #[test]
-    fn encode_emits_magic_and_version_header() {
+    fn encode_emits_magic_and_schema_hash_header() {
         let image = encode_cnb(&BlobMeta::default(), &[1]).unwrap();
         assert_eq!(&image[0..4], &BLOB_MAGIC);
         assert_eq!(
             u32::from_le_bytes(image[4..8].try_into().unwrap()),
-            BLOB_VERSION
+            SCHEMA_HASH
         );
         let meta_len = u64::from_le_bytes(image[8..16].try_into().unwrap()) as usize;
         assert_eq!(image.len(), HEADER_SIZE + meta_len + 1);
     }
 
     #[test]
-    fn parse_rejects_short_bad_magic_and_wrong_version() {
+    fn parse_rejects_short_bad_magic_and_schema_mismatch() {
         assert_eq!(parse_cnb(&[0u8; HEADER_SIZE - 1]), Err(BlobError::TooShort));
         assert_eq!(parse_cnb(&[0u8; HEADER_SIZE]), Err(BlobError::BadMagic));
 
-        let mut wrong_version = encode_cnb(&BlobMeta::default(), &[]).unwrap();
-        wrong_version[4..8].copy_from_slice(&(BLOB_VERSION + 1).to_le_bytes());
+        let mut mismatched = encode_cnb(&BlobMeta::default(), &[]).unwrap();
+        let stored = SCHEMA_HASH.wrapping_add(1);
+        mismatched[4..8].copy_from_slice(&stored.to_le_bytes());
         assert_eq!(
-            parse_cnb(&wrong_version),
-            Err(BlobError::UnsupportedVersion(BLOB_VERSION + 1))
+            parse_cnb(&mismatched),
+            Err(BlobError::SchemaMismatch(stored))
         );
     }
 

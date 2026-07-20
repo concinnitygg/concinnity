@@ -9,8 +9,8 @@ pub enum BlobError {
     TooShort,
     // leading bytes are not BLOB_MAGIC
     BadMagic,
-    // built by a different BLOB_VERSION; carries the version found
-    UnsupportedVersion(u32),
+    // built against a different SCHEMA_HASH; carries the hash found
+    SchemaMismatch(u32),
     // header promises more metadata than the image holds
     TruncatedMeta,
     // metadata block is not decodable postcard

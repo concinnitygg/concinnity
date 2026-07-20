@@ -14,7 +14,7 @@ use crate::result::CnResult;
 mod data;
 
 pub use crate::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
-pub use concinnity_blob::{BLOB_MAGIC, BLOB_VERSION, HEADER_SIZE, WorldManifest};
+pub use concinnity_blob::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH, WorldManifest};
 pub use data::BlobData;
 
 // Format a blob file path for a given index under `.concinnity/data/`. Blob 0
@@ -73,11 +73,9 @@ fn report(path: &str, e: BlobError) -> CnResult {
     match e {
         BlobError::TooShort => tracing::error!("{}: file too short", path),
         BlobError::BadMagic => tracing::error!("{}: bad magic", path),
-        BlobError::UnsupportedVersion(found) => tracing::error!(
-            "Version mismatch in {} (got {}, want {})",
-            path,
-            found,
-            BLOB_VERSION
+        BlobError::SchemaMismatch(_) => tracing::error!(
+            "{}: world data was built by a different version of the engine",
+            path
         ),
         BlobError::TruncatedMeta => tracing::error!("{}: truncated metadata section", path),
         BlobError::Decode => tracing::error!("{}: failed to deserialize metadata", path),
@@ -141,7 +139,7 @@ mod tests {
     fn format_failures_fold_onto_file_io() {
         assert_eq!(report("x.cnb", BlobError::BadMagic), CnResult::FileIo);
         assert_eq!(
-            report("x.cnb", BlobError::UnsupportedVersion(99)),
+            report("x.cnb", BlobError::SchemaMismatch(99)),
             CnResult::FileIo
         );
     }
