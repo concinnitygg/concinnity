@@ -34,6 +34,16 @@ pub(crate) fn overlay(world: &World) -> Option<SystemAsset> {
         .map(|_| crate::gfx::overlay::OverlaySystem::new().into())
 }
 
+// ReactionSystem: present whenever the world declares any `Reaction`.
+// Scheduled before SpawnSystem / SettingsSystem / StorySystem / AudioSystem so
+// the requests its firing rules emit are drained the same tick.
+pub(crate) fn logic(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::Reaction>()
+        .next()
+        .map(|_| crate::logic::ReactionSystem::new().into())
+}
+
 // SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
 // clones the GPU draw slots graphics owns. Scheduled immediately before it so
 // a despawn is applied before the transform push and a spawn reuses slots
@@ -201,9 +211,9 @@ pub(crate) fn story(world: &World) -> Option<SystemAsset> {
 }
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
-// (positional sound), `AudioCue` (screen-triggered sound), or `Story`
-// (page-triggered sound). Its init opens an audio device, so a world with
-// none of them stays silent and device-free.
+// (positional sound), `AudioCue` (screen-triggered sound), `Story`
+// (page-triggered sound), or `Reaction` with a sound action. Its init opens
+// an audio device, so a world with none of them stays silent and device-free.
 pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
     let needs = world
         .query::<crate::assets::AudioEmitter>()
@@ -221,7 +231,10 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
                             .iter()
                             .any(|p| p.music.is_some() || !p.sounds.is_empty())
                 })
-            });
+            })
+        || world
+            .query::<crate::assets::Reaction>()
+            .any(crate::assets::Reaction::plays_sound);
     if !needs {
         return None;
     }

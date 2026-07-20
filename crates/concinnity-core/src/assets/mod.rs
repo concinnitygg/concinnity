@@ -153,6 +153,7 @@ pub use concinnity_asset::RoomArgs;
 pub use concinnity_asset::Scene;
 pub use concinnity_asset::SceneImport;
 pub use concinnity_asset::SceneReel;
+pub use concinnity_asset::{Condition, Reaction, ReactionAction, ReactionSource, StoryPlayback};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use reparent_request::ReparentRequest;
 pub use room::Room;

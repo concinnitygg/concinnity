@@ -23,7 +23,8 @@ use std::collections::{HashMap, HashSet};
 // to a `CrossReferenced` impl in the named asset's file.
 fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, SceneReel, VoxelChunk, VoxelWorld,
+        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, SceneReel, VoxelChunk,
+        VoxelWorld,
     };
     match type_norm {
         "animgraph" => AnimGraph::cross_refs(name, args),
@@ -35,6 +36,7 @@ fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<
         "voxelchunk" | "chunk" => VoxelChunk::cross_refs(name, args),
         "voxelworld" => VoxelWorld::cross_refs(name, args),
         "joint" => Joint::cross_refs(name, args),
+        "reaction" => Reaction::cross_refs(name, args),
         _ => Vec::new(),
     }
 }
@@ -119,6 +121,9 @@ struct RefScope<'a> {
     block_types: HashSet<&'a str>,
     skinned_meshes: HashSet<&'a str>,
     animations: HashSet<&'a str>,
+    audio_clips: HashSet<&'a str>,
+    screens: HashSet<&'a str>,
+    all_names: HashSet<&'a str>,
 }
 
 impl<'a> RefScope<'a> {
@@ -151,6 +156,9 @@ impl<'a> RefScope<'a> {
             block_types: by_type(&|t| t == "blocktype" || t == "block"),
             skinned_meshes: by_type(&|t| t == "skinnedmesh"),
             animations: by_type(&|t| t == "animation"),
+            audio_clips: by_type(&|t| t == "audioclip"),
+            screens: by_type(&|t| t == "screen"),
+            all_names: assets.iter().map(|a| a.name.as_str()).collect(),
         }
     }
 
@@ -163,6 +171,9 @@ impl<'a> RefScope<'a> {
             RefKind::BlockType => self.block_types.contains(name),
             RefKind::SkinnedMesh => self.skinned_meshes.contains(name),
             RefKind::Animation => self.animations.contains(name),
+            RefKind::AudioClip => self.audio_clips.contains(name),
+            RefKind::Screen => self.screens.contains(name),
+            RefKind::AnyAsset => self.all_names.contains(name),
         }
     }
 }

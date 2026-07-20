@@ -649,7 +649,7 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
         .events_mut::<crate::assets::SpawnRequest>()
         .send(crate::assets::SpawnRequest {
             template: template_id,
-            name: name_id,
+            name: Some(name_id),
             transform: crate::assets::Transform {
                 position,
                 rotation_deg,
@@ -1797,7 +1797,7 @@ mod tests {
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].template, crate::ecs::asset_id::AssetId(0));
             // The new instance name was interned to the next id.
-            assert_eq!(seen[0].name, crate::ecs::asset_id::AssetId(1));
+            assert_eq!(seen[0].name, Some(crate::ecs::asset_id::AssetId(1)));
             assert_eq!(seen[0].transform.position, [1.0, 2.0, 3.0]);
             assert_eq!(seen[0].transform.scale, [2.0, 2.0, 2.0]);
             assert_eq!(seen[0].lifetime_secs, Some(5.0));

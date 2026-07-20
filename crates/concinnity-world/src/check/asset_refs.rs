@@ -16,13 +16,13 @@
 // concinnity-core.
 
 use crate::assets::{
-    AnimGraph, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, SceneReel, VoxelChunk,
-    VoxelWorld,
+    AnimGraph, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, Reaction, SceneReel,
+    VoxelChunk, VoxelWorld,
 };
 
 // The category of asset a structured name reference must resolve to.
 // Reference kinds are deliberately not 1:1 with asset types: `MeshSource`
-// accepts several types.
+// accepts several types and `AnyAsset` accepts every declared name.
 #[derive(Debug, Clone, Copy)]
 pub enum RefKind {
     // Mesh, ProceduralMesh, VoxelChunk, or a mesh-kind File.
@@ -32,6 +32,11 @@ pub enum RefKind {
     BlockType,
     SkinnedMesh,
     Animation,
+    AudioClip,
+    Screen,
+    // Any declared asset, whatever its type (runtime targets like a despawned
+    // entity or a spawn template are addressed by bare name).
+    AnyAsset,
 }
 
 // One item produced by a referencing asset's `cross_refs`.
@@ -362,6 +367,118 @@ impl CrossReferenced for Joint {
         if arg_str("body_a").is_empty() {
             refs.push(CrossRef::Issue(format!(
                 "Joint '{name}': `body_a` is required, name of a Prop with a collider"
+            )));
+        }
+
+        refs
+    }
+}
+
+impl CrossReferenced for Reaction {
+    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
+        let mut refs = Vec::new();
+
+        // One action field: required-ness plus resolution against `kind`'s
+        // name-set. An integer value is an already-resolved id and passes; a
+        // missing or empty field is an authoring error when required.
+        let field = |action: &serde_json::Value,
+                     verb: &str,
+                     key: &str,
+                     kind: RefKind,
+                     required: bool,
+                     refs: &mut Vec<CrossRef>| {
+            match action.get(key) {
+                Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                    refs.push(CrossRef::Resolve {
+                        kind,
+                        target: target.clone(),
+                        error: format!("Reaction '{name}': {verb} {key} '{target}' not found"),
+                    });
+                }
+                None | Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null)
+                    if required =>
+                {
+                    refs.push(CrossRef::Issue(format!(
+                        "Reaction '{name}': `{verb}` action requires `{key}`"
+                    )));
+                }
+                _ => {}
+            }
+        };
+
+        let actions = args
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+        for action in actions {
+            if let Some(spawn) = action.get("spawn") {
+                field(
+                    spawn,
+                    "spawn",
+                    "template",
+                    RefKind::AnyAsset,
+                    true,
+                    &mut refs,
+                );
+            }
+            if let Some(despawn) = action.get("despawn") {
+                field(
+                    despawn,
+                    "despawn",
+                    "target",
+                    RefKind::AnyAsset,
+                    true,
+                    &mut refs,
+                );
+            }
+            if let Some(reparent) = action.get("reparent") {
+                field(
+                    reparent,
+                    "reparent",
+                    "child",
+                    RefKind::AnyAsset,
+                    true,
+                    &mut refs,
+                );
+                field(
+                    reparent,
+                    "reparent",
+                    "parent",
+                    RefKind::AnyAsset,
+                    false,
+                    &mut refs,
+                );
+            }
+            if let Some(sound) = action.get("sound") {
+                field(sound, "sound", "clip", RefKind::AudioClip, true, &mut refs);
+            }
+            if let Some(scene) = action.get("scene") {
+                field(scene, "scene", "scene", RefKind::Scene, true, &mut refs);
+            }
+            if let Some(screen) = action.get("screen") {
+                field(screen, "screen", "screen", RefKind::Screen, true, &mut refs);
+            }
+            if let Some(set) = action.get("set")
+                && set
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .is_empty()
+            {
+                refs.push(CrossRef::Issue(format!(
+                    "Reaction '{name}': `set` action requires a variable `name`"
+                )));
+            }
+        }
+
+        // A `variable` source watching an unnamed variable never fires.
+        if let Some(source) = args.get("on")
+            && let Some(var) = source.get("variable")
+            && var.as_str().unwrap_or("").is_empty()
+        {
+            refs.push(CrossRef::Issue(format!(
+                "Reaction '{name}': `variable` source requires a variable name"
             )));
         }
 

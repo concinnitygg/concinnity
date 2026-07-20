@@ -1,0 +1,82 @@
+// Per-rule firing state and the fire decision.
+
+use super::vars::Variables;
+use crate::assets::{Condition, Reaction, ReactionSource};
+
+// One declared reaction plus its runtime firing state. The component stays
+// pure data; every clock and flag lives here.
+#[derive(Debug)]
+pub(super) struct Rule {
+    pub(super) def: Reaction,
+    started: bool,
+    fired_once: bool,
+    cooldown_left: f32,
+    timer_accum: f32,
+    timer_done: bool,
+    last_value: i32,
+}
+
+impl Rule {
+    pub(super) fn new(def: Reaction) -> Self {
+        Self {
+            def,
+            started: false,
+            fired_once: false,
+            cooldown_left: 0.0,
+            timer_accum: 0.0,
+            timer_done: false,
+            last_value: 0,
+        }
+    }
+
+    // Advance this rule's clocks by dt and decide whether it fires this tick.
+    // The decision applies `once`, `cooldown`, and the conditions; a source
+    // event suppressed by any of them is dropped, not queued.
+    pub(super) fn due(&mut self, vars: &Variables, dt: f32) -> bool {
+        self.cooldown_left = (self.cooldown_left - dt).max(0.0);
+        let sourced = match &self.def.on {
+            ReactionSource::Start => !std::mem::replace(&mut self.started, true),
+            ReactionSource::Timer { interval, repeat } => self.timer_due(*interval, *repeat, dt),
+            ReactionSource::Variable(name) => {
+                let current = vars.get(name);
+                let changed = current != self.last_value;
+                self.last_value = current;
+                changed
+            }
+        };
+        if !sourced
+            || (self.def.once && self.fired_once)
+            || self.cooldown_left > 0.0
+            || !conditions_pass(vars, &self.def.conditions)
+        {
+            return false;
+        }
+        self.fired_once = true;
+        self.cooldown_left = self.def.cooldown;
+        true
+    }
+
+    fn timer_due(&mut self, interval: f32, repeat: bool, dt: f32) -> bool {
+        if self.timer_done {
+            return false;
+        }
+        self.timer_accum += dt;
+        if self.timer_accum < interval {
+            return false;
+        }
+        if repeat {
+            // At most one firing per tick; dropping whole elapsed intervals
+            // keeps a long frame from queueing a burst.
+            self.timer_accum %= interval.max(f32::EPSILON);
+        } else {
+            self.timer_done = true;
+        }
+        true
+    }
+}
+
+pub(super) fn conditions_pass(vars: &Variables, conditions: &[Condition]) -> bool {
+    conditions
+        .iter()
+        .all(|c| c.op.eval(vars.get(&c.name), c.value))
+}

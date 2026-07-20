@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 use crate::{AudioEngine, EmitterId};
 use concinnity_core::assets::{
-    AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
+    AudioCommand, AudioCue, AudioEmitter, Camera3D, CueKind, PlayCue, Reaction, ScreenShown, Story,
+    Transform,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -174,9 +175,12 @@ impl System for AudioSystem {
             });
         }
 
-        // A story plays clips by direct PlayCue request rather than through
-        // screen-keyed cues, so cache every clip payload up front, keyed by handle.
-        if ctx.query::<Story>().next().is_some() {
+        // Stories and reactions play clips by direct PlayCue request rather
+        // than through screen-keyed cues, so cache every clip payload up
+        // front, keyed by handle.
+        if ctx.query::<Story>().next().is_some()
+            || ctx.query::<Reaction>().any(Reaction::plays_sound)
+        {
             let uncached: Vec<(AudioClipHandle, PayloadLocator)> = clip_locators
                 .iter()
                 .enumerate()

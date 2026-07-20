@@ -13,6 +13,10 @@
 //   * OverlaySystem first: it shapes the overlay draw list (from the HUD
 //     content written last tick) and publishes the menu state (`MenuActive`)
 //     that gates simulation, input, and the draw this same tick.
+//   * ReactionSystem after OverlaySystem (it honors the menu freeze) and
+//     before SpawnSystem / SettingsSystem / StorySystem / AudioSystem: the
+//     requests its firing rules emit (spawn/despawn, scene, story, audio) are
+//     drained the same tick.
 //   * SpawnSystem before GraphicsSystem: a despawned entity must be gone from
 //     the transform push (it contributes nothing to any pass this frame), and
 //     a spawn reuses draw slots freed this same frame.
@@ -45,6 +49,10 @@ crate::define_systems! {
     OverlaySystem => crate::gfx::overlay::OverlaySystem {
         gate: schedule::overlay,
         present_when: "the world declares a GraphicsConfig",
+    },
+    ReactionSystem => crate::logic::ReactionSystem {
+        gate: schedule::logic,
+        present_when: "the world declares any Reaction",
     },
     SpawnSystem => crate::spawn::SpawnSystem {
         gate: schedule::spawn,
@@ -100,7 +108,7 @@ crate::define_systems! {
     },
     AudioSystem => concinnity_audio::AudioSystem {
         gate: schedule::audio,
-        present_when: "the world declares any AudioEmitter, AudioCue, or a Story page/choice with audio",
+        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Reaction with a sound action",
     },
     UiInputSystem => crate::ui::UiInputSystem {
         gate: schedule::ui_input,

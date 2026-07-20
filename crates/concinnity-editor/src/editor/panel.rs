@@ -1829,6 +1829,7 @@ mod tests {
             "LayoutContainer",
             "Model",
             "PropBody",
+            "Reaction",
             "RigidBody",
             "Scene",
             "SceneReel",

@@ -34,6 +34,9 @@ pub use concinnity_core::paths::set_writable_state_dir;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;
+// Declarative when/if/then logic (Reaction components + the shared Variables
+// store), scheduled before SpawnSystem so its requests apply the same tick.
+pub(crate) mod logic;
 // The rayon job pool now lives in concinnity-render (the lowest layer the device
 // backends and the client's animation fan-out share); re-export it under the
 // historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps

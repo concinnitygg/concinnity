@@ -44,6 +44,7 @@
 - [ProceduralMesh](ProceduralMesh.md) - Geometry built by a named generator at compile time. Use for standard shapes.
 - [Prop](Prop.md) - A scene object: places geometry at a world-space transform.
 - [PropBody](PropBody.md) - Makes a companion [Prop](Prop.md) a dynamic physics body.
+- [Reaction](Reaction.md) - A declarative logic rule: when an event fires and its conditions pass, run a list of actions.
 - [RectAreaLight](RectAreaLight.md) - A rectangular area light: a glowing panel that lights the scene from its whole surface rather than from a single point.
 - [ReflectionProbe](ReflectionProbe.md) - A localized reflection probe. The renderer captures the surrounding scene into a cubemap from `position` and uses it for the specular reflection on glossy surfaces within the influence box (`position` plus or minus `half_extents`). The box is also the parallax-correction volume, so a reflection stays anchored to the surrounding geometry as the camera moves.
 - [RigidBody](RigidBody.md) - Gives a player [Camera3D](Camera3D.md) gravity, jumping, and a grounded character body.
@@ -81,6 +82,7 @@
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
 - [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
+- [Condition](Condition.md) - A test against one shared variable, gating a [Reaction](Reaction.md). An unset variable reads as `0`, so a plain flag test is `ne 0` and its negation `eq 0`.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).

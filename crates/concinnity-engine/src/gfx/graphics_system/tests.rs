@@ -1033,7 +1033,7 @@ fn spawn_request_clones_template_draw_slot() {
         let mut ctx = world.ctx();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: PROP,
-            name: AssetId(900),
+            name: Some(AssetId(900)),
             transform: Transform {
                 position: [5.0, 0.0, 0.0],
                 rotation_deg: [0.0; 3],
@@ -3558,7 +3558,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
         let mut ctx = world.ctx();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: AssetId(902),
-            name: AssetId(903),
+            name: Some(AssetId(903)),
             transform: Transform::default(),
             lifetime_secs: None,
         });
@@ -3621,7 +3621,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         let mut ctx = world.ctx();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: HERO,
-            name: AssetId(905),
+            name: Some(AssetId(905)),
             transform: Transform::default(),
             lifetime_secs: Some(2.0),
         });

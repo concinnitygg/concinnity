@@ -116,6 +116,7 @@ macro_rules! for_each_component {
             CameraProbe       => $crate::assets::CameraProbe { runtime },
             TextInput         => $crate::assets::TextInput { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
             Panel             => $crate::assets::Panel { gen, build_only },
+            Reaction          => $crate::assets::Reaction { gen, external, id },
         }
     };
 }

@@ -182,7 +182,7 @@ impl SpawnSystem {
                     template::spawn_skinned_from_template(
                         ctx,
                         template,
-                        Some(req.name),
+                        req.name,
                         req.transform,
                         req.lifetime_secs,
                         |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
@@ -191,7 +191,7 @@ impl SpawnSystem {
                     template::spawn_from_template(
                         ctx,
                         template,
-                        Some(req.name),
+                        req.name,
                         req.transform,
                         req.lifetime_secs,
                         |src, model| backend.clone_static_draw_object(src, model).ok(),
