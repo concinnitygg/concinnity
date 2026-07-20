@@ -15,7 +15,7 @@
 // list. The world clock (Lifetime + Spawner) freezes while a menu is open
 // (`MenuActive`, published by OverlaySystem earlier this tick).
 
-use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest};
+use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, VisibilityRequest};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
@@ -24,6 +24,7 @@ use std::time::Instant;
 
 mod despawn;
 mod template;
+mod visibility;
 
 #[derive(Debug, Default)]
 pub struct SpawnSystem {
@@ -36,6 +37,9 @@ pub struct SpawnSystem {
     // Cursor into the Events<SpawnRequest> queue (runtime entity spawn: cn debug
     // `spawn`, and gameplay-driven spawning once that path exists).
     spawn_cmd_cursor: crate::ecs::EventCursor,
+    // Cursor into the Events<VisibilityRequest> queue (runtime show/hide:
+    // Reaction show/hide actions).
+    visibility_cmd_cursor: crate::ecs::EventCursor,
     // Clock base and the cumulative elapsed seconds at the previous step, so
     // each step derives the per-frame dt for the Lifetime / Spawner ticks.
     start_time: Option<Instant>,
@@ -115,6 +119,30 @@ impl SpawnSystem {
             for name in despawn_names {
                 if let Some(&entity) = by_name.get(&name) {
                     despawn::despawn_subtree(ctx, backend, entity);
+                }
+            }
+        }
+
+        // Runtime show/hide: drain VisibilityRequest events, resolve each
+        // name to its entity, and switch its subtree's Hidden tags and draw
+        // slots. After the despawn drain so a request naming a just-removed
+        // entity simply finds nothing to switch.
+        let vis_reqs: Vec<VisibilityRequest> = match ctx.events::<VisibilityRequest>() {
+            Some(events) => events
+                .read(&mut self.visibility_cmd_cursor)
+                .into_iter()
+                .copied()
+                .collect(),
+            None => Vec::new(),
+        };
+        if !vis_reqs.is_empty() {
+            let by_name = ctx
+                .resource::<crate::ecs::decompose::EntityByName>()
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+            for req in vis_reqs {
+                if let Some(&entity) = by_name.get(&req.name) {
+                    visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
                 }
             }
         }

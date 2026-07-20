@@ -35,9 +35,10 @@ pub struct Reaction {
     pub asset_id: AssetId,
     /// The event that fires this reaction: `"start"` (world start), `{"timer":
     /// {"interval": seconds, "repeat": bool}}`, `{"variable": "name"}` (the
-    /// named variable changed value), or `{"enter": "volume"}` / `{"exit":
+    /// named variable changed value), `{"enter": "volume"}` / `{"exit":
     /// "volume"}` (something crossed the named
-    /// [TriggerVolume](#triggervolume)).
+    /// [TriggerVolume](#triggervolume)), or `{"interact": "entity"}` (the
+    /// interact key pressed on the named entity).
     pub on: ReactionSource,
     /// Conditions on shared variables; every one must pass for the reaction to
     /// fire. An empty list always passes.
@@ -76,6 +77,9 @@ pub enum ReactionSource {
     Enter(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
     /// Fires when something leaves the named [TriggerVolume](#triggervolume).
     Exit(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    /// Fires when the interact key is pressed on the named entity (a
+    /// [Prop](#prop) declared `interactable`).
+    Interact(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
 }
 
 /// A test against one shared variable, gating a [Reaction](#reaction). An
@@ -172,6 +176,19 @@ pub enum ReactionAction {
     },
     /// Control the world's [Story](#story) playback.
     Story(StoryPlayback),
+    /// Make a hidden entity (and its children) visible again.
+    Show {
+        /// The entity to reveal.
+        #[serde(default, deserialize_with = "de_opt_asset_ref")]
+        target: Option<AssetId>,
+    },
+    /// Make an entity (and its children) invisible without removing it. A
+    /// hidden entity keeps simulating; `show` reverses this.
+    Hide {
+        /// The entity to hide.
+        #[serde(default, deserialize_with = "de_opt_asset_ref")]
+        target: Option<AssetId>,
+    },
 }
 
 /// The [Story](#story) playback command a [Reaction](#reaction) action sends.
@@ -234,6 +251,27 @@ mod tests {
         assert_eq!(r.on, ReactionSource::Enter(Some(AssetId(5))));
         let r: Reaction = serde_json::from_str(r#"{"on":{"exit":5}}"#).unwrap();
         assert_eq!(r.on, ReactionSource::Exit(Some(AssetId(5))));
+        let r: Reaction = serde_json::from_str(r#"{"on":{"interact":5}}"#).unwrap();
+        assert_eq!(r.on, ReactionSource::Interact(Some(AssetId(5))));
+    }
+
+    #[test]
+    fn visibility_actions_parse() {
+        let r: Reaction =
+            serde_json::from_str(r#"{"actions":[{"hide":{"target":3}},{"show":{"target":3}}]}"#)
+                .unwrap();
+        assert!(matches!(
+            r.actions[0],
+            ReactionAction::Hide {
+                target: Some(AssetId(3))
+            }
+        ));
+        assert!(matches!(
+            r.actions[1],
+            ReactionAction::Show {
+                target: Some(AssetId(3))
+            }
+        ));
     }
 
     #[test]

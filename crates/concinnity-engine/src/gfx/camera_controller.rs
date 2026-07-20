@@ -266,14 +266,28 @@ impl System for Camera3DSystem {
                     }
                 }
             }
-            if let Some((_, entity)) = best
-                && let Some(t) = ctx.get_mut::<Transform>(entity)
-            {
-                t.rotation_deg[1] = (t.rotation_deg[1] + 45.0) % 360.0;
-                tracing::info!(
-                    "interacted with prop, yaw now {:.0}\u{00b0}",
-                    t.rotation_deg[1]
-                );
+            if let Some((_, entity)) = best {
+                if let Some(t) = ctx.get_mut::<Transform>(entity) {
+                    t.rotation_deg[1] = (t.rotation_deg[1] + 45.0) % 360.0;
+                    tracing::info!(
+                        "interacted with prop, yaw now {:.0}\u{00b0}",
+                        t.rotation_deg[1]
+                    );
+                }
+                // Announce the press for declarative logic (Reaction interact
+                // sources); an unnamed entity has no addressable identity to
+                // announce.
+                let target = ctx
+                    .resource::<crate::ecs::decompose::EntityByName>()
+                    .and_then(|n| {
+                        n.0.iter()
+                            .find(|(_, e)| **e == entity)
+                            .map(|(&name, _)| name)
+                    });
+                if let Some(target) = target {
+                    ctx.events_mut::<crate::assets::InteractSignal>()
+                        .send(crate::assets::InteractSignal { target });
+                }
             }
         }
 

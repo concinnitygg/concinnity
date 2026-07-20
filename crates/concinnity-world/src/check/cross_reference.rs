@@ -1192,6 +1192,31 @@ mod tests {
     }
 
     #[test]
+    fn reaction_interact_and_visibility_targets_are_validated() {
+        let mesh = asset(
+            "box_mesh",
+            "ProceduralMesh",
+            serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
+        );
+        let prop = asset("lever", "Prop", serde_json::json!({"mesh":"box_mesh"}));
+        let ok = asset(
+            "pull",
+            "Reaction",
+            serde_json::json!({"on":{"interact":"lever"},"actions":[{"hide":{"target":"lever"}}]}),
+        );
+        assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "pull",
+            "Reaction",
+            serde_json::json!({"on":{"interact":"ghost_lever"},"actions":[{"show":{"target":"ghost_door"}}]}),
+        );
+        let errs = err_text(&[mesh, prop, ghost]);
+        assert!(errs.contains("ghost_lever"));
+        assert!(errs.contains("ghost_door"));
+    }
+
+    #[test]
     fn reaction_action_refs_are_validated() {
         let mesh = asset(
             "box_mesh",

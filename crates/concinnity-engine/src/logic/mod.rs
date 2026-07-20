@@ -19,7 +19,7 @@
 
 use std::time::Instant;
 
-use crate::assets::{Reaction, VolumeEvent};
+use crate::assets::{InteractSignal, Reaction, VolumeEvent};
 use crate::ecs::{EventCursor, PipelineContext, StepResult, System};
 
 mod actions;
@@ -36,12 +36,15 @@ pub struct ReactionSystem {
     rules: Vec<rules::Rule>,
     // Delayed action runs: (rule index, seconds left).
     pending: Vec<(usize, f32)>,
-    // Cursor into the Events<VolumeEvent> queue (physics-published volume
-    // crossings), drained every step -- paused ticks included, so a crossing
-    // never ages out of the event store's retention behind a menu.
+    // Cursors into the Events<VolumeEvent> / Events<InteractSignal> queues
+    // (physics-published crossings, controller-published presses), drained
+    // every step -- paused ticks included, so neither ages out of the event
+    // store's retention behind a menu.
     crossing_cursor: EventCursor,
-    // Crossings drained but not yet consumed by an unpaused tick.
+    press_cursor: EventCursor,
+    // Events drained but not yet consumed by an unpaused tick.
     crossings: Vec<VolumeEvent>,
+    presses: Vec<InteractSignal>,
     start_time: Option<Instant>,
     prev_elapsed: f32,
 }
@@ -72,12 +75,16 @@ impl System for ReactionSystem {
         let dt = (elapsed - self.prev_elapsed).max(0.0);
         self.prev_elapsed = elapsed;
 
-        // Volume crossings physics published (last tick's step, since physics
-        // runs later in the schedule). Drained even while paused; consumed by
-        // the next unpaused tick.
+        // Volume crossings and interact presses published later in last
+        // tick's schedule (physics, the camera controller). Drained even
+        // while paused; consumed by the next unpaused tick.
         if let Some(events) = ctx.events::<VolumeEvent>() {
             self.crossings
                 .extend(events.read(&mut self.crossing_cursor).into_iter().copied());
+        }
+        if let Some(events) = ctx.events::<InteractSignal>() {
+            self.presses
+                .extend(events.read(&mut self.press_cursor).into_iter().copied());
         }
 
         // The menu state OverlaySystem published earlier this tick; a paused
@@ -104,12 +111,13 @@ impl ReactionSystem {
                 return;
             };
             for (i, rule) in self.rules.iter_mut().enumerate() {
-                if rule.due(vars, dt, &self.crossings) {
+                if rule.due(vars, dt, &self.crossings, &self.presses) {
                     fired.push(i);
                 }
             }
         }
         self.crossings.clear();
+        self.presses.clear();
 
         // Delayed runs from earlier ticks: count down and execute the ones
         // now due. Conditions were checked at fire time, not re-checked here.

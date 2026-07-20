@@ -118,6 +118,7 @@ macro_rules! for_each_component {
             Panel             => $crate::assets::Panel { gen, build_only },
             Reaction          => $crate::assets::Reaction { gen, external, id },
             TriggerVolume     => $crate::assets::TriggerVolume { gen, external, id, useful_blank },
+            Hidden            => $crate::assets::Hidden { runtime },
         }
     };
 }

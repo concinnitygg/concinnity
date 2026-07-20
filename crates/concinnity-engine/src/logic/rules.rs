@@ -1,7 +1,7 @@
 // Per-rule firing state and the fire decision.
 
 use super::vars::Variables;
-use crate::assets::{Condition, Reaction, ReactionSource, VolumeEvent};
+use crate::assets::{Condition, InteractSignal, Reaction, ReactionSource, VolumeEvent};
 
 // One declared reaction plus its runtime firing state. The component stays
 // pure data; every clock and flag lives here.
@@ -31,9 +31,16 @@ impl Rule {
 
     // Advance this rule's clocks by dt and decide whether it fires this tick.
     // The decision applies `once`, `cooldown`, and the conditions; a source
-    // event suppressed by any of them is dropped, not queued. `crossings` are
-    // the volume boundary events that arrived since the last tick.
-    pub(super) fn due(&mut self, vars: &Variables, dt: f32, crossings: &[VolumeEvent]) -> bool {
+    // event suppressed by any of them is dropped, not queued. `crossings` and
+    // `presses` are the volume boundary events and interact presses that
+    // arrived since the last tick.
+    pub(super) fn due(
+        &mut self,
+        vars: &Variables,
+        dt: f32,
+        crossings: &[VolumeEvent],
+        presses: &[InteractSignal],
+    ) -> bool {
         self.cooldown_left = (self.cooldown_left - dt).max(0.0);
         let sourced = match &self.def.on {
             ReactionSource::Start => !std::mem::replace(&mut self.started, true),
@@ -46,6 +53,9 @@ impl Rule {
             }
             ReactionSource::Enter(volume) => crossing_matches(crossings, *volume, true),
             ReactionSource::Exit(volume) => crossing_matches(crossings, *volume, false),
+            ReactionSource::Interact(target) => {
+                target.is_some_and(|target| presses.iter().any(|p| p.target == target))
+            }
         };
         if !sourced
             || (self.def.once && self.fired_once)

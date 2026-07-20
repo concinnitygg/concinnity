@@ -454,6 +454,12 @@ impl CrossReferenced for Reaction {
             if let Some(sound) = action.get("sound") {
                 field(sound, "sound", "clip", RefKind::AudioClip, true, &mut refs);
             }
+            if let Some(show) = action.get("show") {
+                field(show, "show", "target", RefKind::AnyAsset, true, &mut refs);
+            }
+            if let Some(hide) = action.get("hide") {
+                field(hide, "hide", "target", RefKind::AnyAsset, true, &mut refs);
+            }
             if let Some(scene) = action.get("scene") {
                 field(scene, "scene", "scene", RefKind::Scene, true, &mut refs);
             }
@@ -502,6 +508,22 @@ impl CrossReferenced for Reaction {
                     }
                     _ => {}
                 }
+            }
+            // An interact source must name a declared asset.
+            match source.get("interact") {
+                Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                    refs.push(CrossRef::Resolve {
+                        kind: RefKind::AnyAsset,
+                        target: target.clone(),
+                        error: format!("Reaction '{name}': `interact` target '{target}' not found"),
+                    });
+                }
+                Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                    refs.push(CrossRef::Issue(format!(
+                        "Reaction '{name}': `interact` source requires an entity name"
+                    )));
+                }
+                _ => {}
             }
         }
 

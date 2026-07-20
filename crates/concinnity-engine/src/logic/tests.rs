@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::assets::{
-    CmpOp, Condition, DespawnRequest, Reaction, ReactionAction, ReactionSource, SpawnRequest,
-    StoryCommand, StoryPlayback, VolumeEvent,
+    CmpOp, Condition, DespawnRequest, InteractSignal, Reaction, ReactionAction, ReactionSource,
+    SpawnRequest, StoryCommand, StoryPlayback, VisibilityRequest, VolumeEvent,
 };
 use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
@@ -418,6 +418,58 @@ fn crossings_survive_a_menu_pause() {
     world.ctx().insert_resource(crate::ecs::MenuActive(false));
     sys.step(&mut world.ctx());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn interact_source_fires_on_matching_press_only() {
+    let mut world = world_with(vec![Reaction {
+        on: ReactionSource::Interact(Some(AssetId(4))),
+        actions: vec![despawn(7)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    world
+        .ctx()
+        .events_mut::<InteractSignal>()
+        .send(InteractSignal { target: AssetId(9) });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    world
+        .ctx()
+        .events_mut::<InteractSignal>()
+        .send(InteractSignal { target: AssetId(4) });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn show_and_hide_actions_send_visibility_requests() {
+    let mut world = world_with(vec![Reaction {
+        actions: vec![
+            ReactionAction::Hide {
+                target: Some(AssetId(3)),
+            },
+            ReactionAction::Show {
+                target: Some(AssetId(4)),
+            },
+        ],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    sys.tick(&mut world.ctx(), 0.0);
+    let ctx = world.ctx();
+    let mut cursor = EventCursor::default();
+    let events = ctx.events::<VisibilityRequest>().unwrap();
+    let reqs: Vec<&VisibilityRequest> = events.read(&mut cursor).into_iter().collect();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].name, AssetId(3));
+    assert!(!reqs[0].visible);
+    assert_eq!(reqs[1].name, AssetId(4));
+    assert!(reqs[1].visible);
 }
 
 // A declared Reaction gates the internal system on, and the menu freeze

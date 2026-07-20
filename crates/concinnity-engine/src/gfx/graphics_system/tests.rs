@@ -1055,6 +1055,53 @@ fn spawn_request_clones_template_draw_slot() {
 }
 
 #[test]
+fn visibility_request_switches_slots_and_hidden_tag() {
+    use crate::assets::{Hidden, VisibilityRequest};
+
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    {
+        let mut ctx = world.ctx();
+        ctx.events_mut::<VisibilityRequest>()
+            .send(VisibilityRequest {
+                name: PROP,
+                visible: false,
+            });
+    }
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert!(lock(&state).saw(&Call::UpdateVisibility {
+        draw_idx: 0,
+        visible: false
+    }));
+    assert_eq!(
+        world.ctx().query::<Hidden>().count(),
+        1,
+        "hide tags the entity"
+    );
+
+    {
+        let mut ctx = world.ctx();
+        ctx.events_mut::<VisibilityRequest>()
+            .send(VisibilityRequest {
+                name: PROP,
+                visible: true,
+            });
+    }
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert!(lock(&state).saw(&Call::UpdateVisibility {
+        draw_idx: 0,
+        visible: true
+    }));
+    assert_eq!(
+        world.ctx().query::<Hidden>().count(),
+        0,
+        "show clears the tag"
+    );
+}
+
+#[test]
 fn despawn_request_retires_draw_slots() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();

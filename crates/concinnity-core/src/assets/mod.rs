@@ -26,6 +26,7 @@ mod frame_input;
 mod geometry;
 mod ground_probes;
 mod input_key;
+mod interact_signal;
 mod lifetime;
 mod play_cue;
 mod post_process_config;
@@ -44,6 +45,7 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
+mod visibility_request;
 mod volume_event;
 
 // Per-instance components an entity is composed from: its placement, render
@@ -52,6 +54,7 @@ mod children;
 mod collider;
 mod global_transform;
 mod held;
+mod hidden;
 mod interactable;
 mod mesh_renderer;
 mod model_renderer;
@@ -184,6 +187,7 @@ pub use concinnity_asset::{Sprite, SpriteFit};
 pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{WaterSurface, WaterWave};
 pub use concinnity_asset::{Window, WindowArgs, WindowMode};
+pub use interact_signal::InteractSignal;
 pub use screen_command::ScreenCommand;
 pub use screen_shown::ScreenShown;
 #[cfg(backend_metal)]
@@ -195,6 +199,7 @@ pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;
+pub use visibility_request::VisibilityRequest;
 pub use volume_event::VolumeEvent;
 // `MAX_WATER_WAVES` stays in core: the build-side water-surface validator
 // (concinnity-world) reaches it on every backend, and the Metal water encoder
@@ -208,6 +213,7 @@ pub use children::Children;
 pub use collider::Collider;
 pub use global_transform::GlobalTransform;
 pub use held::Held;
+pub use hidden::Hidden;
 pub use interactable::Interactable;
 pub use mesh_renderer::MeshRenderer;
 pub use model_renderer::ModelRenderer;

@@ -22,7 +22,13 @@ pub(crate) fn decomposed_visibility_snapshot(
     let mut draws = Vec::new();
     let mut scenes = Vec::new();
     for (entity, handle) in ctx.query_with_entity::<RenderHandle>() {
-        draws.push(handle.draws.iter().map(|&slot| slot as usize).collect());
+        // A Hidden entity contributes no slots: its draws were switched off
+        // by a hide request, and a scene switch must not relight them.
+        if ctx.get::<crate::assets::Hidden>(entity).is_some() {
+            draws.push(Vec::new());
+        } else {
+            draws.push(handle.draws.iter().map(|&slot| slot as usize).collect());
+        }
         scenes.push(scene_of.get(&entity).copied());
     }
     (draws, scenes)
@@ -122,6 +128,32 @@ mod tests {
         // Pairs follow RenderHandle column order (a, b, c).
         assert_eq!(draws, vec![vec![10usize, 11], vec![20], vec![30]]);
         assert_eq!(scenes, vec![Some(AssetId(7)), None, Some(AssetId(8))]);
+    }
+
+    // A Hidden entity contributes an empty slot list, so a scene switch never
+    // relights slots a hide request turned off.
+    #[test]
+    fn snapshot_blanks_hidden_entities_draws() {
+        let mut components = ComponentStorage::default();
+        let mut blob = BlobData::empty();
+        let mut profile = FrameProfile::default();
+        let mut resources = Resources::new();
+        let mut ctx = PipelineContext {
+            components: &mut components,
+            blob: &mut blob,
+            profile: &mut profile,
+            resources: &mut resources,
+        };
+
+        let a = ctx.components.spawn();
+        ctx.insert(a, RenderHandle { draws: vec![10] });
+        let b = ctx.components.spawn();
+        ctx.insert(b, RenderHandle { draws: vec![20] });
+        ctx.insert(b, crate::assets::Hidden);
+
+        let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
+        assert_eq!(draws, vec![vec![10usize], vec![]]);
+        assert_eq!(scenes, vec![None, None]);
     }
 
     // An entity carrying SceneMember but no RenderHandle contributes no draws

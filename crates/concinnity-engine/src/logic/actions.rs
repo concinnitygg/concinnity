@@ -5,7 +5,7 @@
 use super::vars::Variables;
 use crate::assets::{
     DespawnRequest, PlayCue, ReactionAction, ReparentRequest, SceneCommand, ScreenCommand,
-    SpawnRequest, StoryCommand, StoryPlayback, Transform,
+    SpawnRequest, StoryCommand, StoryPlayback, Transform, VisibilityRequest,
 };
 use crate::ecs::PipelineContext;
 
@@ -77,6 +77,12 @@ pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) {
                     StoryPlayback::Continue => StoryCommand::Continue,
                 };
                 ctx.events_mut::<StoryCommand>().send(command);
+            }
+            ReactionAction::Show { target } | ReactionAction::Hide { target } => {
+                let Some(name) = *target else { continue };
+                let visible = matches!(action, ReactionAction::Show { .. });
+                ctx.events_mut::<VisibilityRequest>()
+                    .send(VisibilityRequest { name, visible });
             }
         }
     }
