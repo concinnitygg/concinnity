@@ -17,3 +17,13 @@ license = "MIT"
 
 [profile.dev]
 opt-level = 2
+
+# Build scripts run unoptimized by default, which makes concinnity-render's
+# build-time LTC fit (a few million BRDF evaluations) roughly ten times slower
+# than it needs to be. The scripts themselves are small, so optimizing them costs
+# little to compile and is paid back on the first run.
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3

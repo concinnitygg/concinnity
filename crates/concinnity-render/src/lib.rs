@@ -37,6 +37,7 @@ pub mod input;
 pub mod jobs;
 pub mod keymap;
 pub mod lights;
+pub mod ltc;
 pub mod mat;
 pub mod mipmap;
 pub mod parallel_ctx;

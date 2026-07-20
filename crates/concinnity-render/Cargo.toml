@@ -28,3 +28,8 @@ ciborium = "0.2"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1.44"
+
+[build-dependencies]
+# The LTC fitter in src/ltc/fit.rs, which build.rs include!s, fans its per-row
+# fits across cores.
+rayon = "1"
