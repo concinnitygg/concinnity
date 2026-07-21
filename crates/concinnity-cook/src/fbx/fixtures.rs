@@ -148,6 +148,12 @@ pub(super) fn tree(roots: Vec<Node>) -> Tree {
     super::load_tree(file.path()).expect("load tree")
 }
 
+// The forward-slashed path `resolve_texture_path` produces for `rel` under
+// `dir`, so expectations do not bake in the host separator.
+pub(super) fn under(dir: &Path, rel: &str) -> String {
+    dir.join(rel).to_string_lossy().replace('\\', "/")
+}
+
 pub(super) fn assert_vec3_eq(a: [f32; 3], b: [f32; 3]) {
     for i in 0..3 {
         assert!((a[i] - b[i]).abs() < 1e-4, "component {i}: {a:?} vs {b:?}");

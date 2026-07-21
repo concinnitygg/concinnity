@@ -1585,7 +1585,12 @@ mod tests {
         let tex = find(&entries, "scn_tex_0", "Texture");
         assert_eq!(
             tex["args"]["source"],
-            serde_json::json!(dir.path().join("tex/stone_albedo.png").to_string_lossy())
+            serde_json::json!(
+                dir.path()
+                    .join("tex/stone_albedo.png")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            )
         );
         assert_eq!(tex["args"]["max_size"], serde_json::json!(256));
 

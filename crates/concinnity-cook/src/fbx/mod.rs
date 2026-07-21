@@ -321,18 +321,33 @@ fn world_matrix(id: i64, locals: &HashMap<i64, (Mat4, Mat4)>, parents: &HashMap<
     }
 }
 
+// Whether an FBX-authored path is absolute on the machine that wrote it.
+// `Path::is_absolute` cannot answer this: an FBX may come from any OS, and a
+// POSIX "/tex/x.png" is not absolute on Windows while a "C:/tex/x.png" is not
+// absolute anywhere else. Separators are normalized to "/" before this runs.
+fn is_author_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
 // Resolve an FBX texture's RelativeFilename to a path under the FBX directory.
 fn resolve_texture_path(tex: &NodeHandle, fbx_dir: &Path) -> Option<String> {
     let rel = child_str(tex, "RelativeFilename").or_else(|| child_str(tex, "FileName"))?;
     let rel = rel.replace('\\', "/");
-    let relp = Path::new(&rel);
-    let joined = if relp.is_absolute() {
+    let joined = if is_author_absolute(&rel) {
         // Absolute author-machine path: keep only the file name under the local dir.
-        fbx_dir.join(relp.file_name().map(Path::new).unwrap_or(relp))
+        match Path::new(&rel).file_name() {
+            Some(name) => fbx_dir.join(name),
+            // Nothing to rebase (e.g. a bare root); leave it as authored.
+            None => return Some(rel),
+        }
     } else {
-        fbx_dir.join(relp)
+        fbx_dir.join(&rel)
     };
-    Some(joined.to_string_lossy().into_owned())
+    // `join` uses the host separator; the result is an asset source string that
+    // keys the cook cache, so keep it forward-slashed on every platform.
+    Some(joined.to_string_lossy().replace('\\', "/"))
 }
 
 // Meters per FBX file unit, from GlobalSettings. FBX's native unit is the
@@ -1552,22 +1567,10 @@ mod tests {
         assert_vec3_eq(red.emissive_factor, [0.0, 0.5, 0.0]);
         assert!((red.opacity - 0.25).abs() < 1e-6);
         let dir = file.dir();
-        assert_eq!(
-            red.albedo.as_deref(),
-            Some(dir.join("textures/albedo.png").to_str().unwrap())
-        );
-        assert_eq!(
-            red.normal.as_deref(),
-            Some(dir.join("textures/normal.png").to_str().unwrap())
-        );
-        assert_eq!(
-            red.orm.as_deref(),
-            Some(dir.join("textures/orm.png").to_str().unwrap())
-        );
-        assert_eq!(
-            red.emissive.as_deref(),
-            Some(dir.join("textures/emissive.png").to_str().unwrap())
-        );
+        assert_eq!(red.albedo, Some(fx::under(dir, "textures/albedo.png")));
+        assert_eq!(red.normal, Some(fx::under(dir, "textures/normal.png")));
+        assert_eq!(red.orm, Some(fx::under(dir, "textures/orm.png")));
+        assert_eq!(red.emissive, Some(fx::under(dir, "textures/emissive.png")));
 
         let blue = &scene.materials[1];
         assert_eq!(blue.name, "Blue");
