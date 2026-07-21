@@ -281,9 +281,233 @@ fn now_iso8601() -> String {
         .expect("time format")
 }
 
+// Shared harness for tests that drive the build's file output. Both writes
+// target process-global locations -- the blobs go under the installed state
+// root, the lock file is written relative to the working directory -- so the
+// lock serialises them and the guards restore the process afterwards.
+#[cfg(test)]
+pub(crate) mod test_output {
+    pub(crate) static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // Anchors the state root at a temp tree for the life of the guard, so
+    // `write_blobs` lands its files there instead of under the cwd.
+    pub(crate) struct StateDir(tempfile::TempDir);
+
+    impl StateDir {
+        pub(crate) fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            concinnity_core::paths::set_state_dir(dir.path());
+            Self(dir)
+        }
+
+        pub(crate) fn data_dir(&self) -> std::path::PathBuf {
+            self.0.path().join("data")
+        }
+
+        pub(crate) fn assets_dir(&self) -> std::path::PathBuf {
+            self.0.path().join("assets")
+        }
+    }
+
+    impl Drop for StateDir {
+        fn drop(&mut self) {
+            concinnity_core::paths::clear_state_dir();
+        }
+    }
+
+    // Clears the cwd-relative lock path when the test ends, however it ends.
+    // A test may leave a directory there instead of a file to make the write
+    // fail, so both are removed.
+    pub(crate) struct LockFile;
+
+    impl Drop for LockFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(super::LOCK_PATH);
+            let _ = std::fs::remove_dir_all(super::LOCK_PATH);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::{AssetKind, asset_id::AssetId};
+    use test_output::{LockFile, StateDir};
+
+    fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
+        PayloadLocator {
+            blob_index,
+            offset,
+            len,
+        }
+    }
+
+    fn component_def(discriminant: u8, payload: Option<PayloadLocator>) -> BlobAssetDef {
+        BlobAssetDef {
+            name: Some(AssetId(discriminant as u32)),
+            kind: AssetKind::Component,
+            discriminant,
+            args_bytes: vec![discriminant, 0xAA],
+            payload,
+        }
+    }
+
+    #[test]
+    fn write_blobs_keeps_metadata_in_blob_zero_and_splits_payload_bytes() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let state = StateDir::new();
+
+        let defs = vec![
+            component_def(3, Some(locator(0, 0, 3))),
+            component_def(4, None),
+        ];
+        let resources = vec![ResourceRecord {
+            resource_kind: 2,
+            handle: 0,
+            payload: Some(locator(1, 0, 4)),
+            data_bytes: vec![9, 9],
+        }];
+        let payloads = vec![vec![1, 2, 3], vec![4, 5, 6, 7]];
+        let data_dir = state.data_dir();
+        let paths = write_blobs(&defs, &resources, &payloads)
+            .expect("write_blobs")
+            .blob_paths;
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], data_dir.join("0").to_string_lossy());
+        assert_eq!(paths[1], data_dir.join("1").to_string_lossy());
+
+        // Blob 0 carries the whole metadata block plus its own payload section.
+        let (meta, payload_start) = read_cnb(&paths[0]).expect("blob 0 parses");
+        assert_eq!(meta.defs.len(), 2);
+        assert_eq!(meta.defs[0].discriminant, 3);
+        assert_eq!(meta.resources.len(), 1);
+        assert_eq!(meta.resources[0].data_bytes, vec![9, 9]);
+        assert_eq!(
+            meta.manifest,
+            concinnity_blob::WorldManifest::from_records(&defs, &resources),
+            "the shipped manifest is derived from the streams it summarizes"
+        );
+        assert_eq!(&fs::read(&paths[0]).unwrap()[payload_start..], &[1, 2, 3]);
+
+        // An overflow blob is payload only: no defs, no resources.
+        let (overflow_meta, overflow_start) = read_cnb(&paths[1]).expect("blob 1 parses");
+        assert!(overflow_meta.defs.is_empty());
+        assert!(overflow_meta.resources.is_empty());
+        assert_eq!(
+            &fs::read(&paths[1]).unwrap()[overflow_start..],
+            &[4, 5, 6, 7]
+        );
+    }
+
+    #[test]
+    fn write_blobs_without_payloads_still_writes_the_primary_blob() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _state = StateDir::new();
+
+        let defs = vec![component_def(5, None)];
+        let paths = write_blobs(&defs, &[], &[])
+            .expect("write_blobs")
+            .blob_paths;
+        assert_eq!(paths.len(), 1, "a payload-less world still ships blob 0");
+        let (meta, payload_start) = read_cnb(&paths[0]).expect("blob 0 parses");
+        assert_eq!(meta.defs.len(), 1);
+        assert_eq!(fs::read(&paths[0]).unwrap().len(), payload_start);
+    }
+
+    // A blob path that cannot be written (here a directory sits where the file
+    // belongs) fails the build rather than shipping a partial data set.
+    #[test]
+    fn write_blobs_surfaces_a_write_failure() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let state = StateDir::new();
+        fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
+
+        let result = write_blobs(&[component_def(1, None)], &[], &[]);
+        assert!(result.is_err(), "an unwritable blob path must fail");
+    }
+
+    #[test]
+    fn write_lock_records_blob_checksums_payload_sizes_and_provenance() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _state = StateDir::new();
+        let _lock_file = LockFile;
+
+        let defs = vec![
+            component_def(3, Some(locator(0, 0, 3))),
+            component_def(4, None),
+        ];
+        let paths = write_blobs(&defs, &[], &[vec![1, 2, 3]])
+            .expect("write_blobs")
+            .blob_paths;
+        let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];
+        let resources = vec![LockedResource {
+            name: "clip".to_string(),
+            kind: "AudioClip".to_string(),
+            handle: 2,
+            args_hash: "ff".to_string(),
+            payload_blob: None,
+        }];
+        let injected = vec![crate::world::InjectedAsset {
+            name: "debug_hud".to_string(),
+            asset_type: "DebugHud".to_string(),
+            args: serde_json::json!({"enabled": true}),
+            injected_by: "engine",
+        }];
+        let shadowed = vec![crate::world::ShadowedAsset {
+            name: "bistro_mat_wood".to_string(),
+            asset_type: "Material".to_string(),
+            generated_by: "bistro".to_string(),
+        }];
+
+        write_lock(&named, &resources, &injected, &shadowed, &paths).expect("write_lock");
+        let blob_bytes = fs::read(&paths[0]).expect("blob 0 readable");
+        let written = fs::read_to_string(LOCK_PATH).expect("lock written to the working directory");
+
+        let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
+        assert_eq!(lock.engine_version, env!("CARGO_PKG_VERSION"));
+        assert!(OffsetDateTime::parse(&lock.built_at, &Rfc3339).is_ok());
+
+        assert_eq!(lock.blobs.len(), 1);
+        assert_eq!(lock.blobs[0].path, paths[0]);
+        assert_eq!(lock.blobs[0].checksum, checksum(&blob_bytes));
+        assert_eq!(
+            lock.blobs[0].payload_bytes, 3,
+            "payload bytes exclude the header and the metadata section"
+        );
+
+        assert_eq!(lock.assets.len(), 2);
+        assert_eq!(lock.assets[0].name, "floor");
+        assert_eq!(lock.assets[0].kind, "Component");
+        assert_eq!(lock.assets[0].discriminant, 3);
+        assert_eq!(lock.assets[0].args_hash, checksum(&defs[0].args_bytes));
+        assert_eq!(lock.assets[0].payload_blob, Some(0));
+        assert_eq!(lock.assets[1].name, "wall");
+        assert_eq!(lock.assets[1].payload_blob, None);
+
+        assert_eq!(lock.resources[0].name, "clip");
+        assert_eq!(lock.resources[0].handle, 2);
+        assert_eq!(lock.injected[0].name, "debug_hud");
+        assert_eq!(lock.injected[0].args["enabled"], true);
+        assert_eq!(lock.injected[0].injected_by, "engine");
+        assert_eq!(lock.shadowed[0].generated_by, "bistro");
+    }
+
+    // A lock is still written when a listed blob is unreadable: the entry
+    // records the empty checksum and no payload bytes rather than failing.
+    #[test]
+    fn write_lock_tolerates_a_missing_blob_file() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock_file = LockFile;
+
+        let paths = vec!["/no/such/data/0".to_string()];
+        write_lock(&[], &[], &[], &[], &paths).expect("write_lock");
+        let written = fs::read_to_string(LOCK_PATH).expect("lock written");
+
+        let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
+        assert_eq!(lock.blobs[0].payload_bytes, 0);
+        assert_eq!(lock.blobs[0].checksum, checksum(b""));
+        assert!(lock.assets.is_empty());
+    }
 
     #[test]
     fn packer_appends_within_the_limit() {
@@ -330,10 +554,8 @@ mod tests {
         assert_eq!((b.blob_index, b.offset, b.len), (0, 0, 1));
     }
 
-    // The write_cnb round-trip tests live in the concinnity-blob crate with the
-    // encoder; here the tests cover cook's packing policy and the lock.
-    // (write_blobs itself writes through the process-global data-dir anchor, so
-    // it is exercised by `cn build`, not unit-tested.)
+    // The byte-format round-trip tests live in the concinnity-blob crate with
+    // the encoder; here the tests cover cook's packing policy and the lock.
 
     #[test]
     fn checksum_matches_known_sha256_vectors() {

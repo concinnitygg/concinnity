@@ -164,3 +164,81 @@ pub(super) fn build_room_geometry(
 
     (verts, idxs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        for (pos, ..) in verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(pos[k]);
+                mx[k] = mx[k].max(pos[k]);
+            }
+        }
+        (mn, mx)
+    }
+
+    #[test]
+    fn room_geometry_is_six_quads_spanning_the_requested_extents() {
+        let (verts, idxs) = build_room_geometry(3.0, 4.0, 0.0, 2.5);
+        assert_eq!(verts.len(), 6 * 4);
+        assert_eq!(idxs.len(), 6 * 6);
+        assert!(idxs.iter().all(|&i| (i as usize) < verts.len()));
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-3.0, 0.0, -4.0]);
+        assert_eq!(mx, [3.0, 2.5, 4.0]);
+    }
+
+    #[test]
+    fn room_normals_point_into_the_interior() {
+        // Every face's normal is a unit axis pointing at the room centre, which
+        // for an origin-centred box means normal . position is negative.
+        let (verts, _) = build_room_geometry(3.0, 4.0, -1.0, 1.0);
+        for (pos, normal, ..) in &verts {
+            let len =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-6, "normal {normal:?} is not unit");
+            let dot = pos[0] * normal[0] + pos[1] * normal[1] + pos[2] * normal[2];
+            assert!(dot < 0.0, "normal {normal:?} is not inward at {pos:?}");
+        }
+    }
+
+    #[test]
+    fn room_uvs_tile_once_per_metre() {
+        let (verts, _) = build_room_geometry(3.0, 4.0, 0.0, 2.5);
+        // The floor quad is emitted first and tiles across the full 6x8 extent.
+        let floor_uvs: Vec<[f32; 2]> = verts[..4].iter().map(|v| v.3).collect();
+        assert_eq!(
+            floor_uvs,
+            vec![[0.0, 0.0], [6.0, 0.0], [6.0, 8.0], [0.0, 8.0]]
+        );
+        // The north wall (third quad) tiles width by ceiling height.
+        let wall_uvs: Vec<[f32; 2]> = verts[8..12].iter().map(|v| v.3).collect();
+        assert_eq!(
+            wall_uvs,
+            vec![[0.0, 2.5], [6.0, 2.5], [6.0, 0.0], [0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn room_args_override_the_default_extents() {
+        let args = serde_json::json!({
+            "half_width": 2.0, "half_depth": 5.0, "ceiling_height": 4.0,
+        });
+        let (verts, _) = build_room(&args).unwrap();
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-2.0, 0.0, -5.0]);
+        assert_eq!(mx, [2.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn room_args_default_to_a_sixteen_by_twenty_room() {
+        let (verts, _) = build_room(&serde_json::json!({})).unwrap();
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-8.0, 0.0, -10.0]);
+        assert_eq!(mx, [8.0, 3.5, 10.0]);
+    }
+}

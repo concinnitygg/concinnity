@@ -139,3 +139,90 @@ fn lcg_hash(mut v: u32) -> u32 {
     v ^= v >> 16;
     v
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_counts_and_extents_follow_the_subdivision_count() {
+        let args = serde_json::json!({
+            "half_width": 10.0, "half_depth": 5.0, "subdivisions": 8, "amplitude": 3.0,
+        });
+        let (verts, idxs) = build_terrain(&args).unwrap();
+        assert_eq!(verts.len(), 9 * 9);
+        assert_eq!(idxs.len(), 8 * 8 * 6);
+        assert!(idxs.iter().all(|&i| (i as usize) < verts.len()));
+
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        for (pos, ..) in &verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(pos[k]);
+                mx[k] = mx[k].max(pos[k]);
+            }
+        }
+        assert_eq!((mn[0], mx[0]), (-10.0, 10.0));
+        assert_eq!((mn[2], mx[2]), (-5.0, 5.0));
+        // Heights stay inside [0, amplitude] and vary across the grid.
+        assert!(mn[1] >= 0.0 && mx[1] <= 3.0);
+        assert!(mx[1] > mn[1], "expected height variation, got flat {mx:?}");
+    }
+
+    #[test]
+    fn every_vertex_normal_is_unit_length() {
+        let args = serde_json::json!({"subdivisions": 6, "amplitude": 5.0});
+        let (verts, _) = build_terrain(&args).unwrap();
+        for (_, normal, ..) in &verts {
+            let len =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-5, "normal {normal:?} is not unit");
+            assert!(normal[1] > 0.0, "terrain normal points down: {normal:?}");
+        }
+    }
+
+    #[test]
+    fn zero_amplitude_produces_a_flat_grid() {
+        let args = serde_json::json!({"subdivisions": 4, "amplitude": 0.0});
+        let (verts, _) = build_terrain(&args).unwrap();
+        assert!(verts.iter().all(|(pos, ..)| pos[1] == 0.0));
+        assert!(verts.iter().all(|(_, n, ..)| *n == [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn subdivisions_clamp_to_the_supported_range() {
+        // Below the floor clamps to 4 (5x5 lattice)...
+        let (small, _) = build_terrain(&serde_json::json!({"subdivisions": 0})).unwrap();
+        assert_eq!(small.len(), 5 * 5);
+        // ...and above the ceiling clamps to 255, the largest grid that still
+        // indexes with u16.
+        let (large, idxs) = build_terrain(&serde_json::json!({"subdivisions": 4096})).unwrap();
+        assert_eq!(large.len(), 256 * 256);
+        assert_eq!(idxs.len(), 255 * 255 * 6);
+    }
+
+    #[test]
+    fn terrain_height_is_deterministic_and_scales_with_amplitude() {
+        let a = terrain_height(3, 7, 32, 4.0);
+        assert_eq!(a, terrain_height(3, 7, 32, 4.0));
+        assert!((terrain_height(3, 7, 32, 8.0) - a * 2.0).abs() < 1e-5);
+        // The noise is floored at the base plane, never negative.
+        for col in 0..32u32 {
+            for row in 0..32u32 {
+                assert!(terrain_height(col, row, 32, 4.0) >= 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn lattice_values_are_normalised_and_position_dependent() {
+        for x in 0..16u32 {
+            for y in 0..16u32 {
+                let v = lattice_val(x, y);
+                assert!((0.0..=1.0).contains(&v), "lattice_val({x},{y}) = {v}");
+            }
+        }
+        assert_ne!(lattice_val(0, 0), lattice_val(1, 0));
+        assert_ne!(lcg_hash(0), lcg_hash(1));
+    }
+}

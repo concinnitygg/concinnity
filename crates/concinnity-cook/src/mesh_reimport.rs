@@ -102,7 +102,9 @@ pub fn decode_skinned_from_parsed_glb(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glb::test_fixtures::{parse, static_triangle_glb};
+    use crate::glb::test_fixtures::{
+        make_glb, parse, skinned_bin, skinned_glb, skinned_json, static_triangle_glb,
+    };
 
     #[test]
     fn decode_static_mesh_round_trips_a_triangle() {
@@ -120,5 +122,51 @@ mod tests {
         let doc = parse(&static_triangle_glb());
         let err = decode_mesh_from_parsed_glb(&doc, "t.glb", 3, 1, &[]).unwrap_err();
         assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_skinned_mesh_round_trips_vertices_and_the_bind_skeleton() {
+        let doc = parse(&skinned_glb());
+        let (vertices, indices, skeleton) =
+            decode_skinned_from_parsed_glb(&doc, "s.glb").expect("decode");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices, vec![0u16, 1, 2]);
+
+        // The skin authors its joints child-first; the payload round trip keeps
+        // the importer's parents-before-children order.
+        assert_eq!(skeleton.len(), 2);
+        assert_eq!(skeleton[0].name, "root");
+        assert_eq!(skeleton[0].parent, -1);
+        assert_eq!(skeleton[1].name, "tip");
+        assert_eq!(skeleton[1].parent, 0);
+        assert_eq!(skeleton[1].translation, [0.0, 0.5, 0.0]);
+
+        // Vertex bindings are remapped into that order, and the compile step
+        // baked normals for the triangle's plane.
+        assert_eq!(vertices[0].joints, [1, 1, 1, 1]);
+        assert_eq!(vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(vertices[0].normal, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn decode_skinned_mesh_surfaces_a_payload_compile_failure() {
+        // The glTF importer passes indices through untouched, so a triangle
+        // referencing a vertex the primitive does not have is caught by the
+        // payload compile rather than reaching the runtime.
+        let mut bin = skinned_bin();
+        bin[40..42].copy_from_slice(&9u16.to_le_bytes());
+        let doc = parse(&make_glb(&skinned_json(true, true, false), Some(&bin)));
+        let err = decode_skinned_from_parsed_glb(&doc, "s.glb").unwrap_err();
+        assert_eq!(err, "SkinnedMesh index out of range in triangle 0");
+    }
+
+    #[test]
+    fn decode_skinned_mesh_rejects_a_file_with_no_skinned_node() {
+        let doc = parse(&static_triangle_glb());
+        let err = decode_skinned_from_parsed_glb(&doc, "t.glb").unwrap_err();
+        assert!(
+            err.contains("no node with both a mesh and a skin"),
+            "got: {err}"
+        );
     }
 }

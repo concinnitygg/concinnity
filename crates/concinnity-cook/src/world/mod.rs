@@ -110,5 +110,28 @@ mod tests {
                 .iter()
                 .any(|a| a.asset_type == "GraphicsConfig")
         );
+        // The authored names are captured before expansion, so the injected
+        // companions are not mistaken for what the world declared.
+        assert_eq!(loaded.authored, vec!["gfx".to_string()]);
+    }
+
+    // An expansion failure is reported as the single error it is, rather than
+    // being swallowed on the way to semantic validation.
+    #[test]
+    fn prepare_world_reports_an_expansion_failure() {
+        let content = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
+        let errs = prepare_world(content).err().unwrap_or_default();
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("ghost"), "{errs:?}");
+    }
+
+    // Semantic validation runs on the expanded world, so a dangling reference
+    // that survives expansion still fails the build.
+    #[test]
+    fn prepare_world_reports_semantic_errors() {
+        let content = r#"{"name":"prop","type":"Prop","args":{"mesh":"nope"}}"#;
+        let errs = prepare_world(content).err().unwrap_or_default();
+        assert!(!errs.is_empty());
+        assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
     }
 }

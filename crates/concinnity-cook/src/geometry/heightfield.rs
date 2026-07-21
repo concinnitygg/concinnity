@@ -231,6 +231,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_pixel_buffer_shorter_than_the_declared_image() {
+        let args = serde_json::json!({ "subdivisions": 4, "elevation_max": 1.0 });
+        // 8x8 RGBA needs 256 bytes; hand it 100.
+        let err = build_heightfield_from_pixels(&args, 8, 8, &[0u8; 100]).unwrap_err();
+        assert!(err.contains("have 100, need 256"), "got: {err}");
+    }
+
+    #[test]
+    fn a_single_pixel_heightmap_produces_a_flat_mesh() {
+        let args = serde_json::json!({
+            "half_width": 1.0,
+            "half_depth": 1.0,
+            "subdivisions": 4,
+            "elevation_min": 2.0,
+            "elevation_max": 9.0,
+        });
+        let rgba = ramp_rgba(1, 1);
+        let (verts, _) = build_heightfield_from_pixels(&args, 1, 1, &rgba).expect("builds");
+        // The lone pixel's red channel is 0, so every sample lands on the
+        // elevation floor and the surface stays level.
+        assert!(verts.iter().all(|(pos, ..)| pos[1] == 2.0));
+        assert!(verts.iter().all(|(_, n, ..)| *n == [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn subdivisions_clamp_to_the_supported_range() {
+        let args = |subdiv: u64| serde_json::json!({"subdivisions": subdiv, "elevation_max": 1.0});
+        let rgba = ramp_rgba(4, 4);
+        let (small, _) = build_heightfield_from_pixels(&args(0), 4, 4, &rgba).unwrap();
+        assert_eq!(small.len(), 5 * 5);
+        // 255 is the largest grid that still indexes with u16.
+        let (large, idxs) = build_heightfield_from_pixels(&args(4096), 4, 4, &rgba).unwrap();
+        assert_eq!(large.len(), 256 * 256);
+        assert_eq!(idxs.len(), 255 * 255 * 6);
+    }
+
+    #[test]
     fn vertex_and_index_counts_match_grid() {
         // subdivisions=4 -> 5x5 = 25 verts, 4*4*2 = 32 tris -> 96 indices.
         let args = serde_json::json!({

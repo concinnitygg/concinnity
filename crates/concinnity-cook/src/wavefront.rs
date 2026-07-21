@@ -342,6 +342,25 @@ mod tests {
     }
 
     #[test]
+    fn error_on_non_numeric_y_component() {
+        let err = parse_obj("v 0 y 0\nv 1 0 0\nv 0 1 0\nf 1 2 3").unwrap_err();
+        assert_eq!(err, "line 1: invalid float for y");
+    }
+
+    #[test]
+    fn error_on_non_numeric_u_component() {
+        let err = parse_obj("v 0 0 0\nvt u 0\nf 1 1 1").unwrap_err();
+        assert_eq!(err, "line 2: invalid float for u");
+    }
+
+    #[test]
+    fn error_on_out_of_range_uv_index() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nf 1/9 2/1 3/1";
+        let err = parse_obj(obj).unwrap_err();
+        assert_eq!(err, "line 5: UV index 9 out of range (1 UVs defined)");
+    }
+
+    #[test]
     fn error_on_non_numeric_position_index() {
         let err = parse_obj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf a 2 3").unwrap_err();
         assert!(err.contains("invalid position index"), "got: {err}");
@@ -359,6 +378,33 @@ mod tests {
         // Only three vertices exist, so -9 reaches before the start of the list.
         let err = parse_obj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -9 -2 -1").unwrap_err();
         assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_face_with_fewer_than_three_corners() {
+        let err = parse_obj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2").unwrap_err();
+        assert_eq!(err, "line 4: face with fewer than 3 vertices");
+    }
+
+    #[test]
+    fn error_when_unique_vertices_exceed_the_u16_index_limit() {
+        // One vertex past the u16 index space, each used by exactly one
+        // triangle so no deduplication can hide the overflow.
+        let count = u16::MAX as usize + 3;
+        let mut obj = String::with_capacity(count * 12);
+        for i in 0..count {
+            obj.push_str(&format!("v {i} 0 0\n"));
+        }
+        for tri in 0..count / 3 {
+            obj.push_str(&format!(
+                "f {} {} {}\n",
+                tri * 3 + 1,
+                tri * 3 + 2,
+                tri * 3 + 3
+            ));
+        }
+        let err = parse_obj(&obj).unwrap_err();
+        assert_eq!(err, "mesh exceeds 65535 unique vertices (u16 index limit)");
     }
 
     #[test]

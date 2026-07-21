@@ -838,10 +838,16 @@ mod tests {
         out
     }
 
-    // One scene, one node named "Crate Box" at (1,2,3), one mesh with a single
-    // triangle primitive of `vertex_count` positions, and one PBR material.
-    // Growing `vertex_count` past the u16 limit exercises the chunking path.
+    // One scene holding a transform-only pivot at (0,0,1) whose child node
+    // "Crate Box" sits at (1,2,3) and carries a single triangle primitive of
+    // `vertex_count` positions plus one PBR material. Growing `vertex_count`
+    // past the u16 limit exercises the chunking path.
     fn triangle_glb(vertex_count: usize) -> Vec<u8> {
+        triangle_glb_with_mode(vertex_count, 4)
+    }
+
+    // As above, with an explicit glTF primitive mode (4 = TRIANGLES).
+    fn triangle_glb_with_mode(vertex_count: usize, mode: u32) -> Vec<u8> {
         let mut bin = Vec::with_capacity(vertex_count * 12 + 12);
         for i in 0..vertex_count {
             let p: [f32; 3] = match i {
@@ -863,8 +869,11 @@ mod tests {
   "asset": {{"version": "2.0"}},
   "scene": 0,
   "scenes": [{{"nodes": [0]}}],
-  "nodes": [{{"mesh": 0, "name": "Crate Box", "translation": [1, 2, 3]}}],
-  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": 4}}]}}],
+  "nodes": [
+    {{"name": "Pivot", "children": [1], "translation": [0, 0, 1]}},
+    {{"mesh": 0, "name": "Crate Box", "translation": [1, 2, 3]}}
+  ],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": {mode}}}]}}],
   "materials": [{{"pbrMetallicRoughness": {{"baseColorFactor": [0.5, 0.25, 0.125, 1.0], "metallicFactor": 0.5, "roughnessFactor": 0.25}}, "emissiveFactor": [0.5, 0.0, 0.0]}}],
   "accessors": [
     {{"bufferView": 0, "componentType": 5126, "count": {vc}, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
@@ -877,6 +886,7 @@ mod tests {
   "buffers": [{{"byteLength": {total}}}]
 }}"#,
             vc = vertex_count,
+            mode = mode,
             pos_len = pos_len,
             total = bin.len(),
         );
@@ -929,15 +939,18 @@ mod tests {
         assert_eq!(model["args"]["meshes"][0]["mesh"], "scn_prim_0");
         assert_eq!(model["args"]["meshes"][0]["material"], "scn_mat_0");
 
-        // The node becomes a Prop named from the sanitized node name with the
-        // node's translation applied.
+        // The mesh-bearing node becomes a Prop named from its sanitized node
+        // name, flattened to a world transform: its own (1,2,3) composed with
+        // the transform-only parent pivot's (0,0,1). The pivot itself emits
+        // nothing.
         let prop = find(&entries, "scn_crate_box", "Prop");
         assert_eq!(prop["args"]["model"], "scn_model_0");
-        assert_eq!(prop["args"]["position"], serde_json::json!([1.0, 2.0, 3.0]));
+        assert_eq!(prop["args"]["position"], serde_json::json!([1.0, 2.0, 4.0]));
+        assert!(entries.iter().all(|e| e["name"] != "scn_pivot"));
 
         // A camera is framed to the world-space AABB.
         let cam = find(&entries, "scn_cam", "Camera3D");
-        assert!(cam["args"]["position"][2].as_f64().unwrap() > 3.0);
+        assert!(cam["args"]["position"][2].as_f64().unwrap() > 4.0);
     }
 
     #[test]
@@ -977,6 +990,64 @@ mod tests {
 
         let model = find(&entries, "big_model_0", "Model");
         assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");
+    }
+
+    #[test]
+    fn glb_without_a_scene_emits_geometry_but_no_props_or_camera() {
+        // A glTF may omit the scene graph entirely. There is then no node to
+        // place, so no Prop is emitted and nothing bounds a camera, but the
+        // mesh and material entries still expand.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_scene.glb");
+        let json = r#"{
+  "asset": {"version": "2.0"},
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}]}],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+    {"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 12}
+  ],
+  "buffers": [{"byteLength": 48}]
+}"#;
+        let mut bin: Vec<u8> = Vec::new();
+        for c in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+        for idx in [0u32, 1, 2] {
+            bin.extend_from_slice(&idx.to_le_bytes());
+        }
+        std::fs::write(&path, glb_bytes(json, &bin)).unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "scn".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        find(&entries, "scn_prim_0", "Mesh");
+        find(&entries, "scn_model_0", "Model");
+        assert!(entries.iter().all(|e| e["type"] != "Prop"));
+        assert!(entries.iter().all(|e| e["type"] != "Camera3D"));
+    }
+
+    #[test]
+    fn glb_oversized_primitive_with_unsupported_topology_errors() {
+        // Counting the chunks of an oversized primitive is the one geometry
+        // read the expansion performs, so its failure must surface as an error
+        // rather than a silently empty mesh list.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("points.glb");
+        std::fs::write(&path, triangle_glb_with_mode(U16_CAPACITY + 1, 0)).unwrap();
+
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+            .expect_err("POINTS topology is unsupported");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("only TRIANGLES is supported"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1034,14 +1105,18 @@ mod tests {
         let idx_end = bin.len();
         // The image bytes are never decoded during expansion (only a Texture
         // entry pointing at the source is emitted), so arbitrary padding stands
-        // in for the encoded pixels.
-        bin.extend_from_slice(&[0u8; 16]);
+        // in for the encoded pixels. Its odd length leaves the binary chunk
+        // needing tail padding.
+        bin.extend_from_slice(&[0u8; 14]);
         let json = format!(
             r#"{{
   "asset": {{"version": "2.0"}},
   "scene": 0,
-  "scenes": [{{"nodes": [0]}}],
-  "nodes": [{{"mesh": 0, "name": "Crate", "translation": [0, 0, 0]}}],
+  "scenes": [{{"nodes": [0, 1]}}],
+  "nodes": [
+    {{"mesh": 0, "name": "Crate", "translation": [0, 0, 0]}},
+    {{"mesh": 0, "translation": [5, 0, 0]}}
+  ],
   "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": 4}}]}}],
   "materials": [{{
     "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}, "metallicFactor": 0.0, "roughnessFactor": 1.0}},
@@ -1056,7 +1131,7 @@ mod tests {
   "bufferViews": [
     {{"buffer": 0, "byteOffset": 0, "byteLength": {pos_len}}},
     {{"buffer": 0, "byteOffset": {pos_len}, "byteLength": 12}},
-    {{"buffer": 0, "byteOffset": {idx_end}, "byteLength": 16}}
+    {{"buffer": 0, "byteOffset": {idx_end}, "byteLength": 14}}
   ],
   "buffers": [{{"byteLength": {total}}}]
 }}"#,
@@ -1065,6 +1140,394 @@ mod tests {
             total = bin.len(),
         );
         glb_bytes(&json, &bin)
+    }
+
+    // Minimal binary FBX writer: emits only the nodes `crate::fbx::parse_fbx`
+    // reads, so a fixture scene can be assembled without a checked-in file.
+    struct FbxWriter {
+        writer: fbxcel::writer::v7400::binary::Writer<std::io::Cursor<Vec<u8>>>,
+    }
+
+    impl FbxWriter {
+        fn new() -> Self {
+            Self {
+                writer: fbxcel::writer::v7400::binary::Writer::new(
+                    std::io::Cursor::new(Vec::new()),
+                    fbxcel::low::FbxVersion::V7_4,
+                )
+                .expect("fbx writer"),
+            }
+        }
+
+        fn open(&mut self, name: &str) {
+            self.writer.new_node(name).expect("open node");
+        }
+
+        fn close(&mut self) {
+            self.writer.close_node().expect("close node");
+        }
+
+        // Object header: id, then the `Name\0\u{1}Class` pair exporters emit.
+        fn open_object(&mut self, class: &str, id: i64, name: &str) {
+            let mut attrs = self.writer.new_node(class).expect("open object");
+            attrs.append_i64(id).expect("object id");
+            attrs
+                .append_string_direct(&format!("{name}\u{0}\u{1}{class}"))
+                .expect("object name");
+            attrs.append_string_direct("").expect("object subclass");
+        }
+
+        fn text(&mut self, name: &str, value: &str) {
+            let mut attrs = self.writer.new_node(name).expect("open node");
+            attrs.append_string_direct(value).expect("text value");
+            self.close();
+        }
+
+        fn f64_array(&mut self, name: &str, values: &[f64]) {
+            let mut attrs = self.writer.new_node(name).expect("open node");
+            attrs
+                .append_arr_f64_from_iter(None, values.iter().copied())
+                .expect("f64 array");
+            self.close();
+        }
+
+        fn i32_array(&mut self, name: &str, values: &[i32]) {
+            let mut attrs = self.writer.new_node(name).expect("open node");
+            attrs
+                .append_arr_i32_from_iter(None, values.iter().copied())
+                .expect("i32 array");
+            self.close();
+        }
+
+        // A `Properties70` entry: name, type, subtype, flags, then values.
+        fn prop_header(
+            &mut self,
+            name: &str,
+            ty: &str,
+        ) -> fbxcel::writer::v7400::binary::AttributesWriter<'_, std::io::Cursor<Vec<u8>>> {
+            let mut attrs = self.writer.new_node("P").expect("open P");
+            for field in [name, ty, "", "A"] {
+                attrs.append_string_direct(field).expect("P field");
+            }
+            attrs
+        }
+
+        fn prop_vec3(&mut self, name: &str, value: [f64; 3]) {
+            let mut attrs = self.prop_header(name, "Vector3D");
+            for v in value {
+                attrs.append_f64(v).expect("P value");
+            }
+            self.close();
+        }
+
+        fn prop_scalar(&mut self, name: &str, value: f64) {
+            let mut attrs = self.prop_header(name, "double");
+            attrs.append_f64(value).expect("P value");
+            self.close();
+        }
+
+        fn connect(&mut self, kind: &str, child: i64, parent: i64, property: Option<&str>) {
+            let mut attrs = self.writer.new_node("C").expect("open C");
+            attrs.append_string_direct(kind).expect("connection kind");
+            attrs.append_i64(child).expect("child id");
+            attrs.append_i64(parent).expect("parent id");
+            if let Some(property) = property {
+                attrs.append_string_direct(property).expect("property");
+            }
+            self.close();
+        }
+
+        fn write(self, path: &Path) {
+            let sink = self
+                .writer
+                .finalize_and_flush(&Default::default())
+                .expect("finalize fbx");
+            std::fs::write(path, sink.into_inner()).expect("write fbx");
+        }
+    }
+
+    // A two-model scene: "Crate Box" carries a quad split across an opaque and
+    // a glass material slot; the second model is unnamed and has no material.
+    // Two further materials cover the frosted and named-glass paths.
+    fn write_scene_fbx(path: &Path) {
+        let mut f = FbxWriter::new();
+        f.open("Objects");
+
+        f.open_object("Geometry", 100, "CubeMesh");
+        f.f64_array(
+            "Vertices",
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        );
+        // Two triangles; the last corner of each polygon is stored complemented.
+        f.i32_array("PolygonVertexIndex", &[0, 1, !2, 1, 3, !2]);
+        f.open("LayerElementMaterial");
+        f.text("MappingInformationType", "ByPolygon");
+        f.i32_array("Materials", &[0, 1]);
+        f.close();
+        f.close();
+
+        f.open_object("Model", 200, "Crate Box");
+        f.open("Properties70");
+        f.prop_vec3("Lcl Translation", [1.0, 2.0, 3.0]);
+        f.close();
+        f.close();
+
+        f.open_object("Geometry", 101, "PlaneMesh");
+        f.f64_array("Vertices", &[0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+        f.i32_array("PolygonVertexIndex", &[0, 1, !2]);
+        f.close();
+
+        f.open_object("Model", 201, "");
+        f.close();
+
+        f.open_object("Material", 300, "Stone");
+        f.open("Properties70");
+        f.prop_vec3("DiffuseColor", [0.5, 0.25, 0.125]);
+        f.close();
+        f.close();
+
+        f.open_object("Material", 301, "GlassPane");
+        f.open("Properties70");
+        f.prop_scalar("Opacity", 0.25);
+        f.prop_vec3("EmissiveColor", [0.25, 0.5, 0.75]);
+        f.close();
+        f.close();
+
+        f.open_object("Material", 302, "FrostedGlass");
+        f.close();
+
+        f.open_object("Material", 303, "WindowPane");
+        f.open("Properties70");
+        f.prop_scalar("TransparencyFactor", 0.0);
+        f.close();
+        f.close();
+
+        for (id, file) in [
+            (400, "tex/stone_albedo.png"),
+            (401, "tex/stone_normal.png"),
+            (402, "tex/stone_orm.png"),
+            (403, "tex/stone_emissive.png"),
+            (404, "tex/glass_orm.png"),
+        ] {
+            f.open_object("Texture", id, file);
+            f.text("RelativeFilename", file);
+            f.close();
+        }
+        f.close();
+
+        f.open("Connections");
+        f.connect("OO", 100, 200, None);
+        f.connect("OO", 200, 0, None);
+        f.connect("OO", 300, 200, None);
+        f.connect("OO", 301, 200, None);
+        f.connect("OO", 101, 201, None);
+        f.connect("OO", 201, 0, None);
+        f.connect("OP", 400, 300, Some("DiffuseColor"));
+        f.connect("OP", 401, 300, Some("NormalMap"));
+        f.connect("OP", 402, 300, Some("SpecularColor"));
+        f.connect("OP", 403, 300, Some("EmissiveColor"));
+        f.connect("OP", 404, 301, Some("SpecularColor"));
+        f.close();
+
+        f.write(path);
+    }
+
+    fn scene_opts() -> ImportOptions {
+        ImportOptions {
+            name_prefix: "scn".to_string(),
+            texture_max_size: 256,
+            emissive_map_strength: 2.5,
+            emit_camera: true,
+        }
+    }
+
+    #[test]
+    fn fbx_materials_map_textures_factors_and_glass_onto_the_pbr_subset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scene.fbx");
+        write_scene_fbx(&path);
+        let entries = entries_from_scene(path.to_str().unwrap(), &scene_opts()).expect("expand");
+
+        // Each referenced texture is interned once, in material/slot order, and
+        // resolves relative to the .fbx directory.
+        let tex = find(&entries, "scn_tex_0", "Texture");
+        assert_eq!(
+            tex["args"]["source"],
+            serde_json::json!(dir.path().join("tex/stone_albedo.png").to_string_lossy())
+        );
+        assert_eq!(tex["args"]["max_size"], serde_json::json!(256));
+
+        let stone = find(&entries, "scn_mat_0", "Material");
+        assert_eq!(stone["args"]["albedo"], "scn_tex_0");
+        assert_eq!(stone["args"]["normal_map"], "scn_tex_1");
+        assert_eq!(stone["args"]["orm_map"], "scn_tex_2");
+        assert_eq!(stone["args"]["emissive_map"], "scn_tex_3");
+        assert_eq!(stone["args"]["tint"], serde_json::json!([0.5, 0.25, 0.125]));
+        // A textured emissive drives the glow from the import option, not the
+        // FBX factor.
+        assert_eq!(
+            stone["args"]["emissive_factor"],
+            serde_json::json!([2.5, 2.5, 2.5])
+        );
+        assert_eq!(stone["args"]["roughness"], serde_json::json!(0.7));
+        assert_eq!(stone["args"]["metallic"], serde_json::json!(0.0));
+        assert!(stone["args"].get("transparent").is_none());
+
+        // Glass keeps its FBX emissive factor, drops the packed ORM map, and
+        // turns smooth + transparent.
+        let glass = find(&entries, "scn_mat_1", "Material");
+        assert!(glass["args"].get("orm_map").is_none());
+        assert!(
+            !entries.iter().any(|e| e["args"]["source"]
+                .as_str()
+                .is_some_and(|s| s.contains("glass_orm"))),
+            "the dropped glass ORM map must not be interned"
+        );
+        assert_eq!(
+            glass["args"]["emissive_factor"],
+            serde_json::json!([0.25, 0.5, 0.75])
+        );
+        assert_eq!(glass["args"]["roughness"], serde_json::json!(0.08));
+        assert_eq!(glass["args"]["opacity"], serde_json::json!(0.25));
+        assert_eq!(glass["args"]["transparent"], serde_json::json!(true));
+
+        // Frosted glass stays a rough opaque surface.
+        let frosted = find(&entries, "scn_mat_2", "Material");
+        assert_eq!(frosted["args"]["roughness"], serde_json::json!(0.7));
+        assert!(frosted["args"].get("transparent").is_none());
+
+        // An opaque material named like a window is glass with a default
+        // see-through amount.
+        let window = find(&entries, "scn_mat_3", "Material");
+        assert_eq!(window["args"]["roughness"], serde_json::json!(0.08));
+        assert_eq!(window["args"]["opacity"], serde_json::json!(0.25));
+
+        // The fallback material unassigned primitives use.
+        let default_mat = find(&entries, "scn_mat_default", "Material");
+        assert_eq!(default_mat["args"]["roughness"], serde_json::json!(0.8));
+    }
+
+    #[test]
+    fn fbx_scene_expands_to_meshes_models_props_and_a_framed_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scene.fbx");
+        write_scene_fbx(&path);
+        let source = path.to_str().unwrap();
+        let entries = entries_from_scene(source, &scene_opts()).expect("expand");
+
+        // One Mesh per material group, referencing the source by path only.
+        for i in 0..3 {
+            let mesh = find(&entries, &format!("scn_prim_{i}"), "Mesh");
+            assert_eq!(mesh["args"]["source"], serde_json::json!(source));
+            assert_eq!(mesh["args"]["primitive_index"], serde_json::json!(i));
+            assert!(mesh["args"].get("chunk_index").is_none());
+        }
+        assert!(entries.iter().all(|e| e["name"] != "scn_prim_3"));
+
+        // The first model groups both of its material slots.
+        let model = find(&entries, "scn_model_0", "Model");
+        assert_eq!(
+            model["args"]["meshes"],
+            serde_json::json!([
+                {"mesh": "scn_prim_0", "material": "scn_mat_0"},
+                {"mesh": "scn_prim_1", "material": "scn_mat_1"},
+            ])
+        );
+        // The second has no material connection and falls back to the default.
+        let model = find(&entries, "scn_model_1", "Model");
+        assert_eq!(
+            model["args"]["meshes"],
+            serde_json::json!([{"mesh": "scn_prim_2", "material": "scn_mat_default"}])
+        );
+
+        // A named node becomes a sanitized, index-suffixed Prop at its world
+        // transform; an unnamed one falls back to its index.
+        let prop = find(&entries, "scn_crate_box_0", "Prop");
+        assert_eq!(prop["args"]["model"], "scn_model_0");
+        assert_eq!(prop["args"]["position"], serde_json::json!([1.0, 2.0, 3.0]));
+        assert_eq!(prop["args"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
+        let unnamed = find(&entries, "scn_node_1", "Prop");
+        assert_eq!(unnamed["args"]["model"], "scn_model_1");
+
+        // The camera is framed to the scene's world-space bounds.
+        let cam = find(&entries, "scn_cam", "Camera3D");
+        assert!(cam["args"]["position"][2].as_f64().unwrap() > 3.0);
+    }
+
+    #[test]
+    fn fbx_scene_with_emit_camera_false_omits_the_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scene.fbx");
+        write_scene_fbx(&path);
+        let opts = ImportOptions {
+            emit_camera: false,
+            ..scene_opts()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+        assert!(entries.iter().all(|e| e["type"] != "Camera3D"));
+    }
+
+    // One primitive whose polygon-vertex corners outnumber the u16 index
+    // space: corners never share a vertex, so 21846 triangles over three
+    // control points overflow it.
+    fn write_oversized_fbx(path: &Path) {
+        let mut f = FbxWriter::new();
+        f.open("Objects");
+        f.open_object("Geometry", 100, "BigMesh");
+        f.f64_array("Vertices", &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let triangles = U16_CAPACITY / 3 + 1;
+        let mut pvi: Vec<i32> = Vec::with_capacity(triangles * 3);
+        for _ in 0..triangles {
+            pvi.extend_from_slice(&[0, 1, !2]);
+        }
+        f.i32_array("PolygonVertexIndex", &pvi);
+        f.close();
+        f.open_object("Model", 200, "Big");
+        f.close();
+        f.close();
+
+        f.open("Connections");
+        f.connect("OO", 100, 200, None);
+        f.connect("OO", 200, 0, None);
+        f.close();
+        f.write(path);
+    }
+
+    #[test]
+    fn fbx_oversized_primitive_fans_into_chunked_meshes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.fbx");
+        write_oversized_fbx(&path);
+        let opts = ImportOptions {
+            name_prefix: "big".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+
+        // 65538 vertices split into a full u16 chunk plus the remainder, each
+        // emitted as its own Mesh carrying the chunk index to re-slice on.
+        for chunk in 0..2 {
+            let mesh = find(&entries, &format!("big_prim_0_chunk_{chunk}"), "Mesh");
+            assert_eq!(mesh["args"]["primitive_index"], serde_json::json!(0));
+            assert_eq!(mesh["args"]["chunk_index"], serde_json::json!(chunk));
+        }
+        assert!(entries.iter().all(|e| e["name"] != "big_prim_0"));
+
+        let model = find(&entries, "big_model_0", "Model");
+        assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");
+        assert_eq!(model["args"]["meshes"][1]["mesh"], "big_prim_0_chunk_1");
+    }
+
+    #[test]
+    fn corrupt_fbx_errors_as_invalid_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("junk.fbx");
+        std::fs::write(&path, b"definitely not an fbx").unwrap();
+
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+            .expect_err("corrupt file");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("not a valid FBX file"), "{err}");
     }
 
     #[test]
@@ -1089,5 +1552,30 @@ mod tests {
         let mat = find(&entries, "scn_mat_0", "Material");
         assert_eq!(mat["args"]["albedo"], "scn_tex_0");
         assert_eq!(mat["args"]["normal_map"], "scn_tex_0");
+
+        // The second node draws the same mesh but carries no name, so it is
+        // named after its walk order instead.
+        let unnamed = find(&entries, "scn_node_1", "Prop");
+        assert_eq!(unnamed["args"]["model"], "scn_model_0");
+        assert_eq!(
+            unnamed["args"]["position"],
+            serde_json::json!([5.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn glb_texture_max_size_of_zero_leaves_the_texture_uncapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tex.glb");
+        std::fs::write(&path, textured_triangle_glb()).unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "scn".to_string(),
+            texture_max_size: 0,
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        let tex = find(&entries, "scn_tex_0", "Texture");
+        assert!(tex["args"].get("max_size").is_none());
     }
 }

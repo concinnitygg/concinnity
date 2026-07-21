@@ -165,6 +165,26 @@ mod tests {
     }
 
     #[test]
+    fn import_glb_animation_on_a_skinned_file_without_clips_reports_a_plural_count() {
+        use crate::glb::test_fixtures::{make_glb, skinned_bin, skinned_json};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bytes = make_glb(&skinned_json(true, true, false), Some(&skinned_bin()));
+        let src = write_glb(&dir, "s.glb", &bytes);
+        let err = import_glb_animation(&src, 0).unwrap_err();
+        assert!(err.contains("animation_index 0 out of range"), "got: {err}");
+        assert!(err.contains("0 animations"), "got: {err}");
+    }
+
+    #[test]
+    fn glb_animation_names_reports_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("missing.glb");
+        let err = glb_animation_names(src.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("failed to read"), "got: {err}");
+        assert!(err.contains("missing.glb"), "got: {err}");
+    }
+
+    #[test]
     fn glb_animation_names_rejects_invalid_content() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("junk.glb");

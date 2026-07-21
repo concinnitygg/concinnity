@@ -103,3 +103,50 @@ pub(super) fn build_skybox(args: &serde_json::Value) -> Result<(Verts, Vec<u16>)
 
     Ok((verts, idxs))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skybox_is_six_quads_at_the_default_half_extent() {
+        let (verts, idxs) = build_skybox(&serde_json::json!({})).unwrap();
+        assert_eq!(verts.len(), 6 * 4);
+        assert_eq!(idxs.len(), 6 * 6);
+        assert!(idxs.iter().all(|&i| (i as usize) < verts.len()));
+        for (pos, ..) in &verts {
+            for axis in pos {
+                assert_eq!(axis.abs(), 490.0, "corner off the cube: {pos:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn skybox_size_arg_scales_every_corner() {
+        let (verts, _) = build_skybox(&serde_json::json!({"size": 12.5})).unwrap();
+        for (pos, ..) in &verts {
+            for axis in pos {
+                assert_eq!(axis.abs(), 12.5);
+            }
+        }
+    }
+
+    #[test]
+    fn skybox_normals_face_the_interior() {
+        let (verts, _) = build_skybox(&serde_json::json!({"size": 4.0})).unwrap();
+        for (pos, normal, ..) in &verts {
+            let dot = pos[0] * normal[0] + pos[1] * normal[1] + pos[2] * normal[2];
+            assert_eq!(dot, -4.0, "normal {normal:?} is not inward at {pos:?}");
+        }
+    }
+
+    #[test]
+    fn skybox_vertex_colour_flags_sky_with_an_out_of_range_blue() {
+        let (verts, _) = build_skybox(&serde_json::json!({})).unwrap();
+        assert!(
+            verts
+                .iter()
+                .all(|(_, _, color, _)| *color == [1.0, 1.0, 2.0])
+        );
+    }
+}

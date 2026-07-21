@@ -761,7 +761,7 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{JointDef, SkinnedVertexData, VertexData};
+    use crate::assets::{JointDef, MorphDelta, SkinnedVertexData, VertexData};
     use crate::gfx::mesh_payload::{
         Vertex, deserialise_heightfield, deserialise_skinned_with_lods, deserialise_with_lods,
     };
@@ -805,6 +805,43 @@ mod tests {
                 "expected ok for generator '{name}'"
             );
         }
+    }
+
+    #[test]
+    fn compile_mesh_payload_water_grid_generator_builds_a_flat_tessellated_quad() {
+        let args = serde_json::json!({
+            "generator": "water_grid",
+            "half_width": 2.0, "half_depth": 3.0, "subdivisions": 8,
+        });
+        let (verts, indices) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        assert_eq!(verts.len(), 9 * 9);
+        assert_eq!(indices.len(), 8 * 8 * 6);
+        assert!(verts.iter().all(|v| v.pos[1] == 0.0));
+        assert!(verts.iter().all(|v| v.normal == [0.0, 1.0, 0.0]));
+        let max_x = verts.iter().fold(f32::NEG_INFINITY, |m, v| m.max(v.pos[0]));
+        let max_z = verts.iter().fold(f32::NEG_INFINITY, |m, v| m.max(v.pos[2]));
+        assert_eq!((max_x, max_z), (2.0, 3.0));
+    }
+
+    #[test]
+    fn compile_mesh_payload_water_grid_defaults_to_a_sixty_four_subdivision_grid() {
+        let args = serde_json::json!({"generator": "water_grid"});
+        let (verts, _) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        assert_eq!(verts.len(), 65 * 65);
+    }
+
+    #[test]
+    fn compile_mesh_payload_surfaces_generator_errors() {
+        // The sphere generator refuses a tessellation past the u16 index limit.
+        let sphere = serde_json::json!({"generator": "sphere", "rings": 255, "segments": 255});
+        assert!(compile_mesh_payload(&sphere).unwrap_err().contains("u16"));
+        // The extrude generator refuses a missing profile.
+        let extrude = serde_json::json!({"generator": "extrude"});
+        assert!(
+            compile_mesh_payload(&extrude)
+                .unwrap_err()
+                .contains("`profile` array")
+        );
     }
 
     #[test]
@@ -855,6 +892,18 @@ mod tests {
             "ceiling_texture": "checker"
         });
         assert!(compile_room_payload(&args).is_ok());
+    }
+
+    #[test]
+    fn compile_room_payload_surfaces_lod_configuration_errors() {
+        let args = serde_json::json!({
+            "size": [16.0, 20.0, 3.5], "lod_levels": 3, "lod_distances": [10.0],
+        });
+        let err = compile_room_payload(&args).unwrap_err();
+        assert!(
+            err.contains("lod_distances has 1 entries"),
+            "error was: {err}"
+        );
     }
 
     // A unit quad in the XY plane with CCW winding facing +Z.
@@ -916,6 +965,17 @@ mod tests {
         // Flat arrays must carry at least 6 numbers.
         let short = serde_json::json!({"vertices": [[0.0, 0.0, 0.0]], "indices": []});
         assert!(compile_mesh_payload(&short).unwrap_err().contains("6 or 8"));
+        // Every slot of a flat vertex array must be a number.
+        for slot in 0..8 {
+            let mut flat = vec![serde_json::json!(0.0); 8];
+            flat[slot] = serde_json::json!("x");
+            let args = serde_json::json!({"vertices": [flat], "indices": []});
+            let err = compile_mesh_payload(&args).unwrap_err();
+            assert!(
+                err.contains(&format!("vertex[0][{slot}] must be a number")),
+                "slot {slot} gave: {err}"
+            );
+        }
         // Indices must be integers and in range.
         let bad_index = serde_json::json!({"vertices": [[0, 0, 0, 1, 1, 1]], "indices": ["x"]});
         assert!(
@@ -932,6 +992,57 @@ mod tests {
                 .unwrap_err()
                 .contains("triangle 0")
         );
+    }
+
+    #[test]
+    fn inline_mesh_validates_named_vertex_fields() {
+        let vertex = |v: serde_json::Value| serde_json::json!({"vertices": [v], "indices": []});
+        let cases: [(serde_json::Value, &str); 4] = [
+            (serde_json::json!({"color": [1, 1, 1]}), "vertex[0].pos"),
+            (serde_json::json!({"pos": [0, 0, 0]}), "vertex[0].color"),
+            (
+                serde_json::json!({"pos": [0, 0, 0], "color": [1, 1, 1], "uv": [0]}),
+                "vertex[0].uv must have 2 elements",
+            ),
+            (
+                serde_json::json!({"pos": [0, 0], "color": [1, 1, 1]}),
+                "vertex[0].pos must have 3 elements",
+            ),
+        ];
+        for (v, expected) in cases {
+            let err = compile_mesh_payload(&vertex(v)).unwrap_err();
+            assert!(err.contains(expected), "expected '{expected}', got: {err}");
+        }
+    }
+
+    #[test]
+    fn inline_mesh_named_vertices_default_their_uv_to_zero() {
+        let args = serde_json::json!({
+            "vertices": [
+                {"pos": [0.0, 0.0, 0.0], "color": [1.0, 1.0, 1.0]},
+                {"pos": [1.0, 0.0, 0.0], "color": [1.0, 1.0, 1.0]},
+                {"pos": [0.0, 1.0, 0.0], "color": [1.0, 1.0, 1.0]},
+            ],
+            "indices": [0, 1, 2],
+        });
+        let (verts, _) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        assert!(verts.iter().all(|v| v.uv == [0.0, 0.0]));
+    }
+
+    #[test]
+    fn lod_alternates_stop_when_decimation_collapses() {
+        // Vertices with no triangles decimate to nothing, so no alternate is
+        // emitted even though three levels were requested.
+        let args = serde_json::json!({
+            "vertices": [[0, 0, 0, 1, 1, 1], [1, 0, 0, 1, 1, 1], [0, 1, 0, 1, 1, 1]],
+            "indices": [],
+            "lod_levels": 3,
+        });
+        let (verts, lod0, alternates) =
+            deserialise_with_lods(&compile_mesh_payload(&args).unwrap()).unwrap();
+        assert_eq!(verts.len(), 3);
+        assert!(lod0.is_empty());
+        assert!(alternates.is_empty());
     }
 
     #[test]
@@ -966,6 +1077,22 @@ mod tests {
         let args = serde_json::json!({"subdivisions": 4});
         let rgba = vec![255u8; 2 * 2 * 4];
         assert!(compile_heightfield_payload(&args, 2, 2, rgba).is_err());
+    }
+
+    #[test]
+    fn heightfield_payload_surfaces_lod_configuration_errors() {
+        let args = serde_json::json!({
+            "subdivisions": 4,
+            "elevation_max": 10.0,
+            "lod_levels": 3,
+            "lod_distances": [10.0],
+        });
+        let rgba = vec![255u8; 2 * 2 * 4];
+        let err = compile_heightfield_payload(&args, 2, 2, rgba).unwrap_err();
+        assert!(
+            err.contains("lod_distances has 1 entries"),
+            "error was: {err}"
+        );
     }
 
     #[test]
@@ -1044,14 +1171,12 @@ mod tests {
         assert!(parse_f32x3(None, "v").is_err());
         assert!(parse_f32x3(Some(&serde_json::json!("x")), "v").is_err());
         assert!(parse_f32x3(Some(&serde_json::json!([1, 2])), "v").is_err());
-        assert!(parse_f32x3(Some(&serde_json::json!([1, 2, "x"])), "v").is_err());
 
         assert_eq!(
             parse_f32x2(Some(&serde_json::json!([0.5, 1.5])), "uv").unwrap(),
             [0.5, 1.5]
         );
         assert!(parse_f32x2(Some(&serde_json::json!([0.5])), "uv").is_err());
-        assert!(parse_f32x2(Some(&serde_json::json!([true, false])), "uv").is_err());
 
         assert_eq!(
             parse_u32x3(Some(&serde_json::json!([1, 2, 3])), "dim").unwrap(),
@@ -1059,7 +1184,28 @@ mod tests {
         );
         assert!(parse_u32x3(None, "dim").is_err());
         assert!(parse_u32x3(Some(&serde_json::json!([1])), "dim").is_err());
-        assert!(parse_u32x3(Some(&serde_json::json!([1, 2, -3])), "dim").is_err());
+    }
+
+    #[test]
+    fn scalar_array_parsers_name_the_offending_element() {
+        // Each slot is validated in turn, and the message points at the one
+        // that failed rather than at the array as a whole.
+        for slot in 0..3 {
+            let mut v = vec![serde_json::json!(1); 3];
+            v[slot] = serde_json::json!("x");
+            let err = parse_f32x3(Some(&serde_json::Value::Array(v.clone())), "v").unwrap_err();
+            assert_eq!(err, format!("v[{slot}] must be a number"));
+
+            v[slot] = serde_json::json!(-1);
+            let err = parse_u32x3(Some(&serde_json::Value::Array(v)), "dim").unwrap_err();
+            assert_eq!(err, format!("dim[{slot}] must be a non-negative integer"));
+        }
+        for slot in 0..2 {
+            let mut v = vec![serde_json::json!(1); 2];
+            v[slot] = serde_json::json!(true);
+            let err = parse_f32x2(Some(&serde_json::Value::Array(v)), "uv").unwrap_err();
+            assert_eq!(err, format!("uv[{slot}] must be a number"));
+        }
     }
 
     #[test]
@@ -1104,6 +1250,13 @@ mod tests {
             uv: [0.0, 0.0],
             joints: [0; 4],
             weights,
+        }
+    }
+
+    fn morph_delta(position: [f32; 3]) -> MorphDelta {
+        MorphDelta {
+            position,
+            normal: [0.0, 1.0, 0.0],
         }
     }
 
@@ -1215,6 +1368,139 @@ mod tests {
         assert_eq!(alternates[0].1.len() % 3, 0);
     }
 
+    #[test]
+    fn skinned_mesh_rejects_a_mismatched_morph_delta_count() {
+        let tri = [
+            skinned_vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+        ];
+        let err = compile_skinned_mesh_payload_with_lods(
+            &tri,
+            &[0, 1, 2],
+            &[joint("root")],
+            &["smile".to_string()],
+            &[morph_delta([0.1, 0.0, 0.0])],
+            1,
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("morph_deltas has 1 entries; 1 target(s) x 3 vertices requires 3"),
+            "error was: {err}"
+        );
+    }
+
+    #[test]
+    fn skinned_mesh_round_trips_morph_targets() {
+        let tri = [
+            skinned_vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+        ];
+        let deltas = [
+            morph_delta([0.5, 0.0, 0.0]),
+            morph_delta([0.0, 0.5, 0.0]),
+            morph_delta([0.0, 0.0, 0.5]),
+        ];
+        let payload = compile_skinned_mesh_payload_with_lods(
+            &tri,
+            &[0, 1, 2],
+            &[joint("root")],
+            &["smile".to_string()],
+            &deltas,
+            1,
+            &[],
+        )
+        .unwrap();
+        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        assert_eq!(p.morphs.names, vec!["smile".to_string()]);
+        assert_eq!(p.morphs.deltas.len(), 3);
+        assert_eq!(p.morphs.deltas[0].position, [0.5, 0.0, 0.0]);
+        assert_eq!(p.morphs.deltas[2].position, [0.0, 0.0, 0.5]);
+        assert_eq!(p.morphs.deltas[1].normal, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn skinned_mesh_derives_lod_distances_when_none_are_given() {
+        let n = 5usize;
+        let mut verts = Vec::new();
+        for z in 0..n {
+            for x in 0..n {
+                verts.push(skinned_vertex(
+                    [x as f32, 0.0, z as f32],
+                    [1.0, 0.0, 0.0, 0.0],
+                ));
+            }
+        }
+        let mut indices: Vec<u16> = Vec::new();
+        for z in 0..n - 1 {
+            for x in 0..n - 1 {
+                let a = (z * n + x) as u16;
+                indices.extend_from_slice(&[
+                    a,
+                    a + 1,
+                    a + 1 + n as u16,
+                    a + 1 + n as u16,
+                    a + n as u16,
+                    a,
+                ]);
+            }
+        }
+        let payload = compile_skinned_mesh_payload_with_lods(
+            &verts,
+            &indices,
+            &[joint("root")],
+            &[],
+            &[],
+            3,
+            &[],
+        )
+        .unwrap();
+        let lods = deserialise_skinned_with_lods(&payload).unwrap().lods;
+        assert_eq!(lods.len(), 2);
+        // The default cascade doubles per level off the bounding-sphere radius.
+        assert!(lods[0].0 > 0.0);
+        assert!((lods[1].0 - lods[0].0 * 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn skinned_mesh_lod_stops_when_decimation_collapses() {
+        let tri = [
+            skinned_vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            skinned_vertex([0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+        ];
+        // No triangles to decimate, so the alternate list stays empty.
+        let payload =
+            compile_skinned_mesh_payload_with_lods(&tri, &[], &[joint("root")], &[], &[], 3, &[])
+                .unwrap();
+        assert!(
+            deserialise_skinned_with_lods(&payload)
+                .unwrap()
+                .lods
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn skinned_bounding_sphere_radius_covers_empty_and_boxed_inputs() {
+        assert_eq!(skinned_bounding_sphere_radius(&[]), 1.0);
+        let sv = |pos: [f32; 3]| crate::gfx::mesh_payload::SkinnedVertex {
+            pos,
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0; 3],
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+        // A single point has no extent, so the radius clamps to the 0.25 floor.
+        assert_eq!(skinned_bounding_sphere_radius(&[sv([3.0; 3])]), 0.25);
+        let cube = [sv([0.0, 0.0, 0.0]), sv([1.0, 1.0, 1.0])];
+        assert!((skinned_bounding_sphere_radius(&cube) - (3.0f32).sqrt() / 2.0).abs() < 1e-6);
+    }
+
     fn voxel_args(dim: [u32; 3], blocks: Vec<u32>) -> serde_json::Value {
         serde_json::json!({
             "dim": dim,
@@ -1274,6 +1560,27 @@ mod tests {
         let err =
             compile_voxel_chunk_payload(&voxel_args([1, 1, 1], vec![0]), |_| None).unwrap_err();
         assert!(err.contains("stone"), "error was: {err}");
+        // A valid dim with no palette at all is reported against `palette`.
+        let no_palette = serde_json::json!({"dim": [1, 1, 1], "blocks": [0]});
+        let err = compile_voxel_chunk_payload(&no_palette, solid).unwrap_err();
+        assert!(
+            err.contains("`palette` must be an array"),
+            "error was: {err}"
+        );
+    }
+
+    #[test]
+    fn voxel_chunk_surfaces_lod_configuration_errors() {
+        let mut args = voxel_args([1, 1, 1], vec![0]);
+        args["lod_levels"] = serde_json::json!(3);
+        args["lod_distances"] = serde_json::json!([10.0]);
+        let err =
+            compile_voxel_chunk_payload(&args, |_: &str| Some(serde_json::json!({"solid": true})))
+                .unwrap_err();
+        assert!(
+            err.contains("lod_distances has 1 entries"),
+            "error was: {err}"
+        );
     }
 
     #[test]
@@ -1295,5 +1602,13 @@ mod tests {
         assert_eq!(slot.uv_top, [0.0, 0.0, 0.125, 0.125]);
         assert_eq!(slot.uv_bottom, [0.25, 0.25, 0.5, 0.5]);
         assert_eq!(slot.uv_side, [0.25, 0.25, 0.5, 0.5]);
+        // A long-enough rect holding a non-number also falls back.
+        let slot = resolve_block_type(&serde_json::json!({
+            "uv_min": [0.5, 0.5],
+            "uv_max": [0.75, 0.75],
+            "uv_top": [0.0, 0.0, "x", 1.0],
+        }))
+        .unwrap();
+        assert_eq!(slot.uv_top, [0.5, 0.5, 0.75, 0.75]);
     }
 }

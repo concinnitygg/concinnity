@@ -122,19 +122,51 @@ pub fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, pixels))
 }
 
+// Synthetic legacy DDS containers for this crate's tests: `texture.rs` builds
+// them to exercise the DDS branch of the file-backed texture compiler.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_fixtures {
+    use super::{MAGIC, PIXELDATA_OFFSET};
 
-    // Build a minimal legacy DDS around a single block payload.
-    fn wrap_dds(fourcc: &[u8; 4], width: u32, height: u32, block: &[u8]) -> Vec<u8> {
+    // Build a minimal legacy DDS around concatenated block levels.
+    pub(crate) fn wrap_dds_mips(
+        fourcc: &[u8; 4],
+        width: u32,
+        height: u32,
+        mip_count: u32,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut v = vec![0u8; PIXELDATA_OFFSET];
         v[0..4].copy_from_slice(MAGIC);
         v[12..16].copy_from_slice(&height.to_le_bytes());
         v[16..20].copy_from_slice(&width.to_le_bytes());
+        v[28..32].copy_from_slice(&mip_count.to_le_bytes());
         v[84..88].copy_from_slice(fourcc);
-        v.extend_from_slice(block);
+        v.extend_from_slice(data);
         v
+    }
+
+    // A solid-red BC1 block (color0 = 565 red, indices 0).
+    pub(crate) fn bc1_red_block() -> [u8; 8] {
+        [0x00, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_fixtures::{bc1_red_block, wrap_dds_mips};
+    use super::*;
+
+    // A single-level DDS: mip_count 0 is clamped to one stored level.
+    fn wrap_dds(fourcc: &[u8; 4], width: u32, height: u32, block: &[u8]) -> Vec<u8> {
+        wrap_dds_mips(fourcc, width, height, 0, block)
+    }
+
+    // `DdsBlocks` is not `Debug`, so unwrap the error side by hand.
+    fn blocks_err(bytes: &[u8]) -> String {
+        decode_dds_blocks(bytes)
+            .err()
+            .expect("expected decode_dds_blocks to fail")
     }
 
     #[test]
@@ -166,29 +198,11 @@ mod tests {
         assert!(decode_dds(&dds).is_err());
     }
 
-    // Build a DDS with an explicit mip count and concatenated block levels.
-    fn wrap_dds_mips(
-        fourcc: &[u8; 4],
-        width: u32,
-        height: u32,
-        mip_count: u32,
-        data: &[u8],
-    ) -> Vec<u8> {
-        let mut v = vec![0u8; PIXELDATA_OFFSET];
-        v[0..4].copy_from_slice(MAGIC);
-        v[12..16].copy_from_slice(&height.to_le_bytes());
-        v[16..20].copy_from_slice(&width.to_le_bytes());
-        v[28..32].copy_from_slice(&mip_count.to_le_bytes());
-        v[84..88].copy_from_slice(fourcc);
-        v.extend_from_slice(data);
-        v
-    }
-
     #[test]
     fn reads_bc1_mip_chain_blocks() {
         // 8x8 BC1: mip0 = 4 blocks (32B), mip1 (4x4) = 1 block (8B),
         // mip2 (2x2) = 1 block, mip3 (1x1) = 1 block.
-        let block = [0x00, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let block = bc1_red_block();
         let mut data = Vec::new();
         data.extend_from_slice(&block.repeat(4)); // mip0
         data.extend_from_slice(&block); // mip1
@@ -209,6 +223,108 @@ mod tests {
         // Claims 4 mips but only supplies mip0's blocks.
         let block = [0u8; 8];
         let dds = wrap_dds_mips(b"DXT1", 8, 8, 4, &block.repeat(4));
-        assert!(decode_dds_blocks(&dds).is_err());
+        let err = blocks_err(&dds);
+        assert_eq!(
+            err,
+            "DDS mip 1 (4x4) needs 8 bytes at offset 160, file has 160"
+        );
+    }
+
+    #[test]
+    fn dds_blocks_rejects_a_file_shorter_than_the_header() {
+        let err = blocks_err(&[0u8; 16]);
+        assert_eq!(err, "DDS too short: 16 bytes");
+    }
+
+    #[test]
+    fn dds_blocks_rejects_bad_magic() {
+        let mut dds = wrap_dds(b"DXT1", 4, 4, &bc1_red_block());
+        dds[0] = b'X';
+        let err = blocks_err(&dds);
+        assert_eq!(err, "not a DDS file (bad magic)");
+    }
+
+    #[test]
+    fn dds_blocks_rejects_a_zero_dimension() {
+        let dds = wrap_dds(b"DXT1", 0, 4, &bc1_red_block());
+        let err = blocks_err(&dds);
+        assert_eq!(err, "DDS has zero dimension 0x4");
+    }
+
+    #[test]
+    fn dds_blocks_maps_dxt5_and_ati2_to_bc3_and_bc5() {
+        let dds = wrap_dds(b"DXT5", 4, 4, &[0u8; 16]);
+        let blocks = decode_dds_blocks(&dds).expect("dxt5");
+        assert_eq!(blocks.format, TextureFormat::Bc3);
+        assert_eq!(blocks.mips[0].data.len(), 16);
+
+        let dds = wrap_dds(b"ATI2", 4, 4, &[0u8; 16]);
+        let blocks = decode_dds_blocks(&dds).expect("ati2");
+        assert_eq!(blocks.format, TextureFormat::Bc5);
+        assert_eq!(blocks.mips[0].data.len(), 16);
+    }
+
+    #[test]
+    fn dds_blocks_rejects_dx10_and_unknown_fourccs() {
+        let err = blocks_err(&wrap_dds(b"DX10", 4, 4, &[0u8; 16]));
+        assert!(err.contains("DX10 extended header"), "got: {err}");
+        let err = blocks_err(&wrap_dds(b"DXT3", 4, 4, &[0u8; 16]));
+        assert!(
+            err.contains("unsupported DDS fourCC \"DXT3\""),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_dds_rejects_a_zero_dimension() {
+        let dds = wrap_dds(b"DXT1", 4, 0, &bc1_red_block());
+        let err = decode_dds(&dds).unwrap_err();
+        assert_eq!(err, "DDS has zero dimension 4x0");
+    }
+
+    #[test]
+    fn decodes_dxt5_colour_and_alpha() {
+        // Alpha endpoints 200/10 with all indices 0, then an opaque white
+        // BC1 colour block.
+        let mut block = [0u8; 16];
+        block[0] = 200;
+        block[1] = 10;
+        block[8] = 0xFF;
+        block[9] = 0xFF;
+        let dds = wrap_dds(b"DXT5", 4, 4, &block);
+        let (w, h, px) = decode_dds(&dds).unwrap();
+        assert_eq!((w, h), (4, 4));
+        for chunk in px.chunks(4) {
+            assert_eq!(chunk, &[255, 255, 255, 200]);
+        }
+    }
+
+    #[test]
+    fn decode_dds_rejects_pixel_data_shorter_than_one_block() {
+        for fourcc in [b"DXT1", b"DXT5", b"ATI2"] {
+            let dds = wrap_dds(fourcc, 4, 4, &[0u8; 4]);
+            let err = decode_dds(&dds).unwrap_err();
+            assert!(
+                err.starts_with("block-compressed data too short"),
+                "{}: {err}",
+                String::from_utf8_lossy(fourcc)
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_ati2_into_a_reconstructed_normal() {
+        // Red and green both mid-grey: the flat normal, whose Z reconstructs
+        // to near-max blue.
+        let mut block = [0u8; 16];
+        block[0] = 128;
+        block[1] = 128;
+        block[8] = 128;
+        block[9] = 128;
+        let dds = wrap_dds(b"ATI2", 4, 4, &block);
+        let (_, _, px) = decode_dds(&dds).unwrap();
+        assert_eq!(&px[0..2], &[128, 128]);
+        assert!(px[2] >= 253, "expected near-255 blue, got {}", px[2]);
+        assert_eq!(px[3], 255);
     }
 }

@@ -167,4 +167,43 @@ mod tests {
         let err = compile_cubemap_payload(&args).unwrap_err();
         assert!(err.contains("failed to open HDR"), "got: {err}");
     }
+
+    fn write_hdr(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("write hdr");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn compile_cubemap_payload_resamples_a_source_hdr_into_six_faces() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rgb = [0.5f32, 0.25, 0.125];
+        let src = write_hdr(
+            &dir,
+            "studio.hdr",
+            &crate::hdr::test_fixtures::solid_hdr_blob(16, 8, rgb),
+        );
+        let args = serde_json::json!({ "source": src, "face_size": 8 });
+        let payload = compile_cubemap_payload(&args).expect("compile");
+
+        let (face_size, face_bytes) = deserialise(&payload).expect("deserialise");
+        assert_eq!(face_size, 8);
+        assert_eq!(face_bytes.len(), 6 * 8 * 8 * 4 * 4);
+        // A solid equirect resamples to the same colour on every face.
+        for (i, texel) in face_bytes.chunks_exact(4).enumerate() {
+            let v = f32::from_le_bytes(texel.try_into().unwrap());
+            let want = if i % 4 == 3 { 1.0 } else { rgb[i % 4] };
+            assert!((v - want).abs() < 0.01, "float {i} was {v}, want {want}");
+        }
+    }
+
+    #[test]
+    fn compile_cubemap_payload_surfaces_a_corrupt_hdr() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_hdr(&dir, "broken.hdr", b"not a radiance file\n");
+        let args = serde_json::json!({ "source": src, "face_size": 8 });
+        let err = compile_cubemap_payload(&args).unwrap_err();
+        assert!(err.contains("failed to decode HDR"), "got: {err}");
+        assert!(err.contains("missing Radiance magic"), "got: {err}");
+    }
 }

@@ -210,6 +210,18 @@ mod tests {
         assert!(err.contains("missing `source`"));
     }
 
+    // An import with no args at all is the same missing-source failure.
+    #[test]
+    fn an_import_without_args_is_a_missing_source() {
+        let mut assets = vec![serde_json::json!({"name":"scene","type":"SceneImport"})];
+        let mut report = ExpandReport::default();
+        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        assert!(
+            err.contains("SceneImport 'scene': missing `source`"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn unsupported_source_format_is_an_error() {
         let mut assets = vec![serde_json::json!({
@@ -220,6 +232,191 @@ mod tests {
         // The import name is included so the user knows which entry failed.
         assert!(err.contains("scene"));
         assert!(err.contains(".txt"));
+    }
+
+    // A one-triangle text `.gltf` plus the `geo.bin` it references, so a full
+    // expansion runs without a binary fixture in the repo.
+    fn triangle_gltf(dir: &std::path::Path) -> String {
+        let mut json = crate::glb::test_fixtures::static_triangle_json();
+        json["buffers"][0]["uri"] = "geo.bin".into();
+        std::fs::write(
+            dir.join("geo.bin"),
+            crate::glb::test_fixtures::static_triangle_bin(),
+        )
+        .unwrap();
+        let path = dir.join("tri.gltf");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn scene_import(name: &str, source: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut args = serde_json::json!({"source": source});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            args[k] = v;
+        }
+        serde_json::json!({"name": name, "type": "SceneImport", "args": args})
+    }
+
+    // The import is replaced by its generated entries, every one prefixed with
+    // the import's name and recorded against it, and the surrounding assets
+    // keep their place.
+    #[test]
+    fn an_import_expands_in_place_and_records_what_it_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = triangle_gltf(dir.path());
+        let mut assets = vec![
+            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            scene_import("bistro", &source, serde_json::json!({})),
+        ];
+        let mut report = ExpandReport::default();
+        expand_scene_imports(&mut assets, &mut report).unwrap();
+
+        assert_eq!(assets[0]["name"], "gfx");
+        assert!(!assets.iter().any(|v| type_norm(v) == "sceneimport"));
+        let names: Vec<String> = assets.iter().skip(1).map(asset_name).collect();
+        assert!(
+            names.iter().all(|n| n.starts_with("bistro_")),
+            "unprefixed entries: {names:?}"
+        );
+        assert!(names.contains(&"bistro_mat_default".to_string()));
+        assert!(names.contains(&"bistro_prim_0".to_string()));
+        assert!(names.contains(&"bistro_model_0".to_string()));
+        // Every generated entry is accounted for in the report.
+        let recorded: Vec<&str> = report
+            .generated
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(recorded.len(), names.len());
+        assert!(report.generated.iter().all(|g| g.generated_by == "bistro"));
+    }
+
+    // The framed camera is the import's own: it is emitted only when the world
+    // declares no camera, and never twice across two imports.
+    #[test]
+    fn the_framed_camera_yields_to_the_world_and_to_earlier_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = triangle_gltf(dir.path());
+        let cameras = |assets: &[serde_json::Value]| {
+            assets.iter().filter(|v| type_norm(v) == "camera3d").count()
+        };
+
+        let mut alone = vec![scene_import("a", &source, serde_json::json!({}))];
+        expand_scene_imports(&mut alone, &mut ExpandReport::default()).unwrap();
+        assert_eq!(cameras(&alone), 1);
+
+        // Two imports: only the first frames a camera.
+        let mut pair = vec![
+            scene_import("a", &source, serde_json::json!({})),
+            scene_import("b", &source, serde_json::json!({})),
+        ];
+        expand_scene_imports(&mut pair, &mut ExpandReport::default()).unwrap();
+        assert_eq!(cameras(&pair), 1);
+
+        // A CameraShot has not expanded to its Camera3D yet, but still counts
+        // as the world's own camera.
+        let mut authored = vec![
+            serde_json::json!({"name":"cam","type":"CameraShot","args":{}}),
+            scene_import("a", &source, serde_json::json!({})),
+        ];
+        expand_scene_imports(&mut authored, &mut ExpandReport::default()).unwrap();
+        assert_eq!(cameras(&authored), 0);
+
+        // Or the import can decline to frame one at all.
+        let mut declined = vec![scene_import(
+            "a",
+            &source,
+            serde_json::json!({"emit_camera": false}),
+        )];
+        expand_scene_imports(&mut declined, &mut ExpandReport::default()).unwrap();
+        assert_eq!(cameras(&declined), 0);
+    }
+
+    // The import's texture budget reaches every Texture entry it generates.
+    // `emissive_map_strength` rides along in the same options (the FBX importer
+    // is the one that consumes it), so it is set here too.
+    #[test]
+    fn import_options_reach_the_generated_textures() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut json = crate::glb::test_fixtures::static_triangle_json();
+        json["buffers"][0]["uri"] = "geo.bin".into();
+        json["images"] = serde_json::json!([{"uri": "albedo.png"}]);
+        std::fs::write(
+            dir.path().join("geo.bin"),
+            crate::glb::test_fixtures::static_triangle_bin(),
+        )
+        .unwrap();
+        let source = dir.path().join("tex.gltf");
+        std::fs::write(&source, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let mut assets = vec![scene_import(
+            "bistro",
+            &source.to_string_lossy(),
+            serde_json::json!({"texture_max_size": 128, "emissive_map_strength": 5.0}),
+        )];
+        let mut report = ExpandReport::default();
+        expand_scene_imports(&mut assets, &mut report).unwrap();
+
+        let tex = assets
+            .iter()
+            .find(|v| type_norm(v) == "texture")
+            .expect("a Texture entry per glTF image");
+        assert_eq!(asset_name(tex), "bistro_tex_0");
+        assert_eq!(tex["args"]["max_size"], 128);
+        assert_eq!(tex["args"]["image_index"], 0);
+    }
+
+    // A generated entry landing on an authored asset of another type is a hard
+    // error, reported from the middle of a real expansion.
+    #[test]
+    fn a_type_clash_during_expansion_aborts_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = triangle_gltf(dir.path());
+        let mut assets = vec![
+            serde_json::json!({"name":"bistro_mat_default","type":"Sprite","args":{}}),
+            scene_import("bistro", &source, serde_json::json!({})),
+        ];
+        let mut report = ExpandReport::default();
+        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("bistro_mat_default"), "{err}");
+        assert!(err.contains("Sprite"), "{err}");
+    }
+
+    // An entry with no name claims nothing and is recorded against nothing, but
+    // is still emitted.
+    #[test]
+    fn a_nameless_entry_is_emitted_without_being_recorded() {
+        let entry = serde_json::json!({"type": "Material"});
+        let mut report = ExpandReport::default();
+        let mut taken = HashSet::new();
+        assert!(resolve_entry(&entry, &authored_map(&[]), &mut taken, "b", &mut report).unwrap());
+        assert!(report.generated.is_empty());
+        assert!(taken.is_empty());
+    }
+
+    // The user's edited copy of a generated entry wins; the generated one is
+    // dropped from the world and recorded as shadowed.
+    #[test]
+    fn an_authored_copy_replaces_the_generated_entry_in_the_world() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = triangle_gltf(dir.path());
+        let mut assets = vec![
+            serde_json::json!({
+                "name":"bistro_mat_default","type":"Material","args":{"roughness":0.1}
+            }),
+            scene_import("bistro", &source, serde_json::json!({})),
+        ];
+        let mut report = ExpandReport::default();
+        expand_scene_imports(&mut assets, &mut report).unwrap();
+
+        let mats: Vec<&serde_json::Value> = assets
+            .iter()
+            .filter(|v| asset_name(v) == "bistro_mat_default")
+            .collect();
+        assert_eq!(mats.len(), 1);
+        assert_eq!(mats[0]["args"]["roughness"], 0.1);
+        assert_eq!(report.shadowed.len(), 1);
+        assert_eq!(report.shadowed[0].name, "bistro_mat_default");
     }
 
     fn authored_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {

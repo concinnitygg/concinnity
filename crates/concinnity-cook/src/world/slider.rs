@@ -225,6 +225,29 @@ mod tests {
         assert!(expand_sliders(&mut assets).is_err());
     }
 
+    #[test]
+    fn invalid_args_name_the_slider() {
+        let mut assets = vec![serde_json::json!({
+            "name": "sld", "type": "Slider", "args": {"width": "wide"}
+        })];
+        let err = expand_sliders(&mut assets).unwrap_err();
+        assert!(err.contains("Slider 'sld'"), "{err}");
+        assert!(err.contains("invalid args"), "{err}");
+    }
+
+    // A Slider with no args at all is the fully defaulted row, not an error.
+    #[test]
+    fn slider_without_args_uses_type_defaults() {
+        let mut assets = vec![serde_json::json!({"name":"sld","type":"Slider"})];
+        expand_sliders(&mut assets).unwrap();
+        let defaults = Slider::default();
+        assert_eq!(by_name(&assets, "sld_label")["args"]["x"], defaults.x);
+        assert_eq!(
+            by_name(&assets, "sld_label")["args"]["content"],
+            defaults.label
+        );
+    }
+
     // `element_names` must list exactly the Sprite/TextLabel children the
     // expansion emits (a scroll panel relies on these to reflow + clip the row).
     #[test]

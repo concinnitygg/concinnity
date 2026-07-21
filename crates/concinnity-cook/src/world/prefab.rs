@@ -344,6 +344,112 @@ mod tests {
         assert!(err.contains("ghost"));
     }
 
+    // A nested prefab expands under the outer instance's name and inherits its
+    // placement: the inner offset is scaled and added to the outer one.
+    #[test]
+    fn nested_prefab_entries_compose_their_transforms() {
+        let mut assets = vec![
+            serde_json::json!({"name":"leaf","type":"Prefab","args":{"props":[
+                {"name":"cup","kind":"prop","mesh":"box","position":[1,0,0],"scale":[2,2,2]}
+            ]}}),
+            serde_json::json!({"name":"table","type":"Prefab","args":{"props":[
+                {"name":"top","kind":"prop","mesh":"box"},
+                {"name":"set","kind":"prefab","prefab":"leaf","position":[0,1,0]}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{
+                "prefab":"table","position":[10,0,0],"scale":[3,3,3]
+            }}),
+        ];
+        expand_prefabs(&mut assets).unwrap();
+        let names: Vec<String> = assets.iter().map(asset_name).collect();
+        assert_eq!(names, ["inst_top", "inst_set_cup"]);
+
+        let cup = &assets[1]["args"];
+        // inst(10,0,0) + 3 * [ set(0,1,0) + 1 * cup(1,0,0) ] -> (13, 3, 0).
+        assert_eq!(cup["position"], serde_json::json!([13.0, 3.0, 0.0]));
+        // Scales multiply all the way down: 3 * 1 * 2.
+        assert_eq!(cup["scale"], serde_json::json!([6.0, 6.0, 6.0]));
+    }
+
+    #[test]
+    fn nested_prefab_without_a_name_is_an_error() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pa","type":"Prefab","args":{"props":[
+                {"name":"n","kind":"prefab"}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"pa"}}),
+        ];
+        let err = expand_prefabs(&mut assets).unwrap_err();
+        assert!(err.contains("inst_n"), "{err}");
+        assert!(err.contains("'prefab' field is empty"), "{err}");
+    }
+
+    #[test]
+    fn undeclared_nested_prefab_is_an_error() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pa","type":"Prefab","args":{"props":[
+                {"name":"n","kind":"prefab","prefab":"ghost"}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"pa"}}),
+        ];
+        let err = expand_prefabs(&mut assets).unwrap_err();
+        assert!(err.contains("nested prefab 'ghost' not found"), "{err}");
+    }
+
+    // Prop fields the template carries ride along to the instance, including
+    // the collider, which is only written when the entry declares one.
+    #[test]
+    fn prop_entry_fields_and_collider_carry_through() {
+        let mut assets = vec![
+            serde_json::json!({"name":"crate_set","type":"Prefab","args":{"props":[
+                {"name":"a","kind":"prop","model":"m","material":"mat","texture":"t",
+                 "parent":"p","interactable":true,"pickup":true,
+                 "collider":{"shape":"box"}},
+                {"name":"b","kind":"prop","mesh":"box"}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"crate_set"}}),
+        ];
+        expand_prefabs(&mut assets).unwrap();
+        let a = &assets[0]["args"];
+        assert_eq!(a["model"], "m");
+        assert_eq!(a["material"], "mat");
+        assert_eq!(a["texture"], "t");
+        assert_eq!(a["parent"], "p");
+        assert_eq!(a["interactable"], true);
+        assert_eq!(a["pickup"], true);
+        assert_eq!(a["collider"], serde_json::json!({"shape":"box"}));
+        // A entry without a collider does not grow an empty one.
+        assert!(assets[1]["args"].get("collider").is_none());
+    }
+
+    // A Prop that names no prefab is a plain prop and passes through untouched,
+    // and an unnamed Prefab cannot be referenced so it is simply consumed.
+    #[test]
+    fn plain_props_pass_through_and_unnamed_prefabs_are_dropped() {
+        let mut assets = vec![
+            serde_json::json!({"type":"Prefab","args":{"props":[{"name":"x","kind":"prop"}]}}),
+            serde_json::json!({"name":"lamp","type":"Prop","args":{"mesh":"box"}}),
+        ];
+        expand_prefabs(&mut assets).unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0]["name"], "lamp");
+    }
+
+    // A malformed vector (not exactly three numbers) falls back to the default
+    // rather than being read component-wise.
+    #[test]
+    fn a_non_triple_vector_falls_back_to_the_default() {
+        let v = serde_json::json!({"position": [1.0, 2.0], "scale": "big"});
+        assert_eq!(f32_arr3(&v, "position", [7.0, 8.0, 9.0]), [7.0, 8.0, 9.0]);
+        assert_eq!(f32_arr3(&v, "scale", [1.0, 1.0, 1.0]), [1.0, 1.0, 1.0]);
+        // A non-numeric component falls back per component.
+        let mixed = serde_json::json!({"position": [1.0, "x", 3.0]});
+        assert_eq!(
+            f32_arr3(&mixed, "position", [0.0, 5.0, 0.0]),
+            [1.0, 5.0, 3.0]
+        );
+    }
+
     #[test]
     fn rotate_local_identity_at_zero_rotation() {
         let result = rotate_local([1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);

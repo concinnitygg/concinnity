@@ -1340,6 +1340,581 @@ mod tests {
         assert!(err.contains("animation_index 1 out of range"), "got: {err}");
     }
 
+    #[test]
+    fn import_animation_from_doc_pluralizes_a_multi_clip_count() {
+        let doc = parse(&animated_glb());
+        let err = import_glb_animation_from_doc(&doc, "a.glb", 99, "").unwrap_err();
+        assert!(err.contains("file has 7 animations"), "got: {err}");
+        let err = import_glb_animation_from_doc(&doc, "a.glb", 0, "sprint").unwrap_err();
+        assert!(err.contains("file has 7 clips"), "got: {err}");
+    }
+
+    #[test]
+    fn importing_animations_requires_a_skinned_node_with_joints() {
+        // No node carries both a mesh and a skin.
+        let doc = parse(&static_triangle_glb());
+        let err = import_glb_animations_from_doc(&doc, "t.glb").unwrap_err();
+        assert!(
+            err.contains("no node with both a mesh and a skin"),
+            "got: {err}"
+        );
+        // The same failure surfaces through the single-clip selector.
+        let err = import_glb_animation_from_doc(&doc, "t.glb", 0, "").unwrap_err();
+        assert!(
+            err.contains("no node with both a mesh and a skin"),
+            "got: {err}"
+        );
+    }
+
+    // Where a fixture's unbacked bufferViews start: far past any real data, so
+    // the JSON validates but the reader can resolve no bytes for them.
+    const UNBACKED_BASE: usize = 1 << 20;
+
+    // Fixture assembler: appends each accessor's bytes to the binary chunk and
+    // records the matching bufferView, so a fixture declares data instead of
+    // hand-computed byte offsets.
+    struct Fixture {
+        bin: Vec<u8>,
+        views: Vec<serde_json::Value>,
+        accessors: Vec<serde_json::Value>,
+        unbacked_len: usize,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                bin: Vec::new(),
+                views: Vec::new(),
+                accessors: Vec::new(),
+                unbacked_len: 0,
+            }
+        }
+
+        fn accessor(&mut self, bytes: &[u8], component_type: u32, count: usize, ty: &str) -> usize {
+            while !self.bin.len().is_multiple_of(4) {
+                self.bin.push(0);
+            }
+            let byte_offset = self.bin.len();
+            self.bin.extend_from_slice(bytes);
+            self.views.push(serde_json::json!({
+                "buffer": 0,
+                "byteOffset": byte_offset,
+                "byteLength": bytes.len(),
+            }));
+            self.accessors.push(serde_json::json!({
+                "bufferView": self.views.len() - 1,
+                "componentType": component_type,
+                "count": count,
+                "type": ty,
+            }));
+            self.accessors.len() - 1
+        }
+
+        // A float accessor whose bufferView lies past the end of the binary
+        // chunk the container actually carries: the file still validates, but
+        // no bytes resolve, which is how a consumer sees an unreadable sampler.
+        fn unbacked(&mut self, count: usize, ty: &str) -> usize {
+            let components = if ty == "SCALAR" { 1 } else { 3 };
+            let byte_length = count * components * 4;
+            let byte_offset = UNBACKED_BASE + self.unbacked_len;
+            self.unbacked_len += byte_length;
+            self.views.push(serde_json::json!({
+                "buffer": 0,
+                "byteOffset": byte_offset,
+                "byteLength": byte_length,
+            }));
+            self.accessors.push(serde_json::json!({
+                "bufferView": self.views.len() - 1,
+                "componentType": 5126,
+                "count": count,
+                "type": ty,
+            }));
+            self.accessors.len() - 1
+        }
+
+        fn vec2(&mut self, values: &[[f32; 2]]) -> usize {
+            let flat: Vec<f32> = values.iter().flatten().copied().collect();
+            self.accessor(&f32s(&flat), 5126, values.len(), "VEC2")
+        }
+
+        fn vec3(&mut self, values: &[[f32; 3]]) -> usize {
+            let flat: Vec<f32> = values.iter().flatten().copied().collect();
+            self.accessor(&f32s(&flat), 5126, values.len(), "VEC3")
+        }
+
+        // POSITION accessors must declare their bounds to pass glTF validation.
+        fn set_bounds(&mut self, index: usize, min: [f32; 3], max: [f32; 3]) {
+            self.accessors[index]["min"] = serde_json::json!(min);
+            self.accessors[index]["max"] = serde_json::json!(max);
+        }
+
+        fn positions(&mut self, values: &[[f32; 3]]) -> usize {
+            let index = self.vec3(values);
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for v in values {
+                for i in 0..3 {
+                    min[i] = min[i].min(v[i]);
+                    max[i] = max[i].max(v[i]);
+                }
+            }
+            self.set_bounds(index, min, max);
+            index
+        }
+
+        fn vec4(&mut self, values: &[[f32; 4]]) -> usize {
+            let flat: Vec<f32> = values.iter().flatten().copied().collect();
+            self.accessor(&f32s(&flat), 5126, values.len(), "VEC4")
+        }
+
+        fn scalars(&mut self, values: &[f32]) -> usize {
+            self.accessor(&f32s(values), 5126, values.len(), "SCALAR")
+        }
+
+        fn build(self, mut root: serde_json::Value) -> Vec<u8> {
+            let declared = if self.unbacked_len > 0 {
+                UNBACKED_BASE + self.unbacked_len
+            } else {
+                self.bin.len()
+            };
+            root["buffers"] = serde_json::json!([{"byteLength": declared}]);
+            root["bufferViews"] = serde_json::Value::Array(self.views);
+            root["accessors"] = serde_json::Value::Array(self.accessors);
+            make_glb(&root, Some(&self.bin))
+        }
+    }
+
+    // Two skinned nodes: node 1 "root" parents node 2 "tip", authored
+    // child-first in the skin so the topological remap sends tip to joint 1.
+    fn skinned_nodes() -> serde_json::Value {
+        serde_json::json!([
+            {"mesh": 0, "skin": 0},
+            {"name": "root", "children": [2], "translation": [0.0, 1.0, 0.0]},
+            {"name": "tip", "translation": [0.0, 0.5, 0.0]}
+        ])
+    }
+
+    // A two-primitive skinned mesh with morph targets. The first primitive is
+    // indexed and declares two targets (one carrying tangent deltas, which the
+    // importer drops); the second is non-indexed and declares only the first
+    // target, so the importer must pad the second with zero deltas.
+    fn morph_glb(extras: serde_json::Value) -> Vec<u8> {
+        let mut f = Fixture::new();
+        let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let idx = f.accessor(&u16s(&[0, 1, 2]), 5123, 3, "SCALAR");
+        let joints = f.accessor(&[0u8; 12], 5121, 3, "VEC4");
+        let weights = f.vec4(&[[1.0, 0.0, 0.0, 0.0]; 3]);
+        let dp0 = f.vec3(&[[1.0, 0.0, 0.0]; 3]);
+        let dn0 = f.vec3(&[[0.0, 1.0, 0.0]; 3]);
+        let dt0 = f.vec3(&[[0.0, 0.0, 1.0]; 3]);
+        let dp1 = f.vec3(&[[0.0, 2.0, 0.0]; 3]);
+        let dp2 = f.vec3(&[[3.0, 0.0, 0.0]; 3]);
+        let uv = f.vec2(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let color = f.vec3(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        let attributes =
+            serde_json::json!({"POSITION": pos, "JOINTS_0": joints, "WEIGHTS_0": weights});
+        // The second primitive additionally carries UVs and vertex colors.
+        let textured = serde_json::json!({
+            "POSITION": pos,
+            "JOINTS_0": joints,
+            "WEIGHTS_0": weights,
+            "TEXCOORD_0": uv,
+            "COLOR_0": color,
+        });
+        f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1]}],
+            "nodes": skinned_nodes(),
+            "skins": [{"joints": [2, 1]}],
+            "meshes": [{
+                "extras": extras,
+                "primitives": [
+                    {
+                        "attributes": attributes,
+                        "indices": idx,
+                        "targets": [
+                            {"POSITION": dp0, "NORMAL": dn0, "TANGENT": dt0},
+                            {"POSITION": dp1}
+                        ]
+                    },
+                    {
+                        "attributes": textured,
+                        "targets": [{"POSITION": dp2}]
+                    }
+                ]
+            }]
+        }))
+    }
+
+    #[test]
+    fn import_skinned_concatenates_primitives_and_pads_absent_morph_targets() {
+        let doc = parse(&morph_glb(serde_json::json!({"targetNames": ["bulge", 7]})));
+        let mesh = import_skinned_from_doc(&doc, "m.glb").expect("skinned import");
+
+        // Both primitives contribute; the non-indexed one draws sequentially
+        // from its own base offset.
+        assert_eq!(mesh.vertices.len(), 6);
+        assert_eq!(mesh.indices, vec![0, 1, 2, 3, 4, 5]);
+
+        // A non-string target name falls back to the positional default.
+        assert_eq!(mesh.morph_target_names, vec!["bulge", "target_1"]);
+
+        // The first primitive declares neither UVs nor colors and takes the
+        // defaults; the second carries its own.
+        assert_eq!(mesh.vertices[0].uv, [0.0, 0.0]);
+        assert_eq!(mesh.vertices[0].color, [1.0, 1.0, 1.0]);
+        assert_eq!(mesh.vertices[4].uv, [1.0, 0.0]);
+        assert_eq!(mesh.vertices[4].color, [0.0, 1.0, 0.0]);
+
+        // Deltas are dense and target-major: 2 targets x 6 vertices.
+        assert_eq!(mesh.morph_deltas.len(), 12);
+        assert_eq!(mesh.morph_deltas[0].position, [1.0, 0.0, 0.0]);
+        assert_eq!(mesh.morph_deltas[0].normal, [0.0, 1.0, 0.0]);
+        // Target 0 continues into the second primitive's own deltas.
+        assert_eq!(mesh.morph_deltas[3].position, [3.0, 0.0, 0.0]);
+        // Target 1 exists only on the first primitive; the rest is zero-padded.
+        assert_eq!(mesh.morph_deltas[6].position, [0.0, 2.0, 0.0]);
+        assert_eq!(mesh.morph_deltas[9].position, [0.0, 0.0, 0.0]);
+        assert_eq!(mesh.morph_deltas[9].normal, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn morph_target_names_fall_back_when_extras_are_unusable() {
+        for extras in [
+            serde_json::json!({"targetNames": "not an array"}),
+            serde_json::json!({"unrelated": 1}),
+        ] {
+            let doc = parse(&morph_glb(extras.clone()));
+            let mesh = import_skinned_from_doc(&doc, "m.glb").expect("skinned import");
+            assert_eq!(
+                mesh.morph_target_names,
+                vec!["target_0", "target_1"],
+                "extras {extras}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_primitive_geometry_reads_texcoords_and_vertex_colors() {
+        let mut f = Fixture::new();
+        let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let uv = f.vec2(&[[0.0, 0.0], [1.0, 0.0], [0.25, 0.5]]);
+        let color = f.vec3(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        let glb = f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": pos, "TEXCOORD_0": uv, "COLOR_0": color}
+            }]}]
+        }));
+        let doc = parse(&glb);
+        let (vertices, indices) = read_primitive_geometry(&doc, "t.glb", 0).expect("geometry");
+
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(vertices[2].uv, [0.25, 0.5]);
+        // Authored colors replace the neutral fallback.
+        assert_eq!(vertices[0].color, [1.0, 0.0, 0.0]);
+        assert_eq!(vertices[2].color, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn import_skinned_rejects_a_primitive_whose_positions_have_no_data() {
+        let mut f = Fixture::new();
+        let joints = f.accessor(&[0u8; 12], 5121, 3, "VEC4");
+        let weights = f.vec4(&[[1.0, 0.0, 0.0, 0.0]; 3]);
+        // Bindings resolve but the POSITION accessor points past the binary
+        // chunk, so the file parses and only the position read fails.
+        let pos = f.unbacked(3, "VEC3");
+        f.set_bounds(pos, [0.0; 3], [1.0, 1.0, 0.0]);
+        let glb = f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1]}],
+            "nodes": skinned_nodes(),
+            "skins": [{"joints": [2, 1]}],
+            "meshes": [{"primitives": [
+                {"attributes": {"POSITION": pos, "JOINTS_0": joints, "WEIGHTS_0": weights}}
+            ]}]
+        }));
+        let doc = parse(&glb);
+        let err = import_skinned_from_doc(&doc, "m.glb")
+            .err()
+            .expect("expected error");
+        assert!(err.contains("no POSITION data"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_rejects_indices_past_the_u16_limit() {
+        let mut f = Fixture::new();
+        let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let idx = f.accessor(
+            &[0u32, 1, 70_000]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>(),
+            5125,
+            3,
+            "SCALAR",
+        );
+        let joints = f.accessor(&[0u8; 12], 5121, 3, "VEC4");
+        let weights = f.vec4(&[[1.0, 0.0, 0.0, 0.0]; 3]);
+        let glb = f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1]}],
+            "nodes": skinned_nodes(),
+            "skins": [{"joints": [2, 1]}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": pos, "JOINTS_0": joints, "WEIGHTS_0": weights},
+                "indices": idx
+            }]}]
+        }));
+        let doc = parse(&glb);
+        let err = import_skinned_from_doc(&doc, "m.glb")
+            .err()
+            .expect("expected error");
+        assert_eq!(
+            err,
+            "imported skinned mesh exceeds the 65535-vertex u16 index limit"
+        );
+    }
+
+    // A skinned node whose skin declares no joints at all.
+    fn jointless_glb() -> Vec<u8> {
+        let mut f = Fixture::new();
+        let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let joints = f.accessor(&[0u8; 12], 5121, 3, "VEC4");
+        let weights = f.vec4(&[[1.0, 0.0, 0.0, 0.0]; 3]);
+        f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0, "skin": 0}],
+            "skins": [{"joints": []}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": pos, "JOINTS_0": joints, "WEIGHTS_0": weights}
+            }]}]
+        }))
+    }
+
+    #[test]
+    fn import_skeleton_rejects_a_skin_with_no_joints() {
+        let doc = parse(&jointless_glb());
+        let err = import_skinned_from_doc(&doc, "m.glb")
+            .err()
+            .expect("expected error");
+        assert_eq!(err, "glTF skin has no joints");
+        // The animation importer builds the same skeleton and fails alike.
+        let err = import_glb_animations_from_doc(&doc, "m.glb").unwrap_err();
+        assert_eq!(err, "glTF skin has no joints");
+    }
+
+    // A skinned node whose clips cover every animation channel path: T/R/S on
+    // one joint sampled at the same times, morph weights on the mesh node in
+    // both interpolation modes, and the channels the importer must drop.
+    fn animated_glb() -> Vec<u8> {
+        let mut f = Fixture::new();
+        let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let joints = f.accessor(&[0u8; 12], 5121, 3, "VEC4");
+        let weights = f.vec4(&[[1.0, 0.0, 0.0, 0.0]; 3]);
+        let times = f.scalars(&[0.0, 1.0]);
+        let translations = f.vec3(&[[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]]);
+        let scales = f.vec3(&[[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]);
+        // Identity, then a quarter turn about Z.
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let rotations = f.vec4(&[[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, half, half]]);
+        // The same two rotations wrapped in in/out tangents, plus a channel
+        // whose output count does not match its sample times.
+        let tangent = [1.0, 0.0, 0.0, 0.0];
+        let rotations_cubic = f.vec4(&[
+            tangent,
+            [0.0, 0.0, 0.0, 1.0],
+            tangent,
+            tangent,
+            [0.0, 0.0, half, half],
+            tangent,
+        ]);
+        let rotations_ragged = f.vec4(&[[0.0, 0.0, 0.0, 1.0]; 3]);
+        let w_linear = f.scalars(&[0.0, 0.25, 1.0, 0.5]);
+        let w_cubic = f.scalars(&[9.0, 9.0, 0.1, 0.2, 9.0, 9.0, 9.0, 9.0, 0.3, 0.4, 9.0, 9.0]);
+        let w_ragged = f.scalars(&[0.0, 0.5, 1.0]);
+        let unbacked_times = f.unbacked(2, "SCALAR");
+        let unbacked_weights = f.unbacked(4, "SCALAR");
+
+        f.build(serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1]}],
+            "nodes": skinned_nodes(),
+            "skins": [{"joints": [2, 1]}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": pos, "JOINTS_0": joints, "WEIGHTS_0": weights}
+            }]}],
+            "animations": [
+                {
+                    "name": "pose",
+                    "samplers": [
+                        {"input": times, "output": translations, "interpolation": "LINEAR"},
+                        {"input": times, "output": rotations, "interpolation": "LINEAR"},
+                        {"input": times, "output": scales, "interpolation": "LINEAR"},
+                        {"input": times, "output": times, "interpolation": "LINEAR"},
+                        {"input": unbacked_times, "output": translations}
+                    ],
+                    "channels": [
+                        {"sampler": 0, "target": {"node": 2, "path": "translation"}},
+                        {"sampler": 1, "target": {"node": 2, "path": "rotation"}},
+                        {"sampler": 2, "target": {"node": 2, "path": "scale"}},
+                        {"sampler": 3, "target": {"node": 2, "path": "weights"}},
+                        {"sampler": 4, "target": {"node": 2, "path": "translation"}}
+                    ]
+                },
+                {
+                    "name": "pose_cubic",
+                    "samplers": [
+                        {"input": times, "output": rotations_cubic, "interpolation": "CUBICSPLINE"}
+                    ],
+                    "channels": [{"sampler": 0, "target": {"node": 2, "path": "rotation"}}]
+                },
+                {
+                    "name": "pose_ragged",
+                    "samplers": [
+                        {"input": times, "output": rotations_ragged, "interpolation": "LINEAR"}
+                    ],
+                    "channels": [{"sampler": 0, "target": {"node": 2, "path": "rotation"}}]
+                },
+                {
+                    "name": "morph_linear",
+                    "samplers": [{"input": times, "output": w_linear, "interpolation": "LINEAR"}],
+                    "channels": [{"sampler": 0, "target": {"node": 0, "path": "weights"}}]
+                },
+                {
+                    "name": "morph_cubic",
+                    "samplers": [
+                        {"input": times, "output": w_cubic, "interpolation": "CUBICSPLINE"}
+                    ],
+                    "channels": [{"sampler": 0, "target": {"node": 0, "path": "weights"}}]
+                },
+                {
+                    "name": "morph_ragged",
+                    "samplers": [{"input": times, "output": w_ragged, "interpolation": "LINEAR"}],
+                    "channels": [{"sampler": 0, "target": {"node": 0, "path": "weights"}}]
+                },
+                {
+                    "name": "morph_unreadable",
+                    "samplers": [
+                        {"input": unbacked_times, "output": w_linear},
+                        {"input": times, "output": unbacked_weights}
+                    ],
+                    "channels": [
+                        {"sampler": 0, "target": {"node": 0, "path": "weights"}},
+                        {"sampler": 1, "target": {"node": 0, "path": "weights"}}
+                    ]
+                }
+            ]
+        }))
+    }
+
+    fn clip<'a>(anims: &'a [ImportedAnimation], name: &str) -> &'a ImportedAnimation {
+        anims
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("no clip named '{name}'"))
+    }
+
+    #[test]
+    fn import_animation_merges_translation_rotation_and_scale_at_shared_times() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let pose = clip(&anims, "pose");
+
+        // The three T/R/S channels target one joint at identical sample times,
+        // so they merge into a single track of two keys.
+        assert_eq!(pose.tracks.len(), 1);
+        let track = &pose.tracks[0];
+        assert_eq!(track.joint, 1);
+        assert_eq!(track.keys.len(), 2);
+
+        assert_eq!(track.keys[0].time, 0.0);
+        assert_eq!(track.keys[0].pose.translation, [0.0, 0.0, 0.0]);
+        assert_eq!(track.keys[0].pose.scale, [1.0, 1.0, 1.0]);
+        assert_eq!(track.keys[0].pose.rotation_deg, [0.0, 0.0, 0.0]);
+
+        assert_eq!(track.keys[1].time, 1.0);
+        assert_eq!(track.keys[1].pose.translation, [0.0, 2.0, 0.0]);
+        assert_eq!(track.keys[1].pose.scale, [2.0, 2.0, 2.0]);
+        // A quarter turn about Z comes back as roll in the YXZ euler triple.
+        let roll = track.keys[1].pose.rotation_deg[2];
+        assert!((roll - 90.0).abs() < 1e-3, "roll was {roll}");
+
+        // A weights channel aimed at a joint, and a channel whose sampler input
+        // has no data, contribute nothing.
+        assert!(pose.morph_track.is_empty());
+        assert!((pose.duration - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn import_animation_takes_the_value_of_each_cubicspline_rotation_triplet() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let track = &clip(&anims, "pose_cubic").tracks[0];
+
+        // The in / out tangent quaternions flanking each value are discarded.
+        assert_eq!(track.keys.len(), 2);
+        assert_eq!(track.keys[0].pose.rotation_deg, [0.0, 0.0, 0.0]);
+        let roll = track.keys[1].pose.rotation_deg[2];
+        assert!((roll - 90.0).abs() < 1e-3, "roll was {roll}");
+    }
+
+    #[test]
+    fn import_animation_drops_samples_when_the_output_count_disagrees() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let track = &clip(&anims, "pose_ragged").tracks[0];
+        assert_eq!(track.joint, 1);
+        assert!(track.keys.is_empty());
+    }
+
+    #[test]
+    fn import_animation_reads_linear_morph_weight_keys() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let morph = clip(&anims, "morph_linear");
+
+        assert!(morph.tracks.is_empty());
+        assert_eq!(morph.morph_track.len(), 2);
+        assert_eq!(morph.morph_track[0].time, 0.0);
+        assert_eq!(morph.morph_track[0].weights, vec![0.0, 0.25]);
+        assert_eq!(morph.morph_track[1].time, 1.0);
+        assert_eq!(morph.morph_track[1].weights, vec![1.0, 0.5]);
+    }
+
+    #[test]
+    fn import_animation_takes_the_value_of_each_cubicspline_morph_triplet() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let morph = clip(&anims, "morph_cubic");
+
+        // Each key stores in-tangent / value / out-tangent per target; only the
+        // middle triple survives.
+        assert_eq!(morph.morph_track.len(), 2);
+        assert_eq!(morph.morph_track[0].weights, vec![0.1, 0.2]);
+        assert_eq!(morph.morph_track[1].weights, vec![0.3, 0.4]);
+    }
+
+    #[test]
+    fn import_animation_drops_unusable_morph_channels() {
+        let doc = parse(&animated_glb());
+        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        // A weight count that is not a whole multiple of the sample times, and
+        // samplers whose input or output carries no data, are all skipped
+        // rather than producing partial keys.
+        assert!(clip(&anims, "morph_ragged").morph_track.is_empty());
+        assert!(clip(&anims, "morph_unreadable").morph_track.is_empty());
+    }
+
     // Morph fixtures: the local Blender export carries two shape keys with a
     // keyed weights animation. Ignored by default (private/assets is local).
     // Run with: cargo test -p concinnity-cook morph_fixture -- --ignored
@@ -1409,6 +1984,15 @@ mod tests {
         assert_eq!(resolve_source("sub/f.glb"), "sub/f.glb");
         assert_eq!(resolve_source("./f.glb"), "./f.glb");
         assert_eq!(resolve_source("/abs/f.glb"), "/abs/f.glb");
+    }
+
+    #[test]
+    fn resolve_source_anchors_a_bare_filename_under_the_assets_dir() {
+        // Nothing by this name exists to be found, so the fallback is the
+        // assets directory joined with the filename.
+        let resolved = resolve_source("cn_test_no_such_model.glb");
+        let expected = concinnity_core::paths::assets_dir().join("cn_test_no_such_model.glb");
+        assert_eq!(resolved, expected.to_string_lossy());
     }
 
     // split_into_u16_chunks

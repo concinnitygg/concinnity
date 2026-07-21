@@ -303,6 +303,21 @@ LUT_3D_SIZE 2
     }
 
     #[test]
+    fn compile_color_lut_payload_packs_a_png_strip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Rgba, &strip2_pixels());
+        let payload =
+            compile_color_lut_payload(&serde_json::json!({"source": src})).expect("compile");
+        assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
+        assert_eq!(&payload[4..8], &2u32.to_le_bytes());
+        assert_eq!(payload.len(), 12 + 8 * 4);
+        // Texel (r=0, g=0, b=0) is strip pixel (0, 0).
+        assert_eq!(&payload[12..16], &[0, 0, 42, 255]);
+        // The last texel (r=1, g=1, b=1) is strip pixel (3, 1).
+        assert_eq!(&payload[40..44], &[30, 10, 42, 255]);
+    }
+
+    #[test]
     fn compile_color_lut_payload_reports_a_missing_cube_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.cube");
@@ -329,5 +344,51 @@ LUT_3D_SIZE 2
     fn decode_source_rejects_an_unknown_extension() {
         let err = decode_source("grade.tga").unwrap_err();
         assert!(err.contains("must be a .cube or .png"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_color_lut_payload_surfaces_a_malformed_cube() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Declares a size-2 LUT but supplies a single triplet.
+        let src = write_cube(&dir, "LUT_3D_SIZE 2\n0 0 0\n");
+        let err = compile_color_lut_payload(&serde_json::json!({"source": src})).unwrap_err();
+        assert_eq!(err, "ColorLut .cube has 1 entries, expected 8 for size 2");
+    }
+
+    #[test]
+    fn compile_color_lut_payload_surfaces_a_bad_png_strip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_png(&dir, "s.png", 3, 2, png::ColorType::Rgba, &[0u8; 3 * 2 * 4]);
+        let err = compile_color_lut_payload(&serde_json::json!({"source": src})).unwrap_err();
+        assert!(err.contains("must be 4x2"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_reports_a_missing_cube_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing.cube");
+        let err = decode_source(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("failed to read LUT source"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_png_strip_rejects_a_file_that_is_not_a_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s.png");
+        std::fs::write(&path, b"definitely not a png").expect("write");
+        let err = parse_png_strip(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("failed to read PNG info"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_png_strip_rejects_a_truncated_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Rgba, &strip2_pixels());
+        let mut bytes = std::fs::read(&src).expect("read png");
+        // Keep the header chunks but cut the compressed image data short.
+        bytes.truncate(bytes.len() - 20);
+        std::fs::write(&src, &bytes).expect("write truncated png");
+        let err = parse_png_strip(&src).unwrap_err();
+        assert!(err.contains("failed to decode PNG frame"), "got: {err}");
     }
 }

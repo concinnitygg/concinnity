@@ -249,8 +249,9 @@ mod tests {
             1
         );
         assert!(
-            !report.shadowed.iter().any(|s| s.name == "Window"),
-            "no asset named Window exists to be the override"
+            report.shadowed.is_empty(),
+            "no asset named Window exists to be the override: {:?}",
+            report.shadowed
         );
     }
 
@@ -373,6 +374,31 @@ mod tests {
         let mut assets = vec![serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})];
         inject(&mut assets);
         assert!(assets.iter().any(|v| type_norm(v) == "window"));
+    }
+
+    // A label with no args object has nowhere to hold the font reference, so
+    // the default-font pass leaves it alone rather than rewriting the entry.
+    #[test]
+    fn a_label_without_args_is_left_unpatched() {
+        let mut assets = vec![serde_json::json!({"name":"t","type":"TextLabel"})];
+        inject(&mut assets);
+        let label = assets.iter().find(|v| type_norm(v) == "textlabel").unwrap();
+        assert!(label.get("args").is_none());
+        // The Font itself is still injected for the labels that can take it.
+        assert!(assets.iter().any(|v| type_norm(v) == "font"));
+    }
+
+    // An entry with no `type` implies no companions and must not derail the
+    // scan of the assets around it.
+    #[test]
+    fn a_typeless_entry_is_skipped() {
+        let mut assets = vec![
+            serde_json::json!({"name":"junk","args":{}}),
+            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+        ];
+        inject(&mut assets);
+        assert!(assets.iter().any(|v| type_norm(v) == "window"));
+        assert!(assets.iter().any(|v| v["name"] == "junk"));
     }
 
     #[test]

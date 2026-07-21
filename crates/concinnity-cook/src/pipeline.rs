@@ -1980,6 +1980,98 @@ mod tests {
     }
 
     #[test]
+    fn build_from_path_reports_a_malformed_world_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let world = dir.path().join("world.jsonl");
+        std::fs::write(&world, "{not json\n").expect("write world");
+        let err = build_from_path(world.to_str().unwrap()).expect_err("malformed world");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // A lock that cannot be written fails the build: shipping blobs without the
+    // record of what went into them would leave the output unexplainable.
+    #[test]
+    fn write_build_outputs_fails_when_the_lock_cannot_be_written() {
+        let _output = crate::blob::test_output::LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _state = crate::blob::test_output::StateDir::new();
+        let _lock_file = crate::blob::test_output::LockFile;
+        // A directory where the lock file belongs makes the write fail.
+        std::fs::create_dir_all(crate::blob::LOCK_PATH).expect("occupy the lock path");
+
+        let result = PipelineResult {
+            defs: Vec::new(),
+            names: Vec::new(),
+            resources: Vec::new(),
+            payloads: vec![vec![1, 2, 3]],
+            cache_hits: 0,
+            cache_misses: 0,
+            texture_sources: Vec::new(),
+            mesh_sources: Vec::new(),
+            resource_locks: Vec::new(),
+        };
+        assert!(
+            write_build_outputs(&result, &[], &[]).is_err(),
+            "an unwritable lock must fail the build"
+        );
+    }
+
+    // The full build tail: compile the world, ship the blobs under the state
+    // root, and record every asset in the lock beside them.
+    #[test]
+    fn build_from_path_writes_the_blobs_and_the_lock_beside_them() {
+        let _shaders = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _output = crate::blob::test_output::LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _state = crate::blob::test_output::StateDir::new();
+        let _lock_file = crate::blob::test_output::LockFile;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let world_path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &world_path,
+            concat!(
+                r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+                "\n",
+                r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
+                "\n",
+                r#"{"name":"pause","type":"Screen","args":{}}"#,
+                "\n",
+            ),
+        )
+        .expect("write world");
+
+        build_from_path(world_path.to_str().unwrap()).expect("build");
+
+        let raw = std::fs::read_to_string(crate::blob::LOCK_PATH).expect("lock written");
+        let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");
+        assert_eq!(lock.blobs.len(), 1);
+
+        let (meta, _) = crate::blob::read_cnb(&lock.blobs[0].path).expect("blob 0 parses");
+        assert_eq!(
+            meta.defs.len(),
+            lock.assets.len(),
+            "the lock names every def the blob ships"
+        );
+        assert_eq!(meta.resources.len(), lock.resources.len());
+        assert!(lock.assets.iter().any(|a| a.name == "pause"));
+
+        let font = lock
+            .resources
+            .iter()
+            .find(|r| r.name == "f")
+            .expect("the font is recorded in the resource stream");
+        assert_eq!(font.kind, "Font");
+        assert_eq!(font.payload_blob, Some(0));
+        assert!(
+            !lock.injected.is_empty(),
+            "engine defaults are recorded so they can be overridden"
+        );
+    }
+
+    #[test]
     fn build_pipeline_from_str_rejects_malformed_jsonl() {
         let Err(err) = build_pipeline_from_str("{not json\n", None) else {
             panic!("malformed line must not build");
@@ -2007,6 +2099,28 @@ mod tests {
             validate_asset(ty, "x", &serde_json::json!({}))
                 .unwrap_or_else(|e| panic!("{ty} should validate: {e}"));
         }
+    }
+
+    // A resource-only type never builds a component def, so it is validated
+    // through the structural check alone rather than `create_asset_def`.
+    #[test]
+    fn validate_asset_routes_resource_only_types_past_the_component_registry() {
+        validate_asset("AudioClip", "clip", &serde_json::json!({"source": "a.wav"}))
+            .expect("a source-backed AudioClip validates");
+        let err = validate_asset("Texture", "tex", &serde_json::json!({"generator": "nope"}))
+            .expect_err("an unknown texture generator is rejected");
+        assert!(err.contains("nope"), "got: {err}");
+    }
+
+    // A type that resolves through `create_asset_def` still has to satisfy its
+    // structural check, and a clean asset returns Ok.
+    #[test]
+    fn validate_asset_runs_the_structural_check_after_type_resolution() {
+        validate_asset("Scene", "day", &serde_json::json!({})).expect("a Scene validates");
+        // A Prop resolves as a type but has no mesh source to render.
+        let err = validate_asset("Prop", "empty_prop", &serde_json::json!({}))
+            .expect_err("a source-less Prop is rejected");
+        assert!(err.contains("empty_prop"), "got: {err}");
     }
 
     #[test]
@@ -2041,6 +2155,113 @@ mod tests {
         // and the args stay pre-desugar so the next probe key matches.
         assert_eq!(assets[0].args, inline_args);
         assert_eq!(assets[1].args, cached_args);
+    }
+
+    // Write a fixture container into `dir` and return its path as a string.
+    fn write_fixture(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("write fixture");
+        path.to_string_lossy().into_owned()
+    }
+
+    // A source-backed SkinnedMesh has its geometry and skeleton written into
+    // the asset's inline args, replacing the `source` reference for the
+    // compile step that follows.
+    #[test]
+    fn desugar_gltf_skinned_meshes_inlines_geometry_and_skeleton() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &crate::glb::test_fixtures::skinned_glb());
+        let mut assets = vec![wja(
+            "hero",
+            SKINNED_MESH_TYPE,
+            serde_json::json!({"source": src}),
+        )];
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+
+        let args = &assets[0].args;
+        assert_eq!(args["vertices"].as_array().unwrap().len(), 3);
+        assert_eq!(args["indices"].as_array().unwrap(), &vec![0, 1, 2]);
+        // The two-joint skin is reordered parents-before-children, so the
+        // skeleton lands with the root first.
+        assert_eq!(args["skeleton"].as_array().unwrap().len(), 2);
+        // The fixture carries no morph targets, so no morph args appear.
+        assert!(args.get("morph_target_names").is_none());
+        assert!(args.get("morph_deltas").is_none());
+    }
+
+    // The shared skinned fixture with one morph target ("bulge", +Y on every
+    // vertex) and an animation channel driving its weight from 0 to 1.
+    fn morphing_skinned_glb() -> Vec<u8> {
+        use crate::glb::test_fixtures::{f32s, make_glb, skinned_bin, skinned_json};
+
+        let mut bin = skinned_bin(); // 136 bytes
+        bin.extend(f32s(&[0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0])); // deltas -> 172
+        bin.extend(f32s(&[0.0, 1.0])); // morph weights -> 180
+
+        let mut json = skinned_json(true, true, true);
+        json["buffers"][0]["byteLength"] = 180.into();
+        let views = json["bufferViews"].as_array_mut().expect("bufferViews");
+        views.push(serde_json::json!({"buffer": 0, "byteOffset": 136, "byteLength": 36}));
+        views.push(serde_json::json!({"buffer": 0, "byteOffset": 172, "byteLength": 8}));
+        let accessors = json["accessors"].as_array_mut().expect("accessors");
+        accessors.push(
+            serde_json::json!({"bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC3"}),
+        );
+        accessors.push(serde_json::json!(
+            {"bufferView": 7, "componentType": 5126, "count": 2, "type": "SCALAR"}
+        ));
+        json["meshes"][0]["primitives"][0]["targets"] = serde_json::json!([{"POSITION": 6}]);
+        json["meshes"][0]["extras"] = serde_json::json!({"targetNames": ["bulge"]});
+        json["animations"][0]["samplers"]
+            .as_array_mut()
+            .expect("samplers")
+            .push(serde_json::json!({"input": 4, "output": 7, "interpolation": "LINEAR"}));
+        json["animations"][0]["channels"]
+            .as_array_mut()
+            .expect("channels")
+            .push(serde_json::json!({"sampler": 2, "target": {"node": 0, "path": "weights"}}));
+
+        make_glb(&json, Some(&bin))
+    }
+
+    // A source carrying morph targets writes the target names and the dense
+    // delta block into the asset alongside the base geometry.
+    #[test]
+    fn desugar_gltf_skinned_meshes_inlines_morph_targets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &morphing_skinned_glb());
+        let mut assets = vec![wja(
+            "hero",
+            SKINNED_MESH_TYPE,
+            serde_json::json!({"source": src}),
+        )];
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+
+        let args = &assets[0].args;
+        assert_eq!(args["morph_target_names"], serde_json::json!(["bulge"]));
+        // One target over three vertices: a dense target-major delta block.
+        assert_eq!(args["morph_deltas"].as_array().unwrap().len(), 3);
+    }
+
+    // A clip that animates morph weights carries a morph track beside its
+    // joint tracks.
+    #[test]
+    fn desugar_animation_imports_inlines_a_morph_weight_track() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &morphing_skinned_glb());
+        let mut assets = vec![wja(
+            "wave",
+            "Animation",
+            serde_json::json!({"source": src, "animation_index": 0}),
+        )];
+        desugar_animation_imports(&mut assets).expect("desugar");
+
+        let morph = assets[0].args["morph_track"]
+            .as_array()
+            .expect("morph track inlined");
+        assert_eq!(morph.len(), 2);
+        assert_eq!(morph[0], serde_json::json!({"time": 0.0, "weights": [0.0]}));
+        assert_eq!(morph[1], serde_json::json!({"time": 1.0, "weights": [1.0]}));
     }
 
     #[test]
@@ -2120,6 +2341,548 @@ mod tests {
         );
     }
 
+    // Two Mesh assets fanned out of one container parse the file once; both
+    // still land with their own inline geometry.
+    #[test]
+    fn desugar_gltf_meshes_parses_a_shared_source_once_for_every_asset() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(
+            &dir,
+            "scene.glb",
+            &crate::glb::test_fixtures::static_triangle_glb(),
+        );
+        let mut assets = vec![
+            wja(
+                "part_a",
+                MESH_TYPE,
+                serde_json::json!({"source": src, "primitive_index": 0}),
+            ),
+            wja(
+                "part_b",
+                MESH_TYPE,
+                serde_json::json!({"source": src, "primitive_index": 0}),
+            ),
+        ];
+        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        for asset in &assets {
+            assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
+            assert_eq!(asset.args["indices"].as_array().unwrap().len(), 3);
+        }
+    }
+
+    // A primitive the container does not have fails on both the chunked and
+    // the whole-primitive route, naming the asset either way.
+    #[test]
+    fn desugar_gltf_meshes_reports_a_primitive_the_file_does_not_have() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(
+            &dir,
+            "scene.glb",
+            &crate::glb::test_fixtures::static_triangle_glb(),
+        );
+        for extra in [serde_json::json!({}), serde_json::json!({"chunk_index": 0})] {
+            let mut args = serde_json::json!({"source": src, "primitive_index": 7});
+            for (k, v) in extra.as_object().unwrap() {
+                args[k] = v.clone();
+            }
+            let mut assets = vec![wja("ghost", MESH_TYPE, args)];
+            let err = desugar_gltf_meshes(&mut assets, &Default::default())
+                .expect_err("primitive 7 does not exist");
+            let msg = err.to_string();
+            assert!(msg.contains("Asset 'ghost'"), "got: {msg}");
+            assert!(msg.contains("glTF import failed"), "got: {msg}");
+        }
+    }
+
+    // An oversized primitive fanned into several chunked Mesh assets is split
+    // exactly once; every asset still gets its own inline geometry.
+    #[test]
+    fn desugar_gltf_meshes_splits_a_primitive_once_for_every_chunk_asset() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(
+            &dir,
+            "scene.glb",
+            &crate::glb::test_fixtures::static_triangle_glb(),
+        );
+        let chunk = |name: &str| {
+            wja(
+                name,
+                MESH_TYPE,
+                serde_json::json!({"source": src, "primitive_index": 0, "chunk_index": 0}),
+            )
+        };
+        let mut assets = vec![chunk("part_a"), chunk("part_b")];
+        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        for asset in &assets {
+            assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
+        }
+    }
+
+    // An authored `chunk_index` routes through the u16 chunk split instead of
+    // the whole-primitive import; an index past the last chunk names the file,
+    // the primitive, and how many chunks it really produced.
+    #[test]
+    fn desugar_gltf_meshes_reads_a_chunk_and_rejects_one_out_of_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(
+            &dir,
+            "scene.glb",
+            &crate::glb::test_fixtures::static_triangle_glb(),
+        );
+        let mut assets = vec![wja(
+            "chunk0",
+            MESH_TYPE,
+            serde_json::json!({"source": src, "chunk_index": 0}),
+        )];
+        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        assert_eq!(assets[0].args["vertices"].as_array().unwrap().len(), 3);
+
+        let mut past_end = vec![wja(
+            "chunk9",
+            MESH_TYPE,
+            serde_json::json!({"source": src, "chunk_index": 9}),
+        )];
+        let err = desugar_gltf_meshes(&mut past_end, &Default::default())
+            .expect_err("chunk 9 does not exist");
+        let msg = err.to_string();
+        assert!(msg.contains("Asset 'chunk9'"), "got: {msg}");
+        assert!(msg.contains("chunk_index 9 out of range"), "got: {msg}");
+        assert!(msg.contains("1 chunk(s)"), "got: {msg}");
+    }
+
+    // Synthetic binary FBX containers. The importer walks a node tree, so the
+    // fixtures are described as one and serialized by `write_fbx`; no binary
+    // asset needs to live in the repo.
+    enum Attr {
+        Int(i64),
+        Double(f64),
+        Text(String),
+        Doubles(Vec<f64>),
+        Ints(Vec<i32>),
+        Longs(Vec<i64>),
+        Floats(Vec<f32>),
+    }
+
+    struct Node {
+        name: &'static str,
+        attrs: Vec<Attr>,
+        children: Vec<Node>,
+    }
+
+    fn node(name: &'static str, attrs: Vec<Attr>, children: Vec<Node>) -> Node {
+        Node {
+            name,
+            attrs,
+            children,
+        }
+    }
+
+    // An FBX object's second attribute: the authored name, the object class,
+    // and the `\0\u{1}` separator between them.
+    fn object_name(name: &str, class: &str) -> Attr {
+        Attr::Text(format!("{name}\u{0}\u{1}{class}"))
+    }
+
+    fn connection(child: i64, parent: i64) -> Node {
+        node(
+            "C",
+            vec![
+                Attr::Text("OO".to_string()),
+                Attr::Int(child),
+                Attr::Int(parent),
+            ],
+            Vec::new(),
+        )
+    }
+
+    // An object-to-property connection: the parent's named property is what
+    // the child drives.
+    fn property_connection(child: i64, parent: i64, property: &str) -> Node {
+        node(
+            "C",
+            vec![
+                Attr::Text("OP".to_string()),
+                Attr::Int(child),
+                Attr::Int(parent),
+                Attr::Text(property.to_string()),
+            ],
+            Vec::new(),
+        )
+    }
+
+    fn write_fbx(nodes: &[Node]) -> Vec<u8> {
+        use fbxcel::low::FbxVersion;
+        use fbxcel::writer::v7400::binary::{FbxFooter, Writer};
+
+        fn emit<W: std::io::Write + std::io::Seek>(
+            w: &mut Writer<W>,
+            n: &Node,
+        ) -> std::io::Result<()> {
+            {
+                let mut attrs = w.new_node(n.name).expect("open node");
+                for a in &n.attrs {
+                    match a {
+                        Attr::Int(v) => attrs.append_i64(*v),
+                        Attr::Double(v) => attrs.append_f64(*v),
+                        Attr::Text(s) => attrs.append_string_direct(s),
+                        Attr::Doubles(v) => attrs.append_arr_f64_from_iter(None, v.iter().copied()),
+                        Attr::Ints(v) => attrs.append_arr_i32_from_iter(None, v.iter().copied()),
+                        Attr::Longs(v) => attrs.append_arr_i64_from_iter(None, v.iter().copied()),
+                        Attr::Floats(v) => attrs.append_arr_f32_from_iter(None, v.iter().copied()),
+                    }
+                    .expect("append attribute");
+                }
+            }
+            for c in &n.children {
+                emit(w, c)?;
+            }
+            w.close_node().expect("close node");
+            Ok(())
+        }
+
+        let mut w =
+            Writer::new(std::io::Cursor::new(Vec::new()), FbxVersion::V7_4).expect("fbx writer");
+        for n in nodes {
+            emit(&mut w, n).expect("emit node");
+        }
+        w.finalize_and_flush(&FbxFooter::default())
+            .expect("finalize")
+            .into_inner()
+    }
+
+    // One triangle as an FBX Geometry object. The last corner of a polygon is
+    // stored bitwise-negated, which is how the importer finds polygon bounds.
+    fn triangle_geometry(id: i64) -> Node {
+        node(
+            "Geometry",
+            vec![
+                Attr::Int(id),
+                object_name("tri", "Geometry"),
+                Attr::Text("Mesh".to_string()),
+            ],
+            vec![
+                node(
+                    "Vertices",
+                    vec![Attr::Doubles(vec![
+                        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                    ])],
+                    Vec::new(),
+                ),
+                node(
+                    "PolygonVertexIndex",
+                    vec![Attr::Ints(vec![0, 1, !2])],
+                    Vec::new(),
+                ),
+            ],
+        )
+    }
+
+    // One Model connected to one Geometry: `parse_fbx` yields a single
+    // primitive from it.
+    fn static_triangle_fbx() -> Vec<u8> {
+        const GEOMETRY: i64 = 1000;
+        const MODEL: i64 = 2000;
+        write_fbx(&[
+            node(
+                "Objects",
+                Vec::new(),
+                vec![
+                    triangle_geometry(GEOMETRY),
+                    node(
+                        "Model",
+                        vec![
+                            Attr::Int(MODEL),
+                            object_name("tri", "Model"),
+                            Attr::Text("Mesh".to_string()),
+                        ],
+                        Vec::new(),
+                    ),
+                ],
+            ),
+            node("Connections", Vec::new(), vec![connection(GEOMETRY, MODEL)]),
+        ])
+    }
+
+    // FBX time unit: ticks per second.
+    const KTIME_PER_SEC: i64 = 46_186_158_000;
+
+    fn skinned_triangle_fbx() -> Vec<u8> {
+        skinned_fbx(false)
+    }
+
+    // The same triangle bound to a one-bone skin: a Skin deformer over the
+    // geometry, a Cluster linking every control point to the bone Model at an
+    // identity bind, and a unit scale of 100 so file units are already meters.
+    // With `animated`, a one-second stack slides the bone 0 -> 2 along X.
+    fn skinned_fbx(animated: bool) -> Vec<u8> {
+        const GEOMETRY: i64 = 3000;
+        const MESH_MODEL: i64 = 4000;
+        const BONE: i64 = 5000;
+        const SKIN: i64 = 6000;
+        const CLUSTER: i64 = 7000;
+        const STACK: i64 = 8000;
+        const LAYER: i64 = 8100;
+        const CURVE_NODE: i64 = 8200;
+        const CURVE: i64 = 8300;
+        let identity = vec![
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let unit_scale = node(
+            "GlobalSettings",
+            Vec::new(),
+            vec![node(
+                "Properties70",
+                Vec::new(),
+                vec![node(
+                    "P",
+                    vec![
+                        Attr::Text("UnitScaleFactor".to_string()),
+                        Attr::Text("double".to_string()),
+                        Attr::Text("Number".to_string()),
+                        Attr::Text(String::new()),
+                        Attr::Double(100.0),
+                    ],
+                    Vec::new(),
+                )],
+            )],
+        );
+        let mut objects = vec![
+            triangle_geometry(GEOMETRY),
+            node(
+                "Model",
+                vec![
+                    Attr::Int(MESH_MODEL),
+                    object_name("mesh", "Model"),
+                    Attr::Text("Mesh".to_string()),
+                ],
+                Vec::new(),
+            ),
+            node(
+                "Model",
+                vec![
+                    Attr::Int(BONE),
+                    object_name("Root", "Model"),
+                    Attr::Text("LimbNode".to_string()),
+                ],
+                Vec::new(),
+            ),
+            node(
+                "Deformer",
+                vec![
+                    Attr::Int(SKIN),
+                    object_name("skin", "Deformer"),
+                    Attr::Text("Skin".to_string()),
+                ],
+                Vec::new(),
+            ),
+            node(
+                "Deformer",
+                vec![
+                    Attr::Int(CLUSTER),
+                    object_name("cluster", "SubDeformer"),
+                    Attr::Text("Cluster".to_string()),
+                ],
+                vec![
+                    node("Indexes", vec![Attr::Ints(vec![0, 1, 2])], Vec::new()),
+                    node(
+                        "Weights",
+                        vec![Attr::Doubles(vec![1.0, 1.0, 1.0])],
+                        Vec::new(),
+                    ),
+                    node(
+                        "TransformLink",
+                        vec![Attr::Doubles(identity.clone())],
+                        Vec::new(),
+                    ),
+                    node("Transform", vec![Attr::Doubles(identity)], Vec::new()),
+                ],
+            ),
+        ];
+        let mut connections = vec![
+            connection(GEOMETRY, MESH_MODEL),
+            connection(SKIN, GEOMETRY),
+            connection(CLUSTER, SKIN),
+            connection(BONE, CLUSTER),
+        ];
+
+        if animated {
+            objects.extend([
+                node(
+                    "AnimationStack",
+                    vec![Attr::Int(STACK), object_name("wave", "AnimStack")],
+                    Vec::new(),
+                ),
+                node(
+                    "AnimationLayer",
+                    vec![Attr::Int(LAYER), object_name("Base Layer", "AnimLayer")],
+                    Vec::new(),
+                ),
+                node(
+                    "AnimationCurveNode",
+                    vec![Attr::Int(CURVE_NODE), object_name("T", "AnimCurveNode")],
+                    Vec::new(),
+                ),
+                node(
+                    "AnimationCurve",
+                    vec![Attr::Int(CURVE), object_name("", "AnimCurve")],
+                    vec![
+                        node(
+                            "KeyTime",
+                            vec![Attr::Longs(vec![0, KTIME_PER_SEC])],
+                            Vec::new(),
+                        ),
+                        node(
+                            "KeyValueFloat",
+                            vec![Attr::Floats(vec![0.0, 2.0])],
+                            Vec::new(),
+                        ),
+                    ],
+                ),
+            ]);
+            connections.extend([
+                connection(LAYER, STACK),
+                connection(CURVE_NODE, LAYER),
+                property_connection(CURVE, CURVE_NODE, "d|X"),
+                property_connection(CURVE_NODE, BONE, "Lcl Translation"),
+            ]);
+        }
+
+        write_fbx(&[
+            unit_scale,
+            node("Objects", Vec::new(), objects),
+            node("Connections", Vec::new(), connections),
+        ])
+    }
+
+    #[test]
+    fn fbx_fixture_parses_into_one_primitive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "tri.fbx", &static_triangle_fbx());
+        let scene = crate::fbx::parse_fbx(&src).expect("fixture parses");
+        let (vertices, indices) =
+            crate::fbx::read_primitive_geometry(&scene, 0).expect("primitive 0");
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    // A `.fbx`-sourced Mesh lands with inline geometry, and several assets fanned
+    // out of one file share a single parse and a single chunk split.
+    #[test]
+    fn desugar_fbx_meshes_inlines_geometry_for_every_asset_sharing_a_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "scene.fbx", &static_triangle_fbx());
+        let mut assets = vec![
+            wja(
+                "part_a",
+                MESH_TYPE,
+                serde_json::json!({"source": src, "primitive_index": 0}),
+            ),
+            wja(
+                "part_b",
+                MESH_TYPE,
+                serde_json::json!({"source": src, "primitive_index": 0, "chunk_index": 0}),
+            ),
+        ];
+        desugar_fbx_meshes(&mut assets, &Default::default()).expect("desugar");
+        for asset in &assets {
+            assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
+            assert_eq!(asset.args["indices"].as_array().unwrap(), &vec![0, 1, 2]);
+        }
+    }
+
+    // The two failure modes past the parse: a primitive the file does not have,
+    // and a chunk index past the split.
+    #[test]
+    fn desugar_fbx_meshes_rejects_an_unknown_primitive_and_chunk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "scene.fbx", &static_triangle_fbx());
+
+        let mut ghost = vec![wja(
+            "ghost",
+            MESH_TYPE,
+            serde_json::json!({"source": src, "primitive_index": 7}),
+        )];
+        let err =
+            desugar_fbx_meshes(&mut ghost, &Default::default()).expect_err("primitive 7 is absent");
+        let msg = err.to_string();
+        assert!(msg.contains("Asset 'ghost'"), "got: {msg}");
+        assert!(msg.contains("FBX import failed"), "got: {msg}");
+
+        let mut past_end = vec![wja(
+            "chunk9",
+            MESH_TYPE,
+            serde_json::json!({"source": src, "chunk_index": 9}),
+        )];
+        let err = desugar_fbx_meshes(&mut past_end, &Default::default())
+            .expect_err("chunk 9 is past the split");
+        let msg = err.to_string();
+        assert!(msg.contains("chunk_index 9 out of range"), "got: {msg}");
+        assert!(msg.contains("1 chunk(s)"), "got: {msg}");
+    }
+
+    // A `.fbx`-sourced SkinnedMesh lands with inline geometry and a skeleton,
+    // mirroring the glTF pass; the `source` reference is what the compile step
+    // no longer needs.
+    #[test]
+    fn desugar_fbx_skinned_meshes_inlines_geometry_and_skeleton() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.fbx", &skinned_triangle_fbx());
+        let mut assets = vec![wja(
+            "hero",
+            SKINNED_MESH_TYPE,
+            serde_json::json!({"source": src}),
+        )];
+        desugar_fbx_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+
+        let args = &assets[0].args;
+        assert_eq!(args["vertices"].as_array().unwrap().len(), 3);
+        assert_eq!(args["indices"].as_array().unwrap(), &vec![0, 1, 2]);
+        let skeleton = args["skeleton"].as_array().expect("skeleton inlined");
+        assert_eq!(skeleton.len(), 1);
+        assert_eq!(skeleton[0]["name"], "Root");
+        assert_eq!(skeleton[0]["parent"], -1);
+        // Every control point binds fully to the single cluster bone.
+        assert_eq!(
+            args["vertices"][0]["weights"],
+            serde_json::json!([1.0, 0.0, 0.0, 0.0])
+        );
+    }
+
+    // `.glb` sources belong to the glTF pass, and a probe hit means the
+    // compiled payload is already in hand; neither is parsed here.
+    #[test]
+    fn desugar_fbx_skinned_meshes_skips_glb_sources_and_cache_hits() {
+        let glb_args = serde_json::json!({"source": "/no/such/hero.glb"});
+        let cached_args = serde_json::json!({"source": "/no/such/hero.fbx"});
+        let mut assets = vec![
+            wja("from_glb", SKINNED_MESH_TYPE, glb_args.clone()),
+            wja("cached", SKINNED_MESH_TYPE, cached_args.clone()),
+        ];
+        desugar_fbx_skinned_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        assert_eq!(assets[0].args, glb_args);
+        assert_eq!(assets[1].args, cached_args);
+    }
+
+    // A file with no skin deformer is a hard error, named against the asset.
+    #[test]
+    fn desugar_fbx_skinned_meshes_reports_a_file_without_a_skin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "static.fbx", &static_triangle_fbx());
+        let mut assets = vec![wja(
+            "hero",
+            SKINNED_MESH_TYPE,
+            serde_json::json!({"source": src}),
+        )];
+        let err = desugar_fbx_skinned_meshes(&mut assets, &Default::default())
+            .expect_err("a static file has no skin");
+        let msg = err.to_string();
+        assert!(msg.contains("Asset 'hero'"), "got: {msg}");
+        assert!(msg.contains("FBX import failed"), "got: {msg}");
+    }
+
     #[test]
     fn desugar_fbx_meshes_missing_source_errors() {
         let mut assets = vec![wja(
@@ -2144,6 +2907,51 @@ mod tests {
         assert_eq!(assets[1].args, glb_args);
     }
 
+    // An `.fbx` source routes to the FBX importer, which bakes the clip at the
+    // asset's `sample_rate` rather than replaying authored keys.
+    #[test]
+    fn desugar_animation_imports_bakes_an_fbx_clip_at_the_sample_rate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.fbx", &skinned_fbx(true));
+        let mut assets = vec![wja(
+            "wave",
+            "Animation",
+            serde_json::json!({"source": src, "sample_rate": 10.0}),
+        )];
+        desugar_animation_imports(&mut assets).expect("desugar");
+
+        let args = &assets[0].args;
+        assert!(
+            (args["duration"].as_f64().expect("duration") - 1.0).abs() < 1e-3,
+            "got: {}",
+            args["duration"]
+        );
+        let tracks = args["tracks"].as_array().expect("tracks inlined");
+        assert_eq!(tracks.len(), 1);
+        let keys = tracks[0]["keyframes"].as_array().expect("keyframes");
+        // One second at 10 samples per second, inclusive of both ends.
+        assert_eq!(keys.len(), 11);
+        assert_eq!(keys[0]["translation"][0], 0.0);
+        assert_eq!(keys[10]["translation"][0], 2.0);
+    }
+
+    // A clip named by `animation_name` that the file does not contain fails
+    // through the FBX importer too.
+    #[test]
+    fn desugar_animation_imports_reports_an_unknown_fbx_clip_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.fbx", &skinned_fbx(true));
+        let mut assets = vec![wja(
+            "run",
+            "Animation",
+            serde_json::json!({"source": src, "animation_name": "sprint"}),
+        )];
+        let err = desugar_animation_imports(&mut assets).expect_err("no 'sprint' clip");
+        let msg = err.to_string();
+        assert!(msg.contains("Asset 'run'"), "got: {msg}");
+        assert!(msg.contains("FBX import failed"), "got: {msg}");
+    }
+
     #[test]
     fn desugar_animation_imports_missing_source_errors() {
         let mut assets = vec![wja(
@@ -2166,6 +2974,61 @@ mod tests {
         )];
         let err = desugar_animation_imports(&mut assets).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'run'"), "got: {err}");
+    }
+
+    // A source-backed Animation is replaced by the imported clip's duration
+    // and tracks. Channels targeting non-joint nodes are dropped, so the
+    // fixture's two channels yield one track.
+    #[test]
+    fn desugar_animation_imports_inlines_the_indexed_clip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &crate::glb::test_fixtures::skinned_glb());
+        let mut assets = vec![wja(
+            "wave",
+            "Animation",
+            serde_json::json!({"source": src, "animation_index": 0}),
+        )];
+        desugar_animation_imports(&mut assets).expect("desugar");
+
+        let args = &assets[0].args;
+        assert_eq!(args["duration"], 1.0);
+        let tracks = args["tracks"].as_array().expect("tracks inlined");
+        assert_eq!(tracks.len(), 1, "the non-joint channel is dropped");
+        let keys = tracks[0]["keyframes"].as_array().expect("keyframes");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0]["time"], 0.0);
+        assert_eq!(keys[1]["translation"], serde_json::json!([0.0, 2.0, 0.0]));
+        // The fixture animates no morph weights, so no morph track appears.
+        assert!(args.get("morph_track").is_none());
+    }
+
+    // `animation_name` picks the clip by name; a name the file does not carry
+    // is a hard error that lists what it does contain.
+    #[test]
+    fn desugar_animation_imports_resolves_and_rejects_clip_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &crate::glb::test_fixtures::skinned_glb());
+        let mut assets = vec![wja(
+            "wave",
+            "Animation",
+            serde_json::json!({"source": src, "animation_name": "wave"}),
+        )];
+        desugar_animation_imports(&mut assets).expect("desugar");
+        assert_eq!(assets[0].args["tracks"].as_array().unwrap().len(), 1);
+
+        let mut missing = vec![wja(
+            "run",
+            "Animation",
+            serde_json::json!({"source": src, "animation_name": "sprint"}),
+        )];
+        let err =
+            desugar_animation_imports(&mut missing).expect_err("the file has no 'sprint' clip");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("has no animation named 'sprint'"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("wave"), "the error lists the clips: {msg}");
     }
 
     #[test]
@@ -2205,6 +3068,58 @@ mod tests {
             assets[0].args["tracks"][0]["keyframes"][0]["translation"][0],
             1.0
         );
+    }
+
+    // Opting into vertical root motion keeps the Y travel in the root track
+    // instead of anchoring it back into the pose.
+    #[test]
+    fn desugar_root_motion_keeps_y_travel_when_asked() {
+        let clip = |root_motion_y: bool| {
+            serde_json::json!({
+                "target": "hero",
+                "duration": 1.0,
+                "root_motion": true,
+                "root_motion_y": root_motion_y,
+                "tracks": [{"joint": 0, "keyframes": [
+                    {"time": 0.0, "translation": [0.0, 0.0, 0.0]},
+                    {"time": 1.0, "translation": [0.0, 3.0, 0.0]}
+                ]}],
+            })
+        };
+        let mut assets = vec![
+            wja("jump", "Animation", clip(true)),
+            wja("walk", "Animation", clip(false)),
+        ];
+        desugar_root_motion(&mut assets).expect("bake succeeds");
+
+        assert_eq!(assets[0].args["root_track"][1]["translation"][1], 3.0);
+        assert_eq!(
+            assets[0].args["tracks"][0]["keyframes"][1]["translation"][1],
+            0.0
+        );
+        // Without the flag the rise stays in the pose and the root track is flat.
+        assert_eq!(assets[1].args["root_track"][1]["translation"][1], 0.0);
+        assert_eq!(
+            assets[1].args["tracks"][0]["keyframes"][1]["translation"][1],
+            3.0
+        );
+    }
+
+    // An authored `screen` arg wins over the name-prefix convention, exactly
+    // as an authored `scene` does on a Prop.
+    #[test]
+    fn resolve_scene_refs_keeps_an_authored_screen_arg() {
+        let mut assets = vec![
+            wja("menu", "Screen", serde_json::json!({})),
+            wja("other", "Screen", serde_json::json!({})),
+            wja(
+                "menu_title",
+                "TextLabel",
+                serde_json::json!({"screen": "other"}),
+            ),
+        ];
+        super::resolve_scene_refs(&mut assets);
+        assert_eq!(assets[2].args["screen"], "other");
     }
 
     #[test]
@@ -2298,6 +3213,458 @@ mod tests {
         }
     }
 
+    // `build_compiled` runs on an already-prepared world, so a type the
+    // component registry cannot resolve surfaces here rather than upstream.
+    #[test]
+    fn build_compiled_names_the_asset_whose_type_will_not_resolve() {
+        let assets = vec![wja("mystery", "NotAType", serde_json::json!({}))];
+        let Err(err) = build_compiled(assets, None) else {
+            panic!("unknown type must not compile");
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Asset 'mystery'"), "got: {err}");
+    }
+
+    // A payload that will not compile fails the whole build; the error names
+    // the asset so the author knows which line to fix.
+    #[test]
+    fn build_compiled_surfaces_a_payload_compile_failure() {
+        let assets = vec![wja(
+            "shape",
+            "ProceduralMesh",
+            serde_json::json!({"generator": "not_a_generator"}),
+        )];
+        let Err(err) = build_compiled(assets, None) else {
+            panic!("an uncompilable payload must not build");
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("not_a_generator"), "got: {err}");
+    }
+
+    // The per-asset resolution pass reports every asset that fails, not just
+    // the first, and a clean world returns Ok.
+    #[test]
+    fn validate_world_jsonl_collects_every_resolution_failure() {
+        let world = concat!(
+            r#"{"name":"first","type":"ProceduralMesh","args":{"generator":"box"}}"#,
+            "\n",
+            r#"{"name":"clip","type":"AudioClip","args":{"source":"a.wav"}}"#,
+            "\n",
+        );
+        validate_world_jsonl(world).expect("a resolvable world validates");
+
+        // Args of the wrong shape survive the structural world checks and are
+        // rejected when the def is built.
+        let bad = concat!(
+            r#"{"name":"t1","type":"Scene","args":{"duration_secs":"soon"}}"#,
+            "\n",
+            r#"{"name":"t2","type":"Scene","args":{"duration_secs":"later"}}"#,
+            "\n",
+        );
+        let err = validate_world_jsonl(bad).expect_err("mistyped args do not resolve");
+        let msg = err.to_string();
+        assert!(msg.contains("Asset 't1'"), "got: {msg}");
+        assert!(msg.contains("Asset 't2'"), "got: {msg}");
+    }
+
+    // An uncompressed 24-bit BGR Targa, the cheapest real image source to
+    // author inline.
+    fn tga_2x2() -> Vec<u8> {
+        let mut v = vec![0u8; 18];
+        v[2] = 2; // uncompressed true-color
+        v[12..14].copy_from_slice(&2u16.to_le_bytes());
+        v[14..16].copy_from_slice(&2u16.to_le_bytes());
+        v[16] = 24;
+        v[17] = 0x20; // top origin
+        v.extend_from_slice(&[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]);
+        v
+    }
+
+    // `cn debug`'s hot-reload watcher maps a saved file back to the handle it
+    // feeds, so every file-backed texture and mesh records its source in handle
+    // order. A generated asset has nothing to watch and records an empty source.
+    #[test]
+    fn build_compiled_records_hot_reload_sources_in_handle_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tga = write_fixture(&dir, "wall.tga", &tga_2x2());
+        let glb = write_fixture(
+            &dir,
+            "scene.glb",
+            &crate::glb::test_fixtures::static_triangle_glb(),
+        );
+        let assets = vec![
+            wja(
+                "proc_tex",
+                "Texture",
+                serde_json::json!({"generator": "checker", "resolution": 8}),
+            ),
+            wja(
+                "wall_tex",
+                "Texture",
+                serde_json::json!({"source": tga, "image_index": 3}),
+            ),
+            wja(
+                "inline_mesh",
+                MESH_TYPE,
+                serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
+            ),
+            wja(
+                "file_mesh",
+                MESH_TYPE,
+                serde_json::json!({
+                    "source": glb,
+                    "primitive_index": 0,
+                    "lod_levels": 3,
+                    "lod_distances": [10.0, 20.0],
+                }),
+            ),
+        ];
+        let result = build_compiled(assets, None).expect("build");
+
+        assert_eq!(result.texture_sources.len(), 2);
+        assert_eq!(
+            result.texture_sources[0],
+            TextureSourceInfo {
+                name_id: 0,
+                source: String::new(),
+                image_index: 0,
+            },
+            "a generated texture has no file to watch"
+        );
+        assert_eq!(
+            result.texture_sources[1],
+            TextureSourceInfo {
+                name_id: 1,
+                source: tga,
+                image_index: 3,
+            }
+        );
+
+        assert_eq!(result.mesh_sources.len(), 2);
+        assert_eq!(
+            result.mesh_sources[0],
+            MeshSourceInfo {
+                source: String::new(),
+                primitive_index: 0,
+                lod_levels: 1,
+                lod_distances: Vec::new(),
+            },
+            "a generated mesh has no file to watch"
+        );
+        assert_eq!(
+            result.mesh_sources[1],
+            MeshSourceInfo {
+                source: glb,
+                primitive_index: 0,
+                lod_levels: 3,
+                lod_distances: vec![10.0, 20.0],
+            }
+        );
+    }
+
+    // A data resource carries its bytes inline in the record rather than in a
+    // blob payload section, so the lock records no payload blob for it.
+    #[test]
+    fn build_compiled_keeps_a_data_resource_out_of_the_payload_sections() {
+        let assets = vec![
+            wja("wood", "Material", serde_json::json!({})),
+            wja(
+                "shape",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "box"}),
+            ),
+        ];
+        let result = build_compiled(assets, None).expect("build");
+
+        assert_eq!(result.resources.len(), 1);
+        let material = &result.resources[0];
+        assert!(material.payload.is_none(), "a Material rides inline");
+        assert!(!material.data_bytes.is_empty());
+        postcard::from_bytes::<crate::assets::Material>(&material.data_bytes)
+            .expect("the inline bytes decode as a Material");
+        assert_eq!(result.resource_locks[0].name, "wood");
+        assert_eq!(result.resource_locks[0].payload_blob, None);
+        // The component's payload is what actually occupies the blob.
+        assert_eq!(result.defs.len(), 1);
+        assert!(result.defs[0].payload.is_some());
+    }
+
+    // Only a File whose kind maps to a mesh payload is compiled; every other
+    // kind stays a plain reference with no blob bytes.
+    #[test]
+    fn build_compiled_compiles_only_mesh_kind_file_assets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let obj = write_fixture(&dir, "tri.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        let png = write_fixture(&dir, "icon.png", b"not read");
+        let assets = vec![
+            wja(
+                "model",
+                "File",
+                serde_json::json!({"path": obj, "kind": "obj"}),
+            ),
+            wja(
+                "icon",
+                "File",
+                serde_json::json!({"path": png, "kind": "png"}),
+            ),
+        ];
+        let result = build_compiled(assets, None).expect("build");
+
+        assert_eq!(result.names, vec!["model".to_string(), "icon".to_string()]);
+        let mesh_payload = result.defs[0]
+            .payload
+            .as_ref()
+            .expect("the obj File compiles");
+        assert!(mesh_payload.len > 0);
+        assert!(
+            result.defs[1].payload.is_none(),
+            "a png File produces no blob payload"
+        );
+    }
+
+    // A source-backed asset that is neither mesh kind is skipped: its payload
+    // cache is handled by the per-asset path inside the compile pass.
+    #[test]
+    fn probe_gltf_cache_skips_a_source_backed_non_mesh_asset() {
+        let assets = vec![
+            wja("tex", "Texture", serde_json::json!({"source": "wall.png"})),
+            wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
+        ];
+        let probed = probe_gltf_cache(&assets, None);
+        assert_eq!(probed.len(), 1);
+        assert!(probed.contains_key("m"));
+    }
+
+    use crate::resource_handles::{ResourceAssetType, ResourceKind};
+
+    fn procedural_mesh_def() -> BlobAssetDef {
+        asset_api::create_asset_def(&AssetRequest {
+            asset_type: "ProceduralMesh".to_string(),
+            args: Some(serde_json::json!({"generator": "box"})),
+        })
+        .expect("ProceduralMesh def")
+    }
+
+    // The pre-desugar probe is the whole point of the glTF cache: when it holds
+    // bytes for an asset, neither the component nor the resource path may touch
+    // the source again. Both assets here name inputs that would fail to
+    // compile, so a recompile would be loud.
+    #[test]
+    fn compile_and_pack_payloads_serves_probed_bytes_without_recompiling() {
+        let assets = vec![
+            wja(
+                "shape",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "not_a_generator"}),
+            ),
+            wja(
+                "body",
+                MESH_TYPE,
+                serde_json::json!({"source": "/no/such/body.glb"}),
+            ),
+        ];
+        let mut named = vec![("shape".to_string(), procedural_mesh_def())];
+        let resource_jobs = vec![(1usize, ResourceAssetType::Mesh, 0u32)];
+        let mut cache = std::collections::HashMap::new();
+        cache.insert(
+            "shape".to_string(),
+            GltfCacheEntry {
+                key: "shape-key".to_string(),
+                bytes: Some(vec![1, 2, 3]),
+            },
+        );
+        cache.insert(
+            "body".to_string(),
+            GltfCacheEntry {
+                key: "body-key".to_string(),
+                bytes: Some(vec![4, 5, 6, 7]),
+            },
+        );
+
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0],
+            &assets,
+            &resource_jobs,
+            1024,
+            None,
+            &cache,
+        )
+        .expect("probed payloads need no compiler");
+
+        assert_eq!(out.cache_hits, 2);
+        assert_eq!(out.cache_misses, 0);
+        // Components pack first, then the resource stream, into one blob.
+        assert_eq!(out.blobs, vec![vec![1, 2, 3, 4, 5, 6, 7]]);
+        let component = named[0].1.payload.as_ref().expect("component locator");
+        assert_eq!(
+            (component.blob_index, component.offset, component.len),
+            (0, 0, 3)
+        );
+        let resource = out.resources[0].payload.as_ref().expect("resource locator");
+        assert_eq!(
+            (resource.blob_index, resource.offset, resource.len),
+            (0, 3, 4)
+        );
+        assert_eq!(out.resources[0].resource_kind, ResourceKind::Mesh as u8);
+        assert_eq!(out.resources[0].handle, 0);
+    }
+
+    // A probe that recorded a miss compiles for real, on both the component and
+    // the resource path, and both payloads land in the packed blob.
+    #[test]
+    fn compile_and_pack_payloads_compiles_a_probe_miss() {
+        let assets = vec![
+            wja(
+                "shape",
+                "ProceduralMesh",
+                serde_json::json!({"generator": "box"}),
+            ),
+            wja(
+                "body",
+                MESH_TYPE,
+                serde_json::json!({"generator": "sphere", "radius": 1.0}),
+            ),
+        ];
+        let mut named = vec![("shape".to_string(), procedural_mesh_def())];
+        let resource_jobs = vec![(1usize, ResourceAssetType::Mesh, 0u32)];
+        let miss = |key: &str| GltfCacheEntry {
+            key: key.to_string(),
+            bytes: None,
+        };
+        let cache = std::collections::HashMap::from([
+            ("shape".to_string(), miss("shape-key")),
+            ("body".to_string(), miss("body-key")),
+        ]);
+
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0],
+            &assets,
+            &resource_jobs,
+            1 << 20,
+            None,
+            &cache,
+        )
+        .expect("a probe miss compiles");
+
+        assert_eq!(out.cache_hits, 0);
+        assert_eq!(out.cache_misses, 2);
+        let component = named[0].1.payload.as_ref().expect("component locator");
+        let resource = out.resources[0].payload.as_ref().expect("resource locator");
+        assert!(component.len > 0);
+        assert!(resource.len > 0);
+        assert_eq!(
+            out.blobs[0].len() as u64,
+            component.len + resource.len,
+            "both compiled payloads land in the blob"
+        );
+    }
+
+    // A world whose assets all carry inline args produces no payload sections
+    // at all, and still reports one (empty) blob for the metadata to ride in.
+    #[test]
+    fn compile_and_pack_payloads_returns_one_empty_blob_for_a_payload_less_world() {
+        let assets = vec![wja("day", "Scene", serde_json::json!({}))];
+        let mut named = vec![(
+            "day".to_string(),
+            asset_api::create_asset_def(&AssetRequest {
+                asset_type: "Scene".to_string(),
+                args: Some(serde_json::json!({})),
+            })
+            .expect("Scene def"),
+        )];
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0],
+            &assets,
+            &[],
+            1024,
+            None,
+            &Default::default(),
+        )
+        .expect("pack");
+
+        assert_eq!(out.blobs, vec![Vec::<u8>::new()]);
+        assert!(out.resources.is_empty());
+        assert_eq!((out.cache_hits, out.cache_misses), (0, 0));
+        assert!(named[0].1.payload.is_none());
+    }
+
+    // The compile pass selects its work by discriminant. A def carrying one the
+    // component registry does not know is skipped, so an unrecognised record
+    // cannot abort a build.
+    #[test]
+    fn compile_and_pack_payloads_skips_a_def_with_an_unknown_discriminant() {
+        let assets = vec![wja("mystery", "ProceduralMesh", serde_json::json!({}))];
+        let mut named = vec![(
+            "mystery".to_string(),
+            BlobAssetDef {
+                name: None,
+                kind: AssetKind::Component,
+                discriminant: 200,
+                args_bytes: Vec::new(),
+                payload: None,
+            },
+        )];
+        assert!(
+            ComponentType::from_discriminant(200).is_none(),
+            "200 must stay outside the registered discriminant range"
+        );
+
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0],
+            &assets,
+            &[],
+            1024,
+            None,
+            &Default::default(),
+        )
+        .expect("pack");
+
+        assert!(named[0].1.payload.is_none());
+        assert_eq!(out.blobs, vec![Vec::<u8>::new()]);
+    }
+
+    // The blob size ceiling is packing policy, not a format limit: payloads
+    // that overflow it roll into the next blob and their locators follow.
+    #[test]
+    fn compile_and_pack_payloads_rolls_payloads_into_overflow_blobs() {
+        let assets = vec![
+            wja("a", "ProceduralMesh", serde_json::json!({})),
+            wja("b", "ProceduralMesh", serde_json::json!({})),
+        ];
+        let mut named = vec![
+            ("a".to_string(), procedural_mesh_def()),
+            ("b".to_string(), procedural_mesh_def()),
+        ];
+        let cache = std::collections::HashMap::from([
+            (
+                "a".to_string(),
+                GltfCacheEntry {
+                    key: "a".to_string(),
+                    bytes: Some(vec![0xAA; 6]),
+                },
+            ),
+            (
+                "b".to_string(),
+                GltfCacheEntry {
+                    key: "b".to_string(),
+                    bytes: Some(vec![0xBB; 6]),
+                },
+            ),
+        ]);
+
+        let out = compile_and_pack_payloads(&mut named, &[0, 1], &assets, &[], 8, None, &cache)
+            .expect("pack");
+
+        assert_eq!(out.blobs, vec![vec![0xAA; 6], vec![0xBB; 6]]);
+        assert_eq!(named[0].1.payload.as_ref().unwrap().blob_index, 0);
+        let second = named[1].1.payload.as_ref().unwrap();
+        assert_eq!((second.blob_index, second.offset), (1, 0));
+    }
+
     #[test]
     fn compile_by_type_without_build_impl_errors() {
         let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
@@ -2313,6 +3680,26 @@ mod tests {
         let inputs = cache_inputs_by_type(ct, &serde_json::json!({}), &ctx());
         assert_eq!(inputs.sources, SourceFiles::Extra(Vec::new()));
         assert!(!inputs.target_dependent);
+    }
+
+    // The arms that take the trait default report no inputs of their own: every
+    // file they read is named by an args string, which the payload cache's
+    // generic walk already hashes.
+    #[test]
+    fn cache_inputs_by_type_covers_the_args_walk_arms() {
+        use crate::asset::SourceFiles;
+        for name in ["ProceduralMesh", "VoxelChunk", "File", "Room"] {
+            let inputs = cache_inputs_by_type(ct(name), &serde_json::json!({}), &ctx());
+            assert_eq!(
+                inputs.sources,
+                SourceFiles::Extra(Vec::new()),
+                "{name} must not narrow the generic args walk"
+            );
+            assert!(
+                !inputs.target_dependent,
+                "{name} compiles the same everywhere"
+            );
+        }
     }
 
     // AudioClip compiles through `ResourceAssetType` now, not `compile_by_type`

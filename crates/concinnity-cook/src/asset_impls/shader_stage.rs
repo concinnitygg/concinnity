@@ -121,20 +121,105 @@ impl crate::asset::BuildAsset for ShaderStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset::{BuildAsset, SourceFiles, SourceInput};
+
+    fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
+        BuildCtx {
+            name: "s",
+            artifacts_dir,
+            all_assets: &[],
+        }
+    }
+
+    // A source declared for the backend this build targets, so
+    // `resolve_source_from_args` selects it on every platform.
+    fn args(source: &str) -> serde_json::Value {
+        serde_json::json!({"kind": "fragment", "sources": {platform_key(): source}})
+    }
 
     #[test]
     fn resolve_source_path_for_keeps_paths_with_a_directory_component() {
         // A path that already contains a directory is returned verbatim; the
-        // bare-filename branch consults process-global asset anchors and is left
-        // to integration coverage.
-        let ctx = BuildCtx {
-            name: "s",
-            artifacts_dir: None,
-            all_assets: &[],
-        };
+        // `.concinnity/assets/` recursive search consults process-global asset
+        // anchors and is left to integration coverage.
         assert_eq!(
-            resolve_source_path_for("shaders/x.metal", &ctx),
+            resolve_source_path_for("shaders/x.metal", &ctx(None)),
             "shaders/x.metal"
         );
+    }
+
+    #[test]
+    fn resolve_source_path_for_prefers_an_artifact_over_the_assets_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("user.metal"), "// msl").unwrap();
+        let artifacts = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_source_path_for("user.metal", &ctx(Some(&artifacts))),
+            format!("{artifacts}/user.metal")
+        );
+    }
+
+    #[test]
+    fn resolve_source_path_for_falls_back_to_the_assets_dir() {
+        let expected = concinnity_core::paths::assets_dir()
+            .join("cn_no_such.metal")
+            .to_string_lossy()
+            .into_owned();
+        // No artifacts dir at all...
+        assert_eq!(
+            resolve_source_path_for("cn_no_such.metal", &ctx(None)),
+            expected
+        );
+        // ...and an artifacts dir that doesn't hold the file both land there.
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_source_path_for("cn_no_such.metal", &ctx(Some(&artifacts))),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_compile_failure_names_the_asset() {
+        // The source resolves to a path that does not exist, so the compile
+        // fails while reading it and never reaches a shader toolchain.
+        let err = ShaderStage::compile_payload(&args("cn_no_such.metal"), &ctx(None)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.starts_with("Asset 's' compile error:"), "got: {msg}");
+        assert!(msg.contains("cn_no_such.metal"), "got: {msg}");
+    }
+
+    #[test]
+    fn source_files_reports_a_builtin_by_its_embedded_source() {
+        // A built-in has no filesystem path, so it is reported by name and
+        // hashed from the source embedded in the binary.
+        assert_eq!(
+            ShaderStage::source_files(&args("default.metal"), &ctx(None)),
+            SourceFiles::Only(vec![SourceInput::Builtin("default.metal".to_string())])
+        );
+    }
+
+    #[test]
+    fn source_files_reports_a_user_shader_only_once_it_exists_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user.metal");
+        let raw = path.to_string_lossy().into_owned();
+        // Nothing on disk yet: an empty set, since there is no input to hash.
+        assert_eq!(
+            ShaderStage::source_files(&args(&raw), &ctx(None)),
+            SourceFiles::Only(Vec::new())
+        );
+        std::fs::write(&path, "// msl").unwrap();
+        assert_eq!(
+            ShaderStage::source_files(&args(&raw), &ctx(None)),
+            SourceFiles::Only(vec![SourceInput::Path(raw)])
+        );
+        // A stage with no source for this backend hashes nothing.
+        assert_eq!(
+            ShaderStage::source_files(&serde_json::json!({"kind": "vertex"}), &ctx(None)),
+            SourceFiles::Only(Vec::new())
+        );
+        // The same source compiles to different bytecode per backend.
+        const { assert!(ShaderStage::TARGET_DEPENDENT) };
     }
 }

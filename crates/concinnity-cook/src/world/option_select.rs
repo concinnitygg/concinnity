@@ -350,6 +350,29 @@ mod tests {
         assert!(expand_option_selects(&mut assets).is_err());
     }
 
+    #[test]
+    fn invalid_args_name_the_select() {
+        let mut assets = vec![serde_json::json!({
+            "name": "opt", "type": "OptionSelect", "args": {"width": "wide"}
+        })];
+        let err = expand_option_selects(&mut assets).unwrap_err();
+        assert!(err.contains("OptionSelect 'opt'"), "{err}");
+        assert!(err.contains("invalid args"), "{err}");
+    }
+
+    // A row with no args at all is the fully defaulted row, not an error.
+    #[test]
+    fn select_without_args_uses_type_defaults() {
+        let mut assets = vec![serde_json::json!({"name":"opt","type":"OptionSelect"})];
+        expand_option_selects(&mut assets).unwrap();
+        let defaults = OptionSelect::default();
+        assert_eq!(by_name(&assets, "opt_label")["args"]["x"], defaults.x);
+        assert_eq!(
+            by_name(&assets, "opt_label")["args"]["content"],
+            defaults.label
+        );
+    }
+
     // A setting with more than two options (window_mode has three) expands to a
     // dropdown: name + value + chevron under a single open region, no `<`/`>`.
     #[test]

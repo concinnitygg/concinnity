@@ -501,6 +501,8 @@ fn extract_skinned_geometry(geom: &NodeHandle) -> Option<(Vec<VertexData>, Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fbx::fixtures as fx;
+    use crate::fbx::fixtures::assert_vec3_eq;
 
     #[test]
     fn mat4_from_flat_places_translation_in_the_fourth_column() {
@@ -544,5 +546,440 @@ mod tests {
         let (joints, _) = top4_weights(Some(&list));
         assert_eq!(joints[0], 2, "equal weights order by joint index");
         assert_eq!(joints[1], 9);
+    }
+
+    fn import(doc: fx::Doc) -> Result<ImportedSkinnedMesh, String> {
+        let file = doc.write();
+        import_skinned_fbx(file.path())
+    }
+
+    #[test]
+    fn import_skinned_fbx_bakes_the_bind_frame_into_the_vertices() {
+        let mesh = import(fx::two_bone_rig(100.0)).expect("skinned import");
+
+        // The mesh model's +X geometric offset is baked in; the cluster
+        // Transform x TransformLink product is identity for this rig.
+        assert_eq!(mesh.vertices.len(), 3);
+        assert_vec3_eq(mesh.vertices[0].pos, [1.0, 0.0, 0.0]);
+        assert_vec3_eq(mesh.vertices[1].pos, [2.0, 0.0, 0.0]);
+        assert_vec3_eq(mesh.vertices[2].pos, [1.0, 1.0, 0.0]);
+        assert_eq!(mesh.indices, vec![0, 1, 2]);
+        assert!(mesh.morph_target_names.is_empty());
+        assert!(mesh.morph_deltas.is_empty());
+    }
+
+    #[test]
+    fn import_skinned_fbx_rebuilds_joint_locals_from_the_cluster_bind_worlds() {
+        let mesh = import(fx::two_bone_rig(100.0)).expect("skinned import");
+
+        assert_eq!(mesh.skeleton.len(), 2);
+        let root = &mesh.skeleton[0];
+        assert_eq!(root.name, "Root");
+        assert_eq!(root.parent, -1);
+        assert_vec3_eq(root.translation, [0.0, 0.0, 0.0]);
+        assert_vec3_eq(root.scale, [1.0, 1.0, 1.0]);
+
+        // Tip's TransformLink is two units up; relative to Root that is its local.
+        let tip = &mesh.skeleton[1];
+        assert_eq!(tip.name, "Tip");
+        assert_eq!(tip.parent, 0);
+        assert_vec3_eq(tip.translation, [0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_normalizes_the_top_four_cluster_weights() {
+        let mesh = import(fx::two_bone_rig(100.0)).expect("skinned import");
+
+        assert_eq!(mesh.vertices[0].joints, [0, 0, 0, 0]);
+        assert_eq!(mesh.vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
+        // Control point 1 is bound half to each joint.
+        assert_eq!(mesh.vertices[1].joints, [0, 1, 0, 0]);
+        assert_eq!(mesh.vertices[1].weights, [0.5, 0.5, 0.0, 0.0]);
+        assert_eq!(mesh.vertices[2].joints, [1, 0, 0, 0]);
+        assert_eq!(mesh.vertices[2].weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_normalizes_a_centimeter_rig_to_meters() {
+        let mesh = import(fx::two_bone_rig(1.0)).expect("skinned import");
+
+        assert_vec3_eq(mesh.vertices[0].pos, [0.01, 0.0, 0.0]);
+        assert_vec3_eq(mesh.vertices[1].pos, [0.02, 0.0, 0.0]);
+        // Only the root local carries the unit compensation.
+        assert_vec3_eq(mesh.skeleton[0].scale, [0.01, 0.01, 0.01]);
+        assert_vec3_eq(mesh.skeleton[1].translation, [0.0, 2.0, 0.0]);
+        assert_vec3_eq(mesh.skeleton[1].scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_ignores_zero_and_missing_cluster_weights() {
+        let mut doc = fx::two_bone_rig(100.0);
+        // The Root cluster claims control point 2 but supplies no weight for it.
+        doc.replace_object(
+            fx::ROOT_CLUSTER_ID,
+            fx::cluster(
+                fx::ROOT_CLUSTER_ID,
+                "RootCluster",
+                vec![0, 1, 2],
+                vec![1.0, 0.5],
+            )
+            .child(fx::transform_link(fx::flat_translation([0.0, 0.0, 0.0])))
+            .child(fx::transform(fx::flat_translation([0.0, 0.0, 0.0]))),
+        );
+        let mesh = import(doc).expect("skinned import");
+        assert_eq!(mesh.vertices[2].joints, [1, 0, 0, 0]);
+        assert_eq!(mesh.vertices[2].weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_drops_clusters_without_a_bone_link() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.drop_connection(fx::TIP_BONE_ID, fx::TIP_CLUSTER_ID);
+        let mesh = import(doc).expect("skinned import");
+
+        assert_eq!(mesh.skeleton.len(), 1);
+        assert_eq!(mesh.skeleton[0].name, "Root");
+        // The Tip-only control point loses its weights and falls back to joint 0.
+        assert_eq!(mesh.vertices[2].joints, [0, 0, 0, 0]);
+        assert_eq!(mesh.vertices[2].weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_keeps_a_bind_frame_of_identity_without_cluster_transforms() {
+        let mut doc = fx::two_bone_rig(100.0);
+        for (id, name, indexes, weights, link) in [
+            (
+                fx::ROOT_CLUSTER_ID,
+                "RootCluster",
+                vec![0, 1],
+                vec![1.0, 0.5],
+                0.0,
+            ),
+            (
+                fx::TIP_CLUSTER_ID,
+                "TipCluster",
+                vec![1, 2],
+                vec![0.5, 1.0],
+                2.0,
+            ),
+        ] {
+            doc.replace_object(
+                id,
+                fx::cluster(id, name, indexes, weights)
+                    .child(fx::transform_link(fx::flat_translation([0.0, link, 0.0]))),
+            );
+        }
+        let mesh = import(doc).expect("skinned import");
+        // Without a cluster Transform the bind frame is just the geometric offset.
+        assert_vec3_eq(mesh.vertices[0].pos, [1.0, 0.0, 0.0]);
+        assert_vec3_eq(mesh.skeleton[1].translation, [0.0, 2.0, 0.0]);
+    }
+
+    // A rig whose weighted bone hangs off an unweighted parent: the parent has
+    // no cluster, so its bind world comes from its scene pose.
+    fn rig_with_an_unclustered_parent() -> fx::Doc {
+        const HIPS_ID: i64 = 302;
+        fx::Doc {
+            unit_scale_factor: 100.0,
+            objects: vec![
+                fx::geometry(
+                    fx::GEOMETRY_ID,
+                    "mesh",
+                    vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    vec![0, 1, -3],
+                ),
+                fx::model(fx::MESH_MODEL_ID, "MeshNode", "Mesh"),
+                fx::model(HIPS_ID, "Hips", "LimbNode").child(fx::properties70(vec![fx::p_vec3(
+                    "Lcl Translation",
+                    [0.0, 1.0, 0.0],
+                )])),
+                fx::model(fx::ROOT_BONE_ID, "Root", "LimbNode"),
+                fx::skin_deformer(fx::SKIN_ID, "Skin"),
+                fx::cluster(
+                    fx::ROOT_CLUSTER_ID,
+                    "RootCluster",
+                    vec![0, 1, 2],
+                    vec![1.0, 1.0, 1.0],
+                )
+                .child(fx::transform_link(fx::flat_translation([0.0, 3.0, 0.0])))
+                .child(fx::transform(fx::flat_translation([0.0, -1.0, 0.0]))),
+            ],
+            connections: vec![
+                fx::oo(fx::MESH_MODEL_ID, 0),
+                fx::oo(HIPS_ID, 0),
+                fx::oo(fx::ROOT_BONE_ID, HIPS_ID),
+                fx::oo(fx::SKIN_ID, fx::GEOMETRY_ID),
+                fx::oo(fx::ROOT_CLUSTER_ID, fx::SKIN_ID),
+                fx::oo(fx::ROOT_BONE_ID, fx::ROOT_CLUSTER_ID),
+            ],
+        }
+    }
+
+    #[test]
+    fn import_skinned_fbx_extends_the_chain_with_unclustered_parent_scene_poses() {
+        let mesh = import(rig_with_an_unclustered_parent()).expect("skinned import");
+
+        assert_eq!(mesh.skeleton.len(), 2);
+        // Parents come before children even though only the child has a cluster.
+        assert_eq!(mesh.skeleton[0].name, "Hips");
+        assert_eq!(mesh.skeleton[0].parent, -1);
+        assert_vec3_eq(mesh.skeleton[0].translation, [0.0, 1.0, 0.0]);
+        assert_eq!(mesh.skeleton[1].name, "Root");
+        assert_eq!(mesh.skeleton[1].parent, 0);
+        // Root's cluster bind world is 3 up; relative to Hips that is 2.
+        assert_vec3_eq(mesh.skeleton[1].translation, [0.0, 2.0, 0.0]);
+        // The bind frame is TransformLink x Transform; with no Geometry -> Model
+        // connection there is no geometric offset on top of it.
+        assert_vec3_eq(mesh.vertices[0].pos, [0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_binds_the_first_skinned_geometry() {
+        let mut doc = fx::two_bone_rig(100.0);
+        // An earlier, unskinned geometry must not win.
+        doc.objects.insert(
+            0,
+            fx::geometry(
+                101,
+                "decoration",
+                vec![9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0],
+                vec![0, 1, -3],
+            ),
+        );
+        let mesh = import(doc).expect("skinned import");
+        assert_vec3_eq(mesh.vertices[0].pos, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_reads_the_texture_uv_layer() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.attach(
+            fx::GEOMETRY_ID,
+            fx::uv_layer("Lightmap", vec![0.9, 0.9, 0.9, 0.9, 0.9, 0.9], None),
+        );
+        doc.attach(
+            fx::GEOMETRY_ID,
+            fx::uv_layer("TextureUV", vec![0.25, 0.0, 0.5, 0.0, 0.75, 0.0], None),
+        );
+        let mesh = import(doc).expect("skinned import");
+        assert_eq!(mesh.vertices[0].uv, [0.25, 1.0]);
+        assert_eq!(mesh.vertices[1].uv, [0.5, 1.0]);
+        assert_eq!(mesh.vertices[2].uv, [0.75, 1.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_deduplicates_corners_sharing_an_indexed_uv() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.replace_object(
+            fx::GEOMETRY_ID,
+            fx::geometry(
+                fx::GEOMETRY_ID,
+                "quad",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3, 0, 2, -4],
+            )
+            .child(fx::uv_layer(
+                "TextureUV",
+                vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+                Some(vec![0, 1, 2, 0, 2, 3]),
+            )),
+        );
+        let mesh = import(doc).expect("skinned import");
+        // Six polygon-vertices collapse onto four (control point, uv) pairs.
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.indices, vec![0, 1, 2, 0, 2, 3]);
+        assert_eq!(mesh.vertices[3].uv, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_rejects_meshes_past_the_u16_index_limit() {
+        let triangles = (u16::MAX as usize + 3) / 3;
+        let mut pvi = Vec::with_capacity(triangles * 3);
+        for _ in 0..triangles {
+            pvi.extend_from_slice(&[0, 0, !0]);
+        }
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.replace_object(
+            fx::GEOMETRY_ID,
+            fx::geometry(fx::GEOMETRY_ID, "huge", vec![0.0, 0.0, 0.0], pvi),
+        );
+        let err = import(doc).err().expect("index limit");
+        assert!(err.contains("u16 index limit"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_geometry_without_polygon_data() {
+        let empty = [
+            fx::object("Geometry", fx::GEOMETRY_ID, "mesh", "Mesh"),
+            // Control points without polygons.
+            fx::object("Geometry", fx::GEOMETRY_ID, "mesh", "Mesh")
+                .child(fx::node("Vertices").arr_f64(vec![0.0, 0.0, 0.0])),
+            // Declared but empty polygon data emits no vertices either.
+            fx::geometry(fx::GEOMETRY_ID, "mesh", vec![0.0, 0.0, 0.0], Vec::new()),
+        ];
+        for geom in empty {
+            let mut doc = fx::two_bone_rig(100.0);
+            doc.replace_object(fx::GEOMETRY_ID, geom);
+            let err = import(doc).err().expect("no polygon data");
+            assert!(err.contains("has no polygon data"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn import_skinned_fbx_ignores_other_deformers_and_malformed_connections() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.objects
+            .push(fx::object("Deformer", 450, "shape", "BlendShape"));
+        // An object node without an id is skipped by the object scan.
+        doc.objects.push(fx::node("Deformer"));
+        doc.connections.extend([
+            // A connection record without its object ids.
+            fx::node("C").text("OO"),
+            fx::oo(450, fx::GEOMETRY_ID),
+            // A bone parented to an object that is not in the file.
+            fx::oo(fx::ROOT_BONE_ID, 999),
+        ]);
+        let mesh = import(doc).expect("skinned import");
+        assert_eq!(mesh.skeleton.len(), 2);
+        assert_eq!(mesh.skeleton[0].name, "Root");
+        assert_eq!(mesh.vertices.len(), 3);
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing.fbx");
+        let err = import_skinned_fbx(path.to_str().expect("path"))
+            .err()
+            .expect("missing file");
+        assert!(err.contains("could not open"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_fbx_accepts_a_bone_with_no_parent_connection() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.drop_connection(fx::ROOT_BONE_ID, 0);
+        let mesh = import(doc).expect("skinned import");
+        assert_eq!(mesh.skeleton.len(), 2);
+        assert_eq!(mesh.skeleton[0].name, "Root");
+        assert_eq!(mesh.skeleton[0].parent, -1);
+        assert_eq!(mesh.skeleton[1].parent, 0);
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_skin_in_a_file_without_connections() {
+        let doc = fx::two_bone_rig(100.0);
+        let file = fx::write(vec![fx::objects(doc.objects)]);
+        let err = import_skinned_fbx(file.path())
+            .err()
+            .expect("no connections");
+        assert!(
+            err.contains("no geometry is bound to a skin deformer"),
+            "got: {err}"
+        );
+    }
+
+    // Two bones that each claim the other as parent. No topological order
+    // exists, so the ordering pass has to fall back to discovery order.
+    fn rig_with_a_parent_cycle() -> fx::Doc {
+        const ALPHA_ID: i64 = 300;
+        const BETA_ID: i64 = 301;
+        const ALPHA_CLUSTER: i64 = 401;
+        const BETA_CLUSTER: i64 = 402;
+        fx::Doc {
+            unit_scale_factor: 100.0,
+            objects: vec![
+                fx::geometry(
+                    fx::GEOMETRY_ID,
+                    "mesh",
+                    vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    vec![0, 1, -3],
+                ),
+                fx::model(ALPHA_ID, "Alpha", "LimbNode"),
+                fx::model(BETA_ID, "Beta", "LimbNode"),
+                fx::skin_deformer(fx::SKIN_ID, "Skin"),
+                fx::cluster(ALPHA_CLUSTER, "AlphaCluster", vec![0], vec![1.0])
+                    .child(fx::transform_link(fx::flat_translation([0.0, 7.0, 0.0]))),
+                fx::cluster(BETA_CLUSTER, "BetaCluster", vec![1, 2], vec![1.0, 1.0])
+                    .child(fx::transform_link(fx::flat_translation([0.0, 5.0, 0.0]))),
+            ],
+            connections: vec![
+                fx::oo(ALPHA_ID, BETA_ID),
+                fx::oo(BETA_ID, ALPHA_ID),
+                fx::oo(fx::SKIN_ID, fx::GEOMETRY_ID),
+                fx::oo(ALPHA_CLUSTER, fx::SKIN_ID),
+                fx::oo(BETA_CLUSTER, fx::SKIN_ID),
+                fx::oo(ALPHA_ID, ALPHA_CLUSTER),
+                fx::oo(BETA_ID, BETA_CLUSTER),
+            ],
+        }
+    }
+
+    #[test]
+    fn import_skinned_fbx_emits_a_cyclic_parent_chain_in_discovery_order() {
+        let mesh = import(rig_with_a_parent_cycle()).expect("skinned import");
+
+        assert_eq!(mesh.skeleton.len(), 2);
+        // Alpha's chain walk discovers Beta first, so Beta leads and becomes
+        // the root; Alpha then resolves against it.
+        assert_eq!(mesh.skeleton[0].name, "Beta");
+        assert_eq!(mesh.skeleton[0].parent, -1);
+        assert_vec3_eq(mesh.skeleton[0].translation, [0.0, 5.0, 0.0]);
+        assert_eq!(mesh.skeleton[1].name, "Alpha");
+        assert_eq!(mesh.skeleton[1].parent, 0);
+        assert_vec3_eq(mesh.skeleton[1].translation, [0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_file_without_an_objects_section() {
+        let file = fx::write(vec![fx::node("Definitions")]);
+        let err = import_skinned_fbx(file.path())
+            .err()
+            .expect("no Objects section");
+        assert!(err.contains("FBX has no Objects section"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_file_without_a_skin_deformer() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(100, "mesh", vec![0.0; 9], vec![0, 1, -3]),
+            fx::model(200, "Mesh", "Mesh"),
+        ];
+        doc.connections = vec![fx::oo(100, 200)];
+        let err = import(doc).err().expect("no skin deformer");
+        assert!(err.contains("no skin deformer"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_skin_bound_to_no_geometry() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.drop_connection(fx::SKIN_ID, fx::GEOMETRY_ID);
+        let err = import(doc).err().expect("unbound skin");
+        assert!(
+            err.contains("no geometry is bound to a skin deformer"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_a_skin_without_clusters() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.drop_connection(fx::ROOT_CLUSTER_ID, fx::SKIN_ID);
+        doc.drop_connection(fx::TIP_CLUSTER_ID, fx::SKIN_ID);
+        let err = import(doc).err().expect("cluster-less skin");
+        assert!(err.contains("skin deformer has no clusters"), "got: {err}");
+    }
+
+    #[test]
+    fn import_skinned_fbx_reports_clusters_without_bone_links() {
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.drop_connection(fx::ROOT_BONE_ID, fx::ROOT_CLUSTER_ID);
+        doc.drop_connection(fx::TIP_BONE_ID, fx::TIP_CLUSTER_ID);
+        let err = import(doc).err().expect("bone-less clusters");
+        assert!(
+            err.contains("skin clusters have no bone links"),
+            "got: {err}"
+        );
     }
 }

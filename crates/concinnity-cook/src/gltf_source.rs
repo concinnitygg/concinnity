@@ -353,6 +353,18 @@ mod tests {
         assert_eq!(decode_base64("Zm9v\r\nYg==").unwrap(), b"foob");
     }
 
+    #[test]
+    fn base64_names_the_offending_character() {
+        // A full 4-character group so the length check passes and the
+        // per-character alphabet lookup is what rejects the input.
+        let err = decode_base64("Zm9!").unwrap_err();
+        assert_eq!(err, "invalid base64 character '!'");
+        assert_eq!(
+            decode_base64("Zm 9").unwrap_err(),
+            "invalid base64 character ' '"
+        );
+    }
+
     // percent decoding
 
     #[test]
@@ -397,6 +409,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_uri_rejects_a_data_uri_without_a_comma() {
+        let err = resolve_uri_bytes("data:application/octet-stream;base64", None).unwrap_err();
+        assert_eq!(err, "malformed data URI (no comma separator)");
+    }
+
+    #[test]
+    fn resolve_uri_reports_undecodable_base64() {
+        let err = resolve_uri_bytes("data:application/octet-stream;base64,Zm9!", None).unwrap_err();
+        assert!(err.starts_with("invalid base64 data URI"), "got: {err}");
+    }
+
+    #[test]
     fn resolve_uri_reads_a_sibling_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("geo.bin"), b"payload").unwrap();
@@ -409,6 +433,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = resolve_uri_bytes("missing.bin", Some(dir.path())).unwrap_err();
         assert!(err.contains("failed to read external file"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_uri_rejects_a_path_escaping_the_source_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = resolve_uri_bytes("../secrets.bin", Some(dir.path())).unwrap_err();
+        assert!(err.contains("escapes the source directory"), "got: {err}");
     }
 
     #[test]
@@ -506,13 +537,20 @@ mod tests {
         let mut json = triangle_gltf_json("geo.bin");
         json["images"] = serde_json::json!([
             {"uri": "tex%20map.png"},
-            {"uri": "data:image/png;base64,AAAA"}
+            {"uri": "data:image/png;base64,AAAA"},
+            {"uri": "../outside.png"},
+            {"bufferView": 1, "mimeType": "image/png"}
         ]);
         let gltf_path = dir.path().join("tri.gltf");
         std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         let files = referenced_files(gltf_path.to_str().unwrap());
-        assert_eq!(files.len(), 2, "data URI must not be listed: {files:?}");
+        assert_eq!(
+            files.len(),
+            2,
+            "data URIs, bufferView images, and paths outside the source \
+             directory must not be listed: {files:?}"
+        );
         assert!(files.iter().any(|f| f.ends_with("geo.bin")), "{files:?}");
         assert!(
             files.iter().any(|f| f.ends_with("tex map.png")),
@@ -551,6 +589,25 @@ mod tests {
             second[0].ends_with("b.bin"),
             "memo must not serve stale: {second:?}"
         );
+    }
+
+    #[test]
+    fn scan_referenced_files_tolerates_unreadable_and_unparseable_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(scan_referenced_files("/no/such/file.gltf").is_empty());
+
+        let junk = dir.path().join("junk.gltf");
+        std::fs::write(&junk, b"{ not glTF at all").unwrap();
+        assert!(scan_referenced_files(junk.to_str().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn encode_base64_chunk_matches_the_decoder_for_every_chunk_length() {
+        for payload in [&b"f"[..], b"fo", b"foo"] {
+            let encoded = encode_base64_chunk(payload);
+            assert_eq!(encoded.len(), 4, "always a padded quad: {encoded}");
+            assert_eq!(decode_base64(&encoded).unwrap(), payload, "{encoded}");
+        }
     }
 
     // Minimal encoder for test fixtures only.

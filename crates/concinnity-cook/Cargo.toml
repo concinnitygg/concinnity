@@ -61,4 +61,6 @@ windows = { version = "0.61", features = [
 shaderc = { version = "0.10.1", optional = true }
 
 [dev-dependencies]
+# The binary FBX writer builds synthetic .fbx fixtures for the importer tests.
+fbxcel = { version = "0.9.0", default-features = false, features = ["tree", "writer"] }
 tempfile = "3.25.0"

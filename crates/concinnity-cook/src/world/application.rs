@@ -144,6 +144,29 @@ mod tests {
         assert!(err.contains("at most one"));
     }
 
+    // A Window whose args are not an object cannot receive the title, and
+    // silently skipping it would ship a game titled by nothing.
+    #[test]
+    fn non_object_window_args_are_an_error() {
+        let mut assets = vec![app("My Game"), window(serde_json::json!("wide"))];
+        let mut report = ExpandReport::default();
+        let err = apply_application(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("Window 'w'"), "{err}");
+        assert!(err.contains("args must be an object"), "{err}");
+    }
+
+    // Only Windows take the title; other assets are left alone.
+    #[test]
+    fn non_window_assets_are_untouched() {
+        let mut assets = vec![
+            app("My Game"),
+            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+        ];
+        let mut report = ExpandReport::default();
+        apply_application(&mut assets, &mut report).unwrap();
+        assert!(assets[1]["args"].get("title").is_none());
+    }
+
     #[test]
     fn injected_window_args_are_synced_in_the_report() {
         let mut assets = vec![app("My Game"), window(serde_json::json!({}))];

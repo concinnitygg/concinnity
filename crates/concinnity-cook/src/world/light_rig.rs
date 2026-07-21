@@ -158,4 +158,77 @@ mod tests {
         expand_light_rigs(&mut assets);
         assert_eq!(assets[0]["type"], "Logger");
     }
+
+    fn expand_preset(preset: &str) -> Vec<serde_json::Value> {
+        let mut assets = vec![serde_json::json!({
+            "name": "rig",
+            "type": "LightRig",
+            "args": {"preset": preset}
+        })];
+        expand_light_rigs(&mut assets);
+        assets
+    }
+
+    #[test]
+    fn preset_outdoor_sun_expands_to_one_warm_directional() {
+        let lights = expand_preset("rig_outdoor_sun");
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0]["name"], "rig_sun");
+        assert_eq!(lights[0]["type"], "DirectionalLight");
+        assert_eq!(
+            lights[0]["args"]["direction"],
+            serde_json::json!([-0.4, 0.7, 0.3])
+        );
+        assert_eq!(
+            lights[0]["args"]["color"],
+            serde_json::json!([1.0, 0.95, 0.8])
+        );
+        assert_eq!(lights[0]["args"]["intensity"], 1.2);
+    }
+
+    #[test]
+    fn preset_night_moon_expands_to_one_cool_directional() {
+        let lights = expand_preset("rig_night_moon");
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0]["name"], "rig_moon");
+        assert_eq!(
+            lights[0]["args"]["color"],
+            serde_json::json!([0.7, 0.8, 1.0])
+        );
+        assert_eq!(lights[0]["args"]["intensity"], 0.4);
+    }
+
+    // The candle points carry their position, tint, intensity, and range
+    // through to the PointLight args.
+    #[test]
+    fn preset_candle_point_lights_carry_their_placement() {
+        let lights = expand_preset("rig_interior_candles");
+        let candle = lights
+            .iter()
+            .find(|v| v["name"] == "rig_candle_a")
+            .expect("candle_a light");
+        assert_eq!(candle["type"], "PointLight");
+        assert_eq!(
+            candle["args"]["position"],
+            serde_json::json!([3.0, 1.5, -3.0])
+        );
+        assert_eq!(candle["args"]["color"], serde_json::json!([1.0, 0.7, 0.3]));
+        assert_eq!(candle["args"]["intensity"], 8.0);
+        assert_eq!(candle["args"]["range"], 5.0);
+    }
+
+    // An unknown preset is not a build error: the on-disk preset lookup misses
+    // and the rig expands to nothing.
+    #[test]
+    fn unknown_preset_expands_to_no_lights() {
+        assert!(expand_preset("cn_test_no_such_rig").is_empty());
+    }
+
+    // A rig with no preset and no lights list is consumed and adds nothing.
+    #[test]
+    fn rig_without_a_preset_expands_to_nothing() {
+        let mut assets = vec![serde_json::json!({"name":"rig","type":"LightRig"})];
+        expand_light_rigs(&mut assets);
+        assert!(assets.is_empty());
+    }
 }

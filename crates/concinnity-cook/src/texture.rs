@@ -994,6 +994,112 @@ mod tests {
         assert!(err.contains("failed to read PNG info"), "got: {err}");
     }
 
+    #[test]
+    fn decode_source_rejects_an_indexed_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, 2, 1);
+            enc.set_color(png::ColorType::Indexed);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.set_palette(vec![255u8, 0, 0, 0, 255, 0]);
+            let mut writer = enc.write_header().expect("png header");
+            writer.write_image_data(&[0, 1]).expect("png data");
+            writer.finish().expect("png finish");
+        }
+        let src = write_file(&dir, "t.png", &out);
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(
+            err.contains("unsupported PNG color type Indexed"),
+            "got: {err}"
+        );
+    }
+
+    // JPEG decode
+    //
+    // Hand-assembled 1x1 JPEGs whose every coefficient is zero, so each decoded
+    // sample sits at the mid-point of the sample precision. `jpeg-decoder`
+    // derives its output pixel format from the component count (1 luminance,
+    // 3 RGB, 4 CMYK) and the precision, so these drive every loader branch.
+    fn jpeg_1x1(components: usize, lossless: bool) -> Vec<u8> {
+        let (sof, precision) = if lossless { (0xC3u8, 16u8) } else { (0xC0, 8) };
+        let mut v = vec![0xFF, 0xD8]; // SOI
+        if !lossless {
+            // DQT: table 0 with unit quantisation.
+            v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+            v.extend_from_slice(&[1u8; 64]);
+        }
+        // Frame header: one 1x1 pixel, every component at 1x1 sampling.
+        v.extend_from_slice(&[0xFF, sof]);
+        v.extend_from_slice(&(8 + 3 * components as u16).to_be_bytes());
+        v.extend_from_slice(&[precision, 0, 1, 0, 1, components as u8]);
+        for c in 0..components {
+            v.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
+        }
+        // Huffman tables: a single one-bit code for symbol 0. A lossless frame
+        // codes no AC coefficients, so it carries the DC table alone.
+        let classes: &[u8] = if lossless { &[0x00] } else { &[0x00, 0x10] };
+        for &class in classes {
+            v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, class, 1]);
+            v.extend_from_slice(&[0u8; 15]);
+            v.push(0);
+        }
+        // Scan header, then entropy-coded data: one bit per coded coefficient,
+        // with the final byte padded out with ones.
+        v.extend_from_slice(&[0xFF, 0xDA]);
+        v.extend_from_slice(&(6 + 2 * components as u16).to_be_bytes());
+        v.push(components as u8);
+        for c in 0..components {
+            v.extend_from_slice(&[c as u8 + 1, 0x00]);
+        }
+        let coded_bits = if lossless {
+            v.extend_from_slice(&[1, 0, 0]); // predictor 1, no point transform
+            components // one zero difference per component
+        } else {
+            v.extend_from_slice(&[0, 63, 0]); // full spectral selection
+            2 * components // a zero DC difference plus an end-of-block
+        };
+        v.push((0xFFu16 >> coded_bits) as u8);
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
+    #[test]
+    fn decode_source_expands_a_grayscale_jpeg_to_opaque_rgba() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.jpg", &jpeg_1x1(1, false));
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px, vec![128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_source_expands_an_rgb_jpeg_to_opaque_rgba() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.jpg", &jpeg_1x1(3, false));
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px, vec![128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_source_narrows_a_16_bit_jpeg_to_8_bit_channels() {
+        // The 16-bit mid-point sample is 0x8000, whose high byte is 128.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.jpg", &jpeg_1x1(1, true));
+        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!(px, vec![128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_source_converts_a_cmyk_jpeg_to_rgb() {
+        // Every ink at the mid-point: (1 - 0.502) * (1 - 0.502) * 255.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.jpg", &jpeg_1x1(4, false));
+        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!(px, vec![64, 64, 64, 255]);
+    }
+
     // Non-PNG formats: error paths only (no encoder available for these).
 
     #[test]
@@ -1021,22 +1127,22 @@ mod tests {
 
     // GLB-embedded images
 
-    fn glb_with_png_image(png_bytes: &[u8], mime: &str) -> Vec<u8> {
+    fn glb_with_image(image_bytes: &[u8], mime: &str) -> Vec<u8> {
         let json = serde_json::json!({
             "asset": {"version": "2.0"},
-            "buffers": [{"byteLength": png_bytes.len()}],
+            "buffers": [{"byteLength": image_bytes.len()}],
             "bufferViews": [
-                {"buffer": 0, "byteOffset": 0, "byteLength": png_bytes.len()}
+                {"buffer": 0, "byteOffset": 0, "byteLength": image_bytes.len()}
             ],
             "images": [{"bufferView": 0, "mimeType": mime}]
         });
-        make_glb(&json, Some(png_bytes))
+        make_glb(&json, Some(image_bytes))
     }
 
     #[test]
     fn decode_glb_image_reads_an_embedded_png() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[11, 22, 33, 44]);
-        let glb = glb_with_png_image(&png_bytes, "image/png");
+        let glb = glb_with_image(&png_bytes, "image/png");
         let doc = crate::glb::test_fixtures::parse(&glb);
         let (w, h, px) = decode_glb_image_from_doc(&doc, "t.glb", 0).expect("decode");
         assert_eq!((w, h), (1, 1));
@@ -1046,7 +1152,7 @@ mod tests {
     #[test]
     fn decode_glb_image_rejects_an_out_of_range_index() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
-        let glb = glb_with_png_image(&png_bytes, "image/png");
+        let glb = glb_with_image(&png_bytes, "image/png");
         let doc = crate::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 5).unwrap_err();
         assert!(err.contains("image_index 5 is out of range"), "got: {err}");
@@ -1110,10 +1216,59 @@ mod tests {
     #[test]
     fn decode_glb_image_rejects_an_unsupported_mime_type() {
         let png_bytes = encode_png(1, 1, png::ColorType::Rgba, &[0, 0, 0, 0]);
-        let glb = glb_with_png_image(&png_bytes, "image/webp");
+        let glb = glb_with_image(&png_bytes, "image/webp");
         let doc = crate::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(err.contains("unsupported MIME type"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_glb_image_reads_an_embedded_rgb_jpeg() {
+        let glb = glb_with_image(&jpeg_1x1(3, false), "image/jpeg");
+        let doc = crate::glb::test_fixtures::parse(&glb);
+        let (w, h, px) = decode_glb_image_from_doc(&doc, "t.glb", 0).expect("decode");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px, vec![128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_glb_image_reads_an_embedded_grayscale_jpeg() {
+        let glb = glb_with_image(&jpeg_1x1(1, false), "image/jpeg");
+        let doc = crate::glb::test_fixtures::parse(&glb);
+        let (_, _, px) = decode_glb_image_from_doc(&doc, "t.glb", 0).expect("decode");
+        assert_eq!(px, vec![128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_glb_image_rejects_a_cmyk_jpeg() {
+        // The embedded-image decoder handles RGB and grayscale only.
+        let glb = glb_with_image(&jpeg_1x1(4, false), "image/jpeg");
+        let doc = crate::glb::test_fixtures::parse(&glb);
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(
+            err.contains("unsupported JPEG pixel format CMYK32"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_glb_image_reports_a_corrupt_jpeg() {
+        let glb = glb_with_image(b"not a jpeg", "image/jpeg");
+        let doc = crate::glb::test_fixtures::parse(&glb);
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+    }
+
+    #[test]
+    fn mime_from_uri_infers_a_type_from_the_extension_or_data_header() {
+        assert_eq!(mime_from_uri("albedo.PNG").as_deref(), Some("image/png"));
+        assert_eq!(mime_from_uri("albedo.jpg").as_deref(), Some("image/jpeg"));
+        assert_eq!(mime_from_uri("albedo.jpeg").as_deref(), Some("image/jpeg"));
+        assert_eq!(
+            mime_from_uri("data:image/png;base64,iVBOR").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(mime_from_uri("albedo.webp"), None);
     }
 
     // compile_texture_payload: file-backed branch and payload envelope
@@ -1153,6 +1308,183 @@ mod tests {
         let image = deserialise(&payload);
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(image.mips[0].data.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn compile_texture_payload_leaves_an_image_under_the_cap_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let src = write_file(
+            &dir,
+            "t.png",
+            &encode_png(2, 1, png::ColorType::Rgba, &data),
+        );
+        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 64}))
+            .expect("ok");
+        let image = deserialise(&payload);
+        assert_eq!((image.width(), image.height()), (2, 1));
+        assert_eq!(image.mips[0].data, data);
+    }
+
+    // Block-compressed sources: KTX2 and DDS keep their mip chains.
+
+    #[test]
+    fn compile_texture_payload_keeps_a_ktx2_mip_chain_compressed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(
+            &dir,
+            "t.ktx2",
+            &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
+        );
+        // A cap of 1 would shrink an RGBA8 source; a compressed one is exempt.
+        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 1}))
+            .expect("compile");
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Bc1);
+        assert_eq!(image.mips.len(), 2);
+        assert_eq!((image.width(), image.height()), (4, 4));
+    }
+
+    #[test]
+    fn compile_texture_payload_surfaces_a_corrupt_ktx2() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
+        let err = compile_texture_payload(&serde_json::json!({"source": src})).unwrap_err();
+        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
+        assert!(
+            err.contains("t.ktx2"),
+            "error should name the source: {err}"
+        );
+    }
+
+    #[test]
+    fn compile_texture_payload_surfaces_a_missing_ktx2() {
+        let args = serde_json::json!({"source": "zzz_missing_texture.ktx2"});
+        let err = compile_texture_payload(&args).unwrap_err();
+        assert!(err.contains("failed to open KTX2 texture"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_expands_a_ktx2_to_rgba8_for_hot_reload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(
+            &dir,
+            "t.ktx2",
+            &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
+        );
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (4, 4));
+        assert!(px.chunks_exact(4).all(|c| c == [255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn decode_source_routes_ktx2_to_the_ktx2_loader() {
+        let err = decode_source("zzz_missing_texture.ktx2", 0).unwrap_err();
+        assert!(
+            err.contains("failed to open KTX2 texture"),
+            "expected .ktx2 to route to the KTX2 loader, got: {err}"
+        );
+    }
+
+    fn bc1_dds(width: u32, height: u32, mip_count: u32) -> Vec<u8> {
+        let block = crate::dds::test_fixtures::bc1_red_block();
+        let mut data = Vec::new();
+        for level in 0..mip_count {
+            let mw = (width >> level).max(1);
+            let mh = (height >> level).max(1);
+            let blocks = (mw.div_ceil(4) * mh.div_ceil(4)) as usize;
+            data.extend_from_slice(&block.repeat(blocks));
+        }
+        crate::dds::test_fixtures::wrap_dds_mips(b"DXT1", width, height, mip_count, &data)
+    }
+
+    #[test]
+    fn compile_texture_payload_passes_a_dds_mip_chain_through() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.dds", &bc1_dds(8, 8, 4));
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Bc1);
+        assert_eq!(image.mips.len(), 4);
+        assert_eq!((image.width(), image.height()), (8, 8));
+        assert_eq!((image.mips[3].width, image.mips[3].height), (1, 1));
+    }
+
+    #[test]
+    fn compile_texture_payload_decodes_a_single_mip_dds_to_rgba8() {
+        // Without a stored chain the blocks decode so runtime mip generation
+        // still has full-resolution pixels to filter.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.dds", &bc1_dds(4, 4, 1));
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Rgba8);
+        assert_eq!((image.width(), image.height()), (4, 4));
+        assert!(
+            image.mips[0]
+                .data
+                .chunks_exact(4)
+                .all(|c| c == [255, 0, 0, 255])
+        );
+    }
+
+    #[test]
+    fn compile_texture_payload_surfaces_a_corrupt_dds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.dds", b"nope");
+        let err = compile_texture_payload(&serde_json::json!({"source": src})).unwrap_err();
+        assert!(err.contains("DDS too short"), "got: {err}");
+        assert!(err.contains("t.dds"), "error should name the source: {err}");
+    }
+
+    #[test]
+    fn compile_texture_payload_surfaces_a_missing_dds() {
+        let args = serde_json::json!({"source": "zzz_missing_texture.dds"});
+        let err = compile_texture_payload(&args).unwrap_err();
+        assert!(err.contains("failed to open DDS texture"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_texture_payload_surfaces_a_missing_png() {
+        let args = serde_json::json!({"source": "zzz_missing_texture.png"});
+        let err = compile_texture_payload(&args).unwrap_err();
+        assert!(err.contains("failed to open texture source"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_surfaces_a_corrupt_ktx2() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_rejects_a_truncated_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut bytes = encode_png(4, 4, png::ColorType::Rgba, &[0u8; 4 * 4 * 4]);
+        // Keep the header chunks but cut the compressed image data short.
+        bytes.truncate(bytes.len() - 20);
+        let src = write_file(&dir, "t.png", &bytes);
+        let err = decode_source(&src, 0).unwrap_err();
+        assert!(err.contains("failed to decode PNG frame"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_source_surfaces_a_corrupt_glb() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.glb", b"not a glb");
+        assert!(decode_source(&src, 0).is_err());
+    }
+
+    #[test]
+    fn decode_glb_image_reports_a_corrupt_png() {
+        let glb = glb_with_image(b"not a png at all", "image/png");
+        let doc = crate::glb::test_fixtures::parse(&glb);
+        let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
+        assert!(err.contains("failed to read PNG info"), "got: {err}");
     }
 
     #[test]

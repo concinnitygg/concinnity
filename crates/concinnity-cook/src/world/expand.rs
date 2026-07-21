@@ -221,6 +221,81 @@ mod tests {
         assert_eq!(asset_name(&v), "");
     }
 
+    // Every pass's failure aborts the run and surfaces its own message, so a
+    // broken entry is reported by the pass that understands it.
+    #[test]
+    fn a_failing_pass_aborts_the_whole_expansion() {
+        for (asset, needle) in [
+            (
+                serde_json::json!({"name":"s","type":"SceneImport","args":{}}),
+                "SceneImport 's': missing `source`",
+            ),
+            (
+                serde_json::json!({"name":"t","type":"StoryImport","args":{}}),
+                "StoryImport 't': missing `source`",
+            ),
+            (
+                serde_json::json!({"name":"p","type":"Prop","args":{"prefab":"ghost"}}),
+                "prefab 'ghost' not found",
+            ),
+            (
+                serde_json::json!({"type":"MainMenu","args":{}}),
+                "MainMenu: missing `name`",
+            ),
+            (
+                serde_json::json!({"type":"OptionSelect","args":{}}),
+                "OptionSelect: missing `name`",
+            ),
+            (
+                serde_json::json!({"type":"Slider","args":{}}),
+                "Slider: missing `name`",
+            ),
+            (
+                serde_json::json!({"type":"Panel","args":{}}),
+                "Panel: missing `name`",
+            ),
+        ] {
+            let mut assets = vec![asset.clone()];
+            let err = expand_world(&mut assets).unwrap_err();
+            assert!(err.contains(needle), "{asset} -> {err}");
+        }
+    }
+
+    #[test]
+    fn a_second_engine_defaults_entry_aborts_the_expansion() {
+        let mut assets = vec![
+            serde_json::json!({"name":"a","type":"EngineDefaults","args":{}}),
+            serde_json::json!({"name":"b","type":"EngineDefaults","args":{}}),
+        ];
+        let err = expand_world(&mut assets).unwrap_err();
+        assert!(err.contains("at most one"), "{err}");
+    }
+
+    #[test]
+    fn a_window_that_cannot_take_the_application_title_aborts_the_expansion() {
+        let mut assets = vec![
+            serde_json::json!({"name":"app","type":"Application","args":{"name":"My Game"}}),
+            serde_json::json!({"name":"win","type":"Window","args":[]}),
+        ];
+        let err = expand_world(&mut assets).unwrap_err();
+        assert!(err.contains("Window 'win'"), "{err}");
+        assert!(err.contains("args must be an object"), "{err}");
+    }
+
+    // The string entry point reports both the structural failures `load_world`
+    // finds and the expansion failures that follow it.
+    #[test]
+    fn expand_world_from_str_surfaces_load_and_expansion_errors() {
+        let malformed = expand_world_from_str("not json at all\n").unwrap_err();
+        assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
+        assert!(!malformed.to_string().is_empty());
+
+        let broken = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
+        let err = expand_world_from_str(broken).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("ghost"), "{err}");
+    }
+
     #[test]
     fn expand_world_from_str_injects_companions() {
         let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;

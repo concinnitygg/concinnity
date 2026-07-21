@@ -1252,6 +1252,60 @@ mod tests {
     }
 
     #[test]
+    fn missing_name_is_an_error() {
+        let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{}})];
+        let err = expand_main_menus(&mut assets).unwrap_err();
+        assert_eq!(err, "MainMenu: missing `name`");
+    }
+
+    #[test]
+    fn invalid_args_name_the_menu() {
+        let mut assets = vec![serde_json::json!({
+            "name":"m","type":"MainMenu","args":{"button_width":"wide"}
+        })];
+        let err = expand_main_menus(&mut assets).unwrap_err();
+        assert!(err.contains("MainMenu 'm'"), "{err}");
+        assert!(err.contains("invalid args"), "{err}");
+    }
+
+    // A non-centered menu is a column anchored at the menu's own x/y instead of
+    // the reference canvas center and top margin.
+    #[test]
+    fn a_non_centered_menu_anchors_its_column_at_x_and_y() {
+        let mut assets = vec![serde_json::json!({
+            "name":"m","type":"MainMenu",
+            "args":{"centered":false,"x":200.0,"y":80.0,"button_width":300.0}
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        // The first button is centered on x, starting at y.
+        let btn = by_name(&assets, "m_btn_0");
+        assert_eq!(btn["args"]["x"], 200.0 - 300.0 / 2.0);
+        assert_eq!(btn["args"]["y"], 80.0);
+        assert_eq!(by_name(&assets, "m_label_0")["args"]["x"], 200.0);
+    }
+
+    // The settings tab of a non-centered menu keeps the narrower column form,
+    // sized from the menu's button width rather than spanning the canvas.
+    #[test]
+    fn a_non_centered_settings_tab_keeps_the_column_row_width() {
+        let mut assets = vec![serde_json::json!({
+            "name":"m","type":"MainMenu",
+            "args":{"centered":false,"x":300.0,"y":100.0,"button_width":300.0}
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        // 300 * 1.85 = 555, centered on x -> left edge at 300 - 555/2.
+        let card = by_name(&assets, "m_settings_video_bg_0");
+        assert_eq!(card["args"]["width"], 555.0);
+        assert_eq!(card["args"]["x"], 300.0 - 555.0 / 2.0);
+        // Rows stack down from the menu's own y, below the tab bar.
+        let tab_y = by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["y"]
+            .as_f64()
+            .unwrap();
+        assert_eq!(tab_y, 100.0);
+        assert!(card["args"]["y"].as_f64().unwrap() > tab_y);
+    }
+
+    #[test]
     fn video_tab_emits_a_row_per_setting() {
         let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
         expand_main_menus(&mut assets).unwrap();

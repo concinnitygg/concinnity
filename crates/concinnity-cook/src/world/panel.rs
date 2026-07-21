@@ -119,4 +119,37 @@ mod tests {
         let mut assets = vec![serde_json::json!({"type":"Panel","args":{}})];
         assert!(expand_panels(&mut assets).is_err());
     }
+
+    // Other assets keep their place in the list while the Panels around them
+    // expand.
+    #[test]
+    fn other_assets_survive_a_panel_expansion() {
+        let mut assets = vec![
+            serde_json::json!({"name":"win","type":"Window","args":{}}),
+            serde_json::json!({"name":"card","type":"Panel","args":{"width":10.0}}),
+        ];
+        expand_panels(&mut assets).unwrap();
+        assert_eq!(assets[0]["name"], "win");
+        assert_eq!(assets[1]["name"], "card_bg");
+    }
+
+    // A Panel with no args at all is the fully defaulted panel, not an error.
+    #[test]
+    fn panel_without_args_uses_type_defaults() {
+        let mut assets = vec![serde_json::json!({"name":"card","type":"Panel"})];
+        expand_panels(&mut assets).unwrap();
+        let defaults = Panel::default();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(by_name(&assets, "card_bg")["args"]["width"], defaults.width);
+    }
+
+    #[test]
+    fn invalid_args_name_the_panel_and_the_field() {
+        let mut assets = vec![serde_json::json!({
+            "name": "card", "type": "Panel", "args": {"width": "wide"}
+        })];
+        let err = expand_panels(&mut assets).unwrap_err();
+        assert!(err.contains("Panel 'card'"), "{err}");
+        assert!(err.contains("invalid args"), "{err}");
+    }
 }

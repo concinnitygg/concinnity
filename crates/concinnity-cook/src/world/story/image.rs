@@ -49,4 +49,48 @@ mod tests {
         let err = probe_image_dims("/no/such/portrait.png").unwrap_err();
         assert!(err.contains("cannot read"), "got: {err}");
     }
+
+    #[test]
+    fn a_corrupt_png_surfaces_a_decode_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portrait.png");
+        std::fs::write(&path, b"not a png at all").unwrap();
+        let err = probe_image_dims(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("portrait.png"), "got: {err}");
+        assert!(!err.contains("cannot read"), "got: {err}");
+    }
+
+    // SOI plus a baseline 6x9 single-component frame header: everything the
+    // probe reads, since it stops as soon as the frame is known.
+    const JPEG_6X9_HEADER: [u8; 15] = [
+        0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x09, 0x00, 0x06, 0x01, 0x01, 0x11, 0x00,
+    ];
+
+    #[test]
+    fn reads_jpeg_dimensions_from_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portrait.jpg");
+        std::fs::write(&path, JPEG_6X9_HEADER).unwrap();
+        let (w, h) = probe_image_dims(path.to_str().unwrap()).expect("probe jpeg");
+        assert_eq!((w, h), (6, 9));
+    }
+
+    // Anything that is not a `.png` goes down the JPEG path, extension aside.
+    #[test]
+    fn a_non_png_extension_is_probed_as_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portrait.jpeg");
+        std::fs::write(&path, JPEG_6X9_HEADER).unwrap();
+        assert_eq!(probe_image_dims(path.to_str().unwrap()), Ok((6, 9)));
+    }
+
+    #[test]
+    fn a_corrupt_jpeg_surfaces_a_decode_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portrait.jpg");
+        std::fs::write(&path, b"not a jpeg at all").unwrap();
+        let err = probe_image_dims(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("portrait.jpg"), "got: {err}");
+        assert!(!err.contains("cannot read"), "got: {err}");
+    }
 }

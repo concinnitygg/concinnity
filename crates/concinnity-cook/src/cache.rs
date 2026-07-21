@@ -717,6 +717,53 @@ mod tests {
         assert!(referenced_files(&args, &ctx()).is_empty());
     }
 
+    // A bare filename that exists neither directly nor in the artifacts dir is
+    // searched recursively under the state root's `assets/` tree. The lookup
+    // runs against the process-global anchor, so it shares the build-output
+    // lock with the other tests that install one.
+    #[test]
+    fn resolve_source_finds_a_bare_filename_under_the_assets_tree() {
+        let _guard = crate::blob::test_output::LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let state = crate::blob::test_output::StateDir::new();
+        let nested = state.assets_dir().join("hdri");
+        std::fs::create_dir_all(&nested).expect("assets tree");
+        std::fs::write(nested.join("sky.hdr"), b"radiance").expect("write source");
+
+        let found = resolve_source("sky.hdr", &ctx()).expect("bare filename resolves");
+        assert!(found.ends_with("sky.hdr"), "got: {found}");
+        assert_eq!(resolve_source("missing.hdr", &ctx()), None);
+    }
+
+    // An artifacts dir that does not hold the file contributes nothing, so the
+    // lookup falls through to no resolution rather than a bogus path.
+    #[test]
+    fn resolve_source_falls_through_an_artifacts_dir_without_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().to_str().unwrap().to_string();
+        let artifact_ctx = BuildCtx {
+            name: "test",
+            artifacts_dir: Some(&artifacts),
+            all_assets: &[],
+        };
+        assert_eq!(resolve_source("absent.hdr", &artifact_ctx), None);
+    }
+
+    // Storing is best-effort: a directory that cannot be created drops the
+    // entry rather than failing the build.
+    #[test]
+    fn store_in_gives_up_when_the_directory_cannot_be_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"a file, not a directory").unwrap();
+
+        let unusable = blocker.join("cache");
+        store_in(&unusable, "k", b"bytes");
+        assert_eq!(load_in(&unusable, "k"), None);
+        assert!(!unusable.exists());
+    }
+
     #[test]
     fn resolve_source_skips_non_file_looking_strings() {
         // No extension and no separator: never probed, even when a file of

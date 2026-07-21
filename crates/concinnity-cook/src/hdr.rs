@@ -357,6 +357,32 @@ fn fetch_wrap(hdr: &HdrImage, x: i32, y: i32) -> [f32; 3] {
     hdr.pixels[(yc * w + xw) as usize]
 }
 
+// Synthetic Radiance sources for this crate's tests: `cubemap.rs` writes them
+// to disk to exercise its compiler end to end.
+#[cfg(test)]
+pub(crate) mod test_fixtures {
+    // An uncompressed (old-format) Radiance blob of solid `rgb` pixels.
+    pub(crate) fn solid_hdr_blob(width: u32, height: u32, rgb: [f32; 3]) -> Vec<u8> {
+        let maxv = rgb[0].max(rgb[1]).max(rgb[2]);
+        let raw_exp = ((maxv.to_bits() >> 23) & 0xff) as i32;
+        let mantissa = f32::from_bits((maxv.to_bits() & 0x7f_ffff) | (126 << 23));
+        let scale = (mantissa * 256.0) / maxv;
+        let pixel = [
+            (rgb[0] * scale) as u8,
+            (rgb[1] * scale) as u8,
+            (rgb[2] * scale) as u8,
+            (raw_exp - 126 + 128) as u8,
+        ];
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
+        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
+        for _ in 0..(width * height) {
+            blob.extend_from_slice(&pixel);
+        }
+        blob
+    }
+}
+
 // Tests
 
 #[cfg(test)]
@@ -378,11 +404,9 @@ mod tests {
         ]
     }
 
-    // Manual frexp for tests: std::f32 doesn't expose it stably.
+    // Manual frexp for tests: std::f32 doesn't expose it stably. Only ever
+    // called with a strictly positive value (the caller screens out zero).
     fn frexp_f32(x: f32) -> (f32, i32) {
-        if x == 0.0 {
-            return (0.0, 0);
-        }
         let bits = x.to_bits();
         let raw_exp = ((bits >> 23) & 0xff) as i32;
         let exp = raw_exp - 126;
@@ -475,5 +499,295 @@ mod tests {
             minus_x,
             plus_x
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid cube face index 6")]
+    fn face_uv_to_dir_rejects_an_out_of_range_face() {
+        let _ = face_uv_to_dir(6, 0.0, 0.0);
+    }
+
+    // Cube payload deserialise
+
+    // A CUBE payload header followed by `faces` complete RGBA32F faces, which
+    // is six for a well-formed payload and fewer for the truncation tests.
+    fn cube_payload(face_size: u32, mip_count: u32, format_id: u32, faces: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&CUBE_PAYLOAD_MAGIC.to_le_bytes());
+        v.extend_from_slice(&face_size.to_le_bytes());
+        v.extend_from_slice(&mip_count.to_le_bytes());
+        v.extend_from_slice(&format_id.to_le_bytes());
+        let face_bytes = (face_size as usize) * (face_size as usize) * 16;
+        v.resize(CUBE_PAYLOAD_HEADER_BYTES + faces * face_bytes, 0);
+        v
+    }
+
+    #[test]
+    fn deserialise_rejects_a_payload_shorter_than_the_header() {
+        let err = deserialise(&[0u8; 8]).unwrap_err();
+        assert_eq!(
+            err,
+            "cubemap payload too short: 8 bytes (need at least 16 for header)"
+        );
+    }
+
+    #[test]
+    fn deserialise_rejects_a_foreign_magic() {
+        let mut v = cube_payload(2, 1, CUBE_FORMAT_RGBA32F, 6);
+        v[0..4].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+        let err = deserialise(&v).unwrap_err();
+        assert!(err.contains("0xdeadbeef"), "got: {err}");
+    }
+
+    #[test]
+    fn deserialise_rejects_a_multi_mip_payload() {
+        let err = deserialise(&cube_payload(2, 2, CUBE_FORMAT_RGBA32F, 6)).unwrap_err();
+        assert!(err.contains("mip_count 2"), "got: {err}");
+    }
+
+    #[test]
+    fn deserialise_rejects_an_unknown_format_id() {
+        let err = deserialise(&cube_payload(2, 1, 7, 6)).unwrap_err();
+        assert!(err.contains("format_id 7"), "got: {err}");
+    }
+
+    #[test]
+    fn deserialise_rejects_a_payload_missing_faces() {
+        // face_size 4 needs 16 + 6 * 256 bytes; only four faces are present.
+        let err = deserialise(&cube_payload(4, 1, CUBE_FORMAT_RGBA32F, 4)).unwrap_err();
+        assert_eq!(
+            err,
+            "cubemap payload too short for face_size 4: need 1552 bytes, got 1040"
+        );
+    }
+
+    // Radiance header errors
+
+    #[test]
+    fn decode_hdr_rejects_an_unsupported_format_line() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_xyze\n\n-Y 1 +X 1\n\x00\x00\x00\x00".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "unsupported Radiance FORMAT \"32-bit_rle_xyze\"");
+    }
+
+    #[test]
+    fn decode_hdr_requires_a_format_line() {
+        let blob = b"#?RADIANCE\nEXPOSURE=1.0\n\n-Y 1 +X 1\n\x00\x00\x00\x00".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "Radiance header missing FORMAT line");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_header_with_no_line_terminator() {
+        let err = decode_hdr(b"#?RADIANCE").unwrap_err();
+        assert_eq!(err, "unexpected end of HDR header");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_header_with_no_blank_terminator() {
+        let err = decode_hdr(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n").unwrap_err();
+        assert_eq!(err, "unexpected end of HDR header");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_header_with_no_resolution_line() {
+        let err = decode_hdr(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n").unwrap_err();
+        assert_eq!(err, "unexpected end of HDR header");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_non_utf8_header_line() {
+        let err = decode_hdr(b"#?RADIANCE\n\xff\xfe\n\n-Y 1 +X 1\n").unwrap_err();
+        assert_eq!(err, "non-UTF8 in HDR header");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_non_numeric_width() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X wide\n".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert!(err.starts_with("bad axis value \"wide\""), "got: {err}");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_malformed_resolution_line() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1\n".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "malformed Radiance resolution line \"-Y 1\"");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_an_x_before_y_resolution_line() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n+X 1 -Y 1\n".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "unsupported Radiance orientation \"+X 1 -Y 1\"");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_an_over_long_axis_tag() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n--Y 1 +X 1\n".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "bad axis tag \"--Y\"");
+    }
+
+    #[test]
+    fn decode_hdr_rejects_a_non_numeric_axis_value() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y tall +X 1\n".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert!(err.starts_with("bad axis value \"tall\""), "got: {err}");
+    }
+
+    // Scanline orientation
+
+    #[test]
+    fn plus_y_stores_scanlines_bottom_up() {
+        let dark = synth_rgbe_one_pixel(0.25, 0.25, 0.25);
+        let bright = synth_rgbe_one_pixel(4.0, 4.0, 4.0);
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n+Y 2 +X 1\n");
+        blob.extend_from_slice(&dark);
+        blob.extend_from_slice(&bright);
+        let img = decode_hdr(&blob).expect("decode");
+        // The last stored scanline is the top output row.
+        assert!(img.pixels[0][0] > 2.0, "got {}", img.pixels[0][0]);
+        assert!(img.pixels[1][0] < 1.0, "got {}", img.pixels[1][0]);
+    }
+
+    #[test]
+    fn minus_x_stores_pixels_right_to_left() {
+        let dark = synth_rgbe_one_pixel(0.25, 0.25, 0.25);
+        let bright = synth_rgbe_one_pixel(4.0, 4.0, 4.0);
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 -X 2\n");
+        blob.extend_from_slice(&dark);
+        blob.extend_from_slice(&bright);
+        let img = decode_hdr(&blob).expect("decode");
+        assert!(img.pixels[0][0] > 2.0, "got {}", img.pixels[0][0]);
+        assert!(img.pixels[1][0] < 1.0, "got {}", img.pixels[1][0]);
+    }
+
+    #[test]
+    fn a_zero_exponent_pixel_decodes_to_black() {
+        let black = synth_rgbe_one_pixel(0.0, 0.0, 0.0);
+        assert_eq!(black, [0, 0, 0, 0]);
+        let img = decode_hdr(&raw_hdr_blob(1, 1, &[black])).expect("decode");
+        assert_eq!(img.pixels[0], [0.0, 0.0, 0.0]);
+        // The mantissa is ignored entirely once the exponent is zero.
+        assert_eq!(rgbe_to_float(200, 100, 50, 0), [0.0, 0.0, 0.0]);
+    }
+
+    // RLE scanlines
+    //
+    // Exponent 136 makes the decode scale exactly 1.0, so a mantissa byte `m`
+    // reads back as `m + 0.5` and the assertions can be exact.
+
+    fn rle_hdr_blob(width: u32, channels: [Vec<u8>; 4]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
+        blob.extend_from_slice(format!("-Y 1 +X {}\n", width).as_bytes());
+        blob.extend_from_slice(&[0x02, 0x02, (width >> 8) as u8, (width & 0xFF) as u8]);
+        for packets in channels {
+            blob.extend_from_slice(&packets);
+        }
+        blob
+    }
+
+    // One run packet covering `count` samples of `value`.
+    fn run_packet(count: u8, value: u8) -> Vec<u8> {
+        vec![128 + count, value]
+    }
+
+    #[test]
+    fn rle_run_packets_fill_a_whole_scanline() {
+        let blob = rle_hdr_blob(
+            8,
+            [
+                run_packet(8, 200),
+                run_packet(8, 100),
+                run_packet(8, 50),
+                run_packet(8, 136),
+            ],
+        );
+        let img = decode_hdr(&blob).expect("decode");
+        assert_eq!(img.width, 8);
+        for p in &img.pixels {
+            assert_eq!(*p, [200.5, 100.5, 50.5]);
+        }
+    }
+
+    #[test]
+    fn rle_literal_packets_copy_per_pixel_values() {
+        let literal = |base: u8| {
+            let mut v = vec![8u8];
+            v.extend((0..8u8).map(|i| base + i));
+            v
+        };
+        let blob = rle_hdr_blob(
+            8,
+            [literal(0), literal(10), literal(20), run_packet(8, 136)],
+        );
+        let img = decode_hdr(&blob).expect("decode");
+        for (i, p) in img.pixels.iter().enumerate() {
+            let i = i as f32;
+            assert_eq!(*p, [i + 0.5, i + 10.5, i + 20.5], "pixel {i}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_rle_scanline_that_stops_mid_channel() {
+        let blob = rle_hdr_blob(8, [run_packet(8, 1), Vec::new(), Vec::new(), Vec::new()]);
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "RLE scanline truncated");
+    }
+
+    #[test]
+    fn rejects_an_rle_run_longer_than_the_scanline() {
+        let blob = rle_hdr_blob(8, [run_packet(9, 1), Vec::new(), Vec::new(), Vec::new()]);
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "RLE run overruns scanline");
+    }
+
+    #[test]
+    fn rejects_an_rle_run_with_no_value_byte() {
+        let blob = rle_hdr_blob(8, [vec![128 + 8], Vec::new(), Vec::new(), Vec::new()]);
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "RLE run byte missing");
+    }
+
+    #[test]
+    fn rejects_an_rle_literal_longer_than_the_scanline() {
+        let mut packet = vec![9u8];
+        packet.extend([0u8; 9]);
+        let blob = rle_hdr_blob(8, [packet, Vec::new(), Vec::new(), Vec::new()]);
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "RLE literal overruns scanline");
+    }
+
+    #[test]
+    fn rejects_a_truncated_rle_literal_packet() {
+        let blob = rle_hdr_blob(8, [vec![8, 1, 2, 3], Vec::new(), Vec::new(), Vec::new()]);
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "RLE literal truncated");
+    }
+
+    #[test]
+    fn rejects_a_truncated_raw_scanline() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 4\n\x01\x02\x03\x04".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "raw scanline truncated");
+    }
+
+    #[test]
+    fn rejects_a_scanline_header_past_the_end_of_the_file() {
+        let blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n\x00\x00".to_vec();
+        let err = decode_hdr(&blob).unwrap_err();
+        assert_eq!(err, "unexpected end of HDR pixel data");
+    }
+
+    #[test]
+    fn read_scanline_rejects_a_buffer_that_does_not_match_the_width() {
+        let mut cursor = 0usize;
+        let mut out = [0u8; 8];
+        let err = read_scanline(&[0u8; 32], &mut cursor, &mut out, 4).unwrap_err();
+        assert_eq!(err, "scanline buffer size mismatch");
     }
 }

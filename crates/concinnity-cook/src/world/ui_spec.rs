@@ -137,4 +137,15 @@ mod tests {
         assert_eq!(map["a"], 32.0);
         assert_eq!(map["b"], Font::default().size_px as f32);
     }
+
+    // A nameless Font cannot be referenced by an expander, so it is skipped
+    // rather than mapped under the empty name.
+    #[test]
+    fn font_sizes_skips_nameless_fonts_and_other_types() {
+        let assets = vec![
+            serde_json::json!({"type":"Font","args":{"size_px":32}}),
+            serde_json::json!({"name":"sprite","type":"Sprite","args":{"size_px":32}}),
+        ];
+        assert!(font_sizes(&assets).is_empty());
+    }
 }

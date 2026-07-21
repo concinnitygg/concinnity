@@ -20,3 +20,47 @@ impl crate::asset::BuildAsset for File {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asset::{BuildAsset, BuildCtx};
+
+    fn ctx() -> BuildCtx<'static> {
+        BuildCtx {
+            name: "model",
+            artifacts_dir: None,
+            all_assets: &[],
+        }
+    }
+
+    #[test]
+    fn obj_source_compiles_to_a_mesh_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.obj");
+        std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let args = serde_json::json!({"path": path.to_str().unwrap(), "kind": "obj"});
+        let payload = File::compile_payload(&args, &ctx()).expect("obj compiles");
+        assert!(!payload.is_empty());
+    }
+
+    #[test]
+    fn an_unrecognised_kind_names_the_asset() {
+        let args = serde_json::json!({"path": "model.xyz", "kind": "xyz"});
+        let err = File::compile_payload(&args, &ctx()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains("Asset 'model': unsupported File kind 'xyz'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_compile_failure_is_reported_as_invalid_data() {
+        let args = serde_json::json!({"path": "/no/such/model.obj", "kind": "obj"});
+        let err = File::compile_payload(&args, &ctx()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("/no/such/model.obj"), "got: {err}");
+    }
+}

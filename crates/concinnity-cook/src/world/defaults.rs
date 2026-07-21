@@ -668,6 +668,22 @@ mod tests {
         assert!(names_of_type(&assets, "prop").is_empty());
     }
 
+    // Turning the sky default off leaves an EnvironmentMap as image-based
+    // lighting only, with no mesh drawn for it.
+    #[test]
+    fn engine_defaults_opts_out_of_the_sky() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"env","type":"EnvironmentMap","args":{"generator":"sky"}}),
+            serde_json::json!({"name":"d","type":"EngineDefaults","args":{"sky": false}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "proceduralmesh").is_empty());
+        assert!(names_of_type(&assets, "prop").is_empty());
+        assert!(names_of_type(&assets, "material").is_empty());
+    }
+
     #[test]
     fn no_environment_map_means_no_sky() {
         let mut assets = world(&[gfx()]);
@@ -820,6 +836,147 @@ mod tests {
         let mut report = ExpandReport::default();
         inject_engine_defaults(&mut assets, &mut report).unwrap();
         assert!(names_of_type(&assets, "mainmenu").is_empty());
+    }
+
+    // Every sky piece yields to an asset the world already declares under that
+    // name, and the pieces it does not declare are still injected.
+    #[test]
+    fn authored_sky_pieces_are_kept_and_the_rest_injected() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"env","type":"EnvironmentMap","args":{"generator":"sky"}}),
+            serde_json::json!({"name":"sky_mesh","type":"ProceduralMesh","args":{"generator":"cube"}}),
+            serde_json::json!({"name":"mat_sky","type":"Material","args":{"roughness":0.2}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        // The authored mesh and material are untouched; only the Prop is added.
+        let mesh = assets.iter().find(|v| asset_name(v) == "sky_mesh").unwrap();
+        assert_eq!(mesh["args"]["generator"], "cube");
+        let mat = assets.iter().find(|v| asset_name(v) == "mat_sky").unwrap();
+        assert_eq!(mat["args"]["roughness"], 0.2);
+        assert_eq!(names_of_type(&assets, "prop"), vec!["sky"]);
+        // Both overrides are accounted for rather than silently dropped.
+        let shadowed: Vec<&str> = report.shadowed.iter().map(|s| s.name.as_str()).collect();
+        assert!(shadowed.contains(&"sky_mesh"), "{shadowed:?}");
+        assert!(shadowed.contains(&"mat_sky"), "{shadowed:?}");
+    }
+
+    #[test]
+    fn authored_sky_prop_suppresses_the_injected_one() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"env","type":"EnvironmentMap","args":{"generator":"sky"}}),
+            serde_json::json!({"name":"sky","type":"Prop","args":{"mesh":"mine"}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        let props = names_of_type(&assets, "prop");
+        assert_eq!(props, vec!["sky"]);
+        let prop = assets.iter().find(|v| asset_name(v) == "sky").unwrap();
+        assert_eq!(prop["args"]["mesh"], "mine");
+    }
+
+    // Each sky name landing on an unrelated type is a hard error rather than a
+    // silently skipped default.
+    #[test]
+    fn a_sky_name_held_by_another_type_is_an_error() {
+        for name in ["sky_mesh", "mat_sky", "sky"] {
+            let mut assets = world(&[
+                gfx(),
+                serde_json::json!({"name":"env","type":"EnvironmentMap","args":{"generator":"sky"}}),
+                serde_json::json!({"name": name, "type":"Window","args":{}}),
+            ]);
+            let mut report = ExpandReport::default();
+            let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+            assert!(err.contains(name), "{name}: {err}");
+            assert!(err.contains("Window"), "{name}: {err}");
+        }
+    }
+
+    // A chip or the HUD font held by an unrelated type is a hard error too.
+    #[test]
+    fn a_hud_chip_or_font_name_held_by_another_type_is_an_error() {
+        for name in ["passes_chip", HUD_FONT_NAME] {
+            let mut assets = world(&[
+                gfx(),
+                serde_json::json!({"name": name, "type":"Window","args":{}}),
+            ]);
+            let mut report = ExpandReport::default();
+            let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+            assert!(err.contains(name), "{name}: {err}");
+        }
+    }
+
+    // A story world whose pause-menu name is already taken by another type
+    // cannot inject the menu, and skipping it would hide the clash.
+    #[test]
+    fn a_pause_menu_name_held_by_another_type_is_an_error() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"tale","type":"Story","args":{}}),
+            serde_json::json!({"name":"tale_pause","type":"Window","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("tale_pause"), "{err}");
+    }
+
+    // An authored HUD carrying no args at all still gets its label fields.
+    #[test]
+    fn an_authored_hud_without_args_is_filled_in() {
+        let mut assets = world(&[gfx(), serde_json::json!({"name":"hud","type":"StatHud"})]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        let hud = assets.iter().find(|v| type_norm(v) == "stathud").unwrap();
+        assert_eq!(hud["args"]["fps_label"], "fps_chip");
+        assert!(names_of_type(&assets, "textlabel").contains(&"fps_chip".to_string()));
+    }
+
+    #[test]
+    fn a_hud_with_non_object_args_is_an_error() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"hud","type":"StatHud","args":[]}),
+        ]);
+        let mut report = ExpandReport::default();
+        let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("args must be an object"), "{err}");
+    }
+
+    // An EngineDefaults entry with no args is the all-defaults directive.
+    #[test]
+    fn engine_defaults_without_args_keeps_every_default_on() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"d","type":"EngineDefaults"}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert_eq!(names_of_type(&assets, "debughud"), vec!["debug_hud"]);
+    }
+
+    #[test]
+    fn malformed_engine_defaults_args_are_an_error() {
+        let mut assets = world(&[serde_json::json!({
+            "name":"d","type":"EngineDefaults","args":{"hud":"yes"}
+        })]);
+        let mut report = ExpandReport::default();
+        let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("EngineDefaults 'd'"), "{err}");
+        assert!(err.contains("invalid args"), "{err}");
+    }
+
+    // A Story whose `scaffold` is not an object is malformed; the patch is
+    // skipped rather than replacing what the author wrote.
+    #[test]
+    fn a_non_object_scaffold_is_left_alone() {
+        let mut assets = vec![serde_json::json!({
+            "name":"tale","type":"Story","args":{"scaffold": 7}
+        })];
+        patch_story_scaffold(&mut assets, "tale", "tale_pause");
+        assert_eq!(assets[0]["args"]["scaffold"], 7);
     }
 
     #[test]

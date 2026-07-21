@@ -95,6 +95,18 @@ mod tests {
     }
 
     #[test]
+    fn heightfield_unreadable_source_errors_with_the_heightfield_prefix() {
+        let args = serde_json::json!({
+            "generator": "heightfield",
+            "source": "/no/such/terrain.png",
+            "elevation_max": 1.0,
+        });
+        let err = compile_mesh_payload(&args).unwrap_err();
+        assert!(err.starts_with("heightfield: "), "got: {err}");
+        assert!(err.contains("/no/such/terrain.png"), "got: {err}");
+    }
+
+    #[test]
     fn non_heightfield_generator_delegates_to_the_generator_module() {
         let args = serde_json::json!({ "generator": "sphere", "radius": 1.0 });
         assert!(compile_mesh_payload(&args).is_ok());

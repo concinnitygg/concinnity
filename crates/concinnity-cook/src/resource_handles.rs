@@ -398,6 +398,49 @@ mod tests {
         assert_eq!(handles.count(ResourceKind::Mesh), 6);
     }
 
+    // A Material bakes from its authored args alone -- its texture references
+    // are already resolved handles -- so it declares no source file, and a
+    // component naming one resolves it to its declaration-order handle through
+    // the installed seam.
+    #[test]
+    fn a_material_reads_no_source_file_and_resolves_by_declaration_order() {
+        use crate::ecs::asset_id;
+
+        assert!(
+            ResourceAssetType::Material
+                .source_files(&serde_json::json!({"albedo": "wall_tex", "source": "m.json"}))
+                .is_empty()
+        );
+
+        asset_id::reset_interner();
+        let stone = asset_id::intern("stone");
+        let wood = asset_id::intern("wood");
+        reset_resource_handles();
+        install_resource_handles(ResourceHandles::from_assets([
+            (stone, ResourceKind::Material),
+            (wood, ResourceKind::Material),
+        ]));
+
+        let bytes = ComponentType::Prop
+            .reserialize_args(&serde_json::json!({"material": "wood"}))
+            .unwrap();
+        let prop: crate::assets::Prop = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(prop.material, Some(crate::ecs::MaterialHandle(1)));
+
+        // A name no material declared has no slot to point at, so it falls back
+        // to the interned id rather than failing the parse.
+        let bytes = ComponentType::Prop
+            .reserialize_args(&serde_json::json!({"material": "granite"}))
+            .unwrap();
+        let prop: crate::assets::Prop = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            prop.material,
+            Some(crate::ecs::MaterialHandle(
+                asset_id::intern("granite").0 as usize as u32
+            ))
+        );
+    }
+
     #[test]
     fn handles_are_dense_per_kind_in_order() {
         // The caller passes only the resources (pre-classified via

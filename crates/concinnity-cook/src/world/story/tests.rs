@@ -66,6 +66,14 @@ fn missing_source_is_an_error() {
     assert!(err.contains("missing `source`"));
 }
 
+// An import with no args at all is the same missing-source failure.
+#[test]
+fn an_import_without_args_is_a_missing_source() {
+    let mut assets = vec![serde_json::json!({"name":"story","type":"StoryImport"})];
+    let err = expand_stories(&mut assets).unwrap_err();
+    assert_eq!(err, "StoryImport 'story': missing `source`");
+}
+
 #[test]
 fn unreadable_source_file_is_an_error() {
     let mut assets = vec![serde_json::json!({
@@ -891,6 +899,304 @@ fn heading_names_cannot_collide_with_generated_screens() {
         .map(asset_name)
         .collect();
     assert_eq!(screens, ["s_title", "s_stage", "s_ending"]);
+}
+
+// The editor's authoring front end validates source without expanding it, so
+// it must accept and reject exactly what the expansion does.
+#[test]
+fn validate_story_source_accepts_and_rejects_like_the_expansion() {
+    assert_eq!(validate_story_source(CROSSROADS), Ok(()));
+    let err = validate_story_source("---\ntitle: T\n---\n\n# a\n\n> quoted\n").unwrap_err();
+    assert!(err.contains("block quotes"), "{err}");
+}
+
+// The expansion replaces the import in place and leaves everything else in the
+// world alone.
+#[test]
+fn other_assets_survive_a_story_expansion() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.md");
+    std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
+    let mut assets = vec![
+        serde_json::json!({"name":"win","type":"Window","args":{}}),
+        serde_json::json!({
+            "name": "tale", "type": "StoryImport",
+            "args": {"source": path.to_str().unwrap()}
+        }),
+    ];
+    expand_stories(&mut assets).unwrap();
+    assert_eq!(assets[0]["name"], "win");
+    assert!(!assets.iter().any(|v| type_norm(v) == "storyimport"));
+    assert!(assets.iter().any(|v| asset_name(v) == "tale"));
+}
+
+// The import's args reach the emitted graph: the title screen can be dropped
+// and the reveal speed set per import.
+#[test]
+fn import_args_reach_the_compiled_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.md");
+    std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
+    let mut assets = vec![serde_json::json!({
+        "name": "tale", "type": "StoryImport",
+        "args": {"source": path.to_str().unwrap(), "title_screen": false, "text_speed": 12.0}
+    })];
+    expand_stories(&mut assets).unwrap();
+    assert_eq!(find(&assets, "tale")["args"]["text_speed"], 12.0);
+    assert!(!assets.iter().any(|v| asset_name(v) == "tale_title"));
+    // With no title screen the stage shows at launch instead.
+    assert_eq!(find(&assets, "tale_stage")["args"]["initial"], true);
+}
+
+// An emission failure (here an unreadable portrait) is reported against the
+// import and its source file, not as a bare probe error.
+#[test]
+fn an_emission_failure_is_wrapped_with_import_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.md");
+    std::fs::write(
+        &path,
+        "---\ntitle: T\n---\n\n# a\n\n![left](/no/such/portrait.png)\n\nhi\n",
+    )
+    .unwrap();
+    let mut assets = vec![serde_json::json!({
+        "name": "tale", "type": "StoryImport",
+        "args": {"source": path.to_str().unwrap()}
+    })];
+    let err = expand_stories(&mut assets).unwrap_err();
+    assert!(err.contains("StoryImport 'tale'"), "{err}");
+    assert!(err.contains("portrait.png"), "{err}");
+}
+
+// A loose bullet list wraps each choice in its own paragraph; the choices must
+// parse the same as a tight list.
+#[test]
+fn a_loose_choice_list_parses_like_a_tight_one() {
+    let src = "---\ntitle: T\n---\n\n# a\n\nHi.\n\n- [Go](#b)\n\n- [Stay](#a)\n\n# b\n\nDone.\n";
+    let story = parse_story(src).unwrap();
+    let choices = &story.nodes[0].choices;
+    assert_eq!(choices.len(), 2);
+    assert_eq!(choices[0].target, "b");
+    assert_eq!(choices[1].target, "a");
+}
+
+// A second bullet list would be content after the choices, which the runtime
+// has nowhere to show, whether prose separates the two lists or not.
+#[test]
+fn a_second_choice_list_in_one_node_is_an_error() {
+    for src in [
+        "---\ntitle: T\n---\n\n# a\n\n- [Go](#a)\n\ntext\n\n- [Stay](#a)\n",
+        "---\ntitle: T\n---\n\n# a\n\n- [Go](#a)\n\n* [Stay](#a)\n",
+    ] {
+        let err = parse_story(src).unwrap_err();
+        assert!(err.contains("last content"), "{src:?} -> {err}");
+    }
+}
+
+// The space between two links is not prose: a choice item is still rejected
+// for holding two links rather than for holding text.
+#[test]
+fn the_space_between_two_choice_links_is_not_text() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n- [Go](#a) [Stay](#a)\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("exactly one link"), "{err}");
+}
+
+// Two directives on one line are separated by a space, which must not count as
+// the prose that would make the paragraph a mixed one.
+#[test]
+fn two_directives_on_one_line_still_stand_alone() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n[music](m.ogg) [sound](s.wav)\n\nhi\n";
+    let story = parse_story(src).unwrap();
+    let page = &story.nodes[0].pages[0];
+    assert_eq!(page.music.as_deref(), Some("m.ogg"));
+    assert_eq!(page.sounds, ["s.wav"]);
+    assert_eq!(page.text, "hi");
+}
+
+// The final node is closed at end of file, so an empty one there is caught
+// like an empty node anywhere else.
+#[test]
+fn an_empty_last_node_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n# b\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("node 'b' is empty"), "{err}");
+}
+
+#[test]
+fn a_link_inside_image_alt_text_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n![bg [x](#a)](room.png)\n\nhi\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("image alt text"), "{err}");
+}
+
+#[test]
+fn bold_outside_a_paragraph_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n- **loud**\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("speaker attribution"), "{err}");
+}
+
+// A choice item is exactly one link: a wrapped second line makes it prose.
+#[test]
+fn a_multi_line_choice_item_is_an_error() {
+    for body in ["- [Go](#a)\n  and then\n", "- [Go](#a)  \n  and then\n"] {
+        let src = format!("---\ntitle: T\n---\n\n# a\n\n{body}");
+        let err = parse_story(&src).unwrap_err();
+        assert!(err.contains("exactly one link"), "{body:?} -> {err}");
+    }
+}
+
+#[test]
+fn a_script_fence_before_the_first_heading_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n```story\nset x\n```\n\n# a\n\nhi\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("before the first"), "{err}");
+}
+
+#[test]
+fn a_script_fence_after_choices_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n- [Go](#a)\n\n```story\nset x\n```\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("last content"), "{err}");
+}
+
+// Blank lines inside a script fence are layout, not statements.
+#[test]
+fn blank_lines_in_a_script_fence_are_ignored() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n```story\n\nset x\n\n```\n\nhi\n";
+    let story = parse_story(src).unwrap();
+    assert_eq!(story.nodes[0].pages[0].ops.len(), 1);
+    assert_eq!(story.nodes[0].pages[0].ops[0].name, "x");
+}
+
+// A speaker attribution with nothing after it has no line to reveal.
+#[test]
+fn a_speaker_with_no_text_is_an_error() {
+    let src = "---\ntitle: T\ncharacters:\n  k: Keeper\n---\n\n# a\n\n**k:**\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("empty paragraph"), "{err}");
+}
+
+// Frontmatter alone is not a story: there is nothing to play.
+#[test]
+fn a_story_with_no_nodes_is_an_error() {
+    let err = parse_story("---\ntitle: T\n---\n").unwrap_err();
+    assert!(err.contains("no nodes"), "{err}");
+}
+
+// A variable name is checked wherever it appears in a script line.
+#[test]
+fn a_bad_variable_name_is_rejected_in_every_script_form() {
+    for line in [
+        "set Bad Flag = 1",
+        "clear Bad Flag",
+        "add Bad Flag 1",
+        "if Bad Flag >= 1 -> #a",
+    ] {
+        let src = format!("---\ntitle: T\n---\n\n# a\n\n```story\n{line}\n```\n\nhi\n");
+        let err = parse_story(&src).unwrap_err();
+        assert!(err.contains("not a variable name"), "{line:?} -> {err}");
+    }
+}
+
+// Blank lines separate frontmatter blocks; they are not entries.
+#[test]
+fn blank_frontmatter_lines_are_skipped() {
+    let src = "---\ntitle: T\n\ncharacters:\n\n  k: Keeper\n---\n\n# a\n\n**k:** hi\n";
+    let story = parse_story(src).unwrap();
+    assert_eq!(story.title, "T");
+    assert_eq!(story.characters["k"].name, "Keeper");
+}
+
+// A malformed field of a block-form character is reported against the
+// frontmatter line it sits on.
+#[test]
+fn a_bad_block_character_field_names_its_frontmatter_line() {
+    let src =
+        "---\ntitle: T\ncharacters:\n  k:\n    name: Keeper\n    color: red\n---\n\n# a\n\nhi\n";
+    let err = parse_story(src).unwrap_err();
+    assert!(err.contains("frontmatter line 5"), "{err}");
+    assert!(err.contains("color"), "{err}");
+}
+
+// A block character is closed by the next id line and by the next top-level
+// key alike, so a missing `name` is caught either way.
+#[test]
+fn a_block_character_missing_its_name_is_caught_at_every_close() {
+    let next_id = "---\ntitle: T\ncharacters:\n  a:\n  b: Ben\n---\n\n# a\n\nhi\n";
+    let err = parse_story(next_id).unwrap_err();
+    assert!(err.contains("character 'a': missing `name`"), "{err}");
+
+    let next_key = "---\ncharacters:\n  a:\ntitle: T\n---\n\n# a\n\nhi\n";
+    let err = parse_story(next_key).unwrap_err();
+    assert!(err.contains("character 'a': missing `name`"), "{err}");
+}
+
+// A quoted name that is not a JSON string is malformed, in a block character
+// and in a flow map alike.
+#[test]
+fn a_malformed_character_name_or_color_is_an_error() {
+    let block = "---\ntitle: T\ncharacters:\n  a:\n    name: \"unterminated\n---\n\n# a\n\nhi\n";
+    assert!(!parse_story(block).unwrap_err().is_empty());
+
+    let flow_name = "---\ntitle: T\ncharacters:\n  a: { name: \"oops }\n---\n\n# a\n\nhi\n";
+    assert!(!parse_story(flow_name).unwrap_err().is_empty());
+
+    let flow_color = "---\ntitle: T\ncharacters:\n  a: { name: A, color: red }\n---\n\n# a\n\nhi\n";
+    let err = parse_story(flow_color).unwrap_err();
+    assert!(err.contains("color"), "{err}");
+}
+
+// A trailing comma in a flow map leaves an empty field, which is layout.
+#[test]
+fn a_trailing_comma_in_a_flow_map_is_ignored() {
+    let src = "---\ntitle: T\ncharacters:\n  k: { name: Keeper, }\n---\n\n# a\n\n**k:** hi\n";
+    let story = parse_story(src).unwrap();
+    assert_eq!(story.characters["k"].name, "Keeper");
+    assert_eq!(story.characters["k"].color, [1.0, 1.0, 1.0]);
+}
+
+// A one-shot queued before a choice list plays with the menu, and its clip is
+// emitted like a page's.
+#[test]
+fn a_sound_before_a_choice_list_rides_with_the_menu() {
+    let src = "---\ntitle: T\n---\n\n# a\n\nHi.\n\n[sound](ding.wav)\n\n- [Go](#a)\n";
+    let story = parse_story(src).unwrap();
+    assert_eq!(story.nodes[0].choice_sounds, ["ding.wav"]);
+
+    let entries = emit_story("s", &story, true, 45.0, &stub_dims).unwrap();
+    let clip = find(&entries, "s_clip0");
+    assert_eq!(clip["args"]["source"], "ding.wav");
+    let nodes = &find(&entries, "s")["args"]["nodes"];
+    assert_eq!(nodes[0]["choice_sounds"][0], "s_clip0");
+}
+
+// An unreadable portrait fails the build with the probe's own message, on a
+// page stage and on a choice-menu stage alike.
+#[test]
+fn an_unreadable_portrait_fails_emission() {
+    let fail = |_: &str| Err("cannot read 'ana.png'".to_string());
+    let page_src = "---\ntitle: T\n---\n\n# a\n\n![left](ana.png)\n\nhi\n";
+    let story = parse_story(page_src).unwrap();
+    let err = emit_story("s", &story, true, 45.0, &fail).unwrap_err();
+    assert!(err.contains("cannot read 'ana.png'"), "{err}");
+
+    let choice_src = "---\ntitle: T\n---\n\n# a\n\n![left](ana.png)\n\n- [Go](#a)\n";
+    let story = parse_story(choice_src).unwrap();
+    let err = emit_story("s", &story, true, 45.0, &fail).unwrap_err();
+    assert!(err.contains("cannot read 'ana.png'"), "{err}");
+}
+
+// A zero-sized portrait would divide by zero while fitting it to the canvas.
+#[test]
+fn a_zero_sized_portrait_is_an_error() {
+    let src = "---\ntitle: T\n---\n\n# a\n\n![right](ana.png)\n\nhi\n";
+    let story = parse_story(src).unwrap();
+    let zero = |_: &str| Ok((0u32, 0u32));
+    let err = emit_story("s", &story, true, 45.0, &zero).unwrap_err();
+    assert!(err.contains("zero dimension"), "{err}");
+    assert!(err.contains("ana.png"), "{err}");
 }
 
 #[test]

@@ -207,4 +207,121 @@ mod tests {
         let (_, _, px) = decode_tga(&v).unwrap();
         assert_eq!(px, vec![77, 77, 77, 255]);
     }
+
+    #[test]
+    fn rejects_a_buffer_shorter_than_the_fixed_header() {
+        let err = decode_tga(&[0u8; HEADER_LEN - 1]).unwrap_err();
+        assert_eq!(err, "TGA too short: 17 bytes");
+    }
+
+    #[test]
+    fn rejects_a_colour_mapped_image() {
+        let mut v = header(1, 1, 1, 24, true);
+        v[1] = 1; // colour-map type
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "colour-mapped TGA images are not supported");
+    }
+
+    #[test]
+    fn rejects_a_zero_dimension() {
+        let v = header(2, 0, 4, 24, true);
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA has zero dimension 0x4");
+    }
+
+    #[test]
+    fn rejects_an_unsupported_bit_depth() {
+        let v = header(2, 1, 1, 16, true);
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "unsupported TGA bit depth 16");
+    }
+
+    #[test]
+    fn rejects_an_unsupported_image_type() {
+        // Type 1 is colour-mapped image data, which this decoder does not read.
+        let v = header(1, 1, 1, 24, true);
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "unsupported TGA image type 1");
+    }
+
+    #[test]
+    fn rejects_an_id_field_that_runs_past_the_end() {
+        let mut v = header(2, 1, 1, 24, true);
+        v[0] = 200; // id length far beyond the file
+        v.extend_from_slice(&[10, 20, 30]);
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA id field exceeds file length");
+    }
+
+    #[test]
+    fn skips_the_id_field_before_the_pixel_data() {
+        let mut v = header(2, 1, 1, 24, true);
+        v[0] = 3;
+        v.extend_from_slice(b"abc"); // id field, not pixels
+        v.extend_from_slice(&[10, 20, 30]);
+        let (_, _, px) = decode_tga(&v).unwrap();
+        assert_eq!(px, vec![30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn rejects_truncated_uncompressed_pixel_data() {
+        let mut v = header(2, 2, 1, 24, true);
+        v.extend_from_slice(&[1, 2, 3]); // one pixel, two needed
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA pixel data too short: have 3, need 6");
+    }
+
+    #[test]
+    fn rle_raw_packet_copies_literal_pixels() {
+        // 2x1, one raw packet holding two literal BGR pixels.
+        let mut v = header(10, 2, 1, 24, true);
+        v.push(1); // raw packet, count = 2
+        v.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        let (_, _, px) = decode_tga(&v).unwrap();
+        assert_eq!(px, vec![3, 2, 1, 255, 6, 5, 4, 255]);
+    }
+
+    #[test]
+    fn rle_run_overshooting_the_image_is_truncated() {
+        // 3x1 image but a run of 4 pixels: the surplus pixel is dropped.
+        let mut v = header(10, 3, 1, 24, true);
+        v.push(0x80 | 3);
+        v.extend_from_slice(&[1, 2, 3]);
+        let (_, _, px) = decode_tga(&v).unwrap();
+        assert_eq!(px.len(), 3 * 4);
+    }
+
+    #[test]
+    fn rle_grayscale_run_replicates_to_rgb() {
+        let mut v = header(11, 2, 1, 8, true);
+        v.push(0x80 | 1); // run of 2
+        v.push(90);
+        let (_, _, px) = decode_tga(&v).unwrap();
+        assert_eq!(px, vec![90, 90, 90, 255, 90, 90, 90, 255]);
+    }
+
+    #[test]
+    fn rejects_an_rle_stream_that_ends_before_the_image_is_filled() {
+        let v = header(10, 4, 1, 24, true); // no packets at all
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA RLE stream ended early");
+    }
+
+    #[test]
+    fn rejects_a_truncated_rle_run_packet() {
+        let mut v = header(10, 4, 1, 24, true);
+        v.push(0x80 | 3);
+        v.extend_from_slice(&[1, 2]); // the repeated pixel needs three bytes
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA RLE run packet truncated");
+    }
+
+    #[test]
+    fn rejects_a_truncated_rle_raw_packet() {
+        let mut v = header(10, 4, 1, 24, true);
+        v.push(1); // raw packet of two pixels
+        v.extend_from_slice(&[1, 2, 3, 4]); // four of the six bytes
+        let err = decode_tga(&v).unwrap_err();
+        assert_eq!(err, "TGA RLE raw packet truncated");
+    }
 }

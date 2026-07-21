@@ -317,6 +317,198 @@ pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
     Ok((verts, idxs))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        for (pos, ..) in verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(pos[k]);
+                mx[k] = mx[k].max(pos[k]);
+            }
+        }
+        (mn, mx)
+    }
+
+    fn length(v: [f32; 3]) -> f32 {
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
+
+    // Indices address real vertices and no triangle collapses to a line.
+    fn assert_triangles_are_well_formed(verts: &Verts, idxs: &[u16]) {
+        assert_eq!(idxs.len() % 3, 0);
+        assert!(idxs.iter().all(|&i| (i as usize) < verts.len()));
+        for tri in idxs.chunks_exact(3) {
+            let a = verts[tri[0] as usize].0;
+            let b = verts[tri[1] as usize].0;
+            let c = verts[tri[2] as usize].0;
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            assert!(length(cross) > 1e-9, "degenerate triangle {tri:?}");
+        }
+    }
+
+    #[test]
+    fn box_defaults_to_a_unit_cube_of_six_quads() {
+        let (verts, idxs) = build_box(&serde_json::json!({})).unwrap();
+        assert_eq!(verts.len(), 6 * 4);
+        assert_eq!(idxs.len(), 6 * 6);
+        assert_triangles_are_well_formed(&verts, &idxs);
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-0.5, -0.5, -0.5]);
+        assert_eq!(mx, [0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn box_half_extents_set_the_bounds_and_uv_tiling() {
+        let args = serde_json::json!({"half_extents": [2.0, 3.0, 4.0]});
+        let (verts, idxs) = build_box(&args).unwrap();
+        assert_triangles_are_well_formed(&verts, &idxs);
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-2.0, -3.0, -4.0]);
+        assert_eq!(mx, [2.0, 3.0, 4.0]);
+        // The +Y face is emitted first and tiles x by z; the +Z face (third)
+        // tiles x by y.
+        assert_eq!(verts[2].3, [4.0, 8.0]);
+        assert_eq!(verts[10].3, [4.0, 6.0]);
+    }
+
+    #[test]
+    fn box_carries_one_outward_axis_normal_per_face() {
+        let (verts, _) = build_box(&serde_json::json!({})).unwrap();
+        let mut seen: Vec<[f32; 3]> = Vec::new();
+        for face in verts.chunks_exact(4) {
+            let n = face[0].1;
+            assert!((length(n) - 1.0).abs() < 1e-6);
+            // The normal points away from the origin at every corner of its face.
+            for (pos, normal, ..) in face {
+                assert_eq!(*normal, n);
+                let dot = pos[0] * n[0] + pos[1] * n[1] + pos[2] * n[2];
+                assert!(dot > 0.0, "normal {n:?} is not outward at {pos:?}");
+            }
+            assert!(!seen.contains(&n), "duplicate face normal {n:?}");
+            seen.push(n);
+        }
+        assert_eq!(seen.len(), 6);
+    }
+
+    #[test]
+    fn cylinder_counts_follow_the_segment_count() {
+        // Sides are two rings of `segments`; each cap adds a centre plus a ring.
+        let args = serde_json::json!({"radius": 2.0, "height": 4.0, "segments": 8});
+        let (verts, idxs) = build_cylinder(&args).unwrap();
+        assert_eq!(verts.len(), 2 * 8 + 2 * (1 + 8));
+        assert_eq!(idxs.len(), 8 * 6 + 2 * (8 * 3));
+        assert_triangles_are_well_formed(&verts, &idxs);
+
+        let (mn, mx) = bounds(&verts);
+        assert_eq!((mn[1], mx[1]), (-2.0, 2.0));
+        for (pos, ..) in &verts {
+            let radial = (pos[0] * pos[0] + pos[2] * pos[2]).sqrt();
+            assert!(radial <= 2.0 + 1e-5, "vertex outside the radius: {pos:?}");
+        }
+    }
+
+    #[test]
+    fn cylinder_side_normals_are_horizontal_and_radial() {
+        let args = serde_json::json!({"radius": 3.0, "height": 1.0, "segments": 6});
+        let (verts, _) = build_cylinder(&args).unwrap();
+        for (pos, normal, ..) in &verts[..12] {
+            assert_eq!(normal[1], 0.0);
+            assert!((length(*normal) - 1.0).abs() < 1e-5);
+            // The side normal is the vertex's own outward radial direction.
+            assert!((normal[0] * 3.0 - pos[0]).abs() < 1e-4);
+            assert!((normal[2] * 3.0 - pos[2]).abs() < 1e-4);
+        }
+        // Cap centres sit on the axis with the cap's axial normal.
+        assert_eq!(verts[12].0, [0.0, 0.5, 0.0]);
+        assert_eq!(verts[12].1, [0.0, 1.0, 0.0]);
+        assert_eq!(verts[19].0, [0.0, -0.5, 0.0]);
+        assert_eq!(verts[19].1, [0.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn cylinder_defaults_to_sixteen_segments_and_clamps_below_three() {
+        let (default_verts, _) = build_cylinder(&serde_json::json!({})).unwrap();
+        assert_eq!(default_verts.len(), 2 * 16 + 2 * (1 + 16));
+        let (mn, mx) = bounds(&default_verts);
+        assert_eq!((mn[1], mx[1]), (-0.5, 0.5));
+
+        let (thin, idxs) = build_cylinder(&serde_json::json!({"segments": 1})).unwrap();
+        assert_eq!(thin.len(), 2 * 3 + 2 * (1 + 3));
+        assert_triangles_are_well_formed(&thin, &idxs);
+    }
+
+    #[test]
+    fn plane_is_one_upward_facing_quad_tiled_per_metre() {
+        let args = serde_json::json!({"half_width": 3.0, "half_depth": 5.0});
+        let (verts, idxs) = build_plane(&args).unwrap();
+        assert_eq!(verts.len(), 4);
+        assert_eq!(idxs, vec![0, 1, 2, 2, 3, 0]);
+        assert_triangles_are_well_formed(&verts, &idxs);
+        assert!(verts.iter().all(|(pos, ..)| pos[1] == 0.0));
+        assert!(verts.iter().all(|(_, n, ..)| *n == [0.0, 1.0, 0.0]));
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-3.0, 0.0, -5.0]);
+        assert_eq!(mx, [3.0, 0.0, 5.0]);
+        assert_eq!(verts[2].3, [6.0, 10.0]);
+    }
+
+    #[test]
+    fn plane_defaults_to_a_two_metre_square() {
+        let (verts, _) = build_plane(&serde_json::json!({})).unwrap();
+        let (mn, mx) = bounds(&verts);
+        assert_eq!(mn, [-1.0, 0.0, -1.0]);
+        assert_eq!(mx, [1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn sphere_counts_follow_the_ring_and_segment_counts() {
+        let args = serde_json::json!({"radius": 2.0, "rings": 4, "segments": 6});
+        let (verts, idxs) = build_sphere(&args).unwrap();
+        assert_eq!(verts.len(), (4 + 1) * (6 + 1) + 2);
+        // Two pole fans plus a quad band between each adjacent ring pair.
+        assert_eq!(idxs.len(), 2 * 6 * 3 + (4 - 1) * 6 * 6);
+        assert_triangles_are_well_formed(&verts, &idxs);
+    }
+
+    #[test]
+    fn every_sphere_vertex_sits_on_the_radius_with_a_radial_normal() {
+        let args = serde_json::json!({"radius": 3.0, "rings": 5, "segments": 8});
+        let (verts, _) = build_sphere(&args).unwrap();
+        for (pos, normal, ..) in &verts {
+            assert!((length(*pos) - 3.0).abs() < 1e-4, "off-radius {pos:?}");
+            assert!((length(*normal) - 1.0).abs() < 1e-5);
+            for k in 0..3 {
+                assert!((normal[k] * 3.0 - pos[k]).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_clamps_rings_and_segments_to_a_buildable_minimum() {
+        let (verts, idxs) = build_sphere(&serde_json::json!({"rings": 0, "segments": 0})).unwrap();
+        assert_eq!(verts.len(), (2 + 1) * (3 + 1) + 2);
+        assert_triangles_are_well_formed(&verts, &idxs);
+    }
+
+    #[test]
+    fn sphere_rejects_a_tessellation_past_the_u16_index_limit() {
+        let args = serde_json::json!({"rings": 255, "segments": 255});
+        let err = build_sphere(&args).unwrap_err();
+        assert!(err.contains("65538 vertices"), "got: {err}");
+        assert!(err.contains("u16"), "got: {err}");
+    }
+}
+
 // No winding-direction unit tests live here. A previous iteration added an
 // "outward winding" check and silently flipped every primitive's index order
 // to make it pass, which produced a renderer-visible regression because

@@ -523,4 +523,131 @@ mod tests {
             assert!(!metrics.is_empty());
         }
     }
+
+    #[test]
+    fn font_compiles_from_a_ttf_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bundled.ttf");
+        std::fs::write(&path, BUILTIN_FONT_BYTES).expect("write ttf");
+
+        let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
+        let payload = compile_font_payload(&args).expect("compile font read from disk");
+        let (w, h, supersample, size_px, rgba, metrics) = deserialise(&payload).unwrap();
+        assert_eq!(supersample, SUPERSAMPLE);
+        assert_eq!(size_px, 12);
+        // Every printable ASCII glyph (32..=126) is rasterised.
+        assert_eq!(metrics.len(), 95);
+        assert_eq!(metrics[0].char_code, ' ' as u32);
+        assert_eq!(metrics[94].char_code, '~' as u32);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        // 'A' occupies real atlas texels and advances the pen.
+        let a = metrics
+            .iter()
+            .find(|m| m.char_code == 'A' as u32)
+            .expect("'A' is rasterised");
+        assert!(a.atlas_w > 0 && a.atlas_h > 0);
+        assert!(a.advance_px > 0.0);
+    }
+
+    #[test]
+    fn font_reports_a_missing_ttf() {
+        let args = serde_json::json!({ "path": "/no/such/font.ttf", "size_px": 12 });
+        let err = compile_font_payload(&args).unwrap_err();
+        assert!(err.contains("could not read"), "got: {err}");
+        assert!(err.contains("/no/such/font.ttf"), "got: {err}");
+    }
+
+    #[test]
+    fn font_rejects_a_file_that_is_not_a_ttf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bogus.ttf");
+        std::fs::write(&path, b"not a font at all").expect("write junk");
+
+        let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
+        let err = compile_font_payload(&args).unwrap_err();
+        assert!(err.contains("failed to parse"), "got: {err}");
+    }
+
+    #[test]
+    fn font_rejects_args_that_are_not_a_font() {
+        let err = compile_font_payload(&serde_json::json!({ "size_px": "big" })).unwrap_err();
+        assert!(err.contains("Font: invalid args"), "got: {err}");
+    }
+
+    #[test]
+    fn edt_1d_leaves_an_empty_row_untouched() {
+        let mut v = [0usize; 1];
+        let mut z = [0.0f32; 2];
+        let mut d: [f32; 0] = [];
+        edt_1d(&[], &mut d, &mut v, &mut z);
+        // The scratch buffers are untouched: nothing was seeded.
+        assert_eq!(z[0], 0.0);
+    }
+
+    #[test]
+    fn edt_1d_measures_squared_distance_to_the_nearest_seed() {
+        const INF: f32 = 1e9;
+        // Seeds at index 0 and 4; interior samples take the nearer of the two.
+        let f = [0.0, INF, INF, INF, 0.0];
+        let mut d = [0.0f32; 5];
+        let mut v = [0usize; 5];
+        let mut z = [0.0f32; 6];
+        edt_1d(&f, &mut d, &mut v, &mut z);
+        assert_eq!(d, [0.0, 1.0, 4.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn next_pow2_rounds_up_and_maps_zero_to_one() {
+        assert_eq!(next_pow2(0), 1);
+        assert_eq!(next_pow2(1), 1);
+        assert_eq!(next_pow2(3), 4);
+        assert_eq!(next_pow2(64), 64);
+        assert_eq!(next_pow2(65), 128);
+    }
+
+    #[test]
+    fn round_up_to_snaps_to_the_next_multiple() {
+        assert_eq!(round_up_to(0, 8), 0);
+        assert_eq!(round_up_to(1, 8), 8);
+        assert_eq!(round_up_to(8, 8), 8);
+        assert_eq!(round_up_to(9, 8), 16);
+    }
+
+    #[test]
+    fn cell_coverage_to_sdf_puts_the_outline_at_mid_grey() {
+        // An 8x8 cell whose left half is covered: the field must fall across
+        // the vertical edge, saturating away from it on both sides.
+        let (w, h) = (8usize, 8usize);
+        let mut cell = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..4 {
+                cell[(y * w + x) * 4] = 255;
+            }
+        }
+        let mut scratch = SdfScratch {
+            inside_dist2: vec![0.0; w * h],
+            outside_dist2: vec![0.0; w * h],
+            edt: EdtScratch {
+                v: vec![0; w.max(h)],
+                z: vec![0.0; w.max(h) + 1],
+                row_tmp: vec![0.0; w],
+                col_src: vec![0.0; h],
+                col_dst: vec![0.0; h],
+            },
+        };
+        cell_coverage_to_sdf(&mut cell, w, h, 4.0, &mut scratch);
+
+        let at = |x: usize, y: usize| cell[(y * w + x) * 4];
+        // Inside stays above mid-grey, outside below, and the value decreases
+        // monotonically left to right across the edge.
+        assert!(at(0, 4) > 128, "deep inside: {}", at(0, 4));
+        assert!(at(7, 4) < 128, "far outside: {}", at(7, 4));
+        for x in 1..w {
+            assert!(at(x, 4) <= at(x - 1, 4), "field rises at x={x}");
+        }
+        // All four channels carry the same value.
+        let i = (4 * w + 4) * 4;
+        assert_eq!(cell[i], cell[i + 1]);
+        assert_eq!(cell[i], cell[i + 3]);
+    }
 }

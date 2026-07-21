@@ -337,6 +337,69 @@ mod tests {
     }
 
     #[test]
+    fn build_extrude_requires_a_profile_array() {
+        let err = build_extrude(&serde_json::json!({"height": 1.0})).unwrap_err();
+        assert!(err.contains("`profile` array"), "got: {err}");
+        let err = build_extrude(&serde_json::json!({"profile": 3})).unwrap_err();
+        assert!(err.contains("`profile` array"), "got: {err}");
+    }
+
+    #[test]
+    fn build_extrude_rejects_malformed_profile_points() {
+        let cases: [(serde_json::Value, &str); 4] = [
+            (
+                serde_json::json!([[0, 0], [1, 0], "nope"]),
+                "profile[2] must be a 2-element",
+            ),
+            (
+                serde_json::json!([[0, 0], [1, 0], [1]]),
+                "profile[2] must have 2 elements, got 1",
+            ),
+            (
+                serde_json::json!([[0, 0], ["x", 0], [1, 1]]),
+                "profile[1][0] must be a number",
+            ),
+            (
+                serde_json::json!([[0, 0], [1, "z"], [1, 1]]),
+                "profile[1][1] must be a number",
+            ),
+        ];
+        for (profile, expected) in cases {
+            let err = build_extrude(&extrude_args(profile, serde_json::json!({}))).unwrap_err();
+            assert!(err.contains(expected), "expected '{expected}', got: {err}");
+        }
+    }
+
+    #[test]
+    fn build_extrude_defaults_to_a_height_of_one() {
+        // A null `extras` means no overrides at all, so height falls back to 1.
+        let profile = serde_json::json!([[-1, -1], [1, -1], [1, 1], [-1, 1]]);
+        let (verts, _) = build_extrude(&extrude_args(profile, serde_json::Value::Null)).unwrap();
+        let ys: Vec<f32> = verts.iter().map(|v| v.0[1]).collect();
+        assert_eq!(ys.iter().cloned().fold(f32::INFINITY, f32::min), -0.5);
+        assert_eq!(ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max), 0.5);
+    }
+
+    #[test]
+    fn build_extrude_rejects_a_profile_past_the_u16_index_limit() {
+        // Each profile point costs six vertices (top, bottom, four wall corners),
+        // so 10923 points overflows a u16 index buffer.
+        let points: Vec<serde_json::Value> = (0..10923)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 10923.0;
+                serde_json::json!([a.cos(), a.sin()])
+            })
+            .collect();
+        let err = build_extrude(&extrude_args(
+            serde_json::Value::Array(points),
+            serde_json::json!({"height": 1.0}),
+        ))
+        .unwrap_err();
+        assert!(err.contains("65538 vertices"), "got: {err}");
+        assert!(err.contains("u16"), "got: {err}");
+    }
+
+    #[test]
     fn build_extrude_rejects_zero_height() {
         let profile = serde_json::json!([[-1, -1], [1, -1], [1, 1], [-1, 1]]);
         let err =
@@ -417,10 +480,88 @@ mod tests {
     }
 
     #[test]
+    fn round_corners_passes_through_repeated_points() {
+        // A duplicated point leaves a zero-length edge, which has no corner
+        // direction to offset along, so both copies survive unrounded.
+        let profile = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let rounded = round_corners(&profile, 0.2, 4);
+        assert_eq!(rounded.iter().filter(|p| **p == [1.0, 0.0]).count(), 2);
+    }
+
+    #[test]
+    fn round_corners_leaves_reflex_corners_sharp() {
+        // An L-shape: only the five convex corners round, the reflex one at
+        // (1, 1) is emitted verbatim.
+        let profile = vec![
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [0.0, 2.0],
+        ];
+        let rounded = round_corners(&profile, 0.2, 4);
+        assert_eq!(rounded.len(), 5 * 5 + 1);
+        assert_eq!(rounded.iter().filter(|p| **p == [1.0, 1.0]).count(), 1);
+    }
+
+    #[test]
+    fn round_corners_passes_through_a_corner_below_angular_resolution() {
+        // The turn at (1, 0) is far too shallow to resolve an arc from, so the
+        // corner is emitted as authored rather than as a degenerate fan.
+        let profile = vec![[0.0, 0.0], [1.0, 0.0], [2.0, 2e-6], [1.0, 1.0]];
+        let rounded = round_corners(&profile, 0.1, 4);
+        assert!(rounded.contains(&[1.0, 0.0]), "got: {rounded:?}");
+    }
+
+    #[test]
     fn ear_clip_triangle() {
         let profile = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
         let tris = ear_clip(&profile).unwrap();
         assert_eq!(tris.len(), 1);
+    }
+
+    #[test]
+    fn ear_clip_rejects_degenerate_polygons() {
+        let err = ear_clip(&[[0.0, 0.0], [1.0, 0.0]]).unwrap_err();
+        assert!(err.contains("at least 3 vertices"), "got: {err}");
+    }
+
+    #[test]
+    fn ear_clip_skips_a_reflex_first_candidate() {
+        // The same L-shape rotated so vertex 0 is the reflex corner; the ear
+        // search has to step past it to find a clippable vertex.
+        let profile = vec![
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [0.0, 2.0],
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+        ];
+        let tris = ear_clip(&profile).unwrap();
+        assert_eq!(tris.len(), 4);
+        assert!(tris.iter().all(|t| t.iter().all(|&i| i < profile.len())));
+    }
+
+    #[test]
+    fn ear_clip_falls_back_to_a_fan_when_no_ear_exists() {
+        // A clockwise square has no convex vertex by the CCW-math test the ear
+        // search uses, so the fan fallback keeps the build alive.
+        let profile = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
+        let tris = ear_clip(&profile).unwrap();
+        assert_eq!(tris, vec![[0, 1, 2], [0, 2, 3]]);
+    }
+
+    #[test]
+    fn point_in_triangle_rejects_a_point_outside_every_edge() {
+        let a = [0.0, 0.0];
+        let b = [1.0, 0.0];
+        let c = [0.0, 1.0];
+        assert!(point_in_triangle([0.25, 0.25], a, b, c));
+        // On an edge counts as inside; clear of the hypotenuse does not.
+        assert!(point_in_triangle([0.5, 0.5], a, b, c));
+        assert!(!point_in_triangle([2.0, -1.0], a, b, c));
     }
 
     #[test]

@@ -73,6 +73,24 @@ mod tests {
         assert!(errs.iter().any(|e| e.contains("not_a_generator")));
     }
 
+    // Every spelling of a compile-backed asset type reaches the same check.
+    #[test]
+    fn check_asset_routes_each_type_alias() {
+        for alias in ["cubemaptexture", "cubemap"] {
+            let args = serde_json::json!({"source": "studio.png"});
+            let err = check_asset(alias, "c", &args).unwrap_err();
+            assert!(err.contains("Radiance .hdr"), "{alias}: {err}");
+        }
+        for alias in ["environmentmap", "envmap", "ibl"] {
+            let args = serde_json::json!({"generator": "aurora"});
+            let err = check_asset(alias, "e", &args).unwrap_err();
+            assert!(
+                err.contains("unknown EnvironmentMap generator"),
+                "{alias}: {err}"
+            );
+        }
+    }
+
     #[test]
     fn check_asset_runs_both_check_sets() {
         // A pure check arm.

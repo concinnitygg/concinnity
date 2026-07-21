@@ -118,3 +118,134 @@ impl crate::asset::BuildAsset for SdfVolume {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asset::{BuildAsset, SourceFiles, SourceInput};
+
+    // A `.metal` source is the one the macOS build selects; on the other
+    // backends the same shape resolves through their own extension.
+    fn args(source: &str) -> serde_json::Value {
+        let key = concinnity_core::build::Platform::current().key();
+        serde_json::json!({"fragment_shaders": {key: source}})
+    }
+
+    fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
+        BuildCtx {
+            name: "blob",
+            artifacts_dir,
+            all_assets: &[],
+        }
+    }
+
+    #[test]
+    fn an_absolute_path_resolves_only_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chrome.metal");
+        std::fs::write(&path, "// msl").unwrap();
+        let raw = path.to_string_lossy().into_owned();
+        assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(raw.clone()));
+
+        let missing = dir
+            .path()
+            .join("absent.metal")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_source_path(&missing, &ctx(None)), None);
+    }
+
+    #[test]
+    fn a_relative_path_resolves_under_the_artifacts_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("shaders")).unwrap();
+        std::fs::write(dir.path().join("shaders/chrome.metal"), "// msl").unwrap();
+        let artifacts = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_source_path("shaders/chrome.metal", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/shaders/chrome.metal"))
+        );
+    }
+
+    #[test]
+    fn a_bare_filename_resolves_under_the_artifacts_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chrome.metal"), "// msl").unwrap();
+        let artifacts = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_source_path("chrome.metal", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/chrome.metal"))
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_relative_path_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_source_path("cn_no_such_shader.metal", &ctx(Some(&artifacts))),
+            None
+        );
+        assert_eq!(
+            resolve_source_path("cn_no_such_shader.metal", &ctx(None)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_payload_is_the_shader_source_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chrome.metal");
+        std::fs::write(&path, "fragment float4 f() { return 0; }").unwrap();
+        let payload =
+            SdfVolume::compile_payload(&args(&path.to_string_lossy()), &ctx(None)).unwrap();
+        assert_eq!(payload, std::fs::read(&path).unwrap());
+    }
+
+    #[test]
+    fn a_missing_source_file_names_the_asset_and_the_path() {
+        let err =
+            SdfVolume::compile_payload(&args("/no/such/chrome.metal"), &ctx(None)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains(
+                "SdfVolume 'blob': failed to read fragment shader '/no/such/chrome.metal'"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn no_source_for_the_building_backend_is_a_hard_error() {
+        let err = SdfVolume::compile_payload(&serde_json::json!({}), &ctx(None)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("no fragment shader source"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn source_files_reports_only_the_resolved_backend_shader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chrome.metal");
+        std::fs::write(&path, "// msl").unwrap();
+        let raw = path.to_string_lossy().into_owned();
+        assert_eq!(
+            SdfVolume::source_files(&args(&raw), &ctx(None)),
+            SourceFiles::Only(vec![SourceInput::Path(raw)])
+        );
+        // Nothing declared and nothing resolvable both report an empty set.
+        assert_eq!(
+            SdfVolume::source_files(&serde_json::json!({}), &ctx(None)),
+            SourceFiles::Only(Vec::new())
+        );
+        assert_eq!(
+            SdfVolume::source_files(&args("/no/such/chrome.metal"), &ctx(None)),
+            SourceFiles::Only(Vec::new())
+        );
+        // The source bytes pass through untouched, so two backends pointing at
+        // one file share a cache entry.
+        const { assert!(!SdfVolume::TARGET_DEPENDENT) };
+    }
+}

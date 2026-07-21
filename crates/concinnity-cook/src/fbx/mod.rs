@@ -17,6 +17,8 @@
 // (occlusion/roughness/metalness), EmissiveColor -> emissive.
 
 mod anim;
+#[cfg(test)]
+pub(super) mod fixtures;
 mod skin;
 
 pub use anim::{fbx_animation_names, import_fbx_animation};
@@ -739,6 +741,8 @@ fn extract_geometry_groups(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fbx::fixtures as fx;
+    use crate::fbx::fixtures::assert_vec3_eq;
 
     #[test]
     fn decode_pvi_marks_polygon_end() {
@@ -786,12 +790,6 @@ mod tests {
         assert!((t[1] + 2.0).abs() < 1e-4);
         assert!((t[2] - 5.0).abs() < 1e-4);
         assert!((s[0] - 1.0).abs() < 1e-4);
-    }
-
-    fn assert_vec3_eq(a: [f32; 3], b: [f32; 3]) {
-        for i in 0..3 {
-            assert!((a[i] - b[i]).abs() < 1e-4, "component {i}: {a:?} vs {b:?}");
-        }
     }
 
     #[test]
@@ -1153,5 +1151,604 @@ mod tests {
             .err()
             .expect("expected error");
         assert!(err.contains("not a valid FBX file"), "got: {err}");
+    }
+
+    // Node-tree accessors, read back off synthetic FBX documents.
+
+    #[test]
+    fn array_accessors_only_accept_their_own_element_type() {
+        let tree = fx::tree(vec![
+            fx::node("Arrays")
+                .child(fx::node("F64").arr_f64(vec![1.0, 2.0]))
+                .child(fx::node("I32").arr_i32(vec![3, 4]))
+                .child(fx::node("I64").arr_i64(vec![5, 6]))
+                .child(fx::node("F32").arr_f32(vec![7.0, 8.0]))
+                .child(fx::node("NoAttributes")),
+        ]);
+        let arrays = tree.root().first_child_by_name("Arrays").expect("Arrays");
+        let by = |name: &str| arrays.first_child_by_name(name).expect("child node");
+
+        assert_eq!(arr_f64(&by("F64")), Some(&[1.0f64, 2.0][..]));
+        assert_eq!(arr_i32(&by("I32")), Some(&[3i32, 4][..]));
+        assert_eq!(arr_i64(&by("I64")), Some(&[5i64, 6][..]));
+        assert_eq!(arr_f32(&by("F32")), Some(&[7.0f32, 8.0][..]));
+
+        assert_eq!(arr_f64(&by("I32")), None);
+        assert_eq!(arr_i32(&by("F64")), None);
+        assert_eq!(arr_i64(&by("F32")), None);
+        assert_eq!(arr_f32(&by("I64")), None);
+
+        assert_eq!(arr_f64(&by("NoAttributes")), None);
+        assert_eq!(arr_i32(&by("NoAttributes")), None);
+        assert_eq!(arr_i64(&by("NoAttributes")), None);
+        assert_eq!(arr_f32(&by("NoAttributes")), None);
+    }
+
+    #[test]
+    fn child_str_reads_the_first_string_of_a_named_child() {
+        let tree = fx::tree(vec![fx::texture(1, "Tex", "textures/wall.png")]);
+        let tex = tree.root().first_child_by_name("Texture").expect("Texture");
+        assert_eq!(
+            child_str(&tex, "RelativeFilename"),
+            Some("textures/wall.png")
+        );
+        assert_eq!(child_str(&tex, "FileName"), None);
+    }
+
+    #[test]
+    fn object_name_strips_the_class_suffix() {
+        let tree = fx::tree(vec![fx::model(77, "Cube", "Mesh"), fx::node("Model")]);
+        let mut models = tree.root().children_by_name("Model");
+        let named = models.next().expect("first Model");
+        assert_eq!(object_id(&named), Some(77));
+        assert_eq!(object_name(&named), "Cube");
+        // An attribute-less node has neither an id nor a name.
+        let bare = models.next().expect("second Model");
+        assert_eq!(object_id(&bare), None);
+        assert_eq!(object_name(&bare), "");
+    }
+
+    #[test]
+    fn properties70_lookups_read_vectors_and_scalars() {
+        let tree = fx::tree(vec![fx::properties70(vec![
+            fx::p_vec3("Lcl Translation", [1.0, 2.0, 3.0]),
+            fx::p_scalar("RotationOrder", 4.0),
+            fx::node("P").text("Truncated").text("Vector3D"),
+            fx::p_scalar("OneValue", 1.0),
+            fx::node("P")
+                .text("TwoValues")
+                .text("Vector3D")
+                .text("Vector")
+                .text("A")
+                .float(1.0)
+                .float(2.0),
+        ])]);
+        let p70 = tree
+            .root()
+            .first_child_by_name("Properties70")
+            .expect("Properties70");
+        assert_eq!(prop_vec3(&p70, "Lcl Translation"), Some([1.0, 2.0, 3.0]));
+        assert_eq!(prop_scalar(&p70, "RotationOrder"), Some(4.0));
+        assert_eq!(prop_vec3(&p70, "Missing"), None);
+        assert_eq!(prop_scalar(&p70, "Missing"), None);
+        // P entries short of their value attributes read as absent.
+        assert_eq!(prop_vec3(&p70, "Truncated"), None);
+        assert_eq!(prop_scalar(&p70, "Truncated"), None);
+        assert_eq!(prop_vec3(&p70, "OneValue"), None);
+        assert_eq!(prop_vec3(&p70, "TwoValues"), None);
+    }
+
+    #[test]
+    fn rot_ordered_applies_the_axes_in_the_declared_order() {
+        // Each order permutes 90 degrees about all three axes differently, so
+        // the image of (1, 2, 3) identifies the composition uniquely.
+        let r = [90.0, 90.0, 90.0];
+        let cases: [(i32, [f32; 3]); 7] = [
+            (0, [3.0, 2.0, -1.0]),
+            (1, [2.0, 1.0, -3.0]),
+            (2, [-2.0, 1.0, 3.0]),
+            (3, [-1.0, 3.0, 2.0]),
+            (4, [1.0, -3.0, 2.0]),
+            (5, [3.0, -2.0, 1.0]),
+            // SphericXYZ is unsupported and falls back to XYZ.
+            (6, [3.0, 2.0, -1.0]),
+        ];
+        for (order, expected) in cases {
+            let got = transform_point(rot_ordered(r, order), [1.0, 2.0, 3.0]);
+            assert_vec3_eq(got, expected);
+        }
+    }
+
+    // Model transforms
+
+    #[test]
+    fn node_scene_local_scales_then_rotates_then_translates() {
+        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
+            fx::properties70(vec![
+                fx::p_vec3("Lcl Translation", [0.0, 1.0, 0.0]),
+                fx::p_vec3("Lcl Rotation", [0.0, 0.0, 90.0]),
+                fx::p_vec3("Lcl Scaling", [2.0, 2.0, 2.0]),
+            ]),
+        )]);
+        let model = tree.root().first_child_by_name("Model").expect("Model");
+        // (1,0,0) scales to (2,0,0), rotates about Z to (0,2,0), translates up.
+        assert_vec3_eq(
+            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            [0.0, 3.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn node_scene_local_applies_prerotation_before_the_local_rotation() {
+        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
+            fx::properties70(vec![
+                fx::p_vec3("Lcl Rotation", [0.0, 0.0, 90.0]),
+                fx::p_vec3("PreRotation", [90.0, 0.0, 0.0]),
+            ]),
+        )]);
+        let model = tree.root().first_child_by_name("Model").expect("Model");
+        // Rz90 takes +X to +Y, then the PreRotation Rx90 takes +Y to +Z.
+        assert_vec3_eq(
+            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            [0.0, 0.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn node_scene_local_honours_the_rotation_order_property() {
+        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
+            fx::properties70(vec![
+                fx::p_vec3("Lcl Rotation", [90.0, 0.0, 90.0]),
+                fx::p_scalar("RotationOrder", 5.0),
+            ]),
+        )]);
+        let model = tree.root().first_child_by_name("Model").expect("Model");
+        // ZYX applies Z first: +X to +Y, then Rx90 to +Z. XYZ would end at +Y.
+        assert_vec3_eq(
+            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            [0.0, 0.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn node_scene_local_without_properties_is_identity() {
+        let tree = fx::tree(vec![fx::model(1, "Bare", "Null")]);
+        let model = tree.root().first_child_by_name("Model").expect("Model");
+        assert_eq!(node_scene_local(&model), IDENTITY);
+    }
+
+    #[test]
+    fn local_matrices_separate_the_node_and_geometric_transforms() {
+        let tree = fx::tree(vec![
+            fx::model(1, "Mesh", "Mesh").child(fx::properties70(vec![
+                fx::p_vec3("Lcl Translation", [5.0, 0.0, 0.0]),
+                fx::p_vec3("GeometricTranslation", [0.0, 0.0, 2.0]),
+                fx::p_vec3("GeometricScaling", [2.0, 2.0, 2.0]),
+            ])),
+            fx::model(2, "Bare", "Null"),
+        ]);
+        let mut models = tree.root().children_by_name("Model");
+        let (local, geometric) = local_matrices(&models.next().expect("first Model"));
+        assert_vec3_eq(transform_point(local, [0.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        // The geometric offset is a transform of its own, not folded into the node.
+        assert_vec3_eq(transform_point(geometric, [1.0, 0.0, 0.0]), [2.0, 0.0, 2.0]);
+
+        let (local, geometric) = local_matrices(&models.next().expect("second Model"));
+        assert_eq!(local, IDENTITY);
+        assert_eq!(geometric, IDENTITY);
+    }
+
+    #[test]
+    fn unit_scale_to_meters_reads_the_global_unit_factor() {
+        let meters = fx::tree(vec![fx::global_settings(100.0)]);
+        assert!((unit_scale_to_meters(&meters.root()) - 1.0).abs() < 1e-6);
+        let centimeters = fx::tree(vec![fx::global_settings(1.0)]);
+        assert!((unit_scale_to_meters(&centimeters.root()) - 0.01).abs() < 1e-6);
+        // No GlobalSettings: FBX's native centimeter unit.
+        let bare = fx::tree(vec![fx::node("Objects")]);
+        assert!((unit_scale_to_meters(&bare.root()) - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolve_texture_path_rebases_onto_the_fbx_directory() {
+        let tree = fx::tree(vec![
+            fx::texture(1, "Backslashes", "textures\\wall.png"),
+            fx::object("Texture", 2, "Absolute", "")
+                .child(fx::node("FileName").text("/authors/machine/wall.png")),
+            fx::object("Texture", 3, "RootOnly", "").child(fx::node("FileName").text("/")),
+            fx::object("Texture", 4, "Unresolvable", ""),
+        ]);
+        let dir = Path::new("/scene");
+        let mut texs = tree.root().children_by_name("Texture");
+        let mut next = || resolve_texture_path(&texs.next().expect("Texture"), dir);
+
+        assert_eq!(next().as_deref(), Some("/scene/textures/wall.png"));
+        // An absolute author-machine path keeps only its file name.
+        assert_eq!(next().as_deref(), Some("/scene/wall.png"));
+        assert_eq!(next().as_deref(), Some("/"));
+        assert_eq!(next(), None);
+    }
+
+    // parse_fbx
+
+    #[test]
+    fn parse_fbx_reports_a_file_without_an_objects_section() {
+        let file = fx::write(vec![fx::node("Definitions")]);
+        let err = parse_fbx(file.path()).err().expect("no Objects section");
+        assert!(err.contains("FBX has no Objects section"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_fbx_extracts_materials_props_and_per_material_primitives() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(
+                100,
+                "quad",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3, 0, 2, -4],
+            )
+            .child(fx::uv_layer(
+                "TextureUV",
+                vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+                None,
+            ))
+            .child(fx::material_layer("ByPolygon", vec![0, 1])),
+            fx::model(200, "Cube", "Mesh").child(fx::properties70(vec![fx::p_vec3(
+                "Lcl Translation",
+                [5.0, 0.0, 0.0],
+            )])),
+            fx::material(300, "Red").child(fx::properties70(vec![
+                fx::p_vec3("DiffuseColor", [1.0, 0.0, 0.0]),
+                fx::p_vec3("EmissiveColor", [0.0, 0.5, 0.0]),
+                fx::p_scalar("Opacity", 0.25),
+            ])),
+            fx::material(301, "Blue"),
+            fx::texture(400, "Albedo", "textures/albedo.png"),
+            fx::texture(401, "Normal", "textures/normal.png"),
+            fx::texture(402, "Orm", "textures/orm.png"),
+            fx::texture(403, "Emissive", "textures/emissive.png"),
+        ];
+        doc.connections = vec![
+            fx::oo(100, 200),
+            fx::oo(200, 0),
+            fx::oo(300, 200),
+            fx::oo(301, 200),
+            fx::op(400, 300, "DiffuseColor"),
+            fx::op(401, 300, "NormalMap"),
+            fx::op(402, 300, "SpecularColor"),
+            fx::op(403, 300, "EmissiveColor"),
+            // An unrecognised texture slot is ignored.
+            fx::op(401, 300, "AmbientColor"),
+        ];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+
+        assert_eq!(scene.materials.len(), 2);
+        let red = &scene.materials[0];
+        assert_eq!(red.name, "Red");
+        assert_vec3_eq(red.diffuse, [1.0, 0.0, 0.0]);
+        assert_vec3_eq(red.emissive_factor, [0.0, 0.5, 0.0]);
+        assert!((red.opacity - 0.25).abs() < 1e-6);
+        let dir = file.dir();
+        assert_eq!(
+            red.albedo.as_deref(),
+            Some(dir.join("textures/albedo.png").to_str().unwrap())
+        );
+        assert_eq!(
+            red.normal.as_deref(),
+            Some(dir.join("textures/normal.png").to_str().unwrap())
+        );
+        assert_eq!(
+            red.orm.as_deref(),
+            Some(dir.join("textures/orm.png").to_str().unwrap())
+        );
+        assert_eq!(
+            red.emissive.as_deref(),
+            Some(dir.join("textures/emissive.png").to_str().unwrap())
+        );
+
+        let blue = &scene.materials[1];
+        assert_eq!(blue.name, "Blue");
+        assert_vec3_eq(blue.diffuse, [1.0, 1.0, 1.0]);
+        assert_vec3_eq(blue.emissive_factor, [0.0, 0.0, 0.0]);
+        assert!((blue.opacity - 1.0).abs() < 1e-6);
+        assert_eq!(blue.albedo, None);
+
+        assert_eq!(scene.props.len(), 1);
+        let prop = &scene.props[0];
+        assert_eq!(prop.name, "Cube");
+        assert_vec3_eq(prop.position, [5.0, 0.0, 0.0]);
+        assert_vec3_eq(prop.scale, [1.0, 1.0, 1.0]);
+        assert_eq!(prop.primitives, vec![0, 1]);
+
+        // One primitive per material, ordered by material index.
+        assert_eq!(scene.primitives.len(), 2);
+        assert_eq!(scene.primitives[0].material, Some(0));
+        assert_eq!(scene.primitives[1].material, Some(1));
+        let first = &scene.primitives[0];
+        assert_eq!(first.indices, vec![0, 1, 2]);
+        assert_vec3_eq(first.vertices[0].pos, [0.0, 0.0, 0.0]);
+        assert_vec3_eq(first.vertices[1].pos, [1.0, 0.0, 0.0]);
+        assert_vec3_eq(first.vertices[2].pos, [1.0, 1.0, 0.0]);
+        // V is flipped from FBX bottom-up to top-down.
+        assert_eq!(first.vertices[0].uv, [0.0, 1.0]);
+        assert_eq!(first.vertices[1].uv, [1.0, 1.0]);
+        assert_eq!(first.vertices[2].uv, [1.0, 0.0]);
+        assert_vec3_eq(first.vertices[0].color, NEUTRAL_COLOR);
+
+        // The geometry is local; the AABB is the node-transformed box.
+        let (min, max) = scene.aabb.expect("aabb");
+        assert_vec3_eq(min, [5.0, 0.0, 0.0]);
+        assert_vec3_eq(max, [6.0, 1.0, 0.0]);
+    }
+
+    // A single-triangle mesh whose polygons carry the given material layer.
+    fn material_layer_scene(
+        layer: Option<fx::Node>,
+        pvi: Vec<i32>,
+        materials: Vec<i64>,
+    ) -> FbxScene {
+        let mut geom = fx::geometry(
+            100,
+            "mesh",
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            pvi,
+        );
+        if let Some(layer) = layer {
+            geom = geom.child(layer);
+        }
+        let mut doc = fx::doc();
+        doc.objects = vec![geom, fx::model(200, "Mesh", "Mesh")];
+        doc.connections = vec![fx::oo(100, 200), fx::oo(200, 0)];
+        for id in &materials {
+            doc.objects.push(fx::material(*id, "M"));
+            doc.connections.push(fx::oo(*id, 200));
+        }
+        let file = doc.write();
+        parse_fbx(file.path()).expect("parse")
+    }
+
+    #[test]
+    fn parse_fbx_applies_an_all_same_material_to_every_polygon() {
+        let scene = material_layer_scene(
+            Some(fx::material_layer("AllSame", vec![1])),
+            vec![0, 1, -3, 0, 2, -4],
+            vec![300, 301],
+        );
+        assert_eq!(scene.primitives.len(), 1);
+        assert_eq!(scene.primitives[0].material, Some(1));
+        assert_eq!(scene.primitives[0].indices.len(), 6);
+    }
+
+    #[test]
+    fn parse_fbx_leaves_geometry_without_a_material_layer_unassigned() {
+        let scene = material_layer_scene(None, vec![0, 1, -3], vec![300]);
+        assert_eq!(scene.primitives.len(), 1);
+        assert_eq!(scene.primitives[0].material, None);
+    }
+
+    #[test]
+    fn parse_fbx_sorts_unresolved_material_groups_last() {
+        // Polygon 0 is unassigned, 1 uses material 0, 2 indexes past the model's
+        // material list; both unresolved polygons share the trailing group.
+        let scene = material_layer_scene(
+            Some(fx::material_layer("ByPolygon", vec![-1, 0, 5])),
+            vec![0, 1, -3, 0, 2, -4, 1, 2, -4],
+            vec![300],
+        );
+        assert_eq!(scene.primitives.len(), 2);
+        assert_eq!(scene.primitives[0].material, Some(0));
+        assert_eq!(scene.primitives[0].vertices.len(), 3);
+        assert_eq!(scene.primitives[1].material, None);
+        assert_eq!(scene.primitives[1].vertices.len(), 6);
+    }
+
+    #[test]
+    fn parse_fbx_triangulates_a_quad_as_a_fan() {
+        let scene = material_layer_scene(None, vec![0, 1, 2, -4], Vec::new());
+        assert_eq!(scene.primitives.len(), 1);
+        assert_eq!(scene.primitives[0].vertices.len(), 4);
+        assert_eq!(scene.primitives[0].indices, vec![0, 1, 2, 0, 2, 3]);
+    }
+
+    #[test]
+    fn parse_fbx_drops_polygons_with_fewer_than_three_corners() {
+        // Two corners produce no triangles, so the model contributes no prop.
+        let scene = material_layer_scene(None, vec![0, -2], Vec::new());
+        assert!(scene.primitives.is_empty());
+        assert!(scene.props.is_empty());
+        assert!(scene.aabb.is_none());
+    }
+
+    #[test]
+    fn parse_fbx_skips_geometry_without_polygon_data() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::object("Geometry", 100, "mesh", "Mesh")
+                .child(fx::node("Vertices").arr_f64(vec![0.0, 0.0, 0.0])),
+            fx::model(200, "Mesh", "Mesh"),
+        ];
+        doc.connections = vec![fx::oo(100, 200), fx::oo(200, 0)];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert!(scene.primitives.is_empty());
+        assert!(scene.props.is_empty());
+    }
+
+    #[test]
+    fn parse_fbx_prefers_the_texture_uv_layer_over_other_uv_sets() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(
+                100,
+                "mesh",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3],
+            )
+            .child(fx::uv_layer(
+                "Lightmap",
+                vec![0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+                None,
+            ))
+            .child(fx::uv_layer(
+                "TextureUV",
+                vec![0.25, 0.0, 0.25, 0.0, 0.25, 0.0],
+                None,
+            )),
+            fx::model(200, "Mesh", "Mesh"),
+        ];
+        doc.connections = vec![fx::oo(100, 200), fx::oo(200, 0)];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert_eq!(scene.primitives[0].vertices[0].uv, [0.25, 1.0]);
+    }
+
+    #[test]
+    fn parse_fbx_deduplicates_vertices_sharing_an_indexed_uv() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(
+                100,
+                "quad",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3, 0, 2, -4],
+            )
+            .child(fx::uv_layer(
+                "TextureUV",
+                vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+                Some(vec![0, 1, 2, 0, 2, 3]),
+            )),
+            fx::model(200, "Mesh", "Mesh"),
+        ];
+        doc.connections = vec![fx::oo(100, 200), fx::oo(200, 0)];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        // Six polygon-vertices collapse onto the four distinct (point, uv) pairs.
+        assert_eq!(scene.primitives[0].vertices.len(), 4);
+        assert_eq!(scene.primitives[0].indices, vec![0, 1, 2, 0, 2, 3]);
+        assert_eq!(scene.primitives[0].vertices[3].uv, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn parse_fbx_derives_opacity_from_transparency_and_clamps_it() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::material(300, "Glass").child(fx::properties70(vec![fx::p_scalar(
+                "TransparencyFactor",
+                0.25,
+            )])),
+            fx::material(301, "Overbright")
+                .child(fx::properties70(vec![fx::p_scalar("Opacity", 2.0)])),
+            fx::material(302, "Negative")
+                .child(fx::properties70(vec![fx::p_scalar("Opacity", -1.0)])),
+            // `Emissive` is the fallback spelling of `EmissiveColor`.
+            fx::material(303, "Lamp").child(fx::properties70(vec![fx::p_vec3(
+                "Emissive",
+                [0.0, 0.0, 4.0],
+            )])),
+        ];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert!((scene.materials[0].opacity - 0.75).abs() < 1e-6);
+        assert!((scene.materials[1].opacity - 1.0).abs() < 1e-6);
+        assert!((scene.materials[2].opacity - 0.0).abs() < 1e-6);
+        assert_vec3_eq(scene.materials[3].emissive_factor, [0.0, 0.0, 4.0]);
+    }
+
+    #[test]
+    fn parse_fbx_skips_objects_without_an_id() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::node("Material"),
+            fx::node("Model"),
+            fx::material(300, "Only"),
+            // An object kind the static-scene import does not index.
+            fx::object("Deformer", 400, "skin", "Skin"),
+        ];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert_eq!(scene.materials.len(), 1);
+        assert_eq!(scene.materials[0].name, "Only");
+        assert!(scene.props.is_empty());
+    }
+
+    #[test]
+    fn parse_fbx_ignores_malformed_and_unrelated_connections() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(
+                100,
+                "mesh",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3],
+            )
+            .child(fx::material_layer("AllSame", vec![0])),
+            fx::model(200, "Mesh", "Mesh"),
+            fx::material(300, "Red"),
+        ];
+        doc.connections = vec![
+            fx::oo(100, 200),
+            fx::oo(200, 0),
+            fx::oo(300, 200),
+            // A record without object ids.
+            fx::node("C").text("OO"),
+            // A property link whose child is a material, not a texture.
+            fx::op(300, 200, "DiffuseColor"),
+            // An unknown connection kind.
+            fx::node("C").text("PP").int64(300).int64(200),
+        ];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert_eq!(scene.props.len(), 1);
+        assert_eq!(scene.primitives[0].material, Some(0));
+        assert_eq!(scene.materials[0].albedo, None);
+    }
+
+    #[test]
+    fn parse_fbx_without_connections_finds_no_geometry_for_its_models() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(100, "mesh", vec![0.0; 9], vec![0, 1, -3]),
+            fx::model(200, "Mesh", "Mesh"),
+            fx::material(300, "Red"),
+        ];
+        let file = fx::write(vec![fx::objects(doc.objects)]);
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert_eq!(scene.materials.len(), 1);
+        assert!(scene.props.is_empty());
+        assert!(scene.primitives.is_empty());
+    }
+
+    #[test]
+    fn parse_fbx_folds_the_parent_chain_into_the_prop_transform() {
+        let mut doc = fx::doc();
+        doc.objects = vec![
+            fx::geometry(
+                100,
+                "mesh",
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, -3],
+            ),
+            fx::model(200, "Child", "Mesh").child(fx::properties70(vec![fx::p_vec3(
+                "Lcl Translation",
+                [1.0, 0.0, 0.0],
+            )])),
+            fx::model(210, "Parent", "Null").child(fx::properties70(vec![fx::p_vec3(
+                "Lcl Translation",
+                [0.0, 10.0, 0.0],
+            )])),
+        ];
+        doc.connections = vec![
+            fx::oo(100, 200),
+            fx::oo(200, 210),
+            fx::oo(210, 0),
+            // A geometry connected to a non-model parent is not a mesh binding.
+            fx::oo(100, 999),
+        ];
+        let file = doc.write();
+        let scene = parse_fbx(file.path()).expect("parse");
+        assert_eq!(scene.props.len(), 1);
+        assert_vec3_eq(scene.props[0].position, [1.0, 10.0, 0.0]);
     }
 }

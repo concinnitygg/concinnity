@@ -104,4 +104,29 @@ mod tests {
         assert_eq!(ty, "Logger");
         assert_eq!(args["x"], 1);
     }
+
+    #[test]
+    fn normalize_single_fragment_alias() {
+        let (ty, args) = normalize_single_shader_type("frag", &serde_json::json!({}));
+        assert_eq!(ty, "ShaderStage");
+        assert_eq!(args["kind"], "fragment");
+    }
+
+    // Non-object args carry through unchanged: there is nowhere to put `kind`,
+    // and the malformed args surface their own error at validation.
+    #[test]
+    fn normalize_single_leaves_non_object_args_alone() {
+        let (ty, args) = normalize_single_shader_type("VertexStage", &serde_json::json!(7));
+        assert_eq!(ty, "ShaderStage");
+        assert_eq!(args, serde_json::json!(7));
+    }
+
+    // The type is still rewritten when an entry carries no args at all.
+    #[test]
+    fn normalize_rewrites_the_type_without_args() {
+        let mut assets = vec![serde_json::json!({"name":"v","type":"VertexStage"})];
+        normalize_shader_types(&mut assets);
+        assert_eq!(assets[0]["type"], "ShaderStage");
+        assert!(assets[0].get("args").is_none());
+    }
 }

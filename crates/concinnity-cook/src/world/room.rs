@@ -130,6 +130,22 @@ mod tests {
     }
 
     #[test]
+    fn room_without_args_creates_nothing() {
+        let mut assets = vec![serde_json::json!({"name":"r","type":"Room"})];
+        expand_room_textures(&mut assets);
+        assert_eq!(assets.len(), 1);
+    }
+
+    // An empty texture string names no generator, so nothing is created.
+    #[test]
+    fn empty_texture_field_creates_nothing() {
+        let mut assets =
+            vec![serde_json::json!({"name":"r","type":"Room","args":{"wall_texture":""}})];
+        expand_room_textures(&mut assets);
+        assert_eq!(assets.len(), 1);
+    }
+
+    #[test]
     fn non_room_assets_unchanged() {
         let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
         expand_room_textures(&mut assets);

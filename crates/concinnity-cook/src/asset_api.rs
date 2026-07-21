@@ -160,6 +160,20 @@ mod tests {
         assert_eq!(result, serde_json::json!([1, 2, 3]));
     }
 
+    // Merging is only defined between two objects: supplied args cannot be
+    // folded into a non-object default, so the default is kept as-is.
+    #[test]
+    fn resolve_args_keeps_a_non_object_default_when_an_object_is_supplied() {
+        let reg = Registration {
+            type_name: "Fake",
+            origin: AssetOrigin::External,
+            payload: crate::ecs::AssetPayload::None,
+            default_args: Some(serde_json::json!([1, 2, 3])),
+        };
+        let supplied = Some(serde_json::json!({ "a": 1 }));
+        assert_eq!(resolve_args(&reg, &supplied), serde_json::json!([1, 2, 3]));
+    }
+
     #[test]
     fn create_asset_def_rejects_unknown_types() {
         let req = AssetRequest {

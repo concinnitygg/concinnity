@@ -201,6 +201,33 @@ mod tests {
         assert_eq!(aliases, ["floor", "wall", "trim", "door"]);
     }
 
+    // An unknown preset is not a build error: the on-disk preset lookup misses
+    // and the palette expands to nothing.
+    #[test]
+    fn unknown_preset_expands_to_no_materials() {
+        assert!(expand_preset("cn_test_no_such_palette").is_empty());
+    }
+
+    // An entry with no alias still gets a material, under the generic name.
+    #[test]
+    fn entry_without_an_alias_falls_back_to_surface() {
+        let mut assets = vec![serde_json::json!({
+            "name": "pal",
+            "type": "MaterialPalette",
+            "args": {"entries": [{"albedo": "tex_x"}]}
+        })];
+        expand_material_palettes(&mut assets);
+        assert_eq!(assets[0]["name"], "pal_surface");
+    }
+
+    // A palette with neither preset nor entries is consumed and adds nothing.
+    #[test]
+    fn palette_without_entries_expands_to_nothing() {
+        let mut assets = vec![serde_json::json!({"name":"pal","type":"MaterialPalette"})];
+        expand_material_palettes(&mut assets);
+        assert!(assets.is_empty());
+    }
+
     #[test]
     fn entry_fields_override_material_defaults() {
         let mut assets = vec![serde_json::json!({

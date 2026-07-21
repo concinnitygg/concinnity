@@ -150,6 +150,63 @@ mod tests {
         assert_eq!(assets[0]["type"], "Logger");
     }
 
+    // Expand a single CameraShot built from `args` and return the Camera3D args.
+    fn expand_args(args: serde_json::Value) -> serde_json::Value {
+        let mut assets = vec![serde_json::json!({
+            "name": "cam",
+            "type": "CameraShot",
+            "args": args
+        })];
+        expand_camera_shots(&mut assets);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0]["type"], "Camera3D");
+        assets[0]["args"].clone()
+    }
+
+    #[test]
+    fn preset_overhead_looks_down_from_above() {
+        let args = expand_args(serde_json::json!({"preset": "shot_overhead"}));
+        assert_eq!(args["fov_y_degrees"], 60.0);
+        assert_eq!(args["position"], serde_json::json!([0.0, 8.0, 0.0]));
+        assert_eq!(args["pitch"], -1.3963);
+        // The preset sets no yaw, so the type default applies.
+        assert_eq!(args["yaw"], 0.0);
+    }
+
+    #[test]
+    fn preset_dramatic_low_tilts_up_from_near_the_floor() {
+        let args = expand_args(serde_json::json!({"preset": "shot_dramatic_low"}));
+        assert_eq!(args["fov_y_degrees"], 85.0);
+        assert_eq!(args["position"], serde_json::json!([0.0, 0.4, 0.0]));
+        assert_eq!(args["pitch"], 0.2618);
+    }
+
+    #[test]
+    fn preset_outdoor_wide_pushes_the_far_plane_out() {
+        let args = expand_args(serde_json::json!({"preset": "shot_outdoor_wide"}));
+        assert_eq!(args["fov_y_degrees"], 80.0);
+        assert_eq!(args["far"], 500.0);
+        assert_eq!(args["near"], 0.05);
+    }
+
+    // An unknown preset name is not a build error: it falls through to the
+    // on-disk preset lookup, which misses, leaving the type defaults.
+    #[test]
+    fn unknown_preset_falls_back_to_defaults() {
+        let args = expand_args(serde_json::json!({"preset": "cn_test_no_such_shot"}));
+        assert_eq!(args["fov_y_degrees"], 75.0);
+        assert_eq!(args["near"], 0.05);
+        assert_eq!(args["far"], 200.0);
+        assert_eq!(args["position"], serde_json::json!([0.0, 0.0, 0.0]));
+    }
+
+    // A short position array keeps the components it has; the rest read zero.
+    #[test]
+    fn short_position_array_pads_missing_components_with_zero() {
+        let args = expand_args(serde_json::json!({"position": [1.0, 2.0]}));
+        assert_eq!(args["position"], serde_json::json!([1.0, 2.0, 0.0]));
+    }
+
     #[test]
     fn defaults_applied_when_no_args() {
         let mut assets = vec![serde_json::json!({

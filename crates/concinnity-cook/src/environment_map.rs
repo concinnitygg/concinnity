@@ -329,6 +329,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_environment_map_args_rejects_mistyped_args() {
+        let args = serde_json::json!({ "generator": "sky", "prefilter_face_size": "big" });
+        let err = validate_environment_map_args(&args).unwrap_err();
+        assert!(err.contains("invalid EnvironmentMap args"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_environment_map_payload_surfaces_a_corrupt_hdr() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("broken.hdr");
+        std::fs::write(&path, b"not a radiance file\n").expect("write hdr");
+        let args = serde_json::json!({ "source": path.to_str().unwrap() });
+        let err = compile_environment_map_payload(&args).unwrap_err();
+        assert!(err.contains("failed to decode HDR"), "got: {err}");
+        assert!(err.contains("missing Radiance magic"), "got: {err}");
+    }
+
+    #[test]
     fn compile_environment_map_payload_surfaces_a_missing_hdr() {
         // A directory-qualified path resolves verbatim, so the load fails on open.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr" });
@@ -394,6 +412,27 @@ mod tests {
             "got: {}",
             err
         );
+    }
+
+    #[test]
+    fn decode_source_of_an_unlit_hdr_integrates_to_zero_radiance() {
+        // A source with no radiance anywhere convolves to a black irradiance
+        // cube; only the alpha channel carries a value.
+        let tmp = std::env::temp_dir().join(format!(
+            "concinnity_envmap_black_test_{}.hdr",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, raw_hdr_blob(16, 8, [0.0, 0.0, 0.0])).expect("write hdr");
+        let payload = decode_source(tmp.to_str().unwrap(), 16, 8, 16, 0.0).expect("decode");
+        let _ = std::fs::remove_file(&tmp);
+        let view = deserialise(&payload).expect("deserialise");
+        for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
+            if i % 4 == 3 {
+                continue; // alpha
+            }
+            let v = f32::from_le_bytes(texel.try_into().unwrap());
+            assert_eq!(v, 0.0, "irradiance float {i} was {v}");
+        }
     }
 
     #[test]

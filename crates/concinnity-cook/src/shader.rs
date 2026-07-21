@@ -447,6 +447,63 @@ mod dispatch_tests {
         let err = compile_shader(args("user", "default_frag.hlsl")).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
     }
+
+    // The `.hlsl` arm reads its source in the dispatch match too, so a missing
+    // file fails there rather than in any backend compiler.
+    #[test]
+    fn missing_hlsl_source_fails_at_read_before_any_compile() {
+        let err = compile_shader(args("user", "/no/such/user_frag.hlsl")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("Failed to read shader source"),
+            "got: {err}"
+        );
+    }
+
+    // Anything that is not `.metal` or `.hlsl` falls through to the GLSL arm,
+    // which hands the path to the backend's compiler instead of reading it
+    // here. Only the dispatch is asserted: whether a GLSL toolchain is
+    // installed decides which error comes back, and both are failures.
+    #[test]
+    fn other_extensions_route_to_the_glsl_arm() {
+        let err = compile_shader(args("user", "/no/such/user_frag.glsl")).unwrap_err();
+        assert!(
+            !err.to_string().contains("Failed to read shader source"),
+            "GLSL sources must not be read by the dispatch: {err}"
+        );
+    }
+
+    #[test]
+    fn a_builtin_source_resolves_to_its_embedded_text() {
+        // The built-in wins over the filesystem, so a bare built-in name
+        // resolves even though no such file exists in the working directory.
+        let src = read_shader_source("default.metal").expect("built-in resolves");
+        assert!(src.contains("vertex"), "unexpected built-in source");
+        // A path with directories still resolves by bare filename.
+        assert_eq!(read_shader_source("shaders/default.metal").unwrap(), src);
+    }
+
+    #[test]
+    fn a_read_error_reports_the_path_and_keeps_the_io_error_kind() {
+        let err = read_shader_source("/no/such/user.metal").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            err.to_string()
+                .starts_with("Failed to read shader source '/no/such/user.metal'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_on_disk_source_is_read_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user.metal");
+        std::fs::write(&path, "fragment float4 f() { return 0; }").unwrap();
+        assert_eq!(
+            read_shader_source(&path.to_string_lossy()).unwrap(),
+            "fragment float4 f() { return 0; }"
+        );
+    }
 }
 
 #[cfg(test)]
