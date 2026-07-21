@@ -503,13 +503,6 @@ pub(super) fn upload_texture_deferred(
     height: u32,
     pixels: &[u8],
 ) -> Result<(GpuImage, UploadInFlight), String> {
-    let &GpuUploadContext {
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-    } = ctx;
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -522,10 +515,104 @@ pub(super) fn upload_texture_deferred(
     }
 
     let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
-    let mip_count = chain.len() as u32;
+    let levels: Vec<TextureLevel<'_>> = chain
+        .iter()
+        .map(|m| TextureLevel {
+            width: m.width,
+            height: m.height,
+            data: &m.pixels,
+        })
+        .collect();
+    upload_texture_levels_deferred(ctx, vk::Format::R8G8B8A8_UNORM, &levels)
+}
+
+// One mip level handed to `upload_texture_levels_deferred`: its texel
+// dimensions plus the tightly packed level bytes (RGBA8 pixels or 4x4 blocks,
+// per the upload's Vulkan format).
+pub(super) struct TextureLevel<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub data: &'a [u8],
+}
+
+// Vulkan equivalent of a compiled texture payload format. The BC formats need
+// the `textureCompressionBC` device feature, enabled in `vulkan::device`.
+fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> vk::Format {
+    use concinnity_core::build::texture::TextureFormat;
+    match format {
+        TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
+        TextureFormat::Bc1 => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        TextureFormat::Bc3 => vk::Format::BC3_UNORM_BLOCK,
+        TextureFormat::Bc5 => vk::Format::BC5_UNORM_BLOCK,
+        TextureFormat::Bc7 => vk::Format::BC7_UNORM_BLOCK,
+    }
+}
+
+// Upload a decoded texture into a 2-D image. RGBA8 images take the CPU
+// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
+// their container mip chain verbatim.
+pub(super) fn upload_texture_image_deferred(
+    ctx: &GpuUploadContext,
+    image: &concinnity_core::build::texture::TextureImage,
+) -> Result<(GpuImage, UploadInFlight), String> {
+    use concinnity_core::build::texture::TextureFormat;
+    if image.format == TextureFormat::Rgba8 {
+        let mip = image
+            .mips
+            .first()
+            .ok_or("RGBA8 texture image has no mip level")?;
+        return upload_texture_deferred(ctx, mip.width, mip.height, &mip.data);
+    }
+    let levels: Vec<TextureLevel<'_>> = image
+        .mips
+        .iter()
+        .map(|m| TextureLevel {
+            width: m.width,
+            height: m.height,
+            data: &m.data,
+        })
+        .collect();
+    upload_texture_levels_deferred(ctx, vk_texture_format(image.format), &levels)
+}
+
+// Synchronous `upload_texture_image_deferred`.
+pub(super) fn upload_texture_image(
+    ctx: &GpuUploadContext,
+    image: &concinnity_core::build::texture::TextureImage,
+) -> Result<GpuImage, String> {
+    let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
+    unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
+    unsafe {
+        ctx.device
+            .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
+        ctx.device.destroy_buffer(in_flight.staging_buf, None);
+        ctx.device.free_memory(in_flight.staging_mem, None);
+    }
+    Ok(img)
+}
+
+// Upload pre-built mip levels of any Vulkan format into a device-local image
+// without waiting for the copy. `buffer_row_length(0)` keeps each region
+// tightly packed, which for block-compressed formats means one row of 4x4
+// blocks per image row.
+fn upload_texture_levels_deferred(
+    ctx: &GpuUploadContext,
+    format: vk::Format,
+    levels: &[TextureLevel<'_>],
+) -> Result<(GpuImage, UploadInFlight), String> {
+    let &GpuUploadContext {
+        instance,
+        device,
+        physical_device,
+        command_pool,
+        queue,
+    } = ctx;
+    let base = levels.first().ok_or("texture upload has no mip level")?;
+    let (width, height) = (base.width, base.height);
+    let mip_count = levels.len() as u32;
 
     // One packed staging buffer holding mip 0..N concatenated.
-    let total: usize = chain.iter().map(|m| m.pixels.len()).sum();
+    let total: usize = levels.iter().map(|m| m.data.len()).sum();
     let (staging_buf, staging_mem) = create_buffer(
         instance,
         device,
@@ -544,9 +631,9 @@ pub(super) fn upload_texture_deferred(
             )
             .map_err(|e| format!("map staging: {e}"))? as *mut u8;
         let mut off = 0usize;
-        for m in &chain {
-            std::ptr::copy_nonoverlapping(m.pixels.as_ptr(), ptr.add(off), m.pixels.len());
-            off += m.pixels.len();
+        for m in levels {
+            std::ptr::copy_nonoverlapping(m.data.as_ptr(), ptr.add(off), m.data.len());
+            off += m.data.len();
         }
         device.unmap_memory(staging_mem);
     }
@@ -561,7 +648,7 @@ pub(super) fn upload_texture_deferred(
         })
         .mip_levels(mip_count)
         .array_layers(1)
-        .format(vk::Format::R8G8B8A8_UNORM)
+        .format(format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
@@ -602,7 +689,7 @@ pub(super) fn upload_texture_deferred(
         );
         let mut regions: Vec<vk::BufferImageCopy> = Vec::with_capacity(mip_count as usize);
         let mut off = 0u64;
-        for (m, level) in chain.iter().enumerate() {
+        for (m, level) in levels.iter().enumerate() {
             regions.push(
                 vk::BufferImageCopy::default()
                     .buffer_offset(off)
@@ -622,7 +709,7 @@ pub(super) fn upload_texture_deferred(
                         depth: 1,
                     }),
             );
-            off += level.pixels.len() as u64;
+            off += level.data.len() as u64;
         }
         unsafe {
             device.cmd_copy_buffer_to_image(
@@ -656,7 +743,7 @@ pub(super) fn upload_texture_deferred(
         let info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8G8B8A8_UNORM)
+            .format(format)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)

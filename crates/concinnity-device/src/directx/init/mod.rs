@@ -879,10 +879,7 @@ impl DxContext {
                 .iter()
                 .enumerate()
                 .map(|(i, image)| {
-                    let (w, h, px) = image
-                        .base_rgba8()
-                        .map_err(|e| format!("texture[{i}]: {e}"))?;
-                    upload_texture_resource(&device, &command_queue, w, h, px)
+                    upload_texture_image(&device, &command_queue, image)
                         .map_err(|e| format!("texture[{i}]: {e}"))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -911,9 +908,9 @@ impl DxContext {
         for f in 0..FRAMES {
             let copy_base = flat_pool_base_slot + f * flat_pool_len;
             for (k, tex) in gpu_textures.iter().enumerate() {
-                write_rgba8_srv(&device, tex, slot_cpu(copy_base + k));
+                write_texture_srv(&device, tex, slot_cpu(copy_base + k));
             }
-            write_rgba8_srv(
+            write_texture_srv(
                 &device,
                 &gpu_normal_maps[0],
                 slot_cpu(copy_base + flat_albedo_count),
@@ -942,12 +939,12 @@ impl DxContext {
                 let albedo_idx = obj.texture_slot.min(last_tex);
                 let albedo_slot_idx = object_base_slot + obj_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
-                write_rgba8_srv(
+                write_texture_srv(
                     &device,
                     &gpu_textures[albedo_idx],
                     slot_cpu(albedo_slot_idx),
                 );
-                write_rgba8_srv(
+                write_texture_srv(
                     &device,
                     normal_resource(obj.normal_map_slot),
                     slot_cpu(normal_slot_idx),
@@ -963,12 +960,12 @@ impl DxContext {
                 let albedo_idx = cluster.texture_slot.min(last_tex);
                 let albedo_slot_idx = cluster_base_slot + cluster_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
-                write_rgba8_srv(
+                write_texture_srv(
                     &device,
                     &gpu_textures[albedo_idx],
                     slot_cpu(albedo_slot_idx),
                 );
-                write_rgba8_srv(
+                write_texture_srv(
                     &device,
                     normal_resource(cluster.normal_map_slot),
                     slot_cpu(normal_slot_idx),
@@ -1715,7 +1712,7 @@ impl DxContext {
         let last_tex = gpu_textures.len().saturating_sub(1);
         for (i, rec) in decals.iter().enumerate() {
             let tex_idx = rec.texture_slot.min(last_tex);
-            write_rgba8_srv(
+            write_texture_srv(
                 &device,
                 &gpu_textures[tex_idx],
                 slot_cpu(decal_srv_base_slot + i),
@@ -1787,7 +1784,7 @@ impl DxContext {
                     states.push(Some(state));
                     // Write the per-emitter albedo SRV into its reserved heap slot.
                     let tex_idx = rec.texture_slot.min(last_tex);
-                    write_rgba8_srv(
+                    write_texture_srv(
                         &device,
                         &gpu_textures[tex_idx],
                         slot_cpu(particle_srv_base_slot + i),

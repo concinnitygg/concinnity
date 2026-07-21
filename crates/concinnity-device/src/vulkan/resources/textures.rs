@@ -12,7 +12,7 @@ use crate::gfx::render_types::NO_NORMAL_MAP_SLOT;
 
 use super::super::context::*;
 use super::super::texture::{
-    GpuUploadContext, StreamedUploadRetire, upload_texture, upload_texture_deferred,
+    GpuUploadContext, StreamedUploadRetire, upload_texture_image, upload_texture_image_deferred,
 };
 
 impl VkContext {
@@ -214,7 +214,7 @@ impl VkContext {
         clone_samples_slot || self.decal_samples_slot(slot) || self.particle_samples_slot(slot)
     }
 
-    // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
+    // Replace albedo texture-pool `slot` with a freshly decoded texture.
     //
     // The streaming fast path never stalls the device: the upload is
     // submitted without waiting (later submissions on the queue order after
@@ -232,9 +232,6 @@ impl VkContext {
         slot: usize,
         image: &crate::build::texture::TextureImage,
     ) -> Result<(), String> {
-        // The pool upload path writes an RGBA8 image. Block-compressed upload on
-        // Vulkan is a Windows-side follow-on; RGBA8 sources upload here today.
-        let (width, height, pixels) = image.base_rgba8()?;
         if slot >= self.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -251,7 +248,7 @@ impl VkContext {
         };
         if self.streamed_slot_needs_drain(slot) {
             self.wait_idle();
-            let img = upload_texture(&ctx, width, height, pixels)?;
+            let img = upload_texture_image(&ctx, image)?;
             // Swap in the new image, then rewrite every descriptor that
             // samples this slot BEFORE destroying the old view. The reverse
             // order left a brief window where descriptor sets referenced an
@@ -265,7 +262,7 @@ impl VkContext {
             old.destroy(&self.device);
             return Ok(());
         }
-        let (img, in_flight) = upload_texture_deferred(&ctx, width, height, pixels)?;
+        let (img, in_flight) = upload_texture_image_deferred(&ctx, image)?;
         let old = std::mem::replace(&mut self.textures[slot], img);
         self.rewrite_legacy_object_sets(slot);
         self.pool_rewrites.queue(slot);

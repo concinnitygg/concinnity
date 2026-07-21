@@ -307,29 +307,29 @@ impl DxContext {
             }
             let pair_base = 3 + obj_idx * 2;
             if obj.texture_slot.min(last) == slot {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
         let cluster_base = 3 + self.n_objects * 2;
         for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
             let pair_base = cluster_base + cluster_idx * 2;
             if cluster.texture_slot.min(last) == slot {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(cluster.normal_map_slot, slot) {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
             let pair_base = self.skinned.srv_base_slot + i * 2;
             if obj.texture_slot.min(last) == slot {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
     }
@@ -347,10 +347,10 @@ impl DxContext {
             };
             let pair_base = self.clone.srv_base_slot + clone_offset * 2;
             if obj.texture_slot.min(last) == slot {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_rgba8_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
+                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
         // Flat shared pool: the swapped resource has exactly one descriptor per
@@ -358,7 +358,7 @@ impl DxContext {
         // and by the RT hit shader, so one re-point per copy refreshes every
         // consumer at once.
         for f in 0..FRAMES {
-            write_rgba8_srv(
+            write_texture_srv(
                 &self.device,
                 resource,
                 self.srv_slot_cpu(self.flat_pool_slot(f, slot)),
@@ -398,7 +398,7 @@ impl DxContext {
         })
     }
 
-    // Replace texture-pool `slot` with freshly decoded RGBA8 pixels.
+    // Replace texture-pool `slot` with a freshly decoded texture.
     //
     // The asset-streaming subsystem calls this to bring a texture resident
     // after init. Like Vulkan -- and unlike Metal, whose bind paths re-read
@@ -420,10 +420,6 @@ impl DxContext {
         slot: usize,
         image: &crate::build::texture::TextureImage,
     ) -> Result<(), String> {
-        // The streamed-slot SRV machinery below writes an RGBA8 view. Block-
-        // compressed upload on DirectX is a Windows-side follow-on; RGBA8
-        // sources (the majority) upload here today.
-        let (width, height, pixels) = image.base_rgba8()?;
         if slot >= self.descriptors.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -433,8 +429,7 @@ impl DxContext {
         }
         if self.streamed_slot_needs_drain(slot) {
             self.wait_idle();
-            let texture =
-                upload_texture_resource(&self.device, &self.command_queue, width, height, pixels)?;
+            let texture = upload_texture_image(&self.device, &self.command_queue, image)?;
             self.descriptors.textures[slot] = texture;
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every flat-pool copy, so any propagation
@@ -442,13 +437,8 @@ impl DxContext {
             self.pool_rewrites.remove(slot);
             return Ok(());
         }
-        let (texture, in_flight) = upload_texture_resource_deferred(
-            &self.device,
-            &self.command_queue,
-            width,
-            height,
-            pixels,
-        )?;
+        let (texture, in_flight) =
+            upload_texture_image_deferred(&self.device, &self.command_queue, image)?;
         let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
         self.rewrite_legacy_object_pairs(slot);
         self.pool_rewrites.queue(slot);
@@ -478,7 +468,7 @@ impl DxContext {
             let last = self.descriptors.textures.len().saturating_sub(1);
             for slot in self.pool_rewrites.begin_frame() {
                 let resource = &self.descriptors.textures[slot.min(last)];
-                write_rgba8_srv(
+                write_texture_srv(
                     &self.device,
                     resource,
                     self.srv_slot_cpu(self.flat_pool_slot(frame, slot)),
@@ -674,12 +664,12 @@ impl DxContext {
         let albedo_slot = self.clone.srv_base_slot + clone_offset * 2;
         let normal_slot = albedo_slot + 1;
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        write_rgba8_srv(
+        write_texture_srv(
             &self.device,
             &self.descriptors.textures[texture_slot.min(last_tex)],
             self.srv_slot_cpu(albedo_slot),
         );
-        write_rgba8_srv(
+        write_texture_srv(
             &self.device,
             self.normal_pool_resource(normal_map_slot),
             self.srv_slot_cpu(normal_slot),
@@ -1153,12 +1143,12 @@ impl DxContext {
         // Bake the shared chunk (albedo, normal) SRV pair from the chunk
         // material's texture-pool slots, clamped to the pool length.
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        write_rgba8_srv(
+        write_texture_srv(
             &self.device,
             &self.descriptors.textures[texture_slot.min(last_tex)],
             self.srv_slot_cpu(self.chunk_stream.srv_base_slot),
         );
-        write_rgba8_srv(
+        write_texture_srv(
             &self.device,
             self.normal_pool_resource(normal_map_slot),
             self.srv_slot_cpu(self.chunk_stream.srv_base_slot + 1),
@@ -1488,12 +1478,12 @@ impl DxContext {
         // material's texture-pool slots, clamped to the pool length.
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
         for (i, obj) in draw_objects.iter().enumerate() {
-            write_rgba8_srv(
+            write_texture_srv(
                 &self.device,
                 &self.descriptors.textures[obj.texture_slot.min(last_tex)],
                 self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2),
             );
-            write_rgba8_srv(
+            write_texture_srv(
                 &self.device,
                 self.normal_pool_resource(obj.normal_map_slot),
                 self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2 + 1),

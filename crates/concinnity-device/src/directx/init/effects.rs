@@ -20,7 +20,7 @@ use crate::directx::post::ssgi::{SsgiDescriptors, SsgiDevice, SsgiResources};
 use crate::directx::post::ssr::{SsrInitInputs, SsrResources};
 use crate::directx::post::taa::TaaResources;
 use crate::directx::texture::{
-    HDR_FORMAT, create_fallback_white_resource, write_hdr_srv, write_rgba8_srv,
+    HDR_FORMAT, create_fallback_white_resource, write_hdr_srv, write_texture_srv,
 };
 use crate::directx::transient_pool::{TransientResourcePool, transient_slots};
 
@@ -252,7 +252,7 @@ pub(super) fn build_effects(
     // pass-through occlusion when SSAO is off. The real SSAO targets sit in
     // the three slots before it.
     let ssao_white = create_fallback_white_resource(device, command_queue)?;
-    write_rgba8_srv(device, &ssao_white, ssao_slots.white_srv.0);
+    write_texture_srv(device, &ssao_white, ssao_slots.white_srv.0);
     let ssao_white_srv_gpu = ssao_slots.white_srv.1;
     let ssao = if let Some(settings) = ssao_settings {
         let ao_resource = transient_pool

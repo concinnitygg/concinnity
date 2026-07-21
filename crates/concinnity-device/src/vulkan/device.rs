@@ -255,6 +255,8 @@ pub(super) fn create_logical_device(
         // Anisotropic filtering for the scene albedo / normal sampler now that
         // those textures carry a mip chain. Inert when the device lacks it.
         .sampler_anisotropy(base_supported.sampler_anisotropy != 0)
+        // BC1/BC3/BC5/BC7 sampling for KTX2 / DDS block-compressed textures.
+        .texture_compression_bc(base_supported.texture_compression_bc != 0)
         .shader_int16(base_supported.shader_int16 != 0)
         .shader_storage_image_write_without_format(
             base_supported.shader_storage_image_write_without_format != 0,

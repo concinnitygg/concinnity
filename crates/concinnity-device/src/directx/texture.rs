@@ -238,7 +238,7 @@ pub(super) struct UploadInFlight {
 // same in-order queue after the copy, so the texture is safe to sample from
 // any subsequently submitted frame; only releasing the returned in-flight
 // resources needs GPU retirement.
-// Returns just the resource; call `write_rgba8_srv` to bind it into a slot.
+// Returns just the resource; call `write_texture_srv` to bind it into a slot.
 // Multiple SRVs may reference the same resource (one per object using it).
 pub(super) fn upload_texture_resource_deferred(
     device: &ID3D12Device,
@@ -261,7 +261,92 @@ pub(super) fn upload_texture_resource_deferred(
     // Box-filtered mip chain so the texture minifies through hardware trilinear /
     // aniso selection instead of aliasing from a single mip-0 sample.
     let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
-    let mip_count = chain.len() as u32;
+    let levels: Vec<TextureLevel<'_>> = chain
+        .iter()
+        .map(|m| TextureLevel {
+            width: m.width,
+            height: m.height,
+            data: &m.pixels,
+        })
+        .collect();
+    upload_texture_levels_deferred(device, queue, DXGI_FORMAT_R8G8B8A8_UNORM, &levels)
+}
+
+// One mip level handed to `upload_texture_levels_deferred`: its texel
+// dimensions plus the tightly packed level bytes (RGBA8 pixels or 4x4 blocks,
+// per the upload's DXGI format).
+pub(super) struct TextureLevel<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub data: &'a [u8],
+}
+
+// DXGI equivalent of a compiled texture payload format.
+fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_core::build::texture::TextureFormat;
+    match format {
+        TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
+        TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
+        TextureFormat::Bc3 => DXGI_FORMAT_BC3_UNORM,
+        TextureFormat::Bc5 => DXGI_FORMAT_BC5_UNORM,
+        TextureFormat::Bc7 => DXGI_FORMAT_BC7_UNORM,
+    }
+}
+
+// Upload a decoded texture into a 2-D resource. RGBA8 images take the CPU
+// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
+// their container mip chain verbatim. Call `write_texture_srv` to bind the
+// result, which picks the view format back off the resource.
+pub(super) fn upload_texture_image_deferred(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    image: &concinnity_core::build::texture::TextureImage,
+) -> Result<(ID3D12Resource, UploadInFlight), String> {
+    use concinnity_core::build::texture::TextureFormat;
+    if image.format == TextureFormat::Rgba8 {
+        let mip = image
+            .mips
+            .first()
+            .ok_or("RGBA8 texture image has no mip level")?;
+        return upload_texture_resource_deferred(device, queue, mip.width, mip.height, &mip.data);
+    }
+    let levels: Vec<TextureLevel<'_>> = image
+        .mips
+        .iter()
+        .map(|m| TextureLevel {
+            width: m.width,
+            height: m.height,
+            data: &m.data,
+        })
+        .collect();
+    upload_texture_levels_deferred(device, queue, dxgi_texture_format(image.format), &levels)
+}
+
+// Synchronous `upload_texture_image_deferred`.
+pub(super) fn upload_texture_image(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    image: &concinnity_core::build::texture::TextureImage,
+) -> Result<ID3D12Resource, String> {
+    let (texture, in_flight) = upload_texture_image_deferred(device, queue, image)?;
+    wait_for_upload(device, queue)?;
+    drop(in_flight);
+    Ok(texture)
+}
+
+// Upload pre-built mip levels of any DXGI format into a default-heap texture
+// without waiting for the copy. `GetCopyableFootprints` sizes each subresource,
+// so the per-row copy below is format-agnostic: for block-compressed formats a
+// "row" is a row of 4x4 blocks and the row count is the block-row count.
+fn upload_texture_levels_deferred(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    format: DXGI_FORMAT,
+    levels: &[TextureLevel<'_>],
+) -> Result<(ID3D12Resource, UploadInFlight), String> {
+    let base = levels.first().ok_or("texture upload has no mip level")?;
+    let (width, height) = (base.width, base.height);
+    let mip_count = levels.len() as u32;
 
     // Texture resource (default heap, copy-dest initially), full mip chain.
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -274,7 +359,7 @@ pub(super) fn upload_texture_resource_deferred(
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: mip_count as u16,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -323,12 +408,25 @@ pub(super) fn upload_texture_resource_deferred(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("upload tex map: {e}"))?;
-    for (m, level) in chain.iter().enumerate() {
-        let src_row = (level.width * 4) as usize;
+    for (m, level) in levels.iter().enumerate() {
+        let src_row = row_sizes[m] as usize;
+        let rows = row_counts[m] as usize;
+        let needed = src_row * rows;
+        if level.data.len() < needed {
+            unsafe { upload.Unmap(0, None) };
+            return Err(format!(
+                "texture mip {} ({}x{}) is {} bytes, need {}",
+                m,
+                level.width,
+                level.height,
+                level.data.len(),
+                needed
+            ));
+        }
         let dst_pitch = layouts[m].Footprint.RowPitch as usize;
         let base_off = layouts[m].Offset as usize;
-        for row in 0..level.height as usize {
-            let src = &level.pixels[row * src_row..(row + 1) * src_row];
+        for row in 0..rows {
+            let src = &level.data[row * src_row..(row + 1) * src_row];
             let dst = unsafe { (map_ptr as *mut u8).add(base_off + row * dst_pitch) };
             unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
         }
@@ -397,6 +495,14 @@ pub(super) fn upload_texture_resource(
 ) -> Result<ID3D12Resource, String> {
     let (texture, in_flight) =
         upload_texture_resource_deferred(device, queue, width, height, pixels)?;
+    wait_for_upload(device, queue)?;
+    drop(in_flight);
+    Ok(texture)
+}
+
+// Block until the upload queue drains, so a synchronous upload's transient
+// staging resources can be released.
+fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> Result<(), String> {
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("upload fence: {e}"))?;
     let event =
@@ -409,20 +515,22 @@ pub(super) fn upload_texture_resource(
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
     unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
-    drop(in_flight);
-    Ok(texture)
+    Ok(())
 }
 
-// Write an RGBA8_UNORM Texture2D SRV at the given heap slot, exposing the
-// resource's full mip chain so minified samples trilinear-select down it.
-pub(super) fn write_rgba8_srv(
+// Write a Texture2D SRV at the given heap slot, exposing the resource's full
+// mip chain so minified samples trilinear-select down it. The view format is
+// taken from the resource, so block-compressed pool textures bind through the
+// same call as RGBA8 ones.
+pub(super) fn write_texture_srv(
     device: &ID3D12Device,
     resource: &ID3D12Resource,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    let mip_levels = unsafe { resource.GetDesc() }.MipLevels as u32;
+    let desc = unsafe { resource.GetDesc() };
+    let mip_levels = desc.MipLevels as u32;
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        Format: desc.Format,
         ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -438,7 +546,7 @@ pub(super) fn write_rgba8_srv(
 // Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture and write its SRV
 // at the given heap slot. Used for resources that bind to a single slot
 // (text atlases, etc.). Per-object scene textures use `upload_texture_resource`
-// + `write_rgba8_srv` directly so one resource can feed multiple per-object slots.
+// + `write_texture_srv` directly so one resource can feed multiple per-object slots.
 pub(super) fn upload_texture(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
@@ -449,7 +557,7 @@ pub(super) fn upload_texture(
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
     let texture = upload_texture_resource(device, queue, width, height, pixels)?;
-    write_rgba8_srv(device, &texture, srv_cpu);
+    write_texture_srv(device, &texture, srv_cpu);
     Ok(GpuResource {
         resource: texture,
         srv_cpu,

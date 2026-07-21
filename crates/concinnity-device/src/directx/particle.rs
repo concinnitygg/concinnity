@@ -27,7 +27,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
 use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_rgba8_srv,
+    HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
 };
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
@@ -974,7 +974,7 @@ impl DxContext {
             }
             .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
         };
-        write_rgba8_srv(&self.device, &self.descriptors.textures[tex_idx], srv_cpu);
+        write_texture_srv(&self.device, &self.descriptors.textures[tex_idx], srv_cpu);
         Ok(id)
     }
 

@@ -135,20 +135,6 @@ impl TextureImage {
         self.mips.iter().map(|m| m.data.len()).sum()
     }
 
-    // Borrow the base RGBA8 pixels, or an error if the image is block
-    // compressed. Used by backend upload paths that only handle RGBA8 (the
-    // DirectX / Vulkan pool, which does not yet upload compressed textures).
-    pub fn base_rgba8(&self) -> Result<(u32, u32, &[u8]), String> {
-        if self.format != TextureFormat::Rgba8 {
-            return Err(format!(
-                "texture is {:?}; block-compressed upload is not supported on this backend",
-                self.format
-            ));
-        }
-        let mip = self.mips.first().ok_or("RGBA8 texture has no mip level")?;
-        Ok((mip.width, mip.height, &mip.data))
-    }
-
     // Recover the base RGBA8 pixels, or an error if the image is block
     // compressed. Used by the sprite / glyph-atlas paths, which upload RGBA8
     // only.
