@@ -48,6 +48,9 @@ pub mod gltf_source;
 // payload format) shared by the CubemapTexture + EnvironmentMap compilers.
 pub mod hdr;
 pub mod import;
+// KTX2 container decode: BCn block passthrough + Basis Universal (ETC1S / UASTC)
+// transcode into the tagged compressed texture payload. Build-only.
+pub mod ktx2;
 pub mod mesh_compile;
 pub mod mesh_reimport;
 pub mod pipeline;

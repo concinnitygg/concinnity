@@ -305,16 +305,15 @@ mod tests {
     // The RAM-resident source decodes a compiled texture payload on fetch.
     #[test]
     fn build_texture_payload_source_mem_backed_decodes_payload() {
-        // 1x1 RGBA payload: width, height, then one pixel.
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.extend_from_slice(&[0x11, 0x22, 0x33, 0xFF]);
+        // 1x1 RGBA tagged payload via the shared serialiser.
+        let payload = crate::build::texture::serialise(
+            &crate::build::texture::TextureImage::rgba8(1, 1, vec![0x11, 0x22, 0x33, 0xFF]),
+        );
 
         let src = build_texture_payload_source(vec![payload], &[], false).expect("mem source");
         let decoded = src.fetch(0).expect("decodes item 0");
-        assert_eq!((decoded.width, decoded.height), (1, 1));
-        assert_eq!(decoded.pixels, vec![0x11, 0x22, 0x33, 0xFF]);
+        assert_eq!((decoded.image.width(), decoded.image.height()), (1, 1));
+        assert_eq!(decoded.image.mips[0].data, vec![0x11, 0x22, 0x33, 0xFF]);
         // Out-of-range item id surfaces an error rather than panicking.
         assert!(src.fetch(1).is_err());
     }

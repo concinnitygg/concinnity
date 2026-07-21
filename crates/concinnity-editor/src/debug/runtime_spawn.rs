@@ -1194,9 +1194,7 @@ mod tests {
         fn update_texture_slot(
             &mut self,
             _slot: usize,
-            _w: u32,
-            _h: u32,
-            _px: &[u8],
+            _image: &concinnity_core::build::texture::TextureImage,
         ) -> Result<(), String> {
             Ok(())
         }

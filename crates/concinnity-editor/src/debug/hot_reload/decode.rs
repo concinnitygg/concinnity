@@ -420,7 +420,14 @@ pub fn poll_pending_assets(
     let mut failed = batch.decode_failures;
 
     for tex in &batch.textures {
-        let result = backend.update_texture_slot(tex.slot, tex.width, tex.height, &tex.pixels);
+        // Hot-reload decodes sources to RGBA8; wrap them so the backend
+        // regenerates the mip chain on upload.
+        let image = concinnity_core::build::texture::TextureImage::rgba8(
+            tex.width,
+            tex.height,
+            tex.pixels.clone(),
+        );
+        let result = backend.update_texture_slot(tex.slot, &image);
         match result {
             Ok(()) => reloaded += 1,
             Err(e) => {

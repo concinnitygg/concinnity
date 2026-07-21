@@ -20,12 +20,12 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
 use super::{StreamPlanner, StreamState};
+use crate::build::texture::TextureImage;
 
-// A texture payload decoded to GPU-ready RGBA8 pixels.
+// A texture payload decoded to a GPU-ready image (RGBA8 or block-compressed
+// with its mip chain).
 pub struct DecodedTexture {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
+    pub image: TextureImage,
 }
 
 // Fetches and decodes a streamable texture payload by item id.
@@ -62,12 +62,8 @@ impl PayloadSource for MemPayloadSource {
             .payloads
             .get(id)
             .ok_or_else(|| format!("no payload for streamed texture {}", id))?;
-        let (width, height, pixels) = crate::build::texture::deserialise(bytes)?;
-        Ok(DecodedTexture {
-            width,
-            height,
-            pixels,
-        })
+        let image = crate::build::texture::deserialise(bytes)?;
+        Ok(DecodedTexture { image })
     }
 }
 
@@ -109,12 +105,8 @@ impl PayloadSource for DiskPayloadSource {
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {}", id))?;
         let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
-        let (width, height, pixels) = crate::build::texture::deserialise(&bytes)?;
-        Ok(DecodedTexture {
-            width,
-            height,
-            pixels,
-        })
+        let image = crate::build::texture::deserialise(&bytes)?;
+        Ok(DecodedTexture { image })
     }
 }
 
@@ -239,16 +231,16 @@ impl TextureStreamer {
     pub fn drain_completed(
         &mut self,
         frame: u64,
-        mut upload: impl FnMut(usize, u32, u32, &[u8]),
+        mut upload: impl FnMut(usize, &TextureImage),
     ) -> usize {
         let mut applied = 0;
         while let Ok(result) = self.result_rx.try_recv() {
             match result.decoded {
                 Ok(tex) => {
-                    upload(result.id, tex.width, tex.height, &tex.pixels);
-                    // Resident footprint is the decoded RGBA8 buffer.
-                    self.planner
-                        .mark_resident(result.id, frame, tex.pixels.len() as u64);
+                    // Resident footprint is the sum of every mip level's bytes.
+                    let bytes = tex.image.byte_len() as u64;
+                    upload(result.id, &tex.image);
+                    self.planner.mark_resident(result.id, frame, bytes);
                     applied += 1;
                 }
                 Err(e) => {
@@ -330,22 +322,19 @@ mod tests {
         assert_eq!(nearest_sq_distance(&[], [5.0, 5.0, 5.0]), 0.0);
     }
 
-    // Build a minimal compiled-texture payload: u32 width, u32 height, RGBA.
+    // Build a minimal compiled RGBA8 texture payload via the shared serialiser.
     fn make_payload(w: u32, h: u32, fill: u8) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&w.to_le_bytes());
-        bytes.extend_from_slice(&h.to_le_bytes());
-        bytes.extend(std::iter::repeat_n(fill, (w * h * 4) as usize));
-        bytes
+        let pixels = std::iter::repeat_n(fill, (w * h * 4) as usize).collect();
+        crate::build::texture::serialise(&TextureImage::rgba8(w, h, pixels))
     }
 
     #[test]
     fn mem_payload_source_decodes_a_payload() {
         let source = MemPayloadSource::new(vec![make_payload(2, 1, 0xAB)]);
         let tex = source.fetch(0).expect("fetch ok");
-        assert_eq!((tex.width, tex.height), (2, 1));
-        assert_eq!(tex.pixels.len(), 2 * 4);
-        assert!(tex.pixels.iter().all(|&b| b == 0xAB));
+        assert_eq!((tex.image.width(), tex.image.height()), (2, 1));
+        assert_eq!(tex.image.mips[0].data.len(), 2 * 4);
+        assert!(tex.image.mips[0].data.iter().all(|&b| b == 0xAB));
     }
 
     #[test]
@@ -373,9 +362,9 @@ mod tests {
             len: payload.len() as u64,
         }]);
         let tex = source.fetch(0).expect("fetch ok");
-        assert_eq!((tex.width, tex.height), (2, 1));
-        assert_eq!(tex.pixels.len(), 2 * 4);
-        assert!(tex.pixels.iter().all(|&b| b == 0xCD));
+        assert_eq!((tex.image.width(), tex.image.height()), (2, 1));
+        assert_eq!(tex.image.mips[0].data.len(), 2 * 4);
+        assert!(tex.image.mips[0].data.iter().all(|&b| b == 0xCD));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -401,9 +390,7 @@ mod tests {
     impl PayloadSource for ConstSource {
         fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
             Ok(DecodedTexture {
-                width: 1,
-                height: 1,
-                pixels: vec![1, 2, 3, 4],
+                image: TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
             })
         }
     }
@@ -413,7 +400,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut uploads = 0;
         while std::time::Instant::now() < deadline {
-            uploads += streamer.drain_completed(frame, |_, _, _, _| {});
+            uploads += streamer.drain_completed(frame, |_, _| {});
             if streamer.stats().0 >= want {
                 break;
             }
@@ -487,8 +474,13 @@ mod tests {
         let mut seen: Option<(usize, u32, u32, Vec<u8>)> = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline && seen.is_none() {
-            streamer.drain_completed(1, |id, w, h, px| {
-                seen = Some((id, w, h, px.to_vec()));
+            streamer.drain_completed(1, |id, image| {
+                seen = Some((
+                    id,
+                    image.width(),
+                    image.height(),
+                    image.mips[0].data.clone(),
+                ));
             });
             std::thread::sleep(std::time::Duration::from_millis(1));
         }

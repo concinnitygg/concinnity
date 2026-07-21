@@ -1430,7 +1430,7 @@ impl GraphicsSystem {
             Vec::new()
         };
 
-        let mut texture_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+        let mut texture_data: Vec<crate::build::texture::TextureImage> = Vec::new();
         // Raw compiled texture payloads, kept past blob release so the
         // asset-streaming subsystem can re-decode them off the main thread.
         // Left empty when the blobs are disk-backed: the streamer then re-reads
@@ -1654,7 +1654,9 @@ impl GraphicsSystem {
                 continue;
             };
             match ctx.read_payload(&locator) {
-                Ok(bytes) => match crate::build::texture::deserialise(bytes) {
+                Ok(bytes) => match crate::build::texture::deserialise(bytes)
+                    .and_then(|image| image.into_rgba8())
+                {
                     Ok((w, h, rgba)) => {
                         self.sprite_texture_slots
                             .insert(tex_id, text_atlas_data.len());

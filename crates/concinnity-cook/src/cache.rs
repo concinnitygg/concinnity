@@ -74,7 +74,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // 6: the SKMV skinned payload gained the optional MRPH morph-target block, so
 //    a mesh whose source carries morph targets compiles different bytes from
 //    unchanged args.
-const CACHE_FORMAT_VERSION: u32 = 6;
+// 7: every 2D texture payload switched to the tagged format (magic + format_id
+//    + per-mip records) so KTX2 / DDS can ship block-compressed mip chains; the
+//    old headerless RGBA8 bytes no longer parse (build::texture).
+const CACHE_FORMAT_VERSION: u32 = 7;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the component discriminant, the args JSON, a hash of every

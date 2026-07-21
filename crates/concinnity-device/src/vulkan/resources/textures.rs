@@ -230,10 +230,11 @@ impl VkContext {
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
+        image: &crate::build::texture::TextureImage,
     ) -> Result<(), String> {
+        // The pool upload path writes an RGBA8 image. Block-compressed upload on
+        // Vulkan is a Windows-side follow-on; RGBA8 sources upload here today.
+        let (width, height, pixels) = image.base_rgba8()?;
         if slot >= self.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -284,7 +285,8 @@ impl VkContext {
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.update_texture_slot(slot, 1, 1, &[128, 128, 128, 255])
+        let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        self.update_texture_slot(slot, &grey)
     }
 
     // Per-frame streamed-texture upkeep, called at the top of `draw_frame`

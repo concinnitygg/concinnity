@@ -59,11 +59,13 @@ pub struct ShaderBytes<'a> {
 // Decoded image payloads: texture pools, glyph atlases, and the serialised
 // IBL / grading payloads (None = the backend binds identity fallbacks).
 pub struct MediaPayloads<'a> {
-    // Decoded textures for the shared handle-indexed pool: (width, height, RGBA
-    // pixels) per slot. Every texture -- albedo, normal map, emissive/ORM,
-    // terrain secondary -- lives here once at its handle; the backend appends a
-    // flat-normal fallback past the last entry for normal-less draws.
-    pub textures: &'a [(u32, u32, Vec<u8>)],
+    // Decoded textures for the shared handle-indexed pool: one [`TextureImage`]
+    // per slot carrying its GPU format and mip chain. Every texture -- albedo,
+    // normal map, emissive/ORM, terrain secondary -- lives here once at its
+    // handle; the backend appends a flat-normal fallback past the last entry for
+    // normal-less draws. RGBA8 images regenerate mips on upload; block-
+    // compressed images upload their chain verbatim.
+    pub textures: &'a [crate::build::texture::TextureImage],
     // Glyph atlas textures for text rendering; empty = no text support.
     pub text_atlases: Vec<(u32, u32, Vec<u8>)>,
     // Serialised EnvironmentMap payload (irradiance + prefilter cubemaps).

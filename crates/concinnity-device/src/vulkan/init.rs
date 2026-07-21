@@ -728,7 +728,10 @@ impl VkContext {
             textures
                 .iter()
                 .enumerate()
-                .map(|(i, (w, h, px))| {
+                .map(|(i, image)| {
+                    let (w, h, px) = image
+                        .base_rgba8()
+                        .map_err(|e| format!("texture[{i}]: {e}"))?;
                     upload_texture(
                         &GpuUploadContext {
                             instance: &instance,
@@ -737,8 +740,8 @@ impl VkContext {
                             command_pool,
                             queue: graphics_queue,
                         },
-                        *w,
-                        *h,
+                        w,
+                        h,
                         px,
                     )
                     .map_err(|e| format!("texture[{i}]: {e}"))

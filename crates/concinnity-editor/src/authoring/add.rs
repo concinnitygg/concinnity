@@ -432,6 +432,7 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
     ("Scenes", &["glb", "gltf", "fbx"]),
     ("Stories & text", &["md", "txt"]),
     ("Images", &["png", "jpg", "jpeg", "bmp", "tga", "gif"]),
+    ("Textures", &["ktx2"]),
     ("Audio", &["ogg", "wav", "mp3", "flac"]),
     ("Fonts", &["ttf", "otf"]),
     ("Shaders", &["vert", "frag", "glsl", "metal", "wgsl"]),
@@ -528,6 +529,15 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         "ogg" | "wav" | "mp3" | "flac" => Ok(vec![validated_entry(
             &stem,
             "AudioClip",
+            serde_json::json!({ "source": path_str }),
+        )?]),
+
+        // KTX2: a GPU-ready compressed texture. Becomes a Texture asset whose
+        // source the build compiles into a block-compressed payload (BCn / Basis
+        // transcode), unlike the raw File assets below.
+        "ktx2" => Ok(vec![validated_entry(
+            &base_name,
+            "Texture",
             serde_json::json!({ "source": path_str }),
         )?]),
 

@@ -8,7 +8,7 @@
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;
-use crate::metal::texture::upload_texture;
+use crate::metal::texture::{upload_texture, upload_texture_image};
 
 impl MtlContext {
     // The texture a `normal_map_slot` samples for the legacy per-draw normal
@@ -36,9 +36,7 @@ impl MtlContext {
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
+        image: &concinnity_core::build::texture::TextureImage,
     ) -> Result<(), String> {
         if slot >= self.textures.len() {
             return Err(format!(
@@ -47,7 +45,7 @@ impl MtlContext {
                 self.textures.len()
             ));
         }
-        self.textures[slot] = upload_texture(&self.device, width, height, pixels)?;
+        self.textures[slot] = upload_texture_image(&self.device, image)?;
         Ok(())
     }
 

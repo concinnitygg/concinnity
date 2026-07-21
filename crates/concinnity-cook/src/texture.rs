@@ -20,11 +20,12 @@
 //    for (width, height, RGBA pixels).
 // 3. No other files need to change.
 
-// The pre-compiled payload `deserialise` and the resolution-cap `downscale_rgba`
-// stay in concinnity-core (no image-decode deps); the file -> pixels decoders
-// below live here in the build crate alongside the png / jpeg / gltf crates.
+// The pre-compiled payload `deserialise` / `serialise` and the resolution-cap
+// `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
+// pixels decoders below live here in the build crate alongside the png / jpeg /
+// gltf crates.
 use concinnity_core::assets::Texture;
-use concinnity_core::build::texture::downscale_rgba;
+use concinnity_core::build::texture::{TextureFormat, TextureImage, downscale_rgba, serialise};
 
 // Validate the texture generator name in args without generating pixel data.
 pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String> {
@@ -36,42 +37,97 @@ pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String
     }
 }
 
-// Compile a Texture component's JSON args into a packed binary payload.
+// Compile a Texture component's JSON args into the tagged texture payload.
 pub fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let tex: Texture = serde_json::from_value(args.clone())
         .map_err(|e| format!("Texture: invalid args: {}", e))?;
 
-    let (width, height, pixels) = match tex.generator.as_str() {
-        "checker" => generate_checker(tex.resolution),
-        "brick" => generate_brick(tex.resolution),
-        "concrete" => generate_concrete(tex.resolution),
-        "grass" => generate_grass(tex.resolution),
-        "sky" => generate_sky(tex.resolution),
-        "wood" => generate_wood(tex.resolution),
-        "tile" => generate_tile(tex.resolution),
-        "metal" => generate_metal(tex.resolution),
-        "terrain" => generate_terrain(tex.resolution),
-        "stone" => generate_stone(tex.resolution),
-        "plaster" => generate_plaster(tex.resolution),
+    let image = match tex.generator.as_str() {
+        "checker" => rgba8_image(generate_checker(tex.resolution)),
+        "brick" => rgba8_image(generate_brick(tex.resolution)),
+        "concrete" => rgba8_image(generate_concrete(tex.resolution)),
+        "grass" => rgba8_image(generate_grass(tex.resolution)),
+        "sky" => rgba8_image(generate_sky(tex.resolution)),
+        "wood" => rgba8_image(generate_wood(tex.resolution)),
+        "tile" => rgba8_image(generate_tile(tex.resolution)),
+        "metal" => rgba8_image(generate_metal(tex.resolution)),
+        "terrain" => rgba8_image(generate_terrain(tex.resolution)),
+        "stone" => rgba8_image(generate_stone(tex.resolution)),
+        "plaster" => rgba8_image(generate_plaster(tex.resolution)),
         "" => {
             if tex.source.is_empty() {
                 return Err("file-backed Texture requires a `source` path".to_string());
             }
-            let (w, h, px) = decode_file_source(&tex.source, tex.image_index)?;
-            downscale_rgba(w, h, px, tex.max_size)
+            compile_image_source(&tex.source, tex.image_index, tex.max_size)?
         }
         other => return Err(format!("unknown texture generator '{other}'")),
     };
 
-    Ok(serialise(width, height, &pixels))
+    Ok(serialise(&image))
 }
 
-fn serialise(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(8 + pixels.len());
-    buf.extend_from_slice(&width.to_le_bytes());
-    buf.extend_from_slice(&height.to_le_bytes());
-    buf.extend_from_slice(pixels);
-    buf
+fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
+    TextureImage::rgba8(width, height, pixels)
+}
+
+// Compile a file-backed texture source into a tagged image. KTX2 and DDS keep
+// their block-compressed mip chains; everything else decodes to RGBA8. The
+// resolution cap only applies to RGBA8 results (compressed sources ship their
+// own mip chain and are already small).
+fn compile_image_source(
+    source: &str,
+    image_index: u32,
+    max_size: u32,
+) -> Result<TextureImage, String> {
+    let lower = source.to_lowercase();
+    let image = if lower.ends_with(".ktx2") {
+        let bytes = std::fs::read(source)
+            .map_err(|e| format!("failed to open KTX2 texture '{}': {}", source, e))?;
+        crate::ktx2::compile_ktx2(&bytes).map_err(|e| format!("'{}': {}", source, e))?
+    } else if lower.ends_with(".dds") {
+        compile_dds_source(source)?
+    } else {
+        let (w, h, px) = decode_file_source(source, image_index)?;
+        TextureImage::rgba8(w, h, px)
+    };
+    Ok(cap_rgba8(image, max_size))
+}
+
+// DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
+// decodes to RGBA8 so runtime mip generation applies.
+fn compile_dds_source(source: &str) -> Result<TextureImage, String> {
+    let bytes = std::fs::read(source)
+        .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
+    let blocks =
+        crate::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
+    if blocks.mips.len() >= 2 {
+        Ok(TextureImage {
+            format: blocks.format,
+            mips: blocks.mips,
+        })
+    } else {
+        let (w, h, px) =
+            crate::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
+        Ok(TextureImage::rgba8(w, h, px))
+    }
+}
+
+// Apply the resolution cap to an RGBA8 image; compressed images pass through
+// unchanged.
+fn cap_rgba8(image: TextureImage, max_size: u32) -> TextureImage {
+    if image.format != TextureFormat::Rgba8 || max_size == 0 {
+        return image;
+    }
+    let (w, h) = (image.width(), image.height());
+    if w <= max_size && h <= max_size {
+        return image;
+    }
+    let Ok((w, h, px)) = image.into_rgba8() else {
+        // Unreachable: the format guard above already ensured RGBA8.
+        return TextureImage::rgba8(0, 0, Vec::new());
+    };
+    let (dw, dh, dpx) = downscale_rgba(w, h, px, max_size);
+    TextureImage::rgba8(dw, dh, dpx)
 }
 
 // File-backed source decode
@@ -105,11 +161,22 @@ pub fn decode_file_source(source: &str, image_index: u32) -> Result<(u32, u32, V
         load_jpg(source)
     } else if lower.ends_with(".dds") {
         load_dds(source)
+    } else if lower.ends_with(".ktx2") {
+        load_ktx2(source)
     } else if lower.ends_with(".tga") {
         load_tga(source)
     } else {
         load_png(source)
     }
+}
+
+// Decode a KTX2 to RGBA8 for the runtime asset hot-reload live preview. The
+// build path keeps KTX2 block-compressed; this decodes/transcodes the base
+// level so `cn debug` can show an edited texture without a compressed upload.
+fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+    let bytes = std::fs::read(source)
+        .map_err(|e| format!("failed to open KTX2 texture '{}': {}", source, e))?;
+    crate::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{}': {}", source, e))
 }
 
 // Decode a block-compressed DDS (DXT1/DXT5/ATI2) from disk into RGBA.
@@ -1051,8 +1118,12 @@ mod tests {
 
     // compile_texture_payload: file-backed branch and payload envelope
 
+    fn deserialise(payload: &[u8]) -> concinnity_core::build::texture::TextureImage {
+        concinnity_core::build::texture::deserialise(payload).expect("deserialise payload")
+    }
+
     #[test]
-    fn compile_texture_payload_wraps_file_pixels_in_the_header() {
+    fn compile_texture_payload_wraps_file_pixels_in_the_tagged_payload() {
         let dir = tempfile::tempdir().expect("tempdir");
         let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
         let src = write_file(
@@ -1061,9 +1132,11 @@ mod tests {
             &encode_png(2, 1, png::ColorType::Rgba, &data),
         );
         let payload = compile_texture_payload(&serde_json::json!({"source": src})).expect("ok");
-        assert_eq!(&payload[0..4], &2u32.to_le_bytes());
-        assert_eq!(&payload[4..8], &1u32.to_le_bytes());
-        assert_eq!(&payload[8..], &data);
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Rgba8);
+        assert_eq!((image.width(), image.height()), (2, 1));
+        assert_eq!(image.mips.len(), 1);
+        assert_eq!(image.mips[0].data, data);
     }
 
     #[test]
@@ -1077,9 +1150,9 @@ mod tests {
         );
         let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
             .expect("ok");
-        assert_eq!(&payload[0..4], &2u32.to_le_bytes());
-        assert_eq!(&payload[4..8], &2u32.to_le_bytes());
-        assert_eq!(payload.len(), 8 + 2 * 2 * 4);
+        let image = deserialise(&payload);
+        assert_eq!((image.width(), image.height()), (2, 2));
+        assert_eq!(image.mips[0].data.len(), 2 * 2 * 4);
     }
 
     #[test]
@@ -1100,9 +1173,9 @@ mod tests {
             compile_texture_payload(&serde_json::json!({"generator": "sky", "resolution": 64}))
                 .expect("ok");
         // Sky is always 4 pixels wide by `resolution` tall.
-        assert_eq!(&payload[0..4], &4u32.to_le_bytes());
-        assert_eq!(&payload[4..8], &64u32.to_le_bytes());
-        assert_eq!(payload.len(), 8 + 4 * 64 * 4);
+        let image = deserialise(&payload);
+        assert_eq!((image.width(), image.height()), (4, 64));
+        assert_eq!(image.mips[0].data.len(), 4 * 64 * 4);
     }
 
     // The reload decoder dispatches by extension, so a missing file's error
@@ -1298,11 +1371,15 @@ mod tests {
             let args = serde_json::json!({"generator": generator, "resolution": res});
             let payload = compile_texture_payload(&args)
                 .unwrap_or_else(|e| panic!("{generator} should compile: {e}"));
-            assert_eq!(&payload[0..4], &res.to_le_bytes(), "{generator} width");
-            assert_eq!(&payload[4..8], &res.to_le_bytes(), "{generator} height");
+            let image = deserialise(&payload);
             assert_eq!(
-                payload.len(),
-                8 + (res * res * 4) as usize,
+                (image.width(), image.height()),
+                (res, res),
+                "{generator} dims"
+            );
+            assert_eq!(
+                image.mips[0].data.len(),
+                (res * res * 4) as usize,
                 "{generator} payload length"
             );
         }

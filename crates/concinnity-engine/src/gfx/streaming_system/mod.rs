@@ -251,8 +251,8 @@ impl StreamingState {
                     }
                 }
             }
-            streamer.drain_completed(self.frame_count, |slot, w, h, px| {
-                if let Err(e) = backend.update_texture_slot(slot, w, h, px) {
+            streamer.drain_completed(self.frame_count, |slot, image| {
+                if let Err(e) = backend.update_texture_slot(slot, image) {
                     tracing::warn!("StreamingSystem: texture upload slot {}: {}", slot, e);
                 }
             });
@@ -561,9 +561,7 @@ mod tests {
     impl PayloadSource for ConstTexture {
         fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
             Ok(DecodedTexture {
-                width: 1,
-                height: 1,
-                pixels: vec![1, 2, 3, 4],
+                image: crate::build::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
             })
         }
     }

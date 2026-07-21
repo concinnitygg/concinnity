@@ -659,9 +659,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn update_texture_slot(
             &mut self,
             _: usize,
-            _: u32,
-            _: u32,
-            _: &[u8],
+            _: &concinnity_core::build::texture::TextureImage,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -805,8 +803,13 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
         Ok(())
     }
-    fn update_texture_slot(&mut self, slot: usize, w: u32, h: u32, _: &[u8]) -> Result<(), String> {
-        self.texture_updates.push((slot, w, h));
+    fn update_texture_slot(
+        &mut self,
+        slot: usize,
+        image: &concinnity_core::build::texture::TextureImage,
+    ) -> Result<(), String> {
+        self.texture_updates
+            .push((slot, image.width(), image.height()));
         if self.fail_texture_updates {
             return Err("texture update rejected".to_string());
         }

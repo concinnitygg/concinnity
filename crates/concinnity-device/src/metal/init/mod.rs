@@ -45,6 +45,7 @@ use super::texture::{
     EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
     create_fallback_texture, create_hdr_targets, create_lut_texture, create_shadow_map_array,
     create_shadow_map_fallback, upload_color_lut, upload_environment_map, upload_texture,
+    upload_texture_image,
 };
 
 // The reusable hardware handles a live world reload (`cn editor` SAVE) hands
@@ -425,8 +426,8 @@ impl MtlContext {
             textures
                 .iter()
                 .enumerate()
-                .map(|(i, (w, h, pixels))| {
-                    upload_texture(&device, *w, *h, pixels)
+                .map(|(i, image)| {
+                    upload_texture_image(&device, image)
                         .map_err(|e| format!("texture[{}]: {}", i, e))
                 })
                 .collect::<Result<Vec<_>, _>>()?

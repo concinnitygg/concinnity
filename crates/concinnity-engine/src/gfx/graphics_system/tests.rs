@@ -230,11 +230,11 @@ fn quad_mesh_payload() -> Vec<u8> {
 
 // A w x h mid-gray RGBA image in the compiled texture payload format.
 fn texture_payload(w: u32, h: u32) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(8 + (w * h * 4) as usize);
-    bytes.extend_from_slice(&w.to_le_bytes());
-    bytes.extend_from_slice(&h.to_le_bytes());
-    bytes.extend(vec![0x7Fu8; (w * h * 4) as usize]);
-    bytes
+    crate::build::texture::serialise(&crate::build::texture::TextureImage::rgba8(
+        w,
+        h,
+        vec![0x7Fu8; (w * h * 4) as usize],
+    ))
 }
 
 // A representative renderable world: window + config + shaders + camera and

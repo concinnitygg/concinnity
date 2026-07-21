@@ -380,10 +380,15 @@ pub trait RenderBackend: SceneControl + Send {
     fn update_skinned_model(&mut self, _skinned_index: usize, _model: [[f32; 4]; 4]) {}
 
     // Texture streaming. Albedo and normal maps share one handle-indexed pool,
-    // so every streamed texture (whatever its role) flows through these.
+    // so every streamed texture (whatever its role) flows through these. The
+    // image carries its GPU format and mip chain: RGBA8 regenerates mips on
+    // upload, block-compressed formats upload their chain verbatim.
     fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-    fn update_texture_slot(&mut self, slot: usize, w: u32, h: u32, px: &[u8])
-    -> Result<(), String>;
+    fn update_texture_slot(
+        &mut self,
+        slot: usize,
+        image: &crate::build::texture::TextureImage,
+    ) -> Result<(), String>;
 
     // Mesh streaming.
     fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
@@ -1121,9 +1126,7 @@ mod tests {
         fn update_texture_slot(
             &mut self,
             _slot: usize,
-            _w: u32,
-            _h: u32,
-            _px: &[u8],
+            _image: &crate::build::texture::TextureImage,
         ) -> Result<(), String> {
             Ok(())
         }

@@ -418,10 +418,12 @@ impl DxContext {
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
+        image: &crate::build::texture::TextureImage,
     ) -> Result<(), String> {
+        // The streamed-slot SRV machinery below writes an RGBA8 view. Block-
+        // compressed upload on DirectX is a Windows-side follow-on; RGBA8
+        // sources (the majority) upload here today.
+        let (width, height, pixels) = image.base_rgba8()?;
         if slot >= self.descriptors.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -494,7 +496,8 @@ impl DxContext {
     // back. The grey is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.update_texture_slot(slot, 1, 1, &[128, 128, 128, 255])
+        let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        self.update_texture_slot(slot, &grey)
     }
 
     // Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.

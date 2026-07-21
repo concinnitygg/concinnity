@@ -878,8 +878,11 @@ impl DxContext {
             textures
                 .iter()
                 .enumerate()
-                .map(|(i, (w, h, px))| {
-                    upload_texture_resource(&device, &command_queue, *w, *h, px)
+                .map(|(i, image)| {
+                    let (w, h, px) = image
+                        .base_rgba8()
+                        .map_err(|e| format!("texture[{i}]: {e}"))?;
+                    upload_texture_resource(&device, &command_queue, w, h, px)
                         .map_err(|e| format!("texture[{i}]: {e}"))
                 })
                 .collect::<Result<Vec<_>, _>>()?

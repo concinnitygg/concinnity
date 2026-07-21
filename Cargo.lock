@@ -300,6 +300,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "basisu"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36056503b9996959defdfcf058811637fdf68a2e35a48ee8e39c89a787fe9cdc"
+dependencies = [
+ "portable-atomic",
+ "ruzstd 0.7.3",
+]
+
+[[package]]
 name = "bistro"
 version = "0.13.0"
 dependencies = [
@@ -632,6 +642,7 @@ dependencies = [
 name = "concinnity-cook"
 version = "0.13.0"
 dependencies = [
+ "basisu",
  "concinnity-blob",
  "concinnity-core",
  "concinnity-templates",
@@ -641,10 +652,12 @@ dependencies = [
  "gltf",
  "jpeg-decoder",
  "kira",
+ "ktx2",
  "png",
  "postcard",
  "pulldown-cmark",
  "rayon",
+ "ruzstd 0.8.3",
  "serde",
  "serde_json",
  "sha2",
@@ -2159,6 +2172,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ktx2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d50be8a24c37debdf3170be6ca396d5b5b165f37f94837891adac735ca416b8"
+dependencies = [
+ "bitflags 2.11.1",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3135,6 +3157,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
+name = "portable-atomic"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+
+[[package]]
 name = "postcard"
 version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3613,6 +3641,21 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+
+[[package]]
+name = "ruzstd"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "safe_arch"
@@ -4380,6 +4423,12 @@ dependencies = [
  "thiserror 1.0.69",
  "utf-8",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8464ec13c3691491391d9fce00f6416c9a48e46972f72d7865688be2080192c9"
 
 [[package]]
 name = "typenum"

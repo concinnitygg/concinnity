@@ -73,6 +73,87 @@ pub(super) fn upload_texture(
     Ok(texture)
 }
 
+// Upload a decoded texture into a 2-D MTLTexture. RGBA8 images take the CPU
+// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
+// their container mip chain verbatim, one level per `replaceRegion` with a
+// block-row stride. All Apple GPUs sample BC formats natively.
+pub(super) fn upload_texture_image(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    image: &concinnity_core::build::texture::TextureImage,
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+    use concinnity_core::build::texture::TextureFormat;
+    if image.format == TextureFormat::Rgba8 {
+        let mip = image
+            .mips
+            .first()
+            .ok_or("RGBA8 texture image has no mip level")?;
+        return upload_texture(device, mip.width, mip.height, &mip.data);
+    }
+
+    let (pixel_format, block_bytes) = match image.format {
+        TextureFormat::Bc1 => (MTLPixelFormat::BC1_RGBA, 8usize),
+        TextureFormat::Bc3 => (MTLPixelFormat::BC3_RGBA, 16),
+        TextureFormat::Bc5 => (MTLPixelFormat::BC5_RGUnorm, 16),
+        TextureFormat::Bc7 => (MTLPixelFormat::BC7_RGBAUnorm, 16),
+        TextureFormat::Rgba8 => unreachable!("RGBA8 handled above"),
+    };
+
+    let base = image
+        .mips
+        .first()
+        .ok_or("compressed texture image has no mip level")?;
+
+    let desc = MTLTextureDescriptor::new();
+    unsafe {
+        desc.setTextureType(MTLTextureType::Type2D);
+        desc.setPixelFormat(pixel_format);
+        desc.setWidth(base.width as usize);
+        desc.setHeight(base.height as usize);
+        desc.setMipmapLevelCount(image.mips.len());
+        desc.setUsage(MTLTextureUsage::ShaderRead);
+        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    }
+    let texture = device
+        .newTextureWithDescriptor(&desc)
+        .ok_or("failed to create compressed MTLTexture")?;
+
+    for (mip, level) in image.mips.iter().enumerate() {
+        let blocks_x = level.width.div_ceil(4) as usize;
+        let blocks_y = level.height.div_ceil(4) as usize;
+        let bytes_per_row = blocks_x * block_bytes;
+        let needed = bytes_per_row * blocks_y;
+        if level.data.len() < needed {
+            return Err(format!(
+                "compressed mip {} ({}x{}) is {} bytes, need {}",
+                mip,
+                level.width,
+                level.height,
+                level.data.len(),
+                needed
+            ));
+        }
+        unsafe {
+            use objc2_metal::MTLRegion;
+            let region = MTLRegion {
+                origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                size: objc2_metal::MTLSize {
+                    width: level.width as usize,
+                    height: level.height as usize,
+                    depth: 1,
+                },
+            };
+            texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                mip,
+                std::ptr::NonNull::new(level.data.as_ptr() as *mut _)
+                    .ok_or("compressed mip data is empty")?,
+                bytes_per_row,
+            );
+        }
+    }
+    Ok(texture)
+}
+
 // Create a 1x1 opaque white RGBA texture used when no Texture asset is present.
 pub(super) fn create_fallback_texture(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,

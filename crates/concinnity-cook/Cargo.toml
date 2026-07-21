@@ -35,6 +35,9 @@ fontdue = "0.9"
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras"] }
 jpeg-decoder = "0.3"
 kira = "0.12"
+ktx2 = "0.5"
+basisu = "=0.1.0"
+ruzstd = "0.8"
 png = "0.18.1"
 pulldown-cmark = { version = "0.13", default-features = false }
 rayon = "1"
