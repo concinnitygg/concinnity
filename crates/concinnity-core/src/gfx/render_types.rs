@@ -105,6 +105,10 @@ pub struct MaterialUniforms {
     // (R = occlusion, G = roughness, B = metalness). `0` means no map: the
     // shader keeps the scalar `roughness`/`metallic` and full occlusion.
     pub orm_map_index: u32,
+    // Alpha-cutout threshold in [0, 1]; 0 disables the test. Non-zero makes the
+    // fragment shader discard any texel whose albedo alpha falls below it, which
+    // is how foliage and decal cards punch holes while staying in the opaque pass.
+    pub alpha_cutoff: f32,
     // Base surface opacity in [0, 1]; 1 = fully opaque (the default). Only
     // meaningful with `transparent`: it drives the glass alpha in the
     // transparent pass. Carried on the material so it rides Material ->
@@ -140,6 +144,7 @@ impl MaterialUniforms {
         normal_secondary_index: 0,
         emissive_map_index: 0,
         orm_map_index: 0,
+        alpha_cutoff: 0.0,
         opacity: 1.0,
         transparent: 0,
         see_through: 0,
@@ -1002,7 +1007,7 @@ impl DrawObject {
 // cull kernel can read object bounds straight from this buffer without a
 // layout change.
 //
-// Layout (160 bytes) must stay in sync with the `GpuObjectData` struct in
+// Layout (176 bytes) must stay in sync with the `GpuObjectData` struct in
 // every backend's bindless static shader: `default.metal` (Metal), the inline
 // `StructuredBuffer<GpuObjectData>` HLSL in `directx/pipeline.rs`, and the
 // inline `std430` SSBO GLSL in `vulkan/pipeline.rs`. The `gpu_object_data_*`
@@ -1061,6 +1066,12 @@ pub struct GpuObjectData {
     // Bindless-pool index for the packed occlusion/roughness/metalness map
     // (0 = none). Mirrors `MaterialUniforms::orm_map_index`.
     pub orm_map_index: u32,
+    // Alpha-cutout threshold in [0, 1]; 0 disables the test. Mirrors
+    // `MaterialUniforms::alpha_cutoff`.
+    pub alpha_cutoff: f32,
+    // Rounds the record to a 16-byte multiple so an array of them keeps every
+    // `model` matrix 16-byte aligned.
+    pub _pad: [f32; 3],
 }
 
 // Resolve an albedo `texture_slot` to its index in the handle-indexed texture
@@ -1113,6 +1124,8 @@ pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32
         normal_secondary_index: obj.material.normal_secondary_index,
         emissive_map_index: obj.material.emissive_map_index,
         orm_map_index: obj.material.orm_map_index,
+        alpha_cutoff: obj.material.alpha_cutoff,
+        _pad: [0.0; 3],
     }
 }
 
@@ -1151,6 +1164,8 @@ pub fn pack_instance_record(
         normal_secondary_index: cluster.material.normal_secondary_index,
         emissive_map_index: cluster.material.emissive_map_index,
         orm_map_index: cluster.material.orm_map_index,
+        alpha_cutoff: cluster.material.alpha_cutoff,
+        _pad: [0.0; 3],
     }
 }
 
@@ -1227,6 +1242,8 @@ pub fn pack_skinned_record(
         normal_secondary_index: obj.material.normal_secondary_index,
         emissive_map_index: obj.material.emissive_map_index,
         orm_map_index: obj.material.orm_map_index,
+        alpha_cutoff: obj.material.alpha_cutoff,
+        _pad: [0.0; 3],
     }
 }
 
@@ -1565,7 +1582,7 @@ mod tests {
         // The MSL `GpuObjectData` in default.metal lays the struct out with
         // float4x4's 16-byte alignment; the offsets below must match it
         // exactly or the bindless static pass reads garbage.
-        assert_eq!(size_of::<GpuObjectData>(), 160);
+        assert_eq!(size_of::<GpuObjectData>(), 176);
         assert_eq!(offset_of!(GpuObjectData, model), 0);
         assert_eq!(offset_of!(GpuObjectData, tint), 64);
         assert_eq!(offset_of!(GpuObjectData, roughness), 76);
@@ -1583,6 +1600,8 @@ mod tests {
         assert_eq!(offset_of!(GpuObjectData, normal_secondary_index), 148);
         assert_eq!(offset_of!(GpuObjectData, emissive_map_index), 152);
         assert_eq!(offset_of!(GpuObjectData, orm_map_index), 156);
+        assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 160);
+        assert_eq!(offset_of!(GpuObjectData, _pad), 164);
         // Size is a multiple of 16 so an array of records keeps every
         // float4x4 model matrix 16-byte aligned.
         assert_eq!(size_of::<GpuObjectData>() % 16, 0);
@@ -1617,7 +1636,7 @@ mod tests {
         // `tint` and `emissive` as packed_float3 (align 4), so the offsets line
         // up with this tightly-packed Rust struct. A plain float3 there would
         // 16-align `tint` and shift every following field.
-        assert_eq!(size_of::<MaterialUniforms>(), 76);
+        assert_eq!(size_of::<MaterialUniforms>(), 80);
         assert_eq!(offset_of!(MaterialUniforms, roughness), 0);
         assert_eq!(offset_of!(MaterialUniforms, metallic), 4);
         assert_eq!(offset_of!(MaterialUniforms, macro_variation), 8);
@@ -1630,9 +1649,10 @@ mod tests {
         assert_eq!(offset_of!(MaterialUniforms, normal_secondary_index), 52);
         assert_eq!(offset_of!(MaterialUniforms, emissive_map_index), 56);
         assert_eq!(offset_of!(MaterialUniforms, orm_map_index), 60);
-        assert_eq!(offset_of!(MaterialUniforms, opacity), 64);
-        assert_eq!(offset_of!(MaterialUniforms, transparent), 68);
-        assert_eq!(offset_of!(MaterialUniforms, see_through), 72);
+        assert_eq!(offset_of!(MaterialUniforms, alpha_cutoff), 64);
+        assert_eq!(offset_of!(MaterialUniforms, opacity), 68);
+        assert_eq!(offset_of!(MaterialUniforms, transparent), 72);
+        assert_eq!(offset_of!(MaterialUniforms, see_through), 76);
     }
 
     #[test]
@@ -1895,6 +1915,7 @@ mod tests {
                 normal_secondary_index: 0,
                 emissive_map_index: 0,
                 orm_map_index: 0,
+                alpha_cutoff: 0.0,
                 opacity: 1.0,
                 transparent: 0,
                 see_through: 0,

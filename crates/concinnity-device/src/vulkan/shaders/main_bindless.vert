@@ -15,7 +15,7 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
     float prefilter_mip_count; float _ep0; float _ep1;
 } view;
 
-// Layout must match the #[repr(C)] GpuObjectData in gfx::render_types (144
+// Layout must match the #[repr(C)] GpuObjectData in gfx::render_types (176
 // bytes) under std430: every vec3 is followed by a scalar so no padding drifts.
 struct GpuObjectData {
     mat4  model;
@@ -29,8 +29,12 @@ struct GpuObjectData {
     vec3  bb_max;    float secondary_blend_sharpness;
     uint  albedo_secondary_index;
     uint  normal_secondary_index;
-    uint  _pad2;
-    uint  _pad3;
+    uint  emissive_map_index;
+    uint  orm_map_index;
+    float alpha_cutoff;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBlock {

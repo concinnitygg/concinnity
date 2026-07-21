@@ -6,7 +6,7 @@
 // model. The cascade index is a per-ExecuteIndirect root constant at b2 (one
 // indirect draw per cascade), selecting which `light_vps[i]` to project through.
 //
-// Layout (160 bytes) must match the Rust GpuObjectData in gfx::render_types and
+// Layout (176 bytes) must match the Rust GpuObjectData in gfx::render_types and
 // the bindless fragment shader's struct. The VS only reads `model`, but the full
 // layout is required so `objects[object_id]` strides correctly.
 struct GpuObjectData
@@ -28,6 +28,10 @@ struct GpuObjectData
     uint normal_secondary_index;
     uint emissive_map_index;
     uint orm_map_index;
+    float alpha_cutoff;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 cbuffer ObjId : register(b0)

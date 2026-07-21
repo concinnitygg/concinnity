@@ -211,6 +211,8 @@ pub(super) fn metal_instance_records(
                 normal_secondary_index: idx.normal_secondary,
                 emissive_map_index: idx.emissive,
                 orm_map_index: idx.orm,
+                alpha_cutoff: cluster.material.alpha_cutoff,
+                _pad: [0.0; 3],
             });
         }
     }
@@ -350,6 +352,8 @@ impl MtlContext {
                 normal_secondary_index: idx.normal_secondary,
                 emissive_map_index: idx.emissive,
                 orm_map_index: idx.orm,
+                alpha_cutoff: obj.material.alpha_cutoff,
+                _pad: [0.0; 3],
             });
         }
         // Fold the instanced clusters into the same buffer: each instance's

@@ -88,6 +88,13 @@ pub struct Material {
     /// Default `0.5` matches the "smooth but visible" transition AAA
     /// terrain materials typically tune to.
     pub secondary_blend_sharpness: f32,
+    /// Alpha-cutout threshold in [0, 1]. When non-zero, a texel whose `albedo`
+    /// alpha falls below it is discarded outright, punching a hole in the
+    /// surface: this is how foliage, chain-link, and decal cards are drawn as
+    /// one opaque quad. 0 (the default) disables the test and keeps every texel.
+    /// Cutout is not glass: the surface still renders in the opaque pass, so
+    /// leave `transparent` and `see_through` off.
+    pub alpha_cutoff: f32,
     /// Surface opacity in [0, 1]. 1 = fully opaque (the default). Only
     /// meaningful when `transparent` is set: it drives how much of the scene
     /// behind the surface shows through the glass.
@@ -125,6 +132,7 @@ impl Default for Material {
             albedo_secondary: None,
             normal_secondary: None,
             secondary_blend_sharpness: 0.5,
+            alpha_cutoff: 0.0,
             opacity: 1.0,
             transparent: false,
             see_through: false,

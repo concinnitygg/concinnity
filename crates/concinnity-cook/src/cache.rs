@@ -77,7 +77,9 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // 7: every 2D texture payload switched to the tagged format (magic + format_id
 //    + per-mip records) so KTX2 / DDS can ship block-compressed mip chains; the
 //    old headerless RGBA8 bytes no longer parse (build::texture).
-const CACHE_FORMAT_VERSION: u32 = 7;
+// 8: the Material data resource gained `alpha_cutoff`, so its postcard bytes
+//    grew a field and cached records from before it no longer decode.
+const CACHE_FORMAT_VERSION: u32 = 8;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the component discriminant, the args JSON, a hash of every
@@ -139,8 +141,9 @@ fn hash_source_input(input: &SourceInput) -> Option<(String, [u8; 32])> {
 // entry lists are invalidated. v2: glass materials are detected (by FBX
 // transparency / name) and emitted smooth + translucent. v3: a skinned node
 // expands to SkinnedMesh + Animation entries instead of a static
-// Mesh / Model / Prop.
-const EXPAND_FORMAT_VERSION: u32 = 3;
+// Mesh / Model / Prop. v4: glTF materials carry their packed
+// metallic-roughness + emissive textures and an alpha-cutout threshold.
+const EXPAND_FORMAT_VERSION: u32 = 4;
 
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
 // deterministic function of the source file's contents, the import options,

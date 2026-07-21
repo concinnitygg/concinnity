@@ -146,6 +146,10 @@ struct GpuObjectData {
     uint  normal_secondary_index;
     uint  emissive_map_index;
     uint  orm_map_index;
+    float alpha_cutoff;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBlock {
@@ -462,6 +466,11 @@ void main() {
     }
 
     vec4 albedo_samp = texture(tex_pool[od.albedo_index], frag_uv);
+    // Alpha cutout: punch the texel out entirely so foliage and decal cards
+    // stay in the opaque pass. Disabled at cutoff 0.
+    if (od.alpha_cutoff > 0.0 && albedo_samp.a < od.alpha_cutoff) {
+        discard;
+    }
     vec3 albedo = albedo_samp.rgb * frag_color * tint;
 
     // Per-material emissive texture carries the colour (the scalar factor is a

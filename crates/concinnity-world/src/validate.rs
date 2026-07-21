@@ -121,6 +121,7 @@ pub fn material(mut args: Material) -> Material {
     args.macro_variation = args.macro_variation.clamp(0.0, 1.0);
     args.terrain_blend = args.terrain_blend.clamp(0.0, 1.0);
     args.secondary_blend_sharpness = args.secondary_blend_sharpness.clamp(0.0, 1.0);
+    args.alpha_cutoff = args.alpha_cutoff.clamp(0.0, 1.0);
     args.opacity = args.opacity.clamp(0.0, 1.0);
     // See-through glass is by definition transparent; opting into it implies
     // the transparent pass even if the author only set `see_through`.

@@ -1153,6 +1153,7 @@ impl GraphicsSystem {
                 normal_secondary_index: normal_secondary_slot,
                 emissive_map_index: emissive_map_slot,
                 orm_map_index: orm_map_slot,
+                alpha_cutoff: mat.alpha_cutoff,
                 opacity: mat.opacity,
                 transparent: u32::from(mat.transparent),
                 see_through: u32::from(mat.see_through),

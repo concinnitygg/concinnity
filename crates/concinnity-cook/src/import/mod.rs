@@ -20,15 +20,21 @@
 //   EmissiveColor -> emissive_map
 //
 // PBR mapping, glTF -> Concinnity Material:
-//   baseColorTexture    -> albedo
-//   baseColorFactor.rgb -> tint
-//   normalTexture       -> normal_map
-//   metallicFactor      -> metallic
-//   roughnessFactor     -> roughness
-//   emissiveFactor      -> emissive_factor
-// glTF metallic-roughness packed textures, occlusion textures, and alpha modes
-// are dropped for now; the demo scenes still render correctly without them.
+//   baseColorTexture         -> albedo
+//   baseColorFactor.rgb      -> tint
+//   normalTexture            -> normal_map
+//   metallicRoughnessTexture -> orm_map  (glTF packs G = roughness, B = metalness)
+//   emissiveTexture          -> emissive_map
+//   metallicFactor           -> metallic
+//   roughnessFactor          -> roughness
+//   emissiveFactor           -> emissive_factor
+//   alphaMode MASK           -> alpha_cutoff (from alphaCutoff, default 0.5)
+// occlusionTexture is dropped on purpose: the screen-space pass is the engine's
+// ambient-occlusion source, and `Material::orm_map` reserves its red channel for
+// that reason. alphaMode BLEND is dropped too, because `Material::transparent`
+// means refracting glass, not a blended card.
 
+mod gltf_material;
 mod rig;
 
 use std::collections::{HashMap, HashSet};
@@ -393,50 +399,18 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         .enumerate()
         .map(|(i, mat)| {
             let name = format!("{prefix}_mat_{i}");
-            let pbr = mat.pbr_metallic_roughness();
-            let base_color_factor = pbr.base_color_factor();
-            let mut args = serde_json::Map::new();
-
-            if let Some(info) = pbr.base_color_texture() {
-                let image_idx = info.texture().source().index();
-                args.insert(
-                    "albedo".to_string(),
-                    serde_json::Value::String(format!("{prefix}_tex_{image_idx}")),
+            let mapped = gltf_material::map_material(prefix, &mat);
+            if !mapped.extra_uv_sets.is_empty() {
+                tracing::warn!(
+                    "glTF material '{}' samples UV set(s) {:?}; only set 0 is imported, so those textures sample the wrong coordinates",
+                    mat.name().unwrap_or(&name),
+                    mapped.extra_uv_sets
                 );
             }
-            if let Some(info) = mat.normal_texture() {
-                let image_idx = info.texture().source().index();
-                args.insert(
-                    "normal_map".to_string(),
-                    serde_json::Value::String(format!("{prefix}_tex_{image_idx}")),
-                );
-            }
-            args.insert(
-                "tint".to_string(),
-                serde_json::json!([
-                    base_color_factor[0],
-                    base_color_factor[1],
-                    base_color_factor[2],
-                ]),
-            );
-            args.insert(
-                "metallic".to_string(),
-                serde_json::json!(pbr.metallic_factor()),
-            );
-            args.insert(
-                "roughness".to_string(),
-                serde_json::json!(pbr.roughness_factor()),
-            );
-            let e = mat.emissive_factor();
-            args.insert(
-                "emissive_factor".to_string(),
-                serde_json::json!([e[0], e[1], e[2]]),
-            );
-
             entries.push(serde_json::json!({
                 "name": name,
                 "type": "Material",
-                "args": serde_json::Value::Object(args),
+                "args": serde_json::Value::Object(mapped.args),
             }));
             name
         })
@@ -1355,11 +1329,33 @@ mod tests {
   ],
   "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "material": 0, "mode": 4}}]}}],
   "materials": [{{
-    "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}, "metallicFactor": 0.0, "roughnessFactor": 1.0}},
-    "normalTexture": {{"index": 0}}
+    "pbrMetallicRoughness": {{
+      "baseColorTexture": {{"index": 0}},
+      "metallicRoughnessTexture": {{"index": 1}},
+      "metallicFactor": 0.0,
+      "roughnessFactor": 1.0
+    }},
+    "normalTexture": {{"index": 0}},
+    "emissiveTexture": {{"index": 2}},
+    "emissiveFactor": [1.0, 1.0, 1.0],
+    "occlusionTexture": {{"index": 3}}
+  }}, {{
+    "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}}},
+    "alphaMode": "MASK",
+    "alphaCutoff": 0.25
+  }}, {{
+    "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}}},
+    "alphaMode": "BLEND"
+  }}, {{
+    "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0, "texCoord": 1}}}}
   }}],
-  "textures": [{{"source": 0}}],
-  "images": [{{"bufferView": 2, "mimeType": "image/png"}}],
+  "textures": [{{"source": 0}}, {{"source": 1}}, {{"source": 2}}, {{"source": 3}}],
+  "images": [
+    {{"bufferView": 2, "mimeType": "image/png"}},
+    {{"bufferView": 2, "mimeType": "image/png"}},
+    {{"bufferView": 2, "mimeType": "image/png"}},
+    {{"bufferView": 2, "mimeType": "image/png"}}
+  ],
   "accessors": [
     {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}},
     {{"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"}}
@@ -1832,10 +1828,38 @@ mod tests {
         assert_eq!(tex["args"]["source"], serde_json::json!(path));
         assert_eq!(tex["args"]["image_index"], serde_json::json!(0));
 
-        // The material binds that texture as both albedo and normal map.
+        // The material binds that texture as both albedo and normal map, and
+        // carries the packed metallic-roughness + emissive images from the file.
         let mat = find(&entries, "scn_mat_0", "Material");
         assert_eq!(mat["args"]["albedo"], "scn_tex_0");
         assert_eq!(mat["args"]["normal_map"], "scn_tex_0");
+        assert_eq!(mat["args"]["orm_map"], "scn_tex_1");
+        assert_eq!(mat["args"]["emissive_map"], "scn_tex_2");
+        assert_eq!(
+            mat["args"]["emissive_factor"],
+            serde_json::json!([1.0, 1.0, 1.0])
+        );
+        // The source's occlusion texture (image 3) is deliberately unwired:
+        // ambient occlusion comes from the screen-space pass, and `orm_map`
+        // reserves its red channel for exactly that reason.
+        assert!(
+            mat["args"]
+                .as_object()
+                .expect("material args")
+                .values()
+                .all(|v| v.as_str() != Some("scn_tex_3")),
+            "the occlusion image must not be bound: {}",
+            mat["args"]
+        );
+
+        // alphaMode MASK becomes a cutout threshold; BLEND stays unmapped
+        // (`transparent` means refracting glass, not a blended card).
+        let cutout = find(&entries, "scn_mat_1", "Material");
+        assert_eq!(cutout["args"]["alpha_cutoff"], serde_json::json!(0.25));
+        let blended = find(&entries, "scn_mat_2", "Material");
+        assert!(blended["args"].get("alpha_cutoff").is_none());
+        assert!(blended["args"].get("transparent").is_none());
+        assert!(mat["args"].get("alpha_cutoff").is_none());
 
         // The second node draws the same mesh but carries no name, so it is
         // named after its walk order instead.
@@ -1845,6 +1869,42 @@ mod tests {
             unnamed["args"]["position"],
             serde_json::json!([5.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    #[ignore = "needs the local Blender pbr_maps fixture under private/assets"]
+    fn a_blender_authored_glb_keeps_its_packed_maps_and_cutout() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../private/assets/models/pbr_maps/pbr_maps.glb"
+        );
+        let opts = ImportOptions {
+            name_prefix: "pbr".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path, &opts).expect("expand glb");
+
+        // Metal sphere: a packed metallic-roughness image, no cutout.
+        let plate = find(&entries, "pbr_mat_0", "Material");
+        assert_eq!(plate["args"]["albedo"], "pbr_tex_0");
+        assert_eq!(plate["args"]["orm_map"], "pbr_tex_1");
+        assert!(plate["args"].get("alpha_cutoff").is_none());
+
+        // Banded emissive cube: the map plus the factor that scales it.
+        let glow = find(&entries, "pbr_mat_1", "Material");
+        assert_eq!(glow["args"]["emissive_map"], "pbr_tex_2");
+        assert_eq!(glow["args"]["albedo"], "pbr_tex_3");
+        assert_eq!(
+            glow["args"]["emissive_factor"],
+            serde_json::json!([1.0, 1.0, 1.0])
+        );
+
+        // Leaf card: MASK with no explicit alphaCutoff takes the glTF default,
+        // and stays out of the transparent (glass) pass.
+        let leaf = find(&entries, "pbr_mat_2", "Material");
+        assert_eq!(leaf["args"]["alpha_cutoff"], serde_json::json!(0.5));
+        assert!(leaf["args"].get("transparent").is_none());
+        assert!(leaf["args"].get("see_through").is_none());
     }
 
     #[test]

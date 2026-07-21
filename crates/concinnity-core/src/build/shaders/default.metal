@@ -161,8 +161,8 @@ struct ModelUniforms {
 // Per-object record for the bindless static main pass, bound at buffer(9) and
 // indexed by the object id delivered through [[base_instance]]. Replaces the
 // per-draw ModelUniforms + MaterialUniforms + texture binds, so each static
-// draw call carries no state of its own. Layout (144 bytes) must match the
-// Rust GpuObjectData in ffi/render_types.rs. The bb_min/bb_max/cull_distance
+// draw call carries no state of its own. Layout (176 bytes) must match the
+// Rust GpuObjectData in gfx/render_types.rs. The bb_min/bb_max/cull_distance
 // fields are unused here, carried for the compute cull kernel.
 struct GpuObjectData {
     float4x4      model;
@@ -182,6 +182,10 @@ struct GpuObjectData {
     uint          normal_secondary_index;
     uint          emissive_map_index;
     uint          orm_map_index;
+    float         alpha_cutoff;
+    float         _pad0;
+    float         _pad1;
+    float         _pad2;
 };
 
 struct MaterialUniforms {
@@ -197,6 +201,8 @@ struct MaterialUniforms {
     uint   normal_secondary_index;
     uint   emissive_map_index;
     uint   orm_map_index;
+    // Non-zero discards texels whose albedo alpha falls below it (cutout foliage).
+    float  alpha_cutoff;
     // CPU-side routing fields (opacity + transparent + see-through flags).
     // Present so the struct size matches the Rust MaterialUniforms; the opaque
     // main pass never reads them (transparent meshes are skipped CPU-side before
@@ -934,6 +940,7 @@ static float4 shade_surface(
     float                    macro_variation,
     float                    terrain_blend,
     float                    secondary_blend_sharpness,
+    float                    alpha_cutoff,
     float3                   tint,
     float3                   emissive,
     constant LightUniforms  &lights,
@@ -1077,6 +1084,11 @@ static float4 shade_surface(
         float3 B  = cross(N0, T);
         float3 ns = normal_tex.sample(tex_sampler, in.uv).xyz * 2.0 - 1.0;
         N  = normalize(float3x3(T, B, N0) * ns);
+    }
+    // Alpha cutout: punch the texel out entirely so foliage and decal cards
+    // stay in the opaque pass. Disabled at cutoff 0.
+    if (alpha_cutoff > 0.0 && texel.a < alpha_cutoff) {
+        discard_fragment();
     }
     // Break up visible tiling on large surfaces (no-op when strength is 0).
     albedo *= macro_variation_factor(in.world_pos, macro_variation);
@@ -1376,7 +1388,7 @@ fragment float4 fragment_main(
     return shade_surface(
         in, view, probes,
         mat.roughness, mat.metallic, mat.macro_variation,
-        mat.terrain_blend, mat.secondary_blend_sharpness,
+        mat.terrain_blend, mat.secondary_blend_sharpness, mat.alpha_cutoff,
         mat.tint, mat.emissive,
         lights, local_lights, spot_shadows, area_lights, cluster, cluster_light_list, shadow, tex, normal_tex, tex, normal_tex,
         // No emissive / ORM maps on the legacy per-draw path: pass the albedo
@@ -1451,7 +1463,7 @@ fragment float4 fragment_main_bindless(
     return shade_surface(
         in, view, probes,
         obj.roughness, obj.metallic, obj.macro_variation,
-        obj.terrain_blend, obj.secondary_blend_sharpness,
+        obj.terrain_blend, obj.secondary_blend_sharpness, obj.alpha_cutoff,
         obj.tint, obj.emissive,
         lights, local_lights, spot_shadows, area_lights, cluster, cluster_light_list, shadow,
         tex.tex_pool[obj.albedo_index],

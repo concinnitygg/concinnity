@@ -1,6 +1,6 @@
 #pragma pack_matrix(column_major)
 
-// Layout (160 bytes) must match the Rust GpuObjectData in gfx::render_types and
+// Layout (176 bytes) must match the Rust GpuObjectData in gfx::render_types and
 // the bindless fragment shader's struct. The vertex shader only reads `model`,
 // but the full layout is required so `objects[object_id]` strides correctly
 // through the per-object buffer.
@@ -23,6 +23,10 @@ struct GpuObjectData
     uint normal_secondary_index;
     uint emissive_map_index;
     uint orm_map_index;
+    float alpha_cutoff;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 cbuffer ObjId : register(b0)

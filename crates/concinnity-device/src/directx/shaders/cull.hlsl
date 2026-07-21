@@ -17,8 +17,12 @@ struct GpuObjectData
     float secondary_blend_sharpness;
     uint albedo_secondary_index;
     uint normal_secondary_index;
-    uint _pad2;
-    uint _pad3;
+    uint emissive_map_index;
+    uint orm_map_index;
+    float alpha_cutoff;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 struct GpuDrawArgs
