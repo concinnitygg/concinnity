@@ -713,7 +713,13 @@ mod tests {
         assert!(type_renders("text_label"));
         assert!(type_renders("GraphicsConfig"));
         assert!(type_renders("EnvironmentMap"));
+        // A skinned mesh is placed directly and rendered, so its presence
+        // renders even without any static Mesh/Prop in the world.
+        assert!(type_renders("SkinnedMesh"));
+        assert!(type_renders("skinned_mesh"));
         assert!(!type_renders("Window"));
+        // A raw Mesh is inert geometry (rendered only through a Prop/Model), so
+        // unlike SkinnedMesh it does not by itself render.
         assert!(!type_renders("Mesh"));
         assert!(!type_renders("NotARealType"));
     }

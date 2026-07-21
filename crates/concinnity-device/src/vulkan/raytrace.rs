@@ -303,10 +303,10 @@ impl DeviceBuffer {
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.comp`): set 0 = [src skinned verts, joint palette, deformed output]
-// (three storage buffers) + a 16-byte `SkinParams` push-constant block. Built in
-// `build_rt_accel` (gated on RT) and held on `RtAccelData`; mirrors DirectX's
-// `SkinPipeline` / Metal's `skin_pipeline`.
+// (`rt_skin.comp`): set 0 = [src skinned verts, joint palette, deformed output,
+// morph deltas, morph weights] (five storage buffers) + a 16-byte `SkinParams`
+// push-constant block. Built in `build_rt_accel` (gated on RT) and held on
+// `RtAccelData`; mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     set_layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
@@ -315,9 +315,10 @@ pub(super) struct SkinPipeline {
     // the first `rebuild_skinned` (the skinned object count is unknown at init,
     // before `upload_skinned` runs). Indexed `[frame_idx][object]`; rewritten in
     // place each rebuild at the current frame's slot (fence-gated, so safe, like
-    // the RT resolve set's per-frame re-point).
+    // the RT resolve set's per-frame re-point). `upload_skinned_morphs` re-points
+    // the morph bindings (3, 4) on the main fold's sets.
     descriptor_pool: vk::DescriptorPool,
-    sets: Vec<Vec<vk::DescriptorSet>>,
+    pub(in crate::vulkan) sets: Vec<Vec<vk::DescriptorSet>>,
 }
 
 impl SkinPipeline {
@@ -832,7 +833,9 @@ pub(super) fn build_skin_pipeline(
     let spv = compile_glsl_rt(&src, shaderc::ShaderKind::Compute, "rt_skin.comp")?;
     let module = spv_module(device, &spv)?;
 
-    let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..3u32)
+    // Five storage buffers: src verts (0), joint palette (1), deformed output
+    // (2), morph deltas (3), morph weights (4).
+    let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..5u32)
         .map(|b| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(b)
@@ -2062,6 +2065,10 @@ impl RtAccelData {
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             let set = frame_sets[*obj_idx];
+            // The RT skin runs at bind pose (before per-frame morph weights
+            // exist); morphing happens in the per-frame main fold. Bindings 3/4
+            // are dummies (the src VB) and target_count is 0, so they go unread.
+            let dummy_info = src_info;
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -2078,6 +2085,16 @@ impl RtAccelData {
                     .dst_binding(2)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&dst_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(3)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&dummy_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(4)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&dummy_info)),
             ];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
@@ -2101,7 +2118,7 @@ impl RtAccelData {
                 vertex_base: obj.vertex_base as u32,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
-                _pad: 0,
+                target_count: 0,
             };
             let bytes = unsafe {
                 std::slice::from_raw_parts(
@@ -2541,7 +2558,7 @@ pub(super) fn ensure_skin_sets(
     let total = (frames * object_count) as u32;
     let pool_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(total * 3);
+        .descriptor_count(total * 5);
     let pool = unsafe {
         device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -2650,6 +2667,10 @@ impl super::context::VkContext {
                     .buffer(deformed_buf.buffer)
                     .offset(0)
                     .range(vk::WHOLE_SIZE);
+                // Morph bindings 3 (deltas) + 4 (weights) start as dummies (the
+                // src VB); `upload_skinned_morphs` re-points them for objects that
+                // carry morph targets. target_count == 0 leaves them unread.
+                let dummy_info = src_info;
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
@@ -2666,6 +2687,16 @@ impl super::context::VkContext {
                         .dst_binding(2)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&dst_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(3)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&dummy_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(4)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&dummy_info)),
                 ];
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
@@ -2713,7 +2744,12 @@ impl super::context::VkContext {
                 vertex_base: obj.vertex_base as u32,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
-                _pad: 0,
+                target_count: self
+                    .skinned
+                    .morph_target_counts
+                    .get(o)
+                    .copied()
+                    .unwrap_or(0),
             };
             let bytes = unsafe {
                 std::slice::from_raw_parts(

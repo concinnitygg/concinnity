@@ -79,6 +79,7 @@ impl RenderBackend for VkContext {
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
         fn retire_draw_object(&mut self, draw_idx: usize);
         fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
+        fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]);
         fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>);
         fn spawn_skinned_instance(&mut self, template_skinned_index: usize, model: [[f32; 4]; 4]) -> Option<usize>;
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
@@ -124,6 +125,18 @@ impl RenderBackend for VkContext {
         // Vulkan compiles the vertex / shadow paths from inline GLSL; only the
         // fragment shader is supplied as a precompiled SPIR-V payload.
         self.upload_skinned(vertices, indices, draw_objects, frag_bytes)
+    }
+
+    // Trait method returns unit; the inherent returns Result (buffer
+    // allocation can fail), so the forwarder logs instead of propagating.
+    fn upload_skinned_morphs(
+        &mut self,
+        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) {
+        debug_assert_main_thread("upload_skinned_morphs");
+        if let Err(e) = VkContext::upload_skinned_morphs(self, morphs) {
+            tracing::error!("Vulkan: morph target upload failed: {}", e);
+        }
     }
 
     // Inherent particle methods carry the `_particle_` infix; the trait names

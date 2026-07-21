@@ -202,6 +202,20 @@ pub(super) struct SkinnedState {
     pub skin_pipeline: Option<super::raytrace::SkinPipeline>,
     pub deformed_buffers: Vec<ID3D12Resource>,
     pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
+    // Morph targets, parallel to `draw_objects`. `morph_delta_buffers[i]` is the
+    // per-mesh dense target-major `MorphDelta` buffer (instance copies share the
+    // template's resource) or `None` for a mesh without morph targets;
+    // `morph_target_counts[i]` is its target count (0 = none). `morph_weights[i]`
+    // is the object's current weights (empty without morphs), rewritten by
+    // `update_morph_weights` and copied into the per-frame `morph_weight_buffers`
+    // ([frame_idx][skinned_idx], one f32 per target, persistently mapped) by
+    // `upload_morph_weights`. `morph_weight_buffers` is empty when no skinned
+    // object carries morphs.
+    pub morph_delta_buffers: Vec<Option<ID3D12Resource>>,
+    pub morph_target_counts: Vec<u32>,
+    pub morph_weights: Vec<Vec<f32>>,
+    pub morph_weight_buffers: Vec<Vec<ID3D12Resource>>,
+    pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
     // `false` until the deformed-vertex ring has been posed at least one full
     // frame; `true` once a prior frame's `encode_skin` has filled the slot the
     // next frame reads as its velocity history. While false the GPU-driven

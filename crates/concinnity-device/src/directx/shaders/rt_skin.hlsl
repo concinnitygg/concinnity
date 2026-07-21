@@ -16,7 +16,7 @@ cbuffer SkinParams : register(b0)
     uint vertex_base;   // first vertex of this object in the shared buffers
     uint vertex_count;  // vertices to deform this dispatch
     uint joint_count;   // palette size (joint indices are clamped below it)
-    uint _pad;
+    uint target_count;  // morph targets in t2; 0 = no morphing
 };
 
 // t0: bind-pose skinned vertices, raw. The shader fetches the 80-byte
@@ -34,9 +34,16 @@ StructuredBuffer<ColMat4> palette : register(t1);
 // u0: deformed (posed) vertices in the static 56-byte `Vertex` layout
 // (gfx::mesh_payload::Vertex): pos@0, normal@12, tangent@24, color@36, uv@48.
 RWByteAddressBuffer dst : register(u0);
+// t2: dense target-major morph deltas (gfx::mesh_payload::MorphDelta, 24-byte
+// stride: position@0, normal@12), indexed by this object's local vertex index.
+// Dummy-bound (target_count == 0) when the object has no morph targets.
+ByteAddressBuffer morph_deltas : register(t2);
+// t3: one f32 morph weight per target. Dummy-bound when target_count == 0.
+ByteAddressBuffer morph_weights : register(t3);
 
 static const uint SKINNED_VERTEX_STRIDE = 80;
 static const uint VERTEX_STRIDE = 56;
+static const uint MORPH_DELTA_STRIDE = 24;
 
 // Two u16 joint indices are packed into each 32-bit word the index pair lives
 // in; `joints[4]` occupies the 8 bytes at offset 56. Load the two words and
@@ -63,6 +70,18 @@ void rt_skin(uint3 gid : SV_DispatchThreadID)
     float2 uv      = asfloat(src.Load2(sbase + 48));
     uint2  jw      = load_joints(sbase);
     float4 weights = asfloat(src.Load4(sbase + 64));
+
+    // Morph deltas apply in bind space, before the skin matrix; the deltas
+    // buffer is target-major and indexed by this object's LOCAL vertex index.
+    for (uint t = 0; t < target_count; ++t)
+    {
+        float w = asfloat(morph_weights.Load(t * 4));
+        if (abs(w) < 1e-5) continue;
+        uint dbase = (t * vertex_count + gid.x) * MORPH_DELTA_STRIDE;
+        pos    += w * asfloat(morph_deltas.Load3(dbase + 0));
+        normal += w * asfloat(morph_deltas.Load3(dbase + 12));
+    }
+    normal = normalize(normal);
 
     uint j0 = jw.x & 0xFFFFu;
     uint j1 = (jw.x >> 16) & 0xFFFFu;

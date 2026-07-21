@@ -1514,6 +1514,15 @@ impl DxContext {
         self.skinned.joint_ptrs = joint_ptrs;
         self.skinned.draw_objects = draw_objects;
 
+        // Morph targets are attached by a later `upload_skinned_morphs`; until
+        // then every object is morphless (a re-upload / hot-reload resets here).
+        let n_objects = self.skinned.draw_objects.len();
+        self.skinned.morph_delta_buffers = (0..n_objects).map(|_| None).collect();
+        self.skinned.morph_target_counts = vec![0; n_objects];
+        self.skinned.morph_weights = vec![Vec::new(); n_objects];
+        self.skinned.morph_weight_buffers = Vec::new();
+        self.skinned.morph_weight_ptrs = Vec::new();
+
         // GPU-driven main-pass skinning fold. When the bindless cull path is
         // active, build the `rt_skin` compute pipeline (reused independently of
         // RT) + one UAV-writable deformed-vertex buffer per frame-in-flight, sized
@@ -1829,6 +1838,137 @@ impl DxContext {
     // GPU virtual address of skinned object `i`'s joint buffer for `frame_idx`.
     pub(super) fn skinned_joint_gva(&self, frame_idx: usize, i: usize) -> u64 {
         unsafe { self.skinned.joint_buffers[frame_idx][i].GetGPUVirtualAddress() }
+    }
+
+    // Attach morph-target delta buffers to the skinned draw objects. `morphs[i]`
+    // pairs with draw object `i`; instance copies share their template's `Arc`,
+    // so each unique delta set becomes one GPU buffer. Allocates the per-frame
+    // weight upload buffers (one f32 per target per object) when any object
+    // carries morphs. Called once after `upload_skinned`.
+    pub(super) fn upload_skinned_morphs(
+        &mut self,
+        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) -> Result<(), String> {
+        use std::collections::HashMap;
+
+        let n = self.skinned.draw_objects.len();
+        let mut delta_buffers: Vec<Option<ID3D12Resource>> = Vec::with_capacity(n);
+        let mut target_counts: Vec<u32> = Vec::with_capacity(n);
+        let mut weights: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut by_source: HashMap<usize, (ID3D12Resource, u32)> = HashMap::new();
+
+        for m in morphs.iter().take(n) {
+            match m {
+                None => {
+                    delta_buffers.push(None);
+                    target_counts.push(0);
+                    weights.push(Vec::new());
+                }
+                Some(data) => {
+                    let key = std::sync::Arc::as_ptr(data) as usize;
+                    let (buf, count) = match by_source.get(&key) {
+                        Some(entry) => entry.clone(),
+                        None => {
+                            let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
+                            let buf = upload_buffer(
+                                &self.device,
+                                &self.command_queue,
+                                bytes,
+                                D3D12_RESOURCE_STATE_GENERIC_READ,
+                            )?;
+                            let count = data.target_count() as u32;
+                            by_source.insert(key, (buf.clone(), count));
+                            (buf, count)
+                        }
+                    };
+                    delta_buffers.push(Some(buf));
+                    weights.push(vec![0.0; count as usize]);
+                    target_counts.push(count);
+                }
+            }
+        }
+        // Pad the tail morphless if `morphs` was shorter than `draw_objects`.
+        while delta_buffers.len() < n {
+            delta_buffers.push(None);
+            target_counts.push(0);
+            weights.push(Vec::new());
+        }
+
+        // Per-(frame, object) weight upload buffers, one f32 per target (>= 1 so
+        // every slot has a valid GVA), persistently mapped and zero-seeded. Only
+        // allocated when some object carries morphs.
+        let (mut weight_buffers, mut weight_ptrs) = (Vec::new(), Vec::new());
+        if target_counts.iter().any(|&c| c > 0) {
+            for _ in 0..FRAMES {
+                let mut frame_bufs: Vec<ID3D12Resource> = Vec::with_capacity(n);
+                let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(n);
+                for count in &target_counts {
+                    let bytes = ((*count).max(1) as u64) * std::mem::size_of::<f32>() as u64;
+                    let buf = create_buffer(
+                        &self.device,
+                        bytes,
+                        D3D12_HEAP_TYPE_UPLOAD,
+                        D3D12_RESOURCE_STATE_GENERIC_READ,
+                    )
+                    .map_err(|e| format!("morph weight buf: {e}"))?;
+                    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                    unsafe {
+                        buf.Map(0, None, Some(&mut ptr))
+                            .map_err(|e| format!("map morph weight buf: {e}"))?;
+                        std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize);
+                    }
+                    frame_bufs.push(buf);
+                    frame_ptrs.push(ptr as *mut u8);
+                }
+                weight_buffers.push(frame_bufs);
+                weight_ptrs.push(frame_ptrs);
+            }
+        }
+
+        self.skinned.morph_delta_buffers = delta_buffers;
+        self.skinned.morph_target_counts = target_counts;
+        self.skinned.morph_weights = weights;
+        self.skinned.morph_weight_buffers = weight_buffers;
+        self.skinned.morph_weight_ptrs = weight_ptrs;
+        Ok(())
+    }
+
+    // Replace one skinned object's morph weights. Out-of-range indices and
+    // objects without morph targets are ignored; extra weights are dropped.
+    pub(super) fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+        if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
+            for (i, w) in slot.iter_mut().enumerate() {
+                *w = weights.get(i).copied().unwrap_or(0.0);
+            }
+        }
+    }
+
+    // Copy this frame's morph weights into the per-frame weight buffers. Called
+    // from `record_frame` alongside `upload_joint_matrices`. A no-op when no
+    // object carries morphs (the buffers are empty).
+    pub(super) fn upload_morph_weights(&self, frame_idx: usize) {
+        let Some(frame_ptrs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
+            return;
+        };
+        for (i, w) in self.skinned.morph_weights.iter().enumerate() {
+            let (Some(&dst), false) = (frame_ptrs.get(i), w.is_empty()) else {
+                continue;
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    w.as_ptr() as *const u8,
+                    dst,
+                    w.len() * std::mem::size_of::<f32>(),
+                );
+            }
+        }
+    }
+
+    // GPU virtual address of skinned object `i`'s morph weight buffer for
+    // `frame_idx`, or `None` when no weight buffers are allocated.
+    pub(super) fn morph_weight_gva(&self, frame_idx: usize, i: usize) -> Option<u64> {
+        let buf = self.skinned.morph_weight_buffers.get(frame_idx)?.get(i)?;
+        Some(unsafe { buf.GetGPUVirtualAddress() })
     }
 }
 

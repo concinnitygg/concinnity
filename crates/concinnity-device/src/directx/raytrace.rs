@@ -428,7 +428,8 @@ const SKIN_PARAMS_DWORDS: u32 = 4;
 
 // Root signature for the `rt_skin` compute kernel: `SkinParams` root constants at
 // b0, the skinned vertex buffer as a root SRV (t0), the joint palette as a root
-// SRV (t1), and the deformed output as a root UAV (u0).
+// SRV (t1), the deformed output as a root UAV (u0), the morph deltas as a root
+// SRV (t2), and the morph weights as a root SRV (t3).
 fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let params = [
         // [0] b0 SkinParams root constants
@@ -471,6 +472,28 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
                     ShaderRegister: 0,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
+        // [4] t2 morph deltas (raw, dense target-major)
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 2,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
+        // [5] t3 morph weights (raw, one f32 per target)
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 3,
                     RegisterSpace: 0,
                 },
             },
@@ -1657,11 +1680,15 @@ impl RtAccelData {
             if joint_gva == 0 {
                 continue;
             }
+            // The RT skin runs at bind pose (before per-frame morph weights
+            // exist); morphing happens in the per-frame main fold. `target_count
+            // == 0` leaves t2/t3 unread, so a dummy binding (the vertex buffer)
+            // satisfies the root SRVs.
             let params = SkinParams {
                 vertex_base: obj.vertex_base as u32,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
-                _pad: 0,
+                target_count: 0,
             };
             unsafe {
                 cmd.SetComputeRoot32BitConstants(
@@ -1673,6 +1700,8 @@ impl RtAccelData {
                 cmd.SetComputeRootShaderResourceView(1, skinned.vertex_gva);
                 cmd.SetComputeRootShaderResourceView(2, joint_gva);
                 cmd.SetComputeRootUnorderedAccessView(3, deformed_gva);
+                cmd.SetComputeRootShaderResourceView(4, skinned.vertex_gva);
+                cmd.SetComputeRootShaderResourceView(5, skinned.vertex_gva);
                 cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
             }
         }
@@ -1871,12 +1900,28 @@ impl super::context::DxContext {
         }
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
             let joint_gva = self.skinned_joint_gva(frame_idx, i);
+            let target_count = self
+                .skinned
+                .morph_target_counts
+                .get(i)
+                .copied()
+                .unwrap_or(0);
             let params = SkinParams {
                 vertex_base: obj.vertex_base as u32,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
-                _pad: 0,
+                target_count,
             };
+            // Real morph deltas + this frame's weights when the object morphs;
+            // otherwise the vertex buffer as an unread dummy (target_count == 0).
+            let delta_gva = self
+                .skinned
+                .morph_delta_buffers
+                .get(i)
+                .and_then(|b| b.as_ref())
+                .map(|b| unsafe { b.GetGPUVirtualAddress() })
+                .unwrap_or(src_gva);
+            let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
             unsafe {
                 cmd.SetComputeRoot32BitConstants(
                     0,
@@ -1887,6 +1932,8 @@ impl super::context::DxContext {
                 cmd.SetComputeRootShaderResourceView(1, src_gva);
                 cmd.SetComputeRootShaderResourceView(2, joint_gva);
                 cmd.SetComputeRootUnorderedAccessView(3, dst_gva);
+                cmd.SetComputeRootShaderResourceView(4, delta_gva);
+                cmd.SetComputeRootShaderResourceView(5, weight_gva);
                 cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
             }
         }

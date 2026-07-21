@@ -258,7 +258,9 @@ mod tests {
     }
 
     // The structural flags on the resource registry: Material and Font are the
-    // blank-useful addables, EnvironmentMap is the lone render-implying kind.
+    // blank-useful addables; EnvironmentMap and SkinnedMesh are the
+    // render-implying kinds (a placed skinned mesh is scene content in its own
+    // right, so its presence renders like any static Prop).
     #[test]
     fn resource_structural_flags_mark_the_curated_sets() {
         let flagged = |f: fn(ResourceAssetType) -> bool| -> Vec<&'static str> {
@@ -273,7 +275,10 @@ mod tests {
             flagged(ResourceAssetType::useful_blank),
             ["Font", "Material"]
         );
-        assert_eq!(flagged(ResourceAssetType::renders), ["EnvironmentMap"]);
+        assert_eq!(
+            flagged(ResourceAssetType::renders),
+            ["EnvironmentMap", "SkinnedMesh"]
+        );
     }
 
     #[test]

@@ -245,14 +245,15 @@ pub struct RaymarchVolumeUniforms {
 }
 
 // The RT skinning compute push constant (rt_skin.comp `SkinParams`): four
-// tightly-packed uints (16 bytes).
+// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
+// the delta buffer (0 = no morphing).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SkinParams {
     pub vertex_base: u32,
     pub vertex_count: u32,
     pub joint_count: u32,
-    pub _pad: u32,
+    pub target_count: u32,
 }
 
 #[cfg(test)]
@@ -465,6 +466,6 @@ mod tests {
         assert_eq!(offset_of!(SkinParams, vertex_base), 0);
         assert_eq!(offset_of!(SkinParams, vertex_count), 4);
         assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, _pad), 12);
+        assert_eq!(offset_of!(SkinParams, target_count), 12);
     }
 }

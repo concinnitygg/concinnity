@@ -247,6 +247,24 @@ pub(super) struct VkSkinned {
     // `None`/empty until `upload_skinned` runs with the bindless cull path active.
     pub(super) skin: Option<super::raytrace::SkinPipeline>,
     pub(super) deformed: Vec<super::raytrace::DeviceBuffer>,
+    // Morph targets, parallel to `draw_objects`. `morph_delta_unique` owns the
+    // per-mesh dense target-major `MorphDelta` device buffers (deduped by source
+    // `Arc`); `morph_delta_buffers[i]` is object `i`'s handle into them (null =
+    // morphless). `morph_target_counts[i]` is its target count (0 = none).
+    // `morph_weights[i]` is the object's current weights (empty without morphs),
+    // rewritten by `update_morph_weights` and copied into the per-(frame, object)
+    // host-mapped `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per
+    // target) by `upload_morph_weights`. The weight buffers/memories/ptrs are
+    // empty when no skinned object carries morphs. The skin descriptor sets'
+    // morph bindings (3 = deltas, 4 = weights) are re-pointed in
+    // `upload_skinned_morphs`.
+    pub(super) morph_delta_unique: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    pub(super) morph_delta_buffers: Vec<vk::Buffer>,
+    pub(super) morph_target_counts: Vec<u32>,
+    pub(super) morph_weights: Vec<Vec<f32>>,
+    pub(super) morph_weight_buffers: Vec<Vec<vk::Buffer>>,
+    pub(super) morph_weight_memories: Vec<Vec<vk::DeviceMemory>>,
+    pub(super) morph_weight_ptrs: Vec<Vec<*mut u8>>,
     // `false` until the deformed-vertex ring has been posed at least one full
     // frame. While false the GPU-driven G-buffer velocity binds the current
     // deformed buffer as the previous one (prev_pos == cur_pos), so an unposed
@@ -289,6 +307,22 @@ impl VkSkinned {
                 }
             }
             for frame_mems in &self.joint_memories {
+                for &mem in frame_mems {
+                    device.unmap_memory(mem);
+                    device.free_memory(mem, None);
+                }
+            }
+            // Morph delta device buffers + per-(frame, object) weight buffers.
+            for &(buf, mem) in &self.morph_delta_unique {
+                device.destroy_buffer(buf, None);
+                device.free_memory(mem, None);
+            }
+            for frame_bufs in &self.morph_weight_buffers {
+                for &buf in frame_bufs {
+                    device.destroy_buffer(buf, None);
+                }
+            }
+            for frame_mems in &self.morph_weight_memories {
                 for &mem in frame_mems {
                     device.unmap_memory(mem);
                     device.free_memory(mem, None);

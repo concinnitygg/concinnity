@@ -128,6 +128,7 @@ mod tests {
             "voxelworld",
             "watersurface",
             "instancedprop",
+            "skinnedmesh",
         ] {
             let specs = companions_for(ty, &json!({}), &[]);
             assert!(

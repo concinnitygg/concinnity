@@ -148,7 +148,7 @@ macro_rules! for_each_resource_asset {
             Font => $crate::assets::Font { resource: Font, compiled, useful_blank },
             Material => $crate::assets::Material { resource: Material, data, useful_blank },
             Mesh => $crate::assets::Mesh { resource: Mesh, compiled },
-            SkinnedMesh => $crate::assets::SkinnedMesh { resource: SkinnedMesh, compiled },
+            SkinnedMesh => $crate::assets::SkinnedMesh { resource: SkinnedMesh, compiled, renders },
         }
     };
 }

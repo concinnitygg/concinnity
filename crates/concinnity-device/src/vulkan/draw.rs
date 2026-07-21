@@ -421,6 +421,9 @@ impl VkContext {
         // before the skinned shadow + main passes read them. No-op when no
         // SkinnedMesh is declared.
         self.upload_joint_matrices(frame_idx);
+        // Push this frame's morph weights into the per-frame weight buffers the
+        // skin fold reads. No-op when no SkinnedMesh carries morph targets.
+        self.upload_morph_weights(frame_idx);
 
         // Auto-exposure: step the EMA from a previous frame's GPU
         // measurement before any pipeline reads `post_process.exposure`.

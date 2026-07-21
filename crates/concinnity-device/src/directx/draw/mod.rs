@@ -161,6 +161,9 @@ impl DxContext {
         // before the skinned shadow + main passes read them. No-op when no
         // SkinnedMesh is declared.
         self.upload_joint_matrices(frame_idx);
+        // Push this frame's morph weights into the per-frame weight buffers the
+        // skin fold reads. No-op when no SkinnedMesh carries morph targets.
+        self.upload_morph_weights(frame_idx);
 
         // GPU-driven cull gating; matches the inner check in
         // encode_main_pass's bindless branch. When on, the host-side

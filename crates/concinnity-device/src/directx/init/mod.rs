@@ -2255,6 +2255,11 @@ impl DxContext {
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
                 deformed_buffers: Vec::new(),
                 deformed_vbvs: Vec::new(),
+                morph_delta_buffers: Vec::new(),
+                morph_target_counts: Vec::new(),
+                morph_weights: Vec::new(),
+                morph_weight_buffers: Vec::new(),
+                morph_weight_ptrs: Vec::new(),
             },
             skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             uniforms: DxUniforms {

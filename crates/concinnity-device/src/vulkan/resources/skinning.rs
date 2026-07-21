@@ -278,6 +278,16 @@ impl VkContext {
         self.skinned.joint_sets = joint_sets;
         self.skinned.draw_objects = draw_objects;
 
+        // Morph targets are attached by a later `upload_skinned_morphs`; until
+        // then every object is morphless (a re-upload resets here).
+        self.skinned.morph_delta_unique = Vec::new();
+        self.skinned.morph_delta_buffers = vec![vk::Buffer::null(); n];
+        self.skinned.morph_target_counts = vec![0; n];
+        self.skinned.morph_weights = vec![Vec::new(); n];
+        self.skinned.morph_weight_buffers = Vec::new();
+        self.skinned.morph_weight_memories = Vec::new();
+        self.skinned.morph_weight_ptrs = Vec::new();
+
         // GPU-driven main-pass skinning fold: when the bindless cull path is active,
         // build the `rt_skin` compute pipeline + per-frame deformed-vertex buffers +
         // their descriptor sets, and set `self.n_skinned` (which engages the fold so
@@ -501,6 +511,174 @@ impl VkContext {
                     mats.as_ptr() as *const u8,
                     dst,
                     count * std::mem::size_of::<[[f32; 4]; 4]>(),
+                );
+            }
+        }
+    }
+
+    // Attach morph-target delta buffers to the skinned draw objects. `morphs[i]`
+    // pairs with draw object `i`; instance copies share their template's `Arc`,
+    // so each unique delta set becomes one device buffer. Allocates the per-frame
+    // weight buffers (one f32 per target per object) and re-points the main fold's
+    // skin descriptor-set morph bindings when any object carries morphs. Called
+    // once after `upload_skinned`. Mirrors the DirectX `upload_skinned_morphs`.
+    pub(in crate::vulkan) fn upload_skinned_morphs(
+        &mut self,
+        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) -> Result<(), String> {
+        use std::collections::HashMap;
+
+        let n = self.skinned.draw_objects.len();
+        let device = self.device.clone();
+        let frames = self.frames_in_flight.max(1);
+
+        let mut delta_unique: Vec<(vk::Buffer, vk::DeviceMemory)> = Vec::new();
+        let mut delta_buffers: Vec<vk::Buffer> = vec![vk::Buffer::null(); n];
+        let mut target_counts: Vec<u32> = vec![0; n];
+        let mut weights: Vec<Vec<f32>> = vec![Vec::new(); n];
+        let mut by_source: HashMap<usize, (vk::Buffer, u32)> = HashMap::new();
+
+        for (i, m) in morphs.iter().take(n).enumerate() {
+            let Some(data) = m else { continue };
+            let key = std::sync::Arc::as_ptr(data) as usize;
+            let (buf, count) = match by_source.get(&key) {
+                Some(e) => *e,
+                None => {
+                    let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
+                    let (buf, mem) = create_buffer(
+                        &self.instance,
+                        &device,
+                        self.physical_device,
+                        bytes.len().max(4) as u64,
+                        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    )?;
+                    self.write_geometry_region(buf, 0, bytes)?;
+                    let count = data.target_count() as u32;
+                    delta_unique.push((buf, mem));
+                    by_source.insert(key, (buf, count));
+                    (buf, count)
+                }
+            };
+            delta_buffers[i] = buf;
+            target_counts[i] = count;
+            weights[i] = vec![0.0; count as usize];
+        }
+
+        // Per-(frame, object) host-mapped weight buffers, one f32 per target
+        // (>= 1 so every binding has a valid buffer), zero-seeded. Only allocated
+        // when some object carries morphs.
+        let mut weight_buffers: Vec<Vec<vk::Buffer>> = Vec::new();
+        let mut weight_memories: Vec<Vec<vk::DeviceMemory>> = Vec::new();
+        let mut weight_ptrs: Vec<Vec<*mut u8>> = Vec::new();
+        if target_counts.iter().any(|&c| c > 0) {
+            for _ in 0..frames {
+                let mut bufs = Vec::with_capacity(n);
+                let mut mems = Vec::with_capacity(n);
+                let mut ptrs = Vec::with_capacity(n);
+                for &count in &target_counts {
+                    let size = (count.max(1) as u64) * std::mem::size_of::<f32>() as u64;
+                    let (buf, mem) = create_buffer(
+                        &self.instance,
+                        &device,
+                        self.physical_device,
+                        size,
+                        vk::BufferUsageFlags::STORAGE_BUFFER,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )?;
+                    let ptr = unsafe {
+                        device.map_memory(mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                    }
+                    .map_err(|e| format!("map morph weight buffer: {e}"))?
+                        as *mut u8;
+                    unsafe { std::ptr::write_bytes(ptr, 0, size as usize) };
+                    bufs.push(buf);
+                    mems.push(mem);
+                    ptrs.push(ptr);
+                }
+                weight_buffers.push(bufs);
+                weight_memories.push(mems);
+                weight_ptrs.push(ptrs);
+            }
+        }
+
+        // Re-point the main fold's skin descriptor sets' morph bindings (3 =
+        // deltas, 4 = weights). Morphless objects keep the src-VB dummy the
+        // `build_main_skin` write left. A no-op when the fold is inactive.
+        let src = self.skinned.vertex_buffer;
+        if let Some(skin) = self.skinned.skin.as_ref() {
+            for (f, frame_sets) in skin.sets.iter().enumerate() {
+                for (o, &set) in frame_sets.iter().enumerate() {
+                    let delta_buf = match delta_buffers.get(o) {
+                        Some(&b) if b != vk::Buffer::null() => b,
+                        _ => src,
+                    };
+                    let weight_buf = match weight_buffers.get(f).and_then(|fb| fb.get(o)) {
+                        Some(&b) => b,
+                        None => src,
+                    };
+                    let delta_info = vk::DescriptorBufferInfo::default()
+                        .buffer(delta_buf)
+                        .offset(0)
+                        .range(vk::WHOLE_SIZE);
+                    let weight_info = vk::DescriptorBufferInfo::default()
+                        .buffer(weight_buf)
+                        .offset(0)
+                        .range(vk::WHOLE_SIZE);
+                    let writes = [
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(3)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(&delta_info)),
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(4)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(&weight_info)),
+                    ];
+                    unsafe { device.update_descriptor_sets(&writes, &[]) };
+                }
+            }
+        }
+
+        self.skinned.morph_delta_unique = delta_unique;
+        self.skinned.morph_delta_buffers = delta_buffers;
+        self.skinned.morph_target_counts = target_counts;
+        self.skinned.morph_weights = weights;
+        self.skinned.morph_weight_buffers = weight_buffers;
+        self.skinned.morph_weight_memories = weight_memories;
+        self.skinned.morph_weight_ptrs = weight_ptrs;
+        Ok(())
+    }
+
+    // Replace one skinned object's morph weights. Out-of-range indices and
+    // objects without morph targets are ignored; extra weights are dropped.
+    pub fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+        if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
+            for (i, w) in slot.iter_mut().enumerate() {
+                *w = weights.get(i).copied().unwrap_or(0.0);
+            }
+        }
+    }
+
+    // Copy this frame's morph weights into the per-frame weight buffers the skin
+    // fold reads. Called alongside `upload_joint_matrices`. A no-op when no
+    // object carries morphs (the buffers are empty).
+    pub(in crate::vulkan) fn upload_morph_weights(&self, frame_idx: usize) {
+        let Some(frame_bufs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
+            return;
+        };
+        for (i, w) in self.skinned.morph_weights.iter().enumerate() {
+            let (Some(&dst), false) = (frame_bufs.get(i), w.is_empty()) else {
+                continue;
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    w.as_ptr() as *const u8,
+                    dst,
+                    w.len() * std::mem::size_of::<f32>(),
                 );
             }
         }
