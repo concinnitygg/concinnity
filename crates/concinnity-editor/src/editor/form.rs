@@ -25,7 +25,6 @@
 // validated by the caller via `ComponentType::reserialize_args`.
 
 use concinnity_cook::ComponentType;
-use concinnity_cook::resource_handles::ResourceAssetCompile;
 use serde_json::{Map, Value};
 
 // The number of physical form-control slots the edit panel injects (checkboxes,
@@ -695,20 +694,23 @@ fn get_at_path_mut<'a>(obj: &'a mut Map<String, Value>, path: &str) -> Option<&'
 
 // Validate an assembled args object by round-tripping it through the type's typed
 // `Args` (the same check `cn add` applies). `Ok(())` means it will cook.
-pub(crate) fn validate(ty: &str, args: &Map<String, Value>) -> Result<(), String> {
+pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Result<(), String> {
     if let Some(ct) = ComponentType::parse(ty) {
         return ct
             .reserialize_args(&Value::Object(args.clone()))
             .map(|_| ())
             .map_err(|e| e.to_string());
     }
-    // A resource asset validates by compiling its payload (the same check its
-    // build step runs); Font is the only addable-blank resource today.
+    // A resource asset gets the same two checks a component does -- the typed
+    // schema round-trip, then the structural check `cn add` / `cn check` run --
+    // but never a payload compile: an EnvironmentMap's convolution costs seconds
+    // and would stall the editor on every Apply. A source file that parses but
+    // decodes badly is caught by the preview rebuild and by SAVE, which cook for
+    // real.
     if let Some(rt) = concinnity_cook::resource_handles::ResourceAssetType::parse(ty) {
-        return rt
-            .compile_payload(&Value::Object(args.clone()))
-            .map(|_| ())
-            .map_err(|e| e.to_string());
+        let args = Value::Object(args.clone());
+        rt.reserialize_args(&args)?;
+        return concinnity_cook::validate_asset(ty, name, &args);
     }
     Err(format!("unknown asset type '{ty}'"))
 }
@@ -904,7 +906,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_an_unknown_type() {
-        let err = validate("NotARealAssetType", &Map::new()).unwrap_err();
+        let err = validate("NotARealAssetType", "probe", &Map::new()).unwrap_err();
         assert!(err.contains("unknown asset type"), "got: {err}");
     }
 
@@ -944,7 +946,7 @@ mod tests {
         let args = assemble("TextLabel", None, &fields, &texts);
         assert_eq!(args["align"], "center");
         assert!(
-            validate("TextLabel", &args).is_ok(),
+            validate("TextLabel", "probe", &args).is_ok(),
             "the picked variant cooks"
         );
     }
@@ -988,6 +990,37 @@ mod tests {
                 "Material `{key}` should be a Texture ref picker"
             );
         }
+    }
+
+    // An imported `.hdr` is editable in the Assets panel: EnvironmentMap is a
+    // resource type too, so its source and the IBL tuning knobs must derive as
+    // real form fields and survive a round-trip back through the cook.
+    #[test]
+    fn resource_type_environment_map_exposes_its_source_and_tuning() {
+        let mut seed = base_args("EnvironmentMap");
+        seed.insert("source".into(), Value::String("hdri/studio.hdr".into()));
+        let fields = fields_for("EnvironmentMap", Some(&seed));
+
+        let source = fields
+            .iter()
+            .find(|f| f.key == "source")
+            .expect("source field");
+        assert_eq!(source.initial, "hdri/studio.hdr");
+        for key in [
+            "prefilter_face_size",
+            "irradiance_face_size",
+            "prefilter_samples",
+            "prefilter_clamp",
+        ] {
+            assert!(
+                fields.iter().any(|f| f.key == key),
+                "EnvironmentMap `{key}` should be editable"
+            );
+        }
+
+        let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        let args = assemble("EnvironmentMap", Some(&seed), &fields, &texts);
+        validate("EnvironmentMap", "probe", &args).expect("an unedited round-trip stays valid");
     }
 
     // Editing an entry whose ref is already set selects that asset in the options.
@@ -1110,7 +1143,10 @@ mod tests {
             Some(7.5),
             "the nested edit lands inside the sub-object"
         );
-        assert!(validate("Camera3D", &args).is_ok(), "the nested edit cooks");
+        assert!(
+            validate("Camera3D", "probe", &args).is_ok(),
+            "the nested edit cooks"
+        );
     }
 
     // Editing a nested field of an existing entry keeps the sub-object's other
@@ -1154,7 +1190,7 @@ mod tests {
             "the authored null controller survives the edit"
         );
         assert!(
-            validate("Camera3D", &args).is_ok(),
+            validate("Camera3D", "probe", &args).is_ok(),
             "a null controller cooks"
         );
     }
@@ -1362,7 +1398,7 @@ mod tests {
             get_at_path(&args, "position.1").and_then(Value::as_f64),
             Some(4.5)
         );
-        assert!(validate("PointLight", &args).is_ok());
+        assert!(validate("PointLight", "probe", &args).is_ok());
     }
 
     // f32-origin floats display at their shortest round-tripping form, not serde's
@@ -1398,7 +1434,7 @@ mod tests {
             Some(3.25)
         );
         assert!(
-            validate("WaterSurface", &args).is_ok(),
+            validate("WaterSurface", "probe", &args).is_ok(),
             "the element edit cooks"
         );
     }
@@ -1477,7 +1513,7 @@ mod tests {
         let args = assemble("PointLight", None, &fields, &texts);
         assert_eq!(args[&key], serde_json::json!([0.5, 0.25, 0.75]));
         assert!(
-            validate("PointLight", &args).is_ok(),
+            validate("PointLight", "probe", &args).is_ok(),
             "the edit still cooks"
         );
     }
@@ -1571,7 +1607,7 @@ mod tests {
         let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
         let args = assemble("PointLight", None, &fields, &texts);
         assert!(
-            validate("PointLight", &args).is_ok(),
+            validate("PointLight", "probe", &args).is_ok(),
             "the default-derived args re-serialize cleanly"
         );
     }
@@ -1587,7 +1623,7 @@ mod tests {
             let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
             let args = assemble(ty, None, &fields, &texts);
             assert!(
-                validate(ty, &args).is_ok(),
+                validate(ty, "probe", &args).is_ok(),
                 "{ty}: the default-derived form must re-validate"
             );
         }
@@ -1636,10 +1672,10 @@ mod tests {
             // Only assert failure if the field is actually unsigned; otherwise the
             // negative is valid. Guard by re-checking the default kind.
             if base_args("PointLight")[k].is_u64() {
-                assert!(validate("PointLight", &args).is_err());
+                assert!(validate("PointLight", "probe", &args).is_err());
             }
         }
         // Defaults always validate.
-        assert!(validate("PointLight", &base_args("PointLight")).is_ok());
+        assert!(validate("PointLight", "probe", &base_args("PointLight")).is_ok());
     }
 }

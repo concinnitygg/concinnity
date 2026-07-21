@@ -85,6 +85,16 @@ pub fn add_to_path(
             return Ok(());
         }
 
+        // Likewise for an `.hdr`: a world binds one lighting environment, so a
+        // second EnvironmentMap would never render. Point the existing one at
+        // the new source instead of appending.
+        if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
+            // Printed, not just traced: this edits an asset the user already
+            // authored, so it must not look like a plain append.
+            println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
+            return Ok(());
+        }
+
         for entry_name in &entry_names {
             if let Some(existing) = assets
                 .iter()
@@ -162,6 +172,44 @@ fn try_refresh_text_label(
     let args = existing.get_mut("args")?.as_object_mut()?;
     args.insert("content".to_string(), new_content);
     Some(new_name)
+}
+
+// If `entries` is a single EnvironmentMap and `assets` already declares one,
+// point that existing entry at the new source and return its name plus the
+// source. Returns `None` otherwise: the caller falls back to the normal
+// "append, error on duplicate" flow.
+//
+// The runtime binds the first EnvironmentMap it finds and ignores the rest, so
+// appending a second would leave the just-added `.hdr` dark. Only `source` (and
+// the `generator` it displaces, since the two are mutually exclusive) is
+// written; the existing prefilter / irradiance / clamp tuning survives.
+pub(crate) fn try_retarget_environment_map(
+    assets: &mut [serde_json::Value],
+    entries: &[serde_json::Value],
+) -> Option<(String, String)> {
+    if entries.len() != 1 {
+        return None;
+    }
+    let new = &entries[0];
+    if new.get("type").and_then(|v| v.as_str()) != Some("EnvironmentMap") {
+        return None;
+    }
+    let new_source = new.get("args")?.get("source")?.as_str()?.to_string();
+
+    let existing = assets
+        .iter_mut()
+        .find(|a| a.get("type").and_then(|v| v.as_str()) == Some("EnvironmentMap"))?;
+    let name = existing.get("name").and_then(|v| v.as_str())?.to_string();
+    let args = existing.get_mut("args")?.as_object_mut()?;
+    args.insert(
+        "source".to_string(),
+        serde_json::Value::String(new_source.clone()),
+    );
+    args.insert(
+        "generator".to_string(),
+        serde_json::Value::String(String::new()),
+    );
+    Some((name, new_source))
 }
 
 // Decide which scaffold entries the patch closure should inject. Returns
@@ -433,6 +481,7 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
     ("Stories & text", &["md", "txt"]),
     ("Images", &["png", "jpg", "jpeg", "bmp", "tga", "gif"]),
     ("Textures", &["ktx2"]),
+    ("Environment maps", &["hdr"]),
     ("Audio", &["ogg", "wav", "mp3", "flac"]),
     ("Fonts", &["ttf", "otf"]),
     ("Shaders", &["vert", "frag", "glsl", "metal", "wgsl"]),
@@ -529,6 +578,17 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         "ogg" | "wav" | "mp3" | "flac" => Ok(vec![validated_entry(
             &stem,
             "AudioClip",
+            serde_json::json!({ "source": path_str }),
+        )?]),
+
+        // Radiance HDR: an EnvironmentMap, whose build convolves the
+        // equirectangular source into the irradiance + prefiltered radiance
+        // cubemaps that light the scene. Its presence also injects the skybox
+        // mesh that displays it (see cook's `inject_sky`). Stem only, like
+        // fonts and audio.
+        "hdr" => Ok(vec![validated_entry(
+            &stem,
+            "EnvironmentMap",
             serde_json::json!({ "source": path_str }),
         )?]),
 
@@ -1369,6 +1429,157 @@ mod tests {
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hdr_file_becomes_an_environment_map() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("san_giuseppe_4k.hdr");
+        std::fs::write(&path, b"not-really-radiance").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry["type"], "EnvironmentMap");
+        assert_eq!(entry["name"], "san_giuseppe_4k");
+        assert_eq!(entry["args"]["source"], path.to_str().unwrap());
+        // `source` and `generator` are mutually exclusive: the file source wins,
+        // so the schema default leaves `generator` blank.
+        assert_eq!(entry["args"]["generator"], "");
+        // Registration defaults are materialized alongside the source.
+        assert_eq!(entry["args"]["prefilter_face_size"], serde_json::json!(512));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The entry a `.hdr` add produces is one the cook accepts.
+    #[test]
+    fn an_hdr_entry_validates_against_the_environment_map_schema() {
+        let _guard = crate::test_support::lock();
+        let dir = text_test_dir(line!());
+        let path = dir.join("studio.hdr");
+        std::fs::write(&path, b"radiance").unwrap();
+
+        let entry = entry_from_path(path.to_str().unwrap()).unwrap().remove(0);
+        concinnity_cook::validate_asset("EnvironmentMap", "studio", &entry["args"])
+            .expect("a `.hdr` add must produce a cookable EnvironmentMap");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // try_retarget_environment_map
+
+    // A world binds one lighting environment, so a second `.hdr` retargets the
+    // existing map rather than appending one the runtime would ignore. Only the
+    // source changes; the tuning the user set survives.
+    #[test]
+    fn try_retarget_environment_map_repoints_the_existing_map() {
+        let mut assets = vec![serde_json::json!({
+            "name": "env_sky",
+            "type": "EnvironmentMap",
+            "args": {
+                "source": "assets/hdri/old.hdr",
+                "generator": "",
+                "prefilter_face_size": 1024,
+                "prefilter_clamp": 4.0,
+            }
+        })];
+        let entries = vec![serde_json::json!({
+            "name": "studio",
+            "type": "EnvironmentMap",
+            "args": {"source": "assets/hdri/studio.hdr", "generator": ""}
+        })];
+
+        let out = try_retarget_environment_map(&mut assets, &entries);
+        assert_eq!(
+            out,
+            Some(("env_sky".to_string(), "assets/hdri/studio.hdr".to_string()))
+        );
+        assert_eq!(assets.len(), 1, "no second map appended");
+        let args = assets[0]["args"].as_object().unwrap();
+        assert_eq!(args["source"], "assets/hdri/studio.hdr");
+        // Hand-tuned knobs survive the retarget.
+        assert_eq!(args["prefilter_face_size"], 1024);
+        assert_eq!(args["prefilter_clamp"], 4.0);
+        // The name is untouched, so anything referring to it still resolves.
+        assert_eq!(assets[0]["name"], "env_sky");
+    }
+
+    // Retargeting a procedural map clears its generator: the two are mutually
+    // exclusive and the cook rejects an entry carrying both.
+    #[test]
+    fn try_retarget_environment_map_clears_a_generator() {
+        let mut assets = vec![serde_json::json!({
+            "name": "env",
+            "type": "EnvironmentMap",
+            "args": {"source": "", "generator": "sky"}
+        })];
+        let entries = vec![serde_json::json!({
+            "name": "dusk",
+            "type": "EnvironmentMap",
+            "args": {"source": "dusk.hdr", "generator": ""}
+        })];
+
+        assert!(try_retarget_environment_map(&mut assets, &entries).is_some());
+        let args = assets[0]["args"].as_object().unwrap();
+        assert_eq!(args["source"], "dusk.hdr");
+        assert_eq!(args["generator"], "");
+    }
+
+    // The first map is the one the runtime binds, so it is the one retargeted.
+    #[test]
+    fn try_retarget_environment_map_takes_the_first_of_several() {
+        let mut assets = vec![
+            serde_json::json!({"name": "a", "type": "EnvironmentMap", "args": {"source": "a.hdr"}}),
+            serde_json::json!({"name": "b", "type": "EnvironmentMap", "args": {"source": "b.hdr"}}),
+        ];
+        let entries = vec![
+            serde_json::json!({"name": "c", "type": "EnvironmentMap", "args": {"source": "c.hdr"}}),
+        ];
+
+        let (name, _) = try_retarget_environment_map(&mut assets, &entries).unwrap();
+        assert_eq!(name, "a");
+        assert_eq!(assets[0]["args"]["source"], "c.hdr");
+        assert_eq!(
+            assets[1]["args"]["source"], "b.hdr",
+            "the rest are untouched"
+        );
+    }
+
+    // No existing map: the caller falls through to the normal append.
+    #[test]
+    fn try_retarget_environment_map_skips_a_world_without_one() {
+        let mut assets = vec![serde_json::json!({
+            "name": "lamp", "type": "PointLight", "args": {}
+        })];
+        let entries = vec![
+            serde_json::json!({"name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}}),
+        ];
+        assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
+    }
+
+    #[test]
+    fn try_retarget_environment_map_skips_other_types() {
+        let mut assets = vec![serde_json::json!({
+            "name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}
+        })];
+        let entries =
+            vec![serde_json::json!({"name": "face", "type": "Font", "args": {"path": "face.ttf"}})];
+        assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
+        assert_eq!(assets[0]["args"]["source"], "e.hdr");
+    }
+
+    // A fan-out target (a scene, a multi-stage shader) must never retarget.
+    #[test]
+    fn try_retarget_environment_map_skips_multi_entry() {
+        let mut assets = vec![serde_json::json!({
+            "name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}
+        })];
+        let entries = vec![
+            serde_json::json!({"name": "a", "type": "EnvironmentMap", "args": {"source": "a.hdr"}}),
+            serde_json::json!({"name": "b", "type": "EnvironmentMap", "args": {"source": "b.hdr"}}),
+        ];
+        assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
     }
 
     #[test]

@@ -2391,7 +2391,13 @@ fn import_add_rejects_missing_files_and_unknown_extensions() {
     let (mut h, mut world, dir) = import_session();
     type_path(&mut world, "/no/such/thing.glb");
     h.add_import(&mut world);
-    assert!(h.import_status.as_deref().unwrap().contains("no such file"));
+    assert!(
+        h.import_status
+            .as_ref()
+            .unwrap()
+            .text()
+            .contains("no such file")
+    );
     assert!(h.entries.is_empty() && !h.dirty);
 
     let odd = dir.join("mystery.xyz");
@@ -2400,6 +2406,59 @@ fn import_add_rejects_missing_files_and_unknown_extensions() {
     h.add_import(&mut world);
     assert!(h.import_status.is_some(), "unknown extension rejected");
     assert!(h.entries.is_empty() && !h.dirty);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// A `.hdr` into a world with no lighting environment adds one.
+#[test]
+fn import_add_resolves_an_hdr_to_an_environment_map() {
+    let (mut h, mut world, dir) = import_session();
+    let hdr = dir.join("studio.hdr");
+    std::fs::write(&hdr, b"radiance").unwrap();
+    type_path(&mut world, &hdr.to_string_lossy());
+    h.add_import(&mut world);
+    assert_eq!(h.import_status, None);
+    assert_eq!(h.entries.len(), 1);
+    assert_eq!(h.entries[0]["type"], "EnvironmentMap");
+    assert_eq!(h.entries[0]["name"], "studio");
+    assert_eq!(
+        h.entries[0]["args"]["source"],
+        serde_json::Value::String(hdr.to_string_lossy().to_string())
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// A second `.hdr` retargets the world's existing map instead of appending one
+// the runtime would ignore, and says so on the status line.
+#[test]
+fn import_add_retargets_an_existing_environment_map() {
+    let (mut h, mut world, dir) = import_session();
+    h.entries.push(serde_json::json!({
+        "name": "env", "type": "EnvironmentMap", "args": {"source": "", "generator": "sky"}
+    }));
+    let hdr = dir.join("dusk.hdr");
+    std::fs::write(&hdr, b"radiance").unwrap();
+    type_path(&mut world, &hdr.to_string_lossy());
+    h.add_import(&mut world);
+
+    assert_eq!(h.entries.len(), 1, "no second map appended");
+    assert_eq!(h.entries[0]["name"], "env", "the existing map is reused");
+    assert_eq!(
+        h.entries[0]["args"]["source"],
+        serde_json::Value::String(hdr.to_string_lossy().to_string())
+    );
+    assert_eq!(h.entries[0]["args"]["generator"], "");
+    assert!(h.dirty && h.rebuild_preview);
+    // Reported as a notice, not an error: the Add succeeded.
+    assert!(matches!(
+        h.import_status,
+        Some(import_panel::ImportStatus::Notice(_))
+    ));
+    assert_eq!(
+        widget::field_text(&world, import_panel::PATH_INPUT),
+        "",
+        "the path field clears on success"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2424,12 +2483,14 @@ fn import_rows_list_and_open_in_the_edit_form() {
         entry("lamp", "PointLight"),
         serde_json::json!({"name": "town", "type": "SceneImport", "args": {"source": "town.glb"}}),
         serde_json::json!({"name": "face", "type": "Font", "args": {"path": "face.ttf"}}),
+        serde_json::json!({"name": "env", "type": "EnvironmentMap", "args": {"source": "sky.hdr"}}),
     ];
     let rows = h.import_rows();
-    assert_eq!(rows.len(), 2, "only file-backed types list");
+    assert_eq!(rows.len(), 3, "only file-backed types list");
     assert_eq!(rows[0].entry, 1);
     assert_eq!(rows[0].caption, "town  (SceneImport)  town.glb");
     assert_eq!(rows[1].caption, "face  (Font)  face.ttf");
+    assert_eq!(rows[2].caption, "env  (EnvironmentMap)  sky.hdr");
 
     h.apply_import_action(ImportAction::Open(0), &mut world);
     assert!(h.panel_open, "the Assets UI comes up with the form");
@@ -2453,7 +2514,7 @@ fn import_browse_result_fills_the_path_field_relatively() {
     std::fs::create_dir_all(&assets).unwrap();
     let picked = assets.join("hero.glb");
     std::fs::write(&picked, b"glb").unwrap();
-    h.import_status = Some("stale error".to_string());
+    h.import_status = Some(import_panel::ImportStatus::Error("stale error".to_string()));
     h.accept_browsed_path(&mut world, &picked);
 
     assert_eq!(

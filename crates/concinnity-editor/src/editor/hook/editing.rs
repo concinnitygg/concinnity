@@ -318,8 +318,8 @@ impl EditorHook {
         // structure: nested objects, array lengths), then validate the whole thing.
         self.capture_controls(world);
         let args = self.form_args.clone();
-        if let Err(e) = form::validate(&ty, &args) {
-            self.form_error = Some(short_error(&e));
+        if let Err(e) = form::validate(&ty, &typed, &args) {
+            self.form_error = Some(short_status(&e));
             return;
         }
         let args_val = serde_json::Value::Object(args);

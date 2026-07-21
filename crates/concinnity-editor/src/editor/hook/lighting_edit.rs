@@ -129,8 +129,9 @@ impl EditorHook {
                 })
                 .collect();
             let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
-            if let Err(e) = form::validate(s.ty, &args) {
-                self.lighting_status = Some(short_error(&format!("{}: {e}", s.title)));
+            let name = self.entries.get(idx).and_then(entry_name).unwrap_or(s.ty);
+            if let Err(e) = form::validate(s.ty, name, &args) {
+                self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
                 return;
             }
             staged.push((idx, args));
@@ -164,8 +165,9 @@ impl EditorHook {
             .map(|f| form::current_text(&merged, &f.key))
             .collect();
         let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
-        if let Err(e) = form::validate(s.ty, &args) {
-            self.lighting_status = Some(short_error(&format!("{}: {e}", s.title)));
+        let name = self.entries.get(idx).and_then(entry_name).unwrap_or(s.ty);
+        if let Err(e) = form::validate(s.ty, name, &args) {
+            self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
             return;
         }
         if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {

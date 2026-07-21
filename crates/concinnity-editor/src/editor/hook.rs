@@ -36,7 +36,7 @@ use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::health::HealthState;
 use super::health_panel;
 use super::hud::{self, HudAction, HudState};
-use super::import_panel::{self, ImportAction, ImportRow, ImportView};
+use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportView};
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
@@ -126,11 +126,11 @@ pub(crate) struct EditorHook {
     story_status: Option<String>,
     story_blur: bool,
     // The Import panel: shown state, whether the path field holds keyboard
-    // focus, the list window scroll, and the last resolution error.
+    // focus, the list window scroll, and the last Add's outcome.
     import_open: bool,
     import_focus: bool,
     import_scroll: usize,
-    import_status: Option<String>,
+    import_status: Option<ImportStatus>,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // The Assets panel's body: the world's own lines, or everything the build
@@ -263,7 +263,7 @@ fn visible_slot(j: usize, scroll: usize) -> Option<usize> {
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.
-fn short_error(e: &str) -> String {
+fn short_status(e: &str) -> String {
     let line = e.lines().next().unwrap_or(e);
     let clipped: String = line.chars().take(44).collect();
     if clipped.len() < line.len() {

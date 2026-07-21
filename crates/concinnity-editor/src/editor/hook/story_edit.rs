@@ -46,7 +46,7 @@ impl EditorHook {
                     Ok(content) => self.story_lines = story::lines_of(&content),
                     Err(e) => {
                         self.story_lines = story::lines_of("");
-                        self.story_status = Some(short_error(&format!("{path}: {e}")));
+                        self.story_status = Some(short_status(&format!("{path}: {e}")));
                     }
                 }
                 self.story_path = path;
@@ -198,11 +198,11 @@ impl EditorHook {
         self.story_status = None;
         let content = story::join_lines(&self.story_lines);
         if let Err(e) = concinnity_cook::world::validate_story_source(&content) {
-            self.story_status = Some(short_error(&e));
+            self.story_status = Some(short_status(&e));
             return;
         }
         if let Err(e) = std::fs::write(&path, content) {
-            self.story_status = Some(short_error(&format!("{path}: {e}")));
+            self.story_status = Some(short_status(&format!("{path}: {e}")));
             return;
         }
         self.rebuild_preview = true;
@@ -217,7 +217,7 @@ impl EditorHook {
         }
         let path = free_story_path();
         if let Err(e) = std::fs::write(&path, story::STARTER_STORY) {
-            self.story_status = Some(short_error(&format!("{path}: {e}")));
+            self.story_status = Some(short_status(&format!("{path}: {e}")));
             return;
         }
         let name = self.unique_name("story");

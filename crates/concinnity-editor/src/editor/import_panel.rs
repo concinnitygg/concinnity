@@ -45,6 +45,7 @@ pub(crate) const IMPORT_TYPES: &[&str] = &[
     "SceneImport",
     "StoryImport",
     "File",
+    "EnvironmentMap",
     "AudioClip",
     "Font",
     "ShaderStage",
@@ -92,6 +93,30 @@ const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const HINT_COLOR: [f32; 3] = [0.55, 0.58, 0.66];
 const HEADER_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
+const NOTICE_LABEL: [f32; 3] = [0.55, 0.85, 0.65];
+
+// The outcome of the last Add, shown on the status line: a resolution failure,
+// or a note about what the Add did when it appended no new row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ImportStatus {
+    Error(String),
+    Notice(String),
+}
+
+impl ImportStatus {
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::Error(s) | Self::Notice(s) => s,
+        }
+    }
+
+    fn color(&self) -> [f32; 3] {
+        match self {
+            Self::Error(_) => ERROR_LABEL,
+            Self::Notice(_) => NOTICE_LABEL,
+        }
+    }
+}
 
 // One listed import: its entry index and the "name (Type) source" caption.
 pub(crate) struct ImportRow {
@@ -105,8 +130,8 @@ pub(crate) struct ImportView<'a> {
     pub scroll: usize,
     // Whether the path field asserts keyboard focus this frame.
     pub focus: bool,
-    // Resolution error from the last Add.
-    pub status: Option<&'a str>,
+    // Outcome of the last Add.
+    pub status: Option<&'a ImportStatus>,
     pub mouse: [f32; 2],
 }
 
@@ -279,16 +304,21 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2]) {
         l.align = TextAlign::Left;
         l.color = HINT_COLOR;
         l.visible = true;
-        l.content = "scenes (glb, fbx) - stories (md) - images - audio - fonts - shaders - text"
-            .to_string();
+        l.content =
+            "scenes (glb, fbx) - stories (md) - images - hdr - audio - fonts - shaders - text"
+                .to_string();
     }
     if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
         l.x = o[0] + PAD;
         l.y = o[1] + widget::TITLE_H + HEADER_H + HINT_H;
         l.align = TextAlign::Left;
-        l.color = ERROR_LABEL;
+        l.color = view.status.map_or(ERROR_LABEL, ImportStatus::color);
         l.visible = view.status.is_some();
-        l.content = view.status.unwrap_or("").to_string();
+        l.content = view
+            .status
+            .map(ImportStatus::text)
+            .unwrap_or("")
+            .to_string();
     }
     if let Some(l) = widget::label_mut(world, LIST_HEADER) {
         l.x = o[0] + PAD;

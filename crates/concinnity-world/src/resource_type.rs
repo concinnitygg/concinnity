@@ -122,6 +122,26 @@ macro_rules! define_resource_asset_type {
             pub fn all() -> &'static [ResourceAssetType] {
                 &[ $( Self::$variant ),+ ]
             }
+            // Round-trip authored args through the schema struct, the resource
+            // analogue of `ComponentType::reserialize_args`. It rejects what the
+            // typed schema cannot hold (a negative count, a string where a
+            // number belongs) without compiling the payload, so authoring tools
+            // can check a resource's args as cheaply as a component's.
+            pub fn reserialize_args(
+                self,
+                args: &serde_json::Value,
+            ) -> Result<serde_json::Value, String> {
+                crate::ecs::asset_id::ensure_name_resolver();
+                match self {
+                    $(
+                        Self::$variant => {
+                            let typed = serde_json::from_value::<$ty>(args.clone())
+                                .map_err(|e| e.to_string())?;
+                            serde_json::to_value(&typed).map_err(|e| e.to_string())
+                        }
+                    ),+
+                }
+            }
             // The structural flags shared with the component registry: see
             // `ComponentType::{useful_blank, renders}`. Resource assets are
             // never singletons.
@@ -173,6 +193,25 @@ impl ResourceAssetType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The typed round-trip fills the schema defaults and rejects what the
+    // schema cannot hold, so authoring tools can check a resource's args
+    // without paying for its payload compile.
+    #[test]
+    fn reserialize_args_fills_defaults_and_rejects_bad_types() {
+        let env = ResourceAssetType::EnvironmentMap;
+        let out = env
+            .reserialize_args(&serde_json::json!({"source": "studio.hdr"}))
+            .expect("a source-only EnvironmentMap round-trips");
+        assert_eq!(out["source"], "studio.hdr");
+        assert_eq!(out["prefilter_face_size"], 512, "defaults are materialized");
+
+        // A negative value cannot land in a u32 field.
+        let err = ResourceAssetType::Font
+            .reserialize_args(&serde_json::json!({"size_px": -5}))
+            .expect_err("a negative u32 must be rejected");
+        assert!(err.contains("-5"), "got: {err}");
+    }
 
     #[test]
     fn resource_types_classify_others_do_not() {

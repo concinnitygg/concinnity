@@ -46,7 +46,7 @@ impl EditorHook {
             // Focus is asserted only while frontmost, matching the other
             // panels' guard against fighting for typed keys.
             focus: self.import_focus && self.panel_order.last() == Some(&PanelKey::Import),
-            status: self.import_status.as_deref(),
+            status: self.import_status.as_ref(),
             mouse,
         }
     }
@@ -110,16 +110,31 @@ impl EditorHook {
         // Scene entries defer reading their file to the cook, which would
         // surface a typo only as a preview-rebuild log; catch it here instead.
         if !std::path::Path::new(&path).is_file() {
-            self.import_status = Some(short_error(&format!("{path}: no such file")));
+            self.import_status = Some(ImportStatus::Error(short_status(&format!(
+                "{path}: no such file"
+            ))));
             return;
         }
         let mut new_entries = match crate::authoring::entry_from_path(&path) {
             Ok(entries) => entries,
             Err(e) => {
-                self.import_status = Some(short_error(&e.to_string()));
+                self.import_status = Some(ImportStatus::Error(short_status(&e.to_string())));
                 return;
             }
         };
+        // An `.hdr` into a world that already has a lighting environment
+        // retargets it rather than appending a second one the runtime would
+        // ignore, matching `cn add <file>`.
+        if let Some((name, source)) =
+            crate::authoring::try_retarget_environment_map(&mut self.entries, &new_entries)
+        {
+            self.import_status = Some(ImportStatus::Notice(short_status(&format!(
+                "{name} now uses {source}"
+            ))));
+            self.mark_changed();
+            widget::seed_field(world, import_panel::PATH_INPUT, "");
+            return;
+        }
         for entry in &mut new_entries {
             let base = entry_name(entry).unwrap_or("import").to_string();
             let unique = self.unique_from(&base);
