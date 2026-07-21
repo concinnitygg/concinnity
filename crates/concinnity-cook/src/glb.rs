@@ -37,14 +37,12 @@ pub struct ImportedSkinnedMesh {
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
 // asset hot-reload pass uses this directly so it can amortise the `.glb`
 // parse across every Mesh / SkinnedMesh entry that references the same file.
-pub fn import_skinned_from_doc(doc: &GltfDoc, source: &str) -> Result<ImportedSkinnedMesh, String> {
-    // The skinned mesh is the first node carrying both a mesh and a skin.
-    let node = doc
-        .doc
-        .document
-        .nodes()
-        .find(|n| n.mesh().is_some() && n.skin().is_some())
-        .ok_or_else(|| format!("'{}': no node with both a mesh and a skin", source))?;
+pub fn import_skinned_from_doc(
+    doc: &GltfDoc,
+    source: &str,
+    skin_index: u32,
+) -> Result<ImportedSkinnedMesh, String> {
+    let node = skinned_node(doc, source, skin_index)?;
     let mesh = node.mesh().unwrap();
     let skin = node.skin().unwrap();
 
@@ -586,8 +584,12 @@ pub struct ImportedAnimation {
 pub fn import_glb_animations_from_doc(
     doc: &GltfDoc,
     source: &str,
+    skin_index: u32,
 ) -> Result<Vec<ImportedAnimation>, String> {
-    let (mesh_node, skin) = first_skinned_node(doc, source)?;
+    // Morph-weight channels target the mesh node itself, so the node index
+    // travels with the skeleton.
+    let node = skinned_node(doc, source, skin_index)?;
+    let (mesh_node, skin) = (node.index(), node.skin().unwrap());
     let skeleton = import_skeleton(&skin)?;
     Ok(doc
         .doc
@@ -606,10 +608,11 @@ pub fn import_glb_animations_from_doc(
 pub fn import_glb_animation_from_doc(
     doc: &GltfDoc,
     source: &str,
+    skin_index: u32,
     animation_index: u32,
     animation_name: &str,
 ) -> Result<ImportedAnimation, String> {
-    let mut anims = import_glb_animations_from_doc(doc, source)?;
+    let mut anims = import_glb_animations_from_doc(doc, source, skin_index)?;
     let idx = if !animation_name.is_empty() {
         anims
             .iter()
@@ -639,16 +642,37 @@ pub fn import_glb_animation_from_doc(
     Ok(anims.swap_remove(idx))
 }
 
-// First node in `doc` carrying both a mesh and a skin, the same node the
-// skinned-mesh importer picks, so both importers share one skeleton view.
-// Returns the node index too: morph-weight channels target the node itself.
-fn first_skinned_node<'a>(doc: &'a GltfDoc, path: &str) -> Result<(usize, gltf::Skin<'a>), String> {
-    doc.doc
+// The `skin_index`-th node in `doc` carrying both a mesh and a skin, counted
+// in node declaration order. Shared by the skinned-mesh and animation
+// importers so both resolve against the same skeleton.
+//
+// The selector counts skinned NODES, not entries in the glTF `skins` array:
+// exporters share one skin across every mesh bound to an armature, so a
+// character's body and hair typically differ only by node.
+pub fn skinned_node<'a>(
+    doc: &'a GltfDoc,
+    source: &str,
+    skin_index: u32,
+) -> Result<gltf::Node<'a>, String> {
+    let skinned: Vec<gltf::Node<'a>> = doc
+        .doc
         .document
         .nodes()
-        .find(|n| n.mesh().is_some() && n.skin().is_some())
-        .and_then(|n| n.skin().map(|s| (n.index(), s)))
-        .ok_or_else(|| format!("'{}': no node with both a mesh and a skin", path))
+        .filter(|n| n.mesh().is_some() && n.skin().is_some())
+        .collect();
+    if skinned.is_empty() {
+        return Err(format!("'{}': no node with both a mesh and a skin", source));
+    }
+    let count = skinned.len();
+    skinned.into_iter().nth(skin_index as usize).ok_or_else(|| {
+        format!(
+            "'{}': skin_index {} out of range (file has {} skinned mesh{})",
+            source,
+            skin_index,
+            count,
+            if count == 1 { "" } else { "es" }
+        )
+    })
 }
 
 // Build one `ImportedAnimation` from a glTF animation, dropping channels that
@@ -1015,6 +1039,59 @@ pub(crate) mod test_fixtures {
         make_glb(&skinned_json(true, true, true), Some(&skinned_bin()))
     }
 
+    // [`skinned_bin`] plus a second triangle's positions, offset in +X so the
+    // two skinned meshes are distinguishable.
+    pub(crate) fn two_skin_bin() -> Vec<u8> {
+        let mut bin = skinned_bin();
+        bin.extend(f32s(&[5.0, 0.0, 0.0, 6.0, 0.0, 0.0, 5.0, 1.0, 0.0])); // -> 172
+        bin
+    }
+
+    // Two mesh+skin nodes sharing one skin, the shape an exporter produces for
+    // a character split into several meshes bound to one armature. Each mesh
+    // carries its own material.
+    pub(crate) fn two_skin_json() -> serde_json::Value {
+        let mut root = skinned_json(true, true, true);
+        root["buffers"] = serde_json::json!([{"byteLength": 172}]);
+        root["bufferViews"]
+            .as_array_mut()
+            .expect("bufferViews")
+            .push(serde_json::json!({"buffer": 0, "byteOffset": 136, "byteLength": 36}));
+        root["accessors"]
+            .as_array_mut()
+            .expect("accessors")
+            .push(serde_json::json!({
+                "bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC3",
+                "min": [5.0, 0.0, 0.0], "max": [6.0, 1.0, 0.0]
+            }));
+        root["meshes"] = serde_json::json!([
+            {"primitives": [{
+                "attributes": {"POSITION": 0, "JOINTS_0": 2, "WEIGHTS_0": 3},
+                "indices": 1, "material": 0
+            }]},
+            {"primitives": [{
+                "attributes": {"POSITION": 6, "JOINTS_0": 2, "WEIGHTS_0": 3},
+                "indices": 1, "material": 1
+            }]}
+        ]);
+        root["materials"] = serde_json::json!([
+            {"pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 1.0}},
+            {"pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 0.5}}
+        ]);
+        root["nodes"] = serde_json::json!([
+            {"mesh": 0, "skin": 0, "name": "body"},
+            {"name": "root", "children": [2], "translation": [0.0, 1.0, 0.0]},
+            {"name": "tip", "translation": [0.0, 0.5, 0.0]},
+            {"mesh": 1, "skin": 0, "name": "hair"}
+        ]);
+        root["scenes"] = serde_json::json!([{"nodes": [0, 1, 3]}]);
+        root
+    }
+
+    pub(crate) fn two_skin_glb() -> Vec<u8> {
+        make_glb(&two_skin_json(), Some(&two_skin_bin()))
+    }
+
     pub(crate) fn parse(bytes: &[u8]) -> crate::gltf_source::GltfDoc {
         crate::gltf_source::GltfDoc::from_slice(bytes, None, "fixture").expect("fixture must parse")
     }
@@ -1230,7 +1307,7 @@ mod tests {
     #[test]
     fn import_skinned_reorders_joints_and_remaps_vertex_bindings() {
         let doc = parse(&skinned_glb());
-        let imported = import_skinned_from_doc(&doc, "s.glb").expect("skinned import");
+        let imported = import_skinned_from_doc(&doc, "s.glb", 0).expect("skinned import");
 
         // Skin joints are authored child-first ([tip, root]); the importer
         // must emit the root before its child.
@@ -1250,9 +1327,51 @@ mod tests {
     }
 
     #[test]
+    fn skin_index_selects_each_skinned_node_in_declaration_order() {
+        let doc = parse(&two_skin_glb());
+        let body = import_skinned_from_doc(&doc, "s.glb", 0).expect("body import");
+        let hair = import_skinned_from_doc(&doc, "s.glb", 1).expect("hair import");
+
+        // Both nodes reference the same skin, so the selector counts nodes,
+        // not entries in the glTF `skins` array.
+        assert_eq!(body.skeleton.len(), 2);
+        assert_eq!(hair.skeleton.len(), body.skeleton.len());
+        assert_eq!(body.vertices[0].pos, [0.0, 0.0, 0.0]);
+        assert_eq!(hair.vertices[0].pos, [5.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn skin_index_past_the_last_skinned_node_errors() {
+        let doc = parse(&two_skin_glb());
+        let err = import_skinned_from_doc(&doc, "s.glb", 2)
+            .err()
+            .expect("only two skinned nodes");
+        assert!(
+            err.contains("skin_index 2 out of range") && err.contains("2 skinned meshes"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn animations_resolve_against_the_selected_skin() {
+        // Both skinned nodes share a skeleton, so the joint tracks agree; the
+        // morph-weight channel target is what the selector really moves, and
+        // resolving either index must succeed rather than silently fall back.
+        let doc = parse(&two_skin_glb());
+        for skin_index in 0..2 {
+            let anims = import_glb_animations_from_doc(&doc, "s.glb", skin_index)
+                .expect("animations for every skin");
+            assert_eq!(anims.len(), 1);
+            assert_eq!(anims[0].name, "wave");
+        }
+        let err = import_glb_animations_from_doc(&doc, "s.glb", 5).expect_err("out of range");
+        assert!(err.contains("skin_index 5 out of range"), "got: {err}");
+    }
+
+    #[test]
     fn import_skinned_rejects_a_file_with_no_skinned_node() {
         let doc = parse(&static_triangle_glb());
-        let err = import_skinned_from_doc(&doc, "t.glb")
+        let err = import_skinned_from_doc(&doc, "t.glb", 0)
             .err()
             .expect("expected error");
         assert!(
@@ -1267,7 +1386,7 @@ mod tests {
             &skinned_json(true, false, false),
             Some(&skinned_bin()),
         ));
-        let err = import_skinned_from_doc(&doc, "s.glb")
+        let err = import_skinned_from_doc(&doc, "s.glb", 0)
             .err()
             .expect("expected error");
         assert!(err.contains("missing WEIGHTS_0"), "got: {err}");
@@ -1280,7 +1399,7 @@ mod tests {
             &skinned_json(false, false, false),
             Some(&skinned_bin()),
         ));
-        let err = import_skinned_from_doc(&doc, "s.glb")
+        let err = import_skinned_from_doc(&doc, "s.glb", 0)
             .err()
             .expect("expected error");
         assert!(err.contains("no skinned primitives"), "got: {err}");
@@ -1291,7 +1410,7 @@ mod tests {
     #[test]
     fn import_animations_extracts_joint_tracks_and_drops_non_joint_channels() {
         let doc = parse(&skinned_glb());
-        let anims = import_glb_animations_from_doc(&doc, "s.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "s.glb", 0).expect("animations");
         assert_eq!(anims.len(), 1);
         let anim = &anims[0];
         assert_eq!(anim.name, "wave");
@@ -1314,14 +1433,14 @@ mod tests {
     #[test]
     fn import_animation_from_doc_selects_by_name() {
         let doc = parse(&skinned_glb());
-        let anim = import_glb_animation_from_doc(&doc, "s.glb", 7, "wave").expect("clip");
+        let anim = import_glb_animation_from_doc(&doc, "s.glb", 0, 7, "wave").expect("clip");
         assert_eq!(anim.name, "wave");
     }
 
     #[test]
     fn import_animation_from_doc_rejects_an_unknown_name() {
         let doc = parse(&skinned_glb());
-        let err = import_glb_animation_from_doc(&doc, "s.glb", 0, "sprint").unwrap_err();
+        let err = import_glb_animation_from_doc(&doc, "s.glb", 0, 0, "sprint").unwrap_err();
         assert!(err.contains("no animation named 'sprint'"), "got: {err}");
         assert!(err.contains("1 clip"), "got: {err}");
     }
@@ -1329,23 +1448,23 @@ mod tests {
     #[test]
     fn import_animation_from_doc_falls_back_to_index_when_name_is_empty() {
         let doc = parse(&skinned_glb());
-        let anim = import_glb_animation_from_doc(&doc, "s.glb", 0, "").expect("clip");
+        let anim = import_glb_animation_from_doc(&doc, "s.glb", 0, 0, "").expect("clip");
         assert_eq!(anim.name, "wave");
     }
 
     #[test]
     fn import_animation_from_doc_rejects_an_out_of_range_index() {
         let doc = parse(&skinned_glb());
-        let err = import_glb_animation_from_doc(&doc, "s.glb", 1, "").unwrap_err();
+        let err = import_glb_animation_from_doc(&doc, "s.glb", 0, 1, "").unwrap_err();
         assert!(err.contains("animation_index 1 out of range"), "got: {err}");
     }
 
     #[test]
     fn import_animation_from_doc_pluralizes_a_multi_clip_count() {
         let doc = parse(&animated_glb());
-        let err = import_glb_animation_from_doc(&doc, "a.glb", 99, "").unwrap_err();
+        let err = import_glb_animation_from_doc(&doc, "a.glb", 0, 99, "").unwrap_err();
         assert!(err.contains("file has 7 animations"), "got: {err}");
-        let err = import_glb_animation_from_doc(&doc, "a.glb", 0, "sprint").unwrap_err();
+        let err = import_glb_animation_from_doc(&doc, "a.glb", 0, 0, "sprint").unwrap_err();
         assert!(err.contains("file has 7 clips"), "got: {err}");
     }
 
@@ -1353,13 +1472,13 @@ mod tests {
     fn importing_animations_requires_a_skinned_node_with_joints() {
         // No node carries both a mesh and a skin.
         let doc = parse(&static_triangle_glb());
-        let err = import_glb_animations_from_doc(&doc, "t.glb").unwrap_err();
+        let err = import_glb_animations_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(
             err.contains("no node with both a mesh and a skin"),
             "got: {err}"
         );
         // The same failure surfaces through the single-clip selector.
-        let err = import_glb_animation_from_doc(&doc, "t.glb", 0, "").unwrap_err();
+        let err = import_glb_animation_from_doc(&doc, "t.glb", 0, 0, "").unwrap_err();
         assert!(
             err.contains("no node with both a mesh and a skin"),
             "got: {err}"
@@ -1550,7 +1669,7 @@ mod tests {
     #[test]
     fn import_skinned_concatenates_primitives_and_pads_absent_morph_targets() {
         let doc = parse(&morph_glb(serde_json::json!({"targetNames": ["bulge", 7]})));
-        let mesh = import_skinned_from_doc(&doc, "m.glb").expect("skinned import");
+        let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
 
         // Both primitives contribute; the non-indexed one draws sequentially
         // from its own base offset.
@@ -1586,7 +1705,7 @@ mod tests {
             serde_json::json!({"unrelated": 1}),
         ] {
             let doc = parse(&morph_glb(extras.clone()));
-            let mesh = import_skinned_from_doc(&doc, "m.glb").expect("skinned import");
+            let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
             assert_eq!(
                 mesh.morph_target_names,
                 vec!["target_0", "target_1"],
@@ -1640,7 +1759,7 @@ mod tests {
             ]}]
         }));
         let doc = parse(&glb);
-        let err = import_skinned_from_doc(&doc, "m.glb")
+        let err = import_skinned_from_doc(&doc, "m.glb", 0)
             .err()
             .expect("expected error");
         assert!(err.contains("no POSITION data"), "got: {err}");
@@ -1673,7 +1792,7 @@ mod tests {
             }]}]
         }));
         let doc = parse(&glb);
-        let err = import_skinned_from_doc(&doc, "m.glb")
+        let err = import_skinned_from_doc(&doc, "m.glb", 0)
             .err()
             .expect("expected error");
         assert_eq!(
@@ -1703,12 +1822,12 @@ mod tests {
     #[test]
     fn import_skeleton_rejects_a_skin_with_no_joints() {
         let doc = parse(&jointless_glb());
-        let err = import_skinned_from_doc(&doc, "m.glb")
+        let err = import_skinned_from_doc(&doc, "m.glb", 0)
             .err()
             .expect("expected error");
         assert_eq!(err, "glTF skin has no joints");
         // The animation importer builds the same skeleton and fails alike.
-        let err = import_glb_animations_from_doc(&doc, "m.glb").unwrap_err();
+        let err = import_glb_animations_from_doc(&doc, "m.glb", 0).unwrap_err();
         assert_eq!(err, "glTF skin has no joints");
     }
 
@@ -1827,7 +1946,7 @@ mod tests {
     #[test]
     fn import_animation_merges_translation_rotation_and_scale_at_shared_times() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         let pose = clip(&anims, "pose");
 
         // The three T/R/S channels target one joint at identical sample times,
@@ -1858,7 +1977,7 @@ mod tests {
     #[test]
     fn import_animation_takes_the_value_of_each_cubicspline_rotation_triplet() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         let track = &clip(&anims, "pose_cubic").tracks[0];
 
         // The in / out tangent quaternions flanking each value are discarded.
@@ -1871,7 +1990,7 @@ mod tests {
     #[test]
     fn import_animation_drops_samples_when_the_output_count_disagrees() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         let track = &clip(&anims, "pose_ragged").tracks[0];
         assert_eq!(track.joint, 1);
         assert!(track.keys.is_empty());
@@ -1880,7 +1999,7 @@ mod tests {
     #[test]
     fn import_animation_reads_linear_morph_weight_keys() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         let morph = clip(&anims, "morph_linear");
 
         assert!(morph.tracks.is_empty());
@@ -1894,7 +2013,7 @@ mod tests {
     #[test]
     fn import_animation_takes_the_value_of_each_cubicspline_morph_triplet() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         let morph = clip(&anims, "morph_cubic");
 
         // Each key stores in-tangent / value / out-tangent per target; only the
@@ -1907,7 +2026,7 @@ mod tests {
     #[test]
     fn import_animation_drops_unusable_morph_channels() {
         let doc = parse(&animated_glb());
-        let anims = import_glb_animations_from_doc(&doc, "a.glb").expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, "a.glb", 0).expect("animations");
         // A weight count that is not a whole multiple of the sample times, and
         // samplers whose input or output carries no data, are all skipped
         // rather than producing partial keys.
@@ -1926,7 +2045,7 @@ mod tests {
             "/../../private/assets/models/rig_oracle/rig_morph.glb"
         );
         let doc = parse_glb(path).expect("parse");
-        let mesh = import_skinned_from_doc(&doc, path).expect("skinned import");
+        let mesh = import_skinned_from_doc(&doc, path, 0).expect("skinned import");
         assert_eq!(mesh.morph_target_names, vec!["bulge", "shift"]);
         assert_eq!(mesh.morph_deltas.len(), 2 * mesh.vertices.len());
         assert!(
@@ -1936,7 +2055,7 @@ mod tests {
             "bulge target must carry real position deltas"
         );
 
-        let anims = import_glb_animations_from_doc(&doc, path).expect("animations");
+        let anims = import_glb_animations_from_doc(&doc, path, 0).expect("animations");
         let weighted = anims
             .iter()
             .find(|a| !a.morph_track.is_empty())

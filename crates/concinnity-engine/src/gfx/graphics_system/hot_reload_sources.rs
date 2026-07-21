@@ -250,6 +250,9 @@ pub struct SkinnedMeshSourceEntry {
     // the glTF parser in concinnity-cook, which resolves
     // bare filenames internally.
     pub source: String,
+    // Mirrors [`SkinnedMesh::skin_index`]: which skinned mesh of `source` the
+    // reload re-imports.
+    pub skin_index: u32,
     // Index into `MtlContext.skinned_draw_objects` (and the corresponding
     // `SkinnedDrawObject` slot on every backend) of the draw this entry
     // owns.
@@ -422,6 +425,7 @@ mod tests {
     fn skinned_entry(source: &str) -> SkinnedMeshSourceEntry {
         SkinnedMeshSourceEntry {
             source: source.to_string(),
+            skin_index: 0,
             skinned_index: 0,
             vertex_base: 0,
             vertex_count: 3,

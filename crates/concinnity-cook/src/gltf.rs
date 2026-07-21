@@ -19,12 +19,12 @@ use crate::glb::{
 };
 
 // Parse a glTF file into inline `SkinnedMesh` geometry plus a
-// parents-before-children skeleton. The first node carrying both a mesh and a
-// skin is imported; other nodes, materials, cameras, and animations are
-// ignored.
-pub fn import_skinned_glb(source: &str) -> Result<ImportedSkinnedMesh, String> {
+// parents-before-children skeleton. `skin_index` selects among the file's
+// skinned nodes in declaration order; other nodes, materials, cameras, and
+// animations are ignored.
+pub fn import_skinned_glb(source: &str, skin_index: u32) -> Result<ImportedSkinnedMesh, String> {
     let doc = parse_glb(source)?;
-    import_skinned_from_doc(&doc, source)
+    import_skinned_from_doc(&doc, source, skin_index)
 }
 
 // Vertex count for the indexed primitive without reading any vertex data,
@@ -44,19 +44,26 @@ pub fn primitive_vertex_count(
 }
 
 // Import every animation in a `.glb` whose channels target joints of the
-// file's first skinned node. Channels whose target node is not a skin joint,
-// or whose interpolation method we cannot honour, are dropped silently;
-// per-clip warnings would spam build output for files that mix joint and
-// non-joint animations (e.g. character + camera).
-pub fn import_glb_animations(source: &str) -> Result<Vec<ImportedAnimation>, String> {
+// `skin_index`-th skinned node. Channels whose target node is not a skin
+// joint, or whose interpolation method we cannot honour, are dropped
+// silently; per-clip warnings would spam build output for files that mix
+// joint and non-joint animations (e.g. character + camera).
+pub fn import_glb_animations(
+    source: &str,
+    skin_index: u32,
+) -> Result<Vec<ImportedAnimation>, String> {
     let doc = parse_glb(source)?;
-    import_glb_animations_from_doc(&doc, source)
+    import_glb_animations_from_doc(&doc, source, skin_index)
 }
 
 // Import a single animation by its glTF index. Index out of range is a hard
 // error; the user authored an animation entry the file does not contain.
-pub fn import_glb_animation(source: &str, index: usize) -> Result<ImportedAnimation, String> {
-    let mut anims = import_glb_animations(source)?;
+pub fn import_glb_animation(
+    source: &str,
+    index: usize,
+    skin_index: u32,
+) -> Result<ImportedAnimation, String> {
+    let mut anims = import_glb_animations(source, skin_index)?;
     if index >= anims.len() {
         return Err(format!(
             "'{}': animation_index {} out of range (file has {} animation{})",
@@ -100,7 +107,7 @@ mod tests {
     fn import_skinned_glb_reads_mesh_and_skeleton() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let imported = import_skinned_glb(&src).expect("skinned import");
+        let imported = import_skinned_glb(&src, 0).expect("skinned import");
         assert_eq!(imported.vertices.len(), 3);
         assert_eq!(imported.skeleton.len(), 2);
     }
@@ -109,7 +116,7 @@ mod tests {
     fn import_skinned_glb_reports_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("missing.glb");
-        let err = import_skinned_glb(src.to_str().unwrap())
+        let err = import_skinned_glb(src.to_str().unwrap(), 0)
             .err()
             .expect("expected error");
         assert!(err.contains("failed to read"), "got: {err}");
@@ -128,7 +135,7 @@ mod tests {
     fn import_glb_animations_returns_every_clip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let anims = import_glb_animations(&src).expect("animations");
+        let anims = import_glb_animations(&src, 0).expect("animations");
         assert_eq!(anims.len(), 1);
         assert_eq!(anims[0].name, "wave");
     }
@@ -137,7 +144,7 @@ mod tests {
     fn import_glb_animation_returns_the_indexed_clip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let anim = import_glb_animation(&src, 0).expect("clip");
+        let anim = import_glb_animation(&src, 0, 0).expect("clip");
         assert_eq!(anim.name, "wave");
     }
 
@@ -145,7 +152,7 @@ mod tests {
     fn import_glb_animation_rejects_an_out_of_range_index() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let err = import_glb_animation(&src, 3).unwrap_err();
+        let err = import_glb_animation(&src, 3, 0).unwrap_err();
         assert!(err.contains("animation_index 3 out of range"), "got: {err}");
         assert!(err.contains("1 animation"), "got: {err}");
     }
@@ -170,7 +177,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let bytes = make_glb(&skinned_json(true, true, false), Some(&skinned_bin()));
         let src = write_glb(&dir, "s.glb", &bytes);
-        let err = import_glb_animation(&src, 0).unwrap_err();
+        let err = import_glb_animation(&src, 0, 0).unwrap_err();
         assert!(err.contains("animation_index 0 out of range"), "got: {err}");
         assert!(err.contains("0 animations"), "got: {err}");
     }

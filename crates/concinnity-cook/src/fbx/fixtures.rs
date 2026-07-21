@@ -110,13 +110,13 @@ fn emit<W: Write + Seek>(w: &mut Writer<W>, n: &Node) {
 
 // A written .fbx plus the temporary directory holding it; texture paths are
 // resolved relative to that directory, so tests keep it alive.
-pub(super) struct FbxFile {
+pub(crate) struct FbxFile {
     dir: tempfile::TempDir,
     path: String,
 }
 
 impl FbxFile {
-    pub(super) fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
@@ -413,6 +413,11 @@ pub(super) const SKIN_ID: i64 = 400;
 pub(super) const ROOT_CLUSTER_ID: i64 = 401;
 pub(super) const TIP_CLUSTER_ID: i64 = 402;
 
+pub(super) const SECOND_GEOMETRY_ID: i64 = 110;
+pub(super) const SECOND_MESH_MODEL_ID: i64 = 210;
+pub(super) const SECOND_SKIN_ID: i64 = 410;
+pub(super) const SECOND_CLUSTER_ID: i64 = 411;
+
 // A skinned triangle bound to a two-joint chain: Root at the origin, Tip two
 // units up. Control point 0 is fully Root-weighted, 2 fully Tip-weighted, and
 // 1 is shared. The mesh node carries a +X geometric offset so the bind frame
@@ -453,4 +458,65 @@ pub(super) fn two_bone_rig(unit_scale_factor: f64) -> Doc {
             oo(TIP_BONE_ID, TIP_CLUSTER_ID),
         ],
     }
+}
+
+// [`two_bone_rig`] with a second skinned geometry ("hair") bound to the same
+// Tip bone through its own skin deformer, so the file exposes two skinned
+// meshes over one skeleton.
+pub(super) fn two_part_rig(unit_scale_factor: f64) -> Doc {
+    let mut doc = two_bone_rig(unit_scale_factor);
+    doc.objects.extend([
+        geometry(
+            SECOND_GEOMETRY_ID,
+            "hair",
+            vec![0.0, 2.0, 0.0, 1.0, 2.0, 0.0, 0.0, 3.0, 0.0],
+            vec![0, 1, -3],
+        ),
+        model(SECOND_MESH_MODEL_ID, "HairNode", "Mesh"),
+        skin_deformer(SECOND_SKIN_ID, "HairSkin"),
+        cluster(
+            SECOND_CLUSTER_ID,
+            "HairCluster",
+            vec![0, 1, 2],
+            vec![1.0, 1.0, 1.0],
+        )
+        .child(transform_link(flat_translation([0.0, 2.0, 0.0])))
+        .child(transform(flat_translation([0.0, -2.0, 0.0]))),
+    ]);
+    doc.connections.extend([
+        oo(SECOND_GEOMETRY_ID, SECOND_MESH_MODEL_ID),
+        oo(SECOND_MESH_MODEL_ID, 0),
+        oo(SECOND_SKIN_ID, SECOND_GEOMETRY_ID),
+        oo(SECOND_CLUSTER_ID, SECOND_SKIN_ID),
+        oo(TIP_BONE_ID, SECOND_CLUSTER_ID),
+    ]);
+    doc
+}
+
+// [`two_part_rig`] written out with a one-second clip named "Wave", the shape
+// the scene expansion reads: two skinned parts plus an animation stack.
+pub(crate) fn two_part_rig_with_clip() -> FbxFile {
+    const STACK: i64 = 500;
+    const LAYER: i64 = 510;
+    const CURVE_NODE: i64 = 520;
+    const CURVE: i64 = 530;
+    const ONE_SECOND: i64 = 46_186_158_000;
+
+    let mut doc = two_part_rig(100.0);
+    doc.objects.extend([
+        anim_stack(STACK, "Wave").child(properties70(vec![
+            p_time("LocalStart", 0),
+            p_time("LocalStop", ONE_SECOND),
+        ])),
+        anim_layer(LAYER, "BaseLayer"),
+        anim_curve_node(CURVE_NODE, "R", [0.0, 0.0, 0.0]),
+        anim_curve(CURVE, vec![0, ONE_SECOND], vec![0.0, 45.0]),
+    ]);
+    doc.connections.extend([
+        oo(LAYER, STACK),
+        oo(CURVE_NODE, LAYER),
+        op(CURVE, CURVE_NODE, "d|X"),
+        op(CURVE_NODE, TIP_BONE_ID, "Lcl Rotation"),
+    ]);
+    doc.write()
 }

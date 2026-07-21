@@ -506,6 +506,28 @@ fn probe_gltf_cache(
 // `.fbx` sources belong to `desugar_fbx_skinned_meshes`.
 // Skips an asset whose cache probe found a precompiled payload: there is no
 // reason to parse the .glb when the bytes are already in hand.
+// Which skinned mesh of the asset's source file it selects; absent means the
+// file's first.
+fn skin_index_arg(asset: &WorldJsonlAsset) -> u32 {
+    asset
+        .args
+        .get("skin_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32
+}
+
+// Skin selector per SkinnedMesh asset name. An Animation resolves its channels
+// against its target's skeleton, so it inherits the target's selector rather
+// than carrying its own: the two must agree or joint indices bind to a
+// different skeleton and the clip silently mis-poses.
+fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap<String, u32> {
+    assets
+        .iter()
+        .filter(|a| a.asset_type == SKINNED_MESH_TYPE)
+        .map(|a| (a.name.clone(), skin_index_arg(a)))
+        .collect()
+}
+
 fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
     gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
@@ -534,12 +556,13 @@ fn desugar_gltf_skinned_meshes(
             continue;
         }
 
-        let imported = crate::gltf::import_skinned_glb(&source).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': glTF import failed: {}", asset.name, e),
-            )
-        })?;
+        let imported =
+            crate::gltf::import_skinned_glb(&source, skin_index_arg(asset)).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                )
+            })?;
 
         let name = asset.name.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
@@ -624,12 +647,13 @@ fn desugar_fbx_skinned_meshes(
             continue;
         }
 
-        let imported = crate::fbx::import_skinned_fbx(&source).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': FBX import failed: {}", asset.name, e),
-            )
-        })?;
+        let imported =
+            crate::fbx::import_skinned_fbx(&source, skin_index_arg(asset)).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                )
+            })?;
 
         let name = asset.name.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
@@ -981,6 +1005,8 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
     use crate::assets::Animation;
     use crate::ecs::Component;
 
+    let skin_by_target = skin_index_by_target(assets);
+
     for asset in assets.iter_mut() {
         if asset.asset_type != Animation::NAME {
             continue;
@@ -1005,6 +1031,13 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
             .get("animation_index")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
+        let skin_index = asset
+            .args
+            .get("target")
+            .and_then(|v| v.as_str())
+            .and_then(|t| skin_by_target.get(t))
+            .copied()
+            .unwrap_or(0);
 
         let imported = if source.to_lowercase().ends_with(".fbx") {
             let sample_rate = asset
@@ -1017,6 +1050,7 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
                 animation_index as u32,
                 &animation_name,
                 sample_rate,
+                skin_index,
             )
             .map_err(|e| {
                 std::io::Error::new(
@@ -1050,7 +1084,7 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
                 animation_index
             };
 
-            crate::gltf::import_glb_animation(&source, resolved_index).map_err(|e| {
+            crate::gltf::import_glb_animation(&source, resolved_index, skin_index).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Asset '{}': glTF import failed: {}", asset.name, e),
@@ -2849,6 +2883,82 @@ mod tests {
             args["vertices"][0]["weights"],
             serde_json::json!([1.0, 0.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn desugar_skinned_meshes_import_the_selected_skin() {
+        use crate::glb::test_fixtures::two_skin_glb;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &two_skin_glb());
+        let mut assets = vec![
+            wja(
+                "body",
+                SKINNED_MESH_TYPE,
+                serde_json::json!({"source": src, "skin_index": 0}),
+            ),
+            wja(
+                "hair",
+                SKINNED_MESH_TYPE,
+                serde_json::json!({"source": src, "skin_index": 1}),
+            ),
+        ];
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+
+        // Each asset inlines its own part's geometry.
+        assert_eq!(
+            assets[0].args["vertices"][0]["pos"],
+            serde_json::json!([0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            assets[1].args["vertices"][0]["pos"],
+            serde_json::json!([5.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn desugar_animation_imports_inherit_the_targets_skin() {
+        use crate::glb::test_fixtures::two_skin_glb;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_fixture(&dir, "hero.glb", &two_skin_glb());
+        let mut assets = vec![
+            wja(
+                "hair",
+                SKINNED_MESH_TYPE,
+                serde_json::json!({"source": src, "skin_index": 1}),
+            ),
+            wja(
+                "hair_wave",
+                "Animation",
+                serde_json::json!({"target": "hair", "source": src}),
+            ),
+        ];
+        // The clip carries no selector of its own; resolving it against the
+        // target's skin is what keeps the joint indices in the same space.
+        assert_eq!(skin_index_by_target(&assets).get("hair"), Some(&1));
+        desugar_animation_imports(&mut assets).expect("desugar");
+        assert!(
+            !assets[1].args["tracks"]
+                .as_array()
+                .expect("tracks")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_animation_without_a_resolvable_target_falls_back_to_the_first_skin() {
+        let assets = vec![
+            wja(
+                "body",
+                SKINNED_MESH_TYPE,
+                serde_json::json!({"skin_index": 2}),
+            ),
+            wja("orphan", "Animation", serde_json::json!({"target": "gone"})),
+        ];
+        let by_target = skin_index_by_target(&assets);
+        assert_eq!(by_target.get("body"), Some(&2));
+        assert!(!by_target.contains_key("gone"));
     }
 
     // `.glb` sources belong to the glTF pass, and a probe hit means the

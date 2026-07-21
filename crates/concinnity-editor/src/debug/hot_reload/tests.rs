@@ -189,6 +189,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
     let mut m = SkinnedMeshSourceMap::new();
     m.entries.push(SkinnedMeshSourceEntry {
         source: "assets/models/a.glb".to_string(),
+        skin_index: 0,
         skinned_index: 0,
         vertex_base: 0,
         vertex_count: 100,
@@ -197,6 +198,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
     });
     m.entries.push(SkinnedMeshSourceEntry {
         source: "assets/models/b.glb".to_string(),
+        skin_index: 0,
         skinned_index: 1,
         vertex_base: 100,
         vertex_count: 50,
@@ -213,6 +215,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
     let mut skinned = SkinnedMeshSourceMap::new();
     skinned.entries.push(SkinnedMeshSourceEntry {
         source: format!("{}/skinned.glb", std::env::temp_dir().display()),
+        skin_index: 0,
         skinned_index: 0,
         vertex_base: 0,
         vertex_count: 8,
@@ -353,6 +356,7 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
     let mut entries = vec![
         SkinnedMeshSourceEntry {
             source: "a.glb".to_string(),
+            skin_index: 0,
             skinned_index: 0,
             vertex_base: 0,
             vertex_count: 10,
@@ -361,6 +365,7 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
         },
         SkinnedMeshSourceEntry {
             source: "b.glb".to_string(),
+            skin_index: 0,
             skinned_index: 1,
             vertex_base: 10,
             vertex_count: 20,
@@ -715,6 +720,7 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
     // contract robust to backend variation.
     let mut entries = vec![SkinnedMeshSourceEntry {
         source: "a.glb".to_string(),
+        skin_index: 0,
         skinned_index: 7,
         vertex_base: 42,
         vertex_count: 12,
@@ -1159,6 +1165,7 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
     let dir = tempfile::tempdir().unwrap();
     let entry = SkinnedMeshSourceEntry {
         source: dir.path().join("gone.glb").to_string_lossy().into_owned(),
+        skin_index: 0,
         skinned_index: 0,
         vertex_base: 0,
         vertex_count: 8,
@@ -1413,6 +1420,7 @@ fn one_skinned_state(entry: SkinnedMeshSourceEntry) -> AssetHotReloadState {
 fn skinned_entry() -> SkinnedMeshSourceEntry {
     SkinnedMeshSourceEntry {
         source: "rig.glb".to_string(),
+        skin_index: 0,
         skinned_index: 4,
         vertex_base: 0,
         vertex_count: 2,

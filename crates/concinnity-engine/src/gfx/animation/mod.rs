@@ -71,6 +71,9 @@ pub struct AnimationReloadEntry {
     // `.glb` source path verbatim from the asset declaration; used as-is by
     // the GLB parser at reload time.
     pub source: String,
+    // The target mesh's [`SkinnedMesh::skin_index`]: the clip re-imports
+    // against the same skeleton the build cooked it against.
+    pub skin_index: u32,
     // Mirrors [`Animation::animation_index`].
     pub animation_index: u32,
     // Mirrors [`Animation::animation_name`] (precedence over index when
@@ -205,6 +208,10 @@ impl System for AnimationSystem {
             .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex>()
             .cloned()
             .unwrap_or_default();
+        let skin_index = ctx
+            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex>()
+            .cloned()
+            .unwrap_or_default();
         // Animation asset id -> (target bucket, clip slot), for resolving
         // graph clip references onto bucket indices.
         let mut clip_slots: HashMap<AssetId, (SkinnedMeshHandle, usize)> = HashMap::new();
@@ -238,6 +245,7 @@ impl System for AnimationSystem {
                     target,
                     clip_index,
                     source: anim.source.clone(),
+                    skin_index: skin_index.get(target),
                     animation_index: anim.animation_index,
                     animation_name: anim.animation_name.clone(),
                     sample_rate: anim.sample_rate,

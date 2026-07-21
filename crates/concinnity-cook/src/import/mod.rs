@@ -1,7 +1,8 @@
 // src/build/import.rs
 //
 // Build-time expansion of a scene file into Concinnity asset entries
-// (Texture / Material / Mesh / Model / Prop / Camera3D). Each entry references
+// (Texture / Material / Mesh / Model / Prop / Camera3D, plus SkinnedMesh /
+// Animation for a file that carries rigs, see `rig`). Each entry references
 // the source file by path: geometry is filled in later by the desugar passes
 // in `pipeline.rs` and texture pixels by `compile_texture_payload`, so the
 // generated entries carry no inline vertex or pixel data. The expansion is
@@ -28,10 +29,13 @@
 // glTF metallic-roughness packed textures, occlusion textures, and alpha modes
 // are dropped for now; the demo scenes still render correctly without them.
 
-use std::collections::HashMap;
+mod rig;
+
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use rig::{SkinnedPart, rig_entries};
 
 // u16 index ceiling: a primitive with more vertices than this fans into chunks.
 const U16_CAPACITY: usize = u16::MAX as usize + 1;
@@ -221,11 +225,24 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         material_names.push(name);
     }
 
+    // Primitives drawn by a skin-deformed node expand as a SkinnedMesh below,
+    // so they emit no static entries; the primitive index space is the
+    // parser's and stays untouched either way.
+    let skinned_primitives: HashSet<usize> = scene
+        .props
+        .iter()
+        .filter(|p| p.skin_index.is_some())
+        .flat_map(|p| p.primitives.iter().copied())
+        .collect();
+
     // Meshes: one per primitive, fanning oversized primitives into u16 chunks.
     // Record the mesh asset name(s) produced for each primitive so the prop's
     // model can list them as submeshes.
     let mut primitive_meshes: Vec<Vec<String>> = vec![Vec::new(); scene.primitives.len()];
     for (i, prim) in scene.primitives.iter().enumerate() {
+        if skinned_primitives.contains(&i) {
+            continue;
+        }
         if prim.vertices.len() <= U16_CAPACITY {
             let mesh_name = format!("{prefix}_prim_{i}");
             entries.push(serde_json::json!({
@@ -252,8 +269,11 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
     }
 
-    // Models + Props: one of each per scene node that carries geometry.
+    // Models + Props: one of each per scene node that carries static geometry.
     for (pi, prop) in scene.props.iter().enumerate() {
+        if prop.skin_index.is_some() {
+            continue;
+        }
         let mut submeshes: Vec<serde_json::Value> = Vec::new();
         for &prim_idx in &prop.primitives {
             let material = scene.primitives[prim_idx]
@@ -292,6 +312,31 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
                 "scale": prop.scale,
             }
         }));
+    }
+
+    // SkinnedMesh + Animation, one set per skin-deformed node.
+    let mut parts: Vec<SkinnedPart> = scene
+        .props
+        .iter()
+        .filter_map(|p| {
+            let skin_index = p.skin_index?;
+            let material = p
+                .primitives
+                .first()
+                .and_then(|&i| scene.primitives[i].material)
+                .and_then(|mi| material_names.get(mi).cloned())
+                .unwrap_or_else(|| default_mat.clone());
+            Some(SkinnedPart {
+                skin_index,
+                material,
+            })
+        })
+        .collect();
+    if !parts.is_empty() {
+        parts.sort_by_key(|p| p.skin_index);
+        let clips = crate::fbx::fbx_animation_names(path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        entries.extend(rig_entries(prefix, path, &parts, &clips));
     }
 
     // Camera framed to the scene's world AABB, mirroring the glTF importer.
@@ -404,10 +449,37 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     // index limit needs one Mesh per u16-safe chunk; we count the chunks
     // here (one geometry read per oversized primitive) and emit named
     // entries carrying the `chunk_index` the desugar pass will slice on.
+    //
+    // A mesh drawn only by skinned nodes expands as a SkinnedMesh instead, so
+    // its primitives emit no static entries; the counter still advances over
+    // them because `primitive_index` addresses the file's flattened primitive
+    // list, which the desugar pass re-derives from the source.
+    let skinned_nodes: Vec<gltf::Node<'_>> = doc
+        .doc
+        .document
+        .nodes()
+        .filter(|n| n.mesh().is_some() && n.skin().is_some())
+        .collect();
+    let drawn_static: HashSet<usize> = doc
+        .doc
+        .document
+        .nodes()
+        .filter(|n| n.skin().is_none())
+        .filter_map(|n| n.mesh().map(|m| m.index()))
+        .collect();
+    let skinned_only: HashSet<usize> = skinned_nodes
+        .iter()
+        .filter_map(|n| n.mesh().map(|m| m.index()))
+        .filter(|i| !drawn_static.contains(i))
+        .collect();
+
     let mut primitive_counter: usize = 0;
     let mut mesh_to_submesh_refs: Vec<Vec<serde_json::Value>> = Vec::new();
+    // First primitive's material per glTF mesh, for the rigs below.
+    let mut mesh_first_material: Vec<String> = Vec::new();
     for gltf_mesh in doc.doc.document.meshes() {
         let mut submesh_refs: Vec<serde_json::Value> = Vec::new();
+        let skip_static = skinned_only.contains(&gltf_mesh.index());
         for primitive in gltf_mesh.primitives() {
             let prim_idx = primitive_counter;
             primitive_counter += 1;
@@ -417,6 +489,12 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
                 .index()
                 .and_then(|i| material_names.get(i).cloned())
                 .unwrap_or_else(|| default_mat_name.clone());
+            if mesh_first_material.len() == gltf_mesh.index() {
+                mesh_first_material.push(material_name.clone());
+            }
+            if skip_static {
+                continue;
+            }
 
             let vert_count =
                 crate::gltf::primitive_vertex_count(&doc, prim_idx as u32).unwrap_or(0);
@@ -463,21 +541,28 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
                 }));
             }
         }
+        if mesh_first_material.len() == gltf_mesh.index() {
+            mesh_first_material.push(default_mat_name.clone());
+        }
         mesh_to_submesh_refs.push(submesh_refs);
     }
 
     // Models: one entry per glTF mesh, grouping its primitives + materials.
-    let model_names: Vec<String> = mesh_to_submesh_refs
+    // A skinned-only mesh has no static entries to group.
+    let model_names: Vec<Option<String>> = mesh_to_submesh_refs
         .iter()
         .enumerate()
         .map(|(i, submeshes)| {
+            if skinned_only.contains(&i) {
+                return None;
+            }
             let name = format!("{prefix}_model_{i}");
             entries.push(serde_json::json!({
                 "name": name,
                 "type": "Model",
                 "args": { "meshes": submeshes }
             }));
-            name
+            Some(name)
         })
         .collect();
 
@@ -504,6 +589,30 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         for root in scene.nodes() {
             walk.walk_node(&root, IDENTITY);
         }
+    }
+
+    // SkinnedMesh + Animation, one set per skinned node. A skinned node's own
+    // transform is not applied to its geometry (the skin's joints place it),
+    // so each part renders at the origin.
+    if !skinned_nodes.is_empty() {
+        let parts: Vec<SkinnedPart> = skinned_nodes
+            .iter()
+            .enumerate()
+            .map(|(skin_index, node)| SkinnedPart {
+                skin_index,
+                material: node
+                    .mesh()
+                    .and_then(|m| mesh_first_material.get(m.index()).cloned())
+                    .unwrap_or_else(|| default_mat_name.clone()),
+            })
+            .collect();
+        let clips: Vec<String> = doc
+            .doc
+            .document
+            .animations()
+            .map(|a| a.name().unwrap_or("").to_string())
+            .collect();
+        entries.extend(rig_entries(prefix, path, &parts, &clips));
     }
 
     // Camera3D framed to the scene's world AABB.
@@ -549,7 +658,7 @@ fn intern_texture(
 // JSON; `aabb` grows to the world-space bounds of every primitive visited.
 struct SceneWalk<'a> {
     prefix: &'a str,
-    model_names: &'a [String],
+    model_names: &'a [Option<String>],
     prop_counter: usize,
     entries: &'a mut Vec<serde_json::Value>,
     aabb: &'a mut Option<([f32; 3], [f32; 3])>,
@@ -565,9 +674,20 @@ impl SceneWalk<'_> {
         let local = node.transform().matrix();
         let world = mat4_mul(parent_world, local);
 
-        if let Some(mesh) = node.mesh() {
+        // A skinned node expands to a SkinnedMesh, never a Prop: emitting both
+        // would draw the character twice, once frozen in bind pose. Its bounds
+        // still frame the camera, taken at the origin where the SkinnedMesh
+        // renders rather than at the (unapplied) node transform.
+        if let (Some(mesh), true) = (node.mesh(), node.skin().is_some()) {
+            for prim in mesh.primitives() {
+                let local_bbox = prim.bounding_box();
+                for c in aabb_corners(local_bbox.min, local_bbox.max) {
+                    expand_aabb(self.aabb, c);
+                }
+            }
+        } else if let Some(mesh) = node.mesh() {
             let mesh_idx = mesh.index();
-            if let Some(model_name) = self.model_names.get(mesh_idx) {
+            if let Some(Some(model_name)) = self.model_names.get(mesh_idx) {
                 let (t, q, s) = decompose(world);
                 let rotation_deg = euler_yxz_from_quat(q);
                 let idx = self.prop_counter;
@@ -951,6 +1071,122 @@ mod tests {
         // A camera is framed to the world-space AABB.
         let cam = find(&entries, "scn_cam", "Camera3D");
         assert!(cam["args"]["position"][2].as_f64().unwrap() > 4.0);
+    }
+
+    #[test]
+    fn glb_skinned_nodes_expand_to_skinned_meshes_and_clips_not_props() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hero.glb");
+        std::fs::write(&path, crate::glb::test_fixtures::two_skin_glb()).unwrap();
+        let path = path.to_str().unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "hero".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path, &opts).expect("expand glb");
+
+        // One SkinnedMesh per skinned node, each selecting its own part and
+        // taking its mesh's material.
+        let body = find(&entries, "hero_skin_0", "SkinnedMesh");
+        assert_eq!(body["args"]["source"], serde_json::json!(path));
+        assert_eq!(body["args"]["skin_index"], serde_json::json!(0));
+        assert_eq!(body["args"]["material"], "hero_mat_0");
+        let hair = find(&entries, "hero_skin_1", "SkinnedMesh");
+        assert_eq!(hair["args"]["skin_index"], serde_json::json!(1));
+        assert_eq!(hair["args"]["material"], "hero_mat_1");
+
+        // Every part gets the clip, targeting its own mesh.
+        let body_clip = find(&entries, "hero_anim_0_wave_0", "Animation");
+        assert_eq!(body_clip["args"]["target"], "hero_skin_0");
+        assert_eq!(body_clip["args"]["source"], serde_json::json!(path));
+        let hair_clip = find(&entries, "hero_anim_1_wave_0", "Animation");
+        assert_eq!(hair_clip["args"]["target"], "hero_skin_1");
+
+        // The skinned geometry must not also expand statically: a Prop beside
+        // the SkinnedMesh would draw the character twice, once in bind pose.
+        assert!(
+            entries.iter().all(|e| e["type"] != "Prop"),
+            "skinned nodes emit no Prop: {entries:#?}"
+        );
+        assert!(entries.iter().all(|e| e["type"] != "Mesh"));
+        assert!(entries.iter().all(|e| e["type"] != "Model"));
+
+        // The character still bounds a camera, framed where it renders.
+        find(&entries, "hero_cam", "Camera3D");
+    }
+
+    #[test]
+    fn glb_mesh_drawn_by_both_a_skinned_and_a_static_node_keeps_its_static_entries() {
+        // Only geometry drawn *exclusively* by skinned nodes drops its static
+        // entries; a mesh a plain node also draws still needs them.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.glb");
+        let mut json = crate::glb::test_fixtures::two_skin_json();
+        json["nodes"] = serde_json::json!([
+            {"mesh": 0, "skin": 0, "name": "body"},
+            {"name": "root", "children": [2], "translation": [0.0, 1.0, 0.0]},
+            {"name": "tip", "translation": [0.0, 0.5, 0.0]},
+            {"mesh": 1, "skin": 0, "name": "hair"},
+            {"mesh": 1, "name": "hair_prop", "translation": [9.0, 0.0, 0.0]}
+        ]);
+        json["scenes"] = serde_json::json!([{"nodes": [0, 1, 3, 4]}]);
+        let bytes = crate::glb::test_fixtures::make_glb(
+            &json,
+            Some(&crate::glb::test_fixtures::two_skin_bin()),
+        );
+        std::fs::write(&path, bytes).unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "mix".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+
+        // Mesh 1 keeps its static entries for the plain node...
+        find(&entries, "mix_prim_1", "Mesh");
+        find(&entries, "mix_model_1", "Model");
+        let prop = find(&entries, "mix_hair_prop", "Prop");
+        assert_eq!(prop["args"]["model"], "mix_model_1");
+        // ...while mesh 0, drawn only by the skinned body, drops them. Its
+        // primitive index is still 0, so `mix_prim_1` addresses the file's
+        // second primitive as it always did.
+        assert!(entries.iter().all(|e| e["name"] != "mix_prim_0"));
+        assert!(entries.iter().all(|e| e["name"] != "mix_model_0"));
+        // Both skinned parts still expand.
+        find(&entries, "mix_skin_0", "SkinnedMesh");
+        find(&entries, "mix_skin_1", "SkinnedMesh");
+    }
+
+    #[test]
+    fn glb_without_skins_generates_no_rig_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.glb");
+        std::fs::write(&path, triangle_glb(3)).unwrap();
+
+        let entries =
+            entries_from_scene(path.to_str().unwrap(), &ImportOptions::default()).expect("expand");
+        assert!(entries.iter().all(|e| e["type"] != "SkinnedMesh"));
+        assert!(entries.iter().all(|e| e["type"] != "Animation"));
+    }
+
+    #[test]
+    fn glb_skin_without_clips_generates_the_mesh_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bind.glb");
+        let bytes = crate::glb::test_fixtures::make_glb(
+            &crate::glb::test_fixtures::skinned_json(true, true, false),
+            Some(&crate::glb::test_fixtures::skinned_bin()),
+        );
+        std::fs::write(&path, bytes).unwrap();
+
+        let opts = ImportOptions {
+            name_prefix: "rig".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+        find(&entries, "rig_skin_0", "SkinnedMesh");
+        assert!(entries.iter().all(|e| e["type"] != "Animation"));
     }
 
     #[test]
@@ -1516,6 +1752,54 @@ mod tests {
         let model = find(&entries, "big_model_0", "Model");
         assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");
         assert_eq!(model["args"]["meshes"][1]["mesh"], "big_prim_0_chunk_1");
+    }
+
+    #[test]
+    fn fbx_skinned_nodes_expand_to_skinned_meshes_and_clips_not_props() {
+        let file = crate::fbx::fixtures::two_part_rig_with_clip();
+        let opts = ImportOptions {
+            name_prefix: "hero".to_string(),
+            ..ImportOptions::default()
+        };
+        let entries = entries_from_scene(file.path(), &opts).expect("expand fbx");
+
+        // Both skin-deformed geometries expand, ranked in Geometry declaration
+        // order so the selector matches the importer's own scan.
+        let body = find(&entries, "hero_skin_0", "SkinnedMesh");
+        assert_eq!(body["args"]["source"], serde_json::json!(file.path()));
+        assert_eq!(body["args"]["skin_index"], serde_json::json!(0));
+        let hair = find(&entries, "hero_skin_1", "SkinnedMesh");
+        assert_eq!(hair["args"]["skin_index"], serde_json::json!(1));
+
+        // The clip is generated for each part against its own mesh.
+        assert_eq!(
+            find(&entries, "hero_anim_0_wave_0", "Animation")["args"]["target"],
+            "hero_skin_0"
+        );
+        assert_eq!(
+            find(&entries, "hero_anim_1_wave_0", "Animation")["args"]["target"],
+            "hero_skin_1"
+        );
+
+        // No static twin of the skinned geometry.
+        assert!(
+            entries.iter().all(|e| e["type"] != "Prop"),
+            "skinned nodes emit no Prop: {entries:#?}"
+        );
+        assert!(entries.iter().all(|e| e["type"] != "Mesh"));
+    }
+
+    #[test]
+    fn fbx_static_scene_generates_no_rig_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scene.fbx");
+        write_scene_fbx(&path);
+        let entries = entries_from_scene(path.to_str().unwrap(), &scene_opts()).expect("expand");
+        assert!(entries.iter().all(|e| e["type"] != "SkinnedMesh"));
+        assert!(entries.iter().all(|e| e["type"] != "Animation"));
+        // The static expansion is untouched: every prop and mesh still lands.
+        find(&entries, "scn_prim_0", "Mesh");
+        find(&entries, "scn_crate_box_0", "Prop");
     }
 
     #[test]

@@ -42,6 +42,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
                 entry.animation_index,
                 &entry.animation_name,
                 entry.sample_rate,
+                entry.skin_index,
             )
         } else {
             match parsed_cache.get(&entry.source) {
@@ -55,6 +56,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
                 concinnity_cook::glb::import_glb_animation_from_doc(
                     doc,
                     &entry.source,
+                    entry.skin_index,
                     entry.animation_index,
                     &entry.animation_name,
                 )
@@ -352,7 +354,7 @@ mod tests {
             concinnity_cook::gltf_source::GltfDoc::from_slice(&skinned_glb(), None, "hero.glb")
                 .expect("fixture parses");
         let imported =
-            concinnity_cook::glb::import_glb_animation_from_doc(&doc, "hero.glb", 0, "wave")
+            concinnity_cook::glb::import_glb_animation_from_doc(&doc, "hero.glb", 0, 0, "wave")
                 .expect("fixture animation imports");
         let clip = imported_to_clip(&imported, true);
         assert!(clip.looping);

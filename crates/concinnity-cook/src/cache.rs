@@ -137,8 +137,10 @@ fn hash_source_input(input: &SourceInput) -> Option<(String, [u8; 32])> {
 // Bump when the SceneImport expansion output shape changes (a new generated
 // asset field, a renamed arg, a different naming scheme) so existing cached
 // entry lists are invalidated. v2: glass materials are detected (by FBX
-// transparency / name) and emitted smooth + translucent.
-const EXPAND_FORMAT_VERSION: u32 = 2;
+// transparency / name) and emitted smooth + translucent. v3: a skinned node
+// expands to SkinnedMesh + Animation entries instead of a static
+// Mesh / Model / Prop.
+const EXPAND_FORMAT_VERSION: u32 = 3;
 
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
 // deterministic function of the source file's contents, the import options,

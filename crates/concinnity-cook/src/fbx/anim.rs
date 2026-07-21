@@ -43,18 +43,19 @@ pub fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
 }
 
 // Import one animation clip, selected by `animation_name` (precedence) or
-// `animation_index`, baked at `sample_rate` keys per second. Curves targeting
-// nodes that are not skeleton joints are dropped, mirroring the glTF
-// importer.
+// `animation_index`, baked at `sample_rate` keys per second and resolved
+// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
+// that are not skeleton joints are dropped, mirroring the glTF importer.
 pub fn import_fbx_animation(
     path: &str,
     animation_index: u32,
     animation_name: &str,
     sample_rate: f32,
+    skin_index: u32,
 ) -> Result<ImportedAnimation, String> {
     let tree = super::load_tree(path)?;
     let root = tree.root();
-    let skin = super::skin::parse_skin(root, path)?;
+    let skin = super::skin::parse_skin(root, path, skin_index)?;
     let objects = root
         .first_child_by_name("Objects")
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
@@ -570,7 +571,7 @@ mod tests {
     #[test]
     fn import_fbx_animation_bakes_a_translation_channel_at_the_sample_rate() {
         let file = animated_rig(100.0).write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         assert_eq!(anim.name, "Take 001");
         assert!((anim.duration - 1.0).abs() < 1e-4, "{}", anim.duration);
@@ -595,9 +596,9 @@ mod tests {
     #[test]
     fn import_fbx_animation_falls_back_to_thirty_hertz() {
         let file = animated_rig(100.0).write();
-        let slow = import_fbx_animation(file.path(), 0, "", 0.0).expect("animation");
+        let slow = import_fbx_animation(file.path(), 0, "", 0.0, 0).expect("animation");
         assert_eq!(slow.tracks[0].keys.len(), 31);
-        let dense = import_fbx_animation(file.path(), 0, "", 60.0).expect("animation");
+        let dense = import_fbx_animation(file.path(), 0, "", 60.0, 0).expect("animation");
         assert_eq!(dense.tracks[0].keys.len(), 61);
     }
 
@@ -607,7 +608,7 @@ mod tests {
         add_second_clip(&mut doc);
         let file = doc.write();
 
-        let by_name = import_fbx_animation(file.path(), 0, "Second", 30.0).expect("by name");
+        let by_name = import_fbx_animation(file.path(), 0, "Second", 30.0, 0).expect("by name");
         assert_eq!(by_name.name, "Second");
         // Only the selected stack's channels are baked.
         assert_eq!(by_name.tracks.len(), 1);
@@ -617,10 +618,10 @@ mod tests {
             [100.0, 0.0, 0.0],
         );
 
-        let by_index = import_fbx_animation(file.path(), 1, "", 30.0).expect("by index");
+        let by_index = import_fbx_animation(file.path(), 1, "", 30.0, 0).expect("by index");
         assert_eq!(by_index.name, "Second");
 
-        let first = import_fbx_animation(file.path(), 0, "", 30.0).expect("first");
+        let first = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("first");
         assert_eq!(first.name, "Take 001");
         assert_eq!(first.tracks.len(), 1);
         assert_eq!(first.tracks[0].joint, 0);
@@ -637,7 +638,7 @@ mod tests {
             fx::op(SECOND_NODE, fx::TIP_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         assert_eq!(anim.tracks.len(), 2);
         assert_eq!(anim.tracks[0].joint, 0);
@@ -656,7 +657,7 @@ mod tests {
             fx::op(SECOND_NODE, fx::MESH_MODEL_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         assert_eq!(anim.tracks.len(), 1);
         assert_eq!(anim.tracks[0].joint, 0);
     }
@@ -674,7 +675,7 @@ mod tests {
             fx::op(SECOND_NODE, fx::ROOT_BONE_ID, "Visibility"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         assert_eq!(anim.tracks.len(), 1);
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 2.0, 3.0]);
     }
@@ -682,7 +683,7 @@ mod tests {
     #[test]
     fn import_fbx_animation_folds_the_unit_scale_into_animated_root_channels() {
         let file = animated_rig(1.0).write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         let keys = &anim.tracks[0].keys;
         // File units are centimeters, so the root's evaluated translation is
         // re-expressed in meters alongside the bind pose.
@@ -709,7 +710,7 @@ mod tests {
             fx::op(SCALE_NODE, fx::ROOT_BONE_ID, "Lcl Scaling"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         let key = &anim.tracks[0].keys[0];
         assert_vec3_eq(key.pose.scale, [0.02, 0.02, 0.02]);
         // The unanimated translation is already normalized by the bind pose.
@@ -729,7 +730,7 @@ mod tests {
                 .int64(TRANSLATION_NODE),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         assert_eq!(anim.tracks.len(), 1);
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 2.0, 3.0]);
     }
@@ -757,7 +758,7 @@ mod tests {
             fx::op(TRANSLATION_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         assert!((anim.duration - 1.0).abs() < 1e-4, "{}", anim.duration);
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 0.0, 0.0]);
     }
@@ -772,7 +773,7 @@ mod tests {
             fx::op(SECOND_NODE, fx::TIP_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         let tip = anim
             .tracks
             .iter()
@@ -795,7 +796,7 @@ mod tests {
             fx::op(ROTATION_NODE, fx::TIP_BONE_ID, "Lcl Rotation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         let tip = anim
             .tracks
             .iter()
@@ -819,7 +820,7 @@ mod tests {
             fx::op(ROTATION_NODE, fx::TIP_BONE_ID, "Lcl Rotation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         let tip = anim
             .tracks
             .iter()
@@ -843,7 +844,7 @@ mod tests {
         );
         let file = doc.write();
         let (anim, warnings) =
-            fx::count_warnings(|| import_fbx_animation(file.path(), 0, "", 30.0));
+            fx::count_warnings(|| import_fbx_animation(file.path(), 0, "", 30.0, 0));
         let anim = anim.expect("animation");
 
         assert_eq!(warnings, 2, "only the two nonzero properties warn");
@@ -855,7 +856,7 @@ mod tests {
     fn import_fbx_animation_is_silent_for_supported_transforms() {
         let file = animated_rig(100.0).write();
         let (anim, warnings) =
-            fx::count_warnings(|| import_fbx_animation(file.path(), 0, "", 30.0));
+            fx::count_warnings(|| import_fbx_animation(file.path(), 0, "", 30.0, 0));
         anim.expect("animation");
         assert_eq!(warnings, 0);
     }
@@ -872,7 +873,7 @@ mod tests {
             fx::op(532, TRANSLATION_NODE, "d|Z"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         let keys = &anim.tracks[0].keys;
         assert_vec3_eq(keys[0].pose.translation, [0.0, 0.0, 0.0]);
@@ -897,7 +898,7 @@ mod tests {
             fx::op(SECOND_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         // The first layer wins the channel outright: neither the override's
         // curve nor its defaults reach the baked pose, and nothing is summed.
@@ -933,7 +934,7 @@ mod tests {
             fx::op(TRANSLATION_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         assert_eq!(anim.tracks.len(), 1);
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 2.0, 3.0]);
@@ -946,7 +947,7 @@ mod tests {
         let path = path.to_str().expect("path");
         let err = fbx_animation_names(path).expect_err("names");
         assert!(err.contains("could not open"), "got: {err}");
-        let err = import_fbx_animation(path, 0, "", 30.0).expect_err("clip");
+        let err = import_fbx_animation(path, 0, "", 30.0, 0).expect_err("clip");
         assert!(err.contains("could not open"), "got: {err}");
     }
 
@@ -960,7 +961,7 @@ mod tests {
         ];
         doc.connections = vec![fx::oo(100, 200)];
         let file = doc.write();
-        let err = import_fbx_animation(file.path(), 0, "", 30.0).expect_err("no skin");
+        let err = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect_err("no skin");
         assert!(err.contains("no skin deformer"), "got: {err}");
     }
 
@@ -988,7 +989,7 @@ mod tests {
             fx::op(TRANSLATION_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         assert!((anim.duration - 1.0).abs() < 1e-4, "{}", anim.duration);
         let keys = &anim.tracks[0].keys;
@@ -1011,7 +1012,7 @@ mod tests {
             fx::op(TRANSLATION_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
         ]);
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
 
         assert!((anim.duration - 1e-3).abs() < 1e-9, "{}", anim.duration);
         // Two keys is the floor, both holding the curve node defaults.
@@ -1034,7 +1035,7 @@ mod tests {
             let mut doc = animated_rig(100.0);
             doc.replace_object(TRANSLATION_CURVE, curve);
             let file = doc.write();
-            let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+            let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
             // X reverts to the curve node's `d|X` default instead of the curve.
             assert_vec3_eq(anim.tracks[0].keys[0].pose.translation, [1.0, 2.0, 3.0]);
         }
@@ -1048,7 +1049,7 @@ mod tests {
             fx::object("AnimationCurveNode", TRANSLATION_NODE, "T", ""),
         );
         let file = doc.write();
-        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect("animation");
         // The curve still drives X; the axes without one default to zero.
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 0.0, 0.0]);
     }
@@ -1056,14 +1057,14 @@ mod tests {
     #[test]
     fn import_fbx_animation_reports_a_file_without_animation_stacks() {
         let file = fx::two_bone_rig(100.0).write();
-        let err = import_fbx_animation(file.path(), 0, "", 30.0).expect_err("no stacks");
+        let err = import_fbx_animation(file.path(), 0, "", 30.0, 0).expect_err("no stacks");
         assert!(err.contains("FBX has no animation stacks"), "got: {err}");
     }
 
     #[test]
     fn import_fbx_animation_reports_an_unknown_clip_name() {
         let file = animated_rig(100.0).write();
-        let err = import_fbx_animation(file.path(), 0, "Nope", 30.0).expect_err("unknown name");
+        let err = import_fbx_animation(file.path(), 0, "Nope", 30.0, 0).expect_err("unknown name");
         assert!(
             err.contains("no animation named 'Nope' (file has 1 clip)"),
             "got: {err}"
@@ -1072,14 +1073,14 @@ mod tests {
         let mut doc = animated_rig(100.0);
         add_second_clip(&mut doc);
         let file = doc.write();
-        let err = import_fbx_animation(file.path(), 0, "Nope", 30.0).expect_err("unknown name");
+        let err = import_fbx_animation(file.path(), 0, "Nope", 30.0, 0).expect_err("unknown name");
         assert!(err.contains("(file has 2 clips)"), "got: {err}");
     }
 
     #[test]
     fn import_fbx_animation_reports_an_out_of_range_index() {
         let file = animated_rig(100.0).write();
-        let err = import_fbx_animation(file.path(), 5, "", 30.0).expect_err("out of range");
+        let err = import_fbx_animation(file.path(), 5, "", 30.0, 0).expect_err("out of range");
         assert!(
             err.contains("animation_index 5 out of range (file has 1 animation)"),
             "got: {err}"
@@ -1088,7 +1089,7 @@ mod tests {
         let mut doc = animated_rig(100.0);
         add_second_clip(&mut doc);
         let file = doc.write();
-        let err = import_fbx_animation(file.path(), 5, "", 30.0).expect_err("out of range");
+        let err = import_fbx_animation(file.path(), 5, "", 30.0, 0).expect_err("out of range");
         assert!(err.contains("(file has 2 animations)"), "got: {err}");
     }
 }

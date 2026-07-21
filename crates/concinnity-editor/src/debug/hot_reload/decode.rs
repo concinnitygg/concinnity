@@ -318,7 +318,11 @@ pub(super) fn decode_asset_batch(
                 continue;
             }
         };
-        match concinnity_cook::mesh_reimport::decode_skinned_from_parsed_glb(&doc, &entry.source) {
+        match concinnity_cook::mesh_reimport::decode_skinned_from_parsed_glb(
+            &doc,
+            &entry.source,
+            entry.skin_index,
+        ) {
             Ok((verts, idxs, skeleton)) => batch.skinned_meshes.push(DecodedSkinnedMesh {
                 entry_idx,
                 vertices: verts,

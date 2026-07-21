@@ -83,8 +83,9 @@ pub fn decode_mesh_from_parsed_glb(
 pub fn decode_skinned_from_parsed_glb(
     doc: &crate::gltf_source::GltfDoc,
     source: &str,
+    skin_index: u32,
 ) -> Result<SkinnedImport, String> {
-    let imported = crate::glb::import_skinned_from_doc(doc, source)?;
+    let imported = crate::glb::import_skinned_from_doc(doc, source, skin_index)?;
     let payload = compile_skinned_mesh_payload_with_lods(
         &imported.vertices,
         &imported.indices,
@@ -128,7 +129,7 @@ mod tests {
     fn decode_skinned_mesh_round_trips_vertices_and_the_bind_skeleton() {
         let doc = parse(&skinned_glb());
         let (vertices, indices, skeleton) =
-            decode_skinned_from_parsed_glb(&doc, "s.glb").expect("decode");
+            decode_skinned_from_parsed_glb(&doc, "s.glb", 0).expect("decode");
         assert_eq!(vertices.len(), 3);
         assert_eq!(indices, vec![0u16, 1, 2]);
 
@@ -156,14 +157,14 @@ mod tests {
         let mut bin = skinned_bin();
         bin[40..42].copy_from_slice(&9u16.to_le_bytes());
         let doc = parse(&make_glb(&skinned_json(true, true, false), Some(&bin)));
-        let err = decode_skinned_from_parsed_glb(&doc, "s.glb").unwrap_err();
+        let err = decode_skinned_from_parsed_glb(&doc, "s.glb", 0).unwrap_err();
         assert_eq!(err, "SkinnedMesh index out of range in triangle 0");
     }
 
     #[test]
     fn decode_skinned_mesh_rejects_a_file_with_no_skinned_node() {
         let doc = parse(&static_triangle_glb());
-        let err = decode_skinned_from_parsed_glb(&doc, "t.glb").unwrap_err();
+        let err = decode_skinned_from_parsed_glb(&doc, "t.glb", 0).unwrap_err();
         assert!(
             err.contains("no node with both a mesh and a skin"),
             "got: {err}"

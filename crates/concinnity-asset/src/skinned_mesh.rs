@@ -111,6 +111,11 @@ pub struct SkinnedMesh {
     /// `vertices` / `indices` / `skeleton` from it; an inline-authored mesh
     /// leaves this empty.
     pub source: String,
+    /// Which skinned mesh of `source` to import, in file declaration order
+    /// (default 0). A character split into several meshes bound to one
+    /// skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each
+    /// naming its own index.
+    pub skin_index: u32,
     /// Skinned vertex list.
     pub vertices: Vec<SkinnedVertexData>,
     /// Triangle index list.

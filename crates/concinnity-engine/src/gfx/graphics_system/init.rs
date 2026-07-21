@@ -802,9 +802,13 @@ impl GraphicsSystem {
         }
         // Publish the name index before AnimationSystem inits (it runs after
         // GraphicsSystem) so debug WS animation commands can resolve a typed
-        // mesh name to the handle keying the correlation web.
+        // mesh name to the handle keying the correlation web. The skin
+        // selectors ride along for the animation reload catalogue.
         ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
             skinned_name_index,
+        ));
+        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex(
+            skinned_geometry.iter().map(|g| g.2.skin_index).collect(),
         ));
 
         // drain Model components into a name-keyed map for Prop lookup
@@ -1288,6 +1292,7 @@ impl GraphicsSystem {
                 skinned_mesh_source_map.entries.push(
                     super::hot_reload_sources::SkinnedMeshSourceEntry {
                         source: sm.source.clone(),
+                        skin_index: sm.skin_index,
                         skinned_index,
                         vertex_base: base,
                         vertex_count: verts.len(),

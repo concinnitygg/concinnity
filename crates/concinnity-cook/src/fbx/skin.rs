@@ -41,8 +41,13 @@ pub(super) struct FbxSkin {
     pub weights: HashMap<i32, Vec<(usize, f32)>>,
 }
 
-// Locate the first skinned geometry and extract its skeleton + weights.
-pub(super) fn parse_skin(root: NodeHandle<'_>, path: &str) -> Result<FbxSkin, String> {
+// Locate the `skin_index`-th skinned geometry (in Geometry declaration order)
+// and extract its skeleton + weights.
+pub(super) fn parse_skin(
+    root: NodeHandle<'_>,
+    path: &str,
+    skin_index: u32,
+) -> Result<FbxSkin, String> {
     let objects = root
         .first_child_by_name("Objects")
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
@@ -115,10 +120,20 @@ pub(super) fn parse_skin(root: NodeHandle<'_>, path: &str) -> Result<FbxSkin, St
         }
     }
 
-    let (geometry_id, skin_id) = geom_order
+    let skinned: Vec<(i64, i64)> = geom_order
         .iter()
-        .find_map(|g| skin_of_geometry.get(g).map(|s| (*g, *s)))
-        .ok_or_else(|| format!("'{path}': no geometry is bound to a skin deformer"))?;
+        .filter_map(|g| skin_of_geometry.get(g).map(|s| (*g, *s)))
+        .collect();
+    if skinned.is_empty() {
+        return Err(format!("'{path}': no geometry is bound to a skin deformer"));
+    }
+    let count = skinned.len();
+    let (geometry_id, skin_id) = *skinned.get(skin_index as usize).ok_or_else(|| {
+        format!(
+            "'{path}': skin_index {skin_index} out of range (file has {count} skinned mesh{})",
+            if count == 1 { "" } else { "es" }
+        )
+    })?;
     let cluster_ids = clusters_of_skin.remove(&skin_id).unwrap_or_default();
     if cluster_ids.is_empty() {
         return Err(format!("'{path}': skin deformer has no clusters"));
@@ -310,12 +325,12 @@ pub(super) fn parse_skin(root: NodeHandle<'_>, path: &str) -> Result<FbxSkin, St
     })
 }
 
-// Import the first skinned mesh of a binary FBX into the inline `SkinnedMesh`
-// fields, mirroring the glTF importer's output shape.
-pub fn import_skinned_fbx(path: &str) -> Result<ImportedSkinnedMesh, String> {
+// Import the `skin_index`-th skinned mesh of a binary FBX into the inline
+// `SkinnedMesh` fields, mirroring the glTF importer's output shape.
+pub fn import_skinned_fbx(path: &str, skin_index: u32) -> Result<ImportedSkinnedMesh, String> {
     let tree = super::load_tree(path)?;
     let root = tree.root();
-    let skin = parse_skin(root, path)?;
+    let skin = parse_skin(root, path, skin_index)?;
 
     let objects = root
         .first_child_by_name("Objects")
@@ -550,7 +565,7 @@ mod tests {
 
     fn import(doc: fx::Doc) -> Result<ImportedSkinnedMesh, String> {
         let file = doc.write();
-        import_skinned_fbx(file.path())
+        import_skinned_fbx(file.path(), 0)
     }
 
     #[test]
@@ -849,7 +864,7 @@ mod tests {
     fn import_skinned_fbx_reports_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.fbx");
-        let err = import_skinned_fbx(path.to_str().expect("path"))
+        let err = import_skinned_fbx(path.to_str().expect("path"), 0)
             .err()
             .expect("missing file");
         assert!(err.contains("could not open"), "got: {err}");
@@ -870,7 +885,7 @@ mod tests {
     fn import_skinned_fbx_reports_a_skin_in_a_file_without_connections() {
         let doc = fx::two_bone_rig(100.0);
         let file = fx::write(vec![fx::objects(doc.objects)]);
-        let err = import_skinned_fbx(file.path())
+        let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no connections");
         assert!(
@@ -933,7 +948,7 @@ mod tests {
     #[test]
     fn import_skinned_fbx_reports_a_file_without_an_objects_section() {
         let file = fx::write(vec![fx::node("Definitions")]);
-        let err = import_skinned_fbx(file.path())
+        let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no Objects section");
         assert!(err.contains("FBX has no Objects section"), "got: {err}");
@@ -981,5 +996,55 @@ mod tests {
             err.contains("skin clusters have no bone links"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn skin_index_selects_each_skinned_geometry_in_declaration_order() {
+        let file = fx::two_part_rig(100.0).write();
+
+        // The first skinned geometry is the body triangle, weighted across
+        // both bones; the second is the hair triangle, bound to Tip alone.
+        let body = import_skinned_fbx(file.path(), 0).expect("body import");
+        let hair = import_skinned_fbx(file.path(), 1).expect("hair import");
+        assert_eq!(body.vertices.len(), 3);
+        assert_eq!(hair.vertices.len(), 3);
+        assert_ne!(body.vertices[0].pos, hair.vertices[0].pos);
+
+        // Both parts carry their own copy of the shared skeleton.
+        let names = |m: &ImportedSkinnedMesh| -> Vec<String> {
+            m.skeleton.iter().map(|j| j.name.clone()).collect()
+        };
+        assert_eq!(names(&body), vec!["Root".to_string(), "Tip".to_string()]);
+        assert_eq!(names(&hair), names(&body));
+
+        // The hair is fully weighted to Tip, so its own cluster drives it.
+        let tip = hair
+            .skeleton
+            .iter()
+            .position(|j| j.name == "Tip")
+            .expect("Tip joint") as u32;
+        for v in &hair.vertices {
+            assert_eq!(v.joints[0], tip);
+            assert!((v.weights[0] - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn skin_index_past_the_last_skinned_geometry_errors() {
+        let file = fx::two_part_rig(100.0).write();
+        let err = import_skinned_fbx(file.path(), 2)
+            .err()
+            .expect("only two skins");
+        assert!(
+            err.contains("skin_index 2 out of range") && err.contains("2 skinned meshes"),
+            "got: {err}"
+        );
+
+        // A single-skin file pluralizes its count correctly too.
+        let one = fx::two_bone_rig(100.0).write();
+        let err = import_skinned_fbx(one.path(), 1)
+            .err()
+            .expect("only one skin");
+        assert!(err.contains("1 skinned mesh)"), "got: {err}");
     }
 }

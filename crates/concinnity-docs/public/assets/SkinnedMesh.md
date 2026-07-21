@@ -30,6 +30,7 @@ supply them.
 ## Parameters
 
 - `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
+- `skin_index`: An integer. Which skinned mesh of `source` to import, in file declaration order (default 0). A character split into several meshes bound to one skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each naming its own index.
 - `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list.
 - `indices`: An array of integers. Triangle index list.
 - `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets.

@@ -20,6 +20,21 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Default, Clone)]
 pub struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
 
+// Each skinned mesh's source-file skin selector, indexed by handle and
+// published alongside the name index. An animation clip re-imported at
+// hot-reload must resolve against the same skin its target mesh was cooked
+// from; the reload catalogue reads the selector from here at init.
+#[derive(Debug, Default, Clone)]
+pub struct SkinnedMeshSkinIndex(pub Vec<u32>);
+
+impl SkinnedMeshSkinIndex {
+    // The selector for a mesh handle; 0 (the file's first skinned mesh) when
+    // the handle is unknown, matching the asset default.
+    pub fn get(&self, handle: SkinnedMeshHandle) -> u32 {
+        self.0.get(handle.index()).copied().unwrap_or(0)
+    }
+}
+
 impl SkinnedMeshNameIndex {
     // The handle for an interned mesh name. Falls back to reinterpreting the
     // id value as a handle when absent: a unit test that exercises the
