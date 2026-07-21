@@ -25,7 +25,9 @@
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
 use concinnity_core::assets::Texture;
-use concinnity_core::build::texture::{TextureFormat, TextureImage, downscale_rgba, serialise};
+use concinnity_core::build::texture::{
+    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialise,
+};
 
 // Validate the texture generator name in args without generating pixel data.
 pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String> {
@@ -70,10 +72,15 @@ fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
     TextureImage::rgba8(width, height, pixels)
 }
 
+// BC5 stores red and green only. The shaders sample a normal map's `.xyz` and
+// expect Z in blue, so BC5 is decoded at build time (the CPU decoder
+// reconstructs Z) rather than shipped as blocks. BC1/BC3/BC7 upload as-is.
+pub(crate) fn ships_as_blocks(format: TextureFormat) -> bool {
+    !matches!(format, TextureFormat::Rgba8 | TextureFormat::Bc5)
+}
+
 // Compile a file-backed texture source into a tagged image. KTX2 and DDS keep
-// their block-compressed mip chains; everything else decodes to RGBA8. The
-// resolution cap only applies to RGBA8 results (compressed sources ship their
-// own mip chain and are already small).
+// their block-compressed mip chains; everything else decodes to RGBA8.
 fn compile_image_source(
     source: &str,
     image_index: u32,
@@ -85,38 +92,45 @@ fn compile_image_source(
             .map_err(|e| format!("failed to open KTX2 texture '{}': {}", source, e))?;
         crate::ktx2::compile_ktx2(&bytes).map_err(|e| format!("'{}': {}", source, e))?
     } else if lower.ends_with(".dds") {
-        compile_dds_source(source)?
+        compile_dds_source(source, max_size)?
     } else {
         let (w, h, px) = decode_file_source(source, image_index)?;
         TextureImage::rgba8(w, h, px)
     };
-    Ok(cap_rgba8(image, max_size))
+    Ok(cap_image(image, max_size))
 }
 
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
-// decodes to RGBA8 so runtime mip generation applies.
-fn compile_dds_source(source: &str) -> Result<TextureImage, String> {
+// or a BC5 normal map decodes to RGBA8 so runtime mip generation applies.
+fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
     let bytes = std::fs::read(source)
         .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
     let blocks =
         crate::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
-    if blocks.mips.len() >= 2 {
-        Ok(TextureImage {
-            format: blocks.format,
-            mips: blocks.mips,
-        })
-    } else {
-        let (w, h, px) =
-            crate::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
-        Ok(TextureImage::rgba8(w, h, px))
+    if ships_as_blocks(blocks.format) {
+        let mips = cap_block_mips(blocks.mips, max_size);
+        if mips.len() >= 2 {
+            return Ok(TextureImage {
+                format: blocks.format,
+                mips,
+            });
+        }
     }
+    let (w, h, px) = crate::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
+    Ok(TextureImage::rgba8(w, h, px))
 }
 
-// Apply the resolution cap to an RGBA8 image; compressed images pass through
-// unchanged.
-fn cap_rgba8(image: TextureImage, max_size: u32) -> TextureImage {
-    if image.format != TextureFormat::Rgba8 || max_size == 0 {
+// Apply the resolution cap. RGBA8 is resampled; a block-compressed chain drops
+// leading mips instead, which caps the base level without re-encoding.
+fn cap_image(image: TextureImage, max_size: u32) -> TextureImage {
+    if max_size == 0 {
         return image;
+    }
+    if image.format != TextureFormat::Rgba8 {
+        return TextureImage {
+            format: image.format,
+            mips: cap_block_mips(image.mips, max_size),
+        };
     }
     let (w, h) = (image.width(), image.height());
     if w <= max_size && h <= max_size {
@@ -128,6 +142,19 @@ fn cap_rgba8(image: TextureImage, max_size: u32) -> TextureImage {
     };
     let (dw, dh, dpx) = downscale_rgba(w, h, px, max_size);
     TextureImage::rgba8(dw, dh, dpx)
+}
+
+// Drop leading mips until the base level fits the cap, always keeping at least
+// the smallest stored level.
+fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
+    if max_size == 0 {
+        return mips;
+    }
+    let first_fit = mips
+        .iter()
+        .position(|m| m.width <= max_size && m.height <= max_size)
+        .unwrap_or(mips.len().saturating_sub(1));
+    mips.into_iter().skip(first_fit).collect()
 }
 
 // File-backed source decode
@@ -1336,13 +1363,30 @@ mod tests {
             "t.ktx2",
             &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
         );
-        // A cap of 1 would shrink an RGBA8 source; a compressed one is exempt.
-        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 1}))
-            .expect("compile");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!(image.mips.len(), 2);
         assert_eq!((image.width(), image.height()), (4, 4));
+    }
+
+    // A compressed chain honours `max_size` by starting at a smaller stored
+    // level instead of resampling, which would need a block encoder.
+    #[test]
+    fn compile_texture_payload_caps_a_compressed_chain_by_dropping_mips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(
+            &dir,
+            "t.ktx2",
+            &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
+        );
+        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
+            .expect("compile");
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Bc1);
+        assert_eq!((image.width(), image.height()), (2, 2));
+        assert_eq!(image.mips.len(), 1);
     }
 
     #[test]
@@ -1409,6 +1453,44 @@ mod tests {
         assert_eq!(image.mips.len(), 4);
         assert_eq!((image.width(), image.height()), (8, 8));
         assert_eq!((image.mips[3].width, image.mips[3].height), (1, 1));
+    }
+
+    // A DDS chain honours `max_size` by starting at a smaller stored level;
+    // scenes that cap imported textures must not ship the full-size blocks.
+    #[test]
+    fn compile_texture_payload_caps_a_dds_chain_by_dropping_mips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_file(&dir, "t.dds", &bc1_dds(8, 8, 4));
+        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
+            .expect("compile");
+        let image = deserialise(&payload);
+        assert_eq!(image.format, TextureFormat::Bc1);
+        assert_eq!((image.width(), image.height()), (2, 2));
+        assert_eq!(image.mips.len(), 2);
+    }
+
+    // ATI2 normal maps carry no blue channel. Passing the blocks through would
+    // hand the shaders Z = 0 and black out every normal-mapped surface, so the
+    // chain decodes and the CPU decoder reconstructs Z.
+    #[test]
+    fn compile_texture_payload_decodes_a_bc5_dds_to_rgba8() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Both BC4 halves select endpoint 0 = 128, so X and Y sit at the
+        // midpoint and Z reconstructs to ~1.
+        let block = [128u8, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0, 0, 0];
+        let data = block.repeat(4 + 1);
+        let dds = crate::dds::test_fixtures::wrap_dds_mips(b"ATI2", 8, 8, 2, &data);
+        let src = write_file(&dir, "n.dds", &dds);
+
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+        let image = deserialise(&payload);
+
+        assert_eq!(image.format, TextureFormat::Rgba8);
+        assert_eq!((image.width(), image.height()), (8, 8));
+        for texel in image.mips[0].data.chunks(4) {
+            assert_eq!(texel, [128, 128, 255, 255], "Z must be reconstructed");
+        }
     }
 
     #[test]

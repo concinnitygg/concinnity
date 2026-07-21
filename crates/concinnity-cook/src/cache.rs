@@ -79,7 +79,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 //    old headerless RGBA8 bytes no longer parse (build::texture).
 // 8: the Material data resource gained `alpha_cutoff`, so its postcard bytes
 //    grew a field and cached records from before it no longer decode.
-const CACHE_FORMAT_VERSION: u32 = 8;
+// 9: BC5 sources decode to RGBA8 instead of shipping blocks (the shaders need a
+//    reconstructed Z in blue), and a block-compressed chain now honours
+//    `max_size` by dropping leading mips (build::texture).
+const CACHE_FORMAT_VERSION: u32 = 9;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the component discriminant, the args JSON, a hash of every
