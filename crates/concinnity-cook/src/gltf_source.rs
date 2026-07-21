@@ -89,38 +89,34 @@ impl GltfDoc {
 // images, resolved against the source's directory. Used to fold sibling-file
 // contents into cache keys, so the result is best-effort: a source that is
 // missing or fails to parse contributes nothing (the compile will surface the
-// real error). Memoized by (mtime, len) like `cache::file_content_hash`, since
+// real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
 pub fn referenced_files(source: &str) -> Vec<String> {
+    use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    type Memo = Mutex<HashMap<String, (u64, u64, Vec<String>)>>;
+    type Memo = Mutex<HashMap<String, (FileStamp, Vec<String>)>>;
     static MEMO: OnceLock<Memo> = OnceLock::new();
 
     let path = crate::glb::resolve_source(source);
-    let Ok(meta) = std::fs::metadata(&path) else {
+    let Some(stamp) = FileStamp::read(&path) else {
         return Vec::new();
     };
-    let len = meta.len();
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    // Decided before the scan, so a write racing it lands on a later mtime and
+    // misses this entry rather than matching it.
+    let memoizable = stamp.settled();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((m, l, files)) = memo.lock().unwrap().get(&path)
-        && *m == mtime
-        && *l == len
+    if let Some((s, files)) = memo.lock().unwrap().get(&path)
+        && *s == stamp
     {
         return files.clone();
     }
 
     let files = scan_referenced_files(&path);
-    memo.lock()
-        .unwrap()
-        .insert(path, (mtime, len, files.clone()));
+    if memoizable {
+        memo.lock().unwrap().insert(path, (stamp, files.clone()));
+    }
     files
 }
 

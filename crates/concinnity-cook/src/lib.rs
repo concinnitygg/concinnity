@@ -36,6 +36,9 @@ pub mod dds;
 pub mod environment_map;
 pub mod fbx;
 pub mod file;
+// Stat-based identity behind the cook's read memos, and the settle window that
+// keeps a same-tick equal-length rewrite from being served stale.
+mod file_stamp;
 pub mod font;
 // Build-time mesh generators + payload compilers. The runtime-side mesh helpers
 // they share (tangents, the voxel mesher, chunk streaming) stay in

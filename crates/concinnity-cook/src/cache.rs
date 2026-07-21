@@ -14,6 +14,7 @@
 // corrupt a build.
 
 use crate::asset::{BuildCtx, CacheInputs, SourceFiles, SourceInput};
+use crate::file_stamp::FileStamp;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,24 +24,18 @@ use std::sync::{Mutex, OnceLock};
 // single build can reference one large source file from hundreds of assets
 // (e.g. every Mesh imported from one `.fbx`), and hashing it once per asset
 // dominates the build; the memo reads + hashes each unique file once. Keyed by
-// (mtime, len) so a file edited between in-process rebuilds (the `cn debug`
+// `FileStamp` so a file edited between in-process rebuilds (the `cn debug`
 // hot-reload path) is re-hashed rather than served stale.
 fn file_content_hash(path: &str) -> Option<[u8; 32]> {
-    // path -> (mtime_nanos, len, content hash)
-    type HashMemo = Mutex<HashMap<String, (u64, u64, [u8; 32])>>;
+    type HashMemo = Mutex<HashMap<String, (FileStamp, [u8; 32])>>;
     static MEMO: OnceLock<HashMemo> = OnceLock::new();
-    let meta = std::fs::metadata(path).ok()?;
-    let len = meta.len();
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let stamp = FileStamp::read(path)?;
+    // Decided before the read, so a write racing it lands on a later mtime and
+    // misses this entry rather than matching it.
+    let memoizable = stamp.settled();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(&(m, l, h)) = memo.lock().unwrap().get(path)
-        && m == mtime
-        && l == len
+    if let Some(&(s, h)) = memo.lock().unwrap().get(path)
+        && s == stamp
     {
         return Some(h);
     }
@@ -48,9 +43,9 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let hash: [u8; 32] = hasher.finalize().into();
-    memo.lock()
-        .unwrap()
-        .insert(path.to_string(), (mtime, len, hash));
+    if memoizable {
+        memo.lock().unwrap().insert(path.to_string(), (stamp, hash));
+    }
     Some(hash)
 }
 
@@ -415,6 +410,27 @@ mod tests {
         assert_ne!(
             before, after,
             "key must change when a referenced file changes"
+        );
+    }
+
+    // The stat memo behind `file_content_hash` cannot lean on length alone: an
+    // edit that preserves it (a retargeted URI, a flipped flag) leaves the two
+    // writes distinguishable only by mtime, and back-to-back writes routinely
+    // share one filesystem tick. `FileStamp::settled` is what keeps this key
+    // moving; without it this assert fails whenever the writes land together.
+    #[test]
+    fn key_tracks_an_equal_length_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("env.hdr");
+        std::fs::write(&file, b"aaaaa").unwrap();
+        let args = json!({ "source": file.to_str().unwrap() });
+
+        let before = payload_key(3, &args, &ctx(), &CacheInputs::extra(vec![]));
+        std::fs::write(&file, b"bbbbb").unwrap();
+        let after = payload_key(3, &args, &ctx(), &CacheInputs::extra(vec![]));
+        assert_ne!(
+            before, after,
+            "an equal-length edit in the same mtime tick must still bust the key"
         );
     }
 
