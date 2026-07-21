@@ -14,7 +14,7 @@
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use fbxcel::tree::v7400::NodeHandle;
 
@@ -59,18 +59,25 @@ pub fn import_fbx_animation(
         .first_child_by_name("Objects")
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
 
-    // Object indexes.
+    // Object indexes. Layers and curve nodes also carry their declaration
+    // rank, which orders channel assignment below.
     let mut stacks: Vec<(i64, NodeHandle)> = Vec::new();
-    let mut layer_ids: Vec<i64> = Vec::new();
+    let mut layer_rank: HashMap<i64, usize> = HashMap::new();
     let mut curve_node_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut curve_node_rank: HashMap<i64, usize> = HashMap::new();
     let mut curve_by_id: HashMap<i64, NodeHandle> = HashMap::new();
     let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
         match c.name() {
             "AnimationStack" => stacks.push((id, c)),
-            "AnimationLayer" => layer_ids.push(id),
+            "AnimationLayer" => {
+                let rank = layer_rank.len();
+                layer_rank.insert(id, rank);
+            }
             "AnimationCurveNode" => {
+                let rank = curve_node_rank.len();
+                curve_node_rank.insert(id, rank);
                 curve_node_by_id.insert(id, c);
             }
             "AnimationCurve" => {
@@ -133,7 +140,7 @@ pub fn import_fbx_animation(
             };
             match ty {
                 "OO" => {
-                    if layer_ids.contains(&child) {
+                    if layer_rank.contains_key(&child) {
                         stack_of_layer.insert(child, parent);
                     } else if curve_node_by_id.contains_key(&child) {
                         layer_of_curve_node.insert(child, parent);
@@ -162,30 +169,36 @@ pub fn import_fbx_animation(
     }
 
     // Per-model channels for the selected stack: first curve node seen per
-    // (model, property). Multiple layers on one stack are not blended; the
-    // first layer's curves win.
+    // (model, property), walking the file's declaration order. Multiple layers
+    // on one stack are not blended; the first layer's curves win.
     struct Channels {
         translation: Option<i64>,
         rotation: Option<i64>,
         scale: Option<i64>,
     }
-    let mut per_model: HashMap<i64, Channels> = HashMap::new();
-    let mut model_order: Vec<i64> = Vec::new();
-    for (&node_id, (model_id, prop)) in &node_target {
-        let in_stack = layer_of_curve_node
-            .get(&node_id)
-            .and_then(|l| stack_of_layer.get(l))
-            == Some(&stack_id);
-        if !in_stack {
-            continue;
-        }
-        let entry = per_model.entry(*model_id).or_insert_with(|| {
-            model_order.push(*model_id);
-            Channels {
-                translation: None,
-                rotation: None,
-                scale: None,
+    let mut in_stack: Vec<(usize, usize, i64)> = node_target
+        .keys()
+        .filter_map(|&node_id| {
+            let layer = layer_of_curve_node.get(&node_id)?;
+            if stack_of_layer.get(layer) != Some(&stack_id) {
+                return None;
             }
+            Some((
+                *layer_rank.get(layer)?,
+                *curve_node_rank.get(&node_id)?,
+                node_id,
+            ))
+        })
+        .collect();
+    in_stack.sort_unstable();
+
+    let mut per_model: BTreeMap<i64, Channels> = BTreeMap::new();
+    for (_, _, node_id) in in_stack {
+        let (model_id, prop) = &node_target[&node_id];
+        let entry = per_model.entry(*model_id).or_insert(Channels {
+            translation: None,
+            rotation: None,
+            scale: None,
         });
         let slot = match prop.as_str() {
             "Lcl Translation" => &mut entry.translation,
@@ -196,7 +209,6 @@ pub fn import_fbx_animation(
             *slot = Some(node_id);
         }
     }
-    model_order.sort();
 
     // Clip window from the stack, falling back to the covered key range.
     let p70 = stack_node.first_child_by_name("Properties70");
@@ -212,13 +224,12 @@ pub fn import_fbx_animation(
     let rate = if sample_rate > 0.0 { sample_rate } else { 30.0 };
     let samples = ((duration * rate).ceil() as usize + 1).max(2);
     let mut tracks: Vec<ImportedAnimationTrack> = Vec::new();
-    for model_id in model_order {
-        let Some(&joint) = skin.model_to_joint.get(&model_id) else {
+    for (model_id, channels) in &per_model {
+        let Some(&joint) = skin.model_to_joint.get(model_id) else {
             // Curves on a non-joint node (camera, prop): drop, like glTF.
             continue;
         };
-        let channels = &per_model[&model_id];
-        let model = model_by_id[&model_id];
+        let model = model_by_id[model_id];
         warn_unsupported_transform_props(&model, path);
 
         let model_p70 = model.first_child_by_name("Properties70");
@@ -872,12 +883,12 @@ mod tests {
     #[test]
     fn import_fbx_animation_does_not_blend_multiple_layers() {
         let mut doc = animated_rig(100.0);
-        // A second layer on the same stack, keyed identically on the same
+        // A second layer on the same stack, keyed differently on the same
         // channel of the same joint.
         doc.objects.extend([
             fx::anim_layer(SECOND_LAYER, "OverrideLayer"),
-            fx::anim_curve_node(SECOND_NODE, "T", [1.0, 2.0, 3.0]),
-            fx::anim_curve(531, vec![0, ONE_SECOND], vec![0.0, 10.0]),
+            fx::anim_curve_node(SECOND_NODE, "T", [7.0, 8.0, 9.0]),
+            fx::anim_curve(531, vec![0, ONE_SECOND], vec![0.0, 100.0]),
         ]);
         doc.connections.extend([
             fx::oo(SECOND_LAYER, STACK),
@@ -888,7 +899,42 @@ mod tests {
         let file = doc.write();
         let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
 
-        // One curve node wins the channel outright; the layers are not summed.
+        // The first layer wins the channel outright: neither the override's
+        // curve nor its defaults reach the baked pose, and nothing is summed.
+        assert_eq!(anim.tracks.len(), 1);
+        assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn import_fbx_animation_resolves_layer_order_by_declaration_not_object_id() {
+        // The base layer is declared first but carries the higher object id, as
+        // do its curve node and curve, so an id-ordered walk picks the override.
+        let mut doc = fx::two_bone_rig(100.0);
+        doc.objects.extend([
+            fx::anim_stack(STACK, "Take 001").child(fx::properties70(vec![
+                fx::p_time("LocalStart", 0),
+                fx::p_time("LocalStop", ONE_SECOND),
+            ])),
+            fx::anim_layer(SECOND_LAYER, "BaseLayer"),
+            fx::anim_curve_node(SECOND_NODE, "T", [1.0, 2.0, 3.0]),
+            fx::anim_curve(531, vec![0, ONE_SECOND], vec![0.0, 10.0]),
+            fx::anim_layer(LAYER, "OverrideLayer"),
+            fx::anim_curve_node(TRANSLATION_NODE, "T", [7.0, 8.0, 9.0]),
+            fx::anim_curve(TRANSLATION_CURVE, vec![0, ONE_SECOND], vec![0.0, 100.0]),
+        ]);
+        doc.connections.extend([
+            fx::oo(SECOND_LAYER, STACK),
+            fx::oo(SECOND_NODE, SECOND_LAYER),
+            fx::op(531, SECOND_NODE, "d|X"),
+            fx::op(SECOND_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
+            fx::oo(LAYER, STACK),
+            fx::oo(TRANSLATION_NODE, LAYER),
+            fx::op(TRANSLATION_CURVE, TRANSLATION_NODE, "d|X"),
+            fx::op(TRANSLATION_NODE, fx::ROOT_BONE_ID, "Lcl Translation"),
+        ]);
+        let file = doc.write();
+        let anim = import_fbx_animation(file.path(), 0, "", 30.0).expect("animation");
+
         assert_eq!(anim.tracks.len(), 1);
         assert_vec3_eq(anim.tracks[0].keys[30].pose.translation, [10.0, 2.0, 3.0]);
     }
