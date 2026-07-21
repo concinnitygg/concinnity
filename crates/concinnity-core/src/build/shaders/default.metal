@@ -738,6 +738,14 @@ static float2 env_brdf_approx(float NdV, float rough) {
     return float2(-1.04, 1.04) * a004 + r.zw;
 }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+static float3 decode_normal_map(float2 encoded) {
+    float2 nxy = encoded * 2.0 - 1.0;
+    return float3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
+}
+
 // Macro variation: a large-scale, world-space brightness modulation that
 // hides the obvious repetition of a tiled texture on a big surface (terrain,
 // floors). It is two octaves of hash-based value noise sampled in the XZ
@@ -1052,24 +1060,24 @@ static float4 shade_surface(
         weights /= max(weights.x + weights.y + weights.z, 1e-4);
 
         // --- primary normal ---
-        float3 p_nx_t = ((triplanar_octave(normal_tex, tex_sampler, in.world_pos.zy * tile_scale)
-                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.zy * (tile_scale * octave2))) * 0.5).xyz * 2.0 - 1.0;
-        float3 p_ny_t = ((triplanar_octave(normal_tex, tex_sampler, in.world_pos.xz * tile_scale)
-                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.xz * (tile_scale * octave2))) * 0.5).xyz * 2.0 - 1.0;
-        float3 p_nz_t = ((triplanar_octave(normal_tex, tex_sampler, in.world_pos.xy * tile_scale)
-                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.xy * (tile_scale * octave2))) * 0.5).xyz * 2.0 - 1.0;
+        float3 p_nx_t = decode_normal_map(((triplanar_octave(normal_tex, tex_sampler, in.world_pos.zy * tile_scale)
+                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.zy * (tile_scale * octave2))) * 0.5).xy);
+        float3 p_ny_t = decode_normal_map(((triplanar_octave(normal_tex, tex_sampler, in.world_pos.xz * tile_scale)
+                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.xz * (tile_scale * octave2))) * 0.5).xy);
+        float3 p_nz_t = decode_normal_map(((triplanar_octave(normal_tex, tex_sampler, in.world_pos.xy * tile_scale)
+                       + triplanar_octave(normal_tex, tex_sampler, in.world_pos.xy * (tile_scale * octave2))) * 0.5).xy);
         float3 p_wnx = float3(0.0, p_nx_t.y, p_nx_t.x) + float3(N0.x, 0.0, 0.0);
         float3 p_wny = float3(p_ny_t.x, 0.0, p_ny_t.y) + float3(0.0, N0.y, 0.0);
         float3 p_wnz = float3(p_nz_t.x, p_nz_t.y, 0.0) + float3(0.0, 0.0, N0.z);
         float3 N_primary = normalize(p_wnx * weights.x + p_wny * weights.y + p_wnz * weights.z);
 
         // --- secondary normal ---
-        float3 s_nx_t = ((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.zy * tile_scale_secondary)
-                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.zy * (tile_scale_secondary * octave2))) * 0.5).xyz * 2.0 - 1.0;
-        float3 s_ny_t = ((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xz * tile_scale_secondary)
-                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xz * (tile_scale_secondary * octave2))) * 0.5).xyz * 2.0 - 1.0;
-        float3 s_nz_t = ((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xy * tile_scale_secondary)
-                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xy * (tile_scale_secondary * octave2))) * 0.5).xyz * 2.0 - 1.0;
+        float3 s_nx_t = decode_normal_map(((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.zy * tile_scale_secondary)
+                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.zy * (tile_scale_secondary * octave2))) * 0.5).xy);
+        float3 s_ny_t = decode_normal_map(((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xz * tile_scale_secondary)
+                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xz * (tile_scale_secondary * octave2))) * 0.5).xy);
+        float3 s_nz_t = decode_normal_map(((triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xy * tile_scale_secondary)
+                       + triplanar_octave(normal_tex_secondary, tex_sampler, in.world_pos.xy * (tile_scale_secondary * octave2))) * 0.5).xy);
         float3 s_wnx = float3(0.0, s_nx_t.y, s_nx_t.x) + float3(N0.x, 0.0, 0.0);
         float3 s_wny = float3(s_ny_t.x, 0.0, s_ny_t.y) + float3(0.0, N0.y, 0.0);
         float3 s_wnz = float3(s_nz_t.x, s_nz_t.y, 0.0) + float3(0.0, 0.0, N0.z);
@@ -1082,7 +1090,7 @@ static float4 shade_surface(
         // Build TBN matrix and apply tangent-space normal map.
         float3 T  = normalize(in.tangent - dot(in.tangent, N0) * N0);
         float3 B  = cross(N0, T);
-        float3 ns = normal_tex.sample(tex_sampler, in.uv).xyz * 2.0 - 1.0;
+        float3 ns = decode_normal_map(normal_tex.sample(tex_sampler, in.uv).xy);
         N  = normalize(float3x3(T, B, N0) * ns);
     }
     // Alpha cutout: punch the texel out entirely so foliage and decal cards

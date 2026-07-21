@@ -132,6 +132,14 @@ vec3 rt_skinned_normal(uint vi)  { return vec3(sverts[vi * 14u + 3u], sverts[vi 
 vec3 rt_skinned_tangent(uint vi) { return vec3(sverts[vi * 14u + 6u], sverts[vi * 14u + 7u], sverts[vi * 14u + 8u]); }
 vec2 rt_skinned_uv(uint vi)      { return vec2(sverts[vi * 14u + 12u], sverts[vi * 14u + 13u]); }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+vec3 decode_normal_map(vec2 encoded) {
+    vec2 nxy = encoded * 2.0 - 1.0;
+    return vec3(nxy, sqrt(clamp(1.0 - dot(nxy, nxy), 0.0, 1.0)));
+}
+
 // Fetch one u16 index `o` from the packed skinned index buffer (two u16 per
 // uint). The skinned BLAS bakes absolute indices, so no base_vertex is added.
 uint rt_skinned_index(uint o) {
@@ -255,7 +263,7 @@ void main() {
         vec3 N = nw;
         float tlen = length(tw);
         if (tlen > 1e-4) {
-            vec3 nm = textureLod(tex_pool[nonuniformEXT(nidx)], huv, 0.0).xyz * 2.0 - 1.0;
+            vec3 nm = decode_normal_map(textureLod(tex_pool[nonuniformEXT(nidx)], huv, 0.0).xy);
             vec3 T = tw / tlen;
             T = normalize(T - N * dot(N, T));        // Gram-Schmidt
             vec3 B = cross(N, T);

@@ -125,6 +125,14 @@ static float2 rt_vertex_uv(const device float* v, uint vi) {
     return float2(v[b + 12], v[b + 13]);
 }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+static float3 decode_normal_map(float2 encoded) {
+    float2 nxy = encoded * 2.0 - 1.0;
+    return float3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
+}
+
 // The bindless texture pool, bound at buffer(10) by the textured water RT
 // variant (buffer(7) is the ProbeSet, where the main pass keeps its pool, so the
 // pool moves to a free slot here). Identical layout to default.metal /
@@ -599,7 +607,7 @@ fragment float4 water_fragment_rt_textured(
         float3 N = nw;
         float tlen = length(tw);
         if (tlen > 1e-4) {
-            float3 nm = tex.tex_pool[nidx].sample(tsmp, uv, level(0.0)).xyz * 2.0 - 1.0;
+            float3 nm = decode_normal_map(tex.tex_pool[nidx].sample(tsmp, uv, level(0.0)).xy);
             float3 T = tw / tlen;
             T = normalize(T - N * dot(N, T));
             float3 B = cross(N, T);

@@ -82,7 +82,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // 9: BC5 sources decode to RGBA8 instead of shipping blocks (the shaders need a
 //    reconstructed Z in blue), and a block-compressed chain now honours
 //    `max_size` by dropping leading mips (build::texture).
-const CACHE_FORMAT_VERSION: u32 = 9;
+// 10: BC5 sources ship their blocks again now that the shaders reconstruct a
+//     normal map's Z from X and Y, so cached RGBA8 payloads must recompile
+//     (build::texture).
+const CACHE_FORMAT_VERSION: u32 = 10;
 
 // Compute the cache key for one compiled asset. The key folds in the cache
 // format version, the component discriminant, the args JSON, a hash of every

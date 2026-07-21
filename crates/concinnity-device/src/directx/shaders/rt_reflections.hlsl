@@ -147,6 +147,15 @@ float3 rt_skinned_normal(uint vi)  { return asfloat(skinned_verts.Load3(vi * 56 
 float3 rt_skinned_tangent(uint vi) { return asfloat(skinned_verts.Load3(vi * 56 + 24)); }
 float2 rt_skinned_uv(uint vi)      { return asfloat(skinned_verts.Load2(vi * 56 + 48)); }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+float3 decode_normal_map(float2 encoded)
+{
+    float2 nxy = encoded * 2.0 - 1.0;
+    return float3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
+}
+
 // Common per-pixel setup shared by both hit-shading variants.
 struct RtSetup
 {
@@ -403,8 +412,8 @@ float4 rt_reflections_frag_textured(VsOut p) : SV_TARGET
         float tlen = length(t.tangent);
         if (tlen > 1e-4)
         {
-            float3 nm = tex_pool[NonUniformResourceIndex(t.normal_index)]
-                            .SampleLevel(repeat_smp, t.uv, 0.0).xyz * 2.0 - 1.0;
+            float3 nm = decode_normal_map(tex_pool[NonUniformResourceIndex(t.normal_index)]
+                                              .SampleLevel(repeat_smp, t.uv, 0.0).xy);
             float3 T = t.tangent / tlen;
             T = normalize(T - N * dot(N, T));        // Gram-Schmidt
             float3 B = cross(N, T);

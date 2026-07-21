@@ -72,13 +72,6 @@ fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
     TextureImage::rgba8(width, height, pixels)
 }
 
-// BC5 stores red and green only. The shaders sample a normal map's `.xyz` and
-// expect Z in blue, so BC5 is decoded at build time (the CPU decoder
-// reconstructs Z) rather than shipped as blocks. BC1/BC3/BC7 upload as-is.
-pub(crate) fn ships_as_blocks(format: TextureFormat) -> bool {
-    !matches!(format, TextureFormat::Rgba8 | TextureFormat::Bc5)
-}
-
 // Compile a file-backed texture source into a tagged image. KTX2 and DDS keep
 // their block-compressed mip chains; everything else decodes to RGBA8.
 fn compile_image_source(
@@ -101,20 +94,18 @@ fn compile_image_source(
 }
 
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
-// or a BC5 normal map decodes to RGBA8 so runtime mip generation applies.
+// decodes to RGBA8 so runtime mip generation applies.
 fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
     let bytes = std::fs::read(source)
         .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
     let blocks =
         crate::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
-    if ships_as_blocks(blocks.format) {
-        let mips = cap_block_mips(blocks.mips, max_size);
-        if mips.len() >= 2 {
-            return Ok(TextureImage {
-                format: blocks.format,
-                mips,
-            });
-        }
+    let mips = cap_block_mips(blocks.mips, max_size);
+    if mips.len() >= 2 {
+        return Ok(TextureImage {
+            format: blocks.format,
+            mips,
+        });
     }
     let (w, h, px) = crate::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
     Ok(TextureImage::rgba8(w, h, px))
@@ -1469,14 +1460,12 @@ mod tests {
         assert_eq!(image.mips.len(), 2);
     }
 
-    // ATI2 normal maps carry no blue channel. Passing the blocks through would
-    // hand the shaders Z = 0 and black out every normal-mapped surface, so the
-    // chain decodes and the CPU decoder reconstructs Z.
+    // ATI2 normal maps carry no blue channel, but the shaders reconstruct Z
+    // from X and Y, so the chain ships as blocks rather than paying 4x the VRAM
+    // for a decoded RGBA8 copy.
     #[test]
-    fn compile_texture_payload_decodes_a_bc5_dds_to_rgba8() {
+    fn compile_texture_payload_ships_a_bc5_dds_as_blocks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // Both BC4 halves select endpoint 0 = 128, so X and Y sit at the
-        // midpoint and Z reconstructs to ~1.
         let block = [128u8, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0, 0, 0];
         let data = block.repeat(4 + 1);
         let dds = crate::dds::test_fixtures::wrap_dds_mips(b"ATI2", 8, 8, 2, &data);
@@ -1486,11 +1475,10 @@ mod tests {
             compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
         let image = deserialise(&payload);
 
-        assert_eq!(image.format, TextureFormat::Rgba8);
+        assert_eq!(image.format, TextureFormat::Bc5);
         assert_eq!((image.width(), image.height()), (8, 8));
-        for texel in image.mips[0].data.chunks(4) {
-            assert_eq!(texel, [128, 128, 255, 255], "Z must be reconstructed");
-        }
+        assert_eq!(image.mips.len(), 2);
+        assert_eq!(image.mips[0].data, block.repeat(4));
     }
 
     #[test]

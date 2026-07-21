@@ -13,9 +13,8 @@
 //
 // A compressed source without a mip chain (a single level) decodes or
 // transcodes to RGBA8 instead, so the runtime mip generator restores full
-// minification quality. BC5 always decodes: it carries no blue channel, and the
-// shaders read a normal map's `.xyz`. There is no cook-time BCn encoder, so
-// RGBA8 sources (PNG / JPEG) are never compressed here.
+// minification quality. There is no cook-time BCn encoder, so RGBA8 sources
+// (PNG / JPEG) are never compressed here.
 //
 // Cubemaps, texture arrays, and 3D textures are rejected: the payload and the
 // runtime upload path handle single-layer 2D textures only.
@@ -73,8 +72,8 @@ pub fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
 }
 
 // A real BCn `vkFormat`: pass the blocks through. Every level is copied (zstd
-// supercompression inflated) into a compressed mip. BC5, and any single-level
-// source with no chain, falls back to RGBA8 so runtime mip generation applies.
+// supercompression inflated) into a compressed mip. A single-level source with
+// no chain falls back to RGBA8 so runtime mip generation applies.
 fn compile_block_format(
     reader: &Reader<&[u8]>,
     format: Format,
@@ -112,12 +111,10 @@ fn compile_block_format(
         level_blocks.push(blocks);
     }
 
-    // Decode to RGBA8 when the blocks cannot ship as-is: BC5 carries no blue
-    // channel for the shaders to read as Z, and a chainless source needs
-    // runtime mip generation to stay sharp at distance. BC7 has no CPU decoder,
-    // so it stays a single compressed level.
-    let decodes = !crate::texture::ships_as_blocks(tex_format)
-        || (level_blocks.len() == 1 && tex_format != TextureFormat::Bc7);
+    // A chainless source needs runtime mip generation to stay sharp at
+    // distance, so it decodes to RGBA8. BC7 has no CPU decoder, so it stays a
+    // single compressed level.
+    let decodes = level_blocks.len() == 1 && tex_format != TextureFormat::Bc7;
     if decodes {
         let rgba = decode_blocks_to_rgba8(tex_format, &level_blocks[0], width, height)?;
         tracing::info!(
@@ -563,22 +560,18 @@ mod tests {
         }
     }
 
-    // BC5 has no blue channel, so a mip chain is decoded rather than passed
-    // through: the shaders read a normal map's `.xyz` and would otherwise get
-    // Z = 0. The CPU decoder reconstructs Z from X and Y.
+    // BC5 carries no blue channel, but the shaders reconstruct Z from X and Y,
+    // so a two-channel chain uploads as blocks at a quarter of the RGBA8 cost.
     #[test]
-    fn a_bc5_chain_decodes_to_rgba8_with_a_reconstructed_z() {
-        // Both BC4 halves select endpoint 0 = 128 for every texel, so X and Y
-        // sit at the midpoint and Z reconstructs to ~1.
+    fn a_bc5_chain_passes_through_as_blocks() {
         let block = [128u8, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0, 0, 0];
         let levels = vec![(4, 4, block.to_vec()), (2, 2, block.to_vec())];
         let image = compile_ktx2(&build_ktx2(VK_BC5_UNORM, 0, 4, 4, &levels)).expect("compile");
 
-        assert_eq!(image.format, TextureFormat::Rgba8);
-        assert_eq!(image.mips.len(), 1);
-        for texel in image.mips[0].data.chunks(4) {
-            assert_eq!(texel, [128, 128, 255, 255], "Z must be reconstructed");
-        }
+        assert_eq!(image.format, TextureFormat::Bc5);
+        assert_eq!(image.mips.len(), 2);
+        assert_eq!(image.mips[0].data, block.to_vec());
+        assert_eq!((image.mips[1].width, image.mips[1].height), (2, 2));
     }
 
     #[test]

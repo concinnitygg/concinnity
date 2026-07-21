@@ -216,6 +216,14 @@ vec2 env_brdf_approx(float NdV, float rough) {
     return vec2(-1.04, 1.04) * a004 + r.zw;
 }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+vec3 decode_normal_map(vec2 encoded) {
+    vec2 nxy = encoded * 2.0 - 1.0;
+    return vec3(nxy, sqrt(clamp(1.0 - dot(nxy, nxy), 0.0, 1.0)));
+}
+
 // Geometric specular antialiasing (Kaplanyan et al. 2016, as in Filament):
 // widen the NDF by the screen-space variance of the shading normal so an
 // undersampled high-frequency normal map at a distance does not alias into
@@ -453,7 +461,7 @@ void main() {
     vec3 albedo = albedo_samp.rgb * frag_color * push.tint;
 
     // Reconstruct normal from normal map.
-    vec3 norm_samp = texture(normal_tex, frag_uv).rgb * 2.0 - 1.0;
+    vec3 norm_samp = decode_normal_map(texture(normal_tex, frag_uv).rg);
     mat3 TBN = mat3(
         normalize(frag_tangent),
         normalize(frag_bitangent),

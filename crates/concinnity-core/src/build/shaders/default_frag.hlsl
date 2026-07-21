@@ -237,6 +237,15 @@ float2 env_brdf_approx(float NdV, float rough)
     return float2(-1.04, 1.04) * a004 + r.zw;
 }
 
+// Decode a tangent-space normal map texel. Only X and Y are read; Z is
+// reconstructed from them, so a two-channel source (BC5) decodes the same as
+// an RGBA8 one and normal maps can ship as BC5 blocks.
+float3 decode_normal_map(float2 encoded)
+{
+    float2 nxy = encoded * 2.0 - 1.0;
+    return float3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
+}
+
 // Clip a quad against the horizon plane z = 0, keeping the part above it.
 // Sutherland-Hodgman rather than the usual hardcoded 16-case table: a quad cut
 // by one plane yields at most 5 vertices, and the loop form cannot be got wrong
@@ -466,7 +475,7 @@ float4 main(PsIn p) : SV_TARGET
     float4 albedo_samp = albedo_tex.Sample(linear_sampler, p.uv);
     float3 albedo = albedo_samp.rgb * p.color * tint;
 
-    float3 norm_samp = normal_tex.Sample(linear_sampler, p.uv).rgb * 2.0 - 1.0;
+    float3 norm_samp = decode_normal_map(normal_tex.Sample(linear_sampler, p.uv).rg);
     float3x3 TBN = float3x3(
         normalize(p.tangent),
         normalize(p.bitangent),
