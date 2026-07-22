@@ -111,7 +111,14 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
         ctx.insert(parent, Children(kids));
     }
 
-    ctx.insert_resource(EntityByName(by_name));
+    // The loaders publish a full name -> entity index before start; merge the
+    // Prop entries into it rather than replacing it, so non-Prop names stay
+    // resolvable. A world built without a loader still gets the Prop index.
+    if let Some(index) = ctx.resource_mut::<EntityByName>() {
+        index.0.extend(by_name);
+    } else {
+        ctx.insert_resource(EntityByName(by_name));
+    }
 
     // Drop the Prop column now that every consumer reads the decomposed
     // components. drain<Prop> clears only the Prop component, so each entity

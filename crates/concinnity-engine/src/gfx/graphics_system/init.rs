@@ -1687,10 +1687,13 @@ impl GraphicsSystem {
             .as_ref()
             .map(|c| c.ambient_intensity())
             .unwrap_or(1.0);
-        let dir_lights = ctx.drain::<DirectionalLight>();
-        let pt_lights = ctx.drain::<PointLight>();
-        let spot_lights = ctx.drain::<SpotLight>();
-        let rect_lights = ctx.drain::<RectAreaLight>();
+        // Lights are read, not drained: the GPU-side light data stays static
+        // (built once here), but the components keep their entities so editor
+        // tooling can address the authored lights by name.
+        let dir_lights: Vec<DirectionalLight> = ctx.query::<DirectionalLight>().cloned().collect();
+        let pt_lights: Vec<PointLight> = ctx.query::<PointLight>().cloned().collect();
+        let spot_lights: Vec<SpotLight> = ctx.query::<SpotLight>().cloned().collect();
+        let rect_lights: Vec<RectAreaLight> = ctx.query::<RectAreaLight>().cloned().collect();
         let light_data = lights::build_light_data(&pt_lights, &spot_lights, &rect_lights);
         let light_uniforms = lights::build_light_uniforms(
             dir_lights,

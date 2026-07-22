@@ -54,6 +54,7 @@ use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
+use super::billboards;
 use super::gizmo;
 use super::group_transform;
 use super::highlight;
@@ -318,6 +319,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
         .collect()
 }
 
+mod billboard_drive;
 mod browse;
 mod editing;
 mod edits;
@@ -450,6 +452,9 @@ impl DebugHook for EditorHook {
         // window, so gating this on the panel being open would make the first
         // window after opening report a partial one.
         self.health.sample(world);
+        // Seed Transforms onto the billboard-backed entities before any of
+        // this frame's picking or gizmo work resolves them.
+        self.seed_billboard_transforms(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -600,9 +605,11 @@ impl DebugHook for EditorHook {
                 p.hide(world);
             }
         }
-        // The selection rings ride the picked assets' projected bounds, under
-        // the panels (their ids take the default draw layer); the gizmo and
-        // the marquee rect draw over them.
+        // The billboards sit at the bottom of the editor overlays; the
+        // selection rings ride the picked assets' projected bounds above
+        // them, under the panels (their ids take the default draw layer);
+        // the gizmo and the marquee rect draw over both.
+        self.drive_billboards(world, vp, shown);
         self.drive_highlight(world, vp, shown);
         self.drive_gizmo_draw(world, vp, shown);
         self.drive_marquee_draw(world, shown);

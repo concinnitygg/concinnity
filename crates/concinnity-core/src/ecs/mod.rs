@@ -426,9 +426,10 @@ macro_rules! define_components {
         impl ComponentStorage {
             // Dispatch a `ComponentAsset` variant into its typed column via the
             // generic typed push (which mints the Entity and stamps the tick).
-            pub fn push(&mut self, asset: ComponentAsset) {
+            // Returns the minted Entity so loaders can index it by name.
+            pub fn push(&mut self, asset: ComponentAsset) -> $crate::ecs::Entity {
                 match asset {
-                    $( ComponentAsset::$variant(c) => { self.push_typed(c); } )+
+                    $( ComponentAsset::$variant(c) => self.push_typed(c), )+
                 }
             }
 

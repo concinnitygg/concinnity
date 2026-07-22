@@ -75,10 +75,18 @@ pub(crate) fn editor_hud(world: &mut World) {
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.
     world.remove_all::<DebugHud>();
-    // The selection rings, marquee rect, and gizmo go in first: overlay
-    // fallback draw order is insertion order, so they stay under every panel
-    // and the top bar even before the per-frame HudLayers publish (the gizmo
-    // draws over the rings).
+    // The billboards, selection rings, marquee rect, and gizmo go in first:
+    // overlay fallback draw order is insertion order, so they stay under
+    // every panel and the top bar even before the per-frame HudLayers publish
+    // (the rings draw over the billboards, the gizmo over the rings).
+    for s in super::billboards::sprites() {
+        world.add_component(s);
+    }
+    for id in super::billboards::all_label_ids() {
+        let mut l = centered_label(id, "", [0.0; 4], font);
+        l.visible = false;
+        world.add_component(l);
+    }
     for s in super::highlight::outline_sprites() {
         world.add_component(s);
     }

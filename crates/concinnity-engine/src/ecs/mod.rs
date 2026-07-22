@@ -227,10 +227,11 @@ impl World {
         }
     }
 
-    // Add a component loaded from a blob def. Systems are not added this way:
-    // they are internal and constructed by `build_internal_systems`.
-    pub fn add(&mut self, component: ComponentAsset) {
-        self.components.push(component);
+    // Add a component loaded from a blob def, returning its minted entity so
+    // the loaders can index it by name. Systems are not added this way: they
+    // are internal and constructed by `build_internal_systems`.
+    pub fn add(&mut self, component: ComponentAsset) -> Entity {
+        self.components.push(component)
     }
 
     #[allow(dead_code)]
@@ -326,6 +327,22 @@ impl World {
     #[allow(dead_code)]
     pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
         self.components.get_mut::<C>(entity)
+    }
+
+    // Add a component to an existing entity. Mirror of
+    // `PipelineContext::insert`; the editor's billboard drive seeds a
+    // `Transform` onto non-rendering entities through this.
+    #[allow(dead_code)]
+    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
+        self.components.insert_typed(entity, c);
+    }
+
+    // Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
+    // guards name-index resolves against entities despawned by the start-time
+    // drains (Window, GraphicsConfig, Scene, ...).
+    #[allow(dead_code)]
+    pub fn is_alive(&self, entity: Entity) -> bool {
+        self.components.is_alive(entity)
     }
 
     // Read-only join over two component types, for code holding a `World`

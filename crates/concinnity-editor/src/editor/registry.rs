@@ -80,7 +80,8 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::Import => 0xA00,
             PanelKey::Health => 0xB00,
             // 0xC00..0xE00 belong to the highlight, gizmo, and marquee
-            // overlays (allocated in their own modules).
+            // overlays, and 0x1000.. to the billboards (all allocated in
+            // their own modules).
             PanelKey::Outliner => 0xF00,
         }
 }
@@ -215,6 +216,12 @@ mod tests {
         claim(super::super::marquee::RECT, "marquee rect".to_string());
         for id in super::super::gizmo::all_sprite_ids() {
             claim(id, "gizmo".to_string());
+        }
+        for id in super::super::billboards::all_sprite_ids() {
+            claim(id, "billboards".to_string());
+        }
+        for id in super::super::billboards::all_label_ids() {
+            claim(id, "billboard glyphs".to_string());
         }
         claim(
             super::super::gizmo::MODE_LABEL,

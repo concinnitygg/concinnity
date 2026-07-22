@@ -106,9 +106,14 @@ impl EditorHook {
         }
         // Nothing claimed the press: the gizmo's tip handles get it first
         // (grabbing a handle must not re-pick the object behind it), then the
-        // 3D view as a pick. Only edit mode gets here (`left_click` stays
-        // false while the world holds the cursor in play mode).
+        // billboard icons (which arbitrate against the mesh AABBs by camera
+        // distance), then the 3D view as a pick. Only edit mode gets here
+        // (`left_click` stays false while the world holds the cursor in play
+        // mode).
         if self.try_gizmo_press(input, vp, world) {
+            return;
+        }
+        if self.try_billboard_press(input, vp, world) {
             return;
         }
         self.click_world(input, world);

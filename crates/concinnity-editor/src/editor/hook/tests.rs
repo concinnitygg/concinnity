@@ -3722,3 +3722,156 @@ fn viewport_pick_reveals_the_outliner_row() {
     h.reveal_outliner("a20", &world);
     assert_eq!(h.outliner_scroll, 31 - outliner_panel::ROW_POOL);
 }
+
+// Billboard test rig: the pick rig plus a PointLight entity indexed by name
+// (as the loaders' name -> entity index would) and the injected billboard
+// pools.
+fn billboard_world(
+    light_pos: [f32; 3],
+    picks: Vec<(crate::ecs::asset_id::AssetId, [f32; 3], [f32; 3])>,
+) -> World {
+    let mut world = pick_world([0.0; 3], picks);
+    for s in billboards::sprites() {
+        world.add_component(s);
+    }
+    let entity = world.push(crate::assets::PointLight {
+        position: light_pos,
+        ..Default::default()
+    });
+    let id = crate::ecs::asset_id::intern("lamp");
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(id, entity);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world
+}
+
+fn lamp_entry(pos: [f32; 3]) -> serde_json::Value {
+    serde_json::json!({"name": "lamp", "type": "PointLight", "args": {"position": pos}})
+}
+
+// Clicking a light's billboard selects it by name through the normal pick
+// flow, and the tick seeds the Transform the gizmo needs onto its entity.
+#[test]
+fn billboard_click_selects_the_light_and_seeds_its_transform() {
+    crate::ecs::asset_id::reset_interner();
+    let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
+    let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
+
+    // The light projects to the viewport center (camera at origin facing -Z).
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), Some("lamp"), "the icon press selects");
+    assert!(h.panel_open, "the assets UI comes up around the form");
+    assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
+
+    // The seeded Transform mirrors the authored position, so the gizmo's
+    // member resolve works on the light.
+    let entity = world
+        .resource::<concinnity_core::ecs::EntityByName>()
+        .unwrap()
+        .0
+        .values()
+        .next()
+        .copied()
+        .unwrap();
+    let t = world.get::<crate::assets::Transform>(entity).unwrap();
+    assert_eq!(t.position, [0.0, 0.0, -5.0]);
+    assert!(
+        h.gizmo_layout(&world, [1280.0, 720.0]).is_some(),
+        "the translate gizmo anchors on the selected light"
+    );
+}
+
+// A mesh AABB in front of the billboard's anchor keeps the press; one behind
+// it loses to the icon.
+#[test]
+fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
+    crate::ecs::asset_id::reset_interner();
+    let wall = crate::ecs::asset_id::intern("wall");
+    // Wall at depth 2..3, light at depth 5: the wall is nearer.
+    let mut world = billboard_world(
+        [0.0, 0.0, -5.0],
+        vec![(wall, [-1.0, -1.0, -3.0], [1.0, 1.0, -2.0])],
+    );
+    let mut h = hook(vec![entry("wall", "Sprite"), lamp_entry([0.0, 0.0, -5.0])]);
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), Some("wall"), "the nearer mesh wins");
+
+    // Wall at depth 9..10, light at depth 5: the icon is nearer.
+    crate::ecs::asset_id::reset_interner();
+    let wall = crate::ecs::asset_id::intern("wall");
+    let mut world = billboard_world(
+        [0.0, 0.0, -5.0],
+        vec![(wall, [-1.0, -1.0, -10.0], [1.0, 1.0, -9.0])],
+    );
+    let mut h = hook(vec![entry("wall", "Sprite"), lamp_entry([0.0, 0.0, -5.0])]);
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), Some("lamp"), "the nearer icon wins");
+}
+
+// Editor-hidden billboards neither draw nor pick; locked ones stay visible
+// but pass the press through, both matching the mesh pick's rules.
+#[test]
+fn hidden_and_locked_billboards_follow_the_pick_rules() {
+    crate::ecs::asset_id::reset_interner();
+    let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
+    let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
+    h.locked_assets.insert("lamp".to_string());
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), None, "a locked icon is pick-through");
+    assert!(h.marquee.is_some(), "the click fell through to empty space");
+
+    crate::ecs::asset_id::reset_interner();
+    let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
+    let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
+    h.hidden_assets.insert("lamp".to_string());
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), None, "a hidden asset draws no icon");
+    assert!(h.marquee.is_some(), "the click fell through to empty space");
+}
+
+// Selecting a trigger volume draws its collider outline: dotted box segments
+// for a cuboid, and nothing once the selection moves elsewhere.
+#[test]
+fn selected_trigger_volume_draws_its_box_outline() {
+    crate::ecs::asset_id::reset_interner();
+    let mut world = pick_world([0.0; 3], Vec::new());
+    for s in billboards::sprites() {
+        world.add_component(s);
+    }
+    let entity = world.push(crate::assets::TriggerVolume {
+        position: [0.0, 0.0, -6.0],
+        ..Default::default()
+    });
+    let id = crate::ecs::asset_id::intern("zone");
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(id, entity);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    let mut h = hook(vec![serde_json::json!({
+        "name": "zone", "type": "TriggerVolume",
+        "args": {"position": [0.0, 0.0, -6.0]}
+    })]);
+
+    // Click the volume's projected icon (viewport center): it selects and its
+    // outline comes up.
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), Some("zone"));
+    let ids: std::collections::HashSet<_> = billboards::all_sprite_ids().into_iter().collect();
+    let outline_shown = world
+        .query::<Sprite>()
+        .filter(|s| s.visible && ids.contains(&s.asset_id) && s.width < 4.0)
+        .count();
+    assert_eq!(
+        outline_shown,
+        billboards::BOX_EDGES * billboards::EDGE_SEGMENTS,
+        "every dotted box segment is placed"
+    );
+
+    // Clearing the selection hides the outline again.
+    h.selection.clear();
+    h.tick(&mut world);
+    let outline_shown = world
+        .query::<Sprite>()
+        .filter(|s| s.visible && ids.contains(&s.asset_id) && s.width < 4.0)
+        .count();
+    assert_eq!(outline_shown, 0, "no outline without a selected volume");
+}

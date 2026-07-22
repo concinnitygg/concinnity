@@ -6,6 +6,7 @@
 pub use concinnity_core::blob::*;
 
 use crate::ecs::ComponentAsset;
+use crate::ecs::asset_id::AssetId;
 use crate::result::CnResult;
 
 // Load the primary blob, resolve every stored def to a `ComponentAsset`, and
@@ -20,9 +21,13 @@ use crate::result::CnResult;
 // injected into it (see `ComponentAsset::inject_locator`). Only blob 0's payload
 // section is read into memory by `load_raw`; overflow blobs are read from disk
 // lazily on first access.
+// A loaded component paired with its def's name id, so the caller can index
+// the entity it mints for it (the world's name -> entity map).
+type NamedComponent = (Option<AssetId>, ComponentAsset);
+
 pub(crate) fn load() -> Result<
     (
-        Vec<ComponentAsset>,
+        Vec<NamedComponent>,
         Vec<ResourceRecord>,
         WorldManifest,
         BlobData,
@@ -41,7 +46,7 @@ pub(crate) fn load() -> Result<
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }
-            Ok(component)
+            Ok((def.name, component))
         })
         .collect::<Result<Vec<_>, CnResult>>()?;
 
