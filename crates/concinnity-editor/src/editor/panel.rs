@@ -135,8 +135,10 @@ pub(crate) const DOT1: AssetId = AssetId(PANEL + 13);
 pub(crate) const DOT2: AssetId = AssetId(PANEL + 14);
 pub(crate) const DOT3: AssetId = AssetId(PANEL + 15);
 pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 16);
-pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 17);
-pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 18);
+pub(crate) const MENU_LOCK_BG: AssetId = AssetId(PANEL + 17);
+pub(crate) const MENU_LOCK_LABEL: AssetId = AssetId(PANEL + 18);
+pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 19);
+pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 20);
 
 pub(crate) fn row_bg(slot: usize) -> AssetId {
     AssetId(PANEL + 0x20 + slot as u32)
@@ -149,9 +151,6 @@ pub(crate) fn type_label(slot: usize) -> AssetId {
 }
 pub(crate) fn eye_box(slot: usize) -> AssetId {
     AssetId(PANEL + 0x80 + slot as u32)
-}
-pub(crate) fn lock_box(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xA0 + slot as u32)
 }
 pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
     AssetId(PANEL + 0xC0 + slot as u32)
@@ -170,20 +169,23 @@ const STATUS_H: f32 = 20.0;
 pub(crate) const ROW_H: f32 = 26.0;
 const SCROLLBAR_W: f32 = 5.0;
 const GAP: f32 = 6.0;
-// The eye / lock toggle squares.
+// The hide toggle, at the head of an asset row.
 const BOX_SIZE: f32 = 14.0;
-// An asset row's name is inset under its group header.
-const ASSET_INDENT: f32 = 24.0;
+// An asset row's name is inset past its hide toggle, so it still reads as
+// indented under the group header (whose caption starts at the base pad).
+const ASSET_INDENT: f32 = PAD + BOX_SIZE + GAP;
 // Visible rows in the body before it scrolls, shared by the tree and the
 // picker's option list.
 pub(crate) const ROW_POOL: usize = 14;
 // The asset name, and the type that reads right-aligned beside it (the
 // triple-dot takes the type's slot over while the row is hovered).
-const MAX_NAME_CHARS: usize = 24;
-const MAX_TYPE_CHARS: usize = 18;
+const MAX_NAME_CHARS: usize = 26;
+// 17 covers the longest registered type name (`PostProcessConfig`), so a
+// type caption never clips.
+const MAX_TYPE_CHARS: usize = 17;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 20.0;
-// The floating Delete menu.
+// The floating row menu.
 const MENU_W: f32 = 132.0;
 const MENU_ROW_H: f32 = 26.0;
 
@@ -197,20 +199,22 @@ const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 // The eye box: green while the asset renders, dim once hidden.
 const EYE_TINT_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
 const EYE_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-// The lock box: amber while locked, dim while pickable.
-const LOCK_TINT_ON: [f32; 4] = [0.78, 0.56, 0.22, 1.0];
-const LOCK_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const PICKER_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
 const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
 const DOT_BG_TINT: [f32; 4] = [0.30, 0.34, 0.46, 0.95];
 const DOT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
-const MENU_BG_TINT: [f32; 4] = [0.15, 0.15, 0.19, 1.0];
+// Lifted well clear of the panel chrome behind it, and framed by the shared
+// hairline border, so the menu reads as a floating surface rather than as text
+// sitting loose on the panel.
+const MENU_BG_TINT: [f32; 4] = [0.22, 0.23, 0.29, 1.0];
 const MENU_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const MENU_ROW_HOVER: [f32; 4] = theme::HOVER_TINT;
 const LABEL: [f32; 3] = theme::LABEL;
 const LABEL_DIM: [f32; 3] = theme::LABEL_DIM;
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
+// Amber while the asset is locked out of picking, plain while it is pickable.
+const LOCK_LABEL_ON: [f32; 3] = [0.90, 0.72, 0.40];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 
@@ -284,22 +288,11 @@ pub(crate) fn row_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     ]
 }
 
-// The pick-lock toggle, outermost on an asset row.
-pub(crate) fn lock_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    let r = row_rect(o, slot);
-    [
-        r[0] + r[2] - PAD - BOX_SIZE,
-        r[1] + (ROW_H - BOX_SIZE) * 0.5,
-        BOX_SIZE,
-        BOX_SIZE,
-    ]
-}
-
-// The hide toggle, just inside the lock.
+// The hide toggle, at the head of an asset row with the name inset past it.
 pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     let r = row_rect(o, slot);
     [
-        lock_rect(o, slot)[0] - GAP - BOX_SIZE,
+        r[0] + PAD,
         r[1] + (ROW_H - BOX_SIZE) * 0.5,
         BOX_SIZE,
         BOX_SIZE,
@@ -308,7 +301,8 @@ pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
 
 // The right edge the asset type is right-aligned against.
 fn type_right(o: [f32; 2], slot: usize) -> f32 {
-    eye_rect(o, slot)[0] - GAP
+    let r = row_rect(o, slot);
+    r[0] + r[2] - PAD
 }
 
 // The triple-dot button, taking over the type slot while the row is hovered
@@ -328,14 +322,35 @@ pub(crate) fn picker_option_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     [o[0], list_top(o) + slot as f32 * ROW_H, PANEL_W, ROW_H]
 }
 
-// The row menu, floating just below the name row at visible slot `slot`. A
-// single Delete row (a name-row click opens the edit form, so Edit is redundant
-// here). Returns (background, delete row).
-fn menu_rects(o: [f32; 2], slot: usize) -> ([f32; 4], [f32; 4]) {
-    let x = o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0;
+// The row menu, floating just below the asset row at visible slot `slot`.
+// Lock / Unlock is always offered (it applies to anything the viewport can
+// pick); Delete only when the world declares a line to remove -- a generated
+// asset has none, and is removed by editing whatever produced it. A row-body
+// click already opens the edit form, so Edit is redundant here.
+//
+// Returns (background, lock row, delete row).
+fn menu_rects(o: [f32; 2], slot: usize, deletable: bool) -> ([f32; 4], [f32; 4], Option<[f32; 4]>) {
+    let x = menu_left(o);
     let top = list_top(o) + slot as f32 * ROW_H + ROW_H;
-    let delete = [x, top, MENU_W, MENU_ROW_H];
-    (delete, delete)
+    let rows = if deletable { 2.0 } else { 1.0 };
+    let bg = [x, top, MENU_W, rows * MENU_ROW_H];
+    let lock = [x, top, MENU_W, MENU_ROW_H];
+    let delete = deletable.then_some([x, top + MENU_ROW_H, MENU_W, MENU_ROW_H]);
+    (bg, lock, delete)
+}
+
+// The menu's left edge. Only the right-aligned type captions reach under it:
+// a row's name is clipped well short of this (`name_captions_clear_the_menu`).
+fn menu_left(o: [f32; 2]) -> f32 {
+    o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0
+}
+
+// How many body rows the open menu covers, so their type captions can be
+// blanked: all TextLabels draw after all Sprites, so the menu's opaque backing
+// cannot hide a caption underneath it -- only not drawing it can.
+fn menu_covered_slots(slot: usize, deletable: bool) -> std::ops::Range<usize> {
+    let rows = if deletable { 2 } else { 1 };
+    (slot + 1)..(slot + 1 + rows).min(ROW_POOL)
 }
 
 // A resolved panel click. Row picks carry the group and the index within it, so
@@ -355,10 +370,10 @@ pub(crate) enum PanelAction {
     SelectRow(usize, usize),
     // An asset row's eye: flip the editor-session hide.
     ToggleHide(usize, usize),
-    // An asset row's lock: flip the pick lock.
-    ToggleLock(usize, usize),
-    // An asset row's triple-dot: open its Delete menu.
+    // An asset row's triple-dot: open its menu.
     OpenRowMenu(usize, usize),
+    // The open row menu's Lock / Unlock row: flip the pick lock.
+    RowToggleLock,
     // The open row menu's Delete row.
     RowDelete,
     // Dismiss any open overlay (picker / row menu) without picking.
@@ -399,13 +414,16 @@ impl PanelView<'_> {
         self.picker_options.is_some()
     }
 
-    // The visible slot (0..ROW_POOL) currently showing the asset called `name`.
-    fn visible_slot_of(&self, name: &str) -> Option<usize> {
-        (0..ROW_POOL).find(|slot| {
-            matches!(
-                self.rows.get(self.scroll + slot),
-                Some(TreeRow::Asset { name: n, .. }) if n == name
-            )
+    // The visible slot and deletability of the asset the open menu belongs to,
+    // when that asset is still on screen. Only an authored line can be deleted;
+    // a generated asset has no world.jsonl line of its own.
+    fn menu_target(&self) -> Option<(usize, bool)> {
+        let name = self.row_menu?;
+        (0..ROW_POOL).find_map(|slot| match self.rows.get(self.scroll + slot) {
+            Some(TreeRow::Asset { name: n, badge, .. }) if n == name => {
+                Some((slot, *badge == Badge::Authored))
+            }
+            _ => None,
         })
     }
 }
@@ -416,12 +434,15 @@ impl PanelView<'_> {
 // system focuses the field from the same input). Title-bar presses never reach
 // this: the hook intercepts them first to start a drag.
 pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
-    // An open row menu is modal over the panel: its Delete row picks, anything
-    // else dismisses it.
-    if let Some(name) = view.row_menu {
-        if let Some(slot) = view.visible_slot_of(name) {
-            let (_, delete) = menu_rects(o, slot);
-            if point_in(mx, my, delete) {
+    // An open row menu is modal over the panel: its rows pick, anything else
+    // dismisses it.
+    if view.row_menu.is_some() {
+        if let Some((slot, deletable)) = view.menu_target() {
+            let (_, lock, delete) = menu_rects(o, slot, deletable);
+            if point_in(mx, my, lock) {
+                return Some(PanelAction::RowToggleLock);
+            }
+            if delete.is_some_and(|d| point_in(mx, my, d)) {
                 return Some(PanelAction::RowDelete);
             }
         }
@@ -470,17 +491,12 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
         };
         return Some(match row {
             TreeRow::Header { group, .. } => PanelAction::ToggleGroup(*group),
-            TreeRow::Asset {
-                group,
-                index,
-                editable,
-                ..
-            } => {
+            TreeRow::Asset { group, index, .. } => {
                 if point_in(mx, my, eye_rect(o, slot)) {
                     PanelAction::ToggleHide(*group, *index)
-                } else if point_in(mx, my, lock_rect(o, slot)) {
-                    PanelAction::ToggleLock(*group, *index)
-                } else if *editable && point_in(mx, my, dot_rect(o, slot)) {
+                } else if point_in(mx, my, dot_rect(o, slot)) {
+                    // Offered on every asset row: the lock applies to anything
+                    // the viewport can pick, editable or not.
                     PanelAction::OpenRowMenu(*group, *index)
                 } else {
                     PanelAction::SelectRow(*group, *index)
@@ -574,7 +590,6 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
     }
     let total = view.rows.len();
     let scroll = view.scroll.min(total.saturating_sub(1));
-    let mut menu_slot = None;
     for slot in 0..ROW_POOL {
         let Some(row) = view.rows.get(scroll + slot) else {
             break;
@@ -589,12 +604,8 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
                 name,
                 asset_type,
                 badge,
-                editable,
                 ..
             } => {
-                if view.row_menu == Some(name.as_str()) {
-                    menu_slot = Some(slot);
-                }
                 let asset = AssetRow {
                     name,
                     asset_type,
@@ -603,19 +614,19 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
                 };
                 layout_asset_row(world, view, o, slot, &asset);
                 // The triple-dot follows the row whose menu is open, else the
-                // hovered row; only an editable asset offers one at all.
-                if *editable && (view.row_menu == Some(name.as_str()) || hovered) {
+                // hovered row.
+                let menu_here = view.row_menu == Some(name.as_str());
+                if menu_here || hovered {
                     let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, slot));
-                    let show_box = view.row_menu == Some(name.as_str()) || over_dots;
-                    place_dot(world, o, slot, show_box);
+                    place_dot(world, o, slot, menu_here || over_dots);
                     // The dots take over the type slot, so that row's type hides.
                     widget::set_label_visible(world, type_label(slot), false);
                 }
             }
         }
     }
-    if let Some(slot) = menu_slot {
-        layout_row_menu(world, view, o, slot);
+    if let Some((slot, deletable)) = view.menu_target() {
+        layout_row_menu(world, view, o, slot, deletable);
     }
     layout_scrollbar(world, total, scroll, o);
 }
@@ -708,12 +719,6 @@ fn layout_asset_row(
     }
     let eye = if hidden { EYE_TINT_OFF } else { EYE_TINT_ON };
     place_rounded(world, eye_box(slot), eye_rect(o, slot), eye, 4.0, true);
-    let lock = if view.locked.contains(name) {
-        LOCK_TINT_ON
-    } else {
-        LOCK_TINT_OFF
-    };
-    place_rounded(world, lock_box(slot), lock_rect(o, slot), lock, 4.0, true);
 }
 
 // The floating type-picker list, over the tree body.
@@ -798,22 +803,62 @@ fn place_dot(world: &mut World, o: [f32; 2], slot: usize, show_box: bool) {
     }
 }
 
-fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], slot: usize) {
-    let (bg, delete) = menu_rects(o, slot);
-    place_rounded(
+fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], slot: usize, deletable: bool) {
+    let (bg, lock, delete) = menu_rects(o, slot, deletable);
+    // Blank the type captions the menu floats over first: every TextLabel draws
+    // after every Sprite, so the opaque backing below cannot cover them. The
+    // names stay -- they sit well left of the menu, so hiding them would blank
+    // rows the user can still see.
+    for covered in menu_covered_slots(slot, deletable) {
+        widget::set_label_visible(world, type_label(covered), false);
+    }
+    if let Some(sprite) = widget::sprite_mut(world, MENU_BG) {
+        sprite.x = bg[0];
+        sprite.y = bg[1];
+        sprite.width = bg[2];
+        sprite.height = bg[3];
+        sprite.tint = MENU_BG_TINT;
+        sprite.corner_radius = theme::CONTROL_RADIUS;
+        sprite.border_width = theme::PANEL_BORDER_WIDTH;
+        sprite.border_color = theme::PANEL_BORDER_TINT;
+        sprite.visible = true;
+    }
+
+    let locked = view.row_menu.is_some_and(|n| view.locked.contains(n));
+    place_menu_row(
         world,
-        MENU_BG,
-        bg,
-        MENU_BG_TINT,
-        theme::CONTROL_RADIUS,
-        true,
+        (MENU_LOCK_BG, MENU_LOCK_LABEL),
+        lock,
+        view.mouse,
+        if locked { "Unlock" } else { "Lock" },
+        if locked { LOCK_LABEL_ON } else { LABEL },
     );
-    let del_hover = point_in(view.mouse[0], view.mouse[1], delete);
+    if let Some(delete) = delete {
+        place_menu_row(
+            world,
+            (MENU_DELETE_BG, MENU_DELETE_LABEL),
+            delete,
+            view.mouse,
+            "Delete",
+            DELETE_LABEL,
+        );
+    }
+}
+
+fn place_menu_row(
+    world: &mut World,
+    ids: (AssetId, AssetId),
+    rect: [f32; 4],
+    mouse: [f32; 2],
+    caption: &str,
+    color: [f32; 3],
+) {
+    let hovered = point_in(mouse[0], mouse[1], rect);
     place_rounded(
         world,
-        MENU_DELETE_BG,
-        delete,
-        if del_hover {
+        ids.0,
+        rect,
+        if hovered {
             MENU_ROW_HOVER
         } else {
             MENU_ROW_TINT
@@ -823,13 +868,10 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], slot: usize
     );
     place_left_label(
         world,
-        MENU_DELETE_LABEL,
-        [
-            delete[0] + PAD,
-            delete[1] + MENU_ROW_H * 0.5 - theme::TEXT_HALF,
-        ],
-        "Delete",
-        DELETE_LABEL,
+        ids.1,
+        [rect[0] + PAD, rect[1] + MENU_ROW_H * 0.5 - theme::TEXT_HALF],
+        caption,
+        color,
         true,
     );
 }
@@ -876,7 +918,6 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG];
     ids.extend((0..ROW_POOL).map(row_bg));
     ids.extend((0..ROW_POOL).map(eye_box));
-    ids.extend((0..ROW_POOL).map(lock_box));
     ids.push(PICKER_BG);
     ids.extend((0..ROW_POOL).map(picker_row_bg));
     ids.extend([
@@ -887,6 +928,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
         DOT2,
         DOT3,
         MENU_BG,
+        MENU_LOCK_BG,
         MENU_DELETE_BG,
     ]);
     ids
@@ -907,7 +949,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..ROW_POOL).map(name_label));
     ids.extend((0..ROW_POOL).map(type_label));
     ids.extend((0..ROW_POOL).map(picker_row_label));
-    ids.push(MENU_DELETE_LABEL);
+    ids.extend([MENU_LOCK_LABEL, MENU_DELETE_LABEL]);
     ids
 }
 
@@ -974,6 +1016,11 @@ mod tests {
         });
     }
 
+    // An upper bound on the body font's per-character advance (it measures
+    // ~8.2px), for the geometry guards that keep a clipped caption clear of the
+    // chrome beside it.
+    const MAX_CHAR_W: f32 = 10.0;
+
     // The panel origin the tests lay out at: the default anchor in a 1280-wide
     // window.
     fn test_origin() -> [f32; 2] {
@@ -989,14 +1036,34 @@ mod tests {
         }
     }
 
-    fn asset(group: usize, index: usize, name: &str, editable: bool) -> TreeRow {
+    // A generated asset row: no world.jsonl line, so its menu offers no Delete.
+    fn asset(group: usize, index: usize, name: &str) -> TreeRow {
         TreeRow::Asset {
             group,
             index,
             name: name.to_string(),
             asset_type: "Material".to_string(),
             badge: Badge::Imported,
-            editable,
+        }
+    }
+
+    // A row for one of the world's own lines, which the menu can delete.
+    fn authored(group: usize, index: usize, name: &str) -> TreeRow {
+        match asset(group, index, name) {
+            TreeRow::Asset {
+                group,
+                index,
+                name,
+                asset_type,
+                ..
+            } => TreeRow::Asset {
+                group,
+                index,
+                name,
+                asset_type,
+                badge: Badge::Authored,
+            },
+            row => row,
         }
     }
 
@@ -1013,8 +1080,8 @@ mod tests {
             Self {
                 rows: vec![
                     header(0, "World", 2, true),
-                    asset(0, 0, "cam", true),
-                    asset(0, 1, "lamp", true),
+                    authored(0, 0, "cam"),
+                    authored(0, 1, "lamp"),
                     header(1, "fox", 1, false),
                 ],
                 picker_options: Vec::new(),
@@ -1121,17 +1188,18 @@ mod tests {
         assert_eq!(row_rect(o, 1)[1], list_top(o) + ROW_H);
 
         let r = row_rect(o, 0);
-        let (dots, eye, lock) = (dot_rect(o, 0), eye_rect(o, 0), lock_rect(o, 0));
+        let (eye, dots) = (eye_rect(o, 0), dot_rect(o, 0));
+        // The eye heads the row and the name is inset past it.
+        assert_eq!(eye[0], r[0] + PAD, "the eye sits at the row's head");
         assert!(
-            dots[0] + dots[2] <= eye[0] + 0.01,
-            "dots sit left of the eye"
-        );
-        assert!(eye[0] + eye[2] + GAP <= lock[0] + 0.01, "eye left of lock");
-        assert!(
-            lock[0] + lock[2] <= r[0] + r[2],
-            "lock stays inside the row"
+            eye[0] + eye[2] <= r[0] + ASSET_INDENT,
+            "the name starts clear of the eye"
         );
         assert!(eye[1] >= r[1] && eye[1] + eye[3] <= r[1] + r[3]);
+        assert!(
+            dots[0] + dots[2] <= r[0] + r[2],
+            "the triple-dot stays inside the row"
+        );
         // The name never runs under the triple-dot slot.
         let name_room = dots[0] - (r[0] + ASSET_INDENT);
         assert!(name_room > 0.0, "the name has room left of the dots");
@@ -1222,11 +1290,6 @@ mod tests {
             hit_test(&f.view(), e[0] + 2.0, e[1] + 2.0, o),
             Some(PanelAction::ToggleHide(0, 0))
         );
-        let l = lock_rect(o, 1);
-        assert_eq!(
-            hit_test(&f.view(), l[0] + 2.0, l[1] + 2.0, o),
-            Some(PanelAction::ToggleLock(0, 0))
-        );
         let d = dot_rect(o, 1);
         assert_eq!(
             hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
@@ -1241,31 +1304,41 @@ mod tests {
         assert_eq!(hit_test(&f.view(), 5000.0, 5000.0, o), None);
     }
 
-    // A row the build emits unconditionally cannot be promoted, so its dot slot
-    // is inert and the click falls through to a plain select.
+    // A row the build emits unconditionally still offers its menu: the lock
+    // applies to anything the viewport can pick. Only Delete drops out, since
+    // there is no world.jsonl line to remove.
     #[test]
-    fn a_non_editable_row_offers_no_delete_menu() {
+    fn a_generated_row_offers_lock_but_not_delete() {
         let mut f = Fixture::new();
-        f.rows = vec![
-            header(0, "Other expansions", 1, true),
-            asset(0, 0, "tab", false),
-        ];
+        f.rows = vec![header(0, "Other expansions", 1, true), asset(0, 0, "tab")];
         let o = test_origin();
         let d = dot_rect(o, 1);
         assert_eq!(
             hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
-            Some(PanelAction::SelectRow(0, 0))
+            Some(PanelAction::OpenRowMenu(0, 0))
         );
-        let mut world = injected_world();
+
         let v = PanelView {
-            mouse: [d[0] + 2.0, d[1] + 2.0],
+            row_menu: Some("tab"),
             ..f.view()
         };
-        apply(&mut world, Some(&v), o);
-        assert!(
-            !sprite(&world, DOT1).visible,
-            "no triple-dot on a row that cannot be promoted or deleted"
+        let (bg, lock, delete) = menu_rects(o, 1, false);
+        assert!(delete.is_none(), "a generated asset has no line to delete");
+        assert_eq!(bg[3], MENU_ROW_H, "the menu shrinks to its one row");
+        assert_eq!(
+            hit_test(&v, lock[0] + 5.0, lock[1] + 5.0, o),
+            Some(PanelAction::RowToggleLock)
         );
+        // Below that single row the menu is done: the click dismisses it.
+        assert_eq!(
+            hit_test(&v, lock[0] + 5.0, lock[1] + MENU_ROW_H + 5.0, o),
+            Some(PanelAction::CloseOverlays)
+        );
+
+        let mut world = injected_world();
+        apply(&mut world, Some(&v), o);
+        assert_eq!(label(&world, MENU_LOCK_LABEL).content, "Lock");
+        assert!(!label(&world, MENU_DELETE_LABEL).visible);
     }
 
     #[test]
@@ -1303,19 +1376,17 @@ mod tests {
         // The folded group header shows its fold marker.
         assert_eq!(label(&world, name_label(3)).content, "+ fox (1)");
 
-        // cam: selected, locked, visible; its type reads in the right slot.
+        // cam: selected and visible; its type reads in the right slot.
         assert_eq!(sprite(&world, row_bg(1)).tint, ROW_TINT_SELECTED);
         assert_eq!(sprite(&world, eye_box(1)).tint, EYE_TINT_ON);
-        assert_eq!(sprite(&world, lock_box(1)).tint, LOCK_TINT_ON);
         let ty = label(&world, type_label(1));
         assert_eq!(ty.content, "Material");
         assert_eq!(ty.align, TextAlign::Right);
-        assert_eq!(ty.color, badge_color(Badge::Imported));
+        assert_eq!(ty.color, badge_color(Badge::Authored));
 
         // lamp: hidden dims the name and flips the eye.
         assert_eq!(sprite(&world, eye_box(2)).tint, EYE_TINT_OFF);
         assert_eq!(label(&world, name_label(2)).color, LABEL_DIM);
-        assert_eq!(sprite(&world, lock_box(2)).tint, LOCK_TINT_OFF);
 
         // Empty slots past the tree stay blank.
         assert!(!sprite(&world, row_bg(5)).visible);
@@ -1375,16 +1446,23 @@ mod tests {
         assert!(sprite(&world, DOT_BG).visible);
     }
 
-    // The row menu is modal: its Delete row picks, anything else dismisses it.
+    // An authored row's menu offers Lock over Delete, and is modal: its rows
+    // pick, anything else dismisses it.
     #[test]
-    fn the_row_menu_picks_delete_and_dismisses_elsewhere() {
-        let f = Fixture::new();
+    fn the_row_menu_picks_lock_or_delete_and_dismisses_elsewhere() {
+        let mut f = Fixture::new();
+        f.locked.insert("cam".to_string());
         let o = test_origin();
         let v = PanelView {
             row_menu: Some("cam"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, 1);
+        let (_, lock, delete) = menu_rects(o, 1, true);
+        let delete = delete.expect("an authored line can be deleted");
+        assert_eq!(
+            hit_test(&v, lock[0] + 5.0, lock[1] + 5.0, o),
+            Some(PanelAction::RowToggleLock)
+        );
         assert_eq!(
             hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
             Some(PanelAction::RowDelete)
@@ -1397,11 +1475,68 @@ mod tests {
         let mut world = injected_world();
         apply(&mut world, Some(&v), o);
         assert!(sprite(&world, MENU_BG).visible);
+        assert_eq!(
+            label(&world, MENU_LOCK_LABEL).content,
+            "Unlock",
+            "an already-locked asset offers the inverse"
+        );
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
     }
 
+    // Every TextLabel draws after every Sprite, so the menu's opaque backing
+    // cannot cover a row caption underneath it: the covered rows must not draw
+    // their captions at all, or they read straight through the menu.
+    #[test]
+    fn the_row_menu_blanks_the_captions_it_covers() {
+        let mut world = injected_world();
+        let mut f = Fixture::new();
+        // Rows past the menu's reach, to check it blanks only what it covers.
+        f.rows.push(authored(0, 2, "past_a"));
+        f.rows.push(authored(0, 3, "past_b"));
+        let o = test_origin();
+        let v = PanelView {
+            row_menu: Some("cam"),
+            ..f.view()
+        };
+        apply(&mut world, Some(&v), o);
+        // The menu opens under slot 1 and is two rows tall (Lock + Delete).
+        for covered in [2, 3] {
+            assert!(
+                !label(&world, type_label(covered)).visible,
+                "slot {covered}'s type would read through the menu"
+            );
+            assert!(
+                label(&world, name_label(covered)).visible,
+                "slot {covered}'s name sits left of the menu and still reads"
+            );
+        }
+        assert!(
+            label(&world, type_label(4)).visible,
+            "a row past the menu keeps its type"
+        );
+        assert!(label(&world, MENU_DELETE_LABEL).visible);
+    }
+
+    // The names are left alone when the menu opens, which is only safe while a
+    // clipped name cannot reach the menu's left edge.
+    #[test]
+    fn name_captions_clear_the_menu() {
+        let o = test_origin();
+        let name_end = o[0] + ASSET_INDENT + MAX_NAME_CHARS as f32 * MAX_CHAR_W;
+        assert!(
+            name_end <= menu_left(o),
+            "a full-width name would run under the row menu"
+        );
+        // The type is clipped to what fits between the name and the row's edge.
+        let type_start = type_right(o, 0) - MAX_TYPE_CHARS as f32 * MAX_CHAR_W;
+        assert!(
+            name_end <= type_start,
+            "a full-width name would collide with its type"
+        );
+    }
+
     // An open row menu whose asset scrolled out of the visible window has no
-    // hittable Delete row, so any click just closes the overlay.
+    // hittable rows, so any click just closes the overlay.
     #[test]
     fn row_menu_dismisses_when_its_asset_is_off_window() {
         let f = Fixture::new();
@@ -1410,9 +1545,9 @@ mod tests {
             row_menu: Some("not_listed"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, 1);
+        let (_, lock, _) = menu_rects(o, 1, true);
         assert_eq!(
-            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
+            hit_test(&v, lock[0] + 5.0, lock[1] + 5.0, o),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -1489,7 +1624,7 @@ mod tests {
         let mut world = injected_world();
         let mut f = Fixture::new();
         for i in 0..20 {
-            f.rows.push(asset(1, i, &format!("a{i}"), true));
+            f.rows.push(asset(1, i, &format!("a{i}")));
         }
         let v = PanelView {
             scroll: 3,

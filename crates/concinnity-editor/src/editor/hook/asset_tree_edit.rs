@@ -197,15 +197,17 @@ impl EditorHook {
                     self.hidden_assets.insert(name);
                 }
             }
-            PanelAction::ToggleLock(group, index) => {
-                if let Some(name) = self.tree_asset(group, index).map(|a| a.name.clone())
+            PanelAction::OpenRowMenu(group, index) => {
+                self.row_menu = self.tree_asset(group, index).map(|a| a.name.clone());
+            }
+            // The lock is per-session, so it closes the menu without touching
+            // the entries (unlike Delete, which is an authored edit).
+            PanelAction::RowToggleLock => {
+                if let Some(name) = self.row_menu.take()
                     && !self.locked_assets.remove(&name)
                 {
                     self.locked_assets.insert(name);
                 }
-            }
-            PanelAction::OpenRowMenu(group, index) => {
-                self.row_menu = self.tree_asset(group, index).map(|a| a.name.clone());
             }
             PanelAction::RowDelete => {
                 if let Some(name) = self.row_menu.take() {

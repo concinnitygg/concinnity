@@ -767,13 +767,14 @@ fn clicking_a_list_row_opens_its_edit_form() {
     seed_tree(&mut h, Vec::new());
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
-    // Row 0 is the World group header; row 1 is the asset.
+    // Row 0 is the World group header; row 1 is the asset. Aim at its name,
+    // clear of the hide toggle now heading the row.
     let row = panel::row_rect(po, 1);
     let mut world = World::new_empty();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: vp,
-        mouse_x: row[0] + 20.0,
+        mouse_x: row[0] + 60.0,
         mouse_y: row[1] + 10.0,
         left_click: true,
         left_button_down: true,
@@ -3795,8 +3796,9 @@ fn tree_row_click_selects_and_opens_the_form() {
     );
 }
 
-// The eye / lock toggles are editor-session state: they flip the hook's sets
-// (the hidden set publishing as ids each tick) and never touch the entries.
+// The row eye and the menu's Lock are editor-session state: they flip the
+// hook's sets (the hidden set publishing as ids each tick) and never touch the
+// entries.
 #[test]
 fn hide_and_lock_are_session_state_not_edits() {
     crate::ecs::asset_id::reset_interner();
@@ -3808,9 +3810,11 @@ fn hide_and_lock_are_session_state_not_edits() {
     let (g, i) = row_of(&h, "box");
 
     h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
+    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
+    h.apply_panel(PanelAction::RowToggleLock, &mut world);
     assert!(h.hidden_assets.contains("box"));
     assert!(h.locked_assets.contains("box"));
+    assert!(h.row_menu.is_none(), "picking Lock closes the menu");
     assert!(!h.dirty, "session toggles are not authored edits");
 
     h.tick(&mut world);
@@ -3820,7 +3824,8 @@ fn hide_and_lock_are_session_state_not_edits() {
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 
     h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
+    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
+    h.apply_panel(PanelAction::RowToggleLock, &mut world);
     assert!(h.hidden_assets.is_empty() && h.locked_assets.is_empty());
 }
 

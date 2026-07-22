@@ -46,15 +46,6 @@ pub(crate) struct TreeAsset {
     pub promote: Option<serde_json::Value>,
 }
 
-impl TreeAsset {
-    // Whether clicking the row opens an edit form: an authored line edits in
-    // place, a generated asset promotes on confirm, and everything else is
-    // selectable but not editable.
-    pub(crate) fn editable(&self) -> bool {
-        self.badge == Badge::Authored || self.promote.is_some()
-    }
-}
-
 // The assets one origin produced: the world's own lines (`WORLD_GROUP`), a
 // scene import's or injection pass's output, or the unattributed expansions.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,9 +157,9 @@ pub(crate) enum TreeRow {
         index: usize,
         name: String,
         asset_type: String,
+        // Colours the row's type caption, and marks an authored line: only one
+        // of those has a world.jsonl entry the row menu can delete.
         badge: Badge,
-        // Whether clicking the row opens an edit form.
-        editable: bool,
     },
 }
 
@@ -208,7 +199,6 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
                 name: a.name.clone(),
                 asset_type: a.asset_type.clone(),
                 badge: a.badge,
-                editable: a.editable(),
             });
         }
     }
@@ -329,24 +319,16 @@ mod tests {
         assert_eq!(entry["args"]["size_px"], 20);
     }
 
-    // An authored line edits in place, so it carries no promote entry; the
-    // unconditional macro expansions carry none either and are not editable.
+    // Only a generated asset an authored line could override carries a promote
+    // entry: an authored line edits in place, and an unconditional macro
+    // expansion cannot be overridden by a copy at all.
     #[test]
-    fn editability_splits_authored_promotable_and_fixed() {
+    fn only_overridable_generated_assets_carry_a_promote_entry() {
         let groups = groups_from(&loaded());
         let cam = &group(&groups, WORLD_GROUP).assets[0];
         assert!(cam.promote.is_none(), "an authored line edits in place");
-        assert!(cam.editable());
-
-        let generated = &group(&groups, "fox").assets[0];
-        assert!(generated.promote.is_some() && generated.editable());
-
-        let macro_primitive = &group(&groups, UNATTRIBUTED).assets[0];
-        assert!(macro_primitive.promote.is_none());
-        assert!(
-            !macro_primitive.editable(),
-            "an unconditional expansion cannot be overridden by a copy"
-        );
+        assert!(group(&groups, "fox").assets[0].promote.is_some());
+        assert!(group(&groups, UNATTRIBUTED).assets[0].promote.is_none());
     }
 
     #[test]
