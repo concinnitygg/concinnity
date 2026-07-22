@@ -2855,7 +2855,10 @@ fn pick_world(
         interact_requested: false,
         controller: None,
     });
-    world.add_component(highlight::outline_sprite());
+    for s in highlight::outline_sprites() {
+        world.add_component(s);
+    }
+    world.add_component(super::super::marquee::rect_sprite());
     world.insert_resource(crate::ecs::PickIndex {
         entries: picks
             .into_iter()
@@ -2870,6 +2873,10 @@ fn pick_world(
 }
 
 fn click_at(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
+    click_at_mod(world, h, pos, false);
+}
+
+fn click_at_mod(world: &mut World, h: &mut EditorHook, pos: [f32; 2], shift: bool) {
     set_input(
         world,
         FrameInput {
@@ -2877,6 +2884,36 @@ fn click_at(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
             mouse_x: pos[0],
             mouse_y: pos[1],
             left_click: true,
+            left_button_down: true,
+            shift,
+            ..Default::default()
+        },
+    );
+    h.tick(world);
+}
+
+// A button-up tick at `pos`: ends an armed marquee (or gizmo drag).
+fn release_at(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
+    set_input(
+        world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            mouse_x: pos[0],
+            mouse_y: pos[1],
+            ..Default::default()
+        },
+    );
+    h.tick(world);
+}
+
+// A held-button move tick at `pos`: advances an armed marquee or gizmo drag.
+fn drag_to(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
+    set_input(
+        world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            mouse_x: pos[0],
+            mouse_y: pos[1],
             left_button_down: true,
             ..Default::default()
         },
@@ -2905,7 +2942,7 @@ fn viewport_click_picks_the_nearest_prop_and_opens_its_form() {
     ]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected.as_deref(), Some("box_near"), "nearest hit wins");
+    assert_eq!(h.selection.active(), Some("box_near"), "nearest hit wins");
     assert!(h.panel_open, "the assets UI comes up around the form");
     assert_eq!(h.tab, Tab::Config);
     assert_eq!(h.editing, Some(0), "the form targets the picked entry");
@@ -2936,23 +2973,39 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
     ]);
 
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selected.as_deref(), Some("box_near"));
+    assert_eq!(h.selection.active(), Some("box_near"));
     click_at(&mut world, &mut h, [201.0, 601.0]);
     assert_eq!(
-        h.selected.as_deref(),
+        h.selection.active(),
         Some("box_far"),
         "a repeat click reaches the occluded box"
     );
+    assert_eq!(
+        h.selection.iter().count(),
+        1,
+        "a plain click replaces, never accumulates"
+    );
     click_at(&mut world, &mut h, [200.0, 600.0]);
     assert_eq!(
-        h.selected.as_deref(),
+        h.selection.active(),
         Some("box_near"),
         "the cycle wraps back to the front"
     );
 
-    // Aim up-left, well away from both boxes and every panel: cleared.
+    // Aim up-left, well away from both boxes and every panel: the press arms
+    // a marquee, and the still release clears.
     click_at(&mut world, &mut h, [400.0, 120.0]);
-    assert_eq!(h.selected, None, "empty space clears the selection");
+    assert_eq!(
+        h.selection.active(),
+        Some("box_near"),
+        "the selection survives until the release decides click vs marquee"
+    );
+    release_at(&mut world, &mut h, [400.0, 120.0]);
+    assert_eq!(
+        h.selection.active(),
+        None,
+        "empty space clears the selection"
+    );
 }
 
 // Picking an asset the config does not declare (a build-generated one) flips
@@ -2969,7 +3022,7 @@ fn viewport_click_on_a_generated_asset_reveals_the_expanded_tab() {
     let mut h = hook(vec![entry("box_near", "Sprite")]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected.as_deref(), Some("some_generated_asset"));
+    assert_eq!(h.selection.active(), Some("some_generated_asset"));
     assert!(h.panel_open);
     assert_eq!(h.tab, Tab::Expanded, "an unauthored pick goes to Expanded");
     assert_eq!(h.editing, None, "no form for a generated asset");
@@ -2983,12 +3036,16 @@ fn history_jumps_clear_the_pick_selection() {
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selected.as_deref(), Some("box_near"));
+    assert_eq!(h.selection.active(), Some("box_near"));
 
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
     h.undo(&mut world);
-    assert_eq!(h.selected, None, "a history jump drops the selection");
+    assert_eq!(
+        h.selection.active(),
+        None,
+        "a history jump drops the selection"
+    );
 }
 
 // The selection ring follows the picked asset's projected bounds and hides
@@ -3004,7 +3061,7 @@ fn selection_ring_tracks_the_picked_asset() {
     let ring = |world: &World| {
         world
             .query::<Sprite>()
-            .find(|s| s.asset_id == highlight::OUTLINE)
+            .find(|s| s.asset_id == highlight::all_sprite_ids()[0])
             .cloned()
             .expect("outline sprite injected")
     };
@@ -3070,7 +3127,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
 
     // Pick the prop (projects to ~[200, 600] for this camera).
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selected.as_deref(), Some("box_near"));
+    assert_eq!(h.selection.active(), Some("box_near"));
     let layout = h
         .gizmo_layout(&world, [1280.0, 720.0])
         .expect("movable selection shows the gizmo");
@@ -3245,6 +3302,295 @@ fn gizmo_scale_drag_stretches_one_axis() {
     assert!(committed > 1.3 && committed < 1.7, "{committed}");
     h.undo(&mut world);
     assert!(h.entries[0]["args"].get("scale").is_none());
+}
+
+// Two props with live Transforms at `s1` / `s2` (AABB half-extent `half`),
+// wired like `gizmo_rig`, for the multi-select flows.
+fn two_prop_rig(
+    s1: [f32; 3],
+    s2: [f32; 3],
+    half: f32,
+) -> (World, crate::ecs::Entity, crate::ecs::Entity, EditorHook) {
+    crate::ecs::asset_id::reset_interner();
+    let a = crate::ecs::asset_id::intern("box_a");
+    let b = crate::ecs::asset_id::intern("box_b");
+    let bb = |s: [f32; 3]| {
+        (
+            [s[0] - half, s[1] - half, s[2] - half],
+            [s[0] + half, s[1] + half, s[2] + half],
+        )
+    };
+    let (min1, max1) = bb(s1);
+    let (min2, max2) = bb(s2);
+    let mut world = pick_world([0.0; 3], vec![(a, min1, max1), (b, min2, max2)]);
+    let transform = |p: [f32; 3]| crate::assets::Transform {
+        position: p,
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    };
+    let e1 = world.push(transform(s1));
+    let e2 = world.push(transform(s2));
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(a, e1);
+    by_name.insert(b, e2);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    for s in super::super::gizmo::sprites() {
+        world.add_component(s);
+    }
+    let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "name": name, "type": "Prop", "args": { "position": p } });
+    let h = hook(vec![entry("box_a", s1), entry("box_b", s2)]);
+    (world, e1, e2, h)
+}
+
+// Side-by-side props with a clear gap (so neither center ray clips the other
+// box): box_a projects around [200, 600], box_b around [424, 598], both in
+// the panel-free lower-left screen region.
+const SIDE_A: [f32; 3] = [-6.11, -3.3, -5.0];
+const SIDE_B: [f32; 3] = [-3.0, -3.3, -5.0];
+
+// Shift-click toggles membership without disturbing the rest of the set.
+#[test]
+fn shift_click_toggles_selection_membership() {
+    let (mut world, _, _, mut h) = two_prop_rig(SIDE_A, SIDE_B, 1.0);
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    assert_eq!(h.selection.active(), Some("box_a"));
+    click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box_a", "box_b"],
+        "shift-click adds the second box"
+    );
+    assert_eq!(h.selection.active(), Some("box_b"), "the newest is active");
+    assert_eq!(h.editing, Some(1), "the form follows the active member");
+
+    click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box_a"],
+        "a second shift-click removes it again"
+    );
+}
+
+// A drag from empty space boxes both props; shift-drag adds instead of
+// replacing; a sub-slop release is the plain clearing click.
+#[test]
+fn marquee_drag_selects_the_boxed_assets() {
+    let (mut world, _, _, mut h) = two_prop_rig(SIDE_A, SIDE_B, 1.0);
+
+    // Press empty space (the ray misses both boxes), drag across both
+    // projections, release.
+    click_at(&mut world, &mut h, [80.0, 450.0]);
+    assert!(h.marquee.is_some(), "an empty-space press arms the marquee");
+    drag_to(&mut world, &mut h, [560.0, 700.0]);
+    let rect = world
+        .query::<Sprite>()
+        .find(|s| s.asset_id == super::super::marquee::RECT)
+        .cloned()
+        .expect("marquee sprite injected");
+    assert!(rect.visible, "the rect shows once the drag clears the slop");
+    assert_eq!(
+        (rect.x, rect.y, rect.width, rect.height),
+        (80.0, 450.0, 480.0, 250.0)
+    );
+    release_at(&mut world, &mut h, [560.0, 700.0]);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box_a", "box_b"],
+        "both boxed props are selected"
+    );
+    assert!(h.marquee.is_none(), "release ends the marquee");
+    assert!(
+        !world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == super::super::marquee::RECT)
+            .unwrap()
+            .visible,
+        "the rect hides after release"
+    );
+
+    // A fresh plain click on box_a, then a shift-drag over box_b only: added.
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    release_at(&mut world, &mut h, [200.0, 600.0]);
+    assert_eq!(h.selection.iter().collect::<Vec<_>>(), ["box_a"]);
+    click_at_mod(&mut world, &mut h, [360.0, 450.0], true);
+    assert!(h.marquee.is_some());
+    drag_to(&mut world, &mut h, [560.0, 700.0]);
+    release_at(&mut world, &mut h, [560.0, 700.0]);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box_a", "box_b"],
+        "shift-drag adds without replacing"
+    );
+
+    // A still empty-space click clears; a still shift-click does not.
+    click_at_mod(&mut world, &mut h, [80.0, 450.0], true);
+    release_at(&mut world, &mut h, [81.0, 450.0]);
+    assert_eq!(h.selection.iter().count(), 2, "shift keeps the selection");
+    click_at(&mut world, &mut h, [80.0, 450.0]);
+    release_at(&mut world, &mut h, [81.0, 450.0]);
+    assert_eq!(h.selection.active(), None, "plain still release clears");
+}
+
+// Every selection member gets a ring; the active member's is brighter.
+#[test]
+fn selection_rings_cover_every_member() {
+    let (mut world, _, _, mut h) = two_prop_rig(SIDE_A, SIDE_B, 1.0);
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
+
+    let ids = highlight::all_sprite_ids();
+    let ring = |world: &World, i: usize| {
+        world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == ids[i])
+            .cloned()
+            .expect("ring pool injected")
+    };
+    let (r0, r1) = (ring(&world, 0), ring(&world, 1));
+    assert!(r0.visible && r1.visible, "one ring per member");
+    assert!(
+        !ring(&world, 2).visible,
+        "the rest of the pool stays hidden"
+    );
+    assert_ne!(
+        r0.border_color, r1.border_color,
+        "the active member's ring is distinguished"
+    );
+    let center = |r: &Sprite| (r.x + r.width * 0.5, r.y + r.height * 0.5);
+    let (c0x, _) = center(&r0);
+    let (c1x, _) = center(&r1);
+    assert!(
+        c0x < c1x,
+        "rings follow selection order: box_a left of box_b"
+    );
+}
+
+// The gizmo anchors at the selection centroid and a translate drag moves
+// every member by the same world delta, committed as ONE undo step.
+#[test]
+fn multi_translate_moves_all_members_as_one_undo_step() {
+    let (mut world, e1, e2, mut h) = two_prop_rig(SIDE_A, SIDE_B, 1.0);
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
+
+    let layout = h
+        .gizmo_layout(&world, [1280.0, 720.0])
+        .expect("multi selection shows the gizmo");
+    // The anchor is the centroid: between the two boxes, ~[312, 598].
+    assert!(
+        (layout.origin[0] - 312.0).abs() < 3.0 && (layout.origin[1] - 598.0).abs() < 3.0,
+        "centroid anchor, got {:?}",
+        layout.origin
+    );
+
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some(), "the tip press starts a drag");
+    drag_to(
+        &mut world,
+        &mut h,
+        [layout.tips[0][0] + 50.0, layout.tips[0][1]],
+    );
+    let p1 = world.get::<crate::assets::Transform>(e1).unwrap().position;
+    let p2 = world.get::<crate::assets::Transform>(e2).unwrap().position;
+    let (d1, d2) = (p1[0] - SIDE_A[0], p2[0] - SIDE_B[0]);
+    assert!(d1 > 0.3, "box_a moved right: {d1}");
+    assert!((d1 - d2).abs() < 1e-3, "one shared delta: {d1} vs {d2}");
+    assert_eq!(p1[1], SIDE_A[1], "Y untouched");
+
+    release_at(
+        &mut world,
+        &mut h,
+        [layout.tips[0][0] + 50.0, layout.tips[0][1]],
+    );
+    assert!(h.dirty, "the move is an unsaved edit");
+    for (i, s) in [(0, SIDE_A), (1, SIDE_B)] {
+        let committed = h.entries[i]["args"]["position"][0].as_f64().unwrap();
+        assert!(
+            committed > f64::from(s[0]) + 0.3,
+            "entry {i} follows: {committed}"
+        );
+    }
+
+    h.undo(&mut world);
+    for (i, s) in [(0, SIDE_A), (1, SIDE_B)] {
+        let restored = h.entries[i]["args"]["position"][0].as_f64().unwrap();
+        assert!(
+            (restored - f64::from(s[0])).abs() < 1e-3,
+            "entry {i}: {restored}"
+        );
+    }
+    assert!(!h.can_undo(), "the whole multi-drag was one step");
+}
+
+// Rotate orbits member positions about the centroid (and spins each member),
+// the group behavior of every mainstream editor; both writes land in the
+// entries and one undo restores them.
+#[test]
+fn multi_rotate_orbits_members_about_the_centroid() {
+    // Stacked vertically: box_a above the centroid, box_b below, so an X-axis
+    // turn swings them through Z.
+    let s1 = [-6.11, -2.3, -5.0];
+    let s2 = [-6.11, -4.3, -5.0];
+    let (mut world, e1, e2, mut h) = two_prop_rig(s1, s2, 0.8);
+    h.gizmo_mode = gizmo::GizmoMode::Rotate;
+    click_at(&mut world, &mut h, [200.0, 526.0]);
+    assert_eq!(h.selection.active(), Some("box_a"));
+    click_at_mod(&mut world, &mut h, [200.0, 670.0], true);
+    assert_eq!(h.selection.iter().count(), 2);
+
+    let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
+    // Grab the X tip and swing a quarter circle to straight below the origin:
+    // +90 degrees about world X.
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some(), "rotate grab starts on the tip");
+    drag_to(
+        &mut world,
+        &mut h,
+        [layout.origin[0], layout.origin[1] + 70.0],
+    );
+
+    let t1 = *world.get::<crate::assets::Transform>(e1).unwrap();
+    let t2 = *world.get::<crate::assets::Transform>(e2).unwrap();
+    assert!(
+        (t1.rotation_deg[0] - 90.0).abs() < 1.0 && (t2.rotation_deg[0] - 90.0).abs() < 1.0,
+        "both spin: {} / {}",
+        t1.rotation_deg[0],
+        t2.rotation_deg[0]
+    );
+    // +90 about X through the centroid [-6.11, -3.3, -5.0] carries the +Y
+    // offset into +Z: box_a to z = -4, box_b to z = -6, both onto y = -3.3.
+    assert!(
+        (t1.position[1] + 3.3).abs() < 0.1 && (t1.position[2] + 4.0).abs() < 0.1,
+        "box_a orbits: {:?}",
+        t1.position
+    );
+    assert!(
+        (t2.position[1] + 3.3).abs() < 0.1 && (t2.position[2] + 6.0).abs() < 0.1,
+        "box_b orbits: {:?}",
+        t2.position
+    );
+
+    release_at(
+        &mut world,
+        &mut h,
+        [layout.origin[0], layout.origin[1] + 70.0],
+    );
+    let committed = h.entries[0]["args"]["rotation_deg"][0].as_f64().unwrap();
+    assert!((committed - 90.0).abs() < 1.0, "{committed}");
+    let z = h.entries[0]["args"]["position"][2].as_f64().unwrap();
+    assert!((z + 4.0).abs() < 0.1, "the orbited position commits: {z}");
+
+    h.undo(&mut world);
+    for i in [0, 1] {
+        assert!(
+            h.entries[i]["args"].get("rotation_deg").is_none(),
+            "one undo step restores entry {i}"
+        );
+    }
+    let z = h.entries[0]["args"]["position"][2].as_f64().unwrap();
+    assert!((z + 5.0).abs() < 1e-3, "position restored too: {z}");
+    assert!(!h.can_undo(), "the whole multi-drag was one step");
 }
 
 // T / R / S switch the gizmo mode in edit mode, but never while typing.

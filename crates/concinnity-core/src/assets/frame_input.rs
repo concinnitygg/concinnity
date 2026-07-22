@@ -26,6 +26,10 @@ pub struct FrameInput {
     /// and [captured_key](#structfield.captured_key) it is not frozen while a
     /// menu is open.
     pub ctrl: bool,
+    /// True while the Shift key is held. A modifier used by UI (e.g. additive
+    /// selection in the editor). Unlike [sprint](#structfield.sprint) it is
+    /// not frozen while a menu is open, matching [ctrl](#structfield.ctrl).
+    pub shift: bool,
     /// Gamepad left-stick movement vector `[x, y]`: `x` is rightward strafe,
     /// `y` is forward. Radial deadzone applied, magnitude at most 1, so partial
     /// deflection walks slower. `[0.0, 0.0]` with no gamepad; frozen (zeroed)

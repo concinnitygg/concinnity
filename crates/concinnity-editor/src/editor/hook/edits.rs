@@ -128,8 +128,9 @@ impl EditorHook {
         self.close_form();
         self.row_menu = None;
         self.combo = Combo::Closed;
-        self.selected = None;
+        self.selection.clear();
         self.pick_last = None;
+        self.marquee = None;
         self.gizmo_drag = None;
         let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
         self.list_scroll = self.list_scroll.min(max);

@@ -3,11 +3,12 @@
 // EditorHook: viewport click-to-select. A press that missed the top bar and
 // every floating panel is offered to the 3D view: the mouse ray (built from
 // the live Camera3D) is tested against the engine-published PickIndex, and the
-// nearest hit resolves through the interner's name table to either an authored
-// entry (opens the edit form, exactly as its browse row would) or a
-// build-generated asset (reveals its Expanded-tab row). A repeat click on the
-// same spot cycles through overlapping hits near-to-far, which is the only way
-// to reach an occluded object without gizmos.
+// nearest hit resolves through the interner's name table into the selection
+// set (`editor/selection.rs`). A plain click replaces the selection; a
+// shift-click toggles the hit's membership; a press over empty space arms the
+// marquee (`hook/marquee_drag.rs`), whose still release clears. A repeat plain
+// click on the same spot cycles through overlapping hits near-to-far, which is
+// the only way to reach an occluded object without gizmos.
 
 use super::*;
 use concinnity_core::gfx::pick::{PickRay, ray_aabb, screen_ray};
@@ -24,6 +25,13 @@ pub(super) struct PickLast {
     index: usize,
 }
 
+// The interned name behind a pick hit, if the id still resolves.
+pub(super) fn resolve_name(id: AssetId) -> Option<String> {
+    crate::ecs::asset_id::name_table()
+        .get(id.0 as usize)
+        .cloned()
+}
+
 impl EditorHook {
     // Resolve an unclaimed press as a viewport pick. Play mode never reaches
     // this: `left_click` stays false while the world holds the cursor.
@@ -34,8 +42,24 @@ impl EditorHook {
         };
         let hits = ray_hits(world, &ray);
         if hits.is_empty() {
-            self.selected = None;
+            // Empty space arms the marquee; its release decides between a box
+            // select (moved) and a clearing click (still).
+            self.begin_marquee(mouse, input.shift);
+            return;
+        }
+
+        if input.shift {
+            // Shift-click toggles the nearest hit's membership. No cycling:
+            // that is the plain click's repeat behavior.
             self.pick_last = None;
+            let Some(name) = resolve_name(hits[0]) else {
+                return;
+            };
+            if self.selection.toggle(name.clone()) {
+                self.focus_ui_on(&name, world);
+            } else {
+                self.follow_active(world);
+            }
             return;
         }
 
@@ -57,28 +81,26 @@ impl EditorHook {
             hits,
             index,
         });
-        self.select_picked(picked, world);
+        let Some(name) = resolve_name(picked) else {
+            self.selection.clear();
+            return;
+        };
+        self.selection.replace(name.clone());
+        self.focus_ui_on(&name, world);
     }
 
     // Open the picked asset for editing: an authored entry in the edit form
     // (with the assets UI up so the form is visible and its browse row
     // highlighted), a build-generated asset on the Expanded tab, where its "+"
-    // offers the copy-to-config promotion. The selection is kept by name (see
-    // the `selected` field note).
-    fn select_picked(&mut self, picked: AssetId, world: &mut World) {
-        let table = crate::ecs::asset_id::name_table();
-        let Some(name) = table.get(picked.0 as usize).cloned() else {
-            self.selected = None;
-            return;
-        };
-        self.selected = Some(name.clone());
+    // offers the copy-to-config promotion.
+    fn focus_ui_on(&mut self, name: &str, world: &mut World) {
         self.panel_open = true;
         self.combo = Combo::Closed;
         self.row_menu = None;
         if let Some(idx) = self
             .entries
             .iter()
-            .position(|e| entry_name(e) == Some(name.as_str()))
+            .position(|e| entry_name(e) == Some(name))
         {
             self.tab = Tab::Config;
             if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
@@ -88,30 +110,55 @@ impl EditorHook {
             self.tab = Tab::Expanded;
             self.expanded_stale = true;
             self.refresh_expanded_if_needed();
-            self.reveal_expanded(&name);
+            self.reveal_expanded(name);
         }
     }
 
-    // Drive the selection ring: while the HUD is up in edit mode, project the
-    // selected asset's current AABB (from the PickIndex GraphicsSystem
-    // published last frame; the world is frozen in edit mode, so the one-frame
-    // lag is invisible) and place the border sprite over it. Anything
-    // unresolvable -- no selection, a renamed or deleted asset, the camera
-    // inside the box -- hides the ring.
-    pub(super) fn drive_highlight(&self, world: &mut World, vp: [f32; 2], shown: bool) {
-        let rect = if shown && !self.world_capture {
-            self.selected_rect(world, vp)
-        } else {
-            None
+    // Retarget an already-open edit form at the active member (the form
+    // follows the active member; a closed form stays closed, so a marquee or
+    // a toggle-off never forces panels open).
+    pub(super) fn follow_active(&mut self, world: &mut World) {
+        if self.editing.is_none() {
+            return;
+        }
+        let Some(idx) = self.selection.active().and_then(|name| {
+            self.entries
+                .iter()
+                .position(|e| entry_name(e) == Some(name))
+        }) else {
+            return;
         };
-        match rect {
-            Some(r) => highlight::place(world, r),
-            None => highlight::hide(world),
+        if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
+            self.tab = Tab::Config;
+            self.open_form(world, ty, Some(idx));
         }
     }
 
-    fn selected_rect(&self, world: &World, vp: [f32; 2]) -> Option<[f32; 4]> {
-        let name = self.selected.as_deref()?;
+    // Drive the selection rings: while the HUD is up in edit mode, project
+    // each selected asset's current AABB (from the PickIndex GraphicsSystem
+    // published last frame; the world is frozen in edit mode, so the one-frame
+    // lag is invisible) and place a border sprite over it, the active member
+    // in the full accent. Anything unresolvable -- a renamed or deleted asset,
+    // the camera inside the box -- goes ringless.
+    pub(super) fn drive_highlight(&self, world: &mut World, vp: [f32; 2], shown: bool) {
+        if !shown || self.world_capture {
+            highlight::hide(world);
+            return;
+        }
+        let active = self.selection.active();
+        let rects: Vec<([f32; 4], bool)> = self
+            .selection
+            .iter()
+            .filter_map(|name| {
+                Self::member_rect(world, vp, name).map(|r| (r, Some(name) == active))
+            })
+            .take(highlight::MAX_RINGS)
+            .collect();
+        highlight::place_all(world, &rects);
+    }
+
+    // A selection member's projected screen rect, if it resolves this frame.
+    pub(super) fn member_rect(world: &World, vp: [f32; 2], name: &str) -> Option<[f32; 4]> {
         let id = crate::ecs::asset_id::name_table()
             .iter()
             .position(|n| n == name)?;

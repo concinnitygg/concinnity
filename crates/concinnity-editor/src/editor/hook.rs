@@ -53,9 +53,12 @@ use super::widget::{self, point_in};
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
 use super::gizmo;
+use super::group_transform;
 use super::highlight;
 use super::history::History;
+use super::marquee;
 use super::seeded_content;
+use super::selection::Selection;
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
@@ -192,12 +195,14 @@ pub(crate) struct EditorHook {
     // The paths of the form's non-colour vector fields currently disclosed into
     // per-element leaves. Cleared when the form opens / closes.
     vec_expanded: std::collections::HashSet<String>,
-    // The viewport-picked asset, if any, held by NAME: every live-preview
-    // rebuild resets the interner and re-interns names, so a stored AssetId
-    // could silently drift to a different asset. The name is re-resolved each
-    // frame (`hook/pick.rs`). `pick_last` is the transient repeat-click cycle.
-    selected: Option<String>,
+    // The viewport selection set (`editor/selection.rs`), held by NAME: every
+    // live-preview rebuild resets the interner and re-interns names, so a
+    // stored AssetId could silently drift to a different asset. Members are
+    // re-resolved each frame (`hook/pick.rs`). `pick_last` is the transient
+    // repeat-click cycle; `marquee` an in-flight box select.
+    selection: Selection,
     pick_last: Option<pick::PickLast>,
+    marquee: Option<marquee_drag::MarqueeDrag>,
     // The gizmo's edit mode (T/R/S keys) and an active drag
     // (`hook/gizmo_drag.rs`), if any.
     gizmo_mode: gizmo::GizmoMode,
@@ -298,6 +303,7 @@ mod fly;
 mod gizmo_drag;
 mod import_edit;
 mod layout;
+mod marquee_drag;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
@@ -366,8 +372,9 @@ impl EditorHook {
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
             vec_expanded: std::collections::HashSet::new(),
-            selected: None,
+            selection: Selection::default(),
             pick_last: None,
+            marquee: None,
             gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
             fly: false,
@@ -433,7 +440,15 @@ impl DebugHook for EditorHook {
                 if self.gizmo_drag.is_some() {
                     self.drive_gizmo_drag(input, vp, world);
                 }
-                if input.left_click && self.drag.is_none() && self.gizmo_drag.is_none() {
+                // An in-flight marquee likewise: follow, cancel, or select.
+                if self.marquee.is_some() {
+                    self.drive_marquee(input, vp, world);
+                }
+                if input.left_click
+                    && self.drag.is_none()
+                    && self.gizmo_drag.is_none()
+                    && self.marquee.is_none()
+                {
                     self.route_click(input, vp, world);
                 }
                 // T / R / S pick the gizmo's mode (translate / rotate /
@@ -542,11 +557,12 @@ impl DebugHook for EditorHook {
                 p.hide(world);
             }
         }
-        // The selection ring rides the picked asset's projected bounds, under
-        // the panels (its id takes the default draw layer); the translate
-        // gizmo draws over it when the selection is movable.
+        // The selection rings ride the picked assets' projected bounds, under
+        // the panels (their ids take the default draw layer); the gizmo and
+        // the marquee rect draw over them.
         self.drive_highlight(world, vp, shown);
         self.drive_gizmo_draw(world, vp, shown);
+        self.drive_marquee_draw(world, shown);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under

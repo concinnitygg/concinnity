@@ -87,6 +87,9 @@ fn compose_frame_input(
         // Not gated by `gameplay`: a story's Ctrl fast-forward works
         // while its stage (a view) is up, like the rebind capture below.
         ctrl: raw.ctrl,
+        // Not gated by `gameplay`: the editor's additive selection needs the
+        // modifier while it holds the cursor. `raw.sprint` is the Shift key.
+        shift: raw.sprint,
         // Not gated by `gameplay`: the rebind captures work while the
         // settings menu is open (the camera is what freezes behind it).
         captured_key: raw.captured_key,
@@ -301,12 +304,15 @@ mod tests {
         ]);
         let raw = RenderInput {
             forward: true,
+            sprint: true,
             mouse_dx: 5.0,
             ..Default::default()
         };
         let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
         // Movement, jump, axes, and mouse deltas all freeze behind the menu.
         assert!(!input.forward && !input.jump);
+        assert!(!input.sprint, "sprint freezes behind the menu");
+        assert!(input.shift, "the raw Shift modifier stays live for UI");
         assert_eq!(input.move_axis, [0.0, 0.0]);
         assert_eq!(input.look_axis, [0.0, 0.0]);
         assert_eq!(input.mouse_dx, 0.0);

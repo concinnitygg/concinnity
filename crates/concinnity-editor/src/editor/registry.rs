@@ -203,10 +203,10 @@ mod tests {
         for id in super::super::hud::all_ids() {
             claim(id, "top bar".to_string());
         }
-        claim(
-            super::super::highlight::OUTLINE,
-            "selection highlight".to_string(),
-        );
+        for id in super::super::highlight::all_sprite_ids() {
+            claim(id, "selection highlight".to_string());
+        }
+        claim(super::super::marquee::RECT, "marquee rect".to_string());
         for id in super::super::gizmo::all_sprite_ids() {
             claim(id, "gizmo".to_string());
         }

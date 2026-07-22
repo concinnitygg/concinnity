@@ -1,10 +1,12 @@
 // src/editor/highlight.rs
 //
-// The viewport selection highlight: one border-only sprite (transparent fill,
-// accent ring) placed over the picked asset's projected world AABB each frame.
-// Window-space like the rest of the editor HUD, injected hidden alongside it,
-// and drawn under the floating panels (its id is absent from the HudLayers
-// map, so it sits at layer 0 below every focused panel).
+// The viewport selection highlight: a pool of border-only sprites (transparent
+// fill, accent ring), one placed over each selected asset's projected world
+// AABB every frame. The active (most recently picked) member's ring draws in
+// the full accent; the rest a dimmed step. Window-space like the rest of the
+// editor HUD, injected hidden alongside it, and drawn under the floating
+// panels (the ids are absent from the HudLayers map, so they sit at layer 0
+// below every focused panel).
 
 use super::registry::ID_BASE;
 use super::theme;
@@ -13,23 +15,42 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the Health panel's 0xB00.
-pub(crate) const OUTLINE: AssetId = AssetId(ID_BASE + 0xC00);
+const OUTLINE_BASE: u32 = ID_BASE + 0xC00;
+// Ring pool size, bounding the per-frame sprite cost; a selection larger than
+// this keeps every member (gizmo and commit included) but only rings the
+// first `MAX_RINGS`.
+pub(crate) const MAX_RINGS: usize = 32;
 
 const BORDER_W: f32 = 2.0;
 // Breathing room so the ring does not sit flush on the object's silhouette.
 const PAD_PX: f32 = 3.0;
 
-// The injected sprite: invisible until the tick places it, transparent fill,
-// accent border ring.
-pub(crate) fn outline_sprite() -> Sprite {
-    Sprite {
-        asset_id: OUTLINE,
-        tint: [0.0, 0.0, 0.0, 0.0],
-        border_width: BORDER_W,
-        border_color: theme::ACCENT_TINT,
-        visible: false,
-        ..Default::default()
-    }
+// Non-active members ring in a dimmed accent so the active one reads at a
+// glance.
+const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
+
+fn ring_id(i: usize) -> AssetId {
+    AssetId(OUTLINE_BASE + i as u32)
+}
+
+pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
+    (0..MAX_RINGS).map(ring_id).collect()
+}
+
+// The injected pool: invisible until the tick places them, transparent fill,
+// accent border rings.
+pub(crate) fn outline_sprites() -> Vec<Sprite> {
+    all_sprite_ids()
+        .into_iter()
+        .map(|id| Sprite {
+            asset_id: id,
+            tint: [0.0, 0.0, 0.0, 0.0],
+            border_width: BORDER_W,
+            border_color: theme::ACCENT_TINT,
+            visible: false,
+            ..Default::default()
+        })
+        .collect()
 }
 
 // Project a world AABB to its enclosing screen rect `[x, y, w, h]` for the
@@ -106,25 +127,37 @@ pub(crate) fn screen_rect(
     Some([x0, y0, x1 - x0, y1 - y0])
 }
 
-// Show the ring over `rect`, or hide it.
-pub(crate) fn place(world: &mut World, rect: [f32; 4]) {
-    if let Some(s) = sprite_mut(world) {
-        s.x = rect[0];
-        s.y = rect[1];
-        s.width = rect[2];
-        s.height = rect[3];
-        s.visible = true;
+// Show one ring per `(rect, is_active)` entry (rects past the pool are
+// dropped) and hide the rest of the pool.
+pub(crate) fn place_all(world: &mut World, rects: &[([f32; 4], bool)]) {
+    for (i, id) in all_sprite_ids().into_iter().enumerate() {
+        let Some(s) = sprite_mut(world, id) else {
+            continue;
+        };
+        match rects.get(i) {
+            Some((rect, active)) => {
+                s.x = rect[0];
+                s.y = rect[1];
+                s.width = rect[2];
+                s.height = rect[3];
+                s.border_color = if *active {
+                    theme::ACCENT_TINT
+                } else {
+                    MEMBER_TINT
+                };
+                s.visible = true;
+            }
+            None => s.visible = false,
+        }
     }
 }
 
 pub(crate) fn hide(world: &mut World) {
-    if let Some(s) = sprite_mut(world) {
-        s.visible = false;
-    }
+    place_all(world, &[]);
 }
 
-fn sprite_mut(world: &mut World) -> Option<&mut Sprite> {
-    world.query_mut::<Sprite>().find(|s| s.asset_id == OUTLINE)
+fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
+    world.query_mut::<Sprite>().find(|s| s.asset_id == id)
 }
 
 #[cfg(test)]

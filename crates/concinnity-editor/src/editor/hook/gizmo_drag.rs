@@ -1,13 +1,16 @@
 // src/editor/hook/gizmo_drag.rs
 //
-// EditorHook: the gizmo drive. One handle skeleton, three modes (T/R/S keys):
-// translate drags the tip along its world axis, scale drags it to stretch the
-// axis parameter ratio, rotate turns the mouse around the projected origin.
-// While the button is held the selected entity's live `Transform` changes (the
-// renderer, pick index, and selection ring all follow, so the scene previews
-// the edit without a rebuild); releasing commits the mode's arg to the
-// authored entry as ONE undo step (`mark_changed` snapshots the pre-drag entry
-// list); Escape cancels and restores the start state.
+// EditorHook: the gizmo drive over the whole selection. One handle skeleton,
+// three modes (T/R/S keys), anchored at the selection centroid: translate
+// applies one shared world-space delta to every member; rotate orbits member
+// positions about the centroid while spinning each member the same amount
+// (the standard group rotate); scale stretches each member and pushes its
+// position away from the centroid along the dragged axis. While the button is
+// held every member's live `Transform` changes (the renderer, pick index, and
+// selection rings all follow, so the scene previews the edit without a
+// rebuild); releasing commits the changed args of ALL members to their
+// authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
+// entry list once); Escape cancels and restores the start state.
 
 use super::*;
 use crate::assets::{Camera3D, GlobalTransform, Transform};
@@ -30,16 +33,40 @@ const MIN_ROTATE_ARM_PX: f32 = 15.0;
 // Scale factors are clamped away from zero (no mirroring) and runaway growth.
 const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 
+// One selection member the gizmo can edit this frame, resolved fresh every
+// use (rebuilds re-mint entities): the authored entry index and its live
+// entity. Members without the mode's editable arg, generated assets (no entry
+// to write back), parented entities (the drag works in world axes; a rotated
+// parent would skew it), and entities without a Transform are skipped.
+struct GizmoTarget {
+    idx: usize,
+    entity: crate::ecs::Entity,
+    // Whether the entry takes a written-back `position`: rotate and scale
+    // move members about the pivot, and a type without the arg must only
+    // spin / stretch in place.
+    has_position: bool,
+}
+
+// A member's `Transform` fields at the press: the drag base and the cancel
+// target, keyed by name so each frame re-resolves the live entity.
+struct MemberStart {
+    name: String,
+    position: [f32; 3],
+    rotation: [f32; 3],
+    scale: [f32; 3],
+    has_position: bool,
+}
+
 pub(super) struct GizmoDrag {
     axis: usize,
     // The mode at the press; a mode key mid-drag must not morph the drag.
     mode: GizmoMode,
-    // `Transform` fields at the press: the drag base and the cancel target.
-    start_position: [f32; 3],
-    start_rotation: [f32; 3],
-    start_scale: [f32; 3],
+    // The selection centroid at the press: the drag anchor and the rotate /
+    // scale pivot.
+    pivot: [f32; 3],
+    starts: Vec<MemberStart>,
     // Translate / Scale: the axis parameter under the cursor at the press, so
-    // the object keeps its grab offset instead of snapping to the cursor.
+    // the selection keeps its grab offset instead of snapping to the cursor.
     grab_t: f32,
     // Rotate: the previous frame's screen angle about the gizmo origin and
     // the rotation accumulated so far. Accumulating per-frame wrapped steps
@@ -49,14 +76,7 @@ pub(super) struct GizmoDrag {
 }
 
 impl EditorHook {
-    // The selected asset's editable target for `mode`, resolved fresh every
-    // use (rebuilds re-mint entities): the authored entry index and its live
-    // entity. `None` when the gizmo must not show: a generated asset (no
-    // entry to write back), a type without the mode's arg, a missing or
-    // parented entity (the drag works in world axes; a rotated parent would
-    // skew it), or no Transform to edit.
-    fn gizmo_target(&self, world: &World, mode: GizmoMode) -> Option<(usize, crate::ecs::Entity)> {
-        let name = self.selected.as_deref()?;
+    fn member_target(&self, world: &World, mode: GizmoMode, name: &str) -> Option<GizmoTarget> {
         let idx = self
             .entries
             .iter()
@@ -66,6 +86,7 @@ impl EditorHook {
         if !merged.get(mode.arg_key()).is_some_and(|p| p.is_array()) {
             return None;
         }
+        let has_position = merged.get("position").is_some_and(|p| p.is_array());
         let id = crate::ecs::asset_id::name_table()
             .iter()
             .position(|n| n == name)?;
@@ -76,7 +97,19 @@ impl EditorHook {
             return None;
         }
         world.get::<Transform>(entity)?;
-        Some((idx, entity))
+        Some(GizmoTarget {
+            idx,
+            entity,
+            has_position,
+        })
+    }
+
+    // Every selection member editable in `mode`, in selection order.
+    fn gizmo_targets(&self, world: &World, mode: GizmoMode) -> Vec<GizmoTarget> {
+        self.selection
+            .iter()
+            .filter_map(|name| self.member_target(world, mode, name))
+            .collect()
     }
 
     // The entity's world origin: the propagated transform when the renderer
@@ -88,13 +121,22 @@ impl EditorHook {
             .or_else(|| world.get::<Transform>(entity).map(|t| t.position))
     }
 
-    // The gizmo's screen layout this frame, when the selection is editable in
-    // the current mode.
+    // The gizmo anchor: the centroid of the editable members' world origins.
+    fn gizmo_anchor(&self, world: &World, mode: GizmoMode) -> Option<[f32; 3]> {
+        let origins: Vec<[f32; 3]> = self
+            .gizmo_targets(world, mode)
+            .iter()
+            .filter_map(|t| Self::gizmo_origin(world, t.entity))
+            .collect();
+        (!origins.is_empty()).then(|| group_transform::centroid(&origins))
+    }
+
+    // The gizmo's screen layout this frame, when the selection has at least
+    // one member editable in the current mode.
     pub(super) fn gizmo_layout(&self, world: &World, vp: [f32; 2]) -> Option<gizmo::Layout> {
-        let (_, entity) = self.gizmo_target(world, self.gizmo_mode)?;
-        let origin = Self::gizmo_origin(world, entity)?;
+        let anchor = self.gizmo_anchor(world, self.gizmo_mode)?;
         let cam = world.query::<Camera3D>().next()?;
-        gizmo::layout(&cam.view_matrix, cam.fov_y_degrees.to_radians(), vp, origin)
+        gizmo::layout(&cam.view_matrix, cam.fov_y_degrees.to_radians(), vp, anchor)
     }
 
     // Offer an unclaimed press to the gizmo: `true` when a tip handle takes it
@@ -114,18 +156,31 @@ impl EditorHook {
         let Some(axis) = gizmo::hit_axis(&layout, mouse) else {
             return false;
         };
-        let Some((_, entity)) = self.gizmo_target(world, mode) else {
+        let Some(pivot) = self.gizmo_anchor(world, mode) else {
             return false;
         };
-        let Some(start) = world.get::<Transform>(entity).cloned() else {
+        let starts: Vec<MemberStart> = self
+            .gizmo_targets(world, mode)
+            .into_iter()
+            .filter_map(|t| {
+                let tr = world.get::<Transform>(t.entity)?;
+                Some(MemberStart {
+                    name: entry_name(self.entries.get(t.idx)?)?.to_string(),
+                    position: tr.position,
+                    rotation: tr.rotation_deg,
+                    scale: tr.scale,
+                    has_position: t.has_position,
+                })
+            })
+            .collect();
+        if starts.is_empty() {
             return false;
-        };
+        }
         let mut drag = GizmoDrag {
             axis,
             mode,
-            start_position: start.position,
-            start_rotation: start.rotation_deg,
-            start_scale: start.scale,
+            pivot,
+            starts,
             grab_t: 0.0,
             last_angle: 0.0,
             accum_deg: 0.0,
@@ -135,9 +190,9 @@ impl EditorHook {
                 let Some(ray) = pick::camera_ray(world, vp, mouse) else {
                     return false;
                 };
-                // The drag line stays anchored at the press-time position, so
+                // The drag line stays anchored at the press-time pivot, so
                 // each frame's parameter is measured against a stable line.
-                let Some(t) = gizmo::axis_drag_t(start.position, gizmo::AXES[axis], &ray) else {
+                let Some(t) = gizmo::axis_drag_t(pivot, gizmo::AXES[axis], &ray) else {
                     return false;
                 };
                 // A scale ratio needs a non-degenerate base parameter.
@@ -161,20 +216,22 @@ impl EditorHook {
     // Per-frame drag drive: follow the cursor while the button is held,
     // cancel on Escape, commit on release.
     pub(super) fn drive_gizmo_drag(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
-        let Some(drag) = &self.gizmo_drag else {
-            return;
-        };
-        let mode = drag.mode;
         if input.escape {
-            let (pos, rot, scale) = (drag.start_position, drag.start_rotation, drag.start_scale);
-            if let Some((_, entity)) = self.gizmo_target(world, mode)
-                && let Some(t) = world.get_mut::<Transform>(entity)
-            {
-                t.position = pos;
-                t.rotation_deg = rot;
-                t.scale = scale;
+            let Some(drag) = self.gizmo_drag.take() else {
+                return;
+            };
+            for s in &drag.starts {
+                if let Some(t) = self.member_target(world, drag.mode, &s.name)
+                    && let Some(tr) = world.get_mut::<Transform>(t.entity)
+                {
+                    tr.position = s.position;
+                    tr.rotation_deg = s.rotation;
+                    tr.scale = s.scale;
+                }
             }
-            self.gizmo_drag = None;
+            return;
+        }
+        if self.gizmo_drag.is_none() {
             return;
         }
         if input.left_button_down {
@@ -185,43 +242,14 @@ impl EditorHook {
     }
 
     fn follow_gizmo_drag(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
-        let Some(drag) = &mut self.gizmo_drag else {
-            return;
-        };
         let mouse = [input.mouse_x, input.mouse_y];
-        let axis_i = drag.axis;
-        let axis = gizmo::AXES[axis_i];
-        let mode = drag.mode;
-        match mode {
-            GizmoMode::Translate | GizmoMode::Scale => {
-                let start_pos = drag.start_position;
-                let grab_t = drag.grab_t;
-                let Some(ray) = pick::camera_ray(world, vp, mouse) else {
-                    return;
-                };
-                // A parallel-degenerate frame keeps the last value.
-                let Some(t) = gizmo::axis_drag_t(start_pos, axis, &ray) else {
-                    return;
-                };
-                let start_scale = drag.start_scale;
-                if let Some((_, entity)) = self.gizmo_target(world, mode)
-                    && let Some(tr) = world.get_mut::<Transform>(entity)
-                {
-                    if mode == GizmoMode::Translate {
-                        let delta = t - grab_t;
-                        tr.position = [
-                            start_pos[0] + axis[0] * delta,
-                            start_pos[1] + axis[1] * delta,
-                            start_pos[2] + axis[2] * delta,
-                        ];
-                    } else {
-                        let factor = (t / grab_t).clamp(SCALE_FACTOR_RANGE.0, SCALE_FACTOR_RANGE.1);
-                        let mut scale = start_scale;
-                        scale[axis_i] = start_scale[axis_i] * factor;
-                        tr.scale = scale;
-                    }
-                }
-            }
+        let mode = match &self.gizmo_drag {
+            Some(d) => d.mode,
+            None => return,
+        };
+        // Rotate needs this frame's angle step folded into the drag state
+        // before the members move.
+        let angle = match mode {
             GizmoMode::Rotate => {
                 // The turn is measured around the gizmo's projected origin.
                 let Some(layout) = self.gizmo_layout(world, vp) else {
@@ -249,59 +277,136 @@ impl EditorHook {
                             ]
                         })
                         .unwrap_or([0.0, 0.0, -1.0]);
-                    let d = axis[0] * fwd[0] + axis[1] * fwd[1] + axis[2] * fwd[2];
+                    let a = gizmo::AXES[drag.axis];
+                    let d = a[0] * fwd[0] + a[1] * fwd[1] + a[2] * fwd[2];
                     if d >= 0.0 { 1.0 } else { -1.0 }
                 };
-                let start_rot = drag.start_rotation;
-                let accum = drag.accum_deg;
-                if let Some((_, entity)) = self.gizmo_target(world, mode)
-                    && let Some(tr) = world.get_mut::<Transform>(entity)
-                {
-                    let mut rot = start_rot;
-                    rot[axis_i] = start_rot[axis_i] + sign * accum;
+                sign * drag.accum_deg
+            }
+            _ => 0.0,
+        };
+        // The members are written with the drag moved out, so the resolves
+        // below can borrow `self` freely.
+        let Some(drag) = self.gizmo_drag.take() else {
+            return;
+        };
+        let axis_i = drag.axis;
+        let axis = gizmo::AXES[axis_i];
+        match mode {
+            GizmoMode::Translate | GizmoMode::Scale => {
+                let Some(ray) = pick::camera_ray(world, vp, mouse) else {
+                    self.gizmo_drag = Some(drag);
+                    return;
+                };
+                // A parallel-degenerate frame keeps the last value.
+                let Some(t) = gizmo::axis_drag_t(drag.pivot, axis, &ray) else {
+                    self.gizmo_drag = Some(drag);
+                    return;
+                };
+                for s in &drag.starts {
+                    let Some(target) = self.member_target(world, mode, &s.name) else {
+                        continue;
+                    };
+                    let Some(tr) = world.get_mut::<Transform>(target.entity) else {
+                        continue;
+                    };
+                    if mode == GizmoMode::Translate {
+                        tr.position = group_transform::translate(s.position, axis, t - drag.grab_t);
+                    } else {
+                        let factor =
+                            (t / drag.grab_t).clamp(SCALE_FACTOR_RANGE.0, SCALE_FACTOR_RANGE.1);
+                        let mut scale = s.scale;
+                        scale[axis_i] = s.scale[axis_i] * factor;
+                        tr.scale = scale;
+                        if s.has_position {
+                            tr.position =
+                                group_transform::scale_from(s.position, drag.pivot, axis_i, factor);
+                        }
+                    }
+                }
+            }
+            GizmoMode::Rotate => {
+                for s in &drag.starts {
+                    let Some(target) = self.member_target(world, mode, &s.name) else {
+                        continue;
+                    };
+                    let Some(tr) = world.get_mut::<Transform>(target.entity) else {
+                        continue;
+                    };
+                    let mut rot = s.rotation;
+                    rot[axis_i] = s.rotation[axis_i] + angle;
                     tr.rotation_deg = rot;
+                    if s.has_position {
+                        tr.position = group_transform::orbit(s.position, drag.pivot, axis_i, angle);
+                    }
                 }
             }
         }
+        self.gizmo_drag = Some(drag);
     }
 
-    // Write the dragged value into the authored entry and mark the edit. A
-    // drag that ends where it started leaves the entries (and the undo stack)
-    // untouched.
+    // Write every member's dragged values into its authored entry, then mark
+    // the whole edit as ONE change (a single history snapshot, so undo
+    // restores all members together). A drag that ends where it started
+    // leaves the entries (and the undo stack) untouched.
     fn commit_gizmo(&mut self, world: &mut World) {
         let Some(drag) = self.gizmo_drag.take() else {
             return;
         };
-        let Some((idx, entity)) = self.gizmo_target(world, drag.mode) else {
-            return;
-        };
-        let Some(tr) = world.get::<Transform>(entity).cloned() else {
-            return;
-        };
-        let (value, start) = match drag.mode {
-            GizmoMode::Translate => (tr.position.map(round3), drag.start_position.map(round3)),
-            GizmoMode::Rotate => (tr.rotation_deg.map(round1), drag.start_rotation.map(round1)),
-            GizmoMode::Scale => (tr.scale.map(round3), drag.start_scale.map(round3)),
-        };
-        if value == start {
+        let mut changed = Vec::new();
+        for s in &drag.starts {
+            let Some(target) = self.member_target(world, drag.mode, &s.name) else {
+                continue;
+            };
+            let Some(tr) = world.get::<Transform>(target.entity).cloned() else {
+                continue;
+            };
+            let (value, start) = match drag.mode {
+                GizmoMode::Translate => (tr.position.map(round3), s.position.map(round3)),
+                GizmoMode::Rotate => (tr.rotation_deg.map(round1), s.rotation.map(round1)),
+                GizmoMode::Scale => (tr.scale.map(round3), s.scale.map(round3)),
+            };
+            let mut wrote = false;
+            if value != start {
+                Self::write_arg(&mut self.entries, target.idx, drag.mode.arg_key(), value);
+                wrote = true;
+            }
+            // Rotate and scale also move members about the pivot: persist the
+            // carried position alongside the mode's own arg.
+            if drag.mode != GizmoMode::Translate && s.has_position {
+                let pos = tr.position.map(round3);
+                if pos != s.position.map(round3) {
+                    Self::write_arg(&mut self.entries, target.idx, "position", pos);
+                    wrote = true;
+                }
+            }
+            if wrote {
+                changed.push(target.idx);
+            }
+        }
+        if changed.is_empty() {
             return;
         }
-        if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
+        self.mark_changed();
+        // An open form on a moved entry still shows the pre-drag text;
+        // re-derive it from the committed args. (Dragging and typing cannot
+        // overlap, so no in-progress field edit is lost.)
+        if let Some(idx) = self.editing
+            && changed.contains(&idx)
+            && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
+        {
+            self.open_form(world, ty, Some(idx));
+        }
+    }
+
+    fn write_arg(entries: &mut [serde_json::Value], idx: usize, key: &str, value: [f32; 3]) {
+        if let Some(obj) = entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())
                 .or_insert_with(|| serde_json::Value::Object(Default::default()));
             if let Some(a) = args.as_object_mut() {
-                a.insert(drag.mode.arg_key().to_string(), serde_json::json!(value));
+                a.insert(key.to_string(), serde_json::json!(value));
             }
-        }
-        self.mark_changed();
-        // An open form on this entry still shows the pre-drag text; re-derive
-        // it from the committed args. (Dragging and typing cannot overlap, so
-        // no in-progress field edit is lost.)
-        if self.editing == Some(idx)
-            && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
-        {
-            self.open_form(world, ty, Some(idx));
         }
     }
 
