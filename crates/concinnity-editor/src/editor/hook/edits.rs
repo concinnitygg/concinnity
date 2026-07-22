@@ -86,12 +86,10 @@ impl EditorHook {
         }
         self.dirty = true;
         self.rebuild_preview = true;
-        // The expansion follows the entries, so the Expanded tab's and the
-        // Outliner's models are now out of date. Recomputed by the frame drive
-        // while showing, so a burst of edits costs one expansion each rather
-        // than one per edit.
-        self.expanded_stale = true;
-        self.outliner_stale = true;
+        // The expansion follows the entries, so the Assets tree is now out of
+        // date. Recomputed by the frame drive while the panel shows, so a burst
+        // of edits costs one expansion rather than one per edit.
+        self.tree_stale = true;
     }
 
     // Step the entry list back / forward through the history stacks. No-ops at
@@ -117,26 +115,22 @@ impl EditorHook {
     }
 
     // Install a history snapshot as the working entry list. Everything indexing
-    // into `entries` (the open form, the row menu, the browse scroll) may point
-    // at removed or shifted rows after a jump, so it is dropped or re-clamped;
-    // `dirty` is recomputed against the on-disk state so unwinding back to the
-    // saved list clears the Save chip.
+    // into `entries` (the open form, the row menu) may point at removed or
+    // shifted rows after a jump, so it is dropped; `dirty` is recomputed against
+    // the on-disk state so unwinding back to the saved list clears the Save chip.
     fn apply_history_jump(&mut self, snap: Vec<serde_json::Value>, world: &mut World) {
         self.entries = snap;
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
         self.rebuild_preview = true;
-        self.expanded_stale = true;
-        self.outliner_stale = true;
+        self.tree_stale = true;
         self.close_form();
         self.row_menu = None;
-        self.combo = Combo::Closed;
+        self.picker_open = false;
         self.selection.clear();
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;
-        let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
-        self.list_scroll = self.list_scroll.min(max);
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
         if self.lighting_open {

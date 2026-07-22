@@ -6,31 +6,24 @@
 use super::*;
 
 impl EditorHook {
-    // Open the combo in `flavour`, clearing and focusing the shared filter field.
-    pub(super) fn open_combo(&mut self, flavour: Combo, world: &mut World) {
-        self.combo = flavour;
-        self.combo_scroll = 0;
-        self.row_menu = None;
-        widget::focus_field_with(world, panel::FILTER_INPUT, "");
-    }
-
     // Open the add / edit form for `ty`: derive its editable arg fields from the
-    // type's defaults (or the edited entry's current args), seed the name + each
-    // text field, and focus the name. `editing` is `Some(idx)` for a rename +
-    // arg-edit of an existing entry, `None` for a new asset.
-    pub(super) fn open_form(&mut self, world: &mut World, ty: String, editing: Option<usize>) {
-        let seed = editing
-            .and_then(|idx| self.entries.get(idx))
+    // type's defaults (or the edited asset's current args), seed the name + each
+    // text field, and focus the name. `target` decides where confirming lands --
+    // a fresh line, an existing one, or the promotion of a generated asset.
+    pub(super) fn open_form(&mut self, world: &mut World, ty: String, target: FormTarget) {
+        // Cloned rather than borrowed: `unique_name` below reads `self` too.
+        let existing: Option<serde_json::Value> = match &target {
+            FormTarget::Entry(idx) => self.entries.get(*idx).cloned(),
+            FormTarget::Promote(entry) => Some(entry.clone()),
+            FormTarget::New => None,
+        };
+        let seed = existing
+            .as_ref()
             .and_then(|e| e.get("args"))
             .and_then(|v| v.as_object())
             .cloned();
-        let name = match editing {
-            Some(idx) => self
-                .entries
-                .get(idx)
-                .and_then(entry_name)
-                .unwrap_or_default()
-                .to_string(),
+        let name = match &existing {
+            Some(e) => entry_name(e).unwrap_or_default().to_string(),
             None => self.unique_name(&ty),
         };
         // The working args tree: type defaults with the edited entry merged over
@@ -40,8 +33,8 @@ impl EditorHook {
         self.form_focus = FormFocus::Name;
         self.form_error = None;
         self.selected_type = Some(ty);
-        self.editing = editing;
-        self.combo = Combo::Closed;
+        self.form_target = target;
+        self.picker_open = false;
         self.row_menu = None;
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
@@ -67,14 +60,14 @@ impl EditorHook {
         let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
         self.form_scroll = self.form_scroll.min(max);
         // Reference fields pick from the world's existing assets of their target
-        // type. Resolve the option lists up front (reads `entries`) so the fill loop
-        // does not borrow `self` twice.
+        // type. Resolve the option lists up front (reads `entries` + the cooked
+        // tree) so the fill loop does not borrow `self` twice.
         let ref_opts: Vec<(usize, Vec<String>)> = self
             .form_fields
             .iter()
             .enumerate()
             .filter_map(|(i, f)| match f.kind {
-                form::FieldKind::Ref { target } => Some((i, names_of_type(&self.entries, target))),
+                form::FieldKind::Ref { target } => Some((i, self.ref_targets(target))),
                 _ => None,
             })
             .collect();
@@ -126,11 +119,25 @@ impl EditorHook {
         self.form_args = form::assemble(&ty, Some(&self.form_args), &self.form_fields, &texts);
     }
 
-    // Close the form panel, discarding its transient state (the browse row's
-    // highlight clears with `editing`).
+    // The names a reference field targeting `ty` can pick from: every asset of
+    // that type in the expanded world, not just the authored lines. A promoted
+    // asset's references point at generated assets, so an authored-only list
+    // would offer no way to retarget one (`form::set_ref_options` keeps the
+    // current value regardless, but could not offer its siblings).
+    fn ref_targets(&self, ty: &str) -> Vec<String> {
+        let mut names = names_of_type(&self.entries, ty);
+        for asset in self.tree_groups.iter().flat_map(|g| &g.assets) {
+            if asset.asset_type == ty && !names.iter().any(|n| n == &asset.name) {
+                names.push(asset.name.clone());
+            }
+        }
+        names
+    }
+
+    // Close the form panel, discarding its transient state.
     pub(super) fn close_form(&mut self) {
         self.selected_type = None;
-        self.editing = None;
+        self.form_target = FormTarget::New;
         self.form_fields.clear();
         self.form_args = serde_json::Map::new();
         self.vec_expanded.clear();
@@ -139,88 +146,6 @@ impl EditorHook {
         self.form_error = None;
         self.field_dropdown = None;
         self.field_dropdown_scroll = 0;
-    }
-
-    // Route a resolved panel click. Field-focus transitions mutate the injected
-    // `TextInput` components, so this needs the world.
-    pub(super) fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
-        match action {
-            PanelAction::SwitchTab(tab) => self.switch_tab(tab),
-            PanelAction::ToggleGroup(g) => self.toggle_expanded_group(g),
-            PanelAction::AddExpanded(g, i) => self.add_expanded(g, i),
-            PanelAction::TogglePicker => {
-                if self.combo == Combo::Picker {
-                    self.combo = Combo::Closed;
-                } else {
-                    self.open_combo(Combo::Picker, world);
-                }
-            }
-            PanelAction::ToggleFilter => {
-                if self.combo == Combo::Filter {
-                    self.combo = Combo::Closed;
-                } else {
-                    self.open_combo(Combo::Filter, world);
-                }
-            }
-            PanelAction::PickOption(i) => match self.combo {
-                Combo::Filter => {
-                    if let Some(o) = self.combo_options(world).get(i) {
-                        self.type_filter = if o == panel::ALL_LABEL {
-                            None
-                        } else {
-                            Some(o.clone())
-                        };
-                    }
-                    self.list_scroll = 0;
-                    self.combo = Combo::Closed;
-                }
-                Combo::Picker => {
-                    if let Some(ty) = self.combo_options(world).get(i).cloned() {
-                        // A config singleton edits the world's existing instance if
-                        // it has one, else adds it (edit-or-add); a multi-instance
-                        // asset always adds a new one.
-                        let existing = panel::is_singleton(&ty)
-                            .then(|| {
-                                self.entries
-                                    .iter()
-                                    .position(|e| entry_type(e) == Some(ty.as_str()))
-                            })
-                            .flatten();
-                        self.open_form(world, ty, existing);
-                    }
-                }
-                Combo::Closed => {}
-            },
-            PanelAction::OpenEntry(idx) => {
-                if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
-                    self.open_form(world, ty, Some(idx));
-                }
-            }
-            PanelAction::OpenRowMenu(entry) => self.row_menu = Some(entry),
-            PanelAction::RowDelete => {
-                if let Some(idx) = self.row_menu
-                    && idx < self.entries.len()
-                {
-                    self.entries.remove(idx);
-                    self.mark_changed();
-                    // The open form indexes into `entries`: deleting the edited
-                    // entry closes it, and deleting an earlier one shifts it.
-                    match self.editing {
-                        Some(e) if e == idx => self.close_form(),
-                        Some(e) if e > idx => self.editing = Some(e - 1),
-                        _ => {}
-                    }
-                }
-                self.row_menu = None;
-                let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
-                self.list_scroll = self.list_scroll.min(max);
-            }
-            PanelAction::CloseOverlays => {
-                self.combo = Combo::Closed;
-                self.row_menu = None;
-            }
-            PanelAction::Consume => {}
-        }
     }
 
     // Route a resolved form-panel click. Field-focus transitions mutate the
@@ -323,7 +248,7 @@ impl EditorHook {
             return;
         }
         let args_val = serde_json::Value::Object(args);
-        match self.editing {
+        match self.form_target.entry() {
             Some(idx) => {
                 let name = self.finalize_rename(&typed, idx, &ty);
                 if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
@@ -331,6 +256,10 @@ impl EditorHook {
                     obj.insert("args".to_string(), args_val);
                 }
             }
+            // A new asset, or the promotion of a generated one: both append. A
+            // promotion keeps the generated name (nothing in `entries` holds it,
+            // so `finalize_name` leaves it alone), and that identity is what
+            // makes the new line override the expansion.
             None => {
                 let name = self.finalize_name(&typed, &ty);
                 self.entries.push(serde_json::json!({

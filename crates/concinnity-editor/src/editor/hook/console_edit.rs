@@ -236,14 +236,12 @@ impl EditorHook {
         let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
         self.entries.remove(idx);
         self.mark_changed();
-        match self.editing {
-            Some(e) if e == idx => self.close_form(),
-            Some(e) if e > idx => self.editing = Some(e - 1),
+        match self.form_target {
+            FormTarget::Entry(e) if e == idx => self.close_form(),
+            FormTarget::Entry(e) if e > idx => self.form_target = FormTarget::Entry(e - 1),
             _ => {}
         }
         self.row_menu = None;
-        let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
-        self.list_scroll = self.list_scroll.min(max);
         self.console_sink.info(&format!("removed '{name}' ({ty})"));
     }
 

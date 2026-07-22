@@ -7,10 +7,10 @@
 // existing debug server so `cn debug smoke` / `screenshot` can verify a session.
 
 mod asset_list;
+mod asset_tree;
 mod billboards;
 mod console;
 mod console_panel;
-mod expanded;
 mod file_dialog;
 mod form;
 mod form_panel;
@@ -28,8 +28,6 @@ mod lighting;
 mod lighting_panel;
 mod list_panel;
 mod marquee;
-mod outliner;
-mod outliner_panel;
 mod panel;
 mod preview;
 mod registry;

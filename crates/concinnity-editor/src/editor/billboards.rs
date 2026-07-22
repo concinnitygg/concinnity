@@ -23,13 +23,13 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use concinnity_cook::ComponentType;
 
-// Reserved id family: the next free block after the Outliner panel's 0xF00.
+// Reserved id family: the next free block after the panel families below 0x1000.
 // Icons at +0x00, their glyph labels at +0x40, the trigger-volume outline's
 // dotted box run at +0x100 (0x10 per edge), and its sphere ring at +0x1C0.
 const BILLBOARD_BASE: u32 = ID_BASE + 0x1000;
 
 // Icon pool size, bounding the per-frame sprite cost; entries past the pool
-// simply draw no icon (they stay pickable through the Outliner).
+// simply draw no icon (they stay pickable through the Assets tree).
 pub(crate) const MAX_BILLBOARDS: usize = 48;
 
 const ICON_PX: f32 = 18.0;

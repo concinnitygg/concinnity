@@ -30,7 +30,6 @@ pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 // Base tints / colours. Interactive tints (hover / selected) belong to the
 // Assets panel; these are the shared baseline both lists draw from.
 pub(crate) const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
-pub(crate) const HEADER_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 pub(crate) const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 pub(crate) const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 pub(crate) const LABEL: [f32; 3] = theme::LABEL;
@@ -267,7 +266,7 @@ mod tests {
             AssetId(1),
             &hdr,
             [10.0, 20.0, 300.0, ROW_H],
-            HEADER_ROW_TINT,
+            ROW_TINT,
         );
         let l = world
             .query::<TextLabel>()

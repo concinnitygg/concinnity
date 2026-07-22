@@ -7,7 +7,7 @@
 // types otherwise never get one), projects each position to a screen-space
 // icon, and offers the icons to the click router ahead of the mesh pick.
 // Selecting an icon goes through the same name-keyed selection the mesh pick
-// uses, so the form, outliner, and gizmo all follow for free.
+// uses, so the form, tree, and gizmo all follow for free.
 
 use super::*;
 use crate::assets::{Camera3D, Transform, TriggerVolume};
@@ -229,14 +229,12 @@ impl EditorHook {
         if input.shift {
             if self.selection.toggle(name.clone()) {
                 self.focus_ui_on(&name, world);
-                self.reveal_outliner(&name, world);
             } else {
                 self.follow_active(world);
             }
         } else {
             self.selection.replace(name.clone());
             self.focus_ui_on(&name, world);
-            self.reveal_outliner(&name, world);
         }
         true
     }

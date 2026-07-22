@@ -57,7 +57,6 @@ impl EditorHook {
             };
             if self.selection.toggle(name.clone()) {
                 self.focus_ui_on(&name, world);
-                self.reveal_outliner(&name, world);
             } else {
                 self.follow_active(world);
             }
@@ -88,39 +87,26 @@ impl EditorHook {
         };
         self.selection.replace(name.clone());
         self.focus_ui_on(&name, world);
-        self.reveal_outliner(&name, world);
     }
 
-    // Open the picked asset for editing: an authored entry in the edit form
-    // (with the assets UI up so the form is visible and its browse row
-    // highlighted), a build-generated asset on the Expanded tab, where its "+"
-    // offers the copy-to-config promotion.
+    // Open the picked asset for editing, with the assets UI up so the form is
+    // visible and the tree row reveals itself. A build-generated asset opens the
+    // same form seeded from what the expansion produced, so confirming it
+    // promotes the asset to an authored line.
     pub(super) fn focus_ui_on(&mut self, name: &str, world: &mut World) {
         self.panel_open = true;
-        self.combo = Combo::Closed;
+        self.picker_open = false;
         self.row_menu = None;
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
-        {
-            self.tab = Tab::Config;
-            if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
-                self.open_form(world, ty, Some(idx));
-            }
-        } else {
-            self.tab = Tab::Expanded;
-            self.expanded_stale = true;
-            self.refresh_expanded_if_needed();
-            self.reveal_expanded(name);
-        }
+        self.refresh_tree_if_needed();
+        self.open_asset_form(name, world);
+        self.reveal_in_tree(name, world);
     }
 
     // Retarget an already-open edit form at the active member (the form
     // follows the active member; a closed form stays closed, so a marquee or
     // a toggle-off never forces panels open).
     pub(super) fn follow_active(&mut self, world: &mut World) {
-        if self.editing.is_none() {
+        if !self.form_open() {
             return;
         }
         let Some(idx) = self.selection.active().and_then(|name| {
@@ -131,8 +117,7 @@ impl EditorHook {
             return;
         };
         if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
-            self.tab = Tab::Config;
-            self.open_form(world, ty, Some(idx));
+            self.open_form(world, ty, FormTarget::Entry(idx));
         }
     }
 
@@ -178,35 +163,6 @@ impl EditorHook {
             entry.bb_max,
         )
     }
-
-    // Unfold the group holding generated asset `name` and scroll its row into
-    // the Expanded tab's window. A name the expansion does not know (a cook
-    // failure, a stale index entry) leaves the tab as-is.
-    fn reveal_expanded(&mut self, name: &str) {
-        let Some(group) = self
-            .expanded_groups
-            .iter()
-            .position(|g| g.assets.iter().any(|a| a.name == name))
-        else {
-            return;
-        };
-        if !self.expanded_open.contains(&group) {
-            self.expanded_open.push(group);
-        }
-        let rows = self.expanded_rows();
-        let Some(row) = rows
-            .iter()
-            .position(|r| matches!(r, ExpandedRow::Asset { name: n, .. } if n == name))
-        else {
-            return;
-        };
-        // Scroll only when the row is outside the visible window, keeping its
-        // group header in view when it sits directly above.
-        if row < self.expanded_scroll || row >= self.expanded_scroll + panel::MAX_ROWS {
-            let max = rows.len().saturating_sub(panel::MAX_ROWS);
-            self.expanded_scroll = row.saturating_sub(1).min(max);
-        }
-    }
 }
 
 // The mouse ray from the world's live camera, or `None` in a camera-less
@@ -223,7 +179,7 @@ pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> 
 }
 
 // Every PickIndex entry the ray strikes, nearest first. Locked assets (the
-// Outliner's pick lock) are skipped, so a click passes through to whatever
+// tree's pick lock) are skipped, so a click passes through to whatever
 // sits behind them.
 fn ray_hits(
     world: &World,

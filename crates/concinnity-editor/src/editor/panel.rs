@@ -1,31 +1,34 @@
 // src/editor/panel.rs
 //
-// The editor "Assets" panel: browse the world's existing assets (grouped by
-// type, filtered by type). Like the rest of the editor HUD it is plain
-// `Sprite` / `TextLabel` / `TextInput` components at reserved ids (injected by
-// `inject.rs`), driven each frame by the editor hook -- nothing here reaches the
-// shipped runtime. This module owns the panel's pure geometry, its click
-// resolution, and the per-frame layout that shows / positions the elements; the
-// hook owns the state and the option lists.
+// The editor "Assets" panel: every asset of the expanded world as one
+// collapsible tree grouped by origin (built by `asset_tree.rs`), a search field
+// over it, and the per-row editor-session hide / lock toggles. Like the rest of
+// the editor HUD it is plain `Sprite` / `TextLabel` / `TextInput` components at
+// reserved ids (injected by `inject.rs`), driven each frame by the editor hook --
+// nothing here reaches the shipped runtime. This module owns the panel's pure
+// geometry, its click resolution, and the per-frame layout that shows /
+// positions the elements; the hook owns the state and the option list.
 //
 // The panel is a floating column: a draggable title bar ("Assets") across its
 // top, defaulting to below the top bar's buttons; the hook owns its position and
 // clamps a drag so the panel stays fully on screen. Under the title bar the
-// header is a square "+" (add) button and a combo area. While the type picker is
-// open, the "+" becomes a gray "X" that returns to the browse list. The combo
-// area is a dropdown that, when opened, turns into a filter text field
-// (`FILTER_INPUT`, a real `TextInput`) with an option list floating below it:
-//   * Filter  -- opened by clicking the combo: the list is the asset types
-//                present in the world; picking one filters the browse list.
-//   * Picker  -- opened by clicking "+": the list is the addable asset types;
-//                picking one opens the add form.
-// The body below the header is the browse list: the world's existing assets,
-// grouped by type (a type sub-header then its indented names), scrollable.
-// Clicking a name opens that asset's add / edit form -- a separate floating
-// panel (`form_panel.rs`) -- and the name row stays highlighted while its form
-// is open. Hovering a name also reveals a triple-dot button opening a small
-// Delete menu.
+// header is a square "+" (add) button and the search field, then a status line
+// (the asset count, or a cook failure), then the tree.
+//
+// Clicking a name selects the asset in the viewport and opens its add / edit
+// form -- a separate floating panel (`form_panel.rs`). An asset the build
+// generates has no world.jsonl line of its own; its form is seeded from the
+// entry the expansion produced and only confirming it appends that line, which
+// then overrides the expansion. The passes that emit unconditionally (menu,
+// story, and prefab primitives) cannot be overridden that way, so their rows
+// select but open no form. Hovering a name also reveals a triple-dot button
+// opening a small Delete menu.
+//
+// While the type picker is open, the "+" becomes a gray "X" that returns to the
+// tree and the search field narrows the picker's option list, which floats over
+// the body; picking a type opens the add form.
 
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use concinnity_cook::ComponentType;
@@ -35,21 +38,12 @@ use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
-use super::expanded::ExpandedRow;
+use super::asset_tree::{Badge, TreeRow};
 use super::hud;
 use super::registry::{self, PanelKey};
+use super::selection::Selection;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};
-
-// The grouped browse list (row model, grouping, geometry, base style, and the
-// per-row + scrollbar draw) is shared with the Template detail panel; only the
-// interactive chrome below (hover / selected tints, triple-dot, Delete) is
-// Assets-panel-specific. `MAX_ROWS` + `ListRow` are re-exported so the hook keeps
-// referring to them as `panel::MAX_ROWS` / `panel::ListRow`.
-use super::asset_list::{
-    self, HEADER_ROW_TINT, LABEL, PAD, ROW_H, ROW_LABEL_TOP, ROW_TINT, SCROLLBAR_W,
-};
-pub(crate) use super::asset_list::{ListRow, MAX_ROWS};
 
 // The addable asset types the "+" picker offers for a plain add: every type
 // flagged `useful_blank` in the registry (both the component and resource-asset
@@ -117,43 +111,6 @@ pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
     add_types().chain(config_types())
 }
 
-// The label of the "all assets" filter option (the default), shown first in the
-// combo's filter list and as the combo's text when no type filter is active.
-pub(crate) const ALL_LABEL: &str = "All";
-
-// Which list the panel body shows. Config is the world's own world.jsonl lines
-// (the editable set); Expanded is everything the build adds around them, which
-// is most of a world's content yet has no line to browse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Tab {
-    #[default]
-    Config,
-    Expanded,
-}
-
-impl Tab {
-    pub(crate) const ALL: [Tab; 2] = [Tab::Config, Tab::Expanded];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Tab::Config => "Config",
-            Tab::Expanded => "Expanded",
-        }
-    }
-}
-
-// The combo (header dropdown) state: closed, or open in one of two flavours that
-// share the header filter field and the floating option list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Combo {
-    // Just the browse label; the body list shows.
-    Closed,
-    // Filtering the browse list by type (opened from the combo button).
-    Filter,
-    // Picking a type to add (opened from the "+" button).
-    Picker,
-}
-
 // Reserved asset-id family for the panel. The asset-id VALUE does not affect
 // draw order (the overlay draws in component-insertion order, not by id);
 // z-order is set by the sequence in `all_sprite_ids` / `all_label_ids`, which
@@ -162,134 +119,127 @@ const PANEL: u32 = registry::base(PanelKey::Assets);
 pub(crate) const PANEL_BG: AssetId = AssetId(PANEL);
 pub(crate) const PLUS_BG: AssetId = AssetId(PANEL + 1);
 pub(crate) const PLUS_LABEL: AssetId = AssetId(PANEL + 2);
-pub(crate) const TYPEDROP_BG: AssetId = AssetId(PANEL + 3);
-pub(crate) const TYPEDROP_LABEL: AssetId = AssetId(PANEL + 4);
-pub(crate) const FILTER_INPUT: AssetId = AssetId(PANEL + 5);
-pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 12);
-pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 0x58);
-pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 0x59);
-pub(crate) const COMBO_BG: AssetId = AssetId(PANEL + 0x5A);
+pub(crate) const SEARCH_INPUT: AssetId = AssetId(PANEL + 3);
+pub(crate) const STATUS_LABEL: AssetId = AssetId(PANEL + 4);
+pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 5);
+pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 6);
+pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 7);
+pub(crate) const PICKER_BG: AssetId = AssetId(PANEL + 8);
 // The draggable title bar's heading (the bar is the panel surface itself).
-pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 0x5C);
+pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 9);
 // The "X" close button in the title bar's top-right corner.
-pub(crate) const CLOSE_BG: AssetId = AssetId(PANEL + 0x5D);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(PANEL + 0x5E);
-pub(crate) const DOT_BG: AssetId = AssetId(PANEL + 0xA0);
-pub(crate) const DOT1: AssetId = AssetId(PANEL + 0xA1);
-pub(crate) const DOT2: AssetId = AssetId(PANEL + 0xA2);
-pub(crate) const DOT3: AssetId = AssetId(PANEL + 0xA3);
-pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 0xB0);
-pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 0xB3);
-pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 0xB4);
+pub(crate) const CLOSE_BG: AssetId = AssetId(PANEL + 10);
+pub(crate) const CLOSE_LABEL: AssetId = AssetId(PANEL + 11);
+pub(crate) const DOT_BG: AssetId = AssetId(PANEL + 12);
+pub(crate) const DOT1: AssetId = AssetId(PANEL + 13);
+pub(crate) const DOT2: AssetId = AssetId(PANEL + 14);
+pub(crate) const DOT3: AssetId = AssetId(PANEL + 15);
+pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 16);
+pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 17);
+pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 18);
 
-pub(crate) fn list_row_bg(i: usize) -> AssetId {
-    AssetId(PANEL + 0x20 + i as u32)
+pub(crate) fn row_bg(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x20 + slot as u32)
 }
-pub(crate) fn list_row_label(i: usize) -> AssetId {
-    AssetId(PANEL + 0x40 + i as u32)
+pub(crate) fn name_label(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x40 + slot as u32)
 }
-pub(crate) fn tab_bg(i: usize) -> AssetId {
-    AssetId(PANEL + 0xC0 + i as u32)
+pub(crate) fn type_label(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x60 + slot as u32)
 }
-pub(crate) fn tab_label(i: usize) -> AssetId {
-    AssetId(PANEL + 0xC4 + i as u32)
+pub(crate) fn eye_box(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x80 + slot as u32)
 }
-// The "+" on an Expanded row that can be copied into the config.
-pub(crate) fn add_row_bg(i: usize) -> AssetId {
-    AssetId(PANEL + 0xD0 + i as u32)
+pub(crate) fn lock_box(slot: usize) -> AssetId {
+    AssetId(PANEL + 0xA0 + slot as u32)
 }
-pub(crate) fn add_row_label(i: usize) -> AssetId {
-    AssetId(PANEL + 0xE0 + i as u32)
+pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
+    AssetId(PANEL + 0xC0 + slot as u32)
 }
-pub(crate) fn combo_row_bg(i: usize) -> AssetId {
-    AssetId(PANEL + 0x60 + i as u32)
-}
-pub(crate) fn combo_row_label(i: usize) -> AssetId {
-    AssetId(PANEL + 0x80 + i as u32)
+pub(crate) fn picker_row_label(slot: usize) -> AssetId {
+    AssetId(PANEL + 0xE0 + slot as u32)
 }
 
 // Geometry, in window pixels. Every rect derives from the panel's origin `o`
 // (its title bar's top-left corner), so dragging the title bar moves the whole
 // panel; the hook owns the origin.
-pub(crate) const PANEL_W: f32 = 320.0;
+pub(crate) const PANEL_W: f32 = 500.0;
+const PAD: f32 = 10.0;
 const HEADER_H: f32 = 36.0;
-const TAB_H: f32 = 26.0;
+const STATUS_H: f32 = 20.0;
+pub(crate) const ROW_H: f32 = 26.0;
+const SCROLLBAR_W: f32 = 5.0;
 const GAP: f32 = 6.0;
-// How far a tab's chip is inset within its strip cell.
-const TAB_INSET: f32 = 3.0;
-// The "+" that copies an Expanded row into the config.
-const ADD_SZ: f32 = 18.0;
-// Characters an Expanded row fits at PANEL_W: a header spans the body width, an
-// asset row stops short of its "+". Both are free-length text (an import names
-// its output after itself), so they clip rather than overrun the panel.
-const HEADER_ROW_CHARS: usize = 33;
-const ASSET_ROW_CHARS: usize = 29;
-// However long the type is, leave enough of the name to tell rows apart.
-const MIN_NAME_CHARS: usize = 8;
+// The eye / lock toggle squares.
+const BOX_SIZE: f32 = 14.0;
+// An asset row's name is inset under its group header.
+const ASSET_INDENT: f32 = 24.0;
+// Visible rows in the body before it scrolls, shared by the tree and the
+// picker's option list.
+pub(crate) const ROW_POOL: usize = 14;
+// The asset name, and the type that reads right-aligned beside it (the
+// triple-dot takes the type's slot over while the row is hovered).
+const MAX_NAME_CHARS: usize = 24;
+const MAX_TYPE_CHARS: usize = 18;
 // The triple-dot button on a hovered name row.
-const DOT_SZ: f32 = 22.0;
+const DOT_SZ: f32 = 20.0;
 // The floating Delete menu.
 const MENU_W: f32 = 132.0;
 const MENU_ROW_H: f32 = 26.0;
 
 const PLUS_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
-const TYPEDROP_TINT: [f32; 4] = theme::BUTTON_TINT;
-// Interactive name-row tints, layered over the shared base `ROW_TINT`.
+const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
 const ROW_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
+const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
+const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
+// The eye box: green while the asset renders, dim once hidden.
+const EYE_TINT_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
+const EYE_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+// The lock box: amber while locked, dim while pickable.
+const LOCK_TINT_ON: [f32; 4] = [0.78, 0.56, 0.22, 1.0];
+const LOCK_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+const PICKER_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
 const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const OPTION_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
-const COMBO_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
-const CANCEL_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 const DOT_BG_TINT: [f32; 4] = [0.30, 0.34, 0.46, 0.95];
 const DOT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
-const TAB_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const TAB_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const TAB_TINT_ACTIVE: [f32; 4] = theme::SELECTED_TINT;
-// The Expanded tab's group headers read as bands, unlike the Config tab's
-// transparent type sub-headers, because they are the clickable control there.
-const GROUP_ROW_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
-const ADD_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
-const ADD_TINT_HOVER: [f32; 4] = [0.28, 0.60, 0.40, 1.0];
 const MENU_BG_TINT: [f32; 4] = [0.15, 0.15, 0.19, 1.0];
 const MENU_ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const MENU_ROW_HOVER: [f32; 4] = theme::HOVER_TINT;
+const LABEL: [f32; 3] = theme::LABEL;
 const LABEL_DIM: [f32; 3] = theme::LABEL_DIM;
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
+const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
+
+// Per-badge type-label colours, so provenance still reads at a glance now that
+// the row's right slot carries the asset type rather than a badge caption.
+fn badge_color(badge: Badge) -> [f32; 3] {
+    match badge {
+        Badge::Authored => theme::LABEL_DIM,
+        Badge::Imported => [0.45, 0.72, 0.62],
+        Badge::Injected => [0.70, 0.58, 0.88],
+    }
+}
 
 // Where the panel sits until the user drags it: right-aligned below the top bar.
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [vw - PANEL_W, hud::body_top()]
 }
 
-// The panel's footprint, for the hook's drag clamp. Tab-dependent: only the
-// Config tab carries the add / filter header.
-pub(crate) fn size(tab: Tab) -> [f32; 2] {
-    let r = panel_rect([0.0, 0.0], tab);
-    [r[2], r[3]]
-}
-
-// The panel outer rect (title bar + tabs + header + body) at origin `o`.
-pub(crate) fn panel_rect(o: [f32; 2], tab: Tab) -> [f32; 4] {
+// The panel's fixed footprint, for the hook's drag clamp.
+pub(crate) fn size() -> [f32; 2] {
     [
-        o[0],
-        o[1],
         PANEL_W,
-        body_y(o, tab) - o[1] + MAX_ROWS as f32 * ROW_H,
+        widget::TITLE_H + HEADER_H + STATUS_H + ROW_POOL as f32 * ROW_H + PAD,
     ]
 }
 
-// The tab strip, spanning the panel width below the title bar.
-pub(crate) fn tab_strip_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1] + widget::TITLE_H, PANEL_W, TAB_H]
-}
-
-// Tab `i`, splitting the strip evenly.
-pub(crate) fn tab_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    let w = PANEL_W / Tab::ALL.len() as f32;
-    [o[0] + i as f32 * w, o[1] + widget::TITLE_H, w, TAB_H]
+pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
+    let s = size();
+    [o[0], o[1], s[0], s[1]]
 }
 
 // The draggable title bar across the panel top.
@@ -297,126 +247,121 @@ pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], PANEL_W, widget::TITLE_H]
 }
 
-// The "X" close button in the title bar's top-right corner.
-pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    widget::close_rect(title_rect(o))
-}
-
-// Where the Config tab's add / filter header row begins.
 fn header_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + TAB_H
+    o[1] + widget::TITLE_H
 }
 
-// The square "+" add button (panel header below the tabs, left).
+// The square "+" add button at the header's left.
 pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], header_y(o), HEADER_H, HEADER_H]
+    let h = HEADER_H - 8.0;
+    [o[0] + PAD, header_y(o) + 4.0, h, h]
 }
 
-// The combo area (panel header, filling the rest of the row): the browse-filter
-// label when closed, the filter text field when open.
-pub(crate) fn combo_rect(o: [f32; 2]) -> [f32; 4] {
+// The search field, filling the header row right of the "+".
+pub(crate) fn search_rect(o: [f32; 2]) -> [f32; 4] {
+    let p = plus_rect(o);
     [
-        o[0] + HEADER_H + GAP,
-        header_y(o),
-        PANEL_W - HEADER_H - GAP,
-        HEADER_H,
+        p[0] + p[2] + GAP,
+        p[1],
+        PANEL_W - PAD - (p[2] + GAP) - PAD,
+        p[3],
     ]
 }
 
-// The filter text field, centred in the combo area.
-pub(crate) fn filter_input_rect(o: [f32; 2]) -> [f32; 4] {
-    let c = combo_rect(o);
-    [c[0], c[1] + (HEADER_H - ROW_H) * 0.5, c[2], ROW_H]
+// Where the tree body begins: below the header and the status line.
+fn list_top(o: [f32; 2]) -> f32 {
+    header_y(o) + HEADER_H + STATUS_H
 }
 
-// Where the body begins: below the tabs, and below the add / filter header on
-// the Config tab (the Expanded tab has no header, so its body starts higher).
-fn body_y(o: [f32; 2], tab: Tab) -> f32 {
-    match tab {
-        Tab::Config => header_y(o) + HEADER_H,
-        Tab::Expanded => o[1] + widget::TITLE_H + TAB_H,
-    }
-}
-
-// A body row `i` spanning the panel width (list or combo option).
-pub(crate) fn list_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+// Visible row `slot` (0-based within the scroll window), stopping short of the
+// scrollbar.
+pub(crate) fn row_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     [
         o[0],
-        body_y(o, Tab::Config) + i as f32 * ROW_H,
-        PANEL_W,
-        ROW_H,
-    ]
-}
-pub(crate) fn combo_option_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    list_row_rect(o, i)
-}
-
-// An Expanded-tab row `i` (its body starts higher than the Config tab's).
-pub(crate) fn expanded_row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    [
-        o[0],
-        body_y(o, Tab::Expanded) + i as f32 * ROW_H,
-        PANEL_W,
+        list_top(o) + slot as f32 * ROW_H,
+        PANEL_W - SCROLLBAR_W - 2.0,
         ROW_H,
     ]
 }
 
-// The "+" at the right of an addable Expanded row, left of the scrollbar.
-pub(crate) fn add_rect(row: [f32; 4]) -> [f32; 4] {
+// The pick-lock toggle, outermost on an asset row.
+pub(crate) fn lock_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+    let r = row_rect(o, slot);
     [
-        row[0] + row[2] - ADD_SZ - SCROLLBAR_W - 6.0,
-        row[1] + (ROW_H - ADD_SZ) * 0.5,
-        ADD_SZ,
-        ADD_SZ,
+        r[0] + r[2] - PAD - BOX_SIZE,
+        r[1] + (ROW_H - BOX_SIZE) * 0.5,
+        BOX_SIZE,
+        BOX_SIZE,
     ]
 }
 
-// The triple-dot button rect at the right of a name row, left of the scrollbar.
-fn dot_rect(row: [f32; 4]) -> [f32; 4] {
+// The hide toggle, just inside the lock.
+pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+    let r = row_rect(o, slot);
     [
-        row[0] + row[2] - DOT_SZ - SCROLLBAR_W - 4.0,
-        row[1] + (ROW_H - DOT_SZ) * 0.5,
+        lock_rect(o, slot)[0] - GAP - BOX_SIZE,
+        r[1] + (ROW_H - BOX_SIZE) * 0.5,
+        BOX_SIZE,
+        BOX_SIZE,
+    ]
+}
+
+// The right edge the asset type is right-aligned against.
+fn type_right(o: [f32; 2], slot: usize) -> f32 {
+    eye_rect(o, slot)[0] - GAP
+}
+
+// The triple-dot button, taking over the type slot while the row is hovered
+// (the type label hides for that row, so the two never overlap).
+fn dot_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+    let r = row_rect(o, slot);
+    [
+        type_right(o, slot) - DOT_SZ,
+        r[1] + (ROW_H - DOT_SZ) * 0.5,
         DOT_SZ,
         DOT_SZ,
     ]
 }
 
-// The row menu, floating just below a name row at visible index `vr`. A single
-// Delete row (a name-row click opens the edit form, so Edit is redundant here).
-// Returns (background, delete row).
-fn menu_rects(o: [f32; 2], vr: usize) -> ([f32; 4], [f32; 4]) {
+// A picker option row, floating over the tree body.
+pub(crate) fn picker_option_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+    [o[0], list_top(o) + slot as f32 * ROW_H, PANEL_W, ROW_H]
+}
+
+// The row menu, floating just below the name row at visible slot `slot`. A
+// single Delete row (a name-row click opens the edit form, so Edit is redundant
+// here). Returns (background, delete row).
+fn menu_rects(o: [f32; 2], slot: usize) -> ([f32; 4], [f32; 4]) {
     let x = o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0;
-    let top = body_y(o, Tab::Config) + vr as f32 * ROW_H + ROW_H;
+    let top = list_top(o) + slot as f32 * ROW_H + ROW_H;
     let delete = [x, top, MENU_W, MENU_ROW_H];
-    let bg = [x, top, MENU_W, MENU_ROW_H];
-    (bg, delete)
+    (delete, delete)
 }
 
-// A resolved panel click. Option picks carry an index into the hook's current
-// combo option list (the hook maps it to a filter or a type). Row-menu picks
-// carry the entry index the menu belongs to.
+// A resolved panel click. Row picks carry the group and the index within it, so
+// the hook resolves the asset (and its promote entry) through the same model the
+// rows were flattened from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanelAction {
-    // A tab in the strip below the title bar.
-    SwitchTab(Tab),
-    // An Expanded-tab group header: collapse / expand it (carries the group).
-    ToggleGroup(usize),
-    // An Expanded-tab row's "+": copy that asset's entry into the config
-    // (carries the group and the index within it).
-    AddExpanded(usize, usize),
-    // The "+" button: open the type picker (from list) or close it.
+    // Give the search field keyboard focus.
+    FocusSearch,
+    // The "+" button: open the type picker (from the tree) or close it.
     TogglePicker,
-    // The combo button: open the type-filter dropdown (or close it).
-    ToggleFilter,
-    // Choose combo option `i` (the hook reads the open flavour to interpret it).
+    // Choose picker option `i`.
     PickOption(usize),
-    // A name row's body: open that entry's edit form (carries the entry index).
-    OpenEntry(usize),
-    // A name row's triple-dot: open its Delete menu (carries the entry).
-    OpenRowMenu(usize),
+    // A group header: fold / unfold it.
+    ToggleGroup(usize),
+    // An asset row's body: select it and open its editing surface.
+    SelectRow(usize, usize),
+    // An asset row's eye: flip the editor-session hide.
+    ToggleHide(usize, usize),
+    // An asset row's lock: flip the pick lock.
+    ToggleLock(usize, usize),
+    // An asset row's triple-dot: open its Delete menu.
+    OpenRowMenu(usize, usize),
     // The open row menu's Delete row.
     RowDelete,
-    // Dismiss any open overlay (combo / row menu) without picking.
+    // Dismiss any open overlay (picker / row menu) without picking.
     CloseOverlays,
     // A click inside the panel that hits no control (swallowed so it does not
     // fall through to the world; a text-field click resolves to this too, so the
@@ -426,74 +371,56 @@ pub(crate) enum PanelAction {
 
 // The per-frame data the hook hands to `apply` / `hit_test`.
 pub(crate) struct PanelView<'a> {
-    // Which body list is showing. The combo / row-menu fields below describe the
-    // Config tab and are ignored while the Expanded tab is up.
-    pub tab: Tab,
-    // The Expanded tab's rows (group headers plus the assets of open groups).
-    pub expanded_rows: &'a [ExpandedRow],
-    pub expanded_scroll: usize,
-    // Why the Expanded tab has no rows, when a cook of the working entries
-    // failed rather than there being nothing to show.
-    pub expanded_status: Option<&'a str>,
-    pub combo: Combo,
-    // The combo button's text ("All" or the active type), shown when closed.
-    pub filter_label: &'a str,
-    // The floating combo options (already narrowed by the typed field).
-    pub combo_options: &'a [String],
-    // Index of the highlighted option (the active filter), for the Filter flavour.
-    pub combo_selected: Option<usize>,
-    pub combo_scroll: usize,
-    // The grouped browse rows (type sub-headers + indented names).
-    pub list_rows: &'a [ListRow],
-    pub list_scroll: usize,
-    // The entry index whose Delete menu is open, if any.
-    pub row_menu: Option<usize>,
-    // The entry whose edit form is open, if any: its name row stays highlighted.
-    pub selected: Option<usize>,
+    // The flattened tree (group headers plus the assets of unfolded groups).
+    pub rows: &'a [TreeRow],
+    pub scroll: usize,
+    // Whether the search field holds keyboard focus.
+    pub search_focus: bool,
+    // The floating type-picker options, already narrowed by the search field;
+    // `None` while the picker is closed.
+    pub picker_options: Option<&'a [String]>,
+    pub picker_scroll: usize,
+    // The viewport selection the rows mirror, and the session hide / lock sets.
+    pub selection: &'a Selection,
+    pub hidden: &'a BTreeSet<String>,
+    pub locked: &'a BTreeSet<String>,
+    // The name whose Delete menu is open, if any.
+    pub row_menu: Option<&'a str>,
+    // Total assets across every group, for the status line.
+    pub total: usize,
+    // Why the tree is empty, when a cook of the working entries failed rather
+    // than there being nothing to show.
+    pub status: Option<&'a str>,
     pub mouse: [f32; 2],
 }
 
-// The visible row (0..MAX_ROWS) currently showing entry `entry`, if any.
-fn visible_row_of(view: &PanelView, entry: usize) -> Option<usize> {
-    let scroll = view.list_scroll.min(view.list_rows.len().saturating_sub(1));
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
-        if idx >= view.list_rows.len() {
-            break;
-        }
-        if view.list_rows[idx].entry == Some(entry) {
-            return Some(r);
-        }
+impl PanelView<'_> {
+    fn picker_open(&self) -> bool {
+        self.picker_options.is_some()
     }
-    None
+
+    // The visible slot (0..ROW_POOL) currently showing the asset called `name`.
+    fn visible_slot_of(&self, name: &str) -> Option<usize> {
+        (0..ROW_POOL).find(|slot| {
+            matches!(
+                self.rows.get(self.scroll + slot),
+                Some(TreeRow::Asset { name: n, .. }) if n == name
+            )
+        })
+    }
 }
 
 // Resolve a click against the open panel at origin `o`. `None` means the click
 // missed the panel entirely (the caller lets it fall through). Text-field clicks
-// resolve to `Consume` (swallowed here; the engine's text-input system focuses
-// the field from the same input). Title-bar presses never reach this: the hook
-// intercepts them first to start a drag.
+// resolve to `FocusSearch` / `Consume` (swallowed here; the engine's text-input
+// system focuses the field from the same input). Title-bar presses never reach
+// this: the hook intercepts them first to start a drag.
 pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
-    // The tab strip is always live, whichever body is up. Checked before the
-    // Config tab's modal overlays so a stray combo can never trap the tabs.
-    if point_in(mx, my, tab_strip_rect(o)) {
-        for (i, tab) in Tab::ALL.iter().enumerate() {
-            if point_in(mx, my, tab_rect(o, i)) {
-                return Some(PanelAction::SwitchTab(*tab));
-            }
-        }
-        return Some(PanelAction::Consume);
-    }
-
-    if view.tab == Tab::Expanded {
-        return hit_test_expanded(view, mx, my, o);
-    }
-
-    // An open row menu is modal over the panel: its rows pick, anything else
-    // dismisses it.
-    if let Some(entry) = view.row_menu {
-        if let Some(vr) = visible_row_of(view, entry) {
-            let (_, delete) = menu_rects(o, vr);
+    // An open row menu is modal over the panel: its Delete row picks, anything
+    // else dismisses it.
+    if let Some(name) = view.row_menu {
+        if let Some(slot) = view.visible_slot_of(name) {
+            let (_, delete) = menu_rects(o, slot);
             if point_in(mx, my, delete) {
                 return Some(PanelAction::RowDelete);
             }
@@ -501,94 +428,64 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
         return Some(PanelAction::CloseOverlays);
     }
 
-    // An open combo captures the header field + its floating options.
-    if view.combo != Combo::Closed {
+    // An open picker captures the header field + its floating options.
+    if let Some(options) = view.picker_options {
         if point_in(mx, my, plus_rect(o)) {
             return Some(PanelAction::TogglePicker);
         }
-        if point_in(mx, my, combo_rect(o)) {
+        if point_in(mx, my, search_rect(o)) {
             return Some(PanelAction::Consume);
         }
-        let scroll = view
-            .combo_scroll
-            .min(view.combo_options.len().saturating_sub(1));
-        for r in 0..MAX_ROWS {
-            let idx = scroll + r;
-            if idx >= view.combo_options.len() {
+        let scroll = view.picker_scroll.min(options.len().saturating_sub(1));
+        for slot in 0..ROW_POOL {
+            let idx = scroll + slot;
+            if idx >= options.len() {
                 break;
             }
-            if point_in(mx, my, combo_option_rect(o, r)) {
+            if point_in(mx, my, picker_option_rect(o, slot)) {
                 return Some(PanelAction::PickOption(idx));
             }
         }
         return Some(PanelAction::CloseOverlays);
     }
 
-    // Combo closed: clicks outside the panel fall through (the hook's caller
+    // Picker closed: clicks outside the panel fall through (the hook's caller
     // decides who else wants them).
-    if !point_in(mx, my, panel_rect(o, Tab::Config)) {
+    if !point_in(mx, my, panel_rect(o)) {
         return None;
     }
     if point_in(mx, my, plus_rect(o)) {
         return Some(PanelAction::TogglePicker);
     }
-    if point_in(mx, my, combo_rect(o)) {
-        return Some(PanelAction::ToggleFilter);
+    if point_in(mx, my, search_rect(o)) {
+        return Some(PanelAction::FocusSearch);
     }
 
-    // The browse list: a name row's triple-dot opens its menu; the rest of the
-    // row opens that entry's edit form.
-    let scroll = view.list_scroll.min(view.list_rows.len().saturating_sub(1));
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
-        if idx >= view.list_rows.len() {
-            break;
-        }
-        let Some(entry) = view.list_rows[idx].entry else {
+    for slot in 0..ROW_POOL {
+        if !point_in(mx, my, row_rect(o, slot)) {
             continue;
+        }
+        let Some(row) = view.rows.get(view.scroll + slot) else {
+            return Some(PanelAction::Consume);
         };
-        let rect = list_row_rect(o, r);
-        if point_in(mx, my, rect) {
-            if point_in(mx, my, dot_rect(rect)) {
-                return Some(PanelAction::OpenRowMenu(entry));
-            }
-            return Some(PanelAction::OpenEntry(entry));
-        }
-    }
-    Some(PanelAction::Consume)
-}
-
-// Resolve a click on the Expanded tab's body: a group header collapses or
-// expands it, an addable row's "+" copies that asset into the config, and the
-// rest of a row is inert (a generated asset has nothing to edit until it is
-// copied, and an already-copied one is edited from the Config tab).
-fn hit_test_expanded(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
-    if !point_in(mx, my, panel_rect(o, Tab::Expanded)) {
-        return None;
-    }
-    let scroll = view
-        .expanded_scroll
-        .min(view.expanded_rows.len().saturating_sub(1));
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
-        if idx >= view.expanded_rows.len() {
-            break;
-        }
-        let rect = expanded_row_rect(o, r);
-        if !point_in(mx, my, rect) {
-            continue;
-        }
-        return Some(match &view.expanded_rows[idx] {
-            ExpandedRow::Header { group, .. } => PanelAction::ToggleGroup(*group),
-            ExpandedRow::Asset {
+        return Some(match row {
+            TreeRow::Header { group, .. } => PanelAction::ToggleGroup(*group),
+            TreeRow::Asset {
                 group,
                 index,
-                addable,
+                editable,
                 ..
-            } if *addable && point_in(mx, my, add_rect(rect)) => {
-                PanelAction::AddExpanded(*group, *index)
+            } => {
+                if point_in(mx, my, eye_rect(o, slot)) {
+                    PanelAction::ToggleHide(*group, *index)
+                } else if point_in(mx, my, lock_rect(o, slot)) {
+                    PanelAction::ToggleLock(*group, *index)
+                } else if *editable && point_in(mx, my, dot_rect(o, slot)) {
+                    PanelAction::OpenRowMenu(*group, *index)
+                } else {
+                    PanelAction::SelectRow(*group, *index)
+                }
             }
-            ExpandedRow::Asset { .. } => PanelAction::Consume,
         });
     }
     Some(PanelAction::Consume)
@@ -605,20 +502,15 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    widget::place_panel(world, PANEL_BG, panel_rect(o, view.tab));
-    widget::place_heading(world, TITLE_LABEL, title_rect(o), "Assets");
-    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
-    layout_tabs(world, view, o);
-
-    if view.tab == Tab::Expanded {
-        layout_expanded(world, view, o);
-        return;
-    }
+    widget::place_panel(world, PANEL_BG, panel_rect(o));
+    let title = title_rect(o);
+    widget::place_heading(world, TITLE_LABEL, title, "Assets");
+    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
     // The "+" add button. While the type picker is open it becomes a gray "X"
-    // that returns to the browse list (the previous focus).
-    let (glyph, tint) = if view.combo == Combo::Picker {
+    // that returns to the tree (the previous focus).
+    let (glyph, tint) = if view.picker_open() {
         ("X", CANCEL_TINT)
     } else {
         ("+", PLUS_TINT)
@@ -626,226 +518,256 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     place_rounded(
         world,
         PLUS_BG,
-        theme::highlight_rect(plus_rect(o)),
+        plus_rect(o),
         tint,
         theme::CONTROL_RADIUS,
         true,
     );
     place_plus_glyph(world, plus_rect(o), glyph);
+    // The field narrows the picker's options while it is open (and asserts focus
+    // then, since the picker is a typed autocomplete), else it filters the tree.
+    let focused = view.search_focus || view.picker_open();
+    widget::show_field(world, SEARCH_INPUT, search_rect(o), focused);
+    layout_status(world, view, o);
 
-    // The combo area: the browse label when closed, the filter field when open.
-    if view.combo == Combo::Closed {
-        let td = combo_rect(o);
-        place_rounded(
-            world,
-            TYPEDROP_BG,
-            theme::highlight_rect(td),
-            TYPEDROP_TINT,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        place_left_label(
-            world,
-            TYPEDROP_LABEL,
-            [td[0] + PAD, td[1] + HEADER_H * 0.5 - theme::TEXT_HALF],
-            view.filter_label,
-            LABEL,
-            true,
-        );
-        layout_list(world, view, o);
-    } else {
-        widget::show_field(world, FILTER_INPUT, filter_input_rect(o), true);
-        layout_combo(world, view, o);
+    match view.picker_options {
+        Some(options) => layout_picker(world, view, options, o),
+        None => layout_tree(world, view, o),
     }
 }
 
-// The tab strip: each tab is a rounded chip inset in its strip cell; the active
-// one is lit, the others recede to the panel surface.
-fn layout_tabs(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    for (i, tab) in Tab::ALL.iter().enumerate() {
-        let rect = tab_rect(o, i);
-        let active = *tab == view.tab;
-        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        let tint = match (active, hovered) {
-            (true, _) => TAB_TINT_ACTIVE,
-            (false, true) => TAB_TINT_HOVER,
-            (false, false) => TAB_TINT,
-        };
-        let chip = [
-            rect[0] + TAB_INSET,
-            rect[1] + TAB_INSET,
-            rect[2] - 2.0 * TAB_INSET,
-            rect[3] - 2.0 * TAB_INSET,
-        ];
-        place_rounded(world, tab_bg(i), chip, tint, theme::CONTROL_RADIUS, true);
-        if let Some(l) = widget::label_mut(world, tab_label(i)) {
-            l.x = rect[0] + rect[2] * 0.5;
-            l.y = rect[1] + TAB_H * 0.5 - theme::TEXT_HALF;
-            l.align = TextAlign::Center;
-            l.color = if active { LABEL_WHITE } else { LABEL_DIM };
-            l.visible = true;
-            l.content = tab.label().to_string();
+// The status line: the asset count, or a cook failure in its place.
+fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
+    if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
+        l.x = o[0] + PAD;
+        l.y = header_y(o) + HEADER_H;
+        l.align = TextAlign::Left;
+        l.visible = true;
+        match view.status {
+            Some(e) => {
+                l.color = ERROR_LABEL;
+                l.content = e.to_string();
+            }
+            None => {
+                l.color = LABEL_DIM;
+                l.content = format!("Assets ({})", view.total);
+            }
         }
     }
 }
 
-// The Expanded body: one row per group header, plus the assets of each open
-// group. An asset already in the config is dimmed (its own line wins, so there
-// is nothing to add); an addable one carries a "+".
-fn layout_expanded(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    let total = view.expanded_rows.len();
+fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
+    if view.rows.is_empty() {
+        // A world that does not cook has no tree to show; the status line
+        // already says which, so this only covers the genuinely empty world.
+        if view.status.is_none() {
+            place_left_label(
+                world,
+                EMPTY_LABEL,
+                [o[0] + PAD, list_top(o) + PAD],
+                "No matching assets",
+                LABEL_DIM,
+                true,
+            );
+        }
+        return;
+    }
+    let total = view.rows.len();
+    let scroll = view.scroll.min(total.saturating_sub(1));
+    let mut menu_slot = None;
+    for slot in 0..ROW_POOL {
+        let Some(row) = view.rows.get(scroll + slot) else {
+            break;
+        };
+        let r = row_rect(o, slot);
+        let hovered = point_in(view.mouse[0], view.mouse[1], r);
+        match row {
+            TreeRow::Header {
+                label, count, open, ..
+            } => layout_header_row(world, slot, r, label, *count, *open, hovered),
+            TreeRow::Asset {
+                name,
+                asset_type,
+                badge,
+                editable,
+                ..
+            } => {
+                if view.row_menu == Some(name.as_str()) {
+                    menu_slot = Some(slot);
+                }
+                let asset = AssetRow {
+                    name,
+                    asset_type,
+                    badge,
+                    hovered,
+                };
+                layout_asset_row(world, view, o, slot, &asset);
+                // The triple-dot follows the row whose menu is open, else the
+                // hovered row; only an editable asset offers one at all.
+                if *editable && (view.row_menu == Some(name.as_str()) || hovered) {
+                    let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, slot));
+                    let show_box = view.row_menu == Some(name.as_str()) || over_dots;
+                    place_dot(world, o, slot, show_box);
+                    // The dots take over the type slot, so that row's type hides.
+                    widget::set_label_visible(world, type_label(slot), false);
+                }
+            }
+        }
+    }
+    if let Some(slot) = menu_slot {
+        layout_row_menu(world, view, o, slot);
+    }
+    layout_scrollbar(world, total, scroll, o);
+}
+
+fn layout_header_row(
+    world: &mut World,
+    slot: usize,
+    r: [f32; 4],
+    label: &str,
+    count: usize,
+    open: bool,
+    hovered: bool,
+) {
+    let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
+    place_rounded(
+        world,
+        row_bg(slot),
+        theme::highlight_rect(r),
+        tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    let marker = if open { "-" } else { "+" };
+    place_left_label(
+        world,
+        name_label(slot),
+        [r[0] + PAD, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
+        &format!("{marker} {label} ({count})"),
+        theme::HEADING,
+        true,
+    );
+}
+
+// One asset row's drawable payload, borrowed out of its `TreeRow::Asset`.
+struct AssetRow<'a> {
+    name: &'a str,
+    asset_type: &'a str,
+    badge: &'a Badge,
+    hovered: bool,
+}
+
+fn layout_asset_row(
+    world: &mut World,
+    view: &PanelView,
+    o: [f32; 2],
+    slot: usize,
+    asset: &AssetRow,
+) {
+    let AssetRow {
+        name,
+        asset_type,
+        badge,
+        hovered,
+    } = *asset;
+    let r = row_rect(o, slot);
+    let selected = view.selection.contains(name);
+    let tint = if hovered {
+        ROW_TINT_HOVER
+    } else if selected {
+        ROW_TINT_SELECTED
+    } else {
+        ROW_TINT
+    };
+    place_rounded(
+        world,
+        row_bg(slot),
+        theme::highlight_rect(r),
+        tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    let hidden = view.hidden.contains(name);
+    place_left_label(
+        world,
+        name_label(slot),
+        [r[0] + ASSET_INDENT, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
+        &widget::clip_text(name, MAX_NAME_CHARS),
+        // The hidden state dims the name too, so a collapsed object reads as
+        // absent at a glance.
+        if hidden { LABEL_DIM } else { LABEL },
+        true,
+    );
+    if let Some(l) = widget::label_mut(world, type_label(slot)) {
+        l.x = type_right(o, slot);
+        l.y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
+        l.align = TextAlign::Right;
+        l.color = badge_color(*badge);
+        l.visible = true;
+        l.content = widget::clip_text(asset_type, MAX_TYPE_CHARS);
+    }
+    let eye = if hidden { EYE_TINT_OFF } else { EYE_TINT_ON };
+    place_rounded(world, eye_box(slot), eye_rect(o, slot), eye, 4.0, true);
+    let lock = if view.locked.contains(name) {
+        LOCK_TINT_ON
+    } else {
+        LOCK_TINT_OFF
+    };
+    place_rounded(world, lock_box(slot), lock_rect(o, slot), lock, 4.0, true);
+}
+
+// The floating type-picker list, over the tree body.
+fn layout_picker(world: &mut World, view: &PanelView, options: &[String], o: [f32; 2]) {
+    let total = options.len();
+    let scroll = view.picker_scroll.min(total.saturating_sub(1));
+    let shown = total.saturating_sub(scroll).clamp(1, ROW_POOL);
+    let backing = [o[0], list_top(o), PANEL_W, shown as f32 * ROW_H + PAD];
+    place_sprite(world, PICKER_BG, backing, PICKER_BG_TINT, true);
     if total == 0 {
-        // A world that does not cook has no expansion to show; say which it is.
-        let msg = view
-            .expanded_status
-            .unwrap_or("The build adds nothing to this world");
         place_left_label(
             world,
             EMPTY_LABEL,
-            [o[0] + PAD, body_y(o, Tab::Expanded) + PAD],
-            msg,
+            [o[0] + PAD, list_top(o) + PAD],
+            "No matching types",
             LABEL_DIM,
             true,
         );
         return;
     }
-    let scroll = view.expanded_scroll.min(total.saturating_sub(1));
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
+    for slot in 0..ROW_POOL {
+        let idx = scroll + slot;
         if idx >= total {
             break;
         }
-        let rect = expanded_row_rect(o, r);
+        let rect = picker_option_rect(o, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        match &view.expanded_rows[idx] {
-            ExpandedRow::Header {
-                origin,
-                count,
-                in_config,
-                open,
-                ..
-            } => {
-                let tint = if hovered {
-                    ROW_TINT_HOVER
-                } else {
-                    GROUP_ROW_TINT
-                };
-                place_rounded(
-                    world,
-                    list_row_bg(r),
-                    theme::highlight_rect(rect),
-                    tint,
-                    theme::CONTROL_RADIUS,
-                    true,
-                );
-                let caption = group_caption(origin, *count, *in_config, *open);
-                place_left_label(
-                    world,
-                    list_row_label(r),
-                    [rect[0] + PAD, rect[1] + ROW_LABEL_TOP],
-                    &caption,
-                    asset_list::HEADER_LABEL,
-                    true,
-                );
-            }
-            ExpandedRow::Asset {
-                name,
-                asset_type,
-                in_config,
-                addable,
-                ..
-            } => {
-                let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-                place_rounded(
-                    world,
-                    list_row_bg(r),
-                    theme::highlight_rect(rect),
-                    tint,
-                    theme::CONTROL_RADIUS,
-                    true,
-                );
-                let color = if *in_config { LABEL_DIM } else { LABEL };
-                place_left_label(
-                    world,
-                    list_row_label(r),
-                    [rect[0] + PAD + asset_list::INDENT, rect[1] + ROW_LABEL_TOP],
-                    &asset_caption(name, asset_type),
-                    color,
-                    true,
-                );
-                if *addable {
-                    place_add_button(world, r, rect, view.mouse);
-                }
-            }
-        }
+        let tint = if hovered {
+            OPTION_TINT_HOVER
+        } else {
+            OPTION_TINT
+        };
+        place_rounded(
+            world,
+            picker_row_bg(slot),
+            theme::highlight_rect(rect),
+            tint,
+            theme::CONTROL_RADIUS,
+            true,
+        );
+        place_left_label(
+            world,
+            picker_row_label(slot),
+            [rect[0] + PAD, rect[1] + ROW_H * 0.5 - theme::TEXT_HALF],
+            &options[idx],
+            LABEL,
+            true,
+        );
     }
-    asset_list::layout_scrollbar(
-        world,
-        LIST_TRACK,
-        LIST_THUMB,
-        total,
-        scroll,
-        o[0] + PANEL_W,
-        body_y(o, Tab::Expanded),
-    );
-}
-
-// A group header's caption: the collapse marker, what produced the group, and
-// how many assets it holds (with the count already in the config, when any).
-fn group_caption(origin: &str, count: usize, in_config: usize, open: bool) -> String {
-    let marker = if open { "-" } else { "+" };
-    let tail = if in_config > 0 {
-        format!("({}, {} in config)", count, in_config)
-    } else {
-        format!("({})", count)
-    };
-    // Clip the origin rather than the counts, which are the part worth keeping.
-    let budget = HEADER_ROW_CHARS.saturating_sub(tail.chars().count() + 4);
-    format!(
-        "{} {}  {}",
-        marker,
-        widget::clip_text(origin, budget.max(MIN_NAME_CHARS)),
-        tail
-    )
-}
-
-// An asset row's caption: its name and type. Generated names are long (an import
-// prefixes every one with its own name), so the name is clipped to what the type
-// leaves; unclipped it would run under the "+" and off the panel.
-fn asset_caption(name: &str, asset_type: &str) -> String {
-    let budget = ASSET_ROW_CHARS.saturating_sub(asset_type.chars().count() + 3);
-    format!(
-        "{} ({})",
-        widget::clip_text(name, budget.max(MIN_NAME_CHARS)),
-        asset_type
-    )
-}
-
-// The "+" that copies one Expanded row's asset into the config.
-fn place_add_button(world: &mut World, r: usize, row: [f32; 4], mouse: [f32; 2]) {
-    let rect = add_rect(row);
-    let hovered = point_in(mouse[0], mouse[1], rect);
-    let tint = if hovered { ADD_TINT_HOVER } else { ADD_TINT };
-    place_rounded(
-        world,
-        add_row_bg(r),
-        rect,
-        tint,
-        theme::CONTROL_RADIUS,
-        true,
-    );
-    if let Some(l) = widget::label_mut(world, add_row_label(r)) {
-        l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = LABEL_WHITE;
-        l.visible = true;
-        l.content = "+".to_string();
-    }
+    layout_scrollbar(world, total, scroll, o);
 }
 
 // The "+" / "X" glyph, centered in the add button and drawn a step larger than
-// the body text (the box itself stays a HEADER_H square).
+// the body text.
 const PLUS_SCALE: f32 = 1.15;
 fn place_plus_glyph(world: &mut World, rect: [f32; 4], glyph: &str) {
     if let Some(l) = widget::label_mut(world, PLUS_LABEL) {
@@ -859,153 +781,11 @@ fn place_plus_glyph(world: &mut World, rect: [f32; 4], glyph: &str) {
     }
 }
 
-fn layout_list(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    if view.list_rows.is_empty() {
-        place_left_label(
-            world,
-            EMPTY_LABEL,
-            [o[0] + PAD, body_y(o, Tab::Config) + PAD],
-            "No matching assets",
-            LABEL_DIM,
-            true,
-        );
-        return;
-    }
-    let total = view.list_rows.len();
-    let scroll = view.list_scroll.min(total.saturating_sub(1));
-    let mut hovered_row = None;
-    let mut menu_row = None;
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
-        if idx >= total {
-            break;
-        }
-        let row = &view.list_rows[idx];
-        let rect = list_row_rect(o, r);
-        if row.is_header {
-            asset_list::place_row(
-                world,
-                list_row_bg(r),
-                list_row_label(r),
-                row,
-                rect,
-                HEADER_ROW_TINT,
-            );
-            continue;
-        }
-        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        if hovered {
-            hovered_row = Some(r);
-        }
-        if row.entry.is_some() && view.row_menu == row.entry {
-            menu_row = Some(r);
-        }
-        // The row whose edit form is open stays highlighted (hover still wins so
-        // the cursor keeps its feedback).
-        let selected = row.entry.is_some() && view.selected == row.entry;
-        let tint = if hovered {
-            ROW_TINT_HOVER
-        } else if selected {
-            ROW_TINT_SELECTED
-        } else {
-            ROW_TINT
-        };
-        asset_list::place_row(world, list_row_bg(r), list_row_label(r), row, rect, tint);
-    }
-    // The triple-dot follows the row whose menu is open, else the hovered row.
-    // Its background box shows only when the dots themselves are hovered, or when
-    // the menu is open on that row (a "clicked" state); a plain row-hover shows
-    // the bare white dots.
-    if let Some(r) = menu_row.or(hovered_row) {
-        let rect = list_row_rect(o, r);
-        let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(rect));
-        let show_box = menu_row == Some(r) || over_dots;
-        place_dot(world, rect, show_box);
-    }
-    if let Some(r) = menu_row {
-        layout_row_menu(world, view, o, r);
-    }
-    asset_list::layout_scrollbar(
-        world,
-        LIST_TRACK,
-        LIST_THUMB,
-        total,
-        scroll,
-        o[0] + PANEL_W,
-        body_y(o, Tab::Config),
-    );
-}
-
-fn layout_combo(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    let total = view.combo_options.len();
-    let scroll = view.combo_scroll.min(total.saturating_sub(1));
-    let shown = total.saturating_sub(scroll).clamp(1, MAX_ROWS);
-    let backing = [
-        o[0],
-        body_y(o, Tab::Config),
-        PANEL_W,
-        shown as f32 * ROW_H + PAD,
-    ];
-    place_sprite(world, COMBO_BG, backing, COMBO_BG_TINT, true);
-    if total == 0 {
-        place_left_label(
-            world,
-            EMPTY_LABEL,
-            [o[0] + PAD, body_y(o, Tab::Config) + PAD],
-            "No matching types",
-            LABEL_DIM,
-            true,
-        );
-        return;
-    }
-    for r in 0..MAX_ROWS {
-        let idx = scroll + r;
-        if idx >= total {
-            break;
-        }
-        let rect = combo_option_rect(o, r);
-        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        let tint = if hovered {
-            OPTION_TINT_HOVER
-        } else if view.combo_selected == Some(idx) {
-            OPTION_TINT_SELECTED
-        } else {
-            OPTION_TINT
-        };
-        place_rounded(
-            world,
-            combo_row_bg(r),
-            theme::highlight_rect(rect),
-            tint,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        set_row_label(
-            world,
-            combo_row_label(r),
-            [rect[0] + PAD, rect[1] + ROW_LABEL_TOP],
-            &view.combo_options[idx],
-            LABEL,
-            true,
-        );
-    }
-    asset_list::layout_scrollbar(
-        world,
-        LIST_TRACK,
-        LIST_THUMB,
-        total,
-        scroll,
-        o[0] + PANEL_W,
-        body_y(o, Tab::Config),
-    );
-}
-
 // The three stacked white dots of the triple-dot button. The background box is
 // shown only when `show_box` (the dots are hovered, or the menu is open); a plain
-// row-hover shows the bare dots. `DOT_BG` is left hidden (blanked by `hide_all`)
-// when `show_box` is false.
-fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
-    let d = dot_rect(row);
+// row-hover shows the bare dots.
+fn place_dot(world: &mut World, o: [f32; 2], slot: usize, show_box: bool) {
+    let d = dot_rect(o, slot);
     if show_box {
         place_rounded(world, DOT_BG, d, DOT_BG_TINT, theme::CONTROL_RADIUS, true);
     }
@@ -1018,8 +798,8 @@ fn place_dot(world: &mut World, row: [f32; 4], show_box: bool) {
     }
 }
 
-fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) {
-    let (bg, delete) = menu_rects(o, vr);
+fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], slot: usize) {
+    let (bg, delete) = menu_rects(o, slot);
     place_rounded(
         world,
         MENU_BG,
@@ -1054,20 +834,51 @@ fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], vr: usize) 
     );
 }
 
+// A simple non-interactive scrollbar sizing the visible window against `total`,
+// down the panel's right edge. Shown only when the body overflows.
+fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
+    if total <= ROW_POOL {
+        return;
+    }
+    let x = o[0] + PANEL_W - SCROLLBAR_W;
+    let top = list_top(o);
+    let h = ROW_POOL as f32 * ROW_H;
+    place_rounded(
+        world,
+        LIST_TRACK,
+        [x, top, SCROLLBAR_W, h],
+        TRACK_TINT,
+        SCROLLBAR_W * 0.5,
+        true,
+    );
+    let thumb_h = (h * ROW_POOL as f32 / total as f32).max(18.0);
+    let max_scroll = (total - ROW_POOL) as f32;
+    let off = (h - thumb_h) * (scroll.min(total - ROW_POOL) as f32 / max_scroll);
+    place_rounded(
+        world,
+        LIST_THUMB,
+        [x, top + off, SCROLLBAR_W, thumb_h],
+        THUMB_TINT,
+        SCROLLBAR_W * 0.5,
+        true,
+    );
+}
+
 // Every panel sprite id, so the closed / hidden pass can blank the whole panel
 // (and `inject.rs` can create exactly this set). THE ORDER OF THIS VEC IS THE DRAW
 // ORDER: `inject.rs` adds the panel's Sprites in this sequence, and the overlay
 // draws components in insertion (component-column) order -- NOT by asset id -- so
 // later entries paint on top. Bottom-to-top: panel background, header chrome, the
-// combo backing (under its option rows), the row families, then the floating
+// row families, the picker backing (under its option rows), then the floating
 // overlays (scrollbar, triple-dot, row menu), which must sit ABOVE the row
 // backgrounds so a hovered row's fill cannot cover them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG, TYPEDROP_BG];
-    ids.extend((0..Tab::ALL.len()).map(tab_bg));
-    ids.push(COMBO_BG);
-    ids.extend((0..MAX_ROWS).map(list_row_bg));
-    ids.extend((0..MAX_ROWS).map(combo_row_bg));
+    let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG];
+    ids.extend((0..ROW_POOL).map(row_bg));
+    ids.extend((0..ROW_POOL).map(eye_box));
+    ids.extend((0..ROW_POOL).map(lock_box));
+    ids.push(PICKER_BG);
+    ids.extend((0..ROW_POOL).map(picker_row_bg));
     ids.extend([
         LIST_TRACK,
         LIST_THUMB,
@@ -1078,37 +889,35 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
         MENU_BG,
         MENU_DELETE_BG,
     ]);
-    // The Expanded rows' "+" buttons sit above their row backgrounds.
-    ids.extend((0..MAX_ROWS).map(add_row_bg));
     ids
 }
+
 // Same draw-order contract as `all_sprite_ids` (all TextLabels draw after all
 // Sprites, so any label sits above the sprite chrome; among labels this Vec's
-// order decides who wins). The row-menu captions come last so they draw above the
+// order decides who wins). The row-menu caption comes last so it draws above the
 // row labels the menu floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![
         TITLE_LABEL,
         CLOSE_LABEL,
         PLUS_LABEL,
-        TYPEDROP_LABEL,
+        STATUS_LABEL,
         EMPTY_LABEL,
     ];
-    ids.extend((0..Tab::ALL.len()).map(tab_label));
-    ids.extend((0..MAX_ROWS).map(list_row_label));
-    ids.extend((0..MAX_ROWS).map(combo_row_label));
-    ids.extend((0..MAX_ROWS).map(add_row_label));
-    ids.extend([MENU_DELETE_LABEL]);
+    ids.extend((0..ROW_POOL).map(name_label));
+    ids.extend((0..ROW_POOL).map(type_label));
+    ids.extend((0..ROW_POOL).map(picker_row_label));
+    ids.push(MENU_DELETE_LABEL);
     ids
 }
 
-// Every typed field the panel injects: just the combo's filter field (the form's
-// inputs belong to `form_panel.rs`).
+// Every typed field the panel injects: just the search field (the form's inputs
+// belong to `form_panel.rs`).
 pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![FILTER_INPUT]
+    vec![SEARCH_INPUT]
 }
 
-// Hide every panel element, including the typed fields (and blur them so a hidden
+// Hide every panel element, including the typed field (and blur it so a hidden
 // field cannot keep keyboard focus).
 pub(crate) fn hide_all(world: &mut World) {
     for id in all_sprite_ids() {
@@ -1121,12 +930,6 @@ pub(crate) fn hide_all(world: &mut World) {
         widget::hide_field(world, id);
     }
 }
-
-// Element mutation helpers
-//
-// The reserved-id lookups (`widget::sprite_mut` / `label_mut` / `input_mut`) and
-// `place_sprite` / visibility setters live in `widget.rs`, shared with `hud.rs`.
-// These wrap them with the panel's label / field conventions.
 
 fn place_left_label(
     world: &mut World,
@@ -1146,21 +949,10 @@ fn place_left_label(
     }
 }
 
-fn set_row_label(
-    world: &mut World,
-    id: AssetId,
-    pos: [f32; 2],
-    content: &str,
-    color: [f32; 3],
-    visible: bool,
-) {
-    place_left_label(world, id, pos, content, color, visible);
-}
-
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
-pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], tab: Tab) -> bool {
-    let p = panel_rect(o, tab);
-    mx >= p[0] && mx < p[0] + p[2] && my >= body_y(o, tab) && my < p[1] + p[3]
+pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2]) -> bool {
+    let p = panel_rect(o);
+    mx >= p[0] && mx < p[0] + p[2] && my >= list_top(o) && my < p[1] + p[3]
 }
 
 #[cfg(test)]
@@ -1188,86 +980,73 @@ mod tests {
         default_origin(1280.0)
     }
 
-    fn rows(items: &[(bool, &str, Option<usize>)]) -> Vec<ListRow> {
-        items
-            .iter()
-            .map(|(h, t, e)| ListRow {
-                is_header: *h,
-                text: t.to_string(),
-                entry: *e,
-            })
-            .collect()
-    }
-
-    #[derive(Default)]
-    struct Fixture {
-        combo_options: Vec<String>,
-        list_rows: Vec<ListRow>,
-        expanded_rows: Vec<ExpandedRow>,
-    }
-
-    fn view<'a>(
-        fx: &'a Fixture,
-        combo: Combo,
-        row_menu: Option<usize>,
-        mouse: [f32; 2],
-    ) -> PanelView<'a> {
-        PanelView {
-            tab: Tab::Config,
-            expanded_rows: &fx.expanded_rows,
-            expanded_scroll: 0,
-            expanded_status: None,
-            combo,
-            filter_label: ALL_LABEL,
-            combo_options: &fx.combo_options,
-            combo_selected: None,
-            combo_scroll: 0,
-            list_rows: &fx.list_rows,
-            list_scroll: 0,
-            row_menu,
-            selected: None,
-            mouse,
-        }
-    }
-
-    // A view showing the Expanded tab's rows.
-    fn expanded_view<'a>(fx: &'a Fixture, mouse: [f32; 2]) -> PanelView<'a> {
-        PanelView {
-            tab: Tab::Expanded,
-            ..view(fx, Combo::Closed, None, mouse)
-        }
-    }
-
-    fn header(
-        group: usize,
-        origin: &str,
-        count: usize,
-        in_config: usize,
-        open: bool,
-    ) -> ExpandedRow {
-        ExpandedRow::Header {
+    fn header(group: usize, label: &str, count: usize, open: bool) -> TreeRow {
+        TreeRow::Header {
             group,
-            origin: origin.to_string(),
+            label: label.to_string(),
             count,
-            in_config,
             open,
         }
     }
 
-    fn expanded_asset(
-        group: usize,
-        index: usize,
-        name: &str,
-        in_config: bool,
-        addable: bool,
-    ) -> ExpandedRow {
-        ExpandedRow::Asset {
+    fn asset(group: usize, index: usize, name: &str, editable: bool) -> TreeRow {
+        TreeRow::Asset {
             group,
             index,
             name: name.to_string(),
             asset_type: "Material".to_string(),
-            in_config,
-            addable,
+            badge: Badge::Imported,
+            editable,
+        }
+    }
+
+    struct Fixture {
+        rows: Vec<TreeRow>,
+        picker_options: Vec<String>,
+        selection: Selection,
+        hidden: BTreeSet<String>,
+        locked: BTreeSet<String>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                rows: vec![
+                    header(0, "World", 2, true),
+                    asset(0, 0, "cam", true),
+                    asset(0, 1, "lamp", true),
+                    header(1, "fox", 1, false),
+                ],
+                picker_options: Vec::new(),
+                selection: Selection::default(),
+                hidden: BTreeSet::new(),
+                locked: BTreeSet::new(),
+            }
+        }
+
+        fn view(&self) -> PanelView<'_> {
+            PanelView {
+                rows: &self.rows,
+                scroll: 0,
+                search_focus: false,
+                picker_options: None,
+                picker_scroll: 0,
+                selection: &self.selection,
+                hidden: &self.hidden,
+                locked: &self.locked,
+                row_menu: None,
+                total: 3,
+                status: None,
+                mouse: [0.0, 0.0],
+            }
+        }
+
+        // A view with the type picker open over the tree.
+        fn picker_view(&self) -> PanelView<'_> {
+            PanelView {
+                picker_options: Some(&self.picker_options),
+                ..self.view()
+            }
         }
     }
 
@@ -1303,113 +1082,95 @@ mod tests {
             .expect("sprite present")
     }
 
-    fn sprite_visible(world: &World, id: AssetId) -> bool {
-        sprite(world, id).visible
+    fn label(world: &World, id: AssetId) -> TextLabel {
+        world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == id)
+            .cloned()
+            .expect("label present")
     }
 
     #[test]
     fn default_origin_sits_below_the_top_bar_right_aligned() {
         let o = test_origin();
-        let p = panel_rect(o, Tab::Config);
+        let p = panel_rect(o);
         assert_eq!(p[0] + p[2], 1280.0, "flush to the window right");
         assert_eq!(p[1], hud::body_top(), "starts below the top-bar buttons");
         // The whole panel follows its origin: dragged elsewhere, every rect moves.
-        let moved = panel_rect([40.0, 60.0], Tab::Config);
+        let moved = panel_rect([40.0, 60.0]);
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!((moved[2], moved[3]), (p[2], p[3]));
+        assert_eq!(size(), [p[2], p[3]], "the drag-clamp footprint matches");
+    }
+
+    // The header stacks under the title bar, the tree under the status line, and
+    // every row control stays inside its row without overlapping its neighbour.
+    #[test]
+    fn geometry_stacks_and_row_controls_stay_inside_the_row() {
+        let o = test_origin();
+        assert_eq!(title_rect(o), [o[0], o[1], PANEL_W, widget::TITLE_H]);
+        let plus = plus_rect(o);
+        let search = search_rect(o);
+        assert!(plus[0] + plus[2] <= search[0], "+ sits left of the search");
         assert_eq!(
-            size(Tab::Config),
-            [p[2], p[3]],
-            "the drag-clamp footprint matches"
+            search[0] + search[2],
+            o[0] + PANEL_W - PAD,
+            "the search field reaches the panel's right pad"
         );
+        assert_eq!(row_rect(o, 0)[1], list_top(o));
+        assert_eq!(row_rect(o, 1)[1], list_top(o) + ROW_H);
+
+        let r = row_rect(o, 0);
+        let (dots, eye, lock) = (dot_rect(o, 0), eye_rect(o, 0), lock_rect(o, 0));
+        assert!(
+            dots[0] + dots[2] <= eye[0] + 0.01,
+            "dots sit left of the eye"
+        );
+        assert!(eye[0] + eye[2] + GAP <= lock[0] + 0.01, "eye left of lock");
+        assert!(
+            lock[0] + lock[2] <= r[0] + r[2],
+            "lock stays inside the row"
+        );
+        assert!(eye[1] >= r[1] && eye[1] + eye[3] <= r[1] + r[3]);
+        // The name never runs under the triple-dot slot.
+        let name_room = dots[0] - (r[0] + ASSET_INDENT);
+        assert!(name_room > 0.0, "the name has room left of the dots");
     }
 
     #[test]
-    fn title_bar_spans_the_panel_top_and_header_sits_below_the_tabs() {
+    fn plus_toggles_the_picker_from_either_body() {
+        let f = Fixture::new();
         let o = test_origin();
-        let title = title_rect(o);
-        assert_eq!(title, [o[0], o[1], PANEL_W, widget::TITLE_H]);
-        // The tab strip spans the width directly under the title bar, split
-        // evenly between the tabs.
-        let strip = tab_strip_rect(o);
-        assert_eq!(strip[1], o[1] + widget::TITLE_H);
-        assert_eq!(strip[2], PANEL_W);
-        assert_eq!(tab_rect(o, 0)[0], o[0]);
-        assert_eq!(tab_rect(o, 1)[0], o[0] + PANEL_W * 0.5);
-        assert_eq!(
-            tab_rect(o, 1)[0] + tab_rect(o, 1)[2],
-            o[0] + PANEL_W,
-            "the tabs fill the strip"
-        );
-
         let plus = plus_rect(o);
         assert_eq!(
-            plus[1],
-            strip[1] + strip[3],
-            "the header row starts below the tab strip"
+            hit_test(&f.view(), plus[0] + 5.0, plus[1] + 5.0, o),
+            Some(PanelAction::TogglePicker)
         );
-        let combo = combo_rect(o);
-        assert!(plus[0] + plus[2] <= combo[0], "+ is left of the combo");
+        // Open, the same button is the "X" that returns to the tree.
         assert_eq!(
-            combo[0] + combo[2],
-            o[0] + PANEL_W,
-            "combo reaches the panel right"
-        );
-        // And the Config body still sits below that header.
-        assert_eq!(list_row_rect(o, 0)[1], plus[1] + plus[3]);
-    }
-
-    #[test]
-    fn plus_toggles_the_picker() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: vec![],
-            ..Default::default()
-        };
-        let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
-        let plus = plus_rect(test_origin());
-        assert_eq!(
-            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, test_origin()),
+            hit_test(&f.picker_view(), plus[0] + 5.0, plus[1] + 5.0, o),
             Some(PanelAction::TogglePicker)
         );
     }
 
-    // The header button renders as a green "+" while browsing and as a gray "X"
-    // (return to the list) while the type picker is open.
+    // The header button renders as a green "+" over the tree and as a gray "X"
+    // (return to the tree) while the type picker is open.
     #[test]
     fn plus_renders_as_an_x_while_picker_is_open() {
-        let fx = Fixture {
-            combo_options: vec!["PointLight".to_string()],
-            list_rows: vec![],
-            ..Default::default()
-        };
-        let glyph = |world: &World| {
-            world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == PLUS_LABEL)
-                .unwrap()
-                .clone()
-        };
+        let mut f = Fixture::new();
+        f.picker_options = vec!["PointLight".to_string()];
         let mut world = injected_world();
         let o = test_origin();
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, None, [0.0, 0.0])),
-            o,
-        );
-        let l = glyph(&world);
+        apply(&mut world, Some(&f.view()), o);
+        let l = label(&world, PLUS_LABEL);
         assert_eq!(l.content, "+");
         assert_eq!(sprite(&world, PLUS_BG).tint, PLUS_TINT);
         assert!(
             l.scale > 1.0,
             "the glyph draws larger than the body text (the box is unchanged)"
         );
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Picker, None, [0.0, 0.0])),
-            o,
-        );
-        assert_eq!(glyph(&world).content, "X");
+        apply(&mut world, Some(&f.picker_view()), o);
+        assert_eq!(label(&world, PLUS_LABEL).content, "X");
         assert_eq!(
             sprite(&world, PLUS_BG).tint,
             CANCEL_TINT,
@@ -1422,349 +1183,363 @@ mod tests {
     // fall-through here just consumes it).
     #[test]
     fn title_bar_renders_heading_and_consumes_clicks() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: vec![],
-            ..Default::default()
-        };
+        let f = Fixture::new();
         let mut world = injected_world();
         let o = test_origin();
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, None, [0.0, 0.0])),
-            o,
-        );
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == TITLE_LABEL)
-            .unwrap();
+        apply(&mut world, Some(&f.view()), o);
+        let title = label(&world, TITLE_LABEL);
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
-        assert!(sprite_visible(&world, PANEL_BG));
+        assert!(sprite(&world, PANEL_BG).visible);
         let t = title_rect(o);
-        let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
         assert_eq!(
-            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o),
+            hit_test(&f.view(), t[0] + 5.0, t[1] + 5.0, o),
             Some(PanelAction::Consume)
         );
     }
 
     #[test]
-    fn combo_button_opens_and_picks_an_option() {
-        let fx = Fixture {
-            combo_options: vec![ALL_LABEL.to_string(), "PointLight".to_string()],
-            list_rows: vec![],
-            ..Default::default()
-        };
-        // Closed: clicking the combo opens the filter dropdown.
+    fn hit_test_resolves_search_headers_rows_and_toggles() {
+        let f = Fixture::new();
         let o = test_origin();
-        let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
-        let c = combo_rect(o);
+        let s = search_rect(o);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
-            Some(PanelAction::ToggleFilter)
+            hit_test(&f.view(), s[0] + 5.0, s[1] + 5.0, o),
+            Some(PanelAction::FocusSearch)
         );
-        // Open: clicking option row 1 picks it.
-        let vo = view(&fx, Combo::Filter, None, [0.0, 0.0]);
-        let r1 = combo_option_rect(o, 1);
+        let r0 = row_rect(o, 0);
         assert_eq!(
-            hit_test(&vo, r1[0] + 5.0, r1[1] + 5.0, o),
-            Some(PanelAction::PickOption(1))
+            hit_test(&f.view(), r0[0] + 5.0, r0[1] + 5.0, o),
+            Some(PanelAction::ToggleGroup(0))
         );
-        // Open: clicking the header field keeps focus (consumed).
+        let r1 = row_rect(o, 1);
         assert_eq!(
-            hit_test(&vo, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&f.view(), r1[0] + 5.0, r1[1] + 5.0, o),
+            Some(PanelAction::SelectRow(0, 0))
+        );
+        let e = eye_rect(o, 1);
+        assert_eq!(
+            hit_test(&f.view(), e[0] + 2.0, e[1] + 2.0, o),
+            Some(PanelAction::ToggleHide(0, 0))
+        );
+        let l = lock_rect(o, 1);
+        assert_eq!(
+            hit_test(&f.view(), l[0] + 2.0, l[1] + 2.0, o),
+            Some(PanelAction::ToggleLock(0, 0))
+        );
+        let d = dot_rect(o, 1);
+        assert_eq!(
+            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
+            Some(PanelAction::OpenRowMenu(0, 0))
+        );
+        // Past the last row the click is swallowed; off the panel it misses.
+        let r9 = row_rect(o, 9);
+        assert_eq!(
+            hit_test(&f.view(), r9[0] + 5.0, r9[1] + 5.0, o),
             Some(PanelAction::Consume)
         );
-        // Open: a click on empty body space closes it.
-        assert_eq!(
-            hit_test(&vo, 640.0, 700.0, o),
-            Some(PanelAction::CloseOverlays)
-        );
+        assert_eq!(hit_test(&f.view(), 5000.0, 5000.0, o), None);
     }
 
+    // A row the build emits unconditionally cannot be promoted, so its dot slot
+    // is inert and the click falls through to a plain select.
     #[test]
-    fn combo_open_plus_returns_to_the_list() {
-        // With the picker open, the header "+" turns into an "X" that toggles
-        // back to the browse list.
-        let fx = Fixture {
-            combo_options: vec!["PointLight".to_string()],
-            list_rows: vec![],
-            ..Default::default()
-        };
+    fn a_non_editable_row_offers_no_delete_menu() {
+        let mut f = Fixture::new();
+        f.rows = vec![
+            header(0, "Other expansions", 1, true),
+            asset(0, 0, "tab", false),
+        ];
         let o = test_origin();
-        let vo = view(&fx, Combo::Filter, None, [0.0, 0.0]);
-        let plus = plus_rect(o);
+        let d = dot_rect(o, 1);
         assert_eq!(
-            hit_test(&vo, plus[0] + 5.0, plus[1] + 5.0, o),
-            Some(PanelAction::TogglePicker)
+            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
+            Some(PanelAction::SelectRow(0, 0))
         );
-    }
-
-    #[test]
-    fn row_menu_dismisses_when_its_entry_is_off_window() {
-        // An open row menu whose entry scrolled out of the visible window has no
-        // hittable Delete row, so any click just closes the overlay.
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: vec![ListRow {
-                is_header: false,
-                text: "only".to_string(),
-                entry: Some(0),
-            }],
-            ..Default::default()
-        };
-        let o = test_origin();
-        let v = view(&fx, Combo::Closed, Some(9), [0.0, 0.0]);
-        assert_eq!(
-            hit_test(&v, 640.0, 700.0, o),
-            Some(PanelAction::CloseOverlays)
-        );
-    }
-
-    #[test]
-    fn combo_shows_an_empty_state_with_no_matching_options() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: vec![],
-            ..Default::default()
-        };
         let mut world = injected_world();
-        let o = test_origin();
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Filter, None, [0.0, 0.0])),
-            o,
-        );
-        let empty = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == EMPTY_LABEL)
-            .unwrap();
-        assert!(empty.visible);
-        assert_eq!(empty.content, "No matching types");
-    }
-
-    #[test]
-    fn combo_marks_the_selected_option() {
-        let fx = Fixture {
-            combo_options: vec!["All".to_string(), "PointLight".to_string()],
-            list_rows: vec![],
-            ..Default::default()
-        };
-        let mut world = injected_world();
-        let o = test_origin();
-        // The active filter is option 1; the mouse rests far from the options so
-        // the selected (not hovered) branch renders it.
         let v = PanelView {
-            combo_selected: Some(1),
-            ..view(&fx, Combo::Filter, None, [0.0, 0.0])
+            mouse: [d[0] + 2.0, d[1] + 2.0],
+            ..f.view()
         };
         apply(&mut world, Some(&v), o);
-        let label = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == combo_row_label(1))
-            .unwrap();
-        assert!(label.visible);
-        assert_eq!(label.content, "PointLight");
-    }
-
-    #[test]
-    fn picker_option_maps_to_a_scrolled_index() {
-        let opts: Vec<String> = add_types().map(str::to_string).collect();
-        let fx = Fixture {
-            combo_options: opts,
-            list_rows: vec![],
-            ..Default::default()
-        };
-        let mut v = view(&fx, Combo::Picker, None, [0.0, 0.0]);
-        v.combo_scroll = 2;
-        let r0 = combo_option_rect(test_origin(), 0);
-        assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, test_origin()),
-            Some(PanelAction::PickOption(2)),
-            "row 0 maps to option `scroll + 0`"
+        assert!(
+            !sprite(&world, DOT1).visible,
+            "no triple-dot on a row that cannot be promoted or deleted"
         );
     }
 
-    // Clicking a name row's body opens that entry's edit form; the triple-dot
-    // still opens the row menu; a header row is inert.
     #[test]
-    fn name_row_click_opens_the_entry_and_dots_open_the_menu() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(7))]),
-            ..Default::default()
-        };
+    fn scrolled_rows_resolve_through_the_window_offset() {
+        let f = Fixture::new();
         let o = test_origin();
-        let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
-        let name = list_row_rect(o, 1);
+        let v = PanelView {
+            scroll: 2,
+            ..f.view()
+        };
+        let r0 = row_rect(o, 0);
         assert_eq!(
-            hit_test(&v, name[0] + 5.0, name[1] + 5.0, o),
-            Some(PanelAction::OpenEntry(7)),
-            "the row body opens the entry's form"
-        );
-        let dot = dot_rect(name);
-        assert_eq!(
-            hit_test(&v, dot[0] + 5.0, dot[1] + 5.0, o),
-            Some(PanelAction::OpenRowMenu(7))
-        );
-        let hdr = list_row_rect(o, 0);
-        assert_eq!(
-            hit_test(&v, hdr[0] + 5.0, hdr[1] + 5.0, o),
-            Some(PanelAction::Consume)
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o),
+            Some(PanelAction::SelectRow(0, 1)),
+            "slot 0 shows row 2 under scroll 2"
         );
     }
 
-    // The entry whose edit form is open keeps its row highlighted.
     #[test]
-    fn selected_entry_row_stays_highlighted() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: rows(&[
-                (true, "PointLight", None),
-                (false, "lamp", Some(0)),
-                (false, "spot", Some(1)),
-            ]),
-            ..Default::default()
-        };
+    fn apply_draws_headers_types_and_toggle_states() {
         let mut world = injected_world();
+        let mut f = Fixture::new();
+        f.selection.replace("cam".to_string());
+        f.hidden.insert("lamp".to_string());
+        f.locked.insert("cam".to_string());
         let o = test_origin();
-        let mut v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
-        v.selected = Some(0);
-        apply(&mut world, Some(&v), o);
-        assert_eq!(
-            sprite(&world, list_row_bg(1)).tint,
-            ROW_TINT_SELECTED,
-            "the edited entry's row is highlighted"
+        apply(&mut world, Some(&f.view()), o);
+
+        assert_eq!(label(&world, STATUS_LABEL).content, "Assets (3)");
+        assert_eq!(label(&world, name_label(0)).content, "- World (2)");
+        assert!(
+            !sprite(&world, eye_box(0)).visible,
+            "header rows draw no toggles"
         );
-        assert_eq!(
-            sprite(&world, list_row_bg(2)).tint,
-            ROW_TINT,
-            "other rows keep the plain tint"
-        );
+        // The folded group header shows its fold marker.
+        assert_eq!(label(&world, name_label(3)).content, "+ fox (1)");
+
+        // cam: selected, locked, visible; its type reads in the right slot.
+        assert_eq!(sprite(&world, row_bg(1)).tint, ROW_TINT_SELECTED);
+        assert_eq!(sprite(&world, eye_box(1)).tint, EYE_TINT_ON);
+        assert_eq!(sprite(&world, lock_box(1)).tint, LOCK_TINT_ON);
+        let ty = label(&world, type_label(1));
+        assert_eq!(ty.content, "Material");
+        assert_eq!(ty.align, TextAlign::Right);
+        assert_eq!(ty.color, badge_color(Badge::Imported));
+
+        // lamp: hidden dims the name and flips the eye.
+        assert_eq!(sprite(&world, eye_box(2)).tint, EYE_TINT_OFF);
+        assert_eq!(label(&world, name_label(2)).color, LABEL_DIM);
+        assert_eq!(sprite(&world, lock_box(2)).tint, LOCK_TINT_OFF);
+
+        // Empty slots past the tree stay blank.
+        assert!(!sprite(&world, row_bg(5)).visible);
     }
 
+    // The search field shows over both bodies; the picker asserts focus into it
+    // (it is a typed autocomplete) even when the tree had not been focused.
     #[test]
-    fn open_row_menu_resolves_delete() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(3))]),
-            ..Default::default()
-        };
+    fn the_search_field_shows_always_and_the_picker_focuses_it() {
+        let mut world = injected_world();
+        let mut f = Fixture::new();
+        f.picker_options = vec!["PointLight".to_string()];
         let o = test_origin();
-        let v = view(&fx, Combo::Closed, Some(3), [0.0, 0.0]);
+        let field = |w: &World| {
+            w.query::<TextInput>()
+                .find(|t| t.asset_id == SEARCH_INPUT)
+                .cloned()
+                .unwrap()
+        };
+        apply(&mut world, Some(&f.view()), o);
+        let t = field(&world);
+        assert!(t.visible && !t.focused, "shown, unfocused until clicked");
+
+        apply(&mut world, Some(&f.picker_view()), o);
+        assert!(field(&world).focused, "the picker types into the field");
+    }
+
+    // The triple-dot takes over the type slot on hover, so the two never draw on
+    // top of one another.
+    #[test]
+    fn the_triple_dot_replaces_the_type_on_a_hovered_row() {
+        let mut world = injected_world();
+        let f = Fixture::new();
+        let o = test_origin();
+        let r1 = row_rect(o, 1);
+        let v = PanelView {
+            mouse: [r1[0] + 5.0, r1[1] + 5.0],
+            ..f.view()
+        };
+        apply(&mut world, Some(&v), o);
+        assert!(sprite(&world, DOT1).visible, "hover reveals the dots");
+        assert!(
+            !label(&world, type_label(1)).visible,
+            "the hovered row's type yields the slot"
+        );
+        assert!(
+            !sprite(&world, DOT_BG).visible,
+            "the box shows only over the dots themselves"
+        );
+        // Over the dots proper, the background box appears too.
+        let d = dot_rect(o, 1);
+        let over = PanelView {
+            mouse: [d[0] + 2.0, d[1] + 2.0],
+            ..f.view()
+        };
+        apply(&mut world, Some(&over), o);
+        assert!(sprite(&world, DOT_BG).visible);
+    }
+
+    // The row menu is modal: its Delete row picks, anything else dismisses it.
+    #[test]
+    fn the_row_menu_picks_delete_and_dismisses_elsewhere() {
+        let f = Fixture::new();
+        let o = test_origin();
+        let v = PanelView {
+            row_menu: Some("cam"),
+            ..f.view()
+        };
         let (_, delete) = menu_rects(o, 1);
         assert_eq!(
             hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
             Some(PanelAction::RowDelete)
         );
-        // A click off the menu dismisses it.
         assert_eq!(
-            hit_test(&v, 640.0, 700.0, o),
+            hit_test(&v, o[0] + 5.0, o[1] + 5.0, o),
+            Some(PanelAction::CloseOverlays)
+        );
+
+        let mut world = injected_world();
+        apply(&mut world, Some(&v), o);
+        assert!(sprite(&world, MENU_BG).visible);
+        assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
+    }
+
+    // An open row menu whose asset scrolled out of the visible window has no
+    // hittable Delete row, so any click just closes the overlay.
+    #[test]
+    fn row_menu_dismisses_when_its_asset_is_off_window() {
+        let f = Fixture::new();
+        let o = test_origin();
+        let v = PanelView {
+            row_menu: Some("not_listed"),
+            ..f.view()
+        };
+        let (_, delete) = menu_rects(o, 1);
+        assert_eq!(
+            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
             Some(PanelAction::CloseOverlays)
         );
     }
 
     #[test]
-    fn clicks_outside_the_panel_fall_through() {
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: vec![],
-            ..Default::default()
-        };
-        let v = view(&fx, Combo::Closed, None, [0.0, 0.0]);
-        assert_eq!(hit_test(&v, 10.0, 400.0, test_origin()), None);
+    fn picker_options_pick_and_dismiss() {
+        let mut f = Fixture::new();
+        f.picker_options = vec!["Decal".to_string(), "PointLight".to_string()];
+        let o = test_origin();
+        let v = f.picker_view();
+        let r1 = picker_option_rect(o, 1);
+        assert_eq!(
+            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o),
+            Some(PanelAction::PickOption(1))
+        );
+        // The header field keeps focus (consumed), and empty body space closes.
+        let s = search_rect(o);
+        assert_eq!(
+            hit_test(&v, s[0] + 5.0, s[1] + 5.0, o),
+            Some(PanelAction::Consume)
+        );
+        let r13 = picker_option_rect(o, 13);
+        assert_eq!(
+            hit_test(&v, r13[0] + 5.0, r13[1] + 5.0, o),
+            Some(PanelAction::CloseOverlays)
+        );
     }
 
-    // Draw order is component-insertion order, and injection follows these Vecs,
-    // so the floating overlays (dots, row menu) must come AFTER every row family or
-    // a hovered row's fill paints over them.
+    #[test]
+    fn picker_shows_an_empty_state_with_no_matching_options() {
+        let f = Fixture::new();
+        let mut world = injected_world();
+        apply(&mut world, Some(&f.picker_view()), test_origin());
+        let empty = label(&world, EMPTY_LABEL);
+        assert!(empty.visible);
+        assert_eq!(empty.content, "No matching types");
+    }
+
+    #[test]
+    fn a_cook_error_replaces_the_count_line() {
+        let mut world = injected_world();
+        let f = Fixture::new();
+        let v = PanelView {
+            rows: &[],
+            status: Some("the world does not build"),
+            ..f.view()
+        };
+        apply(&mut world, Some(&v), test_origin());
+        let status = label(&world, STATUS_LABEL);
+        assert_eq!(status.content, "the world does not build");
+        assert_eq!(status.color, ERROR_LABEL);
+        assert!(
+            !label(&world, EMPTY_LABEL).visible,
+            "the status line already explains the empty tree"
+        );
+    }
+
+    // A search that matches nothing leaves the tree empty with its own message,
+    // distinct from a cook failure.
+    #[test]
+    fn an_empty_tree_without_an_error_says_nothing_matched() {
+        let mut world = injected_world();
+        let f = Fixture::new();
+        let v = PanelView {
+            rows: &[],
+            ..f.view()
+        };
+        apply(&mut world, Some(&v), test_origin());
+        assert_eq!(label(&world, EMPTY_LABEL).content, "No matching assets");
+    }
+
+    #[test]
+    fn long_tree_shows_the_scrollbar() {
+        let mut world = injected_world();
+        let mut f = Fixture::new();
+        for i in 0..20 {
+            f.rows.push(asset(1, i, &format!("a{i}"), true));
+        }
+        let v = PanelView {
+            scroll: 3,
+            ..f.view()
+        };
+        apply(&mut world, Some(&v), test_origin());
+        assert!(sprite(&world, LIST_THUMB).visible);
+        // A short tree hides it again.
+        let short = Fixture::new();
+        apply(&mut world, Some(&short.view()), test_origin());
+        assert!(!sprite(&world, LIST_THUMB).visible);
+    }
+
+    #[test]
+    fn hide_all_blanks_every_element() {
+        let mut world = injected_world();
+        let f = Fixture::new();
+        apply(&mut world, Some(&f.view()), test_origin());
+        apply(&mut world, None, [0.0, 0.0]);
+        assert!(world.query::<Sprite>().all(|s| !s.visible));
+        assert!(world.query::<TextLabel>().all(|l| !l.visible));
+        assert!(world.query::<TextInput>().all(|t| !t.visible));
+    }
+
+    // The floating overlays are injected after the row families, so a hovered
+    // row's fill can never paint over the scrollbar, dots, or row menu.
     #[test]
     fn floating_overlays_are_injected_after_the_row_families() {
-        let sprites = all_sprite_ids();
-        let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        let last_row_bg = (0..MAX_ROWS)
-            .map(list_row_bg)
-            .chain((0..MAX_ROWS).map(combo_row_bg))
-            .map(spos)
-            .max()
-            .unwrap();
-        for overlay in [DOT_BG, DOT1, DOT2, DOT3, MENU_BG, MENU_DELETE_BG] {
+        let ids = all_sprite_ids();
+        let pos = |id: AssetId| ids.iter().position(|&x| x == id).expect("id listed");
+        let last_row = (0..ROW_POOL).map(row_bg).map(pos).max().unwrap();
+        for overlay in [LIST_TRACK, LIST_THUMB, DOT_BG, DOT1, MENU_BG] {
             assert!(
-                spos(overlay) > last_row_bg,
-                "{overlay:?} must draw above the row backgrounds"
+                pos(overlay) > last_row,
+                "overlays must draw above the row backgrounds"
             );
         }
-        // The combo backing stays below its own option rows.
-        let first_combo = (0..MAX_ROWS).map(combo_row_bg).map(spos).min().unwrap();
-        assert!(spos(COMBO_BG) < first_combo, "combo backing under its rows");
-
-        // The row-menu captions draw above the row labels the menu floats over.
-        let labels = all_label_ids();
-        let lpos = |id: AssetId| labels.iter().position(|&x| x == id).unwrap();
-        let last_row_label = (0..MAX_ROWS)
-            .map(list_row_label)
-            .chain((0..MAX_ROWS).map(combo_row_label))
-            .map(lpos)
-            .max()
-            .unwrap();
-        assert!(
-            lpos(MENU_DELETE_LABEL) > last_row_label,
-            "the Delete caption draws above the row labels"
-        );
+        // The picker backing sits under its own option rows.
+        assert!(pos(PICKER_BG) < (0..ROW_POOL).map(picker_row_bg).map(pos).min().unwrap());
     }
 
-    // The white dots show whenever the row is hovered; the background box shows
-    // only when the dots themselves are hovered, or the menu is open on that row.
     #[test]
-    fn triple_dot_box_shows_only_over_dots_or_with_the_menu_open() {
+    fn cursor_over_body_covers_the_scrollable_area_only() {
         let o = test_origin();
-        let fx = Fixture {
-            combo_options: vec![],
-            list_rows: rows(&[(true, "PointLight", None), (false, "lamp", Some(0))]),
-            ..Default::default()
-        };
-        let name = list_row_rect(o, 1);
-        let dot = dot_rect(name);
-        let mut world = injected_world();
-
-        // Hover the row body (left of the dots): bare dots, no box.
-        let over_body = [name[0] + PAD + asset_list::INDENT, name[1] + 5.0];
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, None, over_body)),
-            o,
-        );
-        assert!(sprite_visible(&world, DOT1), "white dots show on row hover");
+        assert!(cursor_over_body(o[0] + 5.0, list_top(o) + 5.0, o));
         assert!(
-            !sprite_visible(&world, DOT_BG),
-            "no box on a plain row hover"
+            !cursor_over_body(o[0] + 5.0, o[1] + 5.0, o),
+            "the title bar is not the scrollable body"
         );
-
-        // Hover the dots: the box appears.
-        let over_dots = [dot[0] + 5.0, dot[1] + 5.0];
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, None, over_dots)),
-            o,
-        );
-        assert!(
-            sprite_visible(&world, DOT_BG),
-            "box shows when dots hovered"
-        );
-
-        // Menu open: the box shows without any hover, and the menu shows.
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, Some(0), [0.0, 0.0])),
-            o,
-        );
-        assert!(
-            sprite_visible(&world, DOT_BG),
-            "box shows with the menu open"
-        );
-        assert!(sprite_visible(&world, DOT1), "dots show with the menu open");
-        assert!(sprite_visible(&world, MENU_BG), "the row menu shows");
+        assert!(!cursor_over_body(o[0] - 5.0, list_top(o) + 5.0, o));
     }
 
     // Cook `ty` blank in a minimal world: alongside a GraphicsConfig so the
@@ -1857,300 +1632,6 @@ mod tests {
                 offered.contains(ty) ^ excluded.contains(ty),
                 "{ty} cooks blank: flag it `useful_blank` in the registry or add it to the EXCLUDED list (with a reason), not both/neither"
             );
-        }
-    }
-
-    // -- Tabs + the Expanded body ------------------------------------------------
-
-    // Each tab in the strip resolves to its own switch, whichever body is up.
-    #[test]
-    fn the_tab_strip_switches_tabs_from_either_body() {
-        let fx = Fixture::default();
-        let o = test_origin();
-        for (i, tab) in Tab::ALL.iter().enumerate() {
-            let r = tab_rect(o, i);
-            let point = (r[0] + 5.0, r[1] + 5.0);
-            assert_eq!(
-                hit_test(
-                    &view(&fx, Combo::Closed, None, [0.0, 0.0]),
-                    point.0,
-                    point.1,
-                    o
-                ),
-                Some(PanelAction::SwitchTab(*tab))
-            );
-            assert_eq!(
-                hit_test(&expanded_view(&fx, [0.0, 0.0]), point.0, point.1, o),
-                Some(PanelAction::SwitchTab(*tab)),
-                "the strip stays live on the Expanded tab too"
-            );
-        }
-    }
-
-    // The strip is checked before the Config tab's modal overlays, so an open
-    // combo cannot trap the user on one tab.
-    #[test]
-    fn an_open_combo_does_not_swallow_the_tab_strip() {
-        let fx = Fixture {
-            combo_options: vec!["PointLight".to_string()],
-            ..Default::default()
-        };
-        let o = test_origin();
-        let r = tab_rect(o, 1);
-        assert_eq!(
-            hit_test(
-                &view(&fx, Combo::Picker, None, [0.0, 0.0]),
-                r[0] + 5.0,
-                r[1] + 5.0,
-                o
-            ),
-            Some(PanelAction::SwitchTab(Tab::Expanded))
-        );
-    }
-
-    // The Expanded tab has no add / filter header, so its body starts higher and
-    // the panel is correspondingly shorter.
-    #[test]
-    fn the_expanded_tab_drops_the_config_header() {
-        let o = test_origin();
-        let config = panel_rect(o, Tab::Config);
-        let expanded = panel_rect(o, Tab::Expanded);
-        assert!(
-            expanded[3] < config[3],
-            "no header row: {expanded:?} vs {config:?}"
-        );
-        assert_eq!(expanded[2], config[2], "same width");
-        // Both bodies still show MAX_ROWS rows.
-        assert_eq!(
-            expanded_row_rect(o, 0)[1] + MAX_ROWS as f32 * ROW_H,
-            expanded[1] + expanded[3]
-        );
-        // The first Expanded row sits directly below the tab strip.
-        let strip = tab_strip_rect(o);
-        assert_eq!(expanded_row_rect(o, 0)[1], strip[1] + strip[3]);
-        assert_eq!(size(Tab::Expanded), [expanded[2], expanded[3]]);
-    }
-
-    // A group header toggles its group; an addable row's "+" copies it; the row
-    // body (and a non-addable row's "+" area) is inert.
-    #[test]
-    fn expanded_rows_toggle_groups_and_add_assets() {
-        let fx = Fixture {
-            expanded_rows: vec![
-                header(0, "fox", 2, 1, true),
-                expanded_asset(0, 0, "fox_mat_0", false, true),
-                expanded_asset(0, 1, "fox_mat_wood", true, false),
-            ],
-            ..Default::default()
-        };
-        let o = test_origin();
-        let v = expanded_view(&fx, [0.0, 0.0]);
-
-        let hdr = expanded_row_rect(o, 0);
-        assert_eq!(
-            hit_test(&v, hdr[0] + 5.0, hdr[1] + 5.0, o),
-            Some(PanelAction::ToggleGroup(0))
-        );
-
-        let addable = expanded_row_rect(o, 1);
-        let plus = add_rect(addable);
-        assert_eq!(
-            hit_test(&v, plus[0] + 5.0, plus[1] + 5.0, o),
-            Some(PanelAction::AddExpanded(0, 0))
-        );
-        // The rest of that row does nothing: the asset is edited from the Config
-        // tab once copied, not from here.
-        assert_eq!(
-            hit_test(&v, addable[0] + 5.0, addable[1] + 5.0, o),
-            Some(PanelAction::Consume)
-        );
-
-        // An asset already in the config offers no "+" at all.
-        let in_config = expanded_row_rect(o, 2);
-        let where_plus_would_be = add_rect(in_config);
-        assert_eq!(
-            hit_test(
-                &v,
-                where_plus_would_be[0] + 5.0,
-                where_plus_would_be[1] + 5.0,
-                o
-            ),
-            Some(PanelAction::Consume)
-        );
-    }
-
-    #[test]
-    fn expanded_clicks_outside_the_panel_fall_through() {
-        let fx = Fixture::default();
-        assert_eq!(
-            hit_test(&expanded_view(&fx, [0.0, 0.0]), 10.0, 400.0, test_origin()),
-            None
-        );
-    }
-
-    // A header states what produced the group and how many assets it holds; an
-    // asset row names its type, dims when already in the config, and shows its
-    // "+" only when addable.
-    #[test]
-    fn expanded_body_draws_headers_dimming_and_add_buttons() {
-        let fx = Fixture {
-            expanded_rows: vec![
-                header(0, "fox", 2, 1, true),
-                expanded_asset(0, 0, "fox_mat_0", false, true),
-                expanded_asset(0, 1, "fox_mat_wood", true, false),
-            ],
-            ..Default::default()
-        };
-        let mut world = injected_world();
-        let o = test_origin();
-        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
-
-        let label = |i: usize| {
-            world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == list_row_label(i))
-                .cloned()
-                .unwrap()
-        };
-        // The header names the origin, the count, and what is already copied.
-        let h = label(0);
-        assert!(h.content.contains("fox"), "{}", h.content);
-        assert!(h.content.contains('2'), "{}", h.content);
-        assert!(h.content.contains("1 in config"), "{}", h.content);
-        assert!(h.content.starts_with('-'), "open marker: {}", h.content);
-
-        // The asset rows carry their type, and the copied one is dimmed.
-        assert!(label(1).content.contains("Material"));
-        assert_eq!(label(1).color, LABEL);
-        assert_eq!(label(2).color, LABEL_DIM, "an already-copied asset dims");
-
-        // Only the addable row draws a "+".
-        assert!(sprite_visible(&world, add_row_bg(1)));
-        assert!(!sprite_visible(&world, add_row_bg(2)));
-
-        // The Config tab's header chrome is gone.
-        assert!(!sprite_visible(&world, PLUS_BG));
-        assert!(!sprite_visible(&world, TYPEDROP_BG));
-    }
-
-    // A collapsed group draws its marker the other way, so the row reads as
-    // openable.
-    #[test]
-    fn a_collapsed_group_marks_itself_closed() {
-        let fx = Fixture {
-            expanded_rows: vec![header(0, "fox", 4712, 0, false)],
-            ..Default::default()
-        };
-        let mut world = injected_world();
-        apply(
-            &mut world,
-            Some(&expanded_view(&fx, [0.0, 0.0])),
-            test_origin(),
-        );
-        let h = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == list_row_label(0))
-            .unwrap();
-        assert!(h.content.starts_with('+'), "closed marker: {}", h.content);
-        assert!(h.content.contains("4712"));
-        assert!(
-            !h.content.contains("in config"),
-            "nothing copied yet: {}",
-            h.content
-        );
-    }
-
-    // The active tab is lit and the other recedes.
-    #[test]
-    fn the_active_tab_is_highlighted() {
-        let fx = Fixture::default();
-        let mut world = injected_world();
-        let o = test_origin();
-        apply(
-            &mut world,
-            Some(&view(&fx, Combo::Closed, None, [0.0, 0.0])),
-            o,
-        );
-        assert_eq!(sprite(&world, tab_bg(0)).tint, TAB_TINT_ACTIVE);
-        assert_eq!(sprite(&world, tab_bg(1)).tint, TAB_TINT);
-        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
-        assert_eq!(sprite(&world, tab_bg(0)).tint, TAB_TINT);
-        assert_eq!(sprite(&world, tab_bg(1)).tint, TAB_TINT_ACTIVE);
-    }
-
-    // An empty Expanded tab explains itself; a world that would not cook says so
-    // instead of showing an empty list as though there were nothing to add.
-    #[test]
-    fn the_expanded_empty_state_reports_a_cook_failure() {
-        let fx = Fixture::default();
-        let mut world = injected_world();
-        let o = test_origin();
-        apply(&mut world, Some(&expanded_view(&fx, [0.0, 0.0])), o);
-        let empty = |world: &World| {
-            world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == EMPTY_LABEL)
-                .cloned()
-                .unwrap()
-        };
-        assert!(empty(&world).content.contains("adds nothing"));
-
-        let v = PanelView {
-            expanded_status: Some("boom: bad args"),
-            ..expanded_view(&fx, [0.0, 0.0])
-        };
-        apply(&mut world, Some(&v), o);
-        assert_eq!(empty(&world).content, "boom: bad args");
-    }
-
-    // Generated names are long (an import prefixes each with its own name), and
-    // the panel is narrow: an unclipped caption runs under the "+" and off the
-    // panel. The name clips; the type stays, since it is what the row is for.
-    #[test]
-    fn a_long_asset_caption_clips_and_keeps_its_type() {
-        let caption = asset_caption("default_fragment_shader", "ShaderStage");
-        assert!(
-            caption.chars().count() <= ASSET_ROW_CHARS,
-            "{caption} ({} chars)",
-            caption.chars().count()
-        );
-        assert!(caption.ends_with("(ShaderStage)"), "{caption}");
-        assert!(caption.starts_with("default_f"), "{caption}");
-        assert!(caption.contains("..."), "{caption}");
-        // A short name is left alone.
-        assert_eq!(asset_caption("hud_font", "Font"), "hud_font (Font)");
-    }
-
-    // A type long enough to eat the whole budget still leaves the name legible
-    // rather than clipping it away to nothing.
-    #[test]
-    fn a_very_long_type_still_leaves_a_readable_name() {
-        let caption = asset_caption("some_generated_asset", &"T".repeat(40));
-        assert!(caption.starts_with("some_..."), "{caption}");
-    }
-
-    // The header clips its origin, never the counts.
-    #[test]
-    fn a_long_group_caption_clips_the_origin_not_the_counts() {
-        let caption = group_caption(&"a_very_long_import_name".repeat(3), 4712, 3, false);
-        assert!(
-            caption.chars().count() <= HEADER_ROW_CHARS,
-            "{caption} ({} chars)",
-            caption.chars().count()
-        );
-        assert!(caption.ends_with("(4712, 3 in config)"), "{caption}");
-        assert!(caption.starts_with("+ a_very"), "{caption}");
-    }
-
-    // Draw order: a row's "+" must sit above the row backgrounds, or a hovered
-    // row's fill paints over it.
-    #[test]
-    fn expanded_add_buttons_draw_above_the_row_backgrounds() {
-        let sprites = all_sprite_ids();
-        let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        let last_row_bg = (0..MAX_ROWS).map(list_row_bg).map(spos).max().unwrap();
-        for i in 0..MAX_ROWS {
-            assert!(spos(add_row_bg(i)) > last_row_bg);
         }
     }
 }

@@ -7,22 +7,6 @@
 use super::*;
 
 impl EditorHook {
-    // Scroll the Assets panel's browse list, or the combo option list while a
-    // combo is open.
-    pub(super) fn scroll_list(&mut self, delta: f32, world: &mut World) {
-        if self.combo == Combo::Closed {
-            let max = self.list_rows().len().saturating_sub(panel::MAX_ROWS);
-            self.list_scroll = scroll_step(self.list_scroll, delta, max);
-            self.row_menu = None;
-        } else {
-            let max = self
-                .combo_options(world)
-                .len()
-                .saturating_sub(panel::MAX_ROWS);
-            self.combo_scroll = scroll_step(self.combo_scroll, delta, max);
-        }
-    }
-
     // Scroll the edit form: an open value dropdown scrolls its own option list;
     // otherwise the field window moves (folding the visible controls into the
     // working args first, so no in-progress edit is lost).
@@ -91,7 +75,7 @@ impl EditorHook {
             // SAVE only writes to disk now; it neither rebuilds nor re-injects the
             // world, so an open form is left intact (no blank-field risk).
             self.apply_top(a, world);
-            self.combo = Combo::Closed;
+            self.picker_open = false;
             self.row_menu = None;
             return;
         }

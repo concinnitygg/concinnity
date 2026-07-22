@@ -8,16 +8,17 @@
 // code is compiled into a shipped game.
 //
 // The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
-// opens the browse panel (`panel.rs`): a combo (dropdown) that filters the
-// browse list by type, a "+" that opens a typed autocomplete of the addable
-// types, and a browse list grouped by type. Clicking a name (or picking a type
-// from the "+" picker) opens the add / edit form in its own floating panel
-// (`form_panel.rs`); the browse row of the edited entry stays highlighted. The
-// combo's filter field and the form's name heading are real `TextInput` assets
-// edited by the engine's text-input system; the hook reads them back. All three
-// panels (Assets, edit form, Preview) are floating: holding their title bars
-// drags them (the hook owns each origin, clamped so a panel can never leave the
-// screen).
+// opens the assets panel (`panel.rs`): a search field over every asset of the
+// expanded world, grouped by origin into one collapsible tree (`asset_tree.rs`),
+// and a "+" that opens a typed autocomplete of the addable types. Clicking a row
+// (or picking a type from the "+" picker) opens the add / edit form in its own
+// floating panel (`form_panel.rs`). A row the build generates has no world.jsonl
+// line of its own: its form is seeded from what the expansion produced, and only
+// confirming appends the line -- which then overrides the expansion. The search
+// field and the form's name heading are real `TextInput` assets edited by the
+// engine's text-input system; the hook reads them back. All three panels
+// (Assets, edit form, Preview) are floating: holding their title bars drags them
+// (the hook owns each origin, clamped so a panel can never leave the screen).
 //
 // Cursor control: the editor holds the cursor by default (edit mode -- cursor
 // free, world frozen), publishing `MenuOverride(Some(true))`. Ticking the
@@ -30,9 +31,9 @@
 // the live render backend is transplanted out of the world and `apply_world_swap`
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
+use super::asset_tree::{self, TreeGroup, TreeRow};
 use super::console::{self, ConsoleSink};
 use super::console_panel::{self, ConsoleAction, ConsoleView};
-use super::expanded::{self, ExpandedGroup, ExpandedRow};
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::health::HealthState;
@@ -42,9 +43,7 @@ use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportVie
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
-use super::outliner::{self, OutlinerGroup, OutlinerRow};
-use super::outliner_panel::{self, OutlinerAction, OutlinerView};
-use super::panel::{self, Combo, ListRow, PanelAction, PanelView, Tab};
+use super::panel::{self, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
 use super::story;
@@ -56,6 +55,7 @@ use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
+use super::asset_list::ListRow;
 use super::billboards;
 use super::gizmo;
 use super::group_transform;
@@ -139,17 +139,6 @@ pub(crate) struct EditorHook {
     import_focus: bool,
     import_scroll: usize,
     import_status: Option<ImportStatus>,
-    // The Outliner panel: shown state, the cooked grouped tree (recomputed
-    // only when `outliner_stale` and the panel is up, like the Expanded tab),
-    // the unfolded groups, the list window scroll, whether the search field
-    // holds keyboard focus, and the last cook failure.
-    outliner_open: bool,
-    outliner_groups: Vec<OutlinerGroup>,
-    outliner_unfolded: Vec<usize>,
-    outliner_scroll: usize,
-    outliner_stale: bool,
-    outliner_focus: bool,
-    outliner_status: Option<String>,
     // The Console panel: shown state, whether the command line holds keyboard
     // focus (suppressed for one frame after a backtick open so the text
     // system does not type the backtick into it), the log window's scroll
@@ -170,21 +159,28 @@ pub(crate) struct EditorHook {
     hidden_assets: std::collections::BTreeSet<String>,
     locked_assets: std::collections::BTreeSet<String>,
     // Shift state sampled from this frame's input, for the panel presses that
-    // resolve without direct input access (the Outliner's additive select).
+    // resolve without direct input access (the Assets tree's additive select).
     shift_held: bool,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
-    // The Assets panel's body: the world's own lines, or everything the build
-    // adds around them. `expanded_groups` is the cooked model behind the
-    // Expanded tab (it costs a world expansion, so it is recomputed only when
-    // `expanded_stale` and that tab is up), `expanded_open` holds the groups the
-    // user unfolded, and `expanded_status` carries a cook failure to the body.
-    tab: Tab,
-    expanded_groups: Vec<ExpandedGroup>,
-    expanded_open: Vec<usize>,
-    expanded_scroll: usize,
-    expanded_stale: bool,
-    expanded_status: Option<String>,
+    // The Assets panel's body: every asset of the expanded world as one tree
+    // grouped by origin. `tree_groups` is the cooked model (it costs a world
+    // expansion, so it is recomputed only when `tree_stale` and the panel is
+    // up), `tree_unfolded` holds the groups the user unfolded, `row_menu` the
+    // name whose Delete menu is open, and `tree_status` carries a cook failure
+    // to the status line.
+    tree_groups: Vec<TreeGroup>,
+    tree_unfolded: Vec<usize>,
+    tree_scroll: usize,
+    tree_stale: bool,
+    tree_status: Option<String>,
+    search_focus: bool,
+    row_menu: Option<String>,
+    // The header "+" type picker: whether its option list is open and how far it
+    // is scrolled. While open the search field narrows those options instead of
+    // the tree.
+    picker_open: bool,
+    picker_scroll: usize,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -196,19 +192,12 @@ pub(crate) struct EditorHook {
     health: HealthState,
     // Whether the View panel itself is shown (the top-bar View button toggles it).
     view_open: bool,
-    // The header combo (dropdown) state: closed, filtering, or picking a type.
-    combo: Combo,
-    // Active type filter for the browse list, or `None` for "all".
-    type_filter: Option<String>,
-    // First visible row of the (grouped) browse list / the combo option list.
-    list_scroll: usize,
-    combo_scroll: usize,
     // The type of the open add / edit form; `None` means the form panel is
     // closed.
     selected_type: Option<String>,
-    // When the form is editing an existing entry, its `entries` index (else a new
-    // asset is being added).
-    editing: Option<usize>,
+    // What confirming the open form commits to: a new asset, an existing line,
+    // or the promotion of a generated asset.
+    form_target: FormTarget,
     // The editable arg fields of the open form (derived from the type's default
     // args). Empty while the form is closed.
     form_fields: Vec<FormField>,
@@ -220,8 +209,6 @@ pub(crate) struct EditorHook {
     form_focus: FormFocus,
     // A validation message from the last rejected Add, shown under the form.
     form_error: Option<String>,
-    // The `entries` index whose Delete menu is open, if any.
-    row_menu: Option<usize>,
     // The form arg field whose value dropdown is open (a large enum / ref set),
     // and its scroll offset. `None` outside an open dropdown.
     field_dropdown: Option<usize>,
@@ -262,15 +249,45 @@ pub(crate) struct EditorHook {
     panel_order: Vec<PanelKey>,
 }
 
-// Owned per-tick data backing a `PanelView` (computed from the entries + the live
-// filter field, then borrowed for both hit-testing and layout).
+// Owned per-tick data backing a `PanelView` (computed from the cooked tree + the
+// live search field, then borrowed for both hit-testing and layout).
 struct PanelData {
-    filter_label: String,
-    combo_options: Vec<String>,
-    combo_selected: Option<usize>,
-    list_rows: Vec<ListRow>,
-    expanded_rows: Vec<ExpandedRow>,
+    rows: Vec<TreeRow>,
+    picker_options: Option<Vec<String>>,
     form_title: String,
+}
+
+// What confirming the open add / edit form commits to.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) enum FormTarget {
+    // A new asset: confirming appends it under a unique name.
+    #[default]
+    New,
+    // Working-entry `idx`: confirming updates that line in place.
+    Entry(usize),
+    // An asset the build generates, which has no world.jsonl line of its own.
+    // The form is seeded from the entry the expansion produced, and confirming
+    // appends that line -- which then overrides the expansion, since the cook
+    // drops a generated asset in favour of an authored one of the same name and
+    // type. Renaming it in the form instead leaves the generated asset in place
+    // and adds a separate one, which is the honest reading of a rename.
+    Promote(serde_json::Value),
+}
+
+impl FormTarget {
+    // The working-entry index the form updates in place, if any.
+    fn entry(&self) -> Option<usize> {
+        match self {
+            FormTarget::Entry(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    // Whether the form is editing an asset that already exists (in the world or
+    // in the build), rather than adding a brand-new one.
+    fn is_edit(&self) -> bool {
+        !matches!(self, FormTarget::New)
+    }
 }
 
 // Owned per-tick data backing a `TemplateView` (the open template's title,
@@ -334,6 +351,8 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
         .collect()
 }
 
+// Named to avoid colliding with the `use super::asset_tree` module import.
+mod asset_tree_edit;
 mod billboard_drive;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
@@ -348,13 +367,10 @@ mod marquee_drag;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
-// Named to avoid colliding with the `use super::outliner` module import.
-mod outliner_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
 // Named to avoid colliding with the `use super::story` module import.
-mod expanded_tab;
 mod story_edit;
 #[cfg(test)]
 mod tests;
@@ -389,13 +405,6 @@ impl EditorHook {
             import_focus: false,
             import_scroll: 0,
             import_status: None,
-            outliner_open: false,
-            outliner_groups: Vec::new(),
-            outliner_unfolded: Vec::new(),
-            outliner_scroll: 0,
-            outliner_stale: true,
-            outliner_focus: false,
-            outliner_status: None,
             console_open: false,
             console_focus: false,
             console_blur: false,
@@ -407,27 +416,25 @@ impl EditorHook {
             locked_assets: std::collections::BTreeSet::new(),
             shift_held: false,
             panel_open: false,
-            tab: Tab::Config,
-            expanded_groups: Vec::new(),
-            expanded_open: Vec::new(),
-            expanded_scroll: 0,
-            expanded_stale: true,
-            expanded_status: None,
+            tree_groups: Vec::new(),
+            tree_unfolded: Vec::new(),
+            tree_scroll: 0,
+            tree_stale: true,
+            tree_status: None,
+            search_focus: false,
+            row_menu: None,
+            picker_open: false,
+            picker_scroll: 0,
             preview_open: true,
             health_open: false,
             health: HealthState::new(),
             view_open: false,
-            combo: Combo::Closed,
-            type_filter: None,
-            list_scroll: 0,
-            combo_scroll: 0,
             selected_type: None,
-            editing: None,
+            form_target: FormTarget::New,
             form_fields: Vec::new(),
             form_scroll: 0,
             form_focus: FormFocus::Name,
             form_error: None,
-            row_menu: None,
             field_dropdown: None,
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
@@ -458,9 +465,10 @@ impl EditorHook {
     }
 
     // Whether any editor text control holds keyboard focus this frame: the
-    // header combo's filter field, an open edit form (its name / arg inputs
-    // always own focus while it shows), or a focused Lighting / Story / Import
-    // / Outliner / Console field. Undo/redo shortcuts stand down while typing.
+    // Assets panel's search field (or the type picker typing into it), an open
+    // edit form (its name / arg inputs always own focus while it shows), or a
+    // focused Lighting / Story / Import / Console field. Undo/redo shortcuts
+    // stand down while typing.
     fn text_focus_active(&self) -> bool {
         self.non_console_text_focus() || self.console_focus
     }
@@ -469,22 +477,20 @@ impl EditorHook {
     // must keep working while the console is being typed into, but stand down
     // while any other field is (a backtick there is just a character).
     fn non_console_text_focus(&self) -> bool {
-        self.combo != Combo::Closed
+        self.search_focus
+            || self.picker_open
             || self.selected_type.is_some()
             || self.lighting_focus.is_some()
             || self.story_focus
             || self.import_focus
-            || self.outliner_focus
     }
 }
 
 impl DebugHook for EditorHook {
     fn tick(&mut self, world: &mut World) {
-        // Bring the Expanded tab's and the Outliner's models up to date before
-        // anything reads them, so this frame's hit test and draw agree on the
-        // rows.
-        self.refresh_expanded_if_needed();
-        self.refresh_outliner_if_needed();
+        // Bring the Assets tree up to date before anything reads it, so this
+        // frame's hit test and draw agree on the rows.
+        self.refresh_tree_if_needed();
         // Accumulate the Health panel's per-frame counters and, on its throttled
         // boundary, resample. Unconditional: the rates measure a continuous
         // window, so gating this on the panel being open would make the first
@@ -496,7 +502,7 @@ impl DebugHook for EditorHook {
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
-            // access (the Outliner's additive select).
+            // access (the Assets tree's additive select).
             self.shift_held = input.shift;
             // Escape hands the cursor back to the editor (leaves play mode
             // and the fly camera alike).

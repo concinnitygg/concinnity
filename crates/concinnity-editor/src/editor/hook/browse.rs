@@ -30,108 +30,27 @@ impl EditorHook {
         }
     }
 
-    // Option lists (derived from the entries + the live filter field)
-
-    // The distinct asset types present in the world, sorted.
-    pub(super) fn distinct_types(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for e in &self.entries {
-            if let Some(ty) = entry_type(e)
-                && !out.iter().any(|s| s == ty)
-            {
-                out.push(ty.to_string());
-            }
-        }
-        out.sort();
-        out
-    }
-
-    // The browse list, grouped by type (the shared model): a sub-header row per
-    // type matching the active filter, then an indented row per asset name
-    // carrying its entry index (for the Delete / edit menu). Types + names sorted
-    // alphabetically, identical to the Template panel's list.
-    pub(super) fn list_rows(&self) -> Vec<ListRow> {
-        super::asset_list::grouped_rows(&self.entries, self.type_filter.as_deref())
-    }
-
-    // The floating combo option list for the open flavour, narrowed by the typed
-    // filter field. Empty when the combo is closed.
-    pub(super) fn combo_options(&self, world: &World) -> Vec<String> {
-        let filter = widget::field_text(world, panel::FILTER_INPUT).to_lowercase();
-        let matches = |s: &str| filter.is_empty() || s.to_lowercase().contains(&filter);
-        match self.combo {
-            Combo::Filter => {
-                let mut all = vec![panel::ALL_LABEL.to_string()];
-                all.extend(self.distinct_types());
-                all.into_iter().filter(|o| matches(o)).collect()
-            }
-            Combo::Picker => {
-                let mut opts: Vec<String> = panel::picker_types()
-                    .filter(|t| matches(t))
-                    .map(|t| t.to_string())
-                    .collect();
-                // The picker lists the offered types alphabetically (ascending).
-                opts.sort();
-                opts
-            }
-            Combo::Closed => Vec::new(),
-        }
-    }
-
+    // The per-tick Assets-panel data: the flattened tree, the type picker's
+    // options while it is open, and the form heading -- all derived from the
+    // cooked model plus the live search field, then borrowed for both
+    // hit-testing and layout.
     pub(super) fn panel_data(&self, world: &World) -> PanelData {
-        let combo_options = self.combo_options(world);
-        let combo_selected = match self.combo {
-            Combo::Filter => {
-                let target = self
-                    .type_filter
-                    .clone()
-                    .unwrap_or_else(|| panel::ALL_LABEL.to_string());
-                combo_options.iter().position(|o| o == &target)
-            }
-            _ => None,
-        };
-        let form_title = match (&self.editing, &self.selected_type) {
-            (Some(_), Some(t)) => format!("Edit {t}"),
-            (None, Some(t)) => format!("New {t}"),
+        let form_title = match (self.form_target.is_edit(), &self.selected_type) {
+            (true, Some(t)) => format!("Edit {t}"),
+            (false, Some(t)) => format!("New {t}"),
             _ => "New asset".to_string(),
         };
         PanelData {
-            filter_label: self
-                .type_filter
-                .clone()
-                .unwrap_or_else(|| panel::ALL_LABEL.to_string()),
-            combo_options,
-            combo_selected,
-            list_rows: self.list_rows(),
-            expanded_rows: self.expanded_rows(),
+            rows: self.tree_rows(world),
+            picker_options: self.picker_options(world),
             form_title,
-        }
-    }
-
-    pub(super) fn make_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> PanelView<'a> {
-        PanelView {
-            tab: self.tab,
-            expanded_rows: &d.expanded_rows,
-            expanded_scroll: self.expanded_scroll,
-            expanded_status: self.expanded_status.as_deref(),
-            combo: self.combo,
-            filter_label: &d.filter_label,
-            combo_options: &d.combo_options,
-            combo_selected: d.combo_selected,
-            combo_scroll: self.combo_scroll,
-            list_rows: &d.list_rows,
-            list_scroll: self.list_scroll,
-            row_menu: self.row_menu,
-            // The entry whose form is open keeps its browse row highlighted.
-            selected: self.editing,
-            mouse,
         }
     }
 
     pub(super) fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
         FormView {
             title: &d.form_title,
-            editing: self.editing.is_some(),
+            editing: self.form_target.is_edit(),
             form_fields: &self.form_fields,
             form_scroll: self.form_scroll,
             form_focus: self.form_focus,
@@ -158,13 +77,13 @@ impl EditorHook {
         }
     }
 
-    // Toggle the whole assets UI (browse panel + any open edit form + the browse
-    // highlight). Hiding it KEEPS all that state -- panel positions, the open
-    // form, the scroll offset, the selection -- so toggling back restores the same
-    // view. Only the transient combo / row-menu overlays are dropped.
+    // Toggle the whole assets UI (the tree panel plus any open edit form).
+    // Hiding it KEEPS all that state -- panel positions, the open form, the
+    // scroll offset, the fold state, the selection -- so toggling back restores
+    // the same view. Only the transient picker / row-menu overlays are dropped.
     pub(super) fn toggle_assets(&mut self) {
         self.panel_open = !self.panel_open;
-        self.combo = Combo::Closed;
+        self.picker_open = false;
         self.row_menu = None;
     }
 

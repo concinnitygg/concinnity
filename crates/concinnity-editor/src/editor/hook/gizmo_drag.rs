@@ -391,11 +391,11 @@ impl EditorHook {
         // An open form on a moved entry still shows the pre-drag text;
         // re-derive it from the committed args. (Dragging and typing cannot
         // overlap, so no in-progress field edit is lost.)
-        if let Some(idx) = self.editing
+        if let Some(idx) = self.form_target.entry()
             && changed.contains(&idx)
             && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
         {
-            self.open_form(world, ty, Some(idx));
+            self.open_form(world, ty, FormTarget::Entry(idx));
         }
     }
 

@@ -1,24 +1,28 @@
-// src/editor/outliner.rs
+// src/editor/asset_tree.rs
 //
-// The data half of the Outliner panel: every asset of the expanded world,
-// grouped by origin -- the world's own lines first, then each scene import's /
+// The data half of the Assets panel: every asset of the expanded world grouped
+// by origin -- the world's own lines first, then each scene import's /
 // injection pass's output under the line that produced it, and the
 // unattributed macro expansions last. Grouping by origin rather than by type
 // keeps the tree usable: a single scene import expands to thousands of assets,
-// so collapsed it is one header. Each asset carries a provenance badge
-// (authored / imported / injected), classified through the same
-// `LoadedWorld::provenance` the Expanded tab uses, so the two cannot drift.
+// so collapsed it is one header. Each asset carries a provenance badge and,
+// when the build generates it, the entry that promoting it would append.
 //
-// Everything here is pure: `groups_from` builds the grouped model from a
-// cooked `LoadedWorld`, and `rows` flattens it against the collapse state and
-// the live search filter. The panel module draws the rows; the hook owns when
-// to re-cook and the per-session hide / lock sets.
+// Everything here is pure: `groups_from` builds the grouped model from a cooked
+// `LoadedWorld`, and `rows` flattens it against the fold state and the live
+// search filter. The panel draws the rows; the hook owns when to re-cook and
+// the per-session hide / lock sets.
 
-use super::expanded::UNATTRIBUTED;
 use concinnity_cook::world::LoadedWorld;
 
 // The group holding the world.jsonl lines themselves.
 pub(crate) const WORLD_GROUP: &str = "World";
+
+// The group holding assets whose producing pass records no source: menu, story,
+// and prefab primitives. They are listed so the tree is a complete account of
+// the world, but they cannot be promoted (their passes emit unconditionally, so
+// an authored copy would sit beside the generated asset rather than replace it).
+pub(crate) const UNATTRIBUTED: &str = "Other expansions";
 
 // An asset's provenance badge, as the row shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,38 +32,43 @@ pub(crate) enum Badge {
     Injected,
 }
 
-impl Badge {
-    pub(crate) fn caption(self) -> &'static str {
-        match self {
-            Badge::Authored => "authored",
-            Badge::Imported => "imported",
-            Badge::Injected => "injected",
-        }
-    }
-}
-
-// One listed asset: its name, type, and provenance badge.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutlinerAsset {
+// One listed asset: its name, type, provenance badge, and how editing it
+// reaches world.jsonl.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TreeAsset {
     pub name: String,
     pub asset_type: String,
     pub badge: Badge,
+    // The world.jsonl entry that editing this asset would append, promoting it
+    // to an authored line that overrides what the build generates. `None` for a
+    // line the world already has (edited in place instead) and for the
+    // unconditional macro expansions, which cannot be overridden at all.
+    pub promote: Option<serde_json::Value>,
+}
+
+impl TreeAsset {
+    // Whether clicking the row opens an edit form: an authored line edits in
+    // place, a generated asset promotes on confirm, and everything else is
+    // selectable but not editable.
+    pub(crate) fn editable(&self) -> bool {
+        self.badge == Badge::Authored || self.promote.is_some()
+    }
 }
 
 // The assets one origin produced: the world's own lines (`WORLD_GROUP`), a
 // scene import's or injection pass's output, or the unattributed expansions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutlinerGroup {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TreeGroup {
     pub label: String,
-    pub assets: Vec<OutlinerAsset>,
+    pub assets: Vec<TreeAsset>,
 }
 
-// Build the grouped model from a cooked world. Every live asset appears
-// exactly once, under whatever produced it; an authored line that shadows a
-// generated asset lists as authored under the world group (the outliner shows
-// the live world, not the copy-promotion view).
-pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<OutlinerGroup> {
-    let mut groups: Vec<OutlinerGroup> = Vec::new();
+// Build the grouped model from a cooked world. Every live asset appears exactly
+// once, under whatever produced it; an authored line that shadows a generated
+// asset lists as authored under the world group, since the tree shows the live
+// world rather than a copy-promotion view.
+pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
+    let mut groups: Vec<TreeGroup> = Vec::new();
     for asset in &loaded.assets {
         let prov = loaded.provenance(&asset.name);
         let (label, badge) = if prov.is_authored() {
@@ -73,14 +82,15 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<OutlinerGroup> {
         } else {
             (UNATTRIBUTED, Badge::Imported)
         };
-        let entry = OutlinerAsset {
+        let entry = TreeAsset {
             name: asset.name.clone(),
             asset_type: asset.asset_type.clone(),
             badge,
+            promote: prov.is_overridable().then(|| promote_entry(loaded, asset)),
         };
         match groups.iter_mut().find(|g| g.label == label) {
             Some(g) => g.assets.push(entry),
-            None => groups.push(OutlinerGroup {
+            None => groups.push(TreeGroup {
                 label: label.to_string(),
                 assets: vec![entry],
             }),
@@ -95,7 +105,7 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<OutlinerGroup> {
     }
     // World first, attributed origins alphabetically, the catch-all last.
     groups.sort_by(|a, b| {
-        let key = |g: &OutlinerGroup| {
+        let key = |g: &TreeGroup| {
             (
                 g.label != WORLD_GROUP,
                 g.label == UNATTRIBUTED,
@@ -105,6 +115,27 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<OutlinerGroup> {
         key(a).cmp(&key(b))
     });
     groups
+}
+
+// The world.jsonl entry promoting a generated asset would append: its name,
+// type, and the args the expansion gave it. An injected asset uses the args the
+// injection recorded (what the lock shows for overriding) rather than the
+// compiled asset's.
+fn promote_entry(
+    loaded: &LoadedWorld,
+    asset: &concinnity_cook::world::WorldJsonlAsset,
+) -> serde_json::Value {
+    let args = loaded
+        .injected
+        .iter()
+        .find(|i| i.name == asset.name)
+        .map(|i| i.args.clone())
+        .unwrap_or_else(|| asset.args.clone());
+    serde_json::json!({
+        "name": asset.name,
+        "type": asset.asset_type,
+        "args": args,
+    })
 }
 
 // Whether an asset passes the search filter: a case-insensitive substring
@@ -120,39 +151,48 @@ pub(crate) fn filter_matches(filter: &str, name: &str, asset_type: &str) -> bool
 // One rendered row of the tree: a group header (click to fold), or one of an
 // unfolded group's assets.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum OutlinerRow {
+pub(crate) enum TreeRow {
     Header {
-        // Index into the groups list, for the collapse toggle.
+        // Index into the groups list, for the fold toggle.
         group: usize,
         label: String,
         count: usize,
         open: bool,
     },
     Asset {
+        // Index into the groups list and into that group's assets, so the hook
+        // can reach the row's promote entry.
+        group: usize,
+        index: usize,
         name: String,
         asset_type: String,
         badge: Badge,
+        // Whether clicking the row opens an edit form.
+        editable: bool,
     },
 }
 
-// Flatten the groups into rows against the collapse state and the filter.
-// With a blank filter every header shows and only the groups in `open` unfold;
-// a live filter unfolds every group with a match and drops the rest entirely,
-// so a match inside a collapsed group is never invisible.
-pub(crate) fn rows(groups: &[OutlinerGroup], open: &[usize], filter: &str) -> Vec<OutlinerRow> {
+// Flatten the groups into rows against the fold state and the filter. With a
+// blank filter every header shows and only the groups in `open` unfold; a live
+// filter unfolds every group with a match and drops the rest entirely, so a
+// match inside a folded group is never invisible. Groups are folded by default
+// -- a scene import expands to thousands of assets, so an open-by-default tree
+// would be unusable.
+pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<TreeRow> {
     let filtering = !filter.trim().is_empty();
     let mut out = Vec::new();
     for (gi, g) in groups.iter().enumerate() {
-        let listed: Vec<&OutlinerAsset> = g
+        let listed: Vec<(usize, &TreeAsset)> = g
             .assets
             .iter()
-            .filter(|a| filter_matches(filter, &a.name, &a.asset_type))
+            .enumerate()
+            .filter(|(_, a)| filter_matches(filter, &a.name, &a.asset_type))
             .collect();
         if filtering && listed.is_empty() {
             continue;
         }
         let is_open = filtering || open.contains(&gi);
-        out.push(OutlinerRow::Header {
+        out.push(TreeRow::Header {
             group: gi,
             label: g.label.clone(),
             count: listed.len(),
@@ -161,11 +201,14 @@ pub(crate) fn rows(groups: &[OutlinerGroup], open: &[usize], filter: &str) -> Ve
         if !is_open {
             continue;
         }
-        for a in listed {
-            out.push(OutlinerRow::Asset {
+        for (ai, a) in listed {
+            out.push(TreeRow::Asset {
+                group: gi,
+                index: ai,
                 name: a.name.clone(),
                 asset_type: a.asset_type.clone(),
                 badge: a.badge,
+                editable: a.editable(),
             });
         }
     }
@@ -181,7 +224,7 @@ mod tests {
         WorldJsonlAsset {
             name: name.to_string(),
             asset_type: ty.to_string(),
-            args: serde_json::json!({}),
+            args: serde_json::json!({"k": 1}),
         }
     }
 
@@ -200,7 +243,7 @@ mod tests {
             injected: vec![InjectedAsset {
                 name: "hud_font".to_string(),
                 asset_type: "Font".to_string(),
-                args: serde_json::json!({}),
+                args: serde_json::json!({"size_px": 20}),
                 injected_by: "debug_hud",
             }],
             generated: vec![
@@ -224,7 +267,7 @@ mod tests {
         }
     }
 
-    fn group<'a>(groups: &'a [OutlinerGroup], label: &str) -> &'a OutlinerGroup {
+    fn group<'a>(groups: &'a [TreeGroup], label: &str) -> &'a TreeGroup {
         groups.iter().find(|g| g.label == label).expect(label)
     }
 
@@ -260,6 +303,52 @@ mod tests {
         );
     }
 
+    // A generated asset carries the entry a promotion appends, with the args
+    // the expansion produced.
+    #[test]
+    fn a_generated_asset_carries_its_promote_entry() {
+        let groups = groups_from(&loaded());
+        let mat = group(&groups, "fox")
+            .assets
+            .iter()
+            .find(|a| a.name == "fox_mat_a")
+            .unwrap();
+        let entry = mat.promote.as_ref().expect("generated assets promote");
+        assert_eq!(entry["name"], "fox_mat_a");
+        assert_eq!(entry["type"], "Material");
+        assert_eq!(entry["args"]["k"], 1);
+    }
+
+    // An injected default promotes with the args the injection recorded (what
+    // the lock shows for overriding), not the compiled asset's.
+    #[test]
+    fn an_injected_asset_promotes_with_the_recorded_injection_args() {
+        let groups = groups_from(&loaded());
+        let font = &group(&groups, "debug_hud").assets[0];
+        let entry = font.promote.as_ref().expect("injected assets promote");
+        assert_eq!(entry["args"]["size_px"], 20);
+    }
+
+    // An authored line edits in place, so it carries no promote entry; the
+    // unconditional macro expansions carry none either and are not editable.
+    #[test]
+    fn editability_splits_authored_promotable_and_fixed() {
+        let groups = groups_from(&loaded());
+        let cam = &group(&groups, WORLD_GROUP).assets[0];
+        assert!(cam.promote.is_none(), "an authored line edits in place");
+        assert!(cam.editable());
+
+        let generated = &group(&groups, "fox").assets[0];
+        assert!(generated.promote.is_some() && generated.editable());
+
+        let macro_primitive = &group(&groups, UNATTRIBUTED).assets[0];
+        assert!(macro_primitive.promote.is_none());
+        assert!(
+            !macro_primitive.editable(),
+            "an unconditional expansion cannot be overridden by a copy"
+        );
+    }
+
     #[test]
     fn filter_matches_name_or_type_case_insensitively() {
         assert!(filter_matches("", "cam", "Camera3D"));
@@ -270,31 +359,47 @@ mod tests {
     }
 
     #[test]
-    fn rows_collapse_by_default_and_unfold_open_groups() {
+    fn rows_fold_by_default_and_unfold_open_groups() {
         let groups = groups_from(&loaded());
-        let collapsed = rows(&groups, &[], "");
-        assert_eq!(collapsed.len(), 4, "four headers, no asset rows");
+        let folded = rows(&groups, &[], "");
+        assert_eq!(folded.len(), 4, "four headers, no asset rows");
         assert!(
-            collapsed
+            folded
                 .iter()
-                .all(|r| matches!(r, OutlinerRow::Header { open: false, .. }))
+                .all(|r| matches!(r, TreeRow::Header { open: false, .. }))
         );
 
         let open = rows(&groups, &[0], "");
         assert!(matches!(
             &open[0],
-            OutlinerRow::Header {
+            TreeRow::Header {
                 group: 0,
                 count: 2,
                 open: true,
                 ..
             }
         ));
-        assert!(matches!(&open[1], OutlinerRow::Asset { name, .. } if name == "cam"));
+        assert!(matches!(&open[1], TreeRow::Asset { name, .. } if name == "cam"));
         assert!(
-            matches!(&open[3], OutlinerRow::Header { group: 1, .. }),
+            matches!(&open[3], TreeRow::Header { group: 1, .. }),
             "only the opened group unfolds"
         );
+    }
+
+    // An asset row carries the indices its promote entry is reached through,
+    // and they survive a filter dropping earlier assets from the group.
+    #[test]
+    fn asset_rows_index_back_into_their_group() {
+        let groups = groups_from(&loaded());
+        let filtered = rows(&groups, &[], "fox_mat_b");
+        let TreeRow::Asset { group, index, .. } = filtered
+            .iter()
+            .find(|r| matches!(r, TreeRow::Asset { .. }))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(groups[*group].assets[*index].name, "fox_mat_b");
     }
 
     #[test]
@@ -305,7 +410,7 @@ mod tests {
         let headers: Vec<&str> = filtered
             .iter()
             .filter_map(|r| match r {
-                OutlinerRow::Header { label, .. } => Some(label.as_str()),
+                TreeRow::Header { label, .. } => Some(label.as_str()),
                 _ => None,
             })
             .collect();
@@ -314,7 +419,7 @@ mod tests {
             filtered
                 .iter()
                 .filter_map(|r| match r {
-                    OutlinerRow::Header { open, count, .. } => Some((*open, *count)),
+                    TreeRow::Header { open, count, .. } => Some((*open, *count)),
                     _ => None,
                 })
                 .all(|(open, count)| open && count > 0),
@@ -323,7 +428,7 @@ mod tests {
         let names: Vec<&str> = filtered
             .iter()
             .filter_map(|r| match r {
-                OutlinerRow::Asset { name, .. } => Some(name.as_str()),
+                TreeRow::Asset { name, .. } => Some(name.as_str()),
                 _ => None,
             })
             .collect();
@@ -334,7 +439,7 @@ mod tests {
         assert!(
             fonts
                 .iter()
-                .any(|r| matches!(r, OutlinerRow::Asset { name, .. } if name == "hud_font"))
+                .any(|r| matches!(r, TreeRow::Asset { name, .. } if name == "hud_font"))
         );
     }
 

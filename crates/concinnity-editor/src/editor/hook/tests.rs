@@ -67,6 +67,68 @@ fn entry(name: &str, ty: &str) -> serde_json::Value {
     serde_json::json!({"name": name, "type": ty, "args": {}})
 }
 
+// Seed the cooked tree the panel rows come from, without paying for a real
+// world expansion: the working entries under `World`, plus any generated groups
+// the test needs. Mirrors what `refresh_tree_if_needed` builds, and clears
+// `tree_stale` so the frame drive does not overwrite it.
+fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGroup>) {
+    let world_group = TreeGroup {
+        label: asset_tree::WORLD_GROUP.to_string(),
+        assets: h
+            .entries
+            .iter()
+            .map(|e| asset_tree::TreeAsset {
+                name: entry_name(e).unwrap_or_default().to_string(),
+                asset_type: entry_type(e).unwrap_or_default().to_string(),
+                badge: asset_tree::Badge::Authored,
+                promote: None,
+            })
+            .collect(),
+    };
+    h.tree_groups = std::iter::once(world_group).chain(extra).collect();
+    h.tree_unfolded = (0..h.tree_groups.len()).collect();
+    h.tree_stale = false;
+}
+
+// One generated group, as a scene import's or injection pass's output would
+// appear: every asset promotable from the entry the expansion produced.
+fn generated_group(label: &str, assets: &[(&str, &str)]) -> TreeGroup {
+    TreeGroup {
+        label: label.to_string(),
+        assets: assets
+            .iter()
+            .map(|(name, ty)| asset_tree::TreeAsset {
+                name: name.to_string(),
+                asset_type: ty.to_string(),
+                badge: asset_tree::Badge::Imported,
+                promote: Some(serde_json::json!({
+                    "name": name, "type": ty, "args": {},
+                })),
+            })
+            .collect(),
+    }
+}
+
+// The (group, index) a row click on `name` resolves to.
+fn row_of(h: &EditorHook, name: &str) -> (usize, usize) {
+    h.tree_groups
+        .iter()
+        .enumerate()
+        .find_map(|(gi, g)| {
+            g.assets
+                .iter()
+                .position(|a| a.name == name)
+                .map(|ai| (gi, ai))
+        })
+        .unwrap_or_else(|| panic!("{name} is not in the seeded tree"))
+}
+
+// Click the tree row for `name` (the panel's plain select-and-edit action).
+fn click_row(h: &mut EditorHook, name: &str, world: &mut World) {
+    let (g, i) = row_of(h, name);
+    h.apply_panel(PanelAction::SelectRow(g, i), world);
+}
+
 #[test]
 fn starts_in_edit_mode_with_hud_shown() {
     let h = hook(Vec::new());
@@ -75,7 +137,7 @@ fn starts_in_edit_mode_with_hud_shown() {
     // Assets / View / Templates start closed; Preview starts shown.
     assert!(!h.panel_open && !h.view_open && !h.templates_open);
     assert!(h.preview_open, "the Preview panel is shown at launch");
-    assert_eq!(h.combo, Combo::Closed);
+    assert!(!h.picker_open);
 }
 
 // The top-bar View button toggles the View panel; the View panel's rows toggle
@@ -174,7 +236,7 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
     let mut old = World::new_empty();
     super::super::inject::editor_hud(&mut old);
     widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
-    widget::seed_field(&mut old, panel::FILTER_INPUT, "Point");
+    widget::seed_field(&mut old, panel::SEARCH_INPUT, "Point");
     let snapshot = EditorHook::field_snapshot(&old);
 
     // A fresh HUD injection starts every field blank.
@@ -184,7 +246,7 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
 
     EditorHook::restore_fields(&mut new, &snapshot);
     assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "my_light");
-    assert_eq!(widget::field_text(&new, panel::FILTER_INPUT), "Point");
+    assert_eq!(widget::field_text(&new, panel::SEARCH_INPUT), "Point");
 }
 
 // The live preview is rebuilt from the in-memory entries with no disk access:
@@ -215,46 +277,60 @@ fn build_preview_world_renders_from_in_memory_entries() {
     );
 }
 
+// The tree lists the world's own lines under `World` and each expansion's
+// output under whatever produced it, with the search field narrowing both.
 #[test]
-fn list_rows_group_names_under_type_headers() {
-    let h = hook(vec![
-        entry("a", "PointLight"),
-        entry("b", "Decal"),
-        entry("c", "PointLight"),
-    ]);
-    let rows = h.list_rows();
-    // Types sorted: Decal (header, b), then PointLight (header, a, c).
-    assert!(rows[0].is_header && rows[0].text == "Decal");
-    assert_eq!(rows[1].text, "b");
-    assert!(rows[2].is_header && rows[2].text == "PointLight");
-    let names: Vec<&str> = rows[3..].iter().map(|r| r.text.as_str()).collect();
-    assert_eq!(names, ["a", "c"]);
-    // Name rows carry their entry index; headers do not.
-    assert_eq!(rows[1].entry, Some(1));
-    assert_eq!(rows[0].entry, None);
-}
-
-#[test]
-fn filter_narrows_the_grouped_list() {
-    let mut h = hook(vec![
-        entry("a", "PointLight"),
-        entry("b", "Decal"),
-        entry("c", "PointLight"),
-    ]);
+fn tree_rows_group_by_origin_and_narrow_by_search() {
+    let mut h = hook(vec![entry("lamp", "PointLight"), entry("sign", "Decal")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    // Open the filter combo, then pick "PointLight".
-    h.open_combo(Combo::Filter, &mut world);
-    let opts = h.combo_options(&world);
-    assert_eq!(opts[0], panel::ALL_LABEL);
-    let pl = opts.iter().position(|o| o == "PointLight").unwrap();
-    h.apply_panel(PanelAction::PickOption(pl), &mut world);
-    assert_eq!(h.type_filter.as_deref(), Some("PointLight"));
-    assert_eq!(h.combo, Combo::Closed);
-    let rows = h.list_rows();
-    // Only the PointLight group: one header + two names.
-    assert_eq!(rows.len(), 3);
-    assert!(rows[0].is_header && rows[0].text == "PointLight");
+    seed_tree(
+        &mut h,
+        vec![generated_group("fox", &[("fox_mat", "Material")])],
+    );
+
+    let names = |h: &EditorHook, w: &World| -> Vec<String> {
+        h.tree_rows(w)
+            .iter()
+            .filter_map(|r| match r {
+                TreeRow::Asset { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(names(&h, &world), ["lamp", "sign", "fox_mat"]);
+    let headers: Vec<String> = h
+        .tree_rows(&world)
+        .iter()
+        .filter_map(|r| match r {
+            TreeRow::Header { label, .. } => Some(label.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(headers, [asset_tree::WORLD_GROUP, "fox"]);
+
+    // The search field matches name or type, across every group.
+    set_field(&mut world, panel::SEARCH_INPUT, "mat");
+    assert_eq!(names(&h, &world), ["fox_mat"]);
+    set_field(&mut world, panel::SEARCH_INPUT, "PointLight");
+    assert_eq!(names(&h, &world), ["lamp"], "a type match reaches the row");
+}
+
+// While the "+" picker is open the field narrows its type options instead of
+// the tree, so the two never fight over the same text.
+#[test]
+fn the_search_field_narrows_the_picker_while_it_is_open() {
+    let mut h = hook(Vec::new());
+    let mut world = world_with_fields();
+    h.panel_open = true;
+    h.apply_panel(PanelAction::TogglePicker, &mut world);
+    set_field(&mut world, panel::SEARCH_INPUT, "pointlight");
+    let opts = h.picker_options(&world).unwrap();
+    assert_eq!(opts, ["PointLight"], "case-insensitive type narrowing");
+    assert!(
+        h.tree_rows(&world).is_empty(),
+        "the tree is not filtered by the picker's text"
+    );
 }
 
 #[test]
@@ -262,23 +338,17 @@ fn plus_picker_then_name_form_adds_the_entry() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     h.panel_open = true;
-    // "+" opens the picker; the filter field is focused.
+    // "+" opens the picker, which types into the search field (the draw
+    // asserts that focus onto the control each frame).
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert_eq!(h.combo, Combo::Picker);
-    assert!(
-        world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == panel::FILTER_INPUT)
-            .unwrap()
-            .focused
-    );
+    assert!(h.picker_open && h.search_focus);
     // Pick the first offered type -> AddForm, name field prefilled + focused.
-    let ty = h.combo_options(&world)[0].clone();
+    let ty = h.picker_options(&world).unwrap()[0].clone();
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open());
-    assert_eq!(h.combo, Combo::Closed);
+    assert!(!h.picker_open);
     assert_eq!(h.selected_type.as_deref(), Some(ty.as_str()));
-    assert!(h.editing.is_none());
+    assert!((h.form_target == FormTarget::New));
     let name_field = world
         .query::<TextInput>()
         .find(|t| t.asset_id == form_panel::NAME_INPUT)
@@ -299,10 +369,11 @@ fn row_click_opens_the_edit_form_for_a_rename() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
     h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
     // Clicking the name row opens the edit form prefilled for a rename.
-    h.apply_panel(PanelAction::OpenEntry(0), &mut world);
+    click_row(&mut h, "lamp", &mut world);
     assert!(h.form_open());
-    assert_eq!(h.editing, Some(0));
+    assert_eq!(h.form_target, FormTarget::Entry(0));
     assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
     assert!(h.row_menu.is_none());
     let name_field = world
@@ -324,7 +395,9 @@ fn row_menu_delete_removes_the_entry() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+    seed_tree(&mut h, Vec::new());
+    let (g, i) = row_of(&h, "a");
+    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
     h.apply_panel(PanelAction::RowDelete, &mut world);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["name"], "b");
@@ -335,7 +408,7 @@ fn row_menu_delete_removes_the_entry() {
 fn edit_rename_to_a_duplicate_is_suffixed() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
-    h.editing = Some(1);
+    h.form_target = FormTarget::Entry(1);
     h.selected_type = Some("Decal".to_string());
     // Rename "b" to "a": collides with the other entry -> suffixed.
     set_field(&mut world, form_panel::NAME_INPUT, "a");
@@ -376,15 +449,16 @@ fn config_singleton_picker_edits_existing_else_adds() {
     h.panel_open = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     let gi = h
-        .combo_options(&world)
+        .picker_options(&world)
+        .unwrap()
         .iter()
         .position(|o| o == "GraphicsConfig")
         .expect("GraphicsConfig is offered in the picker");
     h.apply_panel(PanelAction::PickOption(gi), &mut world);
     assert!(h.form_open());
     assert_eq!(
-        h.editing,
-        Some(0),
+        h.form_target,
+        FormTarget::Entry(0),
         "picking a present singleton edits it, not a new add"
     );
     h.apply_form(FormAction::Confirm, &mut world);
@@ -403,13 +477,17 @@ fn config_singleton_picker_edits_existing_else_adds() {
     h2.panel_open = true;
     h2.apply_panel(PanelAction::TogglePicker, &mut world2);
     let wi = h2
-        .combo_options(&world2)
+        .picker_options(&world2)
+        .unwrap()
         .iter()
         .position(|o| o == "Window")
         .expect("Window is offered in the picker");
     h2.apply_panel(PanelAction::PickOption(wi), &mut world2);
     assert!(h2.form_open());
-    assert!(h2.editing.is_none(), "no existing Window -> an add form");
+    assert!(
+        (h2.form_target == FormTarget::New),
+        "no existing Window -> an add form"
+    );
     h2.apply_form(FormAction::Confirm, &mut world2);
     assert_eq!(
         h2.entries.iter().filter(|e| e["type"] == "Window").count(),
@@ -425,7 +503,7 @@ fn cancel_form_returns_to_the_list_without_adding() {
     h.selected_type = Some("Decal".to_string());
     h.apply_form(FormAction::Close, &mut world);
     assert!(!h.form_open());
-    assert!(h.selected_type.is_none() && h.editing.is_none());
+    assert!(h.selected_type.is_none() && (h.form_target == FormTarget::New));
     assert!(h.entries.is_empty() && !h.dirty);
 }
 
@@ -433,10 +511,8 @@ fn cancel_form_returns_to_the_list_without_adding() {
 fn picker_lists_types_alphabetically() {
     let mut h = hook(Vec::new());
     let world = world_with_fields();
-    h.combo = Combo::Picker;
-    // A prior browse filter does not reorder the picker: it stays A->Z.
-    h.type_filter = Some("Decal".to_string());
-    let opts = h.combo_options(&world);
+    h.picker_open = true;
+    let opts = h.picker_options(&world).unwrap();
     let mut sorted = opts.clone();
     sorted.sort();
     assert_eq!(opts, sorted, "the picker is alphabetized ascending");
@@ -453,13 +529,13 @@ fn picker_lists_types_alphabetically() {
 }
 
 #[test]
-fn close_overlays_dismisses_combo_and_menu() {
+fn close_overlays_dismisses_the_picker_and_row_menu() {
     let mut h = hook(vec![entry("a", "Decal")]);
     let mut world = world_with_fields();
-    h.combo = Combo::Filter;
-    h.row_menu = Some(0);
+    h.picker_open = true;
+    h.row_menu = Some("a".to_string());
     h.apply_panel(PanelAction::CloseOverlays, &mut world);
-    assert_eq!(h.combo, Combo::Closed);
+    assert!(!h.picker_open);
     assert!(h.row_menu.is_none());
 }
 
@@ -688,10 +764,11 @@ fn dragging_does_not_trigger_controls_it_crosses() {
 fn clicking_a_list_row_opens_its_edit_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
-    // Row 0 is the type header; row 1 is the name.
-    let row = panel::list_row_rect(po, 1);
+    // Row 0 is the World group header; row 1 is the asset.
+    let row = panel::row_rect(po, 1);
     let mut world = World::new_empty();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
@@ -704,7 +781,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     });
     h.tick(&mut world);
     assert!(h.form_open(), "the row click opened the form");
-    assert_eq!(h.editing, Some(0));
+    assert_eq!(h.form_target, FormTarget::Entry(0));
     assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
     assert_eq!(
         widget::field_text(&world, form_panel::NAME_INPUT),
@@ -721,11 +798,17 @@ fn deleting_entries_fixes_up_the_open_form_index() {
     let mut world = world_with_fields();
     h.panel_open = true;
     // Edit "b" (index 1), then delete "a" (index 0): the form now edits 0.
-    h.open_form(&mut world, "Decal".to_string(), Some(1));
-    h.apply_panel(PanelAction::OpenRowMenu(0), &mut world);
+    seed_tree(&mut h, Vec::new());
+    h.open_form(&mut world, "Decal".to_string(), FormTarget::Entry(1));
+    let (g, i) = row_of(&h, "a");
+    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
     h.apply_panel(PanelAction::RowDelete, &mut world);
     assert!(h.form_open(), "the form survives an unrelated delete");
-    assert_eq!(h.editing, Some(0), "the edited index shifted down");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(0),
+        "the edited index shifted down"
+    );
     // Confirm still updates the right (renamed-index) entry.
     set_field(&mut world, form_panel::NAME_INPUT, "b2");
     h.apply_form(FormAction::Confirm, &mut world);
@@ -736,8 +819,10 @@ fn deleting_entries_fixes_up_the_open_form_index() {
     let mut h2 = hook(vec![entry("a", "Decal")]);
     let mut world2 = world_with_fields();
     h2.panel_open = true;
-    h2.open_form(&mut world2, "Decal".to_string(), Some(0));
-    h2.apply_panel(PanelAction::OpenRowMenu(0), &mut world2);
+    seed_tree(&mut h2, Vec::new());
+    h2.open_form(&mut world2, "Decal".to_string(), FormTarget::Entry(0));
+    let (g2, i2) = row_of(&h2, "a");
+    h2.apply_panel(PanelAction::OpenRowMenu(g2, i2), &mut world2);
     h2.apply_panel(PanelAction::RowDelete, &mut world2);
     assert!(!h2.form_open(), "deleting the edited entry closes its form");
 }
@@ -750,7 +835,7 @@ fn edit_panel_drags_by_its_title_bar() {
     let mut world = World::new_empty();
     super::super::inject::editor_hud(&mut world);
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), Some(0));
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     let vp = [1280.0, 720.0];
     let fo = h.origin(PanelKey::Edit, vp);
     world.add_component(FrameInput {
@@ -849,7 +934,7 @@ fn edit_form_title_bar_x_closes_the_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), Some(0));
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     assert!(h.form_open());
     let vp = [1280.0, 720.0];
     let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp));
@@ -878,7 +963,7 @@ fn every_panel_title_bar_x_closes_it() {
     // Assets.
     let mut h = hook(Vec::new());
     h.panel_open = true;
-    let ax = panel::close_rect(h.origin(PanelKey::Assets, vp));
+    let ax = close_rect_of(&h, PanelKey::Assets, vp);
     assert!(h.try_panel_press(PanelKey::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
     assert!(
         !h.panel_open && h.drag.is_none(),
@@ -1107,7 +1192,8 @@ fn add_form_writes_edited_arg_values() {
     // Pick a type with a float arg through the real picker->pick path.
     let ty = "PointLight".to_string();
     let idx = h
-        .combo_options(&world)
+        .picker_options(&world)
+        .unwrap()
         .iter()
         .position(|o| o == &ty)
         .expect("PointLight is offered");
@@ -1141,7 +1227,7 @@ fn add_form_writes_an_edited_colour_vector() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     // VolumetricFog (a newly offered type) has a `color` RGB vector field.
-    h.open_form(&mut world, "VolumetricFog".to_string(), None);
+    h.open_form(&mut world, "VolumetricFog".to_string(), FormTarget::New);
     let (j, key) = h
         .form_fields
         .iter()
@@ -1168,7 +1254,7 @@ fn add_form_writes_an_edited_colour_vector() {
 fn add_form_writes_a_nested_object_field() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "Camera3D".to_string(), None);
+    h.open_form(&mut world, "Camera3D".to_string(), FormTarget::New);
     let j = h
         .form_fields
         .iter()
@@ -1196,7 +1282,7 @@ fn add_form_writes_string_fields_for_a_new_type() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     // KeyBinding (a newly offered type) is a pair of string fields.
-    h.open_form(&mut world, "KeyBinding".to_string(), None);
+    h.open_form(&mut world, "KeyBinding".to_string(), FormTarget::New);
     let field_pos = |k: &str| {
         h.form_fields
             .iter()
@@ -1221,7 +1307,7 @@ fn add_form_cycles_and_persists_an_enum_field() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     // Sprite's `fit` is a string enum -> a cycling picker.
-    h.open_form(&mut world, "Sprite".to_string(), None);
+    h.open_form(&mut world, "Sprite".to_string(), FormTarget::New);
     let idx = h
         .form_fields
         .iter()
@@ -1256,7 +1342,7 @@ fn add_form_ref_field_offers_and_persists_an_existing_asset() {
     let mut world = world_with_fields();
     h.panel_open = true;
     // Add a Decal: its `texture` reference offers the two existing Textures.
-    h.open_form(&mut world, "Decal".to_string(), None);
+    h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
         .form_fields
         .iter()
@@ -1303,7 +1389,7 @@ fn add_form_ref_field_dropdown_picks_and_persists() {
     let mut h = hook(entries);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "Decal".to_string(), None);
+    h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
         .form_fields
         .iter()
@@ -1356,7 +1442,7 @@ fn scrolling_advances_an_open_field_dropdown() {
     let mut h = hook(entries);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "Decal".to_string(), None);
+    h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
         .form_fields
         .iter()
@@ -1389,7 +1475,7 @@ fn scrolling_advances_an_open_field_dropdown() {
 fn add_form_grows_an_array_and_edits_the_new_element() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), None);
+    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
     let header = |h: &EditorHook| {
         h.form_fields
             .iter()
@@ -1438,7 +1524,7 @@ fn add_form_grows_an_array_and_edits_the_new_element() {
 fn add_form_removes_an_array_element() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), None);
+    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
     let hj = h.form_fields.iter().position(|f| f.key == "waves").unwrap();
     // Grow to two, then remove one back to one.
     h.apply_form(FormAction::AddArrayElement(hj), &mut world);
@@ -1459,7 +1545,7 @@ fn add_form_removes_an_array_element() {
 fn form_discloses_a_vector_and_edits_one_element() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "PointLight".to_string(), None);
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
     let pos = |h: &EditorHook| {
         h.form_fields
             .iter()
@@ -1500,7 +1586,7 @@ fn form_discloses_a_vector_and_edits_one_element() {
 fn collapsing_a_vector_keeps_its_element_edits() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "PointLight".to_string(), None);
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
     let pj = h
         .form_fields
         .iter()
@@ -1541,7 +1627,7 @@ fn collapsing_a_vector_keeps_its_element_edits() {
 fn add_form_scrolls_to_and_edits_an_off_window_field() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), None);
+    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
     assert!(
         h.form_fields.len() > form::FIELD_POOL,
         "WaterSurface overflows the control pool"
@@ -1587,7 +1673,7 @@ fn add_form_scrolls_to_and_edits_an_off_window_field() {
 fn add_form_ref_field_defaults_to_none() {
     let mut h = hook(vec![entry("grass_tex", "Texture")]);
     let mut world = world_with_fields();
-    h.open_form(&mut world, "Decal".to_string(), None);
+    h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     set_field(&mut world, form_panel::NAME_INPUT, "bare");
     h.apply_form(FormAction::Confirm, &mut world);
     let decal = h.entries.iter().find(|e| e["name"] == "bare").unwrap();
@@ -1599,7 +1685,7 @@ fn invalid_arg_keeps_the_form_open_with_an_error() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     // Font has a u32 `size_px` field; a negative value cannot re-serialize.
-    h.open_form(&mut world, "Font".to_string(), None);
+    h.open_form(&mut world, "Font".to_string(), FormTarget::New);
     let j = h
         .form_fields
         .iter()
@@ -1622,8 +1708,8 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), Some(0));
-    assert!(h.form_open() && h.editing == Some(0));
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    assert!(h.form_open() && h.form_target == FormTarget::Entry(0));
     // Toggle the assets UI off: the form + selection are kept, not discarded.
     h.toggle_view_row(0, &mut world);
     assert!(!h.panel_open);
@@ -1631,11 +1717,15 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
         h.form_open(),
         "the form is kept when the panel is toggled off"
     );
-    assert_eq!(h.editing, Some(0), "the browse selection is kept");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(0),
+        "the browse selection is kept"
+    );
     // Toggle back on: the same form and selection are restored.
     h.toggle_view_row(0, &mut world);
     assert!(h.panel_open && h.form_open());
-    assert_eq!(h.editing, Some(0));
+    assert_eq!(h.form_target, FormTarget::Entry(0));
 }
 
 // Hiding the assets UI hides the form's elements (but keeps its state); showing
@@ -1650,7 +1740,7 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
     });
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), Some(0));
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     let form_shown = |w: &World| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == form_panel::EDIT_BG)
@@ -1677,8 +1767,9 @@ fn edit_form_seeds_and_updates_existing_args() {
     })]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.apply_panel(PanelAction::OpenEntry(0), &mut world);
-    assert_eq!(h.editing, Some(0));
+    seed_tree(&mut h, Vec::new());
+    click_row(&mut h, "lamp", &mut world);
+    assert_eq!(h.form_target, FormTarget::Entry(0));
     assert!(!h.form_fields.is_empty());
     // The name field was seeded from the entry.
     assert_eq!(widget::field_text(&world, form_panel::NAME_INPUT), "lamp");
@@ -1724,34 +1815,36 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     });
     let mut h = hook(vec![entry("a", "PointLight"), entry("b", "Decal")]);
     h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
 
-    // Grouped list: panel drawn, first row shows a type sub-header.
+    // Tree: panel drawn, first row is the World group header.
     h.tick(&mut world);
     assert!(sprite_visible(&world, panel::PANEL_BG), "panel bg shown");
-    let row0 = label(&world, panel::list_row_label(0));
+    let row0 = label(&world, panel::name_label(0));
     assert!(
-        row0.visible && row0.content == "Decal",
-        "first row is a header"
+        row0.visible && row0.content.starts_with("- World"),
+        "first row is the World group header, got {:?}",
+        row0.content
     );
 
-    // Picker combo: the solid backing and the filter field show.
-    h.combo = Combo::Picker;
+    // Type picker: the solid backing and the search field show.
+    h.picker_open = true;
     h.tick(&mut world);
     assert!(
-        sprite_visible(&world, panel::COMBO_BG),
-        "combo backing shown"
+        sprite_visible(&world, panel::PICKER_BG),
+        "picker backing shown"
     );
     assert!(
         world
             .query::<TextInput>()
-            .find(|t| t.asset_id == panel::FILTER_INPUT)
+            .find(|t| t.asset_id == panel::SEARCH_INPUT)
             .unwrap()
             .visible
     );
 
-    // Row menu: the Delete popup shows over the "a" name row (entry 0).
-    h.combo = Combo::Closed;
-    h.row_menu = Some(0);
+    // Row menu: the Delete popup shows over the "a" row.
+    h.picker_open = false;
+    h.row_menu = Some("a".to_string());
     h.tick(&mut world);
     assert!(sprite_visible(&world, panel::MENU_BG), "row menu shown");
     assert_eq!(label(&world, panel::MENU_DELETE_LABEL).content, "Delete");
@@ -1759,7 +1852,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     // Form open: the edit panel shows alongside the browse list, with its
     // title bar, name heading, and confirm button.
     h.row_menu = None;
-    h.open_form(&mut world, "PointLight".to_string(), None);
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
     h.tick(&mut world);
     assert!(
         sprite_visible(&world, form_panel::APPLY_BG),
@@ -1779,8 +1872,8 @@ fn tick_lays_out_the_open_panel_in_every_state() {
         "the name heading shows"
     );
     assert!(
-        label(&world, panel::list_row_label(0)).visible,
-        "the browse list stays visible beside the form"
+        label(&world, panel::name_label(0)).visible,
+        "the tree stays visible beside the form"
     );
 
     // Closing the panel + form blanks both.
@@ -1821,28 +1914,31 @@ fn write_jsonl_persists_entries_atomically() {
 
 #[test]
 fn scroll_moves_each_regions_offset() {
-    let mut world = world_with_fields();
-    // A long browse list so the closed-combo list scroll can advance.
+    let world = world_with_fields();
+    // A tree longer than the row window, so its scroll can advance.
     let mut h = hook(
         (0..20)
             .map(|i| entry(&format!("log{i}"), "Logger"))
             .collect(),
     );
-    h.row_menu = Some(0);
-    h.scroll_list(1.0, &mut world);
-    assert!(h.list_scroll > 0, "a closed combo scrolls the browse list");
+    seed_tree(&mut h, Vec::new());
+    h.row_menu = Some("log0".to_string());
+    h.scroll_tree(1.0, &world);
+    assert!(h.tree_scroll > 0, "a closed picker scrolls the tree");
     assert!(h.row_menu.is_none(), "scrolling dismisses an open row menu");
-    h.scroll_list(-1.0, &mut world);
-    assert_eq!(h.list_scroll, 0, "scrolling back up clamps at the top");
+    h.scroll_tree(-1.0, &world);
+    assert_eq!(h.tree_scroll, 0, "scrolling back up clamps at the top");
 
-    // An open filter combo scrolls its own option list instead of the browse list.
-    h.combo = Combo::Filter;
-    let before = h.list_scroll;
-    h.scroll_list(1.0, &mut world);
+    // An open picker scrolls its own option list instead of the tree.
+    h.picker_open = true;
+    let before = h.tree_scroll;
+    h.scroll_tree(1.0, &world);
     assert_eq!(
-        h.list_scroll, before,
-        "the browse list stays put with a combo open"
+        h.tree_scroll, before,
+        "the tree stays put while the picker is open"
     );
+    assert!(h.picker_scroll > 0, "the picker's own list scrolled");
+    h.picker_open = false;
 
     // A picked template detail scrolls its own asset list.
     h.open_template = Some(0);
@@ -1918,49 +2014,30 @@ fn apply_form_focus_toggle_and_consume() {
 }
 
 #[test]
-fn apply_panel_toggles_combos_and_consumes() {
+fn apply_panel_toggles_the_picker_and_consumes() {
     let mut world = world_with_fields();
     let mut h = hook(Vec::new());
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert_eq!(h.combo, Combo::Picker);
+    assert!(h.picker_open);
+    assert!(h.search_focus, "the picker types into the search field");
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert_eq!(h.combo, Combo::Closed, "a second toggle closes the picker");
-    h.apply_panel(PanelAction::ToggleFilter, &mut world);
-    assert_eq!(h.combo, Combo::Filter);
-    h.apply_panel(PanelAction::ToggleFilter, &mut world);
-    assert_eq!(h.combo, Combo::Closed, "a second toggle closes the filter");
+    assert!(!h.picker_open, "a second toggle closes the picker");
     h.apply_panel(PanelAction::Consume, &mut world);
 }
 
 #[test]
-fn apply_panel_pick_option_by_combo_flavour() {
+fn apply_panel_pick_option_opens_the_add_form() {
     let mut world = world_with_fields();
     let mut h = hook(vec![entry("log", "Logger")]);
 
-    // Filter: picking "All" clears the type filter.
-    h.type_filter = Some("Logger".to_string());
-    h.combo = Combo::Filter;
-    let opts = h.combo_options(&world);
-    let all_idx = opts.iter().position(|o| o == panel::ALL_LABEL).unwrap();
-    h.apply_panel(PanelAction::PickOption(all_idx), &mut world);
-    assert!(h.type_filter.is_none());
-    assert_eq!(h.combo, Combo::Closed);
-
-    // Filter: picking a concrete type sets the filter.
-    h.combo = Combo::Filter;
-    let opts = h.combo_options(&world);
-    let logger_idx = opts.iter().position(|o| o == "Logger").unwrap();
-    h.apply_panel(PanelAction::PickOption(logger_idx), &mut world);
-    assert_eq!(h.type_filter.as_deref(), Some("Logger"));
-
-    // Picker: picking a type opens the add form.
-    h.combo = Combo::Picker;
+    h.picker_open = true;
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open(), "a picker pick opens the add form");
+    assert!(!h.picker_open, "and closes the picker behind it");
 
-    // A pick with the combo already closed is a no-op.
+    // A pick with the picker already closed is a no-op: there is no option
+    // list to index into.
     h.close_form();
-    h.combo = Combo::Closed;
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(!h.form_open());
 }
@@ -2495,7 +2572,11 @@ fn import_rows_list_and_open_in_the_edit_form() {
     h.apply_import_action(ImportAction::Open(0), &mut world);
     assert!(h.panel_open, "the Assets UI comes up with the form");
     assert!(h.form_open());
-    assert_eq!(h.editing, Some(1), "the clicked entry is being edited");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(1),
+        "the clicked entry is being edited"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2537,7 +2618,7 @@ fn import_browse_result_fills_the_path_field_relatively() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// The Assets panel's Expanded tab
+// The Assets panel's origin-grouped tree
 
 // A world whose GraphicsConfig pulls in companions, so the expansion has
 // something to show without needing a scene file on disk.
@@ -2550,159 +2631,196 @@ fn expandable_hook() -> EditorHook {
     h
 }
 
-// The model is only cooked when the tab is actually showing: the Config tab
+// The first asset the build generates that an authored line could override,
+// as (group, index, name).
+fn a_promotable_asset(h: &EditorHook) -> (usize, usize, String) {
+    h.tree_groups
+        .iter()
+        .enumerate()
+        .find_map(|(gi, g)| {
+            g.assets
+                .iter()
+                .enumerate()
+                .find_map(|(ai, a)| a.promote.as_ref().map(|_| (gi, ai, a.name.clone())))
+        })
+        .expect("an injected default can be promoted")
+}
+
+// The model is only cooked when the panel is actually showing: a closed panel
 // must not pay for an expansion it never draws.
 #[test]
-fn the_expanded_model_is_cooked_only_while_its_tab_is_up() {
+fn the_tree_is_cooked_only_while_the_panel_is_up() {
     let mut h = expandable_hook();
-    assert!(h.expanded_stale);
-    h.refresh_expanded_if_needed();
+    h.panel_open = false;
+    assert!(h.tree_stale);
+    h.refresh_tree_if_needed();
     assert!(
-        h.expanded_stale && h.expanded_groups.is_empty(),
-        "the Config tab does not cook"
+        h.tree_stale && h.tree_groups.is_empty(),
+        "a hidden panel does not cook"
     );
 
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    assert!(!h.expanded_stale);
+    h.panel_open = true;
+    h.refresh_tree_if_needed();
+    assert!(!h.tree_stale);
     assert!(
-        !h.expanded_groups.is_empty(),
+        !h.tree_groups.is_empty(),
         "the injected companions are grouped"
     );
-    assert_eq!(h.expanded_status, None);
+    assert_eq!(h.tree_status, None);
 }
 
 // An edit invalidates the model, and the refresh happens once for a burst of
 // edits rather than once per edit.
 #[test]
-fn an_edit_restales_the_expanded_model() {
+fn an_edit_restales_the_tree() {
     let mut h = expandable_hook();
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    assert!(!h.expanded_stale);
+    h.refresh_tree_if_needed();
+    assert!(!h.tree_stale);
     h.mark_changed();
-    assert!(h.expanded_stale, "the expansion follows the entries");
+    assert!(h.tree_stale, "the expansion follows the entries");
     h.mark_changed();
-    h.refresh_expanded_if_needed();
-    assert!(!h.expanded_stale, "one refresh covers the burst");
+    h.refresh_tree_if_needed();
+    assert!(!h.tree_stale, "one refresh covers the burst");
 }
 
 #[test]
-fn switching_tabs_drops_the_config_overlays() {
+fn groups_fold_and_unfold() {
     let mut h = expandable_hook();
-    h.combo = Combo::Picker;
-    h.row_menu = Some(0);
-    h.switch_tab(Tab::Expanded);
-    assert_eq!(h.tab, Tab::Expanded);
-    assert_eq!(h.combo, Combo::Closed);
-    assert_eq!(h.row_menu, None);
+    let world = world_with_fields();
+    h.refresh_tree_if_needed();
+    let folded = h.tree_rows(&world).len();
+    assert_eq!(folded, h.tree_groups.len(), "headers only");
+
+    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
+    assert!(h.tree_rows(&world).len() > folded, "the group unfolded");
+    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
+    assert_eq!(h.tree_rows(&world).len(), folded, "and folded again");
 }
 
+// The heart of the merged panel: a generated asset has no world.jsonl line, so
+// clicking it opens a form seeded from what the expansion produced, and ONLY
+// confirming appends that line -- keeping the generated name, which is what
+// makes the new line override the expansion.
 #[test]
-fn groups_collapse_and_expand() {
+fn editing_a_generated_asset_promotes_it_on_confirm() {
     let mut h = expandable_hook();
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    let collapsed = h.expanded_rows().len();
-    assert_eq!(collapsed, h.expanded_groups.len(), "headers only");
-
-    h.toggle_expanded_group(0);
-    assert!(h.expanded_rows().len() > collapsed, "the group unfolded");
-    h.toggle_expanded_group(0);
-    assert_eq!(h.expanded_rows().len(), collapsed, "and folded again");
-}
-
-// "+" copies the generated entry into the config, marks the world dirty, and
-// restales the model so the row grays out. It does NOT rebuild the preview: the
-// built world is identical, since the entry is what the expansion emitted.
-#[test]
-fn adding_an_expanded_asset_copies_its_entry_without_a_rebuild() {
-    let mut h = expandable_hook();
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    h.rebuild_preview = false;
-    h.dirty = false;
-
-    // Find a group holding a copyable asset.
-    let (gi, ai, name, expected) = h
-        .expanded_groups
-        .iter()
-        .enumerate()
-        .find_map(|(gi, g)| {
-            g.assets
-                .iter()
-                .enumerate()
-                .find_map(|(ai, a)| a.entry.clone().map(|e| (gi, ai, a.name.clone(), e)))
-        })
-        .expect("an injected default is copyable");
-
+    let mut world = world_with_fields();
+    h.refresh_tree_if_needed();
+    let (gi, ai, name) = a_promotable_asset(&h);
     let before = h.entries.len();
-    h.add_expanded(gi, ai);
-    assert_eq!(h.entries.len(), before + 1);
-    assert_eq!(
-        h.entries.last().unwrap(),
-        &expected,
-        "the entry is copied verbatim"
-    );
-    assert_eq!(entry_name(h.entries.last().unwrap()), Some(name.as_str()));
-    assert!(h.dirty, "the copy is an unsaved change");
+
+    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
+    assert!(h.form_open(), "a generated asset still opens the form");
     assert!(
-        !h.rebuild_preview,
-        "the built world is unchanged, so no rebuild is needed"
+        matches!(h.form_target, FormTarget::Promote(_)),
+        "seeded from the expansion, not from an entry"
     );
-    assert!(h.expanded_stale, "the row must gray out");
+    assert_eq!(
+        widget::field_text(&world, form_panel::NAME_INPUT),
+        name,
+        "the name heading carries the generated name"
+    );
+    assert_eq!(
+        h.entries.len(),
+        before,
+        "opening the form alone adds no line"
+    );
+    assert!(h.selection.contains(&name), "and the row selects");
+
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries.len(), before + 1, "confirming appends the line");
+    let added = h.entries.last().unwrap();
+    assert_eq!(
+        entry_name(added),
+        Some(name.as_str()),
+        "the promoted line keeps the generated name, so it shadows it"
+    );
+    assert!(h.dirty && h.tree_stale);
 }
 
-// After copying, the asset is still listed under its origin (now grayed and
-// with no "+"), rather than vanishing from the tab. This is the whole point of
-// the cook side recording shadows.
+// After promoting, the asset relists once -- as an authored line under the
+// world group -- rather than staying under its origin or appearing twice.
 #[test]
-fn a_copied_asset_stays_listed_and_loses_its_add_button() {
+fn a_promoted_asset_relists_as_authored_under_the_world_group() {
     let mut h = expandable_hook();
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    let (gi, ai, name) = h
-        .expanded_groups
-        .iter()
-        .enumerate()
-        .find_map(|(gi, g)| {
-            g.assets
-                .iter()
-                .enumerate()
-                .find_map(|(ai, a)| a.entry.as_ref().map(|_| (gi, ai, a.name.clone())))
-        })
-        .expect("an injected default is copyable");
+    let mut world = world_with_fields();
+    h.refresh_tree_if_needed();
+    let (gi, ai, name) = a_promotable_asset(&h);
+    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
+    h.apply_form(FormAction::Confirm, &mut world);
+    h.refresh_tree_if_needed();
 
-    h.add_expanded(gi, ai);
-    h.refresh_expanded_if_needed();
-
-    let found = h
-        .expanded_groups
+    let listings: Vec<&str> = h
+        .tree_groups
         .iter()
-        .flat_map(|g| g.assets.iter())
+        .filter(|g| g.assets.iter().any(|a| a.name == name))
+        .map(|g| g.label.as_str())
+        .collect();
+    assert_eq!(
+        listings,
+        [asset_tree::WORLD_GROUP],
+        "listed once, under World"
+    );
+    let promoted = h
+        .tree_groups
+        .iter()
+        .flat_map(|g| &g.assets)
         .find(|a| a.name == name)
-        .expect("the copied asset is still listed under its origin");
-    assert!(found.in_config, "and marked as already in the config");
-    assert!(found.entry.is_none(), "so it offers no second copy");
+        .unwrap();
+    assert!(promoted.promote.is_none(), "nothing left to promote");
 
-    // Adding it again is a no-op (the name is taken).
+    // Clicking it again now edits the line in place rather than re-promoting.
+    let (g2, i2) = row_of(&h, &name);
     let before = h.entries.len();
-    h.add_expanded(gi, ai);
-    assert_eq!(h.entries.len(), before, "no duplicate entry");
+    h.apply_panel(PanelAction::SelectRow(g2, i2), &mut world);
+    assert!(matches!(h.form_target, FormTarget::Entry(_)));
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries.len(), before, "edited in place, not appended");
 }
 
-// A world that does not cook reports why instead of showing an empty list.
+// The passes that emit unconditionally cannot be overridden by a copy, so their
+// rows select but open no form -- and a form already open on something else
+// closes rather than staying pointed at the previous asset.
 #[test]
-fn a_broken_world_reports_its_error_on_the_expanded_tab() {
+fn an_unconditional_expansion_selects_but_does_not_edit() {
+    let mut h = hook(vec![entry("lamp", "PointLight")]);
+    let mut world = world_with_fields();
+    h.panel_open = true;
+    seed_tree(
+        &mut h,
+        vec![TreeGroup {
+            label: asset_tree::UNATTRIBUTED.to_string(),
+            assets: vec![asset_tree::TreeAsset {
+                name: "menu_tab_0".to_string(),
+                asset_type: "TextLabel".to_string(),
+                badge: asset_tree::Badge::Imported,
+                promote: None,
+            }],
+        }],
+    );
+    click_row(&mut h, "lamp", &mut world);
+    assert!(h.form_open(), "the authored line opens its form");
+
+    click_row(&mut h, "menu_tab_0", &mut world);
+    assert!(!h.form_open(), "a fixed expansion has nothing to edit");
+    assert!(
+        h.selection.contains("menu_tab_0"),
+        "but it still selects in the viewport"
+    );
+    assert!(h.entries.len() == 1, "and nothing was appended");
+}
+
+// A world that does not cook reports why instead of showing an empty tree.
+#[test]
+fn a_broken_world_reports_its_error_in_the_status_line() {
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
         "name": "oops", "type": "NotARealAssetType", "args": {}
     })]);
     h.panel_open = true;
-    h.switch_tab(Tab::Expanded);
-    h.refresh_expanded_if_needed();
-    assert!(h.expanded_groups.is_empty());
-    let status = h.expanded_status.as_deref().expect("the failure surfaces");
+    h.refresh_tree_if_needed();
+    assert!(h.tree_groups.is_empty());
+    let status = h.tree_status.as_deref().expect("the failure surfaces");
     assert!(status.contains("NotARealAssetType"), "{status}");
 }
 
@@ -2767,11 +2885,15 @@ fn undo_drops_entry_indexed_ui_state() {
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
     h.selected_type = Some("Sprite".to_string());
-    h.editing = Some(1);
-    h.row_menu = Some(1);
+    h.form_target = FormTarget::Entry(1);
+    h.row_menu = Some("b".to_string());
 
     h.undo(&mut world);
-    assert_eq!(h.editing, None, "the form no longer targets a live row");
+    assert_eq!(
+        h.form_target,
+        FormTarget::New,
+        "the form no longer targets a live row"
+    );
     assert_eq!(h.selected_type, None);
     assert_eq!(h.row_menu, None);
 }
@@ -2944,8 +3066,11 @@ fn viewport_click_picks_the_nearest_prop_and_opens_its_form() {
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("box_near"), "nearest hit wins");
     assert!(h.panel_open, "the assets UI comes up around the form");
-    assert_eq!(h.tab, Tab::Config);
-    assert_eq!(h.editing, Some(0), "the form targets the picked entry");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(0),
+        "the form targets the picked entry"
+    );
     assert_eq!(h.selected_type.as_deref(), Some("Sprite"));
 }
 
@@ -2992,15 +3117,16 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
         "the cycle wraps back to the front"
     );
 
-    // Aim up-left, well away from both boxes and every panel: the press arms
-    // a marquee, and the still release clears.
-    click_at(&mut world, &mut h, [400.0, 120.0]);
+    // Aim into the gutter between the Preview panel and the edit form, well
+    // away from both boxes: the press arms a marquee, and the still release
+    // clears.
+    click_at(&mut world, &mut h, [250.0, 450.0]);
     assert_eq!(
         h.selection.active(),
         Some("box_near"),
         "the selection survives until the release decides click vs marquee"
     );
-    release_at(&mut world, &mut h, [400.0, 120.0]);
+    release_at(&mut world, &mut h, [250.0, 450.0]);
     assert_eq!(
         h.selection.active(),
         None,
@@ -3008,10 +3134,10 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
     );
 }
 
-// Picking an asset the config does not declare (a build-generated one) flips
-// the assets UI to the Expanded tab instead of opening a form.
+// Picking an asset the world does not declare opens no form until the tree
+// knows how (if at all) it can be promoted: an unknown name is selectable only.
 #[test]
-fn viewport_click_on_a_generated_asset_reveals_the_expanded_tab() {
+fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
     isolate_state_dir();
     crate::ecs::asset_id::reset_interner();
     let generated = crate::ecs::asset_id::intern("some_generated_asset");
@@ -3023,9 +3149,13 @@ fn viewport_click_on_a_generated_asset_reveals_the_expanded_tab() {
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("some_generated_asset"));
-    assert!(h.panel_open);
-    assert_eq!(h.tab, Tab::Expanded, "an unauthored pick goes to Expanded");
-    assert_eq!(h.editing, None, "no form for a generated asset");
+    assert!(h.panel_open, "the assets UI still comes up");
+    assert_eq!(
+        h.form_target,
+        FormTarget::New,
+        "nothing in the tree to seed a form from"
+    );
+    assert!(!h.form_open());
 }
 
 // Undo/redo invalidates the pick state along with the other entry-indexed UI.
@@ -3362,7 +3492,11 @@ fn shift_click_toggles_selection_membership() {
         "shift-click adds the second box"
     );
     assert_eq!(h.selection.active(), Some("box_b"), "the newest is active");
-    assert_eq!(h.editing, Some(1), "the form follows the active member");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(1),
+        "the form follows the active member"
+    );
 
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
     assert_eq!(
@@ -3413,7 +3547,9 @@ fn marquee_drag_selects_the_boxed_assets() {
     click_at(&mut world, &mut h, [200.0, 600.0]);
     release_at(&mut world, &mut h, [200.0, 600.0]);
     assert_eq!(h.selection.iter().collect::<Vec<_>>(), ["box_a"]);
-    click_at_mod(&mut world, &mut h, [360.0, 450.0], true);
+    // Starts in the Preview / edit-form gutter, right of box_a's projection so
+    // the box encloses box_b alone.
+    click_at_mod(&mut world, &mut h, [250.0, 450.0], true);
     assert!(h.marquee.is_some());
     drag_to(&mut world, &mut h, [560.0, 700.0]);
     release_at(&mut world, &mut h, [560.0, 700.0]);
@@ -3626,26 +3762,32 @@ fn gizmo_mode_keys_switch_unless_typing() {
     assert!(!h.fly, "typing keeps F");
 }
 
-// An Outliner row click mirrors a viewport pick: plain replaces the selection
-// and opens the picked authored entry's edit form; with shift held it toggles
-// membership instead.
+// A tree row click mirrors a viewport pick: plain replaces the selection and
+// opens the clicked entry's edit form; with shift held it toggles membership
+// instead.
 #[test]
-fn outliner_row_click_selects_and_opens_the_form() {
+fn tree_row_click_selects_and_opens_the_form() {
     let mut world = world_with_fields();
     let mut h = hook(vec![entry("box", "Sprite"), entry("cam", "Camera3D")]);
-    h.apply_outliner_action(OutlinerAction::Select("box".to_string()), &mut world);
+    h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
+    click_row(&mut h, "box", &mut world);
     assert_eq!(h.selection.active(), Some("box"));
     assert!(h.panel_open, "the assets UI comes up around the form");
-    assert_eq!(h.editing, Some(0), "the form targets the clicked entry");
+    assert_eq!(
+        h.form_target,
+        FormTarget::Entry(0),
+        "the form targets the clicked entry"
+    );
 
     h.shift_held = true;
-    h.apply_outliner_action(OutlinerAction::Select("cam".to_string()), &mut world);
+    click_row(&mut h, "cam", &mut world);
     assert_eq!(
         h.selection.iter().collect::<Vec<_>>(),
         ["box", "cam"],
         "a shift click adds"
     );
-    h.apply_outliner_action(OutlinerAction::Select("cam".to_string()), &mut world);
+    click_row(&mut h, "cam", &mut world);
     assert_eq!(
         h.selection.iter().collect::<Vec<_>>(),
         ["box"],
@@ -3656,14 +3798,17 @@ fn outliner_row_click_selects_and_opens_the_form() {
 // The eye / lock toggles are editor-session state: they flip the hook's sets
 // (the hidden set publishing as ids each tick) and never touch the entries.
 #[test]
-fn outliner_hide_and_lock_are_session_state_not_edits() {
+fn hide_and_lock_are_session_state_not_edits() {
     crate::ecs::asset_id::reset_interner();
     let id = crate::ecs::asset_id::intern("box");
     let mut world = world_with_input(FrameInput::default());
     let mut h = hook(vec![entry("box", "Sprite")]);
+    h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
+    let (g, i) = row_of(&h, "box");
 
-    h.apply_outliner_action(OutlinerAction::ToggleHide("box".to_string()), &mut world);
-    h.apply_outliner_action(OutlinerAction::ToggleLock("box".to_string()), &mut world);
+    h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
+    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
     assert!(h.hidden_assets.contains("box"));
     assert!(h.locked_assets.contains("box"));
     assert!(!h.dirty, "session toggles are not authored edits");
@@ -3674,8 +3819,8 @@ fn outliner_hide_and_lock_are_session_state_not_edits() {
         .expect("the hook publishes the hidden set every tick");
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 
-    h.apply_outliner_action(OutlinerAction::ToggleHide("box".to_string()), &mut world);
-    h.apply_outliner_action(OutlinerAction::ToggleLock("box".to_string()), &mut world);
+    h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
+    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
     assert!(h.hidden_assets.is_empty() && h.locked_assets.is_empty());
 }
 
@@ -3695,32 +3840,33 @@ fn locked_assets_are_skipped_by_viewport_picking() {
 }
 
 // A viewport pick unfolds the picked asset's group and scrolls its row into
-// the Outliner's window.
+// the tree's window.
 #[test]
-fn viewport_pick_reveals_the_outliner_row() {
+fn viewport_pick_reveals_the_tree_row() {
     let world = World::new_empty();
     let mut h = hook(Vec::new());
-    h.outliner_open = true;
-    h.outliner_stale = false;
-    h.outliner_groups = vec![outliner::OutlinerGroup {
-        label: outliner::WORLD_GROUP.to_string(),
+    h.panel_open = true;
+    h.tree_stale = false;
+    h.tree_groups = vec![TreeGroup {
+        label: asset_tree::WORLD_GROUP.to_string(),
         assets: (0..30)
-            .map(|i| outliner::OutlinerAsset {
+            .map(|i| asset_tree::TreeAsset {
                 name: format!("a{i:02}"),
                 asset_type: "Sprite".to_string(),
-                badge: outliner::Badge::Authored,
+                badge: asset_tree::Badge::Authored,
+                promote: None,
             })
             .collect(),
     }];
 
-    h.reveal_outliner("a25", &world);
-    assert_eq!(h.outliner_unfolded, vec![0], "the group unfolds");
+    h.reveal_in_tree("a25", &world);
+    assert_eq!(h.tree_unfolded, vec![0], "the group unfolds");
     // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
-    assert_eq!(h.outliner_scroll, 31 - outliner_panel::ROW_POOL);
+    assert_eq!(h.tree_scroll, 31 - panel::ROW_POOL);
 
     // A revealed row already inside the window leaves the scroll alone.
-    h.reveal_outliner("a20", &world);
-    assert_eq!(h.outliner_scroll, 31 - outliner_panel::ROW_POOL);
+    h.reveal_in_tree("a20", &world);
+    assert_eq!(h.tree_scroll, 31 - panel::ROW_POOL);
 }
 
 // Billboard test rig: the pick rig plus a PointLight entity indexed by name

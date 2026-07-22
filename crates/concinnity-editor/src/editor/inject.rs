@@ -320,10 +320,10 @@ mod tests {
         for id in [
             panel::PANEL_BG,
             panel::PLUS_BG,
-            panel::COMBO_BG,
+            panel::PICKER_BG,
             panel::MENU_BG,
-            panel::list_row_bg(0),
-            panel::combo_row_bg(0),
+            panel::row_bg(0),
+            panel::picker_row_bg(0),
             preview::PANEL_BG,
             preview::ROW_BG,
             preview::CHECK_BOX,
@@ -358,7 +358,7 @@ mod tests {
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();
-        assert!(fields.contains(&panel::FILTER_INPUT));
+        assert!(fields.contains(&panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
 

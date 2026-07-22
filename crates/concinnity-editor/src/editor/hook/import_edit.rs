@@ -154,7 +154,7 @@ impl EditorHook {
             return;
         };
         self.panel_open = true;
-        self.open_form(world, ty, Some(idx));
+        self.open_form(world, ty, FormTarget::Entry(idx));
     }
 
     // Enter in the focused path field adds, like clicking the Add button.
