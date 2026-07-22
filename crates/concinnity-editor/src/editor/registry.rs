@@ -35,12 +35,13 @@ pub(crate) enum PanelKey {
     Import,
     Health,
     Outliner,
+    Console,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 11;
+pub(crate) const PANEL_COUNT: usize = 12;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -54,6 +55,7 @@ impl PanelKey {
         PanelKey::Import,
         PanelKey::Health,
         PanelKey::Outliner,
+        PanelKey::Console,
         PanelKey::TemplateDetail,
     ];
 
@@ -83,6 +85,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // overlays, and 0x1000.. to the billboards (all allocated in
             // their own modules).
             PanelKey::Outliner => 0xF00,
+            // Above the billboards' open-ended run, which ends well short of
+            // 0x2000 today (`id_families_are_disjoint` holds the line).
+            PanelKey::Console => 0x2000,
         }
 }
 
@@ -162,6 +167,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::ImportPanel,
     &panels::HealthPanel,
     &panels::OutlinerPanel,
+    &panels::ConsolePanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -255,7 +261,8 @@ mod tests {
                 "Story",
                 "Import",
                 "Health",
-                "Outliner"
+                "Outliner",
+                "Console"
             ]
         );
     }

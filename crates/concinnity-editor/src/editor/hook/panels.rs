@@ -706,6 +706,88 @@ impl Panel for StoryPanel {
     }
 }
 
+pub(crate) struct ConsolePanel;
+
+impl Panel for ConsolePanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Console
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Console")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.console_open
+    }
+    // Opening focuses a cleared command line (backtick does the same through
+    // the hook's key drive).
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.toggle_console(world);
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.console_open = false;
+        hook.console_focus = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        console_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        console_panel::default_origin(vp)
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        console_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        console_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        console_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, "/help"))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        match console_panel::hit_test(mx, my, o) {
+            Some(a) => {
+                hook.apply_console_action(a, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(
+        &self,
+        _hook: &EditorHook,
+        _world: &World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        console_panel::cursor_over_log(mx, my, o)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_console(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.console_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let (lines, total, first) = hook.console_window();
+        let ghost = hook.console_ghost(world);
+        let view = hook.make_console_view(&lines, total, first, &ghost, mouse);
+        console_panel::apply(world, Some(&view), o);
+    }
+    fn hide(&self, world: &mut World) {
+        console_panel::apply(world, None, [0.0, 0.0]);
+    }
+}
+
 pub(crate) struct ImportPanel;
 
 impl Panel for ImportPanel {

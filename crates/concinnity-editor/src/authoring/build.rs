@@ -195,7 +195,15 @@ pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
 // caches are warm.
 pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
-    let loaded = prepare(&content)?;
+    build_world_str_to_disk(&content)
+}
+
+// The string-backed tail of `build_world_to_disk`: compile world content and
+// write the blobs + lock without reading (or writing) a world.jsonl. The
+// editor console's build command goes through here so it compiles the
+// in-memory entries as they stand, saved or not.
+pub(crate) fn build_world_str_to_disk(content: &str) -> std::io::Result<()> {
+    let loaded = prepare(content)?;
     let result = concinnity_cook::build_compiled(loaded.assets, None)?;
     concinnity_cook::write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     Ok(())

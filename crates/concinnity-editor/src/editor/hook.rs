@@ -30,6 +30,8 @@
 // the live render backend is transplanted out of the world and `apply_world_swap`
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
+use super::console::{self, ConsoleSink};
+use super::console_panel::{self, ConsoleAction, ConsoleView};
 use super::expanded::{self, ExpandedGroup, ExpandedRow};
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
@@ -148,6 +150,19 @@ pub(crate) struct EditorHook {
     outliner_stale: bool,
     outliner_focus: bool,
     outliner_status: Option<String>,
+    // The Console panel: shown state, whether the command line holds keyboard
+    // focus (suppressed for one frame after a backtick open so the text
+    // system does not type the backtick into it), the log window's scroll
+    // position with its pinned-to-bottom flag (pinned auto-scrolls on new
+    // lines until the user scrolls up), the shared log sink, and whether a
+    // worker is mid-build (the /cook guard).
+    console_open: bool,
+    console_focus: bool,
+    console_blur: bool,
+    console_scroll: usize,
+    console_pinned: bool,
+    console_sink: ConsoleSink,
+    console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // Editor-session hide / lock sets, by NAME (ids drift across preview
     // rebuilds). Hidden assets skip rendering (via the published
     // `EditorHidden` resource); locked ones are skipped by viewport picking.
@@ -321,6 +336,8 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 
 mod billboard_drive;
 mod browse;
+// Named to avoid colliding with the `use super::console` module import.
+mod console_edit;
 mod editing;
 mod edits;
 mod fly;
@@ -379,6 +396,13 @@ impl EditorHook {
             outliner_stale: true,
             outliner_focus: false,
             outliner_status: None,
+            console_open: false,
+            console_focus: false,
+            console_blur: false,
+            console_scroll: 0,
+            console_pinned: true,
+            console_sink: ConsoleSink::default(),
+            console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
             shift_held: false,
@@ -426,11 +450,25 @@ impl EditorHook {
 }
 
 impl EditorHook {
+    // Replace the standalone sink defaulted by `new` with the shared one the
+    // tracing mirror was installed on (see `run_editor`).
+    pub(crate) fn with_console_sink(mut self, sink: ConsoleSink) -> Self {
+        self.console_sink = sink;
+        self
+    }
+
     // Whether any editor text control holds keyboard focus this frame: the
     // header combo's filter field, an open edit form (its name / arg inputs
     // always own focus while it shows), or a focused Lighting / Story / Import
-    // field. Undo/redo shortcuts stand down while typing.
+    // / Outliner / Console field. Undo/redo shortcuts stand down while typing.
     fn text_focus_active(&self) -> bool {
+        self.non_console_text_focus() || self.console_focus
+    }
+
+    // The same, excluding the console's own command line: the backtick toggle
+    // must keep working while the console is being typed into, but stand down
+    // while any other field is (a backtick there is just a character).
+    fn non_console_text_focus(&self) -> bool {
         self.combo != Combo::Closed
             || self.selected_type.is_some()
             || self.lighting_focus.is_some()
@@ -513,6 +551,11 @@ impl DebugHook for EditorHook {
                         _ => {}
                     }
                 }
+                // Backtick toggles the console. The flag cleared here is the
+                // one-frame focus blur a backtick open sets, so the text
+                // system never types that backtick into the command line.
+                self.console_blur = false;
+                self.drive_console_toggle(input, world);
                 // Ctrl+Z / Ctrl+Y step the entry list through the history,
                 // unless the world owns the keyboard (play mode), a text
                 // field does (its own editing keys must win), or a gizmo drag

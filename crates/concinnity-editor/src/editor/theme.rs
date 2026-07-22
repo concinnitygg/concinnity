@@ -38,6 +38,13 @@ pub(crate) const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 pub(crate) const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
 pub(crate) const HEADING: [f32; 3] = [0.93, 0.94, 0.97];
 
+// Console log-line colours by severity, plus the dimmed echo of a submitted
+// command line.
+pub(crate) const LOG_INFO: [f32; 3] = LABEL;
+pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];
+pub(crate) const LOG_ERROR: [f32; 3] = [0.95, 0.55, 0.55];
+pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
+
 // How far a row's hover / selection highlight is inset from the row rect, so
 // the highlight reads as a floating pill rather than a full-width band.
 pub(crate) const HIGHLIGHT_INSET_X: f32 = 4.0;

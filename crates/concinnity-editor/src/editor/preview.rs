@@ -71,7 +71,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 // Position + show the panel at origin `o`, colouring each checkbox by state.
 pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool, fly: bool, mouse: [f32; 2]) {
     let rows = [
-        Row::checkbox("Capture mouse", capture),
+        Row::checkbox("Capture input", capture),
         Row::checkbox("Fly camera (F)", fly),
     ];
     list_panel::apply(world, BASE, o, PREVIEW_W, "Preview", &rows, mouse);

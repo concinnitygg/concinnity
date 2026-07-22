@@ -8,6 +8,8 @@
 
 mod asset_list;
 mod billboards;
+mod console;
+mod console_panel;
 mod expanded;
 mod file_dialog;
 mod form;
@@ -62,7 +64,11 @@ const SEED_GRAPHICS_CONFIG: &str =
 // when there is nothing to load -- injects the editor HUD, and runs the world
 // loop driven by the editor hook (plus the debug server when a port is given).
 pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
-    concinnity_engine::app::run::init_logging();
+    // Instead of the engine's plain `init_logging`: the same stderr formatter
+    // plus a layer mirroring this crate's events into the Console panel's log.
+    // The sink exists first so even boot-time errors reach the panel.
+    let console_sink = console::ConsoleSink::default();
+    console::install_tracing(console_sink.clone());
 
     // Resolve the edit target -- the world.jsonl where readable names live and
     // where SAVE writes. A missing file is not an error: the editor opens an
@@ -94,7 +100,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // tick drives them each frame.
     inject::editor_hud(app.world_mut());
 
-    let editor_hook = EditorHook::new(world_path, entries);
+    let editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
             let server = crate::debug::DebugServer::start(port)?;

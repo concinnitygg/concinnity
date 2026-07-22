@@ -79,6 +79,12 @@ pub struct TextInput {
     /// field. Not authored and not serialized to a blob.
     #[serde(skip)]
     pub focused: bool,
+    /// Runtime inline-completion suffix, drawn in the placeholder colour after
+    /// the typed content while the field holds focus. Set by whoever drives the
+    /// field (e.g. an autocomplete); never edited by typing. Not authored and
+    /// not serialized to a blob.
+    #[serde(skip)]
+    pub ghost: String,
     /// Runtime caret position as a character index into `content`. Not authored
     /// and not serialized to a blob.
     #[serde(skip)]
@@ -108,6 +114,7 @@ impl Default for TextInput {
             fit: SpriteFit::Fit,
             screen: None,
             focused: false,
+            ghost: String::new(),
             caret: 0,
         }
     }

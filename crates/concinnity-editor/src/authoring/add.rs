@@ -37,23 +37,8 @@ pub fn add_to_path(
 
     let mut entries = resolve_add_target(target)?;
 
-    match (name, entries.len()) {
-        (Some(n), 1) => {
-            entries[0]["name"] = serde_json::Value::String(n.to_string());
-        }
-        (Some(n), _) => {
-            // multi-entry (e.g. a .metal file with both vertex and fragment stages):
-            // use the supplied name as a prefix, keeping the existing _vert/_frag suffix
-            for entry in &mut entries {
-                let existing = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let suffix = existing
-                    .rsplit_once('_')
-                    .map(|(_, s)| format!("_{s}"))
-                    .unwrap_or_default();
-                entry["name"] = serde_json::Value::String(format!("{n}{suffix}"));
-            }
-        }
-        (None, _) => {}
+    if let Some(n) = name {
+        apply_name_override(&mut entries, n);
     }
 
     let entry_names: Vec<String> = entries
@@ -136,6 +121,25 @@ pub fn add_to_path(
             let _ = std::fs::remove_file(&tmp_path);
             Err(e)
         }
+    }
+}
+
+// Apply a caller-supplied name to freshly resolved entries: a single entry is
+// renamed outright; a multi-entry target (e.g. a .metal file with both vertex
+// and fragment stages) uses the supplied name as a prefix, keeping each
+// entry's existing `_vert` / `_frag` style suffix.
+pub(crate) fn apply_name_override(entries: &mut [serde_json::Value], name: &str) {
+    if let [only] = entries {
+        only["name"] = serde_json::Value::String(name.to_string());
+        return;
+    }
+    for entry in entries {
+        let existing = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let suffix = existing
+            .rsplit_once('_')
+            .map(|(_, s)| format!("_{s}"))
+            .unwrap_or_default();
+        entry["name"] = serde_json::Value::String(format!("{name}{suffix}"));
     }
 }
 
@@ -370,7 +374,7 @@ pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
     }
 }
 
-fn is_path_like(s: &str) -> bool {
+pub(crate) fn is_path_like(s: &str) -> bool {
     if s.contains('/') || s.contains('\\') {
         return true;
     }
@@ -887,7 +891,10 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
     }))
 }
 
-fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json::Value>> {
+// Resolve an add target -- a file path, a known asset type name, or inline
+// JSON -- into its world entries. Shared with the editor console's /add, so a
+// console add and a CLI add accept the same targets.
+pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json::Value>> {
     if is_path_like(target) {
         return entry_from_path(target);
     }

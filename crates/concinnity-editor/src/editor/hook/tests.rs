@@ -3875,3 +3875,154 @@ fn selected_trigger_volume_draws_its_box_outline() {
         .count();
     assert_eq!(outline_shown, 0, "no outline without a selected volume");
 }
+
+// Console commands mutate the working entries like their panel counterparts,
+// and everything they do lands in the log sink.
+#[test]
+fn console_commands_edit_the_working_entries() {
+    let mut h = hook(Vec::new());
+
+    h.run_console_line("/add PhysicsConfig phys");
+    assert_eq!(h.entries.len(), 1);
+    assert_eq!(entry_name(&h.entries[0]), Some("phys"));
+    assert_eq!(entry_type(&h.entries[0]), Some("PhysicsConfig"));
+    assert!(h.dirty, "an added entry marks the world dirty");
+
+    h.run_console_line("/del phys");
+    assert!(h.entries.is_empty());
+
+    h.run_console_line("/del ghost");
+    h.run_console_line("just a note");
+    let lines = h.console_sink.window(0, 64);
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(
+        texts.contains(&"added 'phys' (PhysicsConfig)"),
+        "got: {texts:?}"
+    );
+    assert!(
+        texts.contains(&"removed 'phys' (PhysicsConfig)"),
+        "got: {texts:?}"
+    );
+    assert!(
+        texts.contains(&"no authored asset named 'ghost'"),
+        "got: {texts:?}"
+    );
+    // A bare line echoes (as does every submitted command line).
+    assert!(texts.contains(&"> just a note"), "got: {texts:?}");
+    assert!(
+        lines.iter().any(|l| l.severity == console::Severity::Error),
+        "the missing name reports as an error"
+    );
+}
+
+// Backtick opens the console focused-but-blurred for that frame (so the text
+// system cannot type the backtick into the command line), closes it again on
+// the next press, and stands down entirely while another field is typing.
+#[test]
+fn backtick_toggles_the_console_with_a_one_frame_blur() {
+    let mut h = hook(Vec::new());
+    let mut world = world_with_fields();
+    let input = FrameInput {
+        captured_key: Some(crate::assets::Key::Backtick),
+        ..Default::default()
+    };
+
+    h.drive_console_toggle(&input, &mut world);
+    assert!(h.console_open && h.console_focus && h.console_blur);
+    assert_eq!(h.panel_order.last(), Some(&PanelKey::Console));
+    let (lines, total, first) = h.console_window();
+    assert!(
+        !h.make_console_view(&lines, total, first, "", [0.0, 0.0])
+            .focus,
+        "the opening frame never asserts field focus"
+    );
+    // The next frame clears the blur (the tick does this) and focus asserts.
+    h.console_blur = false;
+    let (lines, total, first) = h.console_window();
+    assert!(
+        h.make_console_view(&lines, total, first, "", [0.0, 0.0])
+            .focus
+    );
+
+    h.drive_console_toggle(&input, &mut world);
+    assert!(!h.console_open && !h.console_focus, "second press closes");
+
+    // While another text field is focused, backtick is just a character.
+    h.story_focus = true;
+    h.drive_console_toggle(&input, &mut world);
+    assert!(!h.console_open);
+}
+
+// The /del ghost completes against authored names, and Tab accepts it into
+// the command line.
+#[test]
+fn console_ghost_completes_del_names_and_tab_accepts() {
+    let mut h = hook(vec![entry("cube_red", "Prop")]);
+    let mut world = World::new_empty();
+    world.add_component(TextInput {
+        asset_id: console_panel::INPUT,
+        content: "/del cu".to_string(),
+        caret: 7,
+        ..Default::default()
+    });
+
+    assert_eq!(h.console_ghost(&world), "be_red");
+    h.console_focus = true;
+    let tab = FrameInput {
+        captured_key: Some(crate::assets::Key::Tab),
+        ..Default::default()
+    };
+    h.console_keys(&mut world, &tab);
+    assert_eq!(
+        widget::field_text(&world, console_panel::INPUT),
+        "/del cube_red"
+    );
+    // With the name complete there is nothing left to ghost.
+    assert_eq!(h.console_ghost(&world), "");
+}
+
+// The full tick path of a backtick open: the first frame shows the command
+// line unfocused (so the text system cannot type the '`' into it), the next
+// frame asserts focus.
+#[test]
+fn tick_opens_the_console_blurred_then_focuses() {
+    isolate_state_dir();
+    let mut world = world_with_input(FrameInput {
+        captured_key: Some(crate::assets::Key::Backtick),
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    world.add_component(TextInput {
+        asset_id: console_panel::INPUT,
+        ..Default::default()
+    });
+    for id in console_panel::all_label_ids() {
+        world.add_component(TextLabel {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    let mut h = hook(Vec::new());
+
+    h.tick(&mut world);
+    assert!(h.console_open);
+    let input = world
+        .query::<TextInput>()
+        .find(|t| t.asset_id == console_panel::INPUT)
+        .unwrap();
+    assert!(
+        input.visible && !input.focused,
+        "the opening frame leaves the field blurred"
+    );
+
+    // Next frame, no key held: focus asserts.
+    for i in world.query_mut::<FrameInput>() {
+        i.captured_key = None;
+    }
+    h.tick(&mut world);
+    let input = world
+        .query::<TextInput>()
+        .find(|t| t.asset_id == console_panel::INPUT)
+        .unwrap();
+    assert!(input.visible && input.focused);
+}

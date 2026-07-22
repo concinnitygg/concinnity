@@ -265,6 +265,38 @@ pub(super) fn build_text_input_overlay(
         visible: true,
         screen: ti.screen,
     };
+    let mut labels = vec![label];
+
+    // Inline completion: the ghost suffix in the placeholder colour just past
+    // the caret, only while the field holds focus and the content fits the box
+    // (scrolled overflow leaves it no stable anchor). Clipped to the remaining
+    // width, dropped entirely when no character fits.
+    if ti.focused
+        && !ti.ghost.is_empty()
+        && !showing_placeholder
+        && let Some(f) = font
+    {
+        let advance = |s: &str| text::text_advance_width(s, f, ti.scale);
+        let content_w = advance(&ti.content);
+        if content_w <= avail {
+            let room = avail - content_w - CARET_W;
+            let mut end = 0usize;
+            for (b, c) in ti.ghost.char_indices() {
+                let nb = b + c.len_utf8();
+                if advance(&ti.ghost[..nb]) > room {
+                    break;
+                }
+                end = nb;
+            }
+            if end > 0 {
+                let mut ghost = labels[0].clone();
+                ghost.content = ti.ghost[..end].to_string();
+                ghost.x = ti.x + ti.padding + content_w + CARET_W;
+                ghost.color = ti.placeholder_color;
+                labels.push(ghost);
+            }
+        }
+    }
 
     // Caret: a thin bar at the caret's fit position, only while the field holds
     // focus and the font loaded, and only on the visible half of the blink cycle.
@@ -288,7 +320,7 @@ pub(super) fn build_text_input_overlay(
         });
     }
 
-    (sprites, vec![label])
+    (sprites, labels)
 }
 
 #[cfg(test)]
@@ -549,6 +581,51 @@ mod tests {
             build_text_input_overlay(&ti, &loaded_fonts(), true).0.len(),
             1
         );
+    }
+
+    // The ghost suffix draws after the caret in the placeholder colour, and
+    // only while the field holds focus.
+    #[test]
+    fn build_text_input_overlay_draws_the_ghost_after_the_caret() {
+        let mut ti = text_input();
+        ti.content = "abc".to_string();
+        ti.ghost = "def".to_string();
+        ti.focused = true;
+        ti.caret = 3;
+        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].content, "abc");
+        assert_eq!(labels[0].color, ti.text_color);
+        assert_eq!(labels[1].content, "def");
+        assert_eq!(labels[1].color, ti.placeholder_color);
+        // padding (8) + three 10px glyphs + the caret bar's width (2).
+        assert_eq!((labels[1].x, labels[1].y), (40.0, 12.0));
+        ti.focused = false;
+        assert_eq!(
+            build_text_input_overlay(&ti, &loaded_fonts(), true).1.len(),
+            1,
+            "an unfocused field never shows the ghost"
+        );
+    }
+
+    // The ghost clips to the box's remaining width, and disappears entirely
+    // once the content itself overflows (a scrolled fit leaves it no anchor).
+    #[test]
+    fn build_text_input_overlay_clips_the_ghost_to_the_box() {
+        let mut ti = text_input();
+        // avail = 66 - 2*8 - 2 = 48: 30px of content leaves 16px, one glyph.
+        ti.width = 66.0;
+        ti.content = "abc".to_string();
+        ti.ghost = "defgh".to_string();
+        ti.focused = true;
+        ti.caret = 3;
+        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[1].content, "d");
+        // avail = 22 < the 30px content: focused overflow scrolls, no ghost.
+        ti.width = 40.0;
+        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        assert_eq!(labels.len(), 1);
     }
 
     // Without a loaded font nothing can be measured: the text passes through

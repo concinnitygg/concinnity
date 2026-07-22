@@ -150,6 +150,15 @@ impl EditorHook {
     // success the world is clean again; on failure it stays dirty and the next
     // SAVE retries.
     pub(super) fn save(&mut self) {
+        // A console-launched build is writing the same blobs; stay dirty and
+        // let the next SAVE retry instead of racing it.
+        if self
+            .console_build_running
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::warn!("editor: save deferred, a cook is writing blobs");
+            return;
+        }
         match self.persist() {
             Ok(()) => {
                 self.dirty = false;

@@ -110,14 +110,16 @@ impl EditorHook {
         // Scene entries defer reading their file to the cook, which would
         // surface a typo only as a preview-rebuild log; catch it here instead.
         if !std::path::Path::new(&path).is_file() {
-            self.import_status = Some(ImportStatus::Error(short_status(&format!(
-                "{path}: no such file"
-            ))));
+            let msg = format!("{path}: no such file");
+            self.console_sink.error(&format!("import: {msg}"));
+            self.import_status = Some(ImportStatus::Error(short_status(&msg)));
             return;
         }
         let mut new_entries = match crate::authoring::entry_from_path(&path) {
             Ok(entries) => entries,
             Err(e) => {
+                // The console keeps the full error; the status line clips it.
+                self.console_sink.error(&format!("import: {e}"));
                 self.import_status = Some(ImportStatus::Error(short_status(&e.to_string())));
                 return;
             }
