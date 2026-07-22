@@ -177,9 +177,9 @@ const ASSET_INDENT: f32 = PAD + BOX_SIZE + GAP;
 // Visible rows in the body before it scrolls, shared by the tree and the
 // picker's option list.
 pub(crate) const ROW_POOL: usize = 14;
-// The asset name, and the type that reads right-aligned beside it (the
-// triple-dot takes the type's slot over while the row is hovered).
-const MAX_NAME_CHARS: usize = 26;
+// The asset name, and the type that reads right-aligned beside it, inside what
+// the triple-dot's reserved slot leaves.
+const MAX_NAME_CHARS: usize = 24;
 // 17 covers the longest registered type name (`PostProcessConfig`), so a
 // type caption never clips.
 const MAX_TYPE_CHARS: usize = 17;
@@ -299,22 +299,23 @@ pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     ]
 }
 
-// The right edge the asset type is right-aligned against.
-fn type_right(o: [f32; 2], slot: usize) -> f32 {
-    let r = row_rect(o, slot);
-    r[0] + r[2] - PAD
-}
-
-// The triple-dot button, taking over the type slot while the row is hovered
-// (the type label hides for that row, so the two never overlap).
+// The triple-dot button, in its own reserved slot at the row's right end. The
+// space is held on every row even though the dots only show on hover, so the
+// type beside them never has to move or hide to make room.
 fn dot_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
     let r = row_rect(o, slot);
     [
-        type_right(o, slot) - DOT_SZ,
+        r[0] + r[2] - PAD - DOT_SZ,
         r[1] + (ROW_H - DOT_SZ) * 0.5,
         DOT_SZ,
         DOT_SZ,
     ]
+}
+
+// The right edge the asset type is right-aligned against: just inside the
+// triple-dot's reserved slot.
+fn type_right(o: [f32; 2], slot: usize) -> f32 {
+    dot_rect(o, slot)[0] - GAP
 }
 
 // A picker option row, floating over the tree body.
@@ -614,13 +615,12 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
                 };
                 layout_asset_row(world, view, o, slot, &asset);
                 // The triple-dot follows the row whose menu is open, else the
-                // hovered row.
+                // hovered row. It has a slot of its own, so the type beside it
+                // keeps reading either way.
                 let menu_here = view.row_menu == Some(name.as_str());
                 if menu_here || hovered {
                     let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, slot));
                     place_dot(world, o, slot, menu_here || over_dots);
-                    // The dots take over the type slot, so that row's type hides.
-                    widget::set_label_visible(world, type_label(slot), false);
                 }
             }
         }
@@ -1200,6 +1200,10 @@ mod tests {
             dots[0] + dots[2] <= r[0] + r[2],
             "the triple-dot stays inside the row"
         );
+        assert!(
+            type_right(o, 0) <= dots[0],
+            "the type is right-aligned clear of the dot slot"
+        );
         // The name never runs under the triple-dot slot.
         let name_room = dots[0] - (r[0] + ASSET_INDENT);
         assert!(name_room > 0.0, "the name has room left of the dots");
@@ -1414,24 +1418,29 @@ mod tests {
         assert!(field(&world).focused, "the picker types into the field");
     }
 
-    // The triple-dot takes over the type slot on hover, so the two never draw on
-    // top of one another.
+    // The triple-dot has a slot of its own at the row's right end, so revealing
+    // it on hover neither moves nor hides the type beside it.
     #[test]
-    fn the_triple_dot_replaces_the_type_on_a_hovered_row() {
+    fn the_triple_dot_keeps_its_own_slot_beside_the_type() {
         let mut world = injected_world();
         let f = Fixture::new();
         let o = test_origin();
         let r1 = row_rect(o, 1);
+
+        // Unhovered: the type reads, and the dot slot is already reserved.
+        apply(&mut world, Some(&f.view()), o);
+        let resting = label(&world, type_label(1));
+        assert!(resting.visible && !sprite(&world, DOT1).visible);
+
         let v = PanelView {
             mouse: [r1[0] + 5.0, r1[1] + 5.0],
             ..f.view()
         };
         apply(&mut world, Some(&v), o);
         assert!(sprite(&world, DOT1).visible, "hover reveals the dots");
-        assert!(
-            !label(&world, type_label(1)).visible,
-            "the hovered row's type yields the slot"
-        );
+        let hovered = label(&world, type_label(1));
+        assert!(hovered.visible, "the hovered row's type keeps reading");
+        assert_eq!(hovered.x, resting.x, "and does not shift to make room");
         assert!(
             !sprite(&world, DOT_BG).visible,
             "the box shows only over the dots themselves"
@@ -1527,7 +1536,7 @@ mod tests {
             name_end <= menu_left(o),
             "a full-width name would run under the row menu"
         );
-        // The type is clipped to what fits between the name and the row's edge.
+        // The type is clipped to what fits between the name and the dot slot.
         let type_start = type_right(o, 0) - MAX_TYPE_CHARS as f32 * MAX_CHAR_W;
         assert!(
             name_end <= type_start,
