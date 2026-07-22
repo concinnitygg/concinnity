@@ -229,7 +229,8 @@ mod tests {
     use super::*;
     use crate::assets::{Sprite, TextLabel};
 
-    const BASE: u32 = 0x3000_0000 + 0xF00;
+    // A scratch family well clear of every real allocation in `registry.rs`.
+    const BASE: u32 = 0x3000_0000 + 0x1F00;
 
     fn injected_world(rows: usize) -> World {
         let mut world = World::new_empty();

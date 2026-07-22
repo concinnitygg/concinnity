@@ -40,7 +40,7 @@ impl EditorHook {
         let Some(ray) = camera_ray(world, input.viewport, mouse) else {
             return;
         };
-        let hits = ray_hits(world, &ray);
+        let hits = ray_hits(world, &ray, &self.locked_assets);
         if hits.is_empty() {
             // Empty space arms the marquee; its release decides between a box
             // select (moved) and a clearing click (still).
@@ -57,6 +57,7 @@ impl EditorHook {
             };
             if self.selection.toggle(name.clone()) {
                 self.focus_ui_on(&name, world);
+                self.reveal_outliner(&name, world);
             } else {
                 self.follow_active(world);
             }
@@ -87,13 +88,14 @@ impl EditorHook {
         };
         self.selection.replace(name.clone());
         self.focus_ui_on(&name, world);
+        self.reveal_outliner(&name, world);
     }
 
     // Open the picked asset for editing: an authored entry in the edit form
     // (with the assets UI up so the form is visible and its browse row
     // highlighted), a build-generated asset on the Expanded tab, where its "+"
     // offers the copy-to-config promotion.
-    fn focus_ui_on(&mut self, name: &str, world: &mut World) {
+    pub(super) fn focus_ui_on(&mut self, name: &str, world: &mut World) {
         self.panel_open = true;
         self.combo = Combo::Closed;
         self.row_menu = None;
@@ -220,14 +222,21 @@ pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> 
     )
 }
 
-// Every PickIndex entry the ray strikes, nearest first.
-fn ray_hits(world: &World, ray: &PickRay) -> Vec<AssetId> {
+// Every PickIndex entry the ray strikes, nearest first. Locked assets (the
+// Outliner's pick lock) are skipped, so a click passes through to whatever
+// sits behind them.
+fn ray_hits(
+    world: &World,
+    ray: &PickRay,
+    locked: &std::collections::BTreeSet<String>,
+) -> Vec<AssetId> {
     let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
         return Vec::new();
     };
     let mut hits: Vec<(f32, AssetId)> = index
         .entries
         .iter()
+        .filter(|e| !resolve_name(e.asset_id).is_some_and(|n| locked.contains(&n)))
         .filter_map(|e| ray_aabb(ray, e.bb_min, e.bb_max).map(|t| (t, e.asset_id)))
         .collect();
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));

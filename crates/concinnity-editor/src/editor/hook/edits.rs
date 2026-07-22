@@ -86,10 +86,12 @@ impl EditorHook {
         }
         self.dirty = true;
         self.rebuild_preview = true;
-        // The expansion follows the entries, so the Expanded tab's model is now
-        // out of date. Recomputed by the frame drive if that tab is showing, so
-        // a burst of edits costs one expansion rather than one each.
+        // The expansion follows the entries, so the Expanded tab's and the
+        // Outliner's models are now out of date. Recomputed by the frame drive
+        // while showing, so a burst of edits costs one expansion each rather
+        // than one per edit.
         self.expanded_stale = true;
+        self.outliner_stale = true;
     }
 
     // Step the entry list back / forward through the history stacks. No-ops at
@@ -125,6 +127,7 @@ impl EditorHook {
         self.dirty = self.entries != self.saved;
         self.rebuild_preview = true;
         self.expanded_stale = true;
+        self.outliner_stale = true;
         self.close_form();
         self.row_menu = None;
         self.combo = Combo::Closed;

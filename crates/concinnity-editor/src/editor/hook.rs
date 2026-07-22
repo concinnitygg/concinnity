@@ -40,6 +40,8 @@ use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportVie
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
+use super::outliner::{self, OutlinerGroup, OutlinerRow};
+use super::outliner_panel::{self, OutlinerAction, OutlinerView};
 use super::panel::{self, Combo, ListRow, PanelAction, PanelView, Tab};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
@@ -134,6 +136,26 @@ pub(crate) struct EditorHook {
     import_focus: bool,
     import_scroll: usize,
     import_status: Option<ImportStatus>,
+    // The Outliner panel: shown state, the cooked grouped tree (recomputed
+    // only when `outliner_stale` and the panel is up, like the Expanded tab),
+    // the unfolded groups, the list window scroll, whether the search field
+    // holds keyboard focus, and the last cook failure.
+    outliner_open: bool,
+    outliner_groups: Vec<OutlinerGroup>,
+    outliner_unfolded: Vec<usize>,
+    outliner_scroll: usize,
+    outliner_stale: bool,
+    outliner_focus: bool,
+    outliner_status: Option<String>,
+    // Editor-session hide / lock sets, by NAME (ids drift across preview
+    // rebuilds). Hidden assets skip rendering (via the published
+    // `EditorHidden` resource); locked ones are skipped by viewport picking.
+    // Neither touches the authored entries.
+    hidden_assets: std::collections::BTreeSet<String>,
+    locked_assets: std::collections::BTreeSet<String>,
+    // Shift state sampled from this frame's input, for the panel presses that
+    // resolve without direct input access (the Outliner's additive select).
+    shift_held: bool,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // The Assets panel's body: the world's own lines, or everything the build
@@ -307,6 +329,8 @@ mod marquee_drag;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
+// Named to avoid colliding with the `use super::outliner` module import.
+mod outliner_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
@@ -346,6 +370,16 @@ impl EditorHook {
             import_focus: false,
             import_scroll: 0,
             import_status: None,
+            outliner_open: false,
+            outliner_groups: Vec::new(),
+            outliner_unfolded: Vec::new(),
+            outliner_scroll: 0,
+            outliner_stale: true,
+            outliner_focus: false,
+            outliner_status: None,
+            hidden_assets: std::collections::BTreeSet::new(),
+            locked_assets: std::collections::BTreeSet::new(),
+            shift_held: false,
             panel_open: false,
             tab: Tab::Config,
             expanded_groups: Vec::new(),
@@ -400,14 +434,17 @@ impl EditorHook {
             || self.lighting_focus.is_some()
             || self.story_focus
             || self.import_focus
+            || self.outliner_focus
     }
 }
 
 impl DebugHook for EditorHook {
     fn tick(&mut self, world: &mut World) {
-        // Bring the Expanded tab's model up to date before anything reads it,
-        // so this frame's hit test and draw agree on the rows.
+        // Bring the Expanded tab's and the Outliner's models up to date before
+        // anything reads them, so this frame's hit test and draw agree on the
+        // rows.
         self.refresh_expanded_if_needed();
+        self.refresh_outliner_if_needed();
         // Accumulate the Health panel's per-frame counters and, on its throttled
         // boundary, resample. Unconditional: the rates measure a continuous
         // window, so gating this on the panel being open would make the first
@@ -415,6 +452,9 @@ impl DebugHook for EditorHook {
         self.health.sample(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
+            // Sampled for the panel presses that resolve without direct input
+            // access (the Outliner's additive select).
+            self.shift_held = input.shift;
             // Escape hands the cursor back to the editor (leaves play mode
             // and the fly camera alike).
             if input.escape {
@@ -527,6 +567,9 @@ impl DebugHook for EditorHook {
         // live while the frozen world is flown through.
         world.insert_resource(MenuOverride(Some(!self.world_capture)));
         world.insert_resource(crate::ecs::FlyCam(self.fly && !self.world_capture));
+        // Publish the editor-session hidden set (resolved to this world's ids)
+        // so the renderer collapses those objects this frame.
+        world.insert_resource(crate::ecs::EditorHidden(self.hidden_asset_ids()));
 
         // Re-anchor + recolour the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());

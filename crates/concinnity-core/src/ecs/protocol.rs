@@ -73,6 +73,15 @@ pub struct ScreenStack {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FlyCam(pub bool);
 
+// The editor-session hidden set, published per frame by the `cn editor` HUD
+// drive: GraphicsSystem collapses each listed asset's draw slots to a
+// degenerate transform (so it neither rasterizes nor casts shadows) and drops
+// it from the [PickIndex]. Authored data is untouched, and the collapse is
+// re-derived every frame, so clearing an id restores the object immediately.
+// Absent / empty outside the editor.
+#[derive(Debug, Clone, Default)]
+pub struct EditorHidden(pub alloc::collections::BTreeSet<AssetId>);
+
 // One pickable entity in the [PickIndex]: its asset id and current world-space
 // AABB. Ray-tested by the editor with `gfx::pick::ray_aabb`.
 #[derive(Debug, Clone, Copy)]

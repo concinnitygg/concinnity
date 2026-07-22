@@ -15,6 +15,11 @@ use crate::gfx::settings_system::rows::{
     set_label_content, set_rows_grayed, set_sprite_x, slider_key_of,
 };
 
+// The model matrix pushed for an editor-hidden object's draw slots: zero
+// linear part and translation, so every vertex collapses to a degenerate
+// point and nothing rasterizes (shadow passes included).
+const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
+
 impl GraphicsSystem {
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if self.failed {
@@ -149,9 +154,29 @@ impl GraphicsSystem {
                 // runtime skips this entirely. A despawned entity simply drops
                 // out of the index.
                 if !self.pick_candidates.is_empty() {
+                    // Editor-session hidden objects: overwrite their just-pushed
+                    // model matrices with the degenerate one (nothing draws)
+                    // and keep them out of the pick index. Re-derived every
+                    // frame, so clearing the set restores them immediately.
+                    let hidden = ctx
+                        .resource::<crate::ecs::EditorHidden>()
+                        .map(|h| h.0.clone())
+                        .unwrap_or_default();
+                    for c in self
+                        .pick_candidates
+                        .iter()
+                        .filter(|c| hidden.contains(&c.asset_id))
+                    {
+                        if let Some(handle) = ctx.get::<crate::assets::RenderHandle>(c.entity) {
+                            for &slot in &handle.draws {
+                                backend.update_model(slot as usize, HIDDEN_MODEL);
+                            }
+                        }
+                    }
                     let entries: Vec<crate::ecs::PickEntry> = self
                         .pick_candidates
                         .iter()
+                        .filter(|c| !hidden.contains(&c.asset_id))
                         .filter_map(|c| {
                             let global = ctx.get::<crate::assets::GlobalTransform>(c.entity)?;
                             let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(

@@ -207,6 +207,97 @@ impl Panel for HealthPanel {
     }
 }
 
+pub(crate) struct OutlinerPanel;
+
+impl Panel for OutlinerPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Outliner
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Outliner")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.outliner_open
+    }
+    // Opening re-cooks the tree and focuses a cleared search field, ready to
+    // type.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.outliner_open = !hook.outliner_open;
+        if hook.outliner_open {
+            hook.outliner_stale = true;
+            hook.outliner_scroll = 0;
+            hook.outliner_focus = true;
+            widget::seed_field(world, outliner_panel::FILTER_INPUT, "");
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.outliner_open = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        outliner_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        outliner_panel::default_origin(vp)
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        outliner_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        outliner_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        outliner_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, "search"))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let action = {
+            let rows = hook.outliner_rows(world);
+            let view = hook.make_outliner_view(&rows, [mx, my]);
+            outliner_panel::hit_test(&view, mx, my, o)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_outliner_action(a, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(
+        &self,
+        _hook: &EditorHook,
+        _world: &World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        outliner_panel::cursor_over_list(mx, my, o)
+    }
+    fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
+        hook.scroll_outliner(delta, world);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.outliner_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let rows = hook.outliner_rows(world);
+        let view = hook.make_outliner_view(&rows, mouse);
+        outliner_panel::apply(world, Some(&view), o);
+    }
+    fn hide(&self, world: &mut World) {
+        outliner_panel::apply(world, None, [0.0, 0.0]);
+    }
+}
+
 pub(crate) struct PreviewPanel;
 
 impl Panel for PreviewPanel {

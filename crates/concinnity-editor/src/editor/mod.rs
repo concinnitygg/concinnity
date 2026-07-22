@@ -25,6 +25,8 @@ mod lighting;
 mod lighting_panel;
 mod list_panel;
 mod marquee;
+mod outliner;
+mod outliner_panel;
 mod panel;
 mod preview;
 mod registry;

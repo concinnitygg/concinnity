@@ -3625,3 +3625,100 @@ fn gizmo_mode_keys_switch_unless_typing() {
     key(&mut h, crate::assets::Key::F);
     assert!(!h.fly, "typing keeps F");
 }
+
+// An Outliner row click mirrors a viewport pick: plain replaces the selection
+// and opens the picked authored entry's edit form; with shift held it toggles
+// membership instead.
+#[test]
+fn outliner_row_click_selects_and_opens_the_form() {
+    let mut world = world_with_fields();
+    let mut h = hook(vec![entry("box", "Sprite"), entry("cam", "Camera3D")]);
+    h.apply_outliner_action(OutlinerAction::Select("box".to_string()), &mut world);
+    assert_eq!(h.selection.active(), Some("box"));
+    assert!(h.panel_open, "the assets UI comes up around the form");
+    assert_eq!(h.editing, Some(0), "the form targets the clicked entry");
+
+    h.shift_held = true;
+    h.apply_outliner_action(OutlinerAction::Select("cam".to_string()), &mut world);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box", "cam"],
+        "a shift click adds"
+    );
+    h.apply_outliner_action(OutlinerAction::Select("cam".to_string()), &mut world);
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        ["box"],
+        "a second shift click removes"
+    );
+}
+
+// The eye / lock toggles are editor-session state: they flip the hook's sets
+// (the hidden set publishing as ids each tick) and never touch the entries.
+#[test]
+fn outliner_hide_and_lock_are_session_state_not_edits() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("box");
+    let mut world = world_with_input(FrameInput::default());
+    let mut h = hook(vec![entry("box", "Sprite")]);
+
+    h.apply_outliner_action(OutlinerAction::ToggleHide("box".to_string()), &mut world);
+    h.apply_outliner_action(OutlinerAction::ToggleLock("box".to_string()), &mut world);
+    assert!(h.hidden_assets.contains("box"));
+    assert!(h.locked_assets.contains("box"));
+    assert!(!h.dirty, "session toggles are not authored edits");
+
+    h.tick(&mut world);
+    let hidden = world
+        .resource::<crate::ecs::EditorHidden>()
+        .expect("the hook publishes the hidden set every tick");
+    assert!(hidden.0.contains(&id), "names resolve to this world's ids");
+
+    h.apply_outliner_action(OutlinerAction::ToggleHide("box".to_string()), &mut world);
+    h.apply_outliner_action(OutlinerAction::ToggleLock("box".to_string()), &mut world);
+    assert!(h.hidden_assets.is_empty() && h.locked_assets.is_empty());
+}
+
+// A locked asset is skipped by viewport picking: the click passes through to
+// empty space (arming the marquee) instead of selecting it.
+#[test]
+fn locked_assets_are_skipped_by_viewport_picking() {
+    crate::ecs::asset_id::reset_interner();
+    let near = crate::ecs::asset_id::intern("box_near");
+    let mut world = pick_world([0.0; 3], vec![(near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
+    let mut h = hook(vec![entry("box_near", "Sprite")]);
+    h.locked_assets.insert("box_near".to_string());
+
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(h.selection.active(), None, "the locked box is not picked");
+    assert!(h.marquee.is_some(), "the click fell through to empty space");
+}
+
+// A viewport pick unfolds the picked asset's group and scrolls its row into
+// the Outliner's window.
+#[test]
+fn viewport_pick_reveals_the_outliner_row() {
+    let world = World::new_empty();
+    let mut h = hook(Vec::new());
+    h.outliner_open = true;
+    h.outliner_stale = false;
+    h.outliner_groups = vec![outliner::OutlinerGroup {
+        label: outliner::WORLD_GROUP.to_string(),
+        assets: (0..30)
+            .map(|i| outliner::OutlinerAsset {
+                name: format!("a{i:02}"),
+                asset_type: "Sprite".to_string(),
+                badge: outliner::Badge::Authored,
+            })
+            .collect(),
+    }];
+
+    h.reveal_outliner("a25", &world);
+    assert_eq!(h.outliner_unfolded, vec![0], "the group unfolds");
+    // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
+    assert_eq!(h.outliner_scroll, 31 - outliner_panel::ROW_POOL);
+
+    // A revealed row already inside the window leaves the scroll alone.
+    h.reveal_outliner("a20", &world);
+    assert_eq!(h.outliner_scroll, 31 - outliner_panel::ROW_POOL);
+}

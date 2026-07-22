@@ -35,17 +35,23 @@ impl EditorHook {
         self.clamp_expanded_scroll();
     }
 
-    // Cook the working entries and build the grouped model. The entries are the
-    // in-memory edit state, so the tab reflects unsaved changes rather than what
-    // is on disk.
-    fn expand_entries(&self) -> Result<Vec<ExpandedGroup>, String> {
+    // Cook the working entries into an expanded world. The entries are the
+    // in-memory edit state, so consumers reflect unsaved changes rather than
+    // what is on disk. Shared with the Outliner's refresh.
+    pub(super) fn cook_working_entries(
+        &self,
+    ) -> Result<concinnity_cook::world::LoadedWorld, String> {
         let content = crate::world::write_world_jsonl(&self.entries).map_err(|e| e.to_string())?;
-        let loaded = concinnity_cook::prepare_world(&content).map_err(|errs| {
+        concinnity_cook::prepare_world(&content).map_err(|errs| {
             errs.first()
                 .cloned()
                 .unwrap_or_else(|| "the world does not build".to_string())
-        })?;
-        Ok(expanded::groups_from(&loaded))
+        })
+    }
+
+    // Cook the working entries and build the grouped model.
+    fn expand_entries(&self) -> Result<Vec<ExpandedGroup>, String> {
+        Ok(expanded::groups_from(&self.cook_working_entries()?))
     }
 
     // The tab's rows: every group header, plus the assets of the unfolded ones.
@@ -96,8 +102,10 @@ impl EditorHook {
         let name = asset.name.clone();
         self.entries.push(entry);
         self.dirty = true;
-        // The asset is now a config line, so its row must gray out.
+        // The asset is now a config line, so its row must gray out (and the
+        // Outliner must relist it as authored).
         self.expanded_stale = true;
+        self.outliner_stale = true;
         tracing::info!("editor: copied '{name}' into the config");
     }
 

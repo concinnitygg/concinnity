@@ -64,7 +64,7 @@ impl EditorHook {
             return;
         }
         let rect = marquee::rect_from_corners(m.anchor, m.current);
-        let names = marquee_hits(world, vp, rect);
+        let names = marquee_hits(world, vp, rect, &self.locked_assets);
         if m.additive {
             self.selection.extend(names);
         } else {
@@ -87,8 +87,14 @@ impl EditorHook {
 
 // The names of every PickIndex entry whose projected AABB intersects `rect`,
 // in index order. Entries whose projection fails (behind the camera, off
-// screen) or whose id no longer resolves are skipped.
-fn marquee_hits(world: &World, vp: [f32; 2], rect: [f32; 4]) -> Vec<String> {
+// screen), whose id no longer resolves, or which are locked against picking
+// (the Outliner's lock) are skipped.
+fn marquee_hits(
+    world: &World,
+    vp: [f32; 2],
+    rect: [f32; 4],
+    locked: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
     let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
         return Vec::new();
     };
@@ -104,7 +110,7 @@ fn marquee_hits(world: &World, vp: [f32; 2], rect: [f32; 4]) -> Vec<String> {
             if !marquee::rects_intersect(rect, r) {
                 return None;
             }
-            pick::resolve_name(e.asset_id)
+            pick::resolve_name(e.asset_id).filter(|n| !locked.contains(n))
         })
         .collect()
 }
