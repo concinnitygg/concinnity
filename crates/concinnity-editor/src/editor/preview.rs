@@ -74,7 +74,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool, fly: bool, mo
         Row::checkbox("Capture input", capture),
         Row::checkbox("Fly camera (F)", fly),
     ];
-    list_panel::apply(world, BASE, o, PREVIEW_W, "Preview", &rows, mouse);
+    list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass).

@@ -61,26 +61,27 @@ pub(crate) fn size() -> [f32; 2] {
     list_panel::size(VIEW_W, count())
 }
 
-// The panel outer rect (title bar + the toggle rows) at the effective width `w`.
-pub(crate) fn panel_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    list_panel::panel_rect(o, w, count())
+// The panel outer rect at origin `o` and effective size `s` (the resized
+// footprint; extra height past the toggle rows is padding below them).
+pub(crate) fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1], s[0], s[1]]
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`, width `w`.
+// Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`.
 // `None` means the click missed the panel. Title-bar presses never reach this:
 // the hook intercepts them first to start a drag (the shared routing owns the
 // title-bar geometry).
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], w: f32) -> Option<ViewAction> {
-    if let Some(i) = list_panel::hit_row(mx, my, o, w, count()) {
+pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<ViewAction> {
+    if let Some(i) = list_panel::hit_row(mx, my, o, s[0], count()) {
         return Some(ViewAction::Toggle(i));
     }
-    point_in(mx, my, panel_rect(o, w)).then_some(ViewAction::Consume)
+    point_in(mx, my, panel_rect(o, s)).then_some(ViewAction::Consume)
 }
 
-// Position + show the panel at origin `o`, width `w`, with the given toggle rows
-// (built by the hook from the registry).
-pub(crate) fn apply(world: &mut World, o: [f32; 2], w: f32, rows: &[Row], mouse: [f32; 2]) {
-    list_panel::apply(world, BASE, o, w, "View", rows, mouse);
+// Position + show the panel at origin `o`, effective size `s`, with the given
+// toggle rows (built by the hook from the registry).
+pub(crate) fn apply(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
+    list_panel::apply(world, BASE, o, s, "View", rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
@@ -129,28 +130,36 @@ mod tests {
     #[test]
     fn hit_test_resolves_a_row_or_swallows() {
         let o = default_origin();
+        let s = size();
         let r0 = list_panel::row_rect(o, VIEW_W, 0);
         assert_eq!(
-            hit_test(r0[0] + 10.0, r0[1] + 10.0, o, VIEW_W),
+            hit_test(r0[0] + 10.0, r0[1] + 10.0, o, s),
             Some(ViewAction::Toggle(0))
         );
         let t = list_panel::title_rect(o, VIEW_W);
         assert_eq!(
-            hit_test(t[0] + 5.0, t[1] + 5.0, o, VIEW_W),
+            hit_test(t[0] + 5.0, t[1] + 5.0, o, s),
             Some(ViewAction::Consume)
         );
-        assert_eq!(hit_test(2000.0, 2000.0, o, VIEW_W), None);
+        assert_eq!(hit_test(2000.0, 2000.0, o, s), None);
         // Widening the panel keeps the same rows and swallows body clicks.
-        let wide = VIEW_W + 120.0;
-        let rw = list_panel::row_rect(o, wide, 0);
+        let wide = [VIEW_W + 120.0, s[1]];
+        let rw = list_panel::row_rect(o, wide[0], 0);
         assert_eq!(
             hit_test(rw[0] + 10.0, rw[1] + 10.0, o, wide),
             Some(ViewAction::Toggle(0))
         );
         assert_eq!(
-            hit_test(o[0] + wide - 4.0, rw[1] + 10.0, o, wide),
+            hit_test(o[0] + wide[0] - 4.0, rw[1] + 10.0, o, wide),
             Some(ViewAction::Toggle(0)),
             "the widened right side is still part of the row"
+        );
+        // Growing the panel taller swallows clicks in the padding below the rows.
+        let tall = [VIEW_W, s[1] + 100.0];
+        assert_eq!(
+            hit_test(o[0] + 5.0, o[1] + s[1] + 40.0, o, tall),
+            Some(ViewAction::Consume),
+            "the padding below the last row is still part of the panel"
         );
     }
 
@@ -166,7 +175,7 @@ mod tests {
         apply(
             &mut world,
             default_origin(),
-            VIEW_W,
+            size(),
             &rows(&[("Assets", false), ("Preview", true), ("Templates", false)]),
             [0.0, 0.0],
         );
@@ -189,7 +198,7 @@ mod tests {
         apply(
             &mut world,
             o,
-            VIEW_W,
+            size(),
             &rows(&[("Assets", false)]),
             [0.0, 0.0],
         );
@@ -202,7 +211,7 @@ mod tests {
         apply(
             &mut world,
             o,
-            VIEW_W,
+            size(),
             &rows(&[("Assets", true)]),
             [0.0, 0.0],
         );
@@ -220,7 +229,7 @@ mod tests {
         apply(
             &mut world,
             default_origin(),
-            VIEW_W,
+            size(),
             &rows(&[("Assets", true), ("Preview", true), ("Templates", true)]),
             [0.0, 0.0],
         );

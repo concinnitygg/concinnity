@@ -120,20 +120,22 @@ impl Row {
     }
 }
 
-// Position + show the whole panel at origin `o`: the rounded panel surface, the
-// heading, the hover-tinted close button, and each row's highlight, optional
-// checkbox, and label. `mouse` drives the hover highlight and the close-button
-// tint.
+// Position + show the whole panel at origin `o` and effective size `s`: the
+// rounded panel surface (grown to `s`, so a resized panel's extra height is
+// padding below the last row), the heading, the hover-tinted close button, and
+// each row's highlight, optional checkbox, and label. `mouse` drives the hover
+// highlight and the close-button tint.
 pub(crate) fn apply(
     world: &mut World,
     base: u32,
     o: [f32; 2],
-    w: f32,
+    s: [f32; 2],
     heading: &str,
     rows: &[Row],
     mouse: [f32; 2],
 ) {
-    widget::place_panel(world, panel_bg(base), panel_rect(o, w, rows.len()));
+    let w = s[0];
+    widget::place_panel(world, panel_bg(base), [o[0], o[1], s[0], s[1]]);
     let title = title_rect(o, w);
     widget::place_heading(world, title_label(base), title, heading);
     let close_hover = point_in(mouse[0], mouse[1], close_rect(o, w));
@@ -288,7 +290,7 @@ mod tests {
             &mut world,
             BASE,
             [20.0, 30.0],
-            200.0,
+            size(200.0, 1),
             "Panel",
             &[Row::label("a")],
             [0.0, 0.0],
@@ -298,6 +300,28 @@ mod tests {
         assert_eq!((bg.x, bg.y), (20.0, 30.0));
         assert_eq!((bg.width, bg.height), (200.0, size(200.0, 1)[1]));
         assert_eq!(bg.corner_radius, theme::PANEL_RADIUS);
+    }
+
+    // A resized (taller / wider) panel grows its surface to the given size; the
+    // rows stay anchored below the title bar and the extra space is padding.
+    #[test]
+    fn apply_grows_the_surface_to_the_effective_size() {
+        let mut world = injected_world(1);
+        let o = [20.0, 30.0];
+        let tall_wide = [size(200.0, 1)[0] + 80.0, size(200.0, 1)[1] + 120.0];
+        apply(
+            &mut world,
+            BASE,
+            o,
+            tall_wide,
+            "Panel",
+            &[Row::label("a")],
+            [0.0, 0.0],
+        );
+        let bg = sprite(&world, panel_bg(BASE));
+        assert_eq!((bg.width, bg.height), (tall_wide[0], tall_wide[1]));
+        // The lone row still sits directly under the title bar.
+        assert_eq!(row_rect(o, tall_wide[0], 0)[1], o[1] + widget::TITLE_H);
     }
 
     #[test]
@@ -320,7 +344,7 @@ mod tests {
             &mut world,
             BASE,
             o,
-            w,
+            size(w, 1),
             "Panel",
             &[Row::checkbox("Toggle", true)],
             [0.0, 0.0],
@@ -349,7 +373,7 @@ mod tests {
             &mut world,
             BASE,
             o,
-            w,
+            size(w, 1),
             "Panel",
             &[Row::checkbox("Toggle", false)],
             [0.0, 0.0],
@@ -379,7 +403,7 @@ mod tests {
             &mut world,
             BASE,
             o,
-            200.0,
+            size(200.0, 1),
             "Panel",
             &[Row::label("Just text")],
             [0.0, 0.0],
@@ -405,7 +429,7 @@ mod tests {
             &mut world,
             BASE,
             o,
-            w,
+            size(w, 2),
             "Panel",
             &[Row::label("a"), Row::label("b").select(true)],
             [r0[0] + 5.0, r0[1] + 5.0],
@@ -426,7 +450,7 @@ mod tests {
             &mut world,
             BASE,
             o,
-            w,
+            size(w, 2),
             "Panel",
             &[Row::label("a"), Row::label("b")],
             [0.0, 0.0],
@@ -441,7 +465,7 @@ mod tests {
             &mut world,
             BASE,
             [20.0, 20.0],
-            200.0,
+            size(200.0, 2),
             "Panel",
             &[Row::checkbox("a", true), Row::checkbox("b", false)],
             [0.0, 0.0],

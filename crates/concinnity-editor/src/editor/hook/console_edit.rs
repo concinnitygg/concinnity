@@ -53,20 +53,18 @@ impl EditorHook {
     }
 
     // The visible log window under the current scroll: (lines, total, first).
-    // Pinned follows the tail, so new lines auto-scroll into view.
+    // Pinned follows the tail, so new lines auto-scroll into view. The window
+    // size tracks the panel's (possibly resized) height.
     pub(super) fn console_window(&self) -> (Vec<console::ConsoleLine>, usize, usize) {
+        let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
         let total = self.console_sink.len();
-        let max_first = total.saturating_sub(console_panel::LINE_POOL);
+        let max_first = total.saturating_sub(shown);
         let first = if self.console_pinned {
             max_first
         } else {
             self.console_scroll.min(max_first)
         };
-        (
-            self.console_sink.window(first, console_panel::LINE_POOL),
-            total,
-            first,
-        )
+        (self.console_sink.window(first, shown), total, first)
     }
 
     pub(super) fn make_console_view<'a>(
@@ -101,10 +99,8 @@ impl EditorHook {
 
     // Step the log window; landing on the last line re-pins it to the tail.
     pub(super) fn scroll_console(&mut self, delta: f32) {
-        let max = self
-            .console_sink
-            .len()
-            .saturating_sub(console_panel::LINE_POOL);
+        let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
+        let max = self.console_sink.len().saturating_sub(shown);
         let cur = if self.console_pinned {
             max
         } else {

@@ -58,35 +58,36 @@ pub(crate) fn size() -> [f32; 2] {
     list_panel::size(TEMPLATES_W, count())
 }
 
-// The panel outer rect (title bar + the template rows) at the effective width `w`.
-pub(crate) fn panel_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    list_panel::panel_rect(o, w, count())
+// The panel outer rect at origin `o` and effective size `s` (the resized
+// footprint; extra height past the template rows is padding below them).
+pub(crate) fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1], s[0], s[1]]
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`, width `w`.
+// Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`.
 // `None` means the click missed the panel. Title-bar presses never reach this:
 // the hook intercepts them first to start a drag (the shared routing owns the
 // title-bar geometry).
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], w: f32) -> Option<TemplatesAction> {
-    if let Some(i) = list_panel::hit_row(mx, my, o, w, count()) {
+pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<TemplatesAction> {
+    if let Some(i) = list_panel::hit_row(mx, my, o, s[0], count()) {
         return Some(TemplatesAction::Pick(i));
     }
-    point_in(mx, my, panel_rect(o, w)).then_some(TemplatesAction::Consume)
+    point_in(mx, my, panel_rect(o, s)).then_some(TemplatesAction::Consume)
 }
 
-// Position + show the panel at origin `o`, width `w`, highlighting the hovered
-// row and the `selected` row (the one whose detail panel is open).
+// Position + show the panel at origin `o`, effective size `s`, highlighting the
+// hovered row and the `selected` row (the one whose detail panel is open).
 pub(crate) fn apply(
     world: &mut World,
     o: [f32; 2],
-    w: f32,
+    s: [f32; 2],
     selected: Option<usize>,
     mouse: [f32; 2],
 ) {
     let rows: Vec<Row> = (0..count())
         .map(|i| Row::label(title(i)).select(selected == Some(i)))
         .collect();
-    list_panel::apply(world, BASE, o, w, "Templates", &rows, mouse);
+    list_panel::apply(world, BASE, o, s, "Templates", &rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
@@ -129,29 +130,24 @@ mod tests {
     #[test]
     fn hit_test_picks_a_row_or_swallows() {
         let o = default_origin(1280.0);
+        let s = size();
         let r0 = list_panel::row_rect(o, TEMPLATES_W, 0);
         assert_eq!(
-            hit_test(r0[0] + 10.0, r0[1] + 10.0, o, TEMPLATES_W),
+            hit_test(r0[0] + 10.0, r0[1] + 10.0, o, s),
             Some(TemplatesAction::Pick(0))
         );
         let t = list_panel::title_rect(o, TEMPLATES_W);
         assert_eq!(
-            hit_test(t[0] + 5.0, t[1] + 5.0, o, TEMPLATES_W),
+            hit_test(t[0] + 5.0, t[1] + 5.0, o, s),
             Some(TemplatesAction::Consume)
         );
-        assert_eq!(hit_test(2000.0, 2000.0, o, TEMPLATES_W), None);
+        assert_eq!(hit_test(2000.0, 2000.0, o, s), None);
     }
 
     #[test]
     fn apply_labels_rows_from_the_templates_crate() {
         let mut world = injected_world();
-        apply(
-            &mut world,
-            default_origin(1280.0),
-            TEMPLATES_W,
-            None,
-            [0.0, 0.0],
-        );
+        apply(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == title_label(BASE))
@@ -172,14 +168,14 @@ mod tests {
         let mut world = injected_world();
         let o = default_origin(1280.0);
         // Idle tint first, then the selected tint differs.
-        apply(&mut world, o, TEMPLATES_W, None, [0.0, 0.0]);
+        apply(&mut world, o, size(), None, [0.0, 0.0]);
         let idle = world
             .query::<Sprite>()
             .find(|s| s.asset_id == row_bg(0))
             .cloned()
             .unwrap()
             .tint;
-        apply(&mut world, o, TEMPLATES_W, Some(0), [0.0, 0.0]);
+        apply(&mut world, o, size(), Some(0), [0.0, 0.0]);
         let selected = world
             .query::<Sprite>()
             .find(|s| s.asset_id == row_bg(0))
@@ -191,13 +187,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(
-            &mut world,
-            default_origin(1280.0),
-            TEMPLATES_W,
-            None,
-            [0.0, 0.0],
-        );
+        apply(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
