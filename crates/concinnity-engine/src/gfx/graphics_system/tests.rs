@@ -582,6 +582,28 @@ fn init_pushes_startup_backend_state() {
     assert!(!s.calls.iter().any(|c| matches!(c, Call::SetWindowMode(_))));
 }
 
+// A menu / editor driver present at init (the editor's live-preview rebuild seeds
+// a `MenuOverride` before re-running init) suppresses the first-person startup
+// grab: the per-frame drive owns capture, and re-grabbing on every rebuild would
+// re-hide and decouple the OS cursor, desyncing the free-cursor handoff.
+#[test]
+fn menu_driven_init_skips_the_first_person_cursor_grab() {
+    let (state, hooks) = recording_hooks();
+    // A plain first-person world (Camera3D, no HitRegion / KeyBinding) -- the same
+    // world that grabs at startup above -- but with a driver already in control.
+    let mut world = scene_builder().build();
+    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    let _gs = init_graphics(&mut world, hooks);
+
+    let s = lock(&state);
+    assert!(
+        !s.saw(&Call::CaptureCursor),
+        "a menu/editor driver owns capture; init must not auto-grab"
+    );
+    // Menu mode still reflects the world's own UI (none here), unchanged.
+    assert!(s.saw(&Call::SetMenuMode(false)));
+}
+
 #[test]
 fn ui_only_world_trims_scene_features() {
     let (state, hooks) = recording_hooks();

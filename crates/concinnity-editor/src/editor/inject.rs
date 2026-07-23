@@ -14,7 +14,7 @@
 use super::hud;
 use super::registry::{self, PanelKey};
 use super::theme;
-use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window};
+use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window, WindowMode};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -65,7 +65,7 @@ fn hud_font(world: &World) -> Option<FontHandle> {
 // is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
-    hide_title_bar(world);
+    pin_editor_window(world);
     // Opt in to viewport picking: GraphicsSystem captures pick candidates at
     // start only when this resource is already present, then refreshes it each
     // frame with world-space AABBs. Runs on every injection, so a live-preview
@@ -129,24 +129,30 @@ pub(crate) fn editor_hud(world: &mut World) {
 // move or close.
 const HIDES_TITLE_BAR: bool = cfg!(target_os = "macos");
 
-// Drop the editor window's title bar, letting the world fill the frame, on the
-// platforms where that stays usable (see `HIDES_TITLE_BAR`). Overriding the
-// live component rather than the authored entry keeps it out of the user's
-// world.jsonl on SAVE; being part of this one injection seam means every live
-// preview rebuild re-applies it, so a rebuilt world cannot quietly restore the
-// authored title bar on the next window restyle.
-fn hide_title_bar(world: &mut World) {
-    if !HIDES_TITLE_BAR {
-        return;
-    }
+// Pin the editor's own window to a usable shape: always windowed, and (where the
+// chrome survives, see `HIDES_TITLE_BAR`) title-bar-less. A `borderless` or
+// `fullscreen` world would otherwise size the editor window to the whole display,
+// so the in-engine cursor's inside-the-content test is true everywhere and the OS
+// cursor stays hidden past the panels; forcing windowed keeps the OS pointer for
+// the desktop while the in-engine arrow (and its resize shape) owns the viewport.
+// Overriding the live component rather than the authored entry keeps it out of
+// the user's world.jsonl on SAVE, so the authored `mode` still ships to `cn run`
+// and `cn export`; being part of this one injection seam means every live-preview
+// rebuild re-applies it, so a rebuilt world cannot restore the authored mode or
+// title bar on the next window restyle.
+fn pin_editor_window(world: &mut World) {
     let mut authored = false;
     for w in world.query_mut::<Window>() {
-        w.title_bar = false;
+        w.mode = WindowMode::Windowed;
+        if HIDES_TITLE_BAR {
+            w.title_bar = false;
+        }
         authored = true;
     }
     // A world with no Window of its own renders through `Window::default()`;
-    // materialize that default so the override has something to sit on.
-    if !authored {
+    // materialize that default so the overrides have something to sit on. The
+    // default is already windowed, so only the title bar needs pinning here.
+    if !authored && HIDES_TITLE_BAR {
         world.add_component(Window {
             title_bar: false,
             ..Default::default()
@@ -284,6 +290,35 @@ mod tests {
             assert!(!windows[0].title_bar);
         } else {
             assert!(windows.is_empty());
+        }
+    }
+
+    // A `borderless` / `fullscreen` world would size the editor window to the
+    // whole display and swallow the OS cursor past the panels, so injection pins
+    // the editor session to windowed on every platform -- while leaving the rest
+    // of the authored window (size, title) for `cn run` / `cn export` to honor.
+    #[test]
+    fn injection_pins_a_non_windowed_mode_to_windowed() {
+        for mode in [WindowMode::Borderless, WindowMode::Fullscreen] {
+            let mut world = World::new_empty();
+            world.add_component(Window {
+                title: "My Game".into(),
+                width: 1600,
+                mode,
+                ..Default::default()
+            });
+            editor_hud(&mut world);
+
+            let w = world.query::<Window>().next().unwrap();
+            assert_eq!(
+                w.mode,
+                WindowMode::Windowed,
+                "editor pins {mode:?} to windowed"
+            );
+            // Only the mode (and chrome) is the editor's business; the rest stands.
+            assert_eq!(w.title, "My Game");
+            assert_eq!(w.width, 1600);
+            assert_eq!(world.query::<Window>().count(), 1);
         }
     }
 

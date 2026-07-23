@@ -1455,9 +1455,18 @@ impl MtlContext {
             super::display_mode::FullscreenDisplayMode::new(),
         );
         let keymap = self.keymap;
+        // NSCursor's hide count and the CGAssociate coupling are process-global
+        // and survive teardown (the outgoing context's Drop skips its cursor
+        // release for a transplanted window), but a fresh build resets the flags
+        // tracking that state to "visible". Carry them so a reload does not leak a
+        // hide and strand the OS cursor hidden outside the window.
+        let ui_cursor_hidden = self.ui_cursor_hidden;
+        let cursor_captured = self.cursor_captured;
         let mut rebuilt = MtlContext::build(init, Some(reuse))?;
         rebuilt.fullscreen_display = fullscreen_display;
         rebuilt.keymap = keymap;
+        rebuilt.ui_cursor_hidden = ui_cursor_hidden;
+        rebuilt.cursor_captured = cursor_captured;
         // Hand the window over: the outgoing context (dropped by the assignment
         // below) must not close the shared window -- `rebuilt` owns it now.
         self.owns_window = false;

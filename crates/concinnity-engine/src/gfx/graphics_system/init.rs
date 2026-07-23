@@ -2561,6 +2561,11 @@ impl GraphicsSystem {
             || ctx.query::<crate::assets::KeyBinding>().next().is_some();
         let has_camera = ctx.query::<Camera3D>().next().is_some();
         self.menu_mode = has_camera && has_ui;
+        // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
+        // per frame, so the startup auto-grab is skipped: the editor re-runs this
+        // init on every live-preview rebuild, and grabbing there would re-hide and
+        // decouple the OS cursor each time, desyncing the free-cursor handoff.
+        let menu_driven = ctx.resource::<crate::ecs::MenuOverride>().is_some();
         let mut device_caps = crate::gfx::backend::DeviceCapabilities::ALL;
         if let Some(backend) = self.backend.as_deref_mut() {
             // Capability flags drive the settings-menu gating below.
@@ -2586,7 +2591,7 @@ impl GraphicsSystem {
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
             backend.set_keymap(&self.keymap);
-            if has_camera && !has_ui {
+            if has_camera && !has_ui && !menu_driven {
                 backend.capture_cursor();
             }
         }
