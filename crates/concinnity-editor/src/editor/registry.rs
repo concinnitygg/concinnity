@@ -99,6 +99,11 @@ pub(crate) trait Panel: Sync {
     fn view_row(&self) -> Option<&'static str> {
         None
     }
+    // Whether the user can resize this panel by dragging its edges / corners.
+    // Default `false`: the fixed-size panels (Preview, Health, Console) opt out.
+    fn resizable(&self) -> bool {
+        false
+    }
     // Whether the panel is shown and interactive this frame, compound gates
     // included (e.g. the edit form requires the Assets UI to be on).
     fn is_open(&self, hook: &EditorHook) -> bool;
@@ -108,8 +113,15 @@ pub(crate) trait Panel: Sync {
     // The title-bar "X".
     fn close(&self, hook: &mut EditorHook, world: &mut World);
     // The panel footprint this frame (it may track dynamic content), for the
-    // drag clamp and the shared title-bar geometry.
+    // drag clamp and the shared title-bar geometry. Also the minimum a resizable
+    // panel can be dragged to.
     fn size(&self, hook: &EditorHook) -> [f32; 2];
+    // The largest a resizable panel may be dragged to, per axis (`f32::INFINITY`
+    // for unbounded, capped only by the screen). Default unbounded; a panel whose
+    // body is a fixed pool of rows caps its height so it never shows empty space.
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        [f32::INFINITY, f32::INFINITY]
+    }
     // Where the panel sits until the user drags it.
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2];
     // The injected element ids: sprites, labels, and typed fields with their
@@ -229,6 +241,7 @@ mod tests {
             super::super::gizmo::MODE_LABEL,
             "gizmo mode label".to_string(),
         );
+        claim(super::super::cursor::CURSOR, "editor cursor".to_string());
         for key in PanelKey::ALL {
             let p = panel(key);
             for id in p.sprite_ids() {

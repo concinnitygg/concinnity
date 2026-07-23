@@ -150,24 +150,24 @@ pub(crate) fn place_row(
     }
 }
 
-// A simple non-interactive scrollbar sizing the visible window (`MAX_ROWS`)
-// against `total`, drawn down the right edge from `top_y`. `right_x` is the
-// body's right edge; the bar sits just inside it. Shown only when the body
-// overflows the window.
+// A simple non-interactive scrollbar sizing the visible `window` against
+// `total`, drawn down the right edge from `top_y`. `right_x` is the body's right
+// edge; the bar sits just inside it. Shown only when the body overflows the window.
 pub(crate) fn layout_scrollbar(
     world: &mut World,
-    track_id: AssetId,
-    thumb_id: AssetId,
+    ids: (AssetId, AssetId),
     total: usize,
     scroll: usize,
+    window: usize,
     right_x: f32,
     top_y: f32,
 ) {
-    if total <= MAX_ROWS {
+    let (track_id, thumb_id) = ids;
+    if total <= window {
         return;
     }
     let x = right_x - SCROLLBAR_W - 2.0;
-    let track_h = MAX_ROWS as f32 * ROW_H;
+    let track_h = window as f32 * ROW_H;
     place_rounded(
         world,
         track_id,
@@ -176,11 +176,11 @@ pub(crate) fn layout_scrollbar(
         SCROLLBAR_W * 0.5,
         true,
     );
-    let frac_visible = MAX_ROWS as f32 / total as f32;
+    let frac_visible = window as f32 / total as f32;
     let thumb_h = (track_h * frac_visible).max(20.0);
-    let max_scroll = (total - MAX_ROWS) as f32;
+    let max_scroll = (total - window) as f32;
     let t = if max_scroll > 0.0 {
-        scroll.min(total - MAX_ROWS) as f32 / max_scroll
+        scroll.min(total - window) as f32 / max_scroll
     } else {
         0.0
     };
@@ -304,7 +304,15 @@ mod tests {
             s.visible = false;
         }
         // Fits the window: the bar is left untouched (still hidden).
-        layout_scrollbar(&mut world, AssetId(1), AssetId(2), MAX_ROWS, 0, 300.0, 40.0);
+        layout_scrollbar(
+            &mut world,
+            (AssetId(1), AssetId(2)),
+            MAX_ROWS,
+            0,
+            MAX_ROWS,
+            300.0,
+            40.0,
+        );
         assert!(
             world.query::<Sprite>().all(|s| !s.visible),
             "no bar when the list fits"
@@ -312,10 +320,10 @@ mod tests {
         // Overflows: the track + thumb are shown.
         layout_scrollbar(
             &mut world,
-            AssetId(1),
-            AssetId(2),
+            (AssetId(1), AssetId(2)),
             MAX_ROWS + 5,
             0,
+            MAX_ROWS,
             300.0,
             40.0,
         );

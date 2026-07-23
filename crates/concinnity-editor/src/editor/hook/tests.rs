@@ -770,7 +770,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     let po = h.origin(PanelKey::Assets, vp);
     // Row 0 is the World group header; row 1 is the asset. Aim at its name,
     // clear of the hide toggle now heading the row.
-    let row = panel::row_rect(po, 1);
+    let row = panel::row_rect(po, panel::PANEL_W, 1);
     let mut world = World::new_empty();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
@@ -922,8 +922,15 @@ fn a_panel_press_brings_it_to_the_front() {
     h.panel_open = true;
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
-    let t = panel::title_rect(po);
-    let claimed = h.try_panel_press(PanelKey::Assets, t[0] + 5.0, t[1] + 5.0, vp, &mut world);
+    let t = panel::title_rect(po, panel::PANEL_W);
+    // The title bar's interior (clear of the corner / edge resize band) drags.
+    let claimed = h.try_panel_press(
+        PanelKey::Assets,
+        t[0] + t[2] * 0.5,
+        t[1] + t[3] * 0.5,
+        vp,
+        &mut world,
+    );
     assert!(claimed, "the press was claimed by the Assets panel");
     assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
@@ -1029,7 +1036,14 @@ fn templates_panel_press_drags_and_focuses() {
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
     let t = title_rect_of(&h, PanelKey::Templates, vp);
-    assert!(h.try_panel_press(PanelKey::Templates, t[0] + 5.0, t[1] + 5.0, vp, &mut world));
+    // The title bar's interior (clear of the corner / edge resize band) drags.
+    assert!(h.try_panel_press(
+        PanelKey::Templates,
+        t[0] + t[2] * 0.5,
+        t[1] + t[3] * 0.5,
+        vp,
+        &mut world
+    ));
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
     assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Templates));
 }
@@ -1160,7 +1174,10 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
 
     // Click the detail's Apply button -> the template's assets are added and
     // the detail closes.
-    let apply = template_panel::apply_rect(h.origin(PanelKey::TemplateDetail, vp));
+    let apply = template_panel::apply_rect(
+        h.origin(PanelKey::TemplateDetail, vp),
+        h.effective_size(PanelKey::TemplateDetail)[0],
+    );
     set_input(
         &mut world,
         FrameInput {
@@ -2092,7 +2109,14 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
     let vp = [1280.0, 720.0];
     let vo = h.origin(PanelKey::View, vp);
     let row = super::super::list_panel::row_rect(vo, 200.0, 3);
-    assert!(h.try_panel_press(PanelKey::View, row[0] + 5.0, row[1] + 5.0, vp, &mut world));
+    // Click the row's interior (clear of the edge resize band).
+    assert!(h.try_panel_press(
+        PanelKey::View,
+        row[0] + row[2] * 0.5,
+        row[1] + 5.0,
+        vp,
+        &mut world
+    ));
     assert!(h.lighting_open, "the Lighting row opens the panel");
     assert_eq!(
         widget::field_text(&world, lighting_panel::input(SUN_INTENSITY)),

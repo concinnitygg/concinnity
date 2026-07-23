@@ -31,8 +31,8 @@ pub use concinnity_core::ecs::{
 // Re-exported here to keep the historical `crate::ecs::*` paths for every reader
 // (engine systems and the editor's hook drive).
 pub use concinnity_core::ecs::{
-    CursorState, DropdownView, EditorHidden, FlyCam, FrameRateCap, HudLayers, HudPrefs, MenuActive,
-    MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
+    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, FlyCam, FrameRateCap,
+    HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are

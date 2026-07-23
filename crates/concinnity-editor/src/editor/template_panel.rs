@@ -45,7 +45,11 @@ pub(crate) fn row_label(i: usize) -> AssetId {
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
 // title bar's top-left), so dragging the title bar moves the whole panel.
+// The default (and minimum) width; the user can widen the panel past this.
 pub(crate) const TPL_W: f32 = 420.0;
+// The injected row pool: the default shows up to `MAX_ROWS`, resizing taller
+// reveals more up to this.
+const POOL_MAX: usize = 28;
 const PAD: f32 = 10.0;
 const GAP: f32 = 8.0;
 // The header row: the description and the Apply button.
@@ -84,9 +88,27 @@ pub(crate) struct TemplateView<'a> {
     pub mouse: [f32; 2],
 }
 
-// How many list rows are on screen: the row count capped at the window.
+// The default (minimum) on-screen list rows: the row count capped at the window.
 fn visible_rows(n_rows: usize) -> usize {
     n_rows.clamp(1, MAX_ROWS)
+}
+
+// The chrome height around the row band (title bar + header row + pads).
+const CHROME_H: f32 = widget::TITLE_H + PAD + HEADER_H + PAD + PAD;
+
+fn panel_height(rows: usize) -> f32 {
+    CHROME_H + rows as f32 * ROW_H
+}
+
+// The number of row slots that fit panel height `h`, capped at the pool.
+pub(crate) fn rows_for_height(h: f32) -> usize {
+    (((h - CHROME_H) / ROW_H).floor() as usize).clamp(1, POOL_MAX)
+}
+
+// The tallest the panel resizes to for a template of `n_rows`: its rows shown in
+// full, capped at the injected pool. Width is unbounded (capped by the screen).
+pub(crate) fn max_size(n_rows: usize) -> [f32; 2] {
+    [f32::INFINITY, panel_height(n_rows.clamp(1, POOL_MAX))]
 }
 
 // Where the panel sits until the user drags it: centred, just below the top bar.
@@ -98,42 +120,38 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 // tracks the row count, capped at the window). Origin-independent; the hook's
 // drag clamp uses this.
 pub(crate) fn size(n_rows: usize) -> [f32; 2] {
-    [
-        TPL_W,
-        widget::TITLE_H + PAD + HEADER_H + PAD + visible_rows(n_rows) as f32 * ROW_H + PAD,
-    ]
+    [TPL_W, panel_height(visible_rows(n_rows))]
 }
 
-// The panel outer rect for a view (its height tracks the visible row count).
-fn panel_rect(view: &TemplateView, o: [f32; 2]) -> [f32; 4] {
-    let s = size(view.rows.len());
+// The panel outer rect at the effective size `s`.
+fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], s[0], s[1]]
 }
 
-// The draggable title bar across the panel top.
-pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], TPL_W, widget::TITLE_H]
+// The draggable title bar across the panel top, at the effective width `w`.
+pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, widget::TITLE_H]
 }
 
 // The "X" close button, flush in the title bar's top-right corner. The hook
 // checks this before the title-bar drag, so clicking the X closes the panel.
-pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    widget::close_rect(title_rect(o))
+pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    widget::close_rect(title_rect(o, w))
 }
 
 // The header row under the title bar: description on the left, Apply on the right.
 fn header_y(o: [f32; 2]) -> f32 {
     o[1] + widget::TITLE_H + PAD
 }
-pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0] + TPL_W - PAD - BTN_W, header_y(o), BTN_W, HEADER_H]
+pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0] + w - PAD - BTN_W, header_y(o), BTN_W, HEADER_H]
 }
 // The description area, filling the header row left of the Apply button.
-fn desc_rect(o: [f32; 2]) -> [f32; 4] {
+fn desc_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
         o[0] + PAD,
         header_y(o),
-        TPL_W - 2.0 * PAD - (BTN_W + GAP),
+        w - 2.0 * PAD - (BTN_W + GAP),
         HEADER_H,
     ]
 }
@@ -143,32 +161,35 @@ fn body_top(o: [f32; 2]) -> f32 {
     header_y(o) + HEADER_H + PAD
 }
 
-// Full-width rect of visible list row `r`.
-fn list_row_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    [o[0], body_top(o) + r as f32 * ROW_H, TPL_W, ROW_H]
+// Full-width rect of visible list row `r` at the effective width `w`.
+fn list_row_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    [o[0], body_top(o) + r as f32 * ROW_H, w, ROW_H]
 }
 
 // Whether the cursor is over the panel (for wheel-scrolling the asset list).
-pub(crate) fn cursor_over(view: &TemplateView, mx: f32, my: f32, o: [f32; 2]) -> bool {
-    point_in(mx, my, panel_rect(view, o))
+pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
+    point_in(mx, my, panel_rect(o, s))
 }
 
-// Resolve a click against the open panel at origin `o`. `None` means the click
-// missed the panel. Title-bar presses never reach this: the hook intercepts them
-// first to start a drag (and to catch the "X").
+// Resolve a click against the open panel at origin `o`, size `s`. `None` means
+// the click missed the panel. Title-bar presses never reach this: the hook
+// intercepts them first to start a drag (and to catch the "X").
 pub(crate) fn hit_test(
     view: &TemplateView,
     mx: f32,
     my: f32,
     o: [f32; 2],
+    s: [f32; 2],
 ) -> Option<TemplateAction> {
-    if !point_in(mx, my, panel_rect(view, o)) {
+    let _ = view;
+    let w = s[0];
+    if !point_in(mx, my, panel_rect(o, s)) {
         return None;
     }
-    if point_in(mx, my, close_rect(o)) {
+    if point_in(mx, my, close_rect(o, w)) {
         return Some(TemplateAction::Close);
     }
-    if point_in(mx, my, apply_rect(o)) {
+    if point_in(mx, my, apply_rect(o, w)) {
         return Some(TemplateAction::Apply);
     }
     // The asset list is read-only; every other click inside the panel is
@@ -176,9 +197,9 @@ pub(crate) fn hit_test(
     Some(TemplateAction::Consume)
 }
 
-// Position + show the panel's elements for this frame at origin `o`, or hide them
-// all when the panel is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2]) {
+// Position + show the panel's elements for this frame at origin `o`, effective
+// size `s`, or hide them all when the panel is closed (`view` is `None`).
+pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -187,13 +208,15 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    widget::place_panel(world, PANEL_BG, panel_rect(view, o));
-    widget::place_heading(world, TITLE_LABEL, title_rect(o), view.title);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
+    let w = s[0];
+    let window = rows_for_height(s[1]);
+    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
+    widget::place_heading(world, TITLE_LABEL, title_rect(o, w), view.title);
+    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o, w));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o, w), close_hover);
 
     // The header row: the description (left) and the pinned Apply button (right).
-    let desc = desc_rect(o);
+    let desc = desc_rect(o, w);
     if let Some(l) = widget::label_mut(world, DESC_LABEL) {
         l.x = desc[0];
         l.y = desc[1] + HEADER_H * 0.5 - 10.0 * DESC_SCALE;
@@ -203,7 +226,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
         l.visible = true;
         l.content = view.description.to_string();
     }
-    let apply_btn = apply_rect(o);
+    let apply_btn = apply_rect(o, w);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
     place_rounded(
         world,
@@ -226,7 +249,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
     // row pool, plus a scrollbar when it overflows.
     let total = view.rows.len();
     let scroll = view.scroll.min(total.saturating_sub(1));
-    for r in 0..MAX_ROWS {
+    for r in 0..window {
         let idx = scroll + r;
         if idx >= total {
             break;
@@ -236,17 +259,17 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2])
             row_bg(r),
             row_label(r),
             &view.rows[idx],
-            list_row_rect(o, r),
+            list_row_rect(o, w, r),
             asset_list::ROW_TINT,
         );
     }
     asset_list::layout_scrollbar(
         world,
-        LIST_TRACK,
-        LIST_THUMB,
+        (LIST_TRACK, LIST_THUMB),
         total,
         scroll,
-        o[0] + TPL_W,
+        window,
+        o[0] + w,
         body_top(o),
     );
 }
@@ -266,13 +289,13 @@ pub(crate) fn hide_all(world: &mut World) {
 // order): background + chrome, the row backgrounds, then the scrollbar above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
-    ids.extend((0..MAX_ROWS).map(row_bg));
+    ids.extend((0..POOL_MAX).map(row_bg));
     ids.extend([LIST_TRACK, LIST_THUMB]);
     ids
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, DESC_LABEL];
-    ids.extend((0..MAX_ROWS).map(row_label));
+    ids.extend((0..POOL_MAX).map(row_label));
     ids
 }
 
@@ -357,17 +380,17 @@ mod tests {
     #[test]
     fn header_pins_description_and_apply_under_the_title_bar() {
         let o = test_origin();
-        let title = title_rect(o);
+        let title = title_rect(o, TPL_W);
         assert_eq!(title, [o[0], o[1], TPL_W, widget::TITLE_H]);
-        let close = close_rect(o);
+        let close = close_rect(o, TPL_W);
         assert_eq!(close[1], o[1], "the X sits in the title bar");
         assert_eq!(
             close[0] + close[2],
             o[0] + TPL_W,
             "flush to the panel right"
         );
-        let desc = desc_rect(o);
-        let apply_btn = apply_rect(o);
+        let desc = desc_rect(o, TPL_W);
+        let apply_btn = apply_rect(o, TPL_W);
         assert_eq!(desc[1], o[1] + widget::TITLE_H + PAD, "under the title bar");
         assert_eq!(
             desc[1], apply_btn[1],
@@ -383,8 +406,7 @@ mod tests {
             "Apply flush to the panel's right pad"
         );
         // The whole panel follows its origin.
-        let v = view(&[]);
-        let moved = panel_rect(&v, [40.0, 60.0]);
+        let moved = panel_rect([40.0, 60.0], size(0));
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!(
             size(0),
@@ -411,29 +433,30 @@ mod tests {
         let rs = rows();
         let v = view(&rs);
         let o = test_origin();
-        let a = apply_rect(o);
-        let x = close_rect(o);
+        let s = size(rs.len());
+        let a = apply_rect(o, TPL_W);
+        let x = close_rect(o, TPL_W);
         assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, s),
             Some(TemplateAction::Apply)
         );
         assert_eq!(
-            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o),
+            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o, s),
             Some(TemplateAction::Close)
         );
         // A title-bar click off the X is consumed (the hook grabs drags first).
-        let t = title_rect(o);
+        let t = title_rect(o, TPL_W);
         assert_eq!(
-            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o),
+            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, s),
             Some(TemplateAction::Consume)
         );
         // A body click is consumed; a miss falls through.
-        let row = list_row_rect(o, 1);
+        let row = list_row_rect(o, TPL_W, 1);
         assert_eq!(
-            hit_test(&v, row[0] + 5.0, row[1] + 5.0, o),
+            hit_test(&v, row[0] + 5.0, row[1] + 5.0, o, s),
             Some(TemplateAction::Consume)
         );
-        assert_eq!(hit_test(&v, 5.0, 5.0, o), None);
+        assert_eq!(hit_test(&v, 5.0, 5.0, o, s), None);
     }
 
     // Applying lays out the title, description, Apply caption, and the grouped
@@ -443,7 +466,7 @@ mod tests {
         let rs = rows();
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&view(&rs)), o);
+        apply(&mut world, Some(&view(&rs)), o, size(rs.len()));
         assert_eq!(
             label(&world, TITLE_LABEL).content,
             "Template Minimal 3D World"
@@ -468,7 +491,12 @@ mod tests {
     fn scrollbar_only_when_the_list_overflows() {
         let short = rows();
         let mut world = injected_world();
-        apply(&mut world, Some(&view(&short)), test_origin());
+        apply(
+            &mut world,
+            Some(&view(&short)),
+            test_origin(),
+            size(short.len()),
+        );
         assert!(!sprite(&world, LIST_THUMB).visible, "short list, no bar");
 
         let long: Vec<ListRow> = (0..MAX_ROWS + 6)
@@ -478,15 +506,40 @@ mod tests {
                 entry: Some(i),
             })
             .collect();
-        apply(&mut world, Some(&view(&long)), test_origin());
+        apply(
+            &mut world,
+            Some(&view(&long)),
+            test_origin(),
+            size(long.len()),
+        );
         assert!(sprite(&world, LIST_THUMB).visible, "overflow shows the bar");
+    }
+
+    // A template with more rows than the default window can be resized taller to
+    // reveal them (up to the pool); a small template's height is locked.
+    #[test]
+    fn taller_size_reveals_more_rows_up_to_the_pool() {
+        let n = MAX_ROWS + 8;
+        assert_eq!(
+            rows_for_height(size(n)[1]),
+            MAX_ROWS,
+            "default shows the window"
+        );
+        assert_eq!(
+            rows_for_height(max_size(n)[1]),
+            n,
+            "max reveals all the rows"
+        );
+        assert_eq!(rows_for_height(10_000.0), POOL_MAX, "capped at the pool");
+        // A short template cannot grow taller (no more rows to show).
+        assert_eq!(max_size(3)[1], size(3)[1]);
     }
 
     #[test]
     fn hide_all_blanks_every_element() {
         let rs = rows();
         let mut world = injected_world();
-        apply(&mut world, Some(&view(&rs)), test_origin());
+        apply(&mut world, Some(&view(&rs)), test_origin(), size(rs.len()));
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

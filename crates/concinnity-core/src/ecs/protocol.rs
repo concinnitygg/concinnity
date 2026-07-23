@@ -36,6 +36,26 @@ pub struct FrameRateCap(pub u32);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuOverride(pub Option<bool>);
 
+// The silhouette the in-engine cursor sprite should draw this frame. Published
+// by the `cn editor` HUD when the pointer is over a resizable panel's edge or
+// corner (or while a resize drag is in flight) and read by the overlay build,
+// which draws the matching shape at the pointer in place of the arrow. `Default`
+// is the plain arrow; the four resize shapes are double-headed arrows along a
+// window edge (east/west), edge (north/south), and the two diagonals. A shipped
+// runtime never publishes it, so the arrow always stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    #[default]
+    Default,
+    ResizeEW,
+    ResizeNS,
+    ResizeNWSE,
+    ResizeNESW,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DesiredCursor(pub CursorShape);
+
 // Per-frame draw-layer overrides for HUD Sprites / TextLabels / TextInputs, keyed
 // by asset id and published by the `cn editor` HUD so its floating panels occlude
 // cleanly. Overlay draw calls render in two passes (all sprites, then all text),

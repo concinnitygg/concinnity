@@ -279,9 +279,16 @@ fn build_overlay_frame(
     let menu_cursor = cursor_sprites.iter().any(|s| s.visible && s.tint[3] > 0.0);
     let want_ui_cursor = menu_cursor && !cursor.outside_window;
     if want_ui_cursor {
+        // The `cn editor` HUD switches the silhouette to a resize cursor over a
+        // panel edge; every other cursor stays the arrow (the default absence).
+        let cursor_shape = ctx
+            .resource::<crate::ecs::DesiredCursor>()
+            .map(|c| c.0)
+            .unwrap_or_default();
         calls.extend(crate::gfx::cursor::build_cursor_calls(
             &cursor_sprites,
             cursor.pos,
+            cursor_shape,
             default_atlas_slot,
             [win_w, win_h],
         ));

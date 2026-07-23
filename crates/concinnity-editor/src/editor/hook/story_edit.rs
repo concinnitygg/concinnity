@@ -91,11 +91,16 @@ impl EditorHook {
         self.ensure_story_visible();
     }
 
+    fn story_rows_shown(&self) -> usize {
+        story_panel::visible_rows(self.effective_size(PanelKey::Story)[1])
+    }
+
     fn ensure_story_visible(&mut self) {
+        let rows_shown = self.story_rows_shown();
         if self.story_line < self.story_scroll {
             self.story_scroll = self.story_line;
-        } else if self.story_line >= self.story_scroll + story_panel::LINE_POOL {
-            self.story_scroll = self.story_line + 1 - story_panel::LINE_POOL;
+        } else if self.story_line >= self.story_scroll + rows_shown {
+            self.story_scroll = self.story_line + 1 - rows_shown;
         }
     }
 
@@ -103,7 +108,7 @@ impl EditorHook {
         let max = self
             .story_lines
             .len()
-            .saturating_sub(story_panel::LINE_POOL);
+            .saturating_sub(self.story_rows_shown());
         self.story_scroll = scroll_step(self.story_scroll, delta, max);
     }
 

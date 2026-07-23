@@ -52,10 +52,8 @@ impl EditorHook {
     }
 
     pub(super) fn scroll_imports(&mut self, delta: f32) {
-        let max = self
-            .import_rows()
-            .len()
-            .saturating_sub(import_panel::IMPORT_POOL);
+        let rows_shown = import_panel::visible_rows(self.effective_size(PanelKey::Import)[1]);
+        let max = self.import_rows().len().saturating_sub(rows_shown);
         self.import_scroll = scroll_step(self.import_scroll, delta, max);
     }
 

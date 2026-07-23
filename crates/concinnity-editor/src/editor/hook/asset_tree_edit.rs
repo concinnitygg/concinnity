@@ -101,22 +101,34 @@ impl EditorHook {
         }
     }
 
+    // The Assets panel's visible row count at its current (possibly resized)
+    // height, for the scroll clamps.
+    fn tree_rows_shown(&self) -> usize {
+        panel::visible_rows(self.effective_size(PanelKey::Assets)[1])
+    }
+
     pub(super) fn scroll_tree(&mut self, delta: f32, world: &World) {
         if self.picker_open {
             let total = self
                 .picker_options(world)
                 .map_or(0, |o| o.len())
-                .saturating_sub(panel::ROW_POOL);
+                .saturating_sub(self.tree_rows_shown());
             self.picker_scroll = scroll_step(self.picker_scroll, delta, total);
             return;
         }
-        let max = self.tree_rows(world).len().saturating_sub(panel::ROW_POOL);
+        let max = self
+            .tree_rows(world)
+            .len()
+            .saturating_sub(self.tree_rows_shown());
         self.tree_scroll = scroll_step(self.tree_scroll, delta, max);
         self.row_menu = None;
     }
 
     fn clamp_tree_scroll(&mut self, world: &World) {
-        let max = self.tree_rows(world).len().saturating_sub(panel::ROW_POOL);
+        let max = self
+            .tree_rows(world)
+            .len()
+            .saturating_sub(self.tree_rows_shown());
         self.tree_scroll = self.tree_scroll.min(max);
     }
 
@@ -309,8 +321,8 @@ impl EditorHook {
         };
         // Scroll only when the row is outside the visible window, keeping its
         // group header in view when it sits directly above.
-        if row < self.tree_scroll || row >= self.tree_scroll + panel::ROW_POOL {
-            let max = rows.len().saturating_sub(panel::ROW_POOL);
+        if row < self.tree_scroll || row >= self.tree_scroll + self.tree_rows_shown() {
+            let max = rows.len().saturating_sub(self.tree_rows_shown());
             self.tree_scroll = row.saturating_sub(1).min(max);
         }
     }

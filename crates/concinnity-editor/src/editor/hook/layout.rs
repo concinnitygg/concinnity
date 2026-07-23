@@ -57,7 +57,82 @@ impl EditorHook {
     pub(super) fn origin(&self, key: PanelKey, vp: [f32; 2]) -> [f32; 2] {
         let p = registry::panel(key);
         let pos = self.positions[key.index()].unwrap_or_else(|| p.default_origin(vp));
-        widget::clamp_origin(pos, p.size(self), vp, hud::BAR_H)
+        widget::clamp_origin(pos, self.effective_size(key), vp, hud::BAR_H)
+    }
+
+    // A panel's content-derived default size, which is also its minimum: the user
+    // can grow a panel past this but never below it.
+    pub(super) fn default_size(&self, key: PanelKey) -> [f32; 2] {
+        registry::panel(key).size(self)
+    }
+
+    // A panel's size this frame: the user's override clamped into
+    // `[default, max]`, so content that outgrows the override still wins and the
+    // panel never exceeds its content pool (a non-resizable panel, never
+    // overridden, is always its default).
+    pub(super) fn effective_size(&self, key: PanelKey) -> [f32; 2] {
+        let d = self.default_size(key);
+        match self.sizes[key.index()] {
+            Some(o) => {
+                let max = registry::panel(key).max_size(self);
+                [
+                    o[0].clamp(d[0], max[0].max(d[0])),
+                    o[1].clamp(d[1], max[1].max(d[1])),
+                ]
+            }
+            None => d,
+        }
+    }
+
+    // The edges the pointer grabs on resizable panel `key` (at origin `o`, size
+    // `s`), with any axis the panel has locked (its max equals its default,
+    // e.g. a width-only panel) filtered out so it offers no grab there. `None`
+    // when no live edge is under the pointer.
+    pub(super) fn resize_edges(
+        &self,
+        key: PanelKey,
+        o: [f32; 2],
+        s: [f32; 2],
+        mx: f32,
+        my: f32,
+    ) -> Option<resize::Edges> {
+        let e = resize::hit_test(o, s, resize::BORDER, mx, my)?;
+        let d = self.default_size(key);
+        let max = registry::panel(key).max_size(self);
+        let e = resize::Edges {
+            left: e.left && max[0] > d[0],
+            right: e.right && max[0] > d[0],
+            top: e.top && max[1] > d[1],
+            bottom: e.bottom && max[1] > d[1],
+        };
+        e.any().then_some(e)
+    }
+
+    // The resize cursor for the pointer at `mouse`: the shape of the frontmost
+    // resizable open panel whose edge / corner it grabs, or the arrow when it is
+    // over no such edge. Front-to-back, so a panel's body blocks the panels
+    // behind it; the close button keeps priority over a top-corner grab.
+    pub(super) fn hover_cursor(&self, vp: [f32; 2], mouse: [f32; 2]) -> CursorShape {
+        let (mx, my) = (mouse[0], mouse[1]);
+        for &key in self.panel_order.iter().rev() {
+            let p = registry::panel(key);
+            if !p.resizable() || !p.is_open(self) {
+                continue;
+            }
+            let o = self.origin(key, vp);
+            let s = self.effective_size(key);
+            let title = [o[0], o[1], s[0], widget::TITLE_H];
+            if point_in(mx, my, widget::close_rect(title)) {
+                return CursorShape::Default;
+            }
+            if let Some(edges) = self.resize_edges(key, o, s, mx, my) {
+                return resize::cursor_shape(edges);
+            }
+            if point_in(mx, my, [o[0], o[1], s[0], s[1]]) {
+                return CursorShape::Default;
+            }
+        }
+        CursorShape::Default
     }
 
     // The world-line entries of template `i` (its typed specs via the app bridge).

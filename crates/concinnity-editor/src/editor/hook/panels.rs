@@ -15,6 +15,12 @@ impl Panel for AssetsPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Assets
     }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        panel::max_size()
+    }
     fn view_row(&self) -> Option<&'static str> {
         Some("Assets")
     }
@@ -62,10 +68,11 @@ impl Panel for AssetsPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
+        let s = hook.effective_size(PanelKey::Assets);
         let action = {
             let data = hook.panel_data(world);
             let view = hook.make_view(&data, [mx, my]);
-            panel::hit_test(&view, mx, my, o)
+            panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -75,15 +82,9 @@ impl Panel for AssetsPanel {
             None => false,
         }
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        panel::cursor_over_body(mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Assets);
+        panel::cursor_over_body(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
         hook.scroll_tree(delta, world);
@@ -92,12 +93,13 @@ impl Panel for AssetsPanel {
         hook.tree_keys(world, input);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Assets);
         let data = hook.panel_data(world);
         let view = hook.make_view(&data, mouse);
-        panel::apply(world, Some(&view), o);
+        panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        panel::apply(world, None, [0.0, 0.0]);
+        panel::apply(world, None, [0.0, 0.0], panel::size());
     }
 }
 
@@ -293,6 +295,9 @@ impl Panel for ViewPanel {
     fn key(&self) -> PanelKey {
         PanelKey::View
     }
+    fn resizable(&self) -> bool {
+        true
+    }
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.view_open
     }
@@ -301,6 +306,11 @@ impl Panel for ViewPanel {
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         view::size()
+    }
+    // The toggle rows are fixed (one per registered panel), so only the width
+    // resizes; the height is locked to the row count.
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        [f32::INFINITY, view::size()[1]]
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         view::default_origin()
@@ -319,7 +329,8 @@ impl Panel for ViewPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        match view::hit_test(mx, my, o) {
+        let w = hook.effective_size(PanelKey::View)[0];
+        match view::hit_test(mx, my, o, w) {
             Some(ViewAction::Toggle(i)) => {
                 hook.toggle_view_row(i, world);
                 true
@@ -329,7 +340,8 @@ impl Panel for ViewPanel {
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        view::apply(world, o, &hook.view_rows(), mouse);
+        let w = hook.effective_size(PanelKey::View)[0];
+        view::apply(world, o, w, &hook.view_rows(), mouse);
     }
     fn hide(&self, world: &mut World) {
         view::hide_all(world);
@@ -341,6 +353,9 @@ pub(crate) struct TemplatesPanel;
 impl Panel for TemplatesPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Templates
+    }
+    fn resizable(&self) -> bool {
+        true
     }
     fn view_row(&self) -> Option<&'static str> {
         Some("Templates")
@@ -356,6 +371,11 @@ impl Panel for TemplatesPanel {
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         templates::size()
+    }
+    // The template rows are fixed (one per built-in template), so only the width
+    // resizes; the height is locked to the row count.
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        [f32::INFINITY, templates::size()[1]]
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         templates::default_origin(vp[0])
@@ -375,7 +395,8 @@ impl Panel for TemplatesPanel {
         o: [f32; 2],
     ) -> bool {
         let _ = world;
-        match templates::hit_test(mx, my, o) {
+        let w = hook.effective_size(PanelKey::Templates)[0];
+        match templates::hit_test(mx, my, o, w) {
             Some(TemplatesAction::Pick(i)) => {
                 hook.open_template_detail(i);
                 true
@@ -385,7 +406,8 @@ impl Panel for TemplatesPanel {
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        templates::apply(world, o, hook.open_template, mouse);
+        let w = hook.effective_size(PanelKey::Templates)[0];
+        templates::apply(world, o, w, hook.open_template, mouse);
     }
     fn hide(&self, world: &mut World) {
         templates::hide_all(world);
@@ -394,9 +416,21 @@ impl Panel for TemplatesPanel {
 
 pub(crate) struct TemplateDetailPanel;
 
+impl TemplateDetailPanel {
+    // The open template's grouped-row count (1 when none is open, matching the
+    // panel's minimum footprint).
+    fn row_count(&self, hook: &EditorHook) -> usize {
+        hook.open_template
+            .map_or(1, |i| hook.template_rows(i).len())
+    }
+}
+
 impl Panel for TemplateDetailPanel {
     fn key(&self) -> PanelKey {
         PanelKey::TemplateDetail
+    }
+    fn resizable(&self) -> bool {
+        true
     }
     // Part of the Templates UI: shown only while the Templates list is open and
     // a template is picked.
@@ -407,10 +441,12 @@ impl Panel for TemplateDetailPanel {
         hook.close_template_detail();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        let n = hook
-            .open_template
-            .map_or(1, |i| hook.template_rows(i).len());
-        template_panel::size(n)
+        template_panel::size(self.row_count(hook))
+    }
+    // The list tracks the template's asset count; the height resizes only when
+    // there are more rows than the default window shows.
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        template_panel::max_size(self.row_count(hook))
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template_panel::default_origin(vp[0])
@@ -433,10 +469,11 @@ impl Panel for TemplateDetailPanel {
         let Some(i) = hook.open_template else {
             return false;
         };
+        let s = hook.effective_size(PanelKey::TemplateDetail);
         let action = {
             let data = hook.template_detail_data(i);
             let view = hook.make_template_view(&data, [mx, my]);
-            template_panel::hit_test(&view, mx, my, o)
+            template_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -447,12 +484,11 @@ impl Panel for TemplateDetailPanel {
         }
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let Some(i) = hook.open_template else {
+        if hook.open_template.is_none() {
             return false;
-        };
-        let data = hook.template_detail_data(i);
-        let view = hook.make_template_view(&data, [mx, my]);
-        template_panel::cursor_over(&view, mx, my, o)
+        }
+        let s = hook.effective_size(PanelKey::TemplateDetail);
+        template_panel::cursor_over(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_template_list(delta);
@@ -461,12 +497,13 @@ impl Panel for TemplateDetailPanel {
         let Some(i) = hook.open_template else {
             return;
         };
+        let s = hook.effective_size(PanelKey::TemplateDetail);
         let data = hook.template_detail_data(i);
         let view = hook.make_template_view(&data, mouse);
-        template_panel::apply(world, Some(&view), o);
+        template_panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        template_panel::apply(world, None, [0.0, 0.0]);
+        template_panel::apply(world, None, [0.0, 0.0], template_panel::size(0));
     }
 }
 
@@ -475,6 +512,9 @@ pub(crate) struct LightingPanel;
 impl Panel for LightingPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Lighting
+    }
+    fn resizable(&self) -> bool {
+        true
     }
     fn view_row(&self) -> Option<&'static str> {
         Some("Lighting")
@@ -497,6 +537,11 @@ impl Panel for LightingPanel {
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         lighting_panel::size(lighting::rows(&hook.lighting_present()).len())
+    }
+    // The field rows track the present lighting assets, so only the width
+    // resizes; the height is locked to that row count.
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        [f32::INFINITY, self.size(hook)[1]]
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         lighting_panel::default_origin()
@@ -521,10 +566,11 @@ impl Panel for LightingPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
+        let w = hook.effective_size(PanelKey::Lighting)[0];
         let action = {
             let data = hook.lighting_data();
             let view = hook.make_lighting_view(&data, [mx, my]);
-            lighting_panel::hit_test(&view, mx, my, o)
+            lighting_panel::hit_test(&view, mx, my, o, w)
         };
         match action {
             Some(a) => {
@@ -535,12 +581,13 @@ impl Panel for LightingPanel {
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let w = hook.effective_size(PanelKey::Lighting)[0];
         let data = hook.lighting_data();
         let view = hook.make_lighting_view(&data, mouse);
-        lighting_panel::apply(world, Some(&view), o);
+        lighting_panel::apply(world, Some(&view), o, w);
     }
     fn hide(&self, world: &mut World) {
-        lighting_panel::apply(world, None, [0.0, 0.0]);
+        lighting_panel::apply(world, None, [0.0, 0.0], lighting_panel::LIGHT_W);
     }
 }
 
@@ -549,6 +596,12 @@ pub(crate) struct StoryPanel;
 impl Panel for StoryPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Story
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        story_panel::max_size()
     }
     fn view_row(&self) -> Option<&'static str> {
         Some("Story")
@@ -593,9 +646,10 @@ impl Panel for StoryPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
+        let s = hook.effective_size(PanelKey::Story);
         let action = {
             let view = hook.make_story_view([mx, my]);
-            story_panel::hit_test(&view, mx, my, o)
+            story_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -605,15 +659,9 @@ impl Panel for StoryPanel {
             None => false,
         }
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        story_panel::cursor_over_lines(mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Story);
+        story_panel::cursor_over_lines(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_story(delta);
@@ -622,11 +670,12 @@ impl Panel for StoryPanel {
         hook.story_keys(world, input);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Story);
         let view = hook.make_story_view(mouse);
-        story_panel::apply(world, Some(&view), o);
+        story_panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        story_panel::apply(world, None, [0.0, 0.0]);
+        story_panel::apply(world, None, [0.0, 0.0], story_panel::size());
     }
 }
 
@@ -718,6 +767,12 @@ impl Panel for ImportPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Import
     }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        import_panel::max_size()
+    }
     fn view_row(&self) -> Option<&'static str> {
         Some("Import")
     }
@@ -763,10 +818,11 @@ impl Panel for ImportPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
+        let s = hook.effective_size(PanelKey::Import);
         let action = {
             let rows = hook.import_rows();
             let view = hook.make_import_view(&rows, [mx, my]);
-            import_panel::hit_test(&view, mx, my, o)
+            import_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -776,15 +832,9 @@ impl Panel for ImportPanel {
             None => false,
         }
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        import_panel::cursor_over_list(mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Import);
+        import_panel::cursor_over_list(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_imports(delta);
@@ -793,11 +843,12 @@ impl Panel for ImportPanel {
         hook.import_keys(world, input);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Import);
         let rows = hook.import_rows();
         let view = hook.make_import_view(&rows, mouse);
-        import_panel::apply(world, Some(&view), o);
+        import_panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        import_panel::apply(world, None, [0.0, 0.0]);
+        import_panel::apply(world, None, [0.0, 0.0], import_panel::size());
     }
 }

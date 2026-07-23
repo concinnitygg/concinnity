@@ -35,6 +35,7 @@ pub(crate) fn count() -> usize {
     registry::view_toggle_count()
 }
 
+// The default (and minimum) panel width; the user can widen it past this.
 const VIEW_W: f32 = 200.0;
 
 // A resolved View-panel click.
@@ -60,25 +61,26 @@ pub(crate) fn size() -> [f32; 2] {
     list_panel::size(VIEW_W, count())
 }
 
-// The panel outer rect (title bar + the toggle rows).
-pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    list_panel::panel_rect(o, VIEW_W, count())
+// The panel outer rect (title bar + the toggle rows) at the effective width `w`.
+pub(crate) fn panel_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    list_panel::panel_rect(o, w, count())
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means the
-// click missed the panel. Title-bar presses never reach this: the hook intercepts
-// them first to start a drag (the shared routing owns the title-bar geometry).
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<ViewAction> {
-    if let Some(i) = list_panel::hit_row(mx, my, o, VIEW_W, count()) {
+// Resolve a click at `(mx, my)` against the panel at origin `o`, width `w`.
+// `None` means the click missed the panel. Title-bar presses never reach this:
+// the hook intercepts them first to start a drag (the shared routing owns the
+// title-bar geometry).
+pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], w: f32) -> Option<ViewAction> {
+    if let Some(i) = list_panel::hit_row(mx, my, o, w, count()) {
         return Some(ViewAction::Toggle(i));
     }
-    point_in(mx, my, panel_rect(o)).then_some(ViewAction::Consume)
+    point_in(mx, my, panel_rect(o, w)).then_some(ViewAction::Consume)
 }
 
-// Position + show the panel at origin `o` with the given toggle rows (built by
-// the hook from the registry).
-pub(crate) fn apply(world: &mut World, o: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
-    list_panel::apply(world, BASE, o, VIEW_W, "View", rows, mouse);
+// Position + show the panel at origin `o`, width `w`, with the given toggle rows
+// (built by the hook from the registry).
+pub(crate) fn apply(world: &mut World, o: [f32; 2], w: f32, rows: &[Row], mouse: [f32; 2]) {
+    list_panel::apply(world, BASE, o, w, "View", rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
@@ -129,15 +131,27 @@ mod tests {
         let o = default_origin();
         let r0 = list_panel::row_rect(o, VIEW_W, 0);
         assert_eq!(
-            hit_test(r0[0] + 10.0, r0[1] + 10.0, o),
+            hit_test(r0[0] + 10.0, r0[1] + 10.0, o, VIEW_W),
             Some(ViewAction::Toggle(0))
         );
         let t = list_panel::title_rect(o, VIEW_W);
         assert_eq!(
-            hit_test(t[0] + 5.0, t[1] + 5.0, o),
+            hit_test(t[0] + 5.0, t[1] + 5.0, o, VIEW_W),
             Some(ViewAction::Consume)
         );
-        assert_eq!(hit_test(2000.0, 2000.0, o), None);
+        assert_eq!(hit_test(2000.0, 2000.0, o, VIEW_W), None);
+        // Widening the panel keeps the same rows and swallows body clicks.
+        let wide = VIEW_W + 120.0;
+        let rw = list_panel::row_rect(o, wide, 0);
+        assert_eq!(
+            hit_test(rw[0] + 10.0, rw[1] + 10.0, o, wide),
+            Some(ViewAction::Toggle(0))
+        );
+        assert_eq!(
+            hit_test(o[0] + wide - 4.0, rw[1] + 10.0, o, wide),
+            Some(ViewAction::Toggle(0)),
+            "the widened right side is still part of the row"
+        );
     }
 
     #[test]
@@ -152,6 +166,7 @@ mod tests {
         apply(
             &mut world,
             default_origin(),
+            VIEW_W,
             &rows(&[("Assets", false), ("Preview", true), ("Templates", false)]),
             [0.0, 0.0],
         );
@@ -171,14 +186,26 @@ mod tests {
     fn checkbox_tints_track_the_row_state() {
         let mut world = injected_world();
         let o = default_origin();
-        apply(&mut world, o, &rows(&[("Assets", false)]), [0.0, 0.0]);
+        apply(
+            &mut world,
+            o,
+            VIEW_W,
+            &rows(&[("Assets", false)]),
+            [0.0, 0.0],
+        );
         let off = world
             .query::<Sprite>()
             .find(|s| s.asset_id == check_box(0))
             .cloned()
             .unwrap()
             .tint;
-        apply(&mut world, o, &rows(&[("Assets", true)]), [0.0, 0.0]);
+        apply(
+            &mut world,
+            o,
+            VIEW_W,
+            &rows(&[("Assets", true)]),
+            [0.0, 0.0],
+        );
         let on = world
             .query::<Sprite>()
             .find(|s| s.asset_id == check_box(0))
@@ -193,6 +220,7 @@ mod tests {
         apply(
             &mut world,
             default_origin(),
+            VIEW_W,
             &rows(&[("Assets", true), ("Preview", true), ("Templates", true)]),
             [0.0, 0.0],
         );

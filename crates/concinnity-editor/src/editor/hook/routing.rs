@@ -32,10 +32,9 @@ impl EditorHook {
     // Scroll the Template detail panel's asset list.
     pub(super) fn scroll_template_list(&mut self, delta: f32) {
         if let Some(i) = self.open_template {
-            let max = self
-                .template_rows(i)
-                .len()
-                .saturating_sub(super::asset_list::MAX_ROWS);
+            let window =
+                template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
+            let max = self.template_rows(i).len().saturating_sub(window);
             self.template_list_scroll = scroll_step(self.template_list_scroll, delta, max);
         }
     }
@@ -62,8 +61,26 @@ impl EditorHook {
             return;
         }
         let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
-        let size = registry::panel(drag.key).size(self);
+        let size = self.effective_size(drag.key);
         self.positions[drag.key.index()] = Some(widget::clamp_origin(pos, size, vp, hud::BAR_H));
+    }
+
+    // While an edge / corner resize is active, grow the panel from the press
+    // anchor (clamped at its minimum and fully on screen); releasing the button
+    // ends the resize.
+    pub(super) fn drive_resize(&mut self, input: &FrameInput, vp: [f32; 2]) {
+        let Some(r) = self.resize else {
+            return;
+        };
+        if !input.left_button_down {
+            self.resize = None;
+            return;
+        }
+        let min = self.default_size(r.key);
+        let max = registry::panel(r.key).max_size(self);
+        let (o, s) = resize::apply(&r, [input.mouse_x, input.mouse_y], min, max, vp, hud::BAR_H);
+        self.positions[r.key.index()] = Some(o);
+        self.sizes[r.key.index()] = Some(s);
     }
 
     // Route a press: the top bar first (it draws over the panels), then the panels
@@ -121,11 +138,27 @@ impl EditorHook {
             return false;
         }
         let o = self.origin(key, vp);
-        let title = [o[0], o[1], p.size(self)[0], widget::TITLE_H];
+        let s = self.effective_size(key);
+        let title = [o[0], o[1], s[0], widget::TITLE_H];
         // The X is checked before the title bar so it never starts a drag instead.
         if point_in(mx, my, widget::close_rect(title)) {
             self.focus_panel(key);
             p.close(self, world);
+            return true;
+        }
+        // An edge / corner press starts a resize, checked after the close button
+        // (which sits in a corner) but before the title-bar drag and the body.
+        if p.resizable()
+            && let Some(edges) = self.resize_edges(key, o, s, mx, my)
+        {
+            self.focus_panel(key);
+            self.resize = Some(resize::Resize {
+                key,
+                edges,
+                grab_mouse: [mx, my],
+                start_origin: o,
+                start_size: s,
+            });
             return true;
         }
         if point_in(mx, my, title) {

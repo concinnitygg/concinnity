@@ -46,6 +46,7 @@ pub(crate) fn swatch(b: usize) -> AssetId {
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
 // title bar's top-left), so dragging the title bar moves the whole panel.
+// The default (and minimum) panel width; the user can widen it past this.
 pub(crate) const LIGHT_W: f32 = 380.0;
 const PAD: f32 = 10.0;
 // The header row under the title bar: the status line and the Apply button.
@@ -111,19 +112,18 @@ pub(crate) fn size(n_rows: usize) -> [f32; 2] {
     ]
 }
 
-fn panel_rect(o: [f32; 2], n_rows: usize) -> [f32; 4] {
-    let s = size(n_rows);
-    [o[0], o[1], s[0], s[1]]
+fn panel_rect(o: [f32; 2], w: f32, n_rows: usize) -> [f32; 4] {
+    [o[0], o[1], w, size(n_rows)[1]]
 }
 
-fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], LIGHT_W, widget::TITLE_H]
+fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, widget::TITLE_H]
 }
 
 // The Apply button, pinned to the header row's right end.
-pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
+pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
-        o[0] + LIGHT_W - PAD - BTN_W,
+        o[0] + w - PAD - BTN_W,
         o[1] + widget::TITLE_H + 4.0,
         BTN_W,
         HEADER_H - 8.0,
@@ -131,11 +131,11 @@ pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
 }
 
 // Row `i`, stacked below the header row.
-pub(crate) fn row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
+pub(crate) fn row_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
     [
         o[0],
         o[1] + widget::TITLE_H + HEADER_H + i as f32 * ROW_H,
-        LIGHT_W,
+        w,
         ROW_H,
     ]
 }
@@ -189,12 +189,13 @@ pub(crate) fn hit_test(
     mx: f32,
     my: f32,
     o: [f32; 2],
+    w: f32,
 ) -> Option<LightingAction> {
-    if point_in(mx, my, apply_rect(o)) {
+    if point_in(mx, my, apply_rect(o, w)) {
         return Some(LightingAction::Apply);
     }
     for (i, row) in view.rows.iter().enumerate() {
-        if !point_in(mx, my, row_rect(o, i)) {
+        if !point_in(mx, my, row_rect(o, w, i)) {
             continue;
         }
         return Some(match *row {
@@ -207,24 +208,25 @@ pub(crate) fn hit_test(
             },
         });
     }
-    point_in(mx, my, panel_rect(o, view.rows.len())).then_some(LightingAction::Consume)
+    point_in(mx, my, panel_rect(o, w, view.rows.len())).then_some(LightingAction::Consume)
 }
 
-// Position + show the panel (`Some(view)`), or blank every element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2]) {
+// Position + show the panel (`Some(view)`) at width `w`, or blank every element
+// (`None`).
+pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2], w: f32) {
     let Some(view) = view else {
         hide_all(world);
         return;
     };
     let n = view.rows.len();
-    widget::place_panel(world, PANEL_BG, panel_rect(o, n));
-    let title = title_rect(o);
+    widget::place_panel(world, PANEL_BG, panel_rect(o, w, n));
+    let title = title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Lighting");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
     // Header row: the status line (only after a rejected Apply) + the button.
-    let apply = apply_rect(o);
+    let apply = apply_rect(o, w);
     let apply_hover = point_in(view.mouse[0], view.mouse[1], apply);
     let tint = if apply_hover {
         BTN_TINT_HOVER
@@ -258,7 +260,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2])
     }
 
     for (i, row) in view.rows.iter().enumerate() {
-        let r = row_rect(o, i);
+        let r = row_rect(o, w, i);
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
         let (bg, caption, color) = match *row {
             Row::Header(s) => (
@@ -429,20 +431,20 @@ mod tests {
         let fields = derived_fields();
         let view = all_present_view(&rows, &fields);
         let o = [40.0, 40.0];
-        let a = apply_rect(o);
+        let a = apply_rect(o, LIGHT_W);
         assert_eq!(
-            hit_test(&view, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&view, a[0] + 5.0, a[1] + 5.0, o, LIGHT_W),
             Some(LightingAction::Apply)
         );
         // Row 0 is the Sun header; row 1 its first (float) field.
-        let r0 = row_rect(o, 0);
+        let r0 = row_rect(o, LIGHT_W, 0);
         assert_eq!(
-            hit_test(&view, r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&view, r0[0] + 5.0, r0[1] + 5.0, o, LIGHT_W),
             Some(LightingAction::Consume)
         );
-        let r1 = row_rect(o, 1);
+        let r1 = row_rect(o, LIGHT_W, 1);
         assert_eq!(
-            hit_test(&view, r1[0] + 5.0, r1[1] + 5.0, o),
+            hit_test(&view, r1[0] + 5.0, r1[1] + 5.0, o, LIGHT_W),
             Some(LightingAction::Focus(0))
         );
         // The fog `enabled` row toggles rather than focusing.
@@ -451,12 +453,12 @@ mod tests {
             .iter()
             .position(|r| *r == Row::Field(fog_enabled))
             .unwrap();
-        let rf = row_rect(o, i);
+        let rf = row_rect(o, LIGHT_W, i);
         assert_eq!(
-            hit_test(&view, rf[0] + 5.0, rf[1] + 5.0, o),
+            hit_test(&view, rf[0] + 5.0, rf[1] + 5.0, o, LIGHT_W),
             Some(LightingAction::Toggle(fog_enabled))
         );
-        assert_eq!(hit_test(&view, 5000.0, 5000.0, o), None);
+        assert_eq!(hit_test(&view, 5000.0, 5000.0, o, LIGHT_W), None);
     }
 
     #[test]
@@ -466,9 +468,9 @@ mod tests {
         let view = all_present_view(&rows, &fields);
         let o = [0.0, 0.0];
         let i = rows.iter().position(|r| *r == Row::Add(1)).unwrap();
-        let r = row_rect(o, i);
+        let r = row_rect(o, LIGHT_W, i);
         assert_eq!(
-            hit_test(&view, r[0] + 5.0, r[1] + 5.0, o),
+            hit_test(&view, r[0] + 5.0, r[1] + 5.0, o, LIGHT_W),
             Some(LightingAction::Add(1))
         );
     }
@@ -480,7 +482,7 @@ mod tests {
         let fields = derived_fields();
         let view = all_present_view(&rows, &fields);
         let o = [20.0, 20.0];
-        apply(&mut world, Some(&view), o);
+        apply(&mut world, Some(&view), o, LIGHT_W);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == TITLE_LABEL)
@@ -544,6 +546,7 @@ mod tests {
             &mut world,
             Some(&all_present_view(&rows_all, &fields_all)),
             [20.0, 20.0],
+            LIGHT_W,
         );
         // Re-draw with fog absent: its controls blank, its add row appears.
         let rows = lighting::rows(&[true, false, true, true]);
@@ -556,6 +559,7 @@ mod tests {
             &mut world,
             Some(&all_present_view(&rows, &fields)),
             [20.0, 20.0],
+            LIGHT_W,
         );
         let fog_enabled = lighting::section_base(1);
         assert!(
@@ -582,8 +586,9 @@ mod tests {
             &mut world,
             Some(&all_present_view(&rows, &fields)),
             [20.0, 20.0],
+            LIGHT_W,
         );
-        apply(&mut world, None, [0.0, 0.0]);
+        apply(&mut world, None, [0.0, 0.0], LIGHT_W);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));

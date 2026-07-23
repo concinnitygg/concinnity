@@ -94,6 +94,9 @@ pub(crate) fn editor_hud(world: &mut World) {
     for s in super::gizmo::sprites() {
         world.add_component(s);
     }
+    // The editor's in-engine mouse cursor (a follow_cursor sprite): the tick
+    // shows it while the editor owns the pointer and drives its resize shape.
+    world.add_component(super::cursor::sprite());
     world.add_component(row_label(
         super::gizmo::MODE_LABEL,
         "",

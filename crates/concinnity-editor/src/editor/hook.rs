@@ -57,18 +57,20 @@ use super::widget::{self, point_in};
 use super::asset_list;
 use super::asset_list::ListRow;
 use super::billboards;
+use super::cursor;
 use super::gizmo;
 use super::group_transform;
 use super::highlight;
 use super::history::History;
 use super::marquee;
+use super::resize;
 use super::seeded_content;
 use super::selection::Selection;
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{HudLayers, MenuOverride, PendingBackend, World};
+use crate::ecs::{CursorShape, DesiredCursor, HudLayers, MenuOverride, PendingBackend, World};
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.
@@ -240,8 +242,14 @@ pub(crate) struct EditorHook {
     // the panel still sits at its default anchor. Always clamped fully on screen
     // before use.
     positions: [Option<[f32; 2]>; PANEL_COUNT],
+    // The user's per-panel size overrides, indexed by `PanelKey`; `None` means the
+    // panel is at its content-derived default. Only ever grows a panel past that
+    // default (see `effective_size`), and only the resizable panels are set.
+    sizes: [Option<[f32; 2]>; PANEL_COUNT],
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
+    // The edge / corner resize in progress, if any.
+    resize: Option<resize::Resize>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
     // top + first to receive clicks). Dragging or clicking a panel moves it to the
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
@@ -447,7 +455,9 @@ impl EditorHook {
             fly: false,
             fly_clock: None,
             positions: [None; PANEL_COUNT],
+            sizes: [None; PANEL_COUNT],
             drag: None,
+            resize: None,
             // Back-to-front, matching the injected draw order (registry order:
             // the Template detail panel frontmost, over the Templates list it
             // spawns from).
@@ -524,6 +534,8 @@ impl DebugHook for EditorHook {
                 // when no drag is running -- the press that starts one must not
                 // also resolve to a control) routes to the bar and the panels.
                 self.drive_drag(input, vp);
+                // An active edge / corner resize follows the cursor the same way.
+                self.drive_resize(input, vp);
                 // An in-flight gizmo drag follows the cursor, cancels on
                 // Escape, and commits on release, before any new press routes.
                 if self.gizmo_drag.is_some() {
@@ -535,6 +547,7 @@ impl DebugHook for EditorHook {
                 }
                 if input.left_click
                     && self.drag.is_none()
+                    && self.resize.is_none()
                     && self.gizmo_drag.is_none()
                     && self.marquee.is_none()
                 {
@@ -635,6 +648,22 @@ impl DebugHook for EditorHook {
         // The panels lay out only once the HUD is shown and a real viewport exists
         // (frame 0 keeps the injected-hidden placeholders).
         let shown = self.hud_visible && vp[0] > 0.0;
+        // Drive the editor's in-engine cursor. It shows while the editor owns the
+        // pointer (edit mode); a captured camera (play / fly) owns the pointer
+        // instead, so the sprite hides and no stray arrow lingers over the frozen
+        // pointer. Its shape becomes a resize cursor over a resizable panel edge.
+        let owns_cursor = vp[0] > 0.0 && !self.world_capture && !self.fly;
+        cursor::set_visible(world, owns_cursor);
+        let shape = if !owns_cursor || !shown {
+            CursorShape::Default
+        } else if let Some(r) = &self.resize {
+            // Keep the resize cursor for the whole drag, even if the pointer
+            // drifts off the edge as the panel grows.
+            resize::cursor_shape(r.edges)
+        } else {
+            self.hover_cursor(vp, mouse)
+        };
+        world.insert_resource(DesiredCursor(shape));
         // Publish the panels' draw layers (focus stack) so the renderer occludes
         // overlaps by focus this frame. Empty while the HUD is hidden, so the
         // renderer skips the overlay sort entirely.

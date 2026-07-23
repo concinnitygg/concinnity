@@ -149,29 +149,34 @@ pub(crate) fn type_label(slot: usize) -> AssetId {
 }
 // The visibility eye at a row's head is drawn from two sprites: an outline that
 // reshapes from an open lens to a closed lid, and a pupil shown only while open.
+// The per-row sub-families are spaced 0x20 apart so each holds up to
+// `ROW_POOL_MAX` slots (a resized panel reveals more rows) without overlapping
+// the next; the whole set stays within the Assets id window (below the Edit
+// family), guarded by `id_families_are_disjoint`.
 fn eye_ring(slot: usize) -> AssetId {
     AssetId(PANEL + 0x80 + slot as u32)
 }
 fn eye_pupil(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x90 + slot as u32)
+    AssetId(PANEL + 0xA0 + slot as u32)
 }
 // The pick lock beside the eye is a padlock: a shackle arch behind a solid body.
 fn lock_shackle(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xA0 + slot as u32)
-}
-fn lock_body(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xB0 + slot as u32)
-}
-pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
     AssetId(PANEL + 0xC0 + slot as u32)
 }
-pub(crate) fn picker_row_label(slot: usize) -> AssetId {
+fn lock_body(slot: usize) -> AssetId {
     AssetId(PANEL + 0xE0 + slot as u32)
+}
+pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x100 + slot as u32)
+}
+pub(crate) fn picker_row_label(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x120 + slot as u32)
 }
 
 // Geometry, in window pixels. Every rect derives from the panel's origin `o`
 // (its title bar's top-left corner), so dragging the title bar moves the whole
 // panel; the hook owns the origin.
+// The default (and minimum) panel width; the user can widen it past this.
 pub(crate) const PANEL_W: f32 = 500.0;
 const PAD: f32 = 10.0;
 const HEADER_H: f32 = 36.0;
@@ -189,13 +194,41 @@ const ICON_GAP: f32 = 5.0;
 const ASSET_INDENT: f32 = PAD + BOX_SIZE + ICON_GAP + BOX_SIZE + GAP;
 // Stroke width for the outlined parts of a row icon (eye lens, lock shackle).
 const ICON_STROKE: f32 = 1.5;
-// Visible rows in the body before it scrolls, shared by the tree and the
-// picker's option list.
+// Visible rows in the body at the default height, shared by the tree and the
+// picker's option list; resizing the panel taller reveals more, up to the
+// injected pool `ROW_POOL_MAX`.
 pub(crate) const ROW_POOL: usize = 14;
+pub(crate) const ROW_POOL_MAX: usize = 28;
 // The asset name, and the type that reads right-aligned beside it, inside what
 // the triple-dot's reserved slot leaves. The lock icon widened the row's head,
-// so the name clips a step shorter to keep clear of its type caption.
+// so the name clips a step shorter to keep clear of its type caption. This is
+// the budget at the default width; widening the panel grows it.
 const MAX_NAME_CHARS: usize = 23;
+// Approximate body-font advance, for growing the name budget with the width.
+const CHAR_W: f32 = 8.5;
+
+// The chrome height above the tree body (title bar, header, status line).
+const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
+
+// The visible row count for panel height `h`, clamped to the injected pool. At
+// the default height this is exactly `ROW_POOL`.
+pub(crate) fn visible_rows(h: f32) -> usize {
+    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
+}
+
+// The asset-name character budget at width `w` (grows past the default with width).
+fn name_budget(w: f32) -> usize {
+    (MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0) as usize
+}
+
+// The tallest the panel resizes to: the injected row pool shown in full (width
+// unbounded, capped only by the screen).
+pub(crate) fn max_size() -> [f32; 2] {
+    [
+        f32::INFINITY,
+        size()[1] + (ROW_POOL_MAX - ROW_POOL) as f32 * ROW_H,
+    ]
+}
 // 17 covers the longest registered type name (`PostProcessConfig`), so a
 // type caption never clips.
 const MAX_TYPE_CHARS: usize = 17;
@@ -259,14 +292,13 @@ pub(crate) fn size() -> [f32; 2] {
     ]
 }
 
-pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    let s = size();
+pub(crate) fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], s[0], s[1]]
 }
 
-// The draggable title bar across the panel top.
-pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], PANEL_W, widget::TITLE_H]
+// The draggable title bar across the panel top, at the effective width `w`.
+pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, widget::TITLE_H]
 }
 
 fn header_y(o: [f32; 2]) -> f32 {
@@ -279,15 +311,10 @@ pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
     [o[0] + PAD, header_y(o) + 4.0, h, h]
 }
 
-// The search field, filling the header row right of the "+".
-pub(crate) fn search_rect(o: [f32; 2]) -> [f32; 4] {
+// The search field, filling the header row right of the "+", to the width `w`.
+pub(crate) fn search_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     let p = plus_rect(o);
-    [
-        p[0] + p[2] + GAP,
-        p[1],
-        PANEL_W - PAD - (p[2] + GAP) - PAD,
-        p[3],
-    ]
+    [p[0] + p[2] + GAP, p[1], w - PAD - (p[2] + GAP) - PAD, p[3]]
 }
 
 // Where the tree body begins: below the header and the status line.
@@ -296,19 +323,19 @@ fn list_top(o: [f32; 2]) -> f32 {
 }
 
 // Visible row `slot` (0-based within the scroll window), stopping short of the
-// scrollbar.
-pub(crate) fn row_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+// scrollbar, at the effective width `w`.
+pub(crate) fn row_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
     [
         o[0],
         list_top(o) + slot as f32 * ROW_H,
-        PANEL_W - SCROLLBAR_W - 2.0,
+        w - SCROLLBAR_W - 2.0,
         ROW_H,
     ]
 }
 
 // The visibility eye, at the head of an asset row with the name inset past it.
-pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    let r = row_rect(o, slot);
+pub(crate) fn eye_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
+    let r = row_rect(o, w, slot);
     [
         r[0] + PAD,
         r[1] + (ROW_H - BOX_SIZE) * 0.5,
@@ -318,16 +345,16 @@ pub(crate) fn eye_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
 }
 
 // The pick lock, just right of the eye.
-pub(crate) fn lock_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    let e = eye_rect(o, slot);
+pub(crate) fn lock_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
+    let e = eye_rect(o, w, slot);
     [e[0] + BOX_SIZE + ICON_GAP, e[1], BOX_SIZE, BOX_SIZE]
 }
 
 // The triple-dot button, in its own reserved slot at the row's right end. The
 // space is held on every row even though the dots only show on hover, so the
 // type beside them never has to move or hide to make room.
-fn dot_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    let r = row_rect(o, slot);
+fn dot_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
+    let r = row_rect(o, w, slot);
     [
         r[0] + r[2] - PAD - DOT_SZ,
         r[1] + (ROW_H - DOT_SZ) * 0.5,
@@ -338,13 +365,13 @@ fn dot_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
 
 // The right edge the asset type is right-aligned against: just inside the
 // triple-dot's reserved slot.
-fn type_right(o: [f32; 2], slot: usize) -> f32 {
-    dot_rect(o, slot)[0] - GAP
+fn type_right(o: [f32; 2], w: f32, slot: usize) -> f32 {
+    dot_rect(o, w, slot)[0] - GAP
 }
 
-// A picker option row, floating over the tree body.
-pub(crate) fn picker_option_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    [o[0], list_top(o) + slot as f32 * ROW_H, PANEL_W, ROW_H]
+// A picker option row, floating over the tree body, at the effective width `w`.
+pub(crate) fn picker_option_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
+    [o[0], list_top(o) + slot as f32 * ROW_H, w, ROW_H]
 }
 
 // The row menu, floating just below the asset row at visible slot `slot`. It
@@ -354,8 +381,8 @@ pub(crate) fn picker_option_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
 // row icons, and a row-body click already opens the edit form.
 //
 // Returns (background, delete row).
-fn menu_rects(o: [f32; 2], slot: usize) -> ([f32; 4], [f32; 4]) {
-    let x = menu_left(o);
+fn menu_rects(o: [f32; 2], w: f32, slot: usize) -> ([f32; 4], [f32; 4]) {
+    let x = menu_left(o, w);
     let top = list_top(o) + slot as f32 * ROW_H + ROW_H;
     let bg = [x, top, MENU_W, MENU_ROW_H];
     let delete = [x, top, MENU_W, MENU_ROW_H];
@@ -364,15 +391,15 @@ fn menu_rects(o: [f32; 2], slot: usize) -> ([f32; 4], [f32; 4]) {
 
 // The menu's left edge. Only the right-aligned type captions reach under it:
 // a row's name is clipped well short of this (`name_captions_clear_the_menu`).
-fn menu_left(o: [f32; 2]) -> f32 {
-    o[0] + PANEL_W - MENU_W - SCROLLBAR_W - 2.0
+fn menu_left(o: [f32; 2], w: f32) -> f32 {
+    o[0] + w - MENU_W - SCROLLBAR_W - 2.0
 }
 
 // The single body row the open menu covers, so its type caption can be blanked:
 // all TextLabels draw after all Sprites, so the menu's opaque backing cannot
 // hide a caption underneath it -- only not drawing it can.
-fn menu_covered_slots(slot: usize) -> std::ops::Range<usize> {
-    (slot + 1)..(slot + 2).min(ROW_POOL)
+fn menu_covered_slots(slot: usize, rows: usize) -> std::ops::Range<usize> {
+    (slot + 1)..(slot + 2).min(rows)
 }
 
 // A resolved panel click. Row picks carry the group and the index within it, so
@@ -439,9 +466,9 @@ impl PanelView<'_> {
     // The visible slot of the asset the open menu belongs to, when that asset is
     // still on screen and authored: only an authored line has the Delete the menu
     // offers, so only those rows open one.
-    fn menu_target(&self) -> Option<usize> {
+    fn menu_target(&self, rows: usize) -> Option<usize> {
         let name = self.row_menu?;
-        (0..ROW_POOL).find(|&slot| {
+        (0..rows).find(|&slot| {
             matches!(
                 self.rows.get(self.scroll + slot),
                 Some(TreeRow::Asset { name: n, badge, .. })
@@ -456,12 +483,20 @@ impl PanelView<'_> {
 // resolve to `FocusSearch` / `Consume` (swallowed here; the engine's text-input
 // system focuses the field from the same input). Title-bar presses never reach
 // this: the hook intercepts them first to start a drag.
-pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Option<PanelAction> {
+pub(crate) fn hit_test(
+    view: &PanelView,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+    s: [f32; 2],
+) -> Option<PanelAction> {
+    let w = s[0];
+    let rows = visible_rows(s[1]);
     // An open row menu is modal over the panel: its Delete row picks, anything
     // else dismisses it.
     if view.row_menu.is_some() {
-        if let Some(slot) = view.menu_target() {
-            let (_, delete) = menu_rects(o, slot);
+        if let Some(slot) = view.menu_target(rows) {
+            let (_, delete) = menu_rects(o, w, slot);
             if point_in(mx, my, delete) {
                 return Some(PanelAction::RowDelete);
             }
@@ -474,16 +509,16 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
         if point_in(mx, my, plus_rect(o)) {
             return Some(PanelAction::TogglePicker);
         }
-        if point_in(mx, my, search_rect(o)) {
+        if point_in(mx, my, search_rect(o, w)) {
             return Some(PanelAction::Consume);
         }
         let scroll = view.picker_scroll.min(options.len().saturating_sub(1));
-        for slot in 0..ROW_POOL {
+        for slot in 0..rows {
             let idx = scroll + slot;
             if idx >= options.len() {
                 break;
             }
-            if point_in(mx, my, picker_option_rect(o, slot)) {
+            if point_in(mx, my, picker_option_rect(o, w, slot)) {
                 return Some(PanelAction::PickOption(idx));
             }
         }
@@ -492,18 +527,18 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
 
     // Picker closed: clicks outside the panel fall through (the hook's caller
     // decides who else wants them).
-    if !point_in(mx, my, panel_rect(o)) {
+    if !point_in(mx, my, panel_rect(o, s)) {
         return None;
     }
     if point_in(mx, my, plus_rect(o)) {
         return Some(PanelAction::TogglePicker);
     }
-    if point_in(mx, my, search_rect(o)) {
+    if point_in(mx, my, search_rect(o, w)) {
         return Some(PanelAction::FocusSearch);
     }
 
-    for slot in 0..ROW_POOL {
-        if !point_in(mx, my, row_rect(o, slot)) {
+    for slot in 0..rows {
+        if !point_in(mx, my, row_rect(o, w, slot)) {
             continue;
         }
         let Some(row) = view.rows.get(view.scroll + slot) else {
@@ -517,11 +552,11 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
                 badge,
                 ..
             } => {
-                if point_in(mx, my, eye_rect(o, slot)) {
+                if point_in(mx, my, eye_rect(o, w, slot)) {
                     PanelAction::ToggleHide(*group, *index)
-                } else if point_in(mx, my, lock_rect(o, slot)) {
+                } else if point_in(mx, my, lock_rect(o, w, slot)) {
                     PanelAction::ToggleLock(*group, *index)
-                } else if *badge == Badge::Authored && point_in(mx, my, dot_rect(o, slot)) {
+                } else if *badge == Badge::Authored && point_in(mx, my, dot_rect(o, w, slot)) {
                     // The menu offers only Delete, so it opens for the authored
                     // rows that have a world.jsonl line to remove.
                     PanelAction::OpenRowMenu(*group, *index)
@@ -536,7 +571,7 @@ pub(crate) fn hit_test(view: &PanelView, mx: f32, my: f32, o: [f32; 2]) -> Optio
 
 // Position + show the panel's elements for this frame at origin `o`, or hide
 // them all when the panel is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
+pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -545,8 +580,9 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    widget::place_panel(world, PANEL_BG, panel_rect(o));
-    let title = title_rect(o);
+    let w = s[0];
+    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
+    let title = title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Assets");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
@@ -570,12 +606,12 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2]) {
     // The field narrows the picker's options while it is open (and asserts focus
     // then, since the picker is a typed autocomplete), else it filters the tree.
     let focused = view.search_focus || view.picker_open();
-    widget::show_field(world, SEARCH_INPUT, search_rect(o), focused);
+    widget::show_field(world, SEARCH_INPUT, search_rect(o, w), focused);
     layout_status(world, view, o);
 
     match view.picker_options {
-        Some(options) => layout_picker(world, view, options, o),
-        None => layout_tree(world, view, o),
+        Some(options) => layout_picker(world, view, options, o, s),
+        None => layout_tree(world, view, o, s),
     }
 }
 
@@ -599,7 +635,9 @@ fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
     }
 }
 
-fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
+fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
+    let w = s[0];
+    let rows = visible_rows(s[1]);
     if view.rows.is_empty() {
         // A world that does not cook has no tree to show; the status line
         // already says which, so this only covers the genuinely empty world.
@@ -617,11 +655,11 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
     }
     let total = view.rows.len();
     let scroll = view.scroll.min(total.saturating_sub(1));
-    for slot in 0..ROW_POOL {
+    for slot in 0..rows {
         let Some(row) = view.rows.get(scroll + slot) else {
             break;
         };
-        let r = row_rect(o, slot);
+        let r = row_rect(o, w, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
         match row {
             TreeRow::Header {
@@ -639,23 +677,23 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2]) {
                     badge,
                     hovered,
                 };
-                layout_asset_row(world, view, o, slot, &asset);
+                layout_asset_row(world, view, o, w, slot, &asset);
                 // The triple-dot opens the Delete menu, so it shows only on the
                 // authored rows that have a line to delete. It follows the row
                 // whose menu is open, else the hovered row; its own slot keeps
                 // the type beside it reading either way.
                 let menu_here = view.row_menu == Some(name.as_str());
                 if *badge == Badge::Authored && (menu_here || hovered) {
-                    let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, slot));
-                    place_dot(world, o, slot, menu_here || over_dots);
+                    let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, w, slot));
+                    place_dot(world, o, w, slot, menu_here || over_dots);
                 }
             }
         }
     }
-    if let Some(slot) = view.menu_target() {
-        layout_row_menu(world, view, o, slot);
+    if let Some(slot) = view.menu_target(rows) {
+        layout_row_menu(world, view, o, w, rows, slot);
     }
-    layout_scrollbar(world, total, scroll, o);
+    layout_scrollbar(world, total, scroll, o, w, rows);
 }
 
 fn layout_header_row(
@@ -699,6 +737,7 @@ fn layout_asset_row(
     world: &mut World,
     view: &PanelView,
     o: [f32; 2],
+    w: f32,
     slot: usize,
     asset: &AssetRow,
 ) {
@@ -708,7 +747,7 @@ fn layout_asset_row(
         badge,
         hovered,
     } = *asset;
-    let r = row_rect(o, slot);
+    let r = row_rect(o, w, slot);
     let selected = view.selection.contains(name);
     let tint = if hovered {
         ROW_TINT_HOVER
@@ -730,25 +769,25 @@ fn layout_asset_row(
         world,
         name_label(slot),
         [r[0] + ASSET_INDENT, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
-        &widget::clip_text(name, MAX_NAME_CHARS),
+        &widget::clip_text(name, name_budget(w)),
         // The hidden state dims the name too, so a collapsed object reads as
         // absent at a glance.
         if hidden { LABEL_DIM } else { LABEL },
         true,
     );
     if let Some(l) = widget::label_mut(world, type_label(slot)) {
-        l.x = type_right(o, slot);
+        l.x = type_right(o, w, slot);
         l.y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Right;
         l.color = badge_color(*badge);
         l.visible = true;
         l.content = widget::clip_text(asset_type, MAX_TYPE_CHARS);
     }
-    place_eye(world, eye_rect(o, slot), slot, hidden);
+    place_eye(world, eye_rect(o, w, slot), slot, hidden);
     // The lock shows solid while locked, and as a faint hint on row hover so it
     // stays discoverable; otherwise it is blank, leaving only the eye.
     let locked = view.locked.contains(name);
-    place_lock(world, lock_rect(o, slot), slot, locked, hovered);
+    place_lock(world, lock_rect(o, w, slot), slot, locked, hovered);
 }
 
 // A hollow "ring" sprite: a transparent fill with a `color` outline of `border`
@@ -852,11 +891,19 @@ fn place_lock(world: &mut World, region: [f32; 4], slot: usize, locked: bool, ho
 }
 
 // The floating type-picker list, over the tree body.
-fn layout_picker(world: &mut World, view: &PanelView, options: &[String], o: [f32; 2]) {
+fn layout_picker(
+    world: &mut World,
+    view: &PanelView,
+    options: &[String],
+    o: [f32; 2],
+    s: [f32; 2],
+) {
+    let w = s[0];
+    let rows = visible_rows(s[1]);
     let total = options.len();
     let scroll = view.picker_scroll.min(total.saturating_sub(1));
-    let shown = total.saturating_sub(scroll).clamp(1, ROW_POOL);
-    let backing = [o[0], list_top(o), PANEL_W, shown as f32 * ROW_H + PAD];
+    let shown = total.saturating_sub(scroll).clamp(1, rows);
+    let backing = [o[0], list_top(o), w, shown as f32 * ROW_H + PAD];
     place_sprite(world, PICKER_BG, backing, PICKER_BG_TINT, true);
     if total == 0 {
         place_left_label(
@@ -869,12 +916,12 @@ fn layout_picker(world: &mut World, view: &PanelView, options: &[String], o: [f3
         );
         return;
     }
-    for slot in 0..ROW_POOL {
+    for slot in 0..rows {
         let idx = scroll + slot;
         if idx >= total {
             break;
         }
-        let rect = picker_option_rect(o, slot);
+        let rect = picker_option_rect(o, w, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         let tint = if hovered {
             OPTION_TINT_HOVER
@@ -898,7 +945,7 @@ fn layout_picker(world: &mut World, view: &PanelView, options: &[String], o: [f3
             true,
         );
     }
-    layout_scrollbar(world, total, scroll, o);
+    layout_scrollbar(world, total, scroll, o, w, rows);
 }
 
 // The "+" / "X" glyph, centered in the add button and drawn a step larger than
@@ -919,8 +966,8 @@ fn place_plus_glyph(world: &mut World, rect: [f32; 4], glyph: &str) {
 // The three stacked white dots of the triple-dot button. The background box is
 // shown only when `show_box` (the dots are hovered, or the menu is open); a plain
 // row-hover shows the bare dots.
-fn place_dot(world: &mut World, o: [f32; 2], slot: usize, show_box: bool) {
-    let d = dot_rect(o, slot);
+fn place_dot(world: &mut World, o: [f32; 2], w: f32, slot: usize, show_box: bool) {
+    let d = dot_rect(o, w, slot);
     if show_box {
         place_rounded(world, DOT_BG, d, DOT_BG_TINT, theme::CONTROL_RADIUS, true);
     }
@@ -933,13 +980,20 @@ fn place_dot(world: &mut World, o: [f32; 2], slot: usize, show_box: bool) {
     }
 }
 
-fn layout_row_menu(world: &mut World, view: &PanelView, o: [f32; 2], slot: usize) {
-    let (bg, delete) = menu_rects(o, slot);
+fn layout_row_menu(
+    world: &mut World,
+    view: &PanelView,
+    o: [f32; 2],
+    w: f32,
+    rows: usize,
+    slot: usize,
+) {
+    let (bg, delete) = menu_rects(o, w, slot);
     // Blank the type caption the menu floats over first: every TextLabel draws
     // after every Sprite, so the opaque backing below cannot cover it. The names
     // stay -- they sit well left of the menu, so hiding them would blank rows the
     // user can still see.
-    for covered in menu_covered_slots(slot) {
+    for covered in menu_covered_slots(slot, rows) {
         widget::set_label_visible(world, type_label(covered), false);
     }
     if let Some(sprite) = widget::sprite_mut(world, MENU_BG) {
@@ -996,13 +1050,20 @@ fn place_menu_row(
 
 // A simple non-interactive scrollbar sizing the visible window against `total`,
 // down the panel's right edge. Shown only when the body overflows.
-fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
-    if total <= ROW_POOL {
+fn layout_scrollbar(
+    world: &mut World,
+    total: usize,
+    scroll: usize,
+    o: [f32; 2],
+    w: f32,
+    rows: usize,
+) {
+    if total <= rows {
         return;
     }
-    let x = o[0] + PANEL_W - SCROLLBAR_W;
+    let x = o[0] + w - SCROLLBAR_W;
     let top = list_top(o);
-    let h = ROW_POOL as f32 * ROW_H;
+    let h = rows as f32 * ROW_H;
     place_rounded(
         world,
         LIST_TRACK,
@@ -1011,9 +1072,9 @@ fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2])
         SCROLLBAR_W * 0.5,
         true,
     );
-    let thumb_h = (h * ROW_POOL as f32 / total as f32).max(18.0);
-    let max_scroll = (total - ROW_POOL) as f32;
-    let off = (h - thumb_h) * (scroll.min(total - ROW_POOL) as f32 / max_scroll);
+    let thumb_h = (h * rows as f32 / total as f32).max(18.0);
+    let max_scroll = (total - rows) as f32;
+    let off = (h - thumb_h) * (scroll.min(total - rows) as f32 / max_scroll);
     place_rounded(
         world,
         LIST_THUMB,
@@ -1034,15 +1095,15 @@ fn layout_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2])
 // backgrounds so a hovered row's fill cannot cover them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG];
-    ids.extend((0..ROW_POOL).map(row_bg));
+    ids.extend((0..ROW_POOL_MAX).map(row_bg));
     // The eye then the lock, each family drawn before the next so a lock body
     // paints over its own shackle arch.
-    ids.extend((0..ROW_POOL).map(eye_ring));
-    ids.extend((0..ROW_POOL).map(eye_pupil));
-    ids.extend((0..ROW_POOL).map(lock_shackle));
-    ids.extend((0..ROW_POOL).map(lock_body));
+    ids.extend((0..ROW_POOL_MAX).map(eye_ring));
+    ids.extend((0..ROW_POOL_MAX).map(eye_pupil));
+    ids.extend((0..ROW_POOL_MAX).map(lock_shackle));
+    ids.extend((0..ROW_POOL_MAX).map(lock_body));
     ids.push(PICKER_BG);
-    ids.extend((0..ROW_POOL).map(picker_row_bg));
+    ids.extend((0..ROW_POOL_MAX).map(picker_row_bg));
     ids.extend([
         LIST_TRACK,
         LIST_THUMB,
@@ -1068,9 +1129,9 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         STATUS_LABEL,
         EMPTY_LABEL,
     ];
-    ids.extend((0..ROW_POOL).map(name_label));
-    ids.extend((0..ROW_POOL).map(type_label));
-    ids.extend((0..ROW_POOL).map(picker_row_label));
+    ids.extend((0..ROW_POOL_MAX).map(name_label));
+    ids.extend((0..ROW_POOL_MAX).map(type_label));
+    ids.extend((0..ROW_POOL_MAX).map(picker_row_label));
     ids.push(MENU_DELETE_LABEL);
     ids
 }
@@ -1114,8 +1175,8 @@ fn place_left_label(
 }
 
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
-pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2]) -> bool {
-    let p = panel_rect(o);
+pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
+    let p = panel_rect(o, s);
     mx >= p[0] && mx < p[0] + p[2] && my >= list_top(o) && my < p[1] + p[3]
 }
 
@@ -1282,11 +1343,11 @@ mod tests {
     #[test]
     fn default_origin_sits_below_the_top_bar_right_aligned() {
         let o = test_origin();
-        let p = panel_rect(o);
+        let p = panel_rect(o, size());
         assert_eq!(p[0] + p[2], 1280.0, "flush to the window right");
         assert_eq!(p[1], hud::body_top(), "starts below the top-bar buttons");
         // The whole panel follows its origin: dragged elsewhere, every rect moves.
-        let moved = panel_rect([40.0, 60.0]);
+        let moved = panel_rect([40.0, 60.0], size());
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!((moved[2], moved[3]), (p[2], p[3]));
         assert_eq!(size(), [p[2], p[3]], "the drag-clamp footprint matches");
@@ -1297,20 +1358,27 @@ mod tests {
     #[test]
     fn geometry_stacks_and_row_controls_stay_inside_the_row() {
         let o = test_origin();
-        assert_eq!(title_rect(o), [o[0], o[1], PANEL_W, widget::TITLE_H]);
+        assert_eq!(
+            title_rect(o, PANEL_W),
+            [o[0], o[1], PANEL_W, widget::TITLE_H]
+        );
         let plus = plus_rect(o);
-        let search = search_rect(o);
+        let search = search_rect(o, PANEL_W);
         assert!(plus[0] + plus[2] <= search[0], "+ sits left of the search");
         assert_eq!(
             search[0] + search[2],
             o[0] + PANEL_W - PAD,
             "the search field reaches the panel's right pad"
         );
-        assert_eq!(row_rect(o, 0)[1], list_top(o));
-        assert_eq!(row_rect(o, 1)[1], list_top(o) + ROW_H);
+        assert_eq!(row_rect(o, PANEL_W, 0)[1], list_top(o));
+        assert_eq!(row_rect(o, PANEL_W, 1)[1], list_top(o) + ROW_H);
 
-        let r = row_rect(o, 0);
-        let (eye, lock, dots) = (eye_rect(o, 0), lock_rect(o, 0), dot_rect(o, 0));
+        let r = row_rect(o, PANEL_W, 0);
+        let (eye, lock, dots) = (
+            eye_rect(o, PANEL_W, 0),
+            lock_rect(o, PANEL_W, 0),
+            dot_rect(o, PANEL_W, 0),
+        );
         // The eye heads the row, the lock sits just right of it, and the name is
         // inset past both.
         assert_eq!(eye[0], r[0] + PAD, "the eye sits at the row's head");
@@ -1330,7 +1398,7 @@ mod tests {
             "the triple-dot stays inside the row"
         );
         assert!(
-            type_right(o, 0) <= dots[0],
+            type_right(o, PANEL_W, 0) <= dots[0],
             "the type is right-aligned clear of the dot slot"
         );
         // The name never runs under the triple-dot slot.
@@ -1344,12 +1412,12 @@ mod tests {
         let o = test_origin();
         let plus = plus_rect(o);
         assert_eq!(
-            hit_test(&f.view(), plus[0] + 5.0, plus[1] + 5.0, o),
+            hit_test(&f.view(), plus[0] + 5.0, plus[1] + 5.0, o, size()),
             Some(PanelAction::TogglePicker)
         );
         // Open, the same button is the "X" that returns to the tree.
         assert_eq!(
-            hit_test(&f.picker_view(), plus[0] + 5.0, plus[1] + 5.0, o),
+            hit_test(&f.picker_view(), plus[0] + 5.0, plus[1] + 5.0, o, size()),
             Some(PanelAction::TogglePicker)
         );
     }
@@ -1362,7 +1430,7 @@ mod tests {
         f.picker_options = vec!["PointLight".to_string()];
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o);
+        apply(&mut world, Some(&f.view()), o, size());
         let l = label(&world, PLUS_LABEL);
         assert_eq!(l.content, "+");
         assert_eq!(sprite(&world, PLUS_BG).tint, PLUS_TINT);
@@ -1370,7 +1438,7 @@ mod tests {
             l.scale > 1.0,
             "the glyph draws larger than the body text (the box is unchanged)"
         );
-        apply(&mut world, Some(&f.picker_view()), o);
+        apply(&mut world, Some(&f.picker_view()), o, size());
         assert_eq!(label(&world, PLUS_LABEL).content, "X");
         assert_eq!(
             sprite(&world, PLUS_BG).tint,
@@ -1387,14 +1455,14 @@ mod tests {
         let f = Fixture::new();
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o);
+        apply(&mut world, Some(&f.view()), o, size());
         let title = label(&world, TITLE_LABEL);
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
         assert!(sprite(&world, PANEL_BG).visible);
-        let t = title_rect(o);
+        let t = title_rect(o, PANEL_W);
         assert_eq!(
-            hit_test(&f.view(), t[0] + 5.0, t[1] + 5.0, o),
+            hit_test(&f.view(), t[0] + 5.0, t[1] + 5.0, o, size()),
             Some(PanelAction::Consume)
         );
     }
@@ -1403,44 +1471,44 @@ mod tests {
     fn hit_test_resolves_search_headers_rows_and_toggles() {
         let f = Fixture::new();
         let o = test_origin();
-        let s = search_rect(o);
+        let s = search_rect(o, PANEL_W);
         assert_eq!(
-            hit_test(&f.view(), s[0] + 5.0, s[1] + 5.0, o),
+            hit_test(&f.view(), s[0] + 5.0, s[1] + 5.0, o, size()),
             Some(PanelAction::FocusSearch)
         );
-        let r0 = row_rect(o, 0);
+        let r0 = row_rect(o, PANEL_W, 0);
         assert_eq!(
-            hit_test(&f.view(), r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&f.view(), r0[0] + 5.0, r0[1] + 5.0, o, size()),
             Some(PanelAction::ToggleGroup(0))
         );
-        let r1 = row_rect(o, 1);
+        let r1 = row_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), r1[0] + 5.0, r1[1] + 5.0, o),
+            hit_test(&f.view(), r1[0] + 5.0, r1[1] + 5.0, o, size()),
             Some(PanelAction::SelectRow(0, 0))
         );
-        let e = eye_rect(o, 1);
+        let e = eye_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), e[0] + 2.0, e[1] + 2.0, o),
+            hit_test(&f.view(), e[0] + 2.0, e[1] + 2.0, o, size()),
             Some(PanelAction::ToggleHide(0, 0))
         );
-        let lk = lock_rect(o, 1);
+        let lk = lock_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), lk[0] + 2.0, lk[1] + 2.0, o),
+            hit_test(&f.view(), lk[0] + 2.0, lk[1] + 2.0, o, size()),
             Some(PanelAction::ToggleLock(0, 0))
         );
         // Row 1 is an authored line, so its triple-dot opens the Delete menu.
-        let d = dot_rect(o, 1);
+        let d = dot_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
+            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o, size()),
             Some(PanelAction::OpenRowMenu(0, 0))
         );
         // Past the last row the click is swallowed; off the panel it misses.
-        let r9 = row_rect(o, 9);
+        let r9 = row_rect(o, PANEL_W, 9);
         assert_eq!(
-            hit_test(&f.view(), r9[0] + 5.0, r9[1] + 5.0, o),
+            hit_test(&f.view(), r9[0] + 5.0, r9[1] + 5.0, o, size()),
             Some(PanelAction::Consume)
         );
-        assert_eq!(hit_test(&f.view(), 5000.0, 5000.0, o), None);
+        assert_eq!(hit_test(&f.view(), 5000.0, 5000.0, o, size()), None);
     }
 
     // A row the build emits unconditionally has no world.jsonl line, so its
@@ -1452,15 +1520,15 @@ mod tests {
         let mut f = Fixture::new();
         f.rows = vec![header(0, "Other expansions", 1, true), asset(0, 0, "tab")];
         let o = test_origin();
-        let d = dot_rect(o, 1);
+        let d = dot_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o),
+            hit_test(&f.view(), d[0] + 2.0, d[1] + 2.0, o, size()),
             Some(PanelAction::SelectRow(0, 0)),
             "a generated row's dot slot selects: it has no Delete menu"
         );
-        let lk = lock_rect(o, 1);
+        let lk = lock_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&f.view(), lk[0] + 2.0, lk[1] + 2.0, o),
+            hit_test(&f.view(), lk[0] + 2.0, lk[1] + 2.0, o, size()),
             Some(PanelAction::ToggleLock(0, 0))
         );
 
@@ -1470,15 +1538,15 @@ mod tests {
             ..f.view()
         };
         assert!(
-            v.menu_target().is_none(),
+            v.menu_target(ROW_POOL).is_none(),
             "no menu target for a generated row"
         );
         assert_eq!(
-            hit_test(&v, o[0] + 5.0, list_top(o) + ROW_H + 5.0, o),
+            hit_test(&v, o[0] + 5.0, list_top(o) + ROW_H + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
         );
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size());
         assert!(!sprite(&world, MENU_BG).visible);
         assert!(!label(&world, MENU_DELETE_LABEL).visible);
     }
@@ -1491,9 +1559,9 @@ mod tests {
             scroll: 2,
             ..f.view()
         };
-        let r0 = row_rect(o, 0);
+        let r0 = row_rect(o, PANEL_W, 0);
         assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, size()),
             Some(PanelAction::SelectRow(0, 1)),
             "slot 0 shows row 2 under scroll 2"
         );
@@ -1507,7 +1575,7 @@ mod tests {
         f.hidden.insert("lamp".to_string());
         f.locked.insert("cam".to_string());
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o);
+        apply(&mut world, Some(&f.view()), o, size());
 
         assert_eq!(label(&world, STATUS_LABEL).content, "Assets (3)");
         assert_eq!(label(&world, name_label(0)).content, "- World (2)");
@@ -1555,11 +1623,11 @@ mod tests {
                 .cloned()
                 .unwrap()
         };
-        apply(&mut world, Some(&f.view()), o);
+        apply(&mut world, Some(&f.view()), o, size());
         let t = field(&world);
         assert!(t.visible && !t.focused, "shown, unfocused until clicked");
 
-        apply(&mut world, Some(&f.picker_view()), o);
+        apply(&mut world, Some(&f.picker_view()), o, size());
         assert!(field(&world).focused, "the picker types into the field");
     }
 
@@ -1570,10 +1638,10 @@ mod tests {
         let mut world = injected_world();
         let f = Fixture::new();
         let o = test_origin();
-        let r1 = row_rect(o, 1);
+        let r1 = row_rect(o, PANEL_W, 1);
 
         // Unhovered: the type reads, and the dot slot is already reserved.
-        apply(&mut world, Some(&f.view()), o);
+        apply(&mut world, Some(&f.view()), o, size());
         let resting = label(&world, type_label(1));
         assert!(resting.visible && !sprite(&world, DOT1).visible);
 
@@ -1581,7 +1649,7 @@ mod tests {
             mouse: [r1[0] + 5.0, r1[1] + 5.0],
             ..f.view()
         };
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size());
         assert!(sprite(&world, DOT1).visible, "hover reveals the dots");
         let hovered = label(&world, type_label(1));
         assert!(hovered.visible, "the hovered row's type keeps reading");
@@ -1591,12 +1659,12 @@ mod tests {
             "the box shows only over the dots themselves"
         );
         // Over the dots proper, the background box appears too.
-        let d = dot_rect(o, 1);
+        let d = dot_rect(o, PANEL_W, 1);
         let over = PanelView {
             mouse: [d[0] + 2.0, d[1] + 2.0],
             ..f.view()
         };
-        apply(&mut world, Some(&over), o);
+        apply(&mut world, Some(&over), o, size());
         assert!(sprite(&world, DOT_BG).visible);
     }
 
@@ -1610,18 +1678,18 @@ mod tests {
             row_menu: Some("cam"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, 1);
+        let (_, delete) = menu_rects(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
+            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o, size()),
             Some(PanelAction::RowDelete)
         );
         assert_eq!(
-            hit_test(&v, o[0] + 5.0, o[1] + 5.0, o),
+            hit_test(&v, o[0] + 5.0, o[1] + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
         );
 
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size());
         assert!(sprite(&world, MENU_BG).visible);
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
     }
@@ -1641,7 +1709,7 @@ mod tests {
             row_menu: Some("cam"),
             ..f.view()
         };
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size());
         // The menu opens under slot 1 (cam) and is one row tall (Delete), so it
         // covers slot 2 (lamp). Slot 3 is the fox header, slot 4 the past_a row.
         assert!(
@@ -1666,11 +1734,11 @@ mod tests {
         let o = test_origin();
         let name_end = o[0] + ASSET_INDENT + MAX_NAME_CHARS as f32 * MAX_CHAR_W;
         assert!(
-            name_end <= menu_left(o),
+            name_end <= menu_left(o, PANEL_W),
             "a full-width name would run under the row menu"
         );
         // The type is clipped to what fits between the name and the dot slot.
-        let type_start = type_right(o, 0) - MAX_TYPE_CHARS as f32 * MAX_CHAR_W;
+        let type_start = type_right(o, PANEL_W, 0) - MAX_TYPE_CHARS as f32 * MAX_CHAR_W;
         assert!(
             name_end <= type_start,
             "a full-width name would collide with its type"
@@ -1687,9 +1755,9 @@ mod tests {
             row_menu: Some("not_listed"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, 1);
+        let (_, delete) = menu_rects(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o),
+            hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -1700,20 +1768,20 @@ mod tests {
         f.picker_options = vec!["Decal".to_string(), "PointLight".to_string()];
         let o = test_origin();
         let v = f.picker_view();
-        let r1 = picker_option_rect(o, 1);
+        let r1 = picker_option_rect(o, PANEL_W, 1);
         assert_eq!(
-            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o),
+            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o, size()),
             Some(PanelAction::PickOption(1))
         );
         // The header field keeps focus (consumed), and empty body space closes.
-        let s = search_rect(o);
+        let s = search_rect(o, PANEL_W);
         assert_eq!(
-            hit_test(&v, s[0] + 5.0, s[1] + 5.0, o),
+            hit_test(&v, s[0] + 5.0, s[1] + 5.0, o, size()),
             Some(PanelAction::Consume)
         );
-        let r13 = picker_option_rect(o, 13);
+        let r13 = picker_option_rect(o, PANEL_W, 13);
         assert_eq!(
-            hit_test(&v, r13[0] + 5.0, r13[1] + 5.0, o),
+            hit_test(&v, r13[0] + 5.0, r13[1] + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
         );
     }
@@ -1722,7 +1790,7 @@ mod tests {
     fn picker_shows_an_empty_state_with_no_matching_options() {
         let f = Fixture::new();
         let mut world = injected_world();
-        apply(&mut world, Some(&f.picker_view()), test_origin());
+        apply(&mut world, Some(&f.picker_view()), test_origin(), size());
         let empty = label(&world, EMPTY_LABEL);
         assert!(empty.visible);
         assert_eq!(empty.content, "No matching types");
@@ -1737,7 +1805,7 @@ mod tests {
             status: Some("the world does not build"),
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin());
+        apply(&mut world, Some(&v), test_origin(), size());
         let status = label(&world, STATUS_LABEL);
         assert_eq!(status.content, "the world does not build");
         assert_eq!(status.color, ERROR_LABEL);
@@ -1757,7 +1825,7 @@ mod tests {
             rows: &[],
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin());
+        apply(&mut world, Some(&v), test_origin(), size());
         assert_eq!(label(&world, EMPTY_LABEL).content, "No matching assets");
     }
 
@@ -1772,11 +1840,11 @@ mod tests {
             scroll: 3,
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin());
+        apply(&mut world, Some(&v), test_origin(), size());
         assert!(sprite(&world, LIST_THUMB).visible);
         // A short tree hides it again.
         let short = Fixture::new();
-        apply(&mut world, Some(&short.view()), test_origin());
+        apply(&mut world, Some(&short.view()), test_origin(), size());
         assert!(!sprite(&world, LIST_THUMB).visible);
     }
 
@@ -1784,8 +1852,8 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let f = Fixture::new();
-        apply(&mut world, Some(&f.view()), test_origin());
-        apply(&mut world, None, [0.0, 0.0]);
+        apply(&mut world, Some(&f.view()), test_origin(), size());
+        apply(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
@@ -1811,12 +1879,12 @@ mod tests {
     #[test]
     fn cursor_over_body_covers_the_scrollable_area_only() {
         let o = test_origin();
-        assert!(cursor_over_body(o[0] + 5.0, list_top(o) + 5.0, o));
+        assert!(cursor_over_body(o[0] + 5.0, list_top(o) + 5.0, o, size()));
         assert!(
-            !cursor_over_body(o[0] + 5.0, o[1] + 5.0, o),
+            !cursor_over_body(o[0] + 5.0, o[1] + 5.0, o, size()),
             "the title bar is not the scrollable body"
         );
-        assert!(!cursor_over_body(o[0] - 5.0, list_top(o) + 5.0, o));
+        assert!(!cursor_over_body(o[0] - 5.0, list_top(o) + 5.0, o, size()));
     }
 
     // Cook `ty` blank in a minimal world: alongside a GraphicsConfig so the
@@ -1910,5 +1978,43 @@ mod tests {
                 "{ty} cooks blank: flag it `useful_blank` in the registry or add it to the EXCLUDED list (with a reason), not both/neither"
             );
         }
+    }
+
+    // The default height shows exactly ROW_POOL rows; a taller panel reveals more,
+    // capped at the injected pool.
+    #[test]
+    fn taller_size_reveals_more_rows_up_to_the_pool() {
+        assert_eq!(visible_rows(size()[1]), ROW_POOL);
+        assert_eq!(visible_rows(size()[1] + 5.0 * ROW_H), ROW_POOL + 5);
+        assert_eq!(visible_rows(max_size()[1]), ROW_POOL_MAX);
+        assert_eq!(visible_rows(10_000.0), ROW_POOL_MAX, "capped at the pool");
+    }
+
+    // A wider panel grows the name budget (fewer clipped names); at the default
+    // width it is exactly the baseline.
+    #[test]
+    fn wider_width_grows_the_name_budget() {
+        assert_eq!(name_budget(PANEL_W), MAX_NAME_CHARS);
+        assert!(name_budget(PANEL_W + 200.0) > MAX_NAME_CHARS);
+    }
+
+    // Growing the panel wider stretches the right-anchored elements (the search
+    // field's right edge, a row's right edge, the scrollbar) while the left-anchored
+    // parts stay put.
+    #[test]
+    fn wider_width_stretches_right_anchored_geometry() {
+        let o = test_origin();
+        let wide = PANEL_W + 160.0;
+        assert_eq!(
+            search_rect(o, wide)[0] + search_rect(o, wide)[2],
+            o[0] + wide - PAD,
+            "the search field reaches the widened right pad"
+        );
+        let r = row_rect(o, wide, 0);
+        assert_eq!(
+            r[2],
+            wide - SCROLLBAR_W - 2.0,
+            "the row spans the new width"
+        );
     }
 }

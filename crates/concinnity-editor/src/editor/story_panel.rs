@@ -39,6 +39,7 @@ pub(crate) fn row_label(i: usize) -> AssetId {
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o`
 // (the title bar's top-left), so dragging the title bar moves the whole panel.
+// The default (and minimum) width; the user can widen the panel past this.
 pub(crate) const STORY_W: f32 = 560.0;
 const PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
@@ -46,11 +47,37 @@ const STATUS_H: f32 = 22.0;
 const BTN_W: f32 = 70.0;
 const LINE_H: f32 = 24.0;
 const SCROLLBAR_W: f32 = 5.0;
-// Visible line rows; a longer story scrolls.
+// Visible line rows at the default height; a longer story scrolls. Resizing the
+// panel taller reveals more, up to the injected pool `LINE_POOL_MAX`.
 pub(crate) const LINE_POOL: usize = 16;
-// A label line's character budget before it clips (the edit line's TextInput
-// scrolls instead of clipping).
+pub(crate) const LINE_POOL_MAX: usize = 30;
+// A label line's character budget before it clips at the default width (the edit
+// line's TextInput scrolls instead of clipping); widening grows the budget.
 const MAX_LINE_CHARS: usize = 62;
+// Approximate body-font advance, for growing the caption budget with the width.
+const CHAR_W: f32 = 8.5;
+
+// The chrome height above the line window (everything but the line band + pad).
+const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
+
+// The visible line count for panel height `h`, clamped to the injected pool. At
+// the default height this is exactly `LINE_POOL`.
+pub(crate) fn visible_rows(h: f32) -> usize {
+    (((h - CHROME_H - PAD) / LINE_H).floor() as usize).clamp(LINE_POOL, LINE_POOL_MAX)
+}
+
+// The line character budget at width `w` (grows past the default with width).
+fn max_line_chars(w: f32) -> usize {
+    (MAX_LINE_CHARS as f32 + (w - STORY_W) / CHAR_W).max(8.0) as usize
+}
+
+// The tallest the panel resizes to: the injected line pool shown in full.
+pub(crate) fn max_size() -> [f32; 2] {
+    [
+        f32::INFINITY,
+        size()[1] + (LINE_POOL_MAX - LINE_POOL) as f32 * LINE_H,
+    ]
+}
 
 const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const ROW_TINT_CURRENT: [f32; 4] = theme::SELECTED_TINT;
@@ -109,19 +136,18 @@ pub(crate) fn size() -> [f32; 2] {
     ]
 }
 
-fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    let s = size();
+fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], s[0], s[1]]
 }
 
-fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], STORY_W, widget::TITLE_H]
+fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, widget::TITLE_H]
 }
 
 // The Apply button, pinned to the header row's right end.
-pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
+pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
-        o[0] + STORY_W - PAD - BTN_W,
+        o[0] + w - PAD - BTN_W,
         o[1] + widget::TITLE_H + 4.0,
         BTN_W,
         HEADER_H - 8.0,
@@ -129,34 +155,41 @@ pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
 }
 
 fn body_top(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + HEADER_H + STATUS_H
+    o[1] + CHROME_H
 }
 
-// Visible line row `slot` (0-based within the window).
-pub(crate) fn line_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
+// Visible line row `slot` (0-based within the window) at the effective width `w`.
+pub(crate) fn line_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
     [
         o[0],
         body_top(o) + slot as f32 * LINE_H,
-        STORY_W - SCROLLBAR_W - 2.0,
+        w - SCROLLBAR_W - 2.0,
         LINE_H,
     ]
 }
 
 // Whether the cursor is over the scrollable line window (for wheel routing).
-pub(crate) fn cursor_over_lines(mx: f32, my: f32, o: [f32; 2]) -> bool {
-    let p = panel_rect(o);
+pub(crate) fn cursor_over_lines(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
+    let p = panel_rect(o, s);
     mx >= p[0] && mx < p[0] + p[2] && my >= body_top(o) && my < p[1] + p[3]
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
-// the click missed the panel. Title-bar presses never reach this: the shared
-// routing intercepts them first.
-pub(crate) fn hit_test(view: &StoryView, mx: f32, my: f32, o: [f32; 2]) -> Option<StoryAction> {
-    if point_in(mx, my, apply_rect(o)) && !view.create {
+// Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`. `None`
+// means the click missed the panel. Title-bar presses never reach this: the
+// shared routing intercepts them first.
+pub(crate) fn hit_test(
+    view: &StoryView,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+    s: [f32; 2],
+) -> Option<StoryAction> {
+    let w = s[0];
+    if point_in(mx, my, apply_rect(o, w)) && !view.create {
         return Some(StoryAction::Apply);
     }
-    for slot in 0..LINE_POOL {
-        if !point_in(mx, my, line_rect(o, slot)) {
+    for slot in 0..visible_rows(s[1]) {
+        if !point_in(mx, my, line_rect(o, w, slot)) {
             continue;
         }
         if view.create {
@@ -173,17 +206,20 @@ pub(crate) fn hit_test(view: &StoryView, mx: f32, my: f32, o: [f32; 2]) -> Optio
             StoryAction::Consume
         });
     }
-    point_in(mx, my, panel_rect(o)).then_some(StoryAction::Consume)
+    point_in(mx, my, panel_rect(o, s)).then_some(StoryAction::Consume)
 }
 
-// Position + show the panel (`Some(view)`), or blank every element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
+// Position + show the panel (`Some(view)`) at effective size `s`, or blank every
+// element (`None`).
+pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
     };
-    widget::place_panel(world, PANEL_BG, panel_rect(o));
-    let title = title_rect(o);
+    let w = s[0];
+    let rows_shown = visible_rows(s[1]);
+    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
+    let title = title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Story");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
@@ -198,7 +234,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
         l.visible = !view.create;
         l.content = widget::clip_text(view.path, 52);
     }
-    let apply_btn = apply_rect(o);
+    let apply_btn = apply_rect(o, w);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
     let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
     place_rounded(
@@ -227,8 +263,13 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
     }
 
     widget::hide_field(world, LINE_INPUT);
-    for slot in 0..LINE_POOL {
-        let r = line_rect(o, slot);
+    for slot in 0..LINE_POOL_MAX {
+        if slot >= rows_shown {
+            widget::set_sprite_visible(world, row_bg(slot), false);
+            widget::set_label_visible(world, row_label(slot), false);
+            continue;
+        }
+        let r = line_rect(o, w, slot);
         if view.create {
             // One actionable create row; the rest of the window is blank.
             let on = slot == 0;
@@ -283,24 +324,24 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2]) {
             l.align = TextAlign::Left;
             l.color = LABEL;
             l.visible = true;
-            l.content = widget::clip_text(&view.lines[i], MAX_LINE_CHARS);
+            l.content = widget::clip_text(&view.lines[i], max_line_chars(w));
         }
     }
 
-    layout_scrollbar(world, view, o);
+    layout_scrollbar(world, view, o, w, rows_shown);
 }
 
 // The line window's scrollbar: shown only when the story overflows the pool.
-fn layout_scrollbar(world: &mut World, view: &StoryView, o: [f32; 2]) {
+fn layout_scrollbar(world: &mut World, view: &StoryView, o: [f32; 2], w: f32, rows_shown: usize) {
     let total = view.lines.len();
-    if view.create || total <= LINE_POOL {
+    if view.create || total <= rows_shown {
         widget::set_sprite_visible(world, LINE_TRACK, false);
         widget::set_sprite_visible(world, LINE_THUMB, false);
         return;
     }
-    let x = o[0] + STORY_W - SCROLLBAR_W;
+    let x = o[0] + w - SCROLLBAR_W;
     let top = body_top(o);
-    let h = LINE_POOL as f32 * LINE_H;
+    let h = rows_shown as f32 * LINE_H;
     place_rounded(
         world,
         LINE_TRACK,
@@ -309,9 +350,9 @@ fn layout_scrollbar(world: &mut World, view: &StoryView, o: [f32; 2]) {
         SCROLLBAR_W * 0.5,
         true,
     );
-    let frac = LINE_POOL as f32 / total as f32;
+    let frac = rows_shown as f32 / total as f32;
     let thumb_h = (h * frac).max(18.0);
-    let max_scroll = (total - LINE_POOL) as f32;
+    let max_scroll = (total - rows_shown) as f32;
     let off = (h - thumb_h) * (view.scroll as f32 / max_scroll);
     place_rounded(
         world,
@@ -339,7 +380,7 @@ pub(crate) fn hide_all(world: &mut World) {
 // rows, then the scrollbar floating above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
-    ids.extend((0..LINE_POOL).map(row_bg));
+    ids.extend((0..LINE_POOL_MAX).map(row_bg));
     ids.extend([LINE_TRACK, LINE_THUMB]);
     ids
 }
@@ -352,7 +393,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         PATH_LABEL,
         STATUS_LABEL,
     ];
-    ids.extend((0..LINE_POOL).map(row_label));
+    ids.extend((0..LINE_POOL_MAX).map(row_label));
     ids
 }
 
@@ -410,35 +451,36 @@ mod tests {
         let l = lines(4);
         let v = view(&l, 0, 1);
         let o = [40.0, 40.0];
-        let a = apply_rect(o);
+        let s = size();
+        let a = apply_rect(o, STORY_W);
         assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, s),
             Some(StoryAction::Apply)
         );
-        let r2 = line_rect(o, 2);
+        let r2 = line_rect(o, STORY_W, 2);
         assert_eq!(
-            hit_test(&v, r2[0] + 5.0, r2[1] + 5.0, o),
+            hit_test(&v, r2[0] + 5.0, r2[1] + 5.0, o, s),
             Some(StoryAction::Line(2))
         );
         // Past the last line the click is swallowed, not a line action.
-        let r5 = line_rect(o, 5);
+        let r5 = line_rect(o, STORY_W, 5);
         assert_eq!(
-            hit_test(&v, r5[0] + 5.0, r5[1] + 5.0, o),
+            hit_test(&v, r5[0] + 5.0, r5[1] + 5.0, o, s),
             Some(StoryAction::Consume)
         );
-        assert_eq!(hit_test(&v, 5000.0, 5000.0, o), None);
+        assert_eq!(hit_test(&v, 5000.0, 5000.0, o, s), None);
         // Create mode: row 0 creates, Apply is absent.
         let create = StoryView {
             create: true,
             ..view(&l, 0, 0)
         };
-        let r0 = line_rect(o, 0);
+        let r0 = line_rect(o, STORY_W, 0);
         assert_eq!(
-            hit_test(&create, r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&create, r0[0] + 5.0, r0[1] + 5.0, o, s),
             Some(StoryAction::Create)
         );
         assert_eq!(
-            hit_test(&create, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&create, a[0] + 5.0, a[1] + 5.0, o, s),
             Some(StoryAction::Consume),
             "no Apply in create mode"
         );
@@ -449,9 +491,9 @@ mod tests {
         let l = lines(40);
         let v = view(&l, 10, 12);
         let o = [0.0, 0.0];
-        let r0 = line_rect(o, 0);
+        let r0 = line_rect(o, STORY_W, 0);
         assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, size()),
             Some(StoryAction::Line(10))
         );
     }
@@ -460,7 +502,7 @@ mod tests {
     fn apply_draws_the_edit_line_as_the_input_and_others_as_labels() {
         let mut world = injected_world();
         let l = lines(4);
-        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0]);
+        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
         let input = world
             .query::<TextInput>()
             .find(|t| t.asset_id == LINE_INPUT)
@@ -499,7 +541,7 @@ mod tests {
     fn edit_line_outside_the_window_hides_the_input() {
         let mut world = injected_world();
         let l = lines(40);
-        apply(&mut world, Some(&view(&l, 20, 3)), [20.0, 20.0]);
+        apply(&mut world, Some(&view(&l, 20, 3)), [20.0, 20.0], size());
         let input = world
             .query::<TextInput>()
             .find(|t| t.asset_id == LINE_INPUT)
@@ -523,7 +565,7 @@ mod tests {
             create: true,
             ..view(&l, 0, 0)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0]);
+        apply(&mut world, Some(&v), [20.0, 20.0], size());
         let r0 = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == row_label(0))
@@ -547,11 +589,19 @@ mod tests {
     }
 
     #[test]
+    fn taller_size_reveals_more_lines_up_to_the_pool() {
+        assert_eq!(visible_rows(size()[1]), LINE_POOL);
+        assert_eq!(visible_rows(size()[1] + 4.0 * LINE_H), LINE_POOL + 4);
+        assert_eq!(visible_rows(max_size()[1]), LINE_POOL_MAX);
+        assert_eq!(visible_rows(10_000.0), LINE_POOL_MAX, "capped at the pool");
+    }
+
+    #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let l = lines(4);
-        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0]);
-        apply(&mut world, None, [0.0, 0.0]);
+        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
+        apply(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
