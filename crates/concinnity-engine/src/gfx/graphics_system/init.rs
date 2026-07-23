@@ -75,6 +75,17 @@ struct SkinnedMeshAssembly {
     source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
 }
 
+// The shared texture pool decoded from the TextureTable by `decode_texture_table`:
+// each texture's payload locator (dense by pool slot / cook TextureHandle), the
+// dev-only file-backed source map + name->slot index (cn debug hot-reload / spawn
+// by name), and the pool size.
+struct TextureTableDecode {
+    locators: Vec<crate::ecs::PayloadLocator>,
+    source_map: super::hot_reload_sources::TextureSourceMap,
+    name_to_slot: std::collections::HashMap<AssetId, usize>,
+    count: usize,
+}
+
 impl GraphicsSystem {
     // Resolve every render setting (window, quality preset + ceiling, post-process
     // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
@@ -1069,6 +1080,252 @@ impl GraphicsSystem {
         })
     }
 
+    // Read the shared TextureTable, collecting each texture's payload locator
+    // (dense by pool slot / cook `TextureHandle`). Under `cn debug`
+    // (`capture_sources`) also records the file-backed source paths + the
+    // name -> slot map for the hot-reload watcher and the runtime spawn-by-name
+    // path; the shipped runtime resolves every texture by handle and needs
+    // neither. Returns None (self.failed set) if a texture lacks a payload.
+    fn decode_texture_table(
+        &mut self,
+        ctx: &mut PipelineContext,
+        capture_sources: bool,
+    ) -> Option<TextureTableDecode> {
+        // The shared texture pool comes from the blob's resource stream: cook
+        // assigned each texture a dense `TextureHandle` (== its pool slot) and the
+        // runtime loaded them into a `TextureTable`. Reading the table by handle
+        // replaces draining a `Texture` component column and scanning names.
+        let texture_table = ctx
+            .resource::<crate::resource::TextureTable>()
+            .cloned()
+            .unwrap_or_default();
+        // Dev-only source catalogue (present under `cn debug`) so the hot-reload
+        // watcher can map a texture handle back to the file that backs it.
+        let texture_sources = ctx.resource::<crate::resource::TextureSources>().cloned();
+        let mut texture_locators = Vec::with_capacity(texture_table.len());
+        let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
+        // Name -> pool slot, built only under `cn debug` for the runtime
+        // spawn-by-name path (`WorldReloadState`).
+        let mut texture_name_to_slot: std::collections::HashMap<AssetId, usize> =
+            std::collections::HashMap::new();
+        for (slot, entry) in texture_table.0.iter().enumerate() {
+            match &entry.payload {
+                Some(l) => {
+                    texture_locators.push(l.clone());
+                    if capture_sources
+                        && let Some(info) = texture_sources.as_ref().and_then(|s| s.0.get(slot))
+                    {
+                        texture_name_to_slot.insert(AssetId(info.name_id), slot);
+                        if !info.source.is_empty() {
+                            asset_source_map.push_texture(
+                                info.source.clone(),
+                                info.image_index,
+                                slot,
+                            );
+                        }
+                    }
+                }
+                None => {
+                    tracing::error!(
+                        "GraphicsSystem: Texture has no compiled payload -- did the build succeed?"
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+        let count = texture_table.len();
+        Some(TextureTableDecode {
+            locators: texture_locators,
+            source_map: asset_source_map,
+            name_to_slot: texture_name_to_slot,
+            count,
+        })
+    }
+
+    // Decode the MaterialTable (dense by `MaterialHandle`) into the per-object GPU
+    // uniforms + resolved texture slots the draw list indexes. Materials have no
+    // payload; all data lives in the baked `data_bytes`. Every texture reference
+    // (albedo / normal / secondary / emissive / packed ORM) is a `TextureHandle`
+    // indexing the shared pool directly, so a handle past `texture_count` is a
+    // corrupt-build resolution error. Returns None (self.failed set) on any decode
+    // or resolution failure.
+    fn build_material_map(
+        &mut self,
+        ctx: &mut PipelineContext,
+        texture_count: usize,
+    ) -> Option<std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>> {
+        // Albedo-region textures (albedo, secondary albedo, emissive, packed ORM)
+        // carry a cook-assigned `TextureHandle` whose value is the texture's
+        // declaration-order pool slot, so the handle indexes the pool directly.
+        let albedo_slot_of = |handle: crate::ecs::TextureHandle| -> Option<usize> {
+            let slot = handle.index();
+            (slot < texture_count).then_some(slot)
+        };
+        let material_table = ctx
+            .resource::<crate::resource::MaterialTable>()
+            .cloned()
+            .unwrap_or_default();
+        let mut material_map: std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry> =
+            std::collections::HashMap::with_capacity(material_table.len());
+        for (material_handle, entry) in material_table.0.iter().enumerate() {
+            let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: Material handle {} failed to decode: {}",
+                        material_handle,
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            let albedo_slot = match mat.albedo {
+                None => 0,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range albedo texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+
+            // A normal map is a texture in the shared pool at its own drain slot,
+            // addressed by its cook-assigned `TextureHandle` just like the albedo
+            // region; unset selects the flat-normal fallback. A handle past the
+            // pool is a resolution error (cook validated the reference exists).
+            let normal_map_slot = match mat.normal_map {
+                None => crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range normal_map texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+
+            // Optional secondary albedo/normal pair for the terrain shader's
+            // slope-blending mode. Same handle resolution as the primary pair
+            // (both index the shared pool by `TextureHandle`); the fallback slots
+            // fall through when either is unset and the shader's
+            // `terrain_blend > 0` gate is what controls whether the secondary
+            // actually gets sampled.
+            let albedo_secondary_slot: u32 = match mat.albedo_secondary {
+                None => 0,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range albedo_secondary texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+            // Secondary normal for the terrain slope-blend layer, sampled only
+            // when `terrain_blend > 0`. Resolves to the texture's shared-pool
+            // slot; unset selects the flat-normal fallback (index `texture_count`,
+            // one past the last real texture) so a slope layer without its own
+            // normal map perturbs nothing.
+            let normal_secondary_slot: u32 = match mat.normal_secondary {
+                None => texture_count as u32,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range normal_secondary texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+
+            // Emissive + packed-ORM maps live in the albedo region of the
+            // bindless pool, so their `TextureHandle` indexes the pool directly
+            // like the primary/secondary albedo. Slot 0 (unset) is the sentinel
+            // the shader gates on to keep the scalar fallback.
+            let emissive_map_slot: u32 = match mat.emissive_map {
+                None => 0,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range emissive_map texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+            let orm_map_slot: u32 = match mat.orm_map {
+                None => 0,
+                Some(handle) => match albedo_slot_of(handle) {
+                    Some(slot) => slot as u32,
+                    None => {
+                        tracing::error!(
+                            "GraphicsSystem: Material {} references out-of-range orm_map texture handle {} (only {} textures)",
+                            material_handle,
+                            handle.index(),
+                            texture_count
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+            };
+
+            let uniforms = crate::gfx::render_types::MaterialUniforms {
+                roughness: mat.roughness,
+                metallic: mat.metallic,
+                macro_variation: mat.macro_variation,
+                terrain_blend: mat.terrain_blend,
+                tint: mat.tint,
+                _pad2: 0.0,
+                emissive: mat.emissive_factor,
+                secondary_blend_sharpness: mat.secondary_blend_sharpness,
+                albedo_secondary_index: albedo_secondary_slot,
+                normal_secondary_index: normal_secondary_slot,
+                emissive_map_index: emissive_map_slot,
+                orm_map_index: orm_map_slot,
+                alpha_cutoff: mat.alpha_cutoff,
+                opacity: mat.opacity,
+                transparent: u32::from(mat.transparent),
+                see_through: u32::from(mat.see_through),
+            };
+            material_map.insert(
+                crate::ecs::MaterialHandle(material_handle as u32),
+                (albedo_slot, normal_map_slot, uniforms),
+            );
+        }
+        Some(material_map)
+    }
+
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         let ResolvedRenderConfig {
             post,
@@ -1241,245 +1498,23 @@ impl GraphicsSystem {
             capture(vert_instanced_shader.as_ref(), ShaderKind::VertexInstanced);
         }
 
-        // drain textures and record a name->slot mapping for Prop texture lookup.
-        // Under `cn debug` we also capture the file-backed source paths into
-        // `asset_source_map` so the hot-reload watcher can re-decode + re-upload
-        // when the user saves a texture on disk. Procedural textures (generator
-        // non-empty) and source-less assets carry no source file and are
-        // omitted from the map.
-        // The shared texture pool comes from the blob's resource stream: cook
-        // assigned each texture a dense `TextureHandle` (== its pool slot) and the
-        // runtime loaded them into a `TextureTable`. Reading the table by handle
-        // replaces draining a `Texture` component column and scanning names.
-        let texture_table = ctx
-            .resource::<crate::resource::TextureTable>()
-            .cloned()
-            .unwrap_or_default();
-        // Dev-only source catalogue (present under `cn debug`) so the hot-reload
-        // watcher can map a texture handle back to the file that backs it.
-        let texture_sources = ctx.resource::<crate::resource::TextureSources>().cloned();
-        let mut texture_locators = Vec::with_capacity(texture_table.len());
-        let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
-        // Name -> pool slot, built only under `cn debug` for the runtime
-        // spawn-by-name path (`WorldReloadState`). The shipped runtime resolves
-        // every texture by handle and never needs it.
-        let mut texture_name_to_slot: std::collections::HashMap<AssetId, usize> =
-            std::collections::HashMap::new();
+        // Read the shared texture pool + the material table into the maps the
+        // draw list resolves against. `capture_sources` (cn debug) also gathers
+        // the file-backed source maps the hot-reload watcher consumes.
         let capture_sources = crate::app::dev_flags::enabled();
-        for (slot, entry) in texture_table.0.iter().enumerate() {
-            match &entry.payload {
-                Some(l) => {
-                    texture_locators.push(l.clone());
-                    if capture_sources
-                        && let Some(info) = texture_sources.as_ref().and_then(|s| s.0.get(slot))
-                    {
-                        texture_name_to_slot.insert(AssetId(info.name_id), slot);
-                        if !info.source.is_empty() {
-                            asset_source_map.push_texture(
-                                info.source.clone(),
-                                info.image_index,
-                                slot,
-                            );
-                        }
-                    }
-                }
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: Texture has no compiled payload -- did the build succeed?"
-                    );
-                    self.failed = true;
-                    return;
-                }
-            }
-        }
-
-        // drain Materials and build a name -> (albedo_slot, normal_map_slot, gpu uniforms) map.
-        // Materials have no payload; all data lives in their args.
-        //
-        // Every texture -- whether referenced as an albedo, a normal map, an
-        // emissive/ORM map, or a terrain secondary -- lives once in the shared
-        // pool at its drain slot, so a normal-map reference resolves to the same
-        // slot as any other reference to that texture (no separate normal pool).
-        // A material with no normal map carries `NO_NORMAL_MAP_SLOT`, which the
-        // backend maps to the pool's flat-normal fallback.
-        //
-        // Albedo-region textures (albedo, secondary albedo, emissive, packed
-        // ORM) carry a cook-assigned `TextureHandle` whose value is the texture's
-        // declaration-order drain slot -- i.e. its slot in this pool -- so the
-        // handle indexes `texture_locators` directly, no name->slot scan. A
-        // handle past the pool is a resolution error (cook validates the
-        // reference exists, so this only guards a corrupt build).
-        let texture_count = texture_table.len();
-        let albedo_slot_of = |handle: crate::ecs::TextureHandle| -> Option<usize> {
-            let slot = handle.index();
-            (slot < texture_count).then_some(slot)
+        let TextureTableDecode {
+            locators: texture_locators,
+            source_map: asset_source_map,
+            name_to_slot: texture_name_to_slot,
+            count: texture_count,
+        } = match self.decode_texture_table(ctx, capture_sources) {
+            Some(decoded) => decoded,
+            None => return,
         };
-
-        // Materials are a DATA resource: each `MaterialTable` entry's `data_bytes`
-        // is the cook-validated Material, serialized. Decode each in handle order
-        // into the per-object GPU uniforms + resolved texture slots the draw list
-        // indexes by `MaterialHandle` (the table is dense, so index == handle).
-        let material_table = ctx
-            .resource::<crate::resource::MaterialTable>()
-            .cloned()
-            .unwrap_or_default();
-        let mut material_map: std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry> =
-            std::collections::HashMap::with_capacity(material_table.len());
-        for (material_handle, entry) in material_table.0.iter().enumerate() {
-            let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: Material handle {} failed to decode: {}",
-                        material_handle,
-                        e
-                    );
-                    self.failed = true;
-                    return;
-                }
-            };
-            let albedo_slot = match mat.albedo {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range albedo texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-
-            // A normal map is a texture in the shared pool at its own drain slot,
-            // addressed by its cook-assigned `TextureHandle` just like the albedo
-            // region; unset selects the flat-normal fallback. A handle past the
-            // pool is a resolution error (cook validated the reference exists).
-            let normal_map_slot = match mat.normal_map {
-                None => crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range normal_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-
-            // Optional secondary albedo/normal pair for the terrain shader's
-            // slope-blending mode. Same handle resolution as the primary pair
-            // (both index the shared pool by `TextureHandle`); the fallback slots
-            // fall through when either is unset and the shader's
-            // `terrain_blend > 0` gate is what controls whether the secondary
-            // actually gets sampled.
-            let albedo_secondary_slot: u32 = match mat.albedo_secondary {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range albedo_secondary texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-            // Secondary normal for the terrain slope-blend layer, sampled only
-            // when `terrain_blend > 0`. Resolves to the texture's shared-pool
-            // slot; unset selects the flat-normal fallback (index `texture_count`,
-            // one past the last real texture) so a slope layer without its own
-            // normal map perturbs nothing.
-            let normal_secondary_slot: u32 = match mat.normal_secondary {
-                None => texture_count as u32,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range normal_secondary texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-
-            // Emissive + packed-ORM maps live in the albedo region of the
-            // bindless pool, so their `TextureHandle` indexes the pool directly
-            // like the primary/secondary albedo. Slot 0 (unset) is the sentinel
-            // the shader gates on to keep the scalar fallback.
-            let emissive_map_slot: u32 = match mat.emissive_map {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range emissive_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-            let orm_map_slot: u32 = match mat.orm_map {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range orm_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
-
-            let uniforms = crate::gfx::render_types::MaterialUniforms {
-                roughness: mat.roughness,
-                metallic: mat.metallic,
-                macro_variation: mat.macro_variation,
-                terrain_blend: mat.terrain_blend,
-                tint: mat.tint,
-                _pad2: 0.0,
-                emissive: mat.emissive_factor,
-                secondary_blend_sharpness: mat.secondary_blend_sharpness,
-                albedo_secondary_index: albedo_secondary_slot,
-                normal_secondary_index: normal_secondary_slot,
-                emissive_map_index: emissive_map_slot,
-                orm_map_index: orm_map_slot,
-                alpha_cutoff: mat.alpha_cutoff,
-                opacity: mat.opacity,
-                transparent: u32::from(mat.transparent),
-                see_through: u32::from(mat.see_through),
-            };
-            material_map.insert(
-                crate::ecs::MaterialHandle(material_handle as u32),
-                (albedo_slot, normal_map_slot, uniforms),
-            );
-        }
+        let material_map = match self.build_material_map(ctx, texture_count) {
+            Some(map) => map,
+            None => return,
+        };
 
         // Build skinned draw objects, the shared skinned vertex/index buffers,
         // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
