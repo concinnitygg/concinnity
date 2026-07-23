@@ -1602,6 +1602,147 @@ impl GraphicsSystem {
         })
     }
 
+    // Publish the Resolution row's mode list (backend-enumerated, else the static
+    // preset fallback), apply a persisted display-mode choice to the backend, and
+    // seed the frame-rate-cap resource + the Resolution row's dynamic value label.
+    // Runs after the backend is built.
+    fn finalize_display_modes(&mut self, ctx: &mut PipelineContext) {
+        let chosen = self.resolution;
+        if let Some(backend) = self.backend.as_deref_mut() {
+            let raw = backend.display_modes();
+            self.display_modes = if raw.is_empty() {
+                crate::gfx::display_mode::fallback_modes()
+            } else {
+                crate::gfx::display_mode::normalize(raw)
+            };
+            self.current_mode = backend.current_display_mode();
+            if let Some(mode) = chosen {
+                backend.set_display_mode(mode);
+            }
+        }
+        ctx.insert_resource(crate::ecs::DisplayModes(self.display_modes.clone()));
+        // The resolved frame-rate cap (world value or persisted override) for
+        // the App-level pacer; the settings row's live change republishes it.
+        ctx.insert_resource(crate::ecs::FrameRateCap(self.fps_cap));
+        let idx =
+            crate::gfx::display_mode::index_of(&self.display_modes, self.effective_resolution());
+        if let Some(m) = self.display_modes.get(idx) {
+            set_setting_row_label(ctx, "resolution", &m.label());
+        }
+    }
+
+    // Decide cursor handling and push the post-build backend config: menu mode,
+    // ambient scale, key map, the startup cursor grab (plain first-person worlds
+    // only), and the device capability flags that gate the settings rows.
+    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext) {
+        // A plain first-person world (Camera3D, no UI) captures the cursor at
+        // startup. A Camera3D world that also has UI (a MainMenu's HitRegion /
+        // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
+        // A UI-only world (no camera) stays free-cursor.
+        let has_ui = ctx.query::<HitRegion>().next().is_some()
+            || ctx.query::<crate::assets::KeyBinding>().next().is_some();
+        let has_camera = ctx.query::<Camera3D>().next().is_some();
+        self.menu_mode = has_camera && has_ui;
+        // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
+        // per frame, so the startup auto-grab is skipped: the editor re-runs this
+        // init on every live-preview rebuild, and grabbing there would re-hide and
+        // decouple the OS cursor each time, desyncing the free-cursor handoff.
+        let menu_driven = ctx.resource::<crate::ecs::MenuOverride>().is_some();
+        let mut device_caps = crate::gfx::backend::DeviceCapabilities::ALL;
+        if let Some(backend) = self.backend.as_deref_mut() {
+            // Capability flags drive the settings-menu gating below.
+            device_caps = backend.capabilities();
+            // Detected GPU performance profile, logged once at init so the
+            // classified tier is verifiable on each device.
+            let gpu = backend.gpu_profile();
+            tracing::info!(
+                "GPU profile: vendor={:?} tier={:?} memory_budget={} MB unified={} discrete={}",
+                gpu.vendor,
+                gpu.tier,
+                gpu.memory_budget_bytes / (1 << 20),
+                gpu.unified_memory,
+                gpu.discrete,
+            );
+            backend.set_menu_mode(self.menu_mode);
+            // Push the effective ambient scale (world value or persisted
+            // override). The backend already seeds the world value at its own
+            // init, so this is the path that applies a persisted Ambient-slider
+            // choice; idempotent when there is no override. No-op on DX/VK.
+            backend.set_ambient_intensity(self.ambient_intensity);
+            // Push the movement key map (the persisted rebinds, or the default).
+            // The backend decodes physical keys through it; idempotent with its
+            // own default seed when there is no override.
+            backend.set_keymap(&self.keymap);
+            if has_camera && !has_ui && !menu_driven {
+                backend.capture_cursor();
+            }
+        }
+        self.caps = device_caps;
+        // Gray out + disable settings rows whose feature the device cannot
+        // provide (e.g. ray-traced reflections on a GPU without hardware ray
+        // tracing). Runs while the menu HitRegions / TextLabels / ScrollPanels
+        // are still present (GraphicsSystem.init runs before UiInputSystem drains
+        // them); the value-label sync above already set each row's live value.
+        self.apply_capability_gating(ctx);
+    }
+
+    // Hand the resolved settings snapshot to SettingsSystem, which owns the live
+    // SettingCommand / SceneCommand drain against the backend from here. This
+    // system resolves the values (world config + persisted overrides + device
+    // capabilities) at init and never re-reads its copies afterward.
+    fn publish_settings_state(&mut self, ctx: &mut PipelineContext) {
+        ctx.insert_resource(crate::gfx::settings_system::SettingsState {
+            keymap: self.keymap,
+            rebind_rows: std::mem::take(&mut self.rebind_rows),
+            gamepad_map: self.gamepad_map,
+            pad_rebind_rows: std::mem::take(&mut self.pad_rebind_rows),
+            sliders: std::mem::take(&mut self.sliders),
+            cycle_value_labels: std::mem::take(&mut self.cycle_value_labels),
+            post_process: self.post_process,
+            post_config: self.post_config.clone(),
+            authored_post_config: self.authored_post_config.clone(),
+            ambient_intensity: self.ambient_intensity,
+            quality_preset: self.quality_preset,
+            gpu_profile: self.gpu_profile,
+            render_scale: self.render_scale,
+            upscale_backend: self.upscale_backend,
+            temporal_upscaling: self.temporal_upscaling,
+            hdr_display: self.hdr_display,
+            hdr_pq: self.hdr_pq,
+            shadow_map_size: self.shadow_map_size,
+            shadow_update: self.shadow_update,
+            shadow_distance: self.shadow_distance,
+            shadow_cascades: self.shadow_cascades,
+            anisotropy: self.anisotropy,
+            authored_shadow_map_size: self.authored_shadow_map_size,
+            authored_shadow_update: self.authored_shadow_update,
+            authored_shadow_distance: self.authored_shadow_distance,
+            authored_shadow_cascades: self.authored_shadow_cascades,
+            authored_anisotropy: self.authored_anisotropy,
+            vsync: self.vsync,
+            fps_cap: self.fps_cap,
+            perf_stats: self.perf_stats,
+            show_fps: self.show_fps,
+            show_vram: self.show_vram,
+            perf_sub_row_labels: std::mem::take(&mut self.perf_sub_row_labels),
+            window_args: self.window_args.clone(),
+            display_modes: std::mem::take(&mut self.display_modes),
+            resolution: self.resolution,
+            current_mode: self.current_mode,
+            resolution_row_labels: std::mem::take(&mut self.resolution_row_labels),
+            frames_in_flight: self.frames_in_flight,
+            occlusion_two_pass: self.occlusion_two_pass,
+            texture_cap: self.texture_cap,
+            texture_budget: self.texture_budget,
+            settings_cache: None,
+            settings_writer: None,
+            scene_cmd_cursor: crate::ecs::EventCursor::default(),
+            setting_cmd_cursor: crate::ecs::EventCursor::default(),
+            published_hud_prefs: None,
+            published_disabled_inputs: None,
+        });
+    }
+
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         let ResolvedRenderConfig {
             post,
@@ -2583,36 +2724,9 @@ impl GraphicsSystem {
             backend.set_window_mode(self.window_args.mode);
         }
 
-        // The Resolution row's mode list: the display's enumerated modes when
-        // the backend can provide them, else the static preset fallback. The
-        // list is published once for UiInputSystem to seed the row's dropdown.
-        // A persisted mode choice is handed to the backend, which holds the
-        // display to it whenever the window is in fullscreen; with no choice
-        // the row shows the display's own mode. The row's value label is
-        // dynamic (built from the list, not the static registry), so it is set
-        // here rather than in the generic sync above.
-        let chosen = self.resolution;
-        if let Some(backend) = self.backend.as_deref_mut() {
-            let raw = backend.display_modes();
-            self.display_modes = if raw.is_empty() {
-                crate::gfx::display_mode::fallback_modes()
-            } else {
-                crate::gfx::display_mode::normalize(raw)
-            };
-            self.current_mode = backend.current_display_mode();
-            if let Some(mode) = chosen {
-                backend.set_display_mode(mode);
-            }
-        }
-        ctx.insert_resource(crate::ecs::DisplayModes(self.display_modes.clone()));
-        // The resolved frame-rate cap (world value or persisted override) for
-        // the App-level pacer; the settings row's live change republishes it.
-        ctx.insert_resource(crate::ecs::FrameRateCap(self.fps_cap));
-        let idx =
-            crate::gfx::display_mode::index_of(&self.display_modes, self.effective_resolution());
-        if let Some(m) = self.display_modes.get(idx) {
-            set_setting_row_label(ctx, "resolution", &m.label());
-        }
+        // Publish the Resolution row's mode list + frame-rate cap now the backend
+        // can enumerate the display's modes.
+        self.finalize_display_modes(ctx);
 
         // Reflection probes: hand the backend the declared `ReflectionProbe`
         // placements (Metal bakes a cube per probe; an empty list auto-seeds from
@@ -2782,57 +2896,7 @@ impl GraphicsSystem {
         );
         self.setup_voxel_world_streaming(voxel_world, &block_types, &material_map);
 
-        // Decide cursor handling. A plain first-person world (Camera3D, no UI)
-        // captures the cursor at startup as before. A Camera3D world that also
-        // has UI (a MainMenu's HitRegion / KeyBinding) is "menu mode": capture
-        // is driven per-frame in `run_step` by whether a menu view is active,
-        // so Escape can pause the camera into the menu and back. A UI-only
-        // world (no camera) stays free-cursor.
-        let has_ui = ctx.query::<HitRegion>().next().is_some()
-            || ctx.query::<crate::assets::KeyBinding>().next().is_some();
-        let has_camera = ctx.query::<Camera3D>().next().is_some();
-        self.menu_mode = has_camera && has_ui;
-        // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
-        // per frame, so the startup auto-grab is skipped: the editor re-runs this
-        // init on every live-preview rebuild, and grabbing there would re-hide and
-        // decouple the OS cursor each time, desyncing the free-cursor handoff.
-        let menu_driven = ctx.resource::<crate::ecs::MenuOverride>().is_some();
-        let mut device_caps = crate::gfx::backend::DeviceCapabilities::ALL;
-        if let Some(backend) = self.backend.as_deref_mut() {
-            // Capability flags drive the settings-menu gating below.
-            device_caps = backend.capabilities();
-            // Detected GPU performance profile, logged once at init so the
-            // classified tier is verifiable on each device.
-            let gpu = backend.gpu_profile();
-            tracing::info!(
-                "GPU profile: vendor={:?} tier={:?} memory_budget={} MB unified={} discrete={}",
-                gpu.vendor,
-                gpu.tier,
-                gpu.memory_budget_bytes / (1 << 20),
-                gpu.unified_memory,
-                gpu.discrete,
-            );
-            backend.set_menu_mode(self.menu_mode);
-            // Push the effective ambient scale (world value or persisted
-            // override). The backend already seeds the world value at its own
-            // init, so this is the path that applies a persisted Ambient-slider
-            // choice; idempotent when there is no override. No-op on DX/VK.
-            backend.set_ambient_intensity(self.ambient_intensity);
-            // Push the movement key map (the persisted rebinds, or the default).
-            // The backend decodes physical keys through it; idempotent with its
-            // own default seed when there is no override.
-            backend.set_keymap(&self.keymap);
-            if has_camera && !has_ui && !menu_driven {
-                backend.capture_cursor();
-            }
-        }
-        self.caps = device_caps;
-        // Gray out + disable settings rows whose feature the device cannot
-        // provide (e.g. ray-traced reflections on a GPU without hardware ray
-        // tracing). Runs while the menu HitRegions / TextLabels / ScrollPanels
-        // are still present (GraphicsSystem.init runs before UiInputSystem drains
-        // them); the value-label sync above already set each row's live value.
-        self.apply_capability_gating(ctx);
+        self.finalize_backend_config(ctx);
 
         self.setup_scene_reel(ctx);
 
@@ -2852,62 +2916,7 @@ impl GraphicsSystem {
                 .unwrap_or((0.0, 0.0)),
         });
 
-        // Hand the resolved settings snapshot to SettingsSystem, which owns the
-        // live SettingCommand / SceneCommand drain against the backend. This
-        // system resolves the values (world config + persisted overrides +
-        // device capabilities) at init; SettingsState owns them from here (the
-        // row bookkeeping is moved out, the render config is copied -- this
-        // system never re-reads its copies after init).
-        ctx.insert_resource(crate::gfx::settings_system::SettingsState {
-            keymap: self.keymap,
-            rebind_rows: std::mem::take(&mut self.rebind_rows),
-            gamepad_map: self.gamepad_map,
-            pad_rebind_rows: std::mem::take(&mut self.pad_rebind_rows),
-            sliders: std::mem::take(&mut self.sliders),
-            cycle_value_labels: std::mem::take(&mut self.cycle_value_labels),
-            post_process: self.post_process,
-            post_config: self.post_config.clone(),
-            authored_post_config: self.authored_post_config.clone(),
-            ambient_intensity: self.ambient_intensity,
-            quality_preset: self.quality_preset,
-            gpu_profile: self.gpu_profile,
-            render_scale: self.render_scale,
-            upscale_backend: self.upscale_backend,
-            temporal_upscaling: self.temporal_upscaling,
-            hdr_display: self.hdr_display,
-            hdr_pq: self.hdr_pq,
-            shadow_map_size: self.shadow_map_size,
-            shadow_update: self.shadow_update,
-            shadow_distance: self.shadow_distance,
-            shadow_cascades: self.shadow_cascades,
-            anisotropy: self.anisotropy,
-            authored_shadow_map_size: self.authored_shadow_map_size,
-            authored_shadow_update: self.authored_shadow_update,
-            authored_shadow_distance: self.authored_shadow_distance,
-            authored_shadow_cascades: self.authored_shadow_cascades,
-            authored_anisotropy: self.authored_anisotropy,
-            vsync: self.vsync,
-            fps_cap: self.fps_cap,
-            perf_stats: self.perf_stats,
-            show_fps: self.show_fps,
-            show_vram: self.show_vram,
-            perf_sub_row_labels: std::mem::take(&mut self.perf_sub_row_labels),
-            window_args: self.window_args.clone(),
-            display_modes: std::mem::take(&mut self.display_modes),
-            resolution: self.resolution,
-            current_mode: self.current_mode,
-            resolution_row_labels: std::mem::take(&mut self.resolution_row_labels),
-            frames_in_flight: self.frames_in_flight,
-            occlusion_two_pass: self.occlusion_two_pass,
-            texture_cap: self.texture_cap,
-            texture_budget: self.texture_budget,
-            settings_cache: None,
-            settings_writer: None,
-            scene_cmd_cursor: crate::ecs::EventCursor::default(),
-            setting_cmd_cursor: crate::ecs::EventCursor::default(),
-            published_hud_prefs: None,
-            published_disabled_inputs: None,
-        });
+        self.publish_settings_state(ctx);
 
         // Hand the streaming pools built above to StreamingSystem: it drives
         // them each frame (against the parked backend) and publishes the
