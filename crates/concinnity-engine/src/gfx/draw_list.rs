@@ -608,6 +608,29 @@ pub(crate) struct DrawListInputs<'a> {
     pub always_resident_meshes: &'a std::collections::HashSet<usize>,
 }
 
+// Resolve the (albedo_slot, normal_map_slot, material) a draw object binds. A
+// material handle wins and must resolve in `material_map`; an unresolved one
+// comes back as `Err(handle)` so the caller can log its own context. With no
+// material, a texture handle contributes its albedo slot (clamped to slot 0 when
+// past `texture_count`) over the default material; with neither, slot 0 and the
+// default material.
+pub(crate) fn resolve_material_slots(
+    material: Option<MaterialHandle>,
+    texture: Option<TextureHandle>,
+    material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
+    texture_count: usize,
+) -> Result<MaterialEntry, MaterialHandle> {
+    if let Some(mat_id) = material {
+        return material_map.get(&mat_id).copied().ok_or(mat_id);
+    }
+    if let Some(tex_id) = texture {
+        let slot = tex_id.index();
+        let slot = if slot < texture_count { slot } else { 0 };
+        return Ok((slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT));
+    }
+    Ok((0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT))
+}
+
 pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     let DrawListInputs {
         items,
@@ -750,10 +773,10 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         return None;
                     }
                 };
-                let (texture_slot, normal_map_slot, material) = match sub.material {
-                    Some(mat_id) => match material_map.get(&mat_id) {
-                        Some(&(slot, nms, u)) => (slot, nms, u),
-                        None => {
+                let (texture_slot, normal_map_slot, material) =
+                    match resolve_material_slots(sub.material, None, material_map, texture_count) {
+                        Ok(entry) => entry,
+                        Err(mat_id) => {
                             tracing::error!(
                                 "GraphicsSystem: Model {} sub-mesh material {} not found",
                                 model_id,
@@ -761,9 +784,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                             );
                             return None;
                         }
-                    },
-                    None => (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT),
-                };
+                    };
                 let (bb_min, bb_max) =
                     if item.is_dynamic || always_resident_meshes.contains(&sub_mesh) {
                         UNCULLED_BB
@@ -827,26 +848,23 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     return None;
                 }
             };
-            let (texture_slot, normal_map_slot, material) = if let Some(mat_id) = item.material {
-                match material_map.get(&mat_id) {
-                    Some(&(slot, nms, uniforms)) => (slot, nms, uniforms),
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Prop {} references unknown material {} -- add a Material asset with that id",
-                            item.asset_id,
-                            mat_id.index()
-                        );
-                        return None;
-                    }
+            // The texture handle is the texture's declaration-order pool slot;
+            // an out-of-range handle falls back to slot 0.
+            let (texture_slot, normal_map_slot, material) = match resolve_material_slots(
+                item.material,
+                item.texture,
+                material_map,
+                texture_count,
+            ) {
+                Ok(entry) => entry,
+                Err(mat_id) => {
+                    tracing::error!(
+                        "GraphicsSystem: Prop {} references unknown material {} -- add a Material asset with that id",
+                        item.asset_id,
+                        mat_id.index()
+                    );
+                    return None;
                 }
-            } else if let Some(tex_id) = item.texture {
-                // The texture handle is the texture's declaration-order pool
-                // slot; an out-of-range handle falls back to slot 0.
-                let s = tex_id.index();
-                let slot = if s < texture_count { s } else { 0 };
-                (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
-            } else {
-                (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
             };
             let (bb_min, bb_max) =
                 if item.is_dynamic || always_resident_meshes.contains(&mesh_handle) {
@@ -922,24 +940,21 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 return None;
             }
         };
-        let (texture_slot, normal_map_slot, material) = if let Some(mat_id) = inst.material {
-            match material_map.get(&mat_id) {
-                Some(&(slot, nms, uniforms)) => (slot, nms, uniforms),
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: InstancedProp {} references unknown material {}",
-                        inst.asset_id,
-                        mat_id.index()
-                    );
-                    return None;
-                }
+        let (texture_slot, normal_map_slot, material) = match resolve_material_slots(
+            inst.material,
+            inst.texture,
+            material_map,
+            texture_count,
+        ) {
+            Ok(entry) => entry,
+            Err(mat_id) => {
+                tracing::error!(
+                    "GraphicsSystem: InstancedProp {} references unknown material {}",
+                    inst.asset_id,
+                    mat_id.index()
+                );
+                return None;
             }
-        } else if let Some(tex_id) = inst.texture {
-            let s = tex_id.index();
-            let slot = if s < texture_count { s } else { 0 };
-            (slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
-        } else {
-            (0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT)
         };
 
         let mut instance_mats: Vec<[[f32; 4]; 4]> = Vec::with_capacity(inst.instances.len());
@@ -1090,6 +1105,55 @@ mod tests {
     use super::*;
     use crate::assets::Prop;
     use crate::ecs::TextureHandle;
+
+    fn material_map_with(
+        handle: MaterialHandle,
+        entry: MaterialEntry,
+    ) -> std::collections::HashMap<MaterialHandle, MaterialEntry> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(handle, entry);
+        m
+    }
+
+    #[test]
+    fn resolve_material_slots_prefers_a_resolved_material() {
+        let entry: MaterialEntry = (7, 3, MaterialUniforms::DEFAULT);
+        let map = material_map_with(MaterialHandle(2), entry);
+        // A material handle wins even when a texture is also present; its albedo
+        // and normal-map slots come straight from the map entry.
+        let got = resolve_material_slots(Some(MaterialHandle(2)), Some(TextureHandle(9)), &map, 16)
+            .expect("material resolves");
+        assert_eq!((got.0, got.1), (7, 3));
+    }
+
+    #[test]
+    fn resolve_material_slots_reports_a_missing_material_by_handle() {
+        let map = std::collections::HashMap::new();
+        let got = resolve_material_slots(Some(MaterialHandle(5)), None, &map, 16);
+        assert_eq!(got.err(), Some(MaterialHandle(5)));
+    }
+
+    #[test]
+    fn resolve_material_slots_falls_back_to_the_texture_slot() {
+        let map = std::collections::HashMap::new();
+        let got = resolve_material_slots(None, Some(TextureHandle(4)), &map, 16).expect("ok");
+        assert_eq!((got.0, got.1), (4, NO_NORMAL_MAP_SLOT));
+    }
+
+    #[test]
+    fn resolve_material_slots_clamps_an_out_of_range_texture_to_slot_zero() {
+        let map = std::collections::HashMap::new();
+        // Handle 20 is past the pool of 16, so it clamps to slot 0.
+        let got = resolve_material_slots(None, Some(TextureHandle(20)), &map, 16).expect("ok");
+        assert_eq!((got.0, got.1), (0, NO_NORMAL_MAP_SLOT));
+    }
+
+    #[test]
+    fn resolve_material_slots_defaults_with_no_material_or_texture() {
+        let map = std::collections::HashMap::new();
+        let got = resolve_material_slots(None, None, &map, 16).expect("ok");
+        assert_eq!((got.0, got.1), (0, NO_NORMAL_MAP_SLOT));
+    }
 
     fn make_prop(position: [f32; 3]) -> Prop {
         Prop {

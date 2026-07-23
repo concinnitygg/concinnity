@@ -1202,10 +1202,15 @@ impl GraphicsSystem {
         // fan-out), so one entry per asset.
         let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
         for (handle, name_id, sm, verts, idxs, joint_defs, morphs, lod_alts) in &skinned_geometry {
-            let (texture_slot, normal_map_slot, material) = if let Some(mat_id) = sm.material {
-                match material_map.get(&mat_id) {
-                    Some(&(s, n, u)) => (s, n, u),
-                    None => {
+            let (texture_slot, normal_map_slot, material) =
+                match crate::gfx::draw_list::resolve_material_slots(
+                    sm.material,
+                    sm.texture,
+                    &material_map,
+                    texture_count,
+                ) {
+                    Ok(entry) => entry,
+                    Err(mat_id) => {
                         tracing::error!(
                             "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
                             name_id,
@@ -1214,21 +1219,7 @@ impl GraphicsSystem {
                         self.failed = true;
                         return;
                     }
-                }
-            } else if let Some(tex_id) = sm.texture {
-                let slot = tex_id.index();
-                (
-                    if slot < texture_count { slot } else { 0 },
-                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                    crate::gfx::render_types::MaterialUniforms::DEFAULT,
-                )
-            } else {
-                (
-                    0,
-                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                    crate::gfx::render_types::MaterialUniforms::DEFAULT,
-                )
-            };
+                };
 
             let base = skinned_vertices.len() as u16;
             let index_offset = skinned_indices.len();
