@@ -86,6 +86,22 @@ struct TextureTableDecode {
     count: usize,
 }
 
+// The world's decoded shaders from `decode_shaders`: each stage's compiled
+// payload bytes (the main vertex + fragment, an engine-internal empty shadow
+// slice, and the optional instanced-vertex stage), the payload locators kept for
+// the blob-release step, and the dev-only source map the hot-reload watcher
+// subscribes to.
+struct DecodedShaders {
+    vert_locator: crate::ecs::PayloadLocator,
+    frag_locator: crate::ecs::PayloadLocator,
+    vert_instanced_locator: Option<crate::ecs::PayloadLocator>,
+    source_map: super::hot_reload_sources::ShaderStageSourceMap,
+    vert_bytes: Vec<u8>,
+    frag_bytes: Vec<u8>,
+    shadow_bytes: Vec<u8>,
+    vert_instanced_bytes: Vec<u8>,
+}
+
 impl GraphicsSystem {
     // Resolve every render setting (window, quality preset + ceiling, post-process
     // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
@@ -1326,6 +1342,189 @@ impl GraphicsSystem {
         Some(material_map)
     }
 
+    // Drain the world's ShaderStage components, resolve the required main vertex +
+    // fragment stages (and the optional instanced-vertex stage) to their compiled
+    // payload locators, and read their bytes. Under `cn debug` also records each
+    // stage's resolved on-disk source path so the asset hot-reload watcher can
+    // recompile + rebuild pipelines on a shader save. Returns None (self.failed
+    // set) if a required stage or its payload is missing or unreadable.
+    fn decode_shaders(&mut self, ctx: &mut PipelineContext) -> Option<DecodedShaders> {
+        let mut shaders = ctx.drain::<ShaderStage>();
+        let find_shader = |shaders: &mut Vec<ShaderStage>, kind: ShaderKind| {
+            shaders
+                .iter()
+                .position(|s| s.kind == kind)
+                .map(|i| shaders.remove(i))
+        };
+
+        let vert_instanced_shader = find_shader(&mut shaders, ShaderKind::VertexInstanced);
+
+        let vert_shader = match find_shader(&mut shaders, ShaderKind::Vertex) {
+            Some(s) => s,
+            None => {
+                tracing::error!(
+                    "GraphicsSystem: no vertex ShaderStage found -- add one to world.jsonl"
+                );
+                self.failed = true;
+                return None;
+            }
+        };
+        let frag_shader = match find_shader(&mut shaders, ShaderKind::Fragment) {
+            Some(s) => s,
+            None => {
+                tracing::error!(
+                    "GraphicsSystem: no fragment ShaderStage found -- add one to world.jsonl"
+                );
+                self.failed = true;
+                return None;
+            }
+        };
+
+        let vert_locator = match &vert_shader.locator {
+            Some(l) => l.clone(),
+            None => {
+                tracing::error!(
+                    "GraphicsSystem: vertex ShaderStage '{}' has no compiled payload",
+                    vert_shader.source
+                );
+                self.failed = true;
+                return None;
+            }
+        };
+        let frag_locator = match &frag_shader.locator {
+            Some(l) => l.clone(),
+            None => {
+                tracing::error!(
+                    "GraphicsSystem: fragment ShaderStage '{}' has no compiled payload",
+                    frag_shader.source
+                );
+                self.failed = true;
+                return None;
+            }
+        };
+
+        // instanced vertex shader is optional; required only when at least
+        // one InstancedProp is in the world (which we don't know yet).
+        let vert_instanced_locator = vert_instanced_shader
+            .as_ref()
+            .and_then(|s| s.locator.clone());
+
+        // Capture every world-loaded ShaderStage's resolved on-disk source
+        // path so the asset hot-reload watcher can recompile + rebuild
+        // pipelines on a `.metal` / `.hlsl` / `.glsl` save. Stages whose
+        // current-platform source is the embedded GLSL fallback (or whose
+        // declaration uses a non-platform-compatible extension) carry no
+        // file to watch and are skipped; the inline GLSL path keeps
+        // rendering at whatever was baked in.
+        let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
+        if crate::app::dev_flags::enabled() {
+            let mut capture = |stage_opt: Option<&ShaderStage>, kind: ShaderKind| {
+                let Some(stage) = stage_opt else {
+                    return;
+                };
+                let Some(raw) = stage.current_platform_source() else {
+                    return;
+                };
+                // Engine-bundled built-ins are served from `include_str!`-baked
+                // source by `concinnity_cook::shader::compile_shader`, not from
+                // disk, and a separate watcher in `crate::metal::hot_reload`
+                // already covers them via `src/metal/shaders/`. Skip them
+                // here so the asset watcher does not redundantly subscribe to
+                // a path it cannot meaningfully reload.
+                if crate::build::shader::builtin_shader_source(&raw).is_some() {
+                    return;
+                }
+                let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
+                shader_stage_source_map.entries.push(
+                    super::hot_reload_sources::ShaderStageSourceEntry {
+                        kind,
+                        resolved_path: resolved,
+                    },
+                );
+            };
+            capture(Some(&vert_shader), ShaderKind::Vertex);
+            capture(Some(&frag_shader), ShaderKind::Fragment);
+            capture(vert_instanced_shader.as_ref(), ShaderKind::VertexInstanced);
+        }
+
+        // Read all shader payloads before the blob is released -- they may share
+        // one blob with the mesh/texture payloads read elsewhere in init.
+        let vert_bytes = match ctx.read_payload(&vert_locator) {
+            Ok(b) => b.to_vec(),
+            Err(e) => {
+                tracing::error!("GraphicsSystem: failed to read vertex shader: {:?}", e);
+                self.failed = true;
+                return None;
+            }
+        };
+        let frag_bytes = match ctx.read_payload(&frag_locator) {
+            Ok(b) => b.to_vec(),
+            Err(e) => {
+                tracing::error!("GraphicsSystem: failed to read fragment shader: {:?}", e);
+                self.failed = true;
+                return None;
+            }
+        };
+
+        // The DirectX backend engages its bindless main pass only when the
+        // main-shader override is empty (it then uses its embedded bindless
+        // pipeline + the embedded default for any legacy/streamed fallback). The
+        // built-in default ShaderStage compiles to non-empty DXBC, which would
+        // pin every built-in world to the legacy per-draw path. When the world's
+        // main shader IS the built-in default, hand DX empty bytes so it takes
+        // the bindless path, matching Vulkan (whose default payload is already
+        // empty) and Metal (whose `default.metal` drives its own bindless pass).
+        // Custom-shader worlds keep their compiled bytes and the legacy path.
+        // Metal loads its metallib from these bytes, so it is left untouched.
+        #[cfg(backend_dx)]
+        let (vert_bytes, frag_bytes) = {
+            let is_builtin_main = |src: Option<String>| {
+                matches!(
+                    src.as_deref(),
+                    Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
+                )
+            };
+            if is_builtin_main(vert_shader.current_platform_source())
+                && is_builtin_main(frag_shader.current_platform_source())
+            {
+                (Vec::new(), Vec::new())
+            } else {
+                (vert_bytes, frag_bytes)
+            }
+        };
+        // The shadow shader is engine-internal now (compiled from
+        // `shadow_map.metal`), so there is no per-world shadow payload. The
+        // DX / Vulkan constructors still take a shadow byte slice pending their
+        // own internal-shadow migration; Metal ignores it.
+        let shadow_bytes: Vec<u8> = Vec::new();
+        let vert_instanced_bytes = if let Some(ref locator) = vert_instanced_locator {
+            match ctx.read_payload(locator) {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: failed to read instanced vertex shader: {:?}",
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        Some(DecodedShaders {
+            vert_locator,
+            frag_locator,
+            vert_instanced_locator,
+            source_map: shader_stage_source_map,
+            vert_bytes,
+            frag_bytes,
+            shadow_bytes,
+            vert_instanced_bytes,
+        })
+    }
+
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         let ResolvedRenderConfig {
             post,
@@ -1400,103 +1599,19 @@ impl GraphicsSystem {
             }
         };
 
-        let mut shaders = ctx.drain::<ShaderStage>();
-        let find_shader = |shaders: &mut Vec<ShaderStage>, kind: ShaderKind| {
-            shaders
-                .iter()
-                .position(|s| s.kind == kind)
-                .map(|i| shaders.remove(i))
+        let DecodedShaders {
+            vert_locator,
+            frag_locator,
+            vert_instanced_locator,
+            source_map: shader_stage_source_map,
+            vert_bytes,
+            frag_bytes,
+            shadow_bytes,
+            vert_instanced_bytes,
+        } = match self.decode_shaders(ctx) {
+            Some(decoded) => decoded,
+            None => return,
         };
-
-        let vert_instanced_shader = find_shader(&mut shaders, ShaderKind::VertexInstanced);
-
-        let vert_shader = match find_shader(&mut shaders, ShaderKind::Vertex) {
-            Some(s) => s,
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: no vertex ShaderStage found -- add one to world.jsonl"
-                );
-                self.failed = true;
-                return;
-            }
-        };
-        let frag_shader = match find_shader(&mut shaders, ShaderKind::Fragment) {
-            Some(s) => s,
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: no fragment ShaderStage found -- add one to world.jsonl"
-                );
-                self.failed = true;
-                return;
-            }
-        };
-
-        let vert_locator = match &vert_shader.locator {
-            Some(l) => l.clone(),
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: vertex ShaderStage '{}' has no compiled payload",
-                    vert_shader.source
-                );
-                self.failed = true;
-                return;
-            }
-        };
-        let frag_locator = match &frag_shader.locator {
-            Some(l) => l.clone(),
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: fragment ShaderStage '{}' has no compiled payload",
-                    frag_shader.source
-                );
-                self.failed = true;
-                return;
-            }
-        };
-
-        // instanced vertex shader is optional; required only when at least
-        // one InstancedProp is in the world (which we don't know yet).
-        let vert_instanced_locator = vert_instanced_shader
-            .as_ref()
-            .and_then(|s| s.locator.clone());
-
-        // Capture every world-loaded ShaderStage's resolved on-disk source
-        // path so the asset hot-reload watcher can recompile + rebuild
-        // pipelines on a `.metal` / `.hlsl` / `.glsl` save. Stages whose
-        // current-platform source is the embedded GLSL fallback (or whose
-        // declaration uses a non-platform-compatible extension) carry no
-        // file to watch and are skipped; the inline GLSL path keeps
-        // rendering at whatever was baked in.
-        let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
-        if crate::app::dev_flags::enabled() {
-            let mut capture = |stage_opt: Option<&ShaderStage>, kind: ShaderKind| {
-                let Some(stage) = stage_opt else {
-                    return;
-                };
-                let Some(raw) = stage.current_platform_source() else {
-                    return;
-                };
-                // Engine-bundled built-ins are served from `include_str!`-baked
-                // source by `concinnity_cook::shader::compile_shader`, not from
-                // disk, and a separate watcher in `crate::metal::hot_reload`
-                // already covers them via `src/metal/shaders/`. Skip them
-                // here so the asset watcher does not redundantly subscribe to
-                // a path it cannot meaningfully reload.
-                if crate::build::shader::builtin_shader_source(&raw).is_some() {
-                    return;
-                }
-                let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
-                shader_stage_source_map.entries.push(
-                    super::hot_reload_sources::ShaderStageSourceEntry {
-                        kind,
-                        resolved_path: resolved,
-                    },
-                );
-            };
-            capture(Some(&vert_shader), ShaderKind::Vertex);
-            capture(Some(&frag_shader), ShaderKind::Fragment);
-            capture(vert_instanced_shader.as_ref(), ShaderKind::VertexInstanced);
-        }
 
         // Read the shared texture pool + the material table into the maps the
         // draw list resolves against. `capture_sources` (cn debug) also gathers
@@ -1535,71 +1650,6 @@ impl GraphicsSystem {
         ) {
             Some(assembly) => assembly,
             None => return,
-        };
-
-        // read all payloads before releasing -- they may share a blob
-        let vert_bytes = match ctx.read_payload(&vert_locator) {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read vertex shader: {:?}", e);
-                self.failed = true;
-                return;
-            }
-        };
-        let frag_bytes = match ctx.read_payload(&frag_locator) {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read fragment shader: {:?}", e);
-                self.failed = true;
-                return;
-            }
-        };
-
-        // The DirectX backend engages its bindless main pass only when the
-        // main-shader override is empty (it then uses its embedded bindless
-        // pipeline + the embedded default for any legacy/streamed fallback). The
-        // built-in default ShaderStage compiles to non-empty DXBC, which would
-        // pin every built-in world to the legacy per-draw path. When the world's
-        // main shader IS the built-in default, hand DX empty bytes so it takes
-        // the bindless path, matching Vulkan (whose default payload is already
-        // empty) and Metal (whose `default.metal` drives its own bindless pass).
-        // Custom-shader worlds keep their compiled bytes and the legacy path.
-        // Metal loads its metallib from these bytes, so it is left untouched.
-        #[cfg(backend_dx)]
-        let (vert_bytes, frag_bytes) = {
-            let is_builtin_main = |src: Option<String>| {
-                matches!(
-                    src.as_deref(),
-                    Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
-                )
-            };
-            if is_builtin_main(vert_shader.current_platform_source())
-                && is_builtin_main(frag_shader.current_platform_source())
-            {
-                (Vec::new(), Vec::new())
-            } else {
-                (vert_bytes, frag_bytes)
-            }
-        };
-        // The shadow shader is engine-internal now (compiled from
-        // `shadow_map.metal`), so there is no per-world shadow payload. The
-        // DX / Vulkan constructors still take a shadow byte slice pending their
-        // own internal-shadow migration; Metal ignores it.
-        let shadow_bytes: Vec<u8> = Vec::new();
-        let vert_instanced_bytes = if let Some(ref locator) = vert_instanced_locator {
-            match ctx.read_payload(locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read instanced vertex shader: {:?}",
-                        e
-                    );
-                    self.failed = true;
-                    return;
-                }
-            }
-        } else {
-            Vec::new()
         };
 
         let mut texture_data: Vec<crate::build::texture::TextureImage> = Vec::new();
