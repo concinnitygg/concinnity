@@ -3797,9 +3797,8 @@ fn tree_row_click_selects_and_opens_the_form() {
     );
 }
 
-// The row eye and the menu's Lock are editor-session state: they flip the
-// hook's sets (the hidden set publishing as ids each tick) and never touch the
-// entries.
+// The row eye and lock are editor-session state: they flip the hook's sets (the
+// hidden set publishing as ids each tick) and never touch the entries.
 #[test]
 fn hide_and_lock_are_session_state_not_edits() {
     crate::ecs::asset_id::reset_interner();
@@ -3811,11 +3810,9 @@ fn hide_and_lock_are_session_state_not_edits() {
     let (g, i) = row_of(&h, "box");
 
     h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
-    h.apply_panel(PanelAction::RowToggleLock, &mut world);
+    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
     assert!(h.hidden_assets.contains("box"));
     assert!(h.locked_assets.contains("box"));
-    assert!(h.row_menu.is_none(), "picking Lock closes the menu");
     assert!(!h.dirty, "session toggles are not authored edits");
 
     h.tick(&mut world);
@@ -3825,8 +3822,7 @@ fn hide_and_lock_are_session_state_not_edits() {
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 
     h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
-    h.apply_panel(PanelAction::RowToggleLock, &mut world);
+    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
     assert!(h.hidden_assets.is_empty() && h.locked_assets.is_empty());
 }
 
