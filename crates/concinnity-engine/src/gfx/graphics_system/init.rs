@@ -19,8 +19,52 @@ use std::time::Instant;
 use super::helpers::*;
 use super::*;
 
+// The resolved render settings the rest of init consumes after
+// `init_render_settings` has written the remaining values onto the
+// GraphicsSystem: the packed post-processing config handed to the backend ctor,
+// the quality ceiling (planar-reflection budget), and the drained StreamingConfig.
+struct ResolvedRenderConfig {
+    post: crate::gfx::backend_init::PostSettings,
+    quality_ceiling: crate::gfx::quality_preset::QualityCeiling,
+    streaming_config: Option<StreamingConfig>,
+    // Raw world ambient (PostProcessConfig::ambient_intensity, no user override),
+    // folded into the static LightUniforms built later in init.
+    world_ambient_intensity: f32,
+}
+
+// Decoded geometry for one SkinnedMesh, produced in the order cook assigned
+// handles (the table index IS the `SkinnedMeshHandle` keying the animation
+// correlation web): its handle, interned name id, the baked mesh, its vertices,
+// LOD0 indices, the bind-pose joint defs, its morph targets, and LOD alternates.
+struct SkinnedGeometry {
+    handle: crate::ecs::SkinnedMeshHandle,
+    name_id: AssetId,
+    mesh: crate::assets::SkinnedMesh,
+    vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
+    indices: Vec<u16>,
+    joint_defs: Vec<crate::assets::JointDef>,
+    morphs: crate::gfx::mesh_payload::PayloadMorphs,
+    lod_alternates: Vec<(f32, Vec<u16>)>,
+}
+
+// One skinned mesh's skeleton bookkeeping, driving the SkeletonPose +
+// CharacterRig publish after the geometry upload. `template_index` is recorded
+// explicitly rather than inferred from position because pre-reserved instance
+// copies interleave the draw-object list (template, copies, template, ...).
+struct SkinnedSkeletonEntry {
+    handle: crate::ecs::SkinnedMeshHandle,
+    name_id: AssetId,
+    template_index: usize,
+    skeleton: skinning::Skeleton,
+    model: [[f32; 4]; 4],
+    capsule: Option<crate::assets::CharacterCapsule>,
+}
+
 impl GraphicsSystem {
-    pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
+    // Resolve every render setting (window, quality preset + ceiling, post-process
+    // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
+    // settings-menu value labels, and return the config the rest of init needs.
+    fn init_render_settings(&mut self, ctx: &mut PipelineContext) -> ResolvedRenderConfig {
         // Persisted settings-menu choices override the world's authored defaults
         // below (each field is None when the user never changed that setting).
         let user_graphics = self.persisted_settings().graphics;
@@ -667,6 +711,142 @@ impl GraphicsSystem {
         // settings row. Honoured by the DirectX and Vulkan backends (FSR3 / DLSS /
         // XeSS); Metal always uses MetalFX, so it ignores the selector.
         let upscale_backend = self.upscale_backend;
+
+        let post = crate::gfx::backend_init::PostSettings {
+            post_process,
+            taa_enabled,
+            ssao: ssao_settings,
+            ssr: ssr_settings,
+            ssgi: ssgi_settings,
+            rt_reflections: rt_reflection_settings,
+            reflection_blur_scale,
+            auto_exposure: auto_exposure_settings,
+            auto_exposure_bias_ev,
+            hdr_display,
+            hdr_pq,
+            temporal_upscaling,
+            upscale_scale,
+            upscale_backend,
+            occlusion_two_pass,
+        };
+        ResolvedRenderConfig {
+            post,
+            quality_ceiling,
+            streaming_config,
+            world_ambient_intensity: world_ambient,
+        }
+    }
+
+    // Decode every SkinnedMesh resource-table entry's geometry payload (before
+    // the shared blob is released) into a handle-ordered table, and publish the
+    // name -> handle index + skin-selector list for the animation systems.
+    // Returns the decoded geometry and the blob indices its payloads occupy (for
+    // the release step), or None if any entry's baked data or payload is missing
+    // or malformed (self.failed already set).
+    fn decode_skinned_geometry(
+        &mut self,
+        ctx: &mut PipelineContext,
+    ) -> Option<(Vec<SkinnedGeometry>, Vec<u32>)> {
+        // Load the SkinnedMesh resource table and decode each entry's geometry
+        // payload now, before the shared blob is released. The placement,
+        // material references, capsule, and spawn reserve travel in the baked
+        // `data_bytes`; the vertex/index geometry + skeleton in the compiled
+        // payload. The table index IS the mesh's `SkinnedMeshHandle`, which keys
+        // the whole animation correlation web.
+        let skinned_table = ctx
+            .resource::<crate::resource::SkinnedMeshTable>()
+            .cloned()
+            .unwrap_or_default();
+        let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
+        let mut skinned_blob_indices: Vec<u32> = Vec::new();
+        // Interned name -> handle, published for the debug WS animation
+        // commands, which address a mesh by its typed name.
+        let mut skinned_name_index: std::collections::HashMap<
+            AssetId,
+            crate::ecs::SkinnedMeshHandle,
+        > = std::collections::HashMap::new();
+        for (handle, entry) in skinned_table.0.iter().enumerate() {
+            let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
+            let (name_id, sm): (u32, crate::assets::SkinnedMesh) =
+                match postcard::from_bytes(&entry.data_bytes) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!(
+                            "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
+                            handle.index(),
+                            e
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                };
+            let name_id = AssetId(name_id);
+            skinned_name_index.insert(name_id, handle);
+            let locator = match &entry.payload {
+                Some(l) => l.clone(),
+                None => {
+                    tracing::error!(
+                        "GraphicsSystem: SkinnedMesh handle {} has no compiled payload",
+                        handle.index()
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            skinned_blob_indices.push(locator.blob_index);
+            let bytes = match ctx.read_payload(&locator) {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {:?}",
+                        handle.index(),
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            match crate::gfx::mesh_payload::deserialise_skinned_with_lods(&bytes) {
+                Ok(p) => {
+                    let joint_defs = crate::geometry::payload_joints_to_defs(p.joints);
+                    skinned_geometry.push(SkinnedGeometry {
+                        handle,
+                        name_id,
+                        mesh: sm,
+                        vertices: p.vertices,
+                        indices: p.indices,
+                        joint_defs,
+                        morphs: p.morphs,
+                        lod_alternates: p.lods,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+        // Publish the name index before AnimationSystem inits (it runs after
+        // GraphicsSystem) so debug WS animation commands can resolve a typed
+        // mesh name to the handle keying the correlation web. The skin
+        // selectors ride along for the animation reload catalogue.
+        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
+            skinned_name_index,
+        ));
+        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex(
+            skinned_geometry.iter().map(|g| g.mesh.skin_index).collect(),
+        ));
+        Some((skinned_geometry, skinned_blob_indices))
+    }
+
+    pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
+        let ResolvedRenderConfig {
+            post,
+            quality_ceiling,
+            streaming_config,
+            world_ambient_intensity,
+        } = self.init_render_settings(ctx);
         // Infinite-world chunk streaming. The first declared VoxelWorld wins;
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
@@ -714,102 +894,10 @@ impl GraphicsSystem {
                 }
             };
 
-        // Load the SkinnedMesh resource table and decode each entry's geometry
-        // payload now, before the shared blob is released. The placement,
-        // material references, capsule, and spawn reserve travel in the baked
-        // `data_bytes`; the vertex/index geometry + skeleton in the compiled
-        // payload. The table index IS the mesh's `SkinnedMeshHandle`, which keys
-        // the whole animation correlation web.
-        // Decoded geometry for one SkinnedMesh: its handle, interned name id,
-        // the baked data, its vertices, LOD0 indices, the bind-pose skeleton,
-        // its morph targets, and LOD alternates.
-        type SkinnedGeometry = (
-            crate::ecs::SkinnedMeshHandle,
-            AssetId,
-            crate::assets::SkinnedMesh,
-            Vec<crate::gfx::mesh_payload::SkinnedVertex>,
-            Vec<u16>,
-            Vec<crate::assets::JointDef>,
-            crate::gfx::mesh_payload::PayloadMorphs,
-            Vec<(f32, Vec<u16>)>,
-        );
-        let skinned_table = ctx
-            .resource::<crate::resource::SkinnedMeshTable>()
-            .cloned()
-            .unwrap_or_default();
-        let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
-        let mut skinned_blob_indices: Vec<u32> = Vec::new();
-        // Interned name -> handle, published for the debug WS animation
-        // commands, which address a mesh by its typed name.
-        let mut skinned_name_index: std::collections::HashMap<
-            AssetId,
-            crate::ecs::SkinnedMeshHandle,
-        > = std::collections::HashMap::new();
-        for (handle, entry) in skinned_table.0.iter().enumerate() {
-            let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
-            let (name_id, sm): (u32, crate::assets::SkinnedMesh) =
-                match postcard::from_bytes(&entry.data_bytes) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
-                            handle.index(),
-                            e
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                };
-            let name_id = AssetId(name_id);
-            skinned_name_index.insert(name_id, handle);
-            let locator = match &entry.payload {
-                Some(l) => l.clone(),
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: SkinnedMesh handle {} has no compiled payload",
-                        handle.index()
-                    );
-                    self.failed = true;
-                    return;
-                }
-            };
-            skinned_blob_indices.push(locator.blob_index);
-            let bytes = match ctx.read_payload(&locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {:?}",
-                        handle.index(),
-                        e
-                    );
-                    self.failed = true;
-                    return;
-                }
-            };
-            match crate::gfx::mesh_payload::deserialise_skinned_with_lods(&bytes) {
-                Ok(p) => {
-                    let skeleton = crate::geometry::payload_joints_to_defs(p.joints);
-                    skinned_geometry.push((
-                        handle, name_id, sm, p.vertices, p.indices, skeleton, p.morphs, p.lods,
-                    ));
-                }
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
-                    self.failed = true;
-                    return;
-                }
-            }
-        }
-        // Publish the name index before AnimationSystem inits (it runs after
-        // GraphicsSystem) so debug WS animation commands can resolve a typed
-        // mesh name to the handle keying the correlation web. The skin
-        // selectors ride along for the animation reload catalogue.
-        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
-            skinned_name_index,
-        ));
-        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex(
-            skinned_geometry.iter().map(|g| g.2.skin_index).collect(),
-        ));
+        let (skinned_geometry, skinned_blob_indices) = match self.decode_skinned_geometry(ctx) {
+            Some(decoded) => decoded,
+            None => return,
+        };
 
         // drain Model components into a name-keyed map for Prop lookup
         let models = ctx.drain::<Model>();
@@ -1172,20 +1260,6 @@ impl GraphicsSystem {
         let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
         // One entry per authored skinned mesh: its handle, interned name id,
         // the skinned index of its (visible) template draw object, and its
-        // bind-pose skeleton. The template index is recorded explicitly rather
-        // than inferred from position because pre-reserved instance copies
-        // interleave the draw-object list (template, copies, template, ...).
-        // (handle, name id, draw index, skeleton, authored model, optional
-        // capsule) per skinned mesh; drives the SkeletonPose + CharacterRig
-        // publish after the geometry upload below.
-        type SkinnedSkeletonEntry = (
-            crate::ecs::SkinnedMeshHandle,
-            AssetId,
-            usize,
-            skinning::Skeleton,
-            [[f32; 4]; 4],
-            Option<crate::assets::CharacterCapsule>,
-        );
         let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
         // `(template_index, instance_index)` pairs seeding the backend skinned
         // instance pool: each instance is a hidden bind-pose copy reserved from
@@ -1201,7 +1275,17 @@ impl GraphicsSystem {
         // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
         // fan-out), so one entry per asset.
         let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
-        for (handle, name_id, sm, verts, idxs, joint_defs, morphs, lod_alts) in &skinned_geometry {
+        for SkinnedGeometry {
+            handle,
+            name_id,
+            mesh: sm,
+            vertices: verts,
+            indices: idxs,
+            joint_defs,
+            morphs,
+            lod_alternates: lod_alts,
+        } in &skinned_geometry
+        {
             let (texture_slot, normal_map_slot, material) =
                 match crate::gfx::draw_list::resolve_material_slots(
                     sm.material,
@@ -1352,14 +1436,14 @@ impl GraphicsSystem {
                 skinned_pool_reservations.push((skinned_index, copy_skinned_index));
             }
 
-            skinned_skeletons.push((
-                *handle,
-                *name_id,
-                skinned_index,
+            skinned_skeletons.push(SkinnedSkeletonEntry {
+                handle: *handle,
+                name_id: *name_id,
+                template_index: skinned_index,
                 skeleton,
-                sm.model_matrix(),
-                sm.capsule.clone(),
-            ));
+                model: sm.model_matrix(),
+                capsule: sm.capsule.clone(),
+            });
         }
 
         // read all payloads before releasing -- they may share a blob
@@ -1674,10 +1758,7 @@ impl GraphicsSystem {
         // Indirect-ambient multiplier from PostProcessConfig, folded into the
         // shared LightUniforms so every backend's main pass scales its IBL /
         // flat-fallback ambient by it. 1.0 (the default) is a no-op.
-        let ambient_intensity = post_config
-            .as_ref()
-            .map(|c| c.ambient_intensity())
-            .unwrap_or(1.0);
+        let ambient_intensity = world_ambient_intensity;
         // Lights are read, not drained: the GPU-side light data stays static
         // (built once here), but the components keep their entities so editor
         // tooling can address the authored lights by name.
@@ -2196,7 +2277,7 @@ impl GraphicsSystem {
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the compile-time-selected backend.
         use crate::gfx::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
+            BackendInit, MediaPayloads, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
         let mut backend_init = BackendInit {
             window: &self.window_args,
@@ -2241,23 +2322,7 @@ impl GraphicsSystem {
             },
             anisotropy: self.anisotropy,
             planar_planes: planar_reflection_planes,
-            post: PostSettings {
-                post_process,
-                taa_enabled,
-                ssao: ssao_settings,
-                ssr: ssr_settings,
-                ssgi: ssgi_settings,
-                rt_reflections: rt_reflection_settings,
-                reflection_blur_scale,
-                auto_exposure: auto_exposure_settings,
-                auto_exposure_bias_ev,
-                hdr_display,
-                hdr_pq,
-                temporal_upscaling,
-                upscale_scale,
-                upscale_backend,
-                occlusion_two_pass,
-            },
+            post,
             fx: WorldFx {
                 decals: decal_records,
                 particles: particle_records,
@@ -2496,7 +2561,15 @@ impl GraphicsSystem {
                 backend.seed_skinned_instance_pool(std::mem::take(&mut skinned_pool_reservations));
             }
             let skinned_count = skinned_skeletons.len();
-            for (handle, name_id, template_index, skeleton, model, capsule) in skinned_skeletons {
+            for SkinnedSkeletonEntry {
+                handle,
+                name_id,
+                template_index,
+                skeleton,
+                model,
+                capsule,
+            } in skinned_skeletons
+            {
                 let entity = ctx.components.spawn();
                 ctx.insert(
                     entity,
