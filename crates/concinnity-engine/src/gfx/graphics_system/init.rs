@@ -60,6 +60,21 @@ struct SkinnedSkeletonEntry {
     capsule: Option<crate::assets::CharacterCapsule>,
 }
 
+// Assembled skinned-mesh GPU inputs from `assemble_skinned_meshes`: the shared
+// skinned vertex/index buffers, the per-slot draw objects (templates + their
+// hidden pre-reserved instance copies), the per-mesh skeleton bookkeeping, the
+// (template, copy) pool reservations, per-slot morph targets, and the hot-reload
+// source map.
+struct SkinnedMeshAssembly {
+    vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
+    indices: Vec<u16>,
+    draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
+    skeletons: Vec<SkinnedSkeletonEntry>,
+    pool_reservations: Vec<(usize, usize)>,
+    morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
+}
+
 impl GraphicsSystem {
     // Resolve every render setting (window, quality preset + ceiling, post-process
     // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
@@ -840,6 +855,220 @@ impl GraphicsSystem {
         Some((skinned_geometry, skinned_blob_indices))
     }
 
+    // Build skinned draw objects, the shared skinned vertex/index buffers, and
+    // bind-pose skeletons from the decoded SkinnedMesh geometry. Runs after the
+    // material map so SkinnedMesh material references resolve. Each mesh also
+    // pre-reserves `max_instances` hidden bind-pose copies for runtime spawns.
+    // Returns None (self.failed set) if a mesh references an unknown material.
+    fn assemble_skinned_meshes(
+        &mut self,
+        skinned_geometry: &[SkinnedGeometry],
+        material_map: &std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>,
+        texture_count: usize,
+        capture_sources: bool,
+    ) -> Option<SkinnedMeshAssembly> {
+        let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
+        let mut skinned_indices: Vec<u16> = Vec::new();
+        let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
+        // One entry per authored skinned mesh: its handle, interned name id,
+        // the skinned index of its (visible) template draw object, and its
+        let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
+        // `(template_index, instance_index)` pairs seeding the backend skinned
+        // instance pool: each instance is a hidden bind-pose copy reserved from
+        // SkinnedMesh.max_instances.
+        let mut skinned_pool_reservations: Vec<(usize, usize)> = Vec::new();
+        // Morph-target data per skinned draw object; instance copies share
+        // their template's data through the Arc.
+        let mut skinned_morphs: Vec<
+            Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>,
+        > = Vec::new();
+        // Asset hot-reload (`cn debug` only) needs the per-slot vertex region
+        // + joint count so it can reject size + shape changes before pushing
+        // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
+        // fan-out), so one entry per asset.
+        let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
+        for SkinnedGeometry {
+            handle,
+            name_id,
+            mesh: sm,
+            vertices: verts,
+            indices: idxs,
+            joint_defs,
+            morphs,
+            lod_alternates: lod_alts,
+        } in skinned_geometry
+        {
+            let (texture_slot, normal_map_slot, material) =
+                match crate::gfx::draw_list::resolve_material_slots(
+                    sm.material,
+                    sm.texture,
+                    material_map,
+                    texture_count,
+                ) {
+                    Ok(entry) => entry,
+                    Err(mat_id) => {
+                        tracing::error!(
+                            "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
+                            name_id,
+                            mat_id.index()
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                };
+
+            let base = skinned_vertices.len() as u16;
+            let index_offset = skinned_indices.len();
+            skinned_vertices.extend_from_slice(verts);
+            skinned_indices.extend(idxs.iter().map(|i| i + base));
+
+            // LOD alternates share this slot's vertex region. The runtime
+            // skinned IB is u16, so each alternate's mesh-relative indices
+            // are rebased onto the same `base` as LOD0, identical to how
+            // the shadow / velocity / SSAO / SSR pre-passes already consume
+            // the IB.
+            let mut lod_slices: Vec<crate::gfx::render_types::LodSlice> =
+                Vec::with_capacity(lod_alts.len());
+            for (switch_distance, alt_idx) in lod_alts {
+                let alt_offset = skinned_indices.len();
+                skinned_indices.extend(alt_idx.iter().map(|i| i + base));
+                lod_slices.push(crate::gfx::render_types::LodSlice {
+                    index_offset: alt_offset,
+                    index_count: alt_idx.len(),
+                    switch_distance: *switch_distance,
+                });
+            }
+
+            let skeleton = crate::assets::build_skeleton_from_joint_defs(joint_defs);
+            let joint_count = skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
+
+            // Bind-pose (object-space) AABB over this mesh's vertices. The
+            // GPU-driven skinned fold pads + transforms it per frame for culling.
+            let (local_bb_min, local_bb_max) = if verts.is_empty() {
+                ([0.0; 3], [0.0; 3])
+            } else {
+                let mut lo = [f32::INFINITY; 3];
+                let mut hi = [f32::NEG_INFINITY; 3];
+                for v in verts.iter() {
+                    for a in 0..3 {
+                        lo[a] = lo[a].min(v.pos[a]);
+                        hi[a] = hi[a].max(v.pos[a]);
+                    }
+                }
+                (lo, hi)
+            };
+
+            let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
+            let skinned_index = skinned_draw_objects.len();
+            skinned_morphs.push(mesh_morphs.clone());
+            skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
+                vertex_base: base,
+                vertex_count: verts.len(),
+                index_offset,
+                index_count: idxs.len(),
+                model: sm.model_matrix(),
+                texture_slot,
+                normal_map_slot,
+                material,
+                visible: true,
+                joint_count,
+                local_bb_min,
+                local_bb_max,
+                lod_alternates: lod_slices,
+            });
+            if capture_sources && !sm.source.is_empty() {
+                skinned_mesh_source_map.entries.push(
+                    super::hot_reload_sources::SkinnedMeshSourceEntry {
+                        source: sm.source.clone(),
+                        skin_index: sm.skin_index,
+                        skinned_index,
+                        vertex_base: base,
+                        vertex_count: verts.len(),
+                        index_count: idxs.len(),
+                        joint_count,
+                    },
+                );
+            }
+            // Pre-reserve runtime spawn copies: append `max_instances` hidden
+            // bind-pose duplicates of this mesh, each with its OWN vertex region
+            // in the shared skinned buffer. They must not share a region because
+            // the GPU skin fold writes the deformed buffer keyed by global vertex
+            // index, so two live instances at one region would clobber each
+            // other's pose. A runtime skinned spawn reveals one of these without
+            // growing any GPU buffer; a despawn returns it to the pool.
+            for _ in 0..sm.max_instances {
+                // The shared skinned index buffer is u16, so a copy's vertex
+                // region must fit there. Stop reserving (and warn) once the next
+                // copy would overflow rather than truncating into a neighbour.
+                let copy_base_usize = skinned_vertices.len();
+                if copy_base_usize + verts.len() > u16::MAX as usize + 1 {
+                    let reserved = skinned_draw_objects.len() - skinned_index - 1;
+                    tracing::warn!(
+                        "GraphicsSystem: SkinnedMesh '{}' reserved {} of {} requested instances; \
+                         the u16-indexed skinned vertex buffer is full",
+                        name_id,
+                        reserved,
+                        sm.max_instances
+                    );
+                    break;
+                }
+                let copy_base = copy_base_usize as u16;
+                let copy_index_offset = skinned_indices.len();
+                skinned_vertices.extend_from_slice(verts);
+                skinned_indices.extend(idxs.iter().map(|i| i + copy_base));
+                let mut copy_lods: Vec<crate::gfx::render_types::LodSlice> =
+                    Vec::with_capacity(lod_alts.len());
+                for (switch_distance, alt_idx) in lod_alts {
+                    let alt_offset = skinned_indices.len();
+                    skinned_indices.extend(alt_idx.iter().map(|i| i + copy_base));
+                    copy_lods.push(crate::gfx::render_types::LodSlice {
+                        index_offset: alt_offset,
+                        index_count: alt_idx.len(),
+                        switch_distance: *switch_distance,
+                    });
+                }
+                let copy_skinned_index = skinned_draw_objects.len();
+                skinned_morphs.push(mesh_morphs.clone());
+                skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
+                    vertex_base: copy_base,
+                    vertex_count: verts.len(),
+                    index_offset: copy_index_offset,
+                    index_count: idxs.len(),
+                    model: sm.model_matrix(),
+                    texture_slot,
+                    normal_map_slot,
+                    material,
+                    // Hidden until a runtime spawn claims it.
+                    visible: false,
+                    joint_count,
+                    local_bb_min,
+                    local_bb_max,
+                    lod_alternates: copy_lods,
+                });
+                skinned_pool_reservations.push((skinned_index, copy_skinned_index));
+            }
+
+            skinned_skeletons.push(SkinnedSkeletonEntry {
+                handle: *handle,
+                name_id: *name_id,
+                template_index: skinned_index,
+                skeleton,
+                model: sm.model_matrix(),
+                capsule: sm.capsule.clone(),
+            });
+        }
+
+        Some(SkinnedMeshAssembly {
+            vertices: skinned_vertices,
+            indices: skinned_indices,
+            draw_objects: skinned_draw_objects,
+            skeletons: skinned_skeletons,
+            pool_reservations: skinned_pool_reservations,
+            morphs: skinned_morphs,
+            source_map: skinned_mesh_source_map,
+        })
+    }
+
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         let ResolvedRenderConfig {
             post,
@@ -1255,196 +1484,23 @@ impl GraphicsSystem {
         // Build skinned draw objects, the shared skinned vertex/index buffers,
         // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
         // after the material map so SkinnedMesh material references resolve.
-        let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
-        let mut skinned_indices: Vec<u16> = Vec::new();
-        let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
-        // One entry per authored skinned mesh: its handle, interned name id,
-        // the skinned index of its (visible) template draw object, and its
-        let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
-        // `(template_index, instance_index)` pairs seeding the backend skinned
-        // instance pool: each instance is a hidden bind-pose copy reserved from
-        // SkinnedMesh.max_instances.
-        let mut skinned_pool_reservations: Vec<(usize, usize)> = Vec::new();
-        // Morph-target data per skinned draw object; instance copies share
-        // their template's data through the Arc.
-        let mut skinned_morphs: Vec<
-            Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>,
-        > = Vec::new();
-        // Asset hot-reload (`cn debug` only) needs the per-slot vertex region
-        // + joint count so it can reject size + shape changes before pushing
-        // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
-        // fan-out), so one entry per asset.
-        let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
-        for SkinnedGeometry {
-            handle,
-            name_id,
-            mesh: sm,
-            vertices: verts,
-            indices: idxs,
-            joint_defs,
-            morphs,
-            lod_alternates: lod_alts,
-        } in &skinned_geometry
-        {
-            let (texture_slot, normal_map_slot, material) =
-                match crate::gfx::draw_list::resolve_material_slots(
-                    sm.material,
-                    sm.texture,
-                    &material_map,
-                    texture_count,
-                ) {
-                    Ok(entry) => entry,
-                    Err(mat_id) => {
-                        tracing::error!(
-                            "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                            name_id,
-                            mat_id.index()
-                        );
-                        self.failed = true;
-                        return;
-                    }
-                };
-
-            let base = skinned_vertices.len() as u16;
-            let index_offset = skinned_indices.len();
-            skinned_vertices.extend_from_slice(verts);
-            skinned_indices.extend(idxs.iter().map(|i| i + base));
-
-            // LOD alternates share this slot's vertex region. The runtime
-            // skinned IB is u16, so each alternate's mesh-relative indices
-            // are rebased onto the same `base` as LOD0, identical to how
-            // the shadow / velocity / SSAO / SSR pre-passes already consume
-            // the IB.
-            let mut lod_slices: Vec<crate::gfx::render_types::LodSlice> =
-                Vec::with_capacity(lod_alts.len());
-            for (switch_distance, alt_idx) in lod_alts {
-                let alt_offset = skinned_indices.len();
-                skinned_indices.extend(alt_idx.iter().map(|i| i + base));
-                lod_slices.push(crate::gfx::render_types::LodSlice {
-                    index_offset: alt_offset,
-                    index_count: alt_idx.len(),
-                    switch_distance: *switch_distance,
-                });
-            }
-
-            let skeleton = crate::assets::build_skeleton_from_joint_defs(joint_defs);
-            let joint_count = skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
-
-            // Bind-pose (object-space) AABB over this mesh's vertices. The
-            // GPU-driven skinned fold pads + transforms it per frame for culling.
-            let (local_bb_min, local_bb_max) = if verts.is_empty() {
-                ([0.0; 3], [0.0; 3])
-            } else {
-                let mut lo = [f32::INFINITY; 3];
-                let mut hi = [f32::NEG_INFINITY; 3];
-                for v in verts.iter() {
-                    for a in 0..3 {
-                        lo[a] = lo[a].min(v.pos[a]);
-                        hi[a] = hi[a].max(v.pos[a]);
-                    }
-                }
-                (lo, hi)
-            };
-
-            let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
-            let skinned_index = skinned_draw_objects.len();
-            skinned_morphs.push(mesh_morphs.clone());
-            skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
-                vertex_base: base,
-                vertex_count: verts.len(),
-                index_offset,
-                index_count: idxs.len(),
-                model: sm.model_matrix(),
-                texture_slot,
-                normal_map_slot,
-                material,
-                visible: true,
-                joint_count,
-                local_bb_min,
-                local_bb_max,
-                lod_alternates: lod_slices,
-            });
-            if capture_sources && !sm.source.is_empty() {
-                skinned_mesh_source_map.entries.push(
-                    super::hot_reload_sources::SkinnedMeshSourceEntry {
-                        source: sm.source.clone(),
-                        skin_index: sm.skin_index,
-                        skinned_index,
-                        vertex_base: base,
-                        vertex_count: verts.len(),
-                        index_count: idxs.len(),
-                        joint_count,
-                    },
-                );
-            }
-            // Pre-reserve runtime spawn copies: append `max_instances` hidden
-            // bind-pose duplicates of this mesh, each with its OWN vertex region
-            // in the shared skinned buffer. They must not share a region because
-            // the GPU skin fold writes the deformed buffer keyed by global vertex
-            // index, so two live instances at one region would clobber each
-            // other's pose. A runtime skinned spawn reveals one of these without
-            // growing any GPU buffer; a despawn returns it to the pool.
-            for _ in 0..sm.max_instances {
-                // The shared skinned index buffer is u16, so a copy's vertex
-                // region must fit there. Stop reserving (and warn) once the next
-                // copy would overflow rather than truncating into a neighbour.
-                let copy_base_usize = skinned_vertices.len();
-                if copy_base_usize + verts.len() > u16::MAX as usize + 1 {
-                    let reserved = skinned_draw_objects.len() - skinned_index - 1;
-                    tracing::warn!(
-                        "GraphicsSystem: SkinnedMesh '{}' reserved {} of {} requested instances; \
-                         the u16-indexed skinned vertex buffer is full",
-                        name_id,
-                        reserved,
-                        sm.max_instances
-                    );
-                    break;
-                }
-                let copy_base = copy_base_usize as u16;
-                let copy_index_offset = skinned_indices.len();
-                skinned_vertices.extend_from_slice(verts);
-                skinned_indices.extend(idxs.iter().map(|i| i + copy_base));
-                let mut copy_lods: Vec<crate::gfx::render_types::LodSlice> =
-                    Vec::with_capacity(lod_alts.len());
-                for (switch_distance, alt_idx) in lod_alts {
-                    let alt_offset = skinned_indices.len();
-                    skinned_indices.extend(alt_idx.iter().map(|i| i + copy_base));
-                    copy_lods.push(crate::gfx::render_types::LodSlice {
-                        index_offset: alt_offset,
-                        index_count: alt_idx.len(),
-                        switch_distance: *switch_distance,
-                    });
-                }
-                let copy_skinned_index = skinned_draw_objects.len();
-                skinned_morphs.push(mesh_morphs.clone());
-                skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
-                    vertex_base: copy_base,
-                    vertex_count: verts.len(),
-                    index_offset: copy_index_offset,
-                    index_count: idxs.len(),
-                    model: sm.model_matrix(),
-                    texture_slot,
-                    normal_map_slot,
-                    material,
-                    // Hidden until a runtime spawn claims it.
-                    visible: false,
-                    joint_count,
-                    local_bb_min,
-                    local_bb_max,
-                    lod_alternates: copy_lods,
-                });
-                skinned_pool_reservations.push((skinned_index, copy_skinned_index));
-            }
-
-            skinned_skeletons.push(SkinnedSkeletonEntry {
-                handle: *handle,
-                name_id: *name_id,
-                template_index: skinned_index,
-                skeleton,
-                model: sm.model_matrix(),
-                capsule: sm.capsule.clone(),
-            });
-        }
+        let SkinnedMeshAssembly {
+            vertices: skinned_vertices,
+            indices: skinned_indices,
+            draw_objects: mut skinned_draw_objects,
+            skeletons: skinned_skeletons,
+            pool_reservations: mut skinned_pool_reservations,
+            morphs: mut skinned_morphs,
+            source_map: skinned_mesh_source_map,
+        } = match self.assemble_skinned_meshes(
+            &skinned_geometry,
+            &material_map,
+            texture_count,
+            capture_sources,
+        ) {
+            Some(assembly) => assembly,
+            None => return,
+        };
 
         // read all payloads before releasing -- they may share a blob
         let vert_bytes = match ctx.read_payload(&vert_locator) {
