@@ -102,6 +102,83 @@ struct DecodedShaders {
     vert_instanced_bytes: Vec<u8>,
 }
 
+// Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
+// streamed mesh, its scoring centre, and its decoded per-mesh geometry copy.
+// The three vecs are column-aligned.
+struct MeshStreamData {
+    draw_indices: Vec<usize>,
+    centers: Vec<Vec<[f32; 3]>>,
+    payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
+}
+
+// Per-texture-slot draw positions for the streaming scorer, which ranks each
+// texture by the camera's distance to the nearest draw that samples it. Albedo
+// and normal maps share one pool, so a draw contributes its position to both the
+// slot it samples as albedo and the one it samples as a normal map
+// (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither). `texture_count`
+// sizes the outer vec so every pool slot has an entry.
+fn texture_stream_centers(
+    draw_objects: &[crate::gfx::render_types::DrawObject],
+    texture_count: usize,
+) -> Vec<Vec<[f32; 3]>> {
+    let mut centers = vec![Vec::new(); texture_count];
+    for obj in draw_objects {
+        let pos = draw_object_position(obj);
+        if let Some(slot) = centers.get_mut(obj.texture_slot) {
+            slot.push(pos);
+        }
+        if obj.normal_map_slot != crate::gfx::render_types::NO_NORMAL_MAP_SLOT
+            && let Some(slot) = centers.get_mut(obj.normal_map_slot)
+        {
+            slot.push(pos);
+        }
+    }
+    centers
+}
+
+// Per-streamed-mesh data captured before `draw_objects` moves into the backend.
+// Only static, frustum-cullable draws stream; skybox, rooms, and dynamic props
+// (sentinel AABB) stay resident so structural geometry never pops in. Each
+// payload copies the draw's region of the shared vertex/index buffers, scored by
+// its AABB centre; indices are stored mesh-relative and narrowed to u16 (each
+// per-mesh region fits in u16 by the build-time splitter). Draws whose
+// build-time offsets fall out of range are skipped defensively.
+fn mesh_stream_data(
+    draw_objects: &[crate::gfx::render_types::DrawObject],
+    all_vertices: &[Vertex],
+    all_indices: &[u32],
+) -> MeshStreamData {
+    let mut draw_indices: Vec<usize> = Vec::new();
+    let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
+    let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
+    for (draw_idx, obj) in draw_objects.iter().enumerate() {
+        if !obj.cullable() {
+            continue;
+        }
+        let vstart = obj.vertex_offset / std::mem::size_of::<Vertex>();
+        let vend = vstart + obj.vertex_count;
+        let iend = obj.index_offset + obj.index_count;
+        if vend > all_vertices.len() || iend > all_indices.len() {
+            continue;
+        }
+        draw_indices.push(draw_idx);
+        centers.push(vec![draw_object_position(obj)]);
+        let vbase = vstart as u32;
+        payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
+            vertices: all_vertices[vstart..vend].to_vec(),
+            indices: all_indices[obj.index_offset..iend]
+                .iter()
+                .map(|&i| (i - vbase) as u16)
+                .collect(),
+        });
+    }
+    MeshStreamData {
+        draw_indices,
+        centers,
+        payloads,
+    }
+}
+
 impl GraphicsSystem {
     // Resolve every render setting (window, quality preset + ceiling, post-process
     // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
@@ -2099,68 +2176,17 @@ impl GraphicsSystem {
         // A geometry-less world (e.g. text-only) is valid: the backend is
         // initialised with empty geometry buffers and only the text path runs.
 
-        // Per-texture-slot draw positions, captured before `draw_objects` is
-        // moved into the backend. The streaming subsystem scores each texture
-        // by the camera's distance to the nearest draw that samples it. Albedo
-        // and normal maps share one pool, so a draw contributes its position to
-        // both the texture it samples as albedo and the one it samples as a
-        // normal map (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither).
-        let texture_centers: Vec<Vec<[f32; 3]>> = {
-            let mut centers = vec![Vec::new(); texture_data.len()];
-            for obj in &draw_objects {
-                let pos = draw_object_position(obj);
-                if let Some(slot) = centers.get_mut(obj.texture_slot) {
-                    slot.push(pos);
-                }
-                if obj.normal_map_slot != crate::gfx::render_types::NO_NORMAL_MAP_SLOT
-                    && let Some(slot) = centers.get_mut(obj.normal_map_slot)
-                {
-                    slot.push(pos);
-                }
-            }
-            centers
-        };
+        // Per-texture-slot draw positions for the streaming scorer, captured
+        // before `draw_objects` moves into the backend.
+        let texture_centers = texture_stream_centers(&draw_objects, texture_data.len());
 
         // Per-streamed-mesh data, also captured before `draw_objects` moves
-        // into the backend. Only static, frustum-cullable draws stream; skybox,
-        // rooms, and dynamic props (sentinel AABB) stay resident so structural
-        // geometry never pops in. Each payload is a copy of the draw's region
-        // of the shared vertex/index buffers, scored by its AABB centre.
-        let (mesh_stream_draw_indices, mesh_centers, mesh_payloads) = {
-            let mut draw_indices: Vec<usize> = Vec::new();
-            let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
-            let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
-            for (draw_idx, obj) in draw_objects.iter().enumerate() {
-                if !obj.cullable() {
-                    continue;
-                }
-                let vstart = obj.vertex_offset / std::mem::size_of::<Vertex>();
-                let vend = vstart + obj.vertex_count;
-                let iend = obj.index_offset + obj.index_count;
-                if vend > all_vertices.len() || iend > all_indices.len() {
-                    // Build-time offsets should always be in range; skip
-                    // defensively rather than risk an out-of-bounds slice.
-                    continue;
-                }
-                draw_indices.push(draw_idx);
-                centers.push(vec![draw_object_position(obj)]);
-                // Indices are stored mesh-relative (0-based): the sub-allocator
-                // places the mesh's vertices anywhere on upload, and upload_mesh
-                // rebases the indices onto whatever vertex region it chose.
-                // mesh-relative index is global - vbase; each per-mesh region
-                // fits in u16 (the build-time splitter enforces this), so we
-                // narrow back here for DecodedMesh's per-mesh u16 indices.
-                let vbase = vstart as u32;
-                payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
-                    vertices: all_vertices[vstart..vend].to_vec(),
-                    indices: all_indices[obj.index_offset..iend]
-                        .iter()
-                        .map(|&i| (i - vbase) as u16)
-                        .collect(),
-                });
-            }
-            (draw_indices, centers, payloads)
-        };
+        // into the backend.
+        let MeshStreamData {
+            draw_indices: mesh_stream_draw_indices,
+            centers: mesh_centers,
+            payloads: mesh_payloads,
+        } = mesh_stream_data(&draw_objects, &all_vertices, &all_indices);
 
         // Mesh streaming and LOD alternates don't yet cooperate: upload_mesh
         // writes only LOD0 to its newly-allocated region, but obj.lod_alternates
@@ -2991,5 +3017,113 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: &str, text: &str) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
+
+    // A draw over `[vertex_offset (bytes), +vertex_count]` / `[index_offset,
+    // +index_count]` sampling `texture_slot` (+ `normal_map_slot`). A non-cullable
+    // draw carries the NaN sentinel AABB, matching the skybox / dynamic path.
+    fn draw(
+        vertex_offset: usize,
+        vertex_count: usize,
+        index_offset: usize,
+        index_count: usize,
+        texture_slot: usize,
+        normal_map_slot: usize,
+        cullable: bool,
+    ) -> DrawObject {
+        let (bb_min, bb_max) = if cullable {
+            ([0.0; 3], [1.0; 3])
+        } else {
+            ([f32::NAN; 3], [f32::NAN; 3])
+        };
+        DrawObject {
+            vertex_offset,
+            vertex_count,
+            index_offset,
+            index_count,
+            base_vertex: 0,
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            texture_slot,
+            normal_map_slot,
+            material: MaterialUniforms::DEFAULT,
+            visible: true,
+            resident: true,
+            bb_min,
+            bb_max,
+            cull_distance: 0.0,
+            lod_alternates: Vec::new(),
+        }
+    }
+
+    fn vert(x: f32) -> Vertex {
+        Vertex {
+            pos: [x, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            uv: [0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn texture_stream_centers_scores_albedo_and_normal_slots() {
+        // One draw sampling slot 0 as albedo and slot 2 as its normal map.
+        let objs = vec![draw(0, 1, 0, 1, 0, 2, true)];
+        let centers = texture_stream_centers(&objs, 4);
+        assert_eq!(centers.len(), 4);
+        assert_eq!(centers[0].len(), 1);
+        assert_eq!(centers[2].len(), 1);
+        assert!(centers[1].is_empty());
+        assert!(centers[3].is_empty());
+    }
+
+    #[test]
+    fn texture_stream_centers_skips_absent_normal_map() {
+        let objs = vec![draw(0, 1, 0, 1, 1, NO_NORMAL_MAP_SLOT, true)];
+        let centers = texture_stream_centers(&objs, 2);
+        assert_eq!(centers[1].len(), 1);
+        assert!(centers[0].is_empty());
+    }
+
+    #[test]
+    fn mesh_stream_data_includes_cullable_and_narrows_indices_to_u16() {
+        let verts: Vec<Vertex> = (0..4).map(|i| vert(i as f32)).collect();
+        // Global indices into a mesh whose vertex region starts at vertex 2.
+        let indices: Vec<u32> = vec![2, 3, 2];
+        // vertex_offset is a BYTE offset; vertex 2 => 2 * size_of::<Vertex>().
+        let vbyte = 2 * std::mem::size_of::<Vertex>();
+        let objs = vec![draw(vbyte, 2, 0, 3, 0, NO_NORMAL_MAP_SLOT, true)];
+        let data = mesh_stream_data(&objs, &verts, &indices);
+        assert_eq!(data.draw_indices, vec![0]);
+        assert_eq!(data.payloads.len(), 1);
+        assert_eq!(data.payloads[0].vertices.len(), 2);
+        // Global indices 2,3,2 rebased mesh-relative (minus vbase 2): 0,1,0.
+        assert_eq!(data.payloads[0].indices, vec![0u16, 1, 0]);
+    }
+
+    #[test]
+    fn mesh_stream_data_skips_non_cullable_and_out_of_range() {
+        let verts: Vec<Vertex> = (0..2).map(|i| vert(i as f32)).collect();
+        let indices: Vec<u32> = vec![0, 1];
+        let objs = vec![
+            // Non-cullable (NaN AABB): skybox / dynamic, stays resident.
+            draw(0, 2, 0, 2, 0, NO_NORMAL_MAP_SLOT, false),
+            // Cullable but vertex_count overruns the 2-vertex buffer: skipped.
+            draw(0, 5, 0, 2, 0, NO_NORMAL_MAP_SLOT, true),
+        ];
+        let data = mesh_stream_data(&objs, &verts, &indices);
+        assert!(data.draw_indices.is_empty());
+        assert!(data.payloads.is_empty());
     }
 }
