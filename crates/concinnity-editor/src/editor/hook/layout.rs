@@ -57,7 +57,7 @@ impl EditorHook {
     pub(super) fn origin(&self, key: PanelKey, vp: [f32; 2]) -> [f32; 2] {
         let p = registry::panel(key);
         let pos = self.positions[key.index()].unwrap_or_else(|| p.default_origin(vp));
-        widget::clamp_origin(pos, p.size(self), vp)
+        widget::clamp_origin(pos, p.size(self), vp, hud::BAR_H)
     }
 
     // The world-line entries of template `i` (its typed specs via the app bridge).

@@ -35,8 +35,8 @@ pub(crate) const REDO_LABEL: AssetId = AssetId(ID_BASE + 8);
 // the chips sit vertically centered at its right end. On macOS the window's
 // traffic-light buttons float over the bar's left end (the editor drops the OS
 // title bar there), so the bar doubles as their backdrop.
-pub(crate) const BAR_H: f32 = 40.0;
-pub(crate) const BTN_H: f32 = 26.0;
+pub(crate) const BAR_H: f32 = 30.0;
+pub(crate) const BTN_H: f32 = 22.0;
 const SAVE_W: f32 = 64.0;
 const VIEW_W: f32 = 72.0;
 const STEP_W: f32 = 56.0;

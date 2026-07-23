@@ -653,7 +653,8 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     h.tick(&mut world);
     assert_eq!(h.origin(PanelKey::Assets, vp), [390.0, 140.0]);
 
-    // Drag far past the top-left corner: the panel hard-stops at the edge.
+    // Drag far past the top-left corner: the panel hard-stops at the left edge
+    // and at the top bar's lower edge, never sliding under the bar.
     set_input(
         &mut world,
         FrameInput {
@@ -667,8 +668,8 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     h.tick(&mut world);
     assert_eq!(
         h.origin(PanelKey::Assets, vp),
-        [0.0, 0.0],
-        "never partially off screen"
+        [0.0, hud::BAR_H],
+        "never partially off screen or under the top bar"
     );
 
     // Release ends the drag; the panel stays where it was dropped.
@@ -682,7 +683,7 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     );
     h.tick(&mut world);
     assert!(h.drag.is_none(), "release ends the drag");
-    assert_eq!(h.origin(PanelKey::Assets, vp), [0.0, 0.0]);
+    assert_eq!(h.origin(PanelKey::Assets, vp), [0.0, hud::BAR_H]);
 }
 
 // The Preview panel drags by its own title bar, clamped to the window's far

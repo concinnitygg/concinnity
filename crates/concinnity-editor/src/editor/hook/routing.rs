@@ -63,7 +63,7 @@ impl EditorHook {
         }
         let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
         let size = registry::panel(drag.key).size(self);
-        self.positions[drag.key.index()] = Some(widget::clamp_origin(pos, size, vp));
+        self.positions[drag.key.index()] = Some(widget::clamp_origin(pos, size, vp, hud::BAR_H));
     }
 
     // Route a press: the top bar first (it draws over the panels), then the panels

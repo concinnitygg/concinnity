@@ -102,12 +102,19 @@ pub(crate) fn place_close(
     }
 }
 
-// Clamp a dragged panel origin so the whole `size` panel stays on screen: a hard
-// stop at every window edge. A panel larger than the window pins to the top-left.
-pub(crate) fn clamp_origin(pos: [f32; 2], size: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
+// Clamp a dragged panel origin so the whole `size` panel stays on screen below
+// the top bar: a hard stop at every window edge and at `top` (the bar's lower
+// edge), so a panel can never slide under the bar. A panel too large for the
+// region pins to its top-left corner.
+pub(crate) fn clamp_origin(
+    pos: [f32; 2],
+    size: [f32; 2],
+    viewport: [f32; 2],
+    top: f32,
+) -> [f32; 2] {
     [
         pos[0].clamp(0.0, (viewport[0] - size[0]).max(0.0)),
-        pos[1].clamp(0.0, (viewport[1] - size[1]).max(0.0)),
+        pos[1].clamp(top, (viewport[1] - size[1]).max(top)),
     ]
 }
 
@@ -388,24 +395,33 @@ mod tests {
         assert!(hovered.corner_radius > 0.0, "and it is rounded");
     }
 
-    // The clamp hard-stops a panel at every window edge: it can never be dragged
-    // even partially off screen, and an oversized panel pins to the top-left.
+    // The clamp hard-stops a panel at every window edge and at the top bar: it
+    // can never be dragged even partially off screen or under the bar, and a
+    // panel too tall for the region pins to the top-left below the bar.
     #[test]
     fn clamp_origin_keeps_the_whole_panel_on_screen() {
         let size = [320.0, 400.0];
         let vp = [1280.0, 720.0];
+        let top = 40.0;
         assert_eq!(
-            clamp_origin([100.0, 50.0], size, vp),
+            clamp_origin([100.0, 50.0], size, vp, top),
             [100.0, 50.0],
             "an in-bounds origin is untouched"
         );
-        assert_eq!(clamp_origin([-40.0, -9000.0], size, vp), [0.0, 0.0]);
         assert_eq!(
-            clamp_origin([2000.0, 700.0], size, vp),
+            clamp_origin([-40.0, -9000.0], size, vp, top),
+            [0.0, top],
+            "stops at the left edge and the bar's lower edge"
+        );
+        assert_eq!(
+            clamp_origin([2000.0, 700.0], size, vp, top),
             [vp[0] - size[0], vp[1] - size[1]],
             "stops with the panel's far edges on the window's"
         );
-        // Taller than the window: pinned to the top rather than pushed off.
-        assert_eq!(clamp_origin([10.0, 300.0], [320.0, 900.0], vp), [10.0, 0.0]);
+        // Taller than the region below the bar: pinned under the bar, not off.
+        assert_eq!(
+            clamp_origin([10.0, 300.0], [320.0, 900.0], vp, top),
+            [10.0, top]
+        );
     }
 }
