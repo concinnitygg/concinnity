@@ -109,6 +109,9 @@ impl Panel for EditPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Edit
     }
+    fn resizable(&self) -> bool {
+        true
+    }
     // The form is part of the assets UI: shown / interactive only while the
     // browse panel is on.
     fn is_open(&self, hook: &EditorHook) -> bool {
@@ -119,6 +122,11 @@ impl Panel for EditPanel {
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         form_panel::size(hook.form_fields.len())
+    }
+    // The field list tracks the type's args; the height resizes only when there
+    // are more fields than the default window shows.
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        form_panel::max_size(hook.form_fields.len())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])
@@ -131,7 +139,7 @@ impl Panel for EditPanel {
     }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
         let mut ids = vec![(form_panel::NAME_INPUT, "name")];
-        ids.extend((0..form::FIELD_POOL).map(|j| (form_panel::form_input(j), "")));
+        ids.extend((0..form::FIELD_POOL_MAX).map(|j| (form_panel::form_input(j), "")));
         ids
     }
     fn press(
@@ -142,10 +150,11 @@ impl Panel for EditPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
+        let s = hook.effective_size(PanelKey::Edit);
         let action = {
             let data = hook.panel_data(world);
             let view = hook.make_form_view(&data, [mx, my]);
-            form_panel::hit_test(&view, mx, my, o)
+            form_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -155,21 +164,21 @@ impl Panel for EditPanel {
             None => false,
         }
     }
-    fn wheel_over(&self, hook: &EditorHook, world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let data = hook.panel_data(world);
-        let view = hook.make_form_view(&data, [mx, my]);
-        form_panel::cursor_over(&view, mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Edit);
+        form_panel::cursor_over(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
         hook.scroll_form(delta, world);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Edit);
         let data = hook.panel_data(world);
         let view = hook.make_form_view(&data, mouse);
-        form_panel::apply(world, Some(&view), o);
+        form_panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        form_panel::apply(world, None, [0.0, 0.0]);
+        form_panel::apply(world, None, [0.0, 0.0], form_panel::size(0));
     }
 }
 

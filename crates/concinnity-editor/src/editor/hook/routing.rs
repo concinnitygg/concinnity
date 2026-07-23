@@ -17,7 +17,7 @@ impl EditorHook {
             self.field_dropdown_scroll = scroll_step(self.field_dropdown_scroll, delta, max);
         } else {
             // The same capture / refresh cycle an array add / remove uses.
-            let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
+            let max = self.form_fields.len().saturating_sub(self.form_window());
             let next = scroll_step(self.form_scroll, delta, max);
             if next == self.form_scroll {
                 return;

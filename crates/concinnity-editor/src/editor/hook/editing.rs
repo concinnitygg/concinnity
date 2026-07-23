@@ -47,6 +47,12 @@ impl EditorHook {
         widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
     }
 
+    // The form panel's visible field-slot count at its current (possibly resized)
+    // height, for the seed / capture window and the scroll clamps.
+    pub(super) fn form_window(&self) -> usize {
+        form_panel::rows_for_height(self.effective_size(PanelKey::Edit)[1])
+    }
+
     // Derive the form's fields from the current working args, fill each reference
     // field's options, and (re-)seed the text controls. Called on open and after a
     // structural change (array add / remove) re-shapes the field list.
@@ -57,7 +63,8 @@ impl EditorHook {
         self.form_fields = form::fields_for_with(&ty, Some(&self.form_args), &self.vec_expanded);
         // Clamp the scroll window to the (possibly changed) field count -- an array
         // shrink can leave `form_scroll` past the new last page.
-        let max = self.form_fields.len().saturating_sub(form::FIELD_POOL);
+        let window = self.form_window();
+        let max = self.form_fields.len().saturating_sub(window);
         self.form_scroll = self.form_scroll.min(max);
         // Reference fields pick from the world's existing assets of their target
         // type. Resolve the option lists up front (reads `entries` + the cooked
@@ -82,7 +89,7 @@ impl EditorHook {
             if !field.kind.has_text_input() {
                 continue;
             }
-            if let Some(r) = visible_slot(j, scroll) {
+            if let Some(r) = visible_slot(j, scroll, window) {
                 widget::seed_field(world, form_panel::form_input(r), &field.initial);
             }
         }
@@ -96,6 +103,7 @@ impl EditorHook {
             return;
         };
         let scroll = self.form_scroll;
+        let window = self.form_window();
         let texts: Vec<String> = self
             .form_fields
             .iter()
@@ -105,7 +113,7 @@ impl EditorHook {
                     // State lives in the field (boolval / variant_idx) or its child
                     // leaves (a disclosed vector), not a control of its own.
                     String::new()
-                } else if let Some(r) = visible_slot(j, scroll) {
+                } else if let Some(r) = visible_slot(j, scroll, window) {
                     // In the window: read the live control.
                     widget::field_text(world, form_panel::form_input(r))
                 } else {

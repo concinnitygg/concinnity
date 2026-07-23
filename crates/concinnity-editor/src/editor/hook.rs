@@ -324,10 +324,11 @@ fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
 }
 
 // The physical control slot showing logical form field `j` under scroll offset
-// `scroll`, or `None` when the field is outside the visible window. The panel's
-// control pool is slot-indexed, so seeding / reading a field goes through its slot.
-fn visible_slot(j: usize, scroll: usize) -> Option<usize> {
-    (j >= scroll && j < scroll + form::FIELD_POOL).then(|| j - scroll)
+// `scroll`, or `None` when the field is outside the visible window of `window`
+// rows. The panel's control pool is slot-indexed, so seeding / reading a field
+// goes through its slot.
+fn visible_slot(j: usize, scroll: usize, window: usize) -> Option<usize> {
+    (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.

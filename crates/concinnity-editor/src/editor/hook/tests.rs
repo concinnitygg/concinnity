@@ -946,7 +946,7 @@ fn edit_form_title_bar_x_closes_the_form() {
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     assert!(h.form_open());
     let vp = [1280.0, 720.0];
-    let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp));
+    let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp), form_panel::EDIT_W);
     let claimed = h.try_panel_press(PanelKey::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
     assert!(claimed, "the X press was claimed");
     assert!(!h.form_open(), "the X closed the form");
@@ -1586,7 +1586,7 @@ fn form_discloses_a_vector_and_edits_one_element() {
         .position(|f| f.key == "position.1")
         .expect("the y element leaf");
     // Edit y through its control, then confirm.
-    let slot = visible_slot(yj, h.form_scroll).expect("y leaf visible");
+    let slot = visible_slot(yj, h.form_scroll, h.form_window()).expect("y leaf visible");
     set_field(&mut world, form_panel::form_input(slot), "4.5");
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
@@ -1617,7 +1617,7 @@ fn collapsing_a_vector_keeps_its_element_edits() {
         .iter()
         .position(|f| f.key == "position.0")
         .unwrap();
-    let slot = visible_slot(xj, h.form_scroll).unwrap();
+    let slot = visible_slot(xj, h.form_scroll, h.form_window()).unwrap();
     set_field(&mut world, form_panel::form_input(slot), "2.0");
     // Collapse again: the element leaves go away but the edit is folded in.
     let pj = h
@@ -1657,14 +1657,15 @@ fn add_form_scrolls_to_and_edits_an_off_window_field() {
         .position(|f| f.key == "roughness")
         .expect("a roughness field");
     assert!(
-        visible_slot(rj, h.form_scroll).is_none(),
+        visible_slot(rj, h.form_scroll, h.form_window()).is_none(),
         "roughness starts past the visible window"
     );
     // Wheel to the bottom; roughness scrolls into the window.
     for _ in 0..h.form_fields.len() {
         h.scroll_form(1.0, &mut world);
     }
-    let slot = visible_slot(rj, h.form_scroll).expect("roughness scrolled into view");
+    let slot =
+        visible_slot(rj, h.form_scroll, h.form_window()).expect("roughness scrolled into view");
     // Edit it through its now-visible control and confirm.
     set_field(&mut world, form_panel::form_input(slot), "0.9");
     set_field(&mut world, form_panel::NAME_INPUT, "sea");

@@ -140,49 +140,72 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     ]
 }
 
-// The panel footprint for `n_fields` total fields (the field area is capped at
-// the control pool; a wider form scrolls). Origin-independent; the hook's drag
-// clamp uses this.
+// The chrome height around the field band (title bar + header row + status line
+// + pads); the field rows stack below it.
+const CHROME_H: f32 = widget::TITLE_H + PAD + NAME_H + 4.0 + STATUS_H + PAD;
+
+fn panel_height(rows: usize) -> f32 {
+    CHROME_H + rows as f32 * FIELD_H
+}
+
+// The default (minimum) on-screen field slots: the field count capped at the
+// default window.
+fn visible_rows(n_fields: usize) -> usize {
+    n_fields.clamp(1, form::FIELD_POOL)
+}
+
+// The number of field slots that fit panel height `h`, capped at the pool.
+pub(crate) fn rows_for_height(h: f32) -> usize {
+    (((h - CHROME_H) / FIELD_H).floor() as usize).clamp(1, form::FIELD_POOL_MAX)
+}
+
+// The panel footprint for `n_fields` total fields (the field area tracks the
+// count, capped at the default window; a wider form scrolls). Origin-independent;
+// the hook's drag clamp uses this, and it is the minimum resize size.
 pub(crate) fn size(n_fields: usize) -> [f32; 2] {
-    let visible = n_fields.clamp(1, form::FIELD_POOL);
+    [EDIT_W, panel_height(visible_rows(n_fields))]
+}
+
+// The tallest the panel resizes to for a form of `n_fields`: its fields shown in
+// full, capped at the injected pool. Width is unbounded (capped by the screen).
+pub(crate) fn max_size(n_fields: usize) -> [f32; 2] {
     [
-        EDIT_W,
-        widget::TITLE_H + PAD + NAME_H + 4.0 + STATUS_H + visible as f32 * FIELD_H + PAD,
+        f32::INFINITY,
+        panel_height(n_fields.clamp(1, form::FIELD_POOL_MAX)),
     ]
 }
 
-// The panel outer rect for a view (its height tracks the visible field count).
-fn panel_rect(view: &FormView, o: [f32; 2]) -> [f32; 4] {
-    let s = size(view.form_fields.len());
+// The panel outer rect at the effective size `s`.
+fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
     [o[0], o[1], s[0], s[1]]
 }
 
-// The draggable title bar across the panel top.
-pub(crate) fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], EDIT_W, widget::TITLE_H]
+// The draggable title bar across the panel top, at the effective width `w`.
+pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, widget::TITLE_H]
 }
 
 // The "X" close button, a square flush in the title bar's top-right corner. The
 // hook checks this before the title-bar drag, so clicking the X closes the form
 // rather than starting a drag.
-pub(crate) fn close_rect(o: [f32; 2]) -> [f32; 4] {
-    widget::close_rect(title_rect(o))
+pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    widget::close_rect(title_rect(o, w))
 }
 
 // The header row under the title bar: name heading + the pinned Apply button.
 fn header_y(o: [f32; 2]) -> f32 {
     o[1] + widget::TITLE_H + PAD
 }
-pub(crate) fn name_rect(o: [f32; 2]) -> [f32; 4] {
+pub(crate) fn name_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
         o[0] + PAD,
         header_y(o),
-        EDIT_W - 2.0 * PAD - (BTN_W + GAP),
+        w - 2.0 * PAD - (BTN_W + GAP),
         NAME_H,
     ]
 }
-pub(crate) fn apply_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0] + EDIT_W - PAD - BTN_W, header_y(o), BTN_W, NAME_H]
+pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0] + w - PAD - BTN_W, header_y(o), BTN_W, NAME_H]
 }
 
 // Where the scrollable field area begins (below the header + status line).
@@ -190,45 +213,46 @@ fn fields_top(o: [f32; 2]) -> f32 {
     header_y(o) + NAME_H + 4.0 + STATUS_H
 }
 
-// The full-width rect of visible field slot `r`.
-fn field_row_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    [o[0], fields_top(o) + r as f32 * FIELD_H, EDIT_W, FIELD_H]
+// The full-width rect of visible field slot `r` at the effective width `w`.
+fn field_row_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    [o[0], fields_top(o) + r as f32 * FIELD_H, w, FIELD_H]
 }
-// The control (text field / checkbox area) on the right of slot `r`.
-pub(crate) fn form_control_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    let row = field_row_rect(o, r);
+// The control (text field / checkbox area) on the right of slot `r`; it widens
+// with the panel while the caption column stays fixed.
+pub(crate) fn form_control_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let row = field_row_rect(o, w, r);
     [
         row[0] + LABEL_COL,
         row[1] + 3.0,
-        EDIT_W - LABEL_COL - PAD - 2.0,
+        w - LABEL_COL - PAD - 2.0,
         FIELD_H - 8.0,
     ]
 }
 // The checkbox box for a bool field on slot `r`.
-pub(crate) fn form_toggle_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, r);
+pub(crate) fn form_toggle_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let c = form_control_rect(o, w, r);
     let s = FIELD_H - 12.0;
     [c[0], c[1], s, s]
 }
 // The `[+]` add and `[-]` remove buttons of an array header on slot `r`.
-fn array_add_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, r);
+fn array_add_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let c = form_control_rect(o, w, r);
     let s = FIELD_H - 12.0;
     [c[0] + c[2] - s, c[1], s, s]
 }
-fn array_remove_rect(o: [f32; 2], r: usize) -> [f32; 4] {
-    let a = array_add_rect(o, r);
+fn array_remove_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let a = array_add_rect(o, w, r);
     [a[0] - a[2] - 4.0, a[1], a[2], a[3]]
 }
 
 // An open value dropdown for the enum / ref field on slot `r`: it floats
 // directly below that field's control, aligned to it.
-fn field_option_rect(o: [f32; 2], slot: usize, r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, slot);
+fn field_option_rect(o: [f32; 2], w: f32, slot: usize, r: usize) -> [f32; 4] {
+    let c = form_control_rect(o, w, slot);
     [c[0], c[1] + c[3] + r as f32 * DROP_ROW_H, c[2], DROP_ROW_H]
 }
-fn field_dropdown_backing(o: [f32; 2], slot: usize, shown: usize) -> [f32; 4] {
-    let c = form_control_rect(o, slot);
+fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f32; 4] {
+    let c = form_control_rect(o, w, slot);
     [c[0], c[1] + c[3], c[2], shown as f32 * DROP_ROW_H + 4.0]
 }
 
@@ -237,15 +261,17 @@ fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
-// How many field slots are on screen: the field count capped at the pool.
-fn visible_field_count(view: &FormView) -> usize {
-    view.form_fields.len().min(form::FIELD_POOL)
+// How many field slots are on screen at effective size `s`: the field count
+// capped at the height-derived window.
+fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
+    view.form_fields.len().min(rows_for_height(s[1]))
 }
 
-// The slot showing logical field `j`, if it is inside the scroll window.
-fn field_slot(view: &FormView, j: usize) -> Option<usize> {
+// The slot showing logical field `j`, if it is inside the scroll window of
+// `window` rows.
+fn field_slot(view: &FormView, window: usize, j: usize) -> Option<usize> {
     let scroll = view.form_scroll;
-    (j >= scroll && j < scroll + form::FIELD_POOL).then(|| j - scroll)
+    (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
 
 // The element count of a vector field (0 for any other kind).
@@ -353,19 +379,27 @@ pub(crate) struct FormView<'a> {
 }
 
 // Whether the cursor is over the panel (for wheel-scrolling the field window).
-pub(crate) fn cursor_over(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> bool {
-    point_in(mx, my, panel_rect(view, o))
+pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
+    point_in(mx, my, panel_rect(o, s))
 }
 
-// Resolve a click against the open form panel at origin `o`. `None` means the
-// click missed the panel (the caller lets it fall through). Title-bar presses
-// never reach this: the hook intercepts them first to start a drag.
-pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option<FormAction> {
+// Resolve a click against the open form panel at origin `o`, effective size `s`.
+// `None` means the click missed the panel (the caller lets it fall through).
+// Title-bar presses never reach this: the hook intercepts them first to drag.
+pub(crate) fn hit_test(
+    view: &FormView,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+    s: [f32; 2],
+) -> Option<FormAction> {
+    let w = s[0];
+    let window = rows_for_height(s[1]);
     // An open value dropdown is modal over the panel: its option rows pick,
     // anything else dismisses it.
     if let Some(open) = view.field_dropdown
         && let Some(field) = view.form_fields.get(open)
-        && let Some(slot) = field_slot(view, open)
+        && let Some(slot) = field_slot(view, window, open)
     {
         let total = field.variants.len();
         let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
@@ -374,25 +408,25 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
             if idx >= total {
                 break;
             }
-            if point_in(mx, my, field_option_rect(o, slot, r)) {
+            if point_in(mx, my, field_option_rect(o, w, slot, r)) {
                 return Some(FormAction::PickFieldOption(idx));
             }
         }
         return Some(FormAction::CloseOverlays);
     }
 
-    if !point_in(mx, my, panel_rect(view, o)) {
+    if !point_in(mx, my, panel_rect(o, s)) {
         return None;
     }
     // The "X" in the title bar closes the form. (The hook checks this before the
     // title-bar drag; resolved here too so the pure hit test stays complete.)
-    if point_in(mx, my, close_rect(o)) {
+    if point_in(mx, my, close_rect(o, w)) {
         return Some(FormAction::Close);
     }
-    if point_in(mx, my, apply_rect(o)) {
+    if point_in(mx, my, apply_rect(o, w)) {
         return Some(FormAction::Confirm);
     }
-    if point_in(mx, my, name_rect(o)) {
+    if point_in(mx, my, name_rect(o, w)) {
         return Some(FormAction::FocusName);
     }
 
@@ -400,19 +434,19 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
     // `form_scroll + r`. A bool toggles, an enum cycles / opens a dropdown, an
     // array grows / shrinks, a text field takes focus.
     let scroll = view.form_scroll;
-    for r in 0..visible_field_count(view) {
+    for r in 0..visible_field_count(view, s) {
         let j = scroll + r;
         let Some(f) = view.form_fields.get(j) else {
             break;
         };
         match f.kind {
             FieldKind::Bool => {
-                if point_in(mx, my, form_toggle_rect(o, r)) {
+                if point_in(mx, my, form_toggle_rect(o, w, r)) {
                     return Some(FormAction::ToggleField(j));
                 }
             }
             FieldKind::Enum | FieldKind::Ref { .. } => {
-                if point_in(mx, my, form_control_rect(o, r)) {
+                if point_in(mx, my, form_control_rect(o, w, r)) {
                     // A small variant set cycles in place; a large one opens a
                     // floating dropdown instead of forcing many clicks.
                     if f.variants.len() > CYCLE_MAX {
@@ -422,21 +456,21 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
                 }
             }
             FieldKind::Array => {
-                if point_in(mx, my, array_add_rect(o, r)) {
+                if point_in(mx, my, array_add_rect(o, w, r)) {
                     return Some(FormAction::AddArrayElement(j));
                 }
-                if point_in(mx, my, array_remove_rect(o, r)) {
+                if point_in(mx, my, array_remove_rect(o, w, r)) {
                     return Some(FormAction::RemoveArrayElement(j));
                 }
             }
             FieldKind::Vec { color: false, .. } => {
                 // The disclosure button toggles the per-element leaves.
-                if point_in(mx, my, form_control_rect(o, r)) {
+                if point_in(mx, my, form_control_rect(o, w, r)) {
                     return Some(FormAction::ToggleVecExpand(j));
                 }
             }
             _ => {
-                if point_in(mx, my, form_control_rect(o, r)) {
+                if point_in(mx, my, form_control_rect(o, w, r)) {
                     return Some(FormAction::FocusField(j));
                 }
             }
@@ -446,9 +480,9 @@ pub(crate) fn hit_test(view: &FormView, mx: f32, my: f32, o: [f32; 2]) -> Option
     Some(FormAction::Consume)
 }
 
-// Position + show the panel's elements for this frame at origin `o`, or hide
-// them all when the form is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
+// Position + show the panel's elements for this frame at origin `o`, effective
+// size `s`, or hide them all when the form is closed (`view` is `None`).
+pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -457,18 +491,20 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     hide_all(world);
 
-    widget::place_panel(world, EDIT_BG, panel_rect(view, o));
-    widget::place_heading(world, TITLE_LABEL, title_rect(o), view.title);
+    let w = s[0];
+    let window = rows_for_height(s[1]);
+    widget::place_panel(world, EDIT_BG, panel_rect(o, s));
+    widget::place_heading(world, TITLE_LABEL, title_rect(o, w), view.title);
 
     // The "X" close button in the title bar's top-right corner (blends into the
     // title bar until hovered; shared look across every panel).
-    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o), close_hover);
+    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o, w));
+    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o, w), close_hover);
 
     // The header row: the asset-name heading (drawn larger) and the pinned Apply
     // button at the panel's top right.
-    show_name_heading(world, o, view.form_focus == FormFocus::Name);
-    let apply_btn = apply_rect(o);
+    show_name_heading(world, o, w, view.form_focus == FormFocus::Name);
+    let apply_btn = apply_rect(o, w);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
     place_rounded(
         world,
@@ -501,22 +537,22 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     // graphics_system/frame.rs), and a long caption could overflow across it.
     let drop_backing = view.field_dropdown.and_then(|open| {
         let field = view.form_fields.get(open)?;
-        let slot = field_slot(view, open)?;
+        let slot = field_slot(view, window, open)?;
         let total = field.variants.len();
         let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
         let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-        Some(field_dropdown_backing(o, slot, shown))
+        Some(field_dropdown_backing(o, w, slot, shown))
     });
 
     // The arg fields over the visible window, drawn into the slot-indexed pool.
     let scroll = view.form_scroll;
-    for r in 0..visible_field_count(view) {
+    for r in 0..visible_field_count(view, s) {
         let j = scroll + r;
         let Some(field) = view.form_fields.get(j) else {
             break;
         };
-        let row = field_row_rect(o, r);
-        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(o, r), d)) {
+        let row = field_row_rect(o, w, r);
+        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(o, w, r), d)) {
             continue;
         }
         // A nested (dotted-path) field shows its indented caption; a disclosed
@@ -536,14 +572,14 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
         );
         match field.kind {
             FieldKind::Bool => {
-                let t = form_toggle_rect(o, r);
+                let t = form_toggle_rect(o, w, r);
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
                 place_rounded(world, form_toggle_bg(r), t, tint, 4.0, true);
             }
             FieldKind::Enum | FieldKind::Ref { .. } => {
                 // A cycling button spanning the control, captioned with the
                 // current selection.
-                let c = form_control_rect(o, r);
+                let c = form_control_rect(o, w, r);
                 let hover = point_in(view.mouse[0], view.mouse[1], c);
                 let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
                 place_rounded(
@@ -564,7 +600,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
             FieldKind::Array => {
                 // A header for a variable-length array: its element count and a
                 // red `[-]` remove + green `[+]` add button.
-                let c = form_control_rect(o, r);
+                let c = form_control_rect(o, w, r);
                 place_left_label(
                     world,
                     form_enum_label(r),
@@ -576,7 +612,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 place_rounded(
                     world,
                     form_swatch(r),
-                    array_remove_rect(o, r),
+                    array_remove_rect(o, w, r),
                     REMOVE_BTN_TINT,
                     4.0,
                     true,
@@ -584,7 +620,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 place_rounded(
                     world,
                     form_toggle_bg(r),
-                    array_add_rect(o, r),
+                    array_add_rect(o, w, r),
                     ADD_BTN_TINT,
                     4.0,
                     true,
@@ -594,7 +630,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 // A disclosure button spanning the control, captioned with the
                 // element count and a caret (`>` collapsed, `v` expanded). Clicking
                 // it toggles the per-element leaves below.
-                let c = form_control_rect(o, r);
+                let c = form_control_rect(o, w, r);
                 let hover = point_in(view.mouse[0], view.mouse[1], c);
                 let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
                 place_rounded(
@@ -617,7 +653,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
                 );
             }
             kind => {
-                let control = form_control_rect(o, r);
+                let control = form_control_rect(o, w, r);
                 // A colour vector reserves a right-hand strip for a live preview
                 // swatch and narrows its field to clear it. The swatch must sit
                 // OUTSIDE the field rect: a `TextInput`'s opaque background box
@@ -652,38 +688,40 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2]) {
     }
 
     // A scrollbar down the field region's right edge when the form overflows the
-    // pool.
-    layout_form_scrollbar(world, view.form_fields.len(), scroll, o);
+    // visible window.
+    layout_form_scrollbar(world, view.form_fields.len(), scroll, o, w, window);
 
     // The open value dropdown draws last so it floats over the slots below it.
     if let Some(open) = view.field_dropdown {
-        layout_field_dropdown(world, view, o, open);
+        layout_field_dropdown(world, view, o, w, window, open);
     }
 }
 
 // The name heading: the editable TextInput under the title bar, drawn larger
 // than the body text.
-fn show_name_heading(world: &mut World, o: [f32; 2], focused: bool) {
-    widget::show_field(world, NAME_INPUT, name_rect(o), focused);
+fn show_name_heading(world: &mut World, o: [f32; 2], w: f32, focused: bool) {
+    widget::show_field(world, NAME_INPUT, name_rect(o, w), focused);
     if let Some(t) = widget::input_mut(world, NAME_INPUT) {
         t.scale = NAME_SCALE;
     }
 }
 
 // The form's scrollbar thumb, sizing the visible window against the total field
-// count. Shown only when the form overflows the pool.
-fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32; 2]) {
-    if total <= form::FIELD_POOL {
+// count. Shown only when the form overflows the visible window of `window` rows.
+fn layout_form_scrollbar(
+    world: &mut World,
+    total: usize,
+    scroll: usize,
+    o: [f32; 2],
+    w: f32,
+    window: usize,
+) {
+    if total <= window {
         return;
     }
     let region_top = fields_top(o);
-    let track_h = form::FIELD_POOL as f32 * FIELD_H;
-    let track = [
-        o[0] + EDIT_W - SCROLLBAR_W,
-        region_top,
-        SCROLLBAR_W,
-        track_h,
-    ];
+    let track_h = window as f32 * FIELD_H;
+    let track = [o[0] + w - SCROLLBAR_W, region_top, SCROLLBAR_W, track_h];
     place_rounded(
         world,
         FORM_TRACK,
@@ -692,11 +730,11 @@ fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32
         SCROLLBAR_W * 0.5,
         true,
     );
-    let frac_visible = form::FIELD_POOL as f32 / total as f32;
+    let frac_visible = window as f32 / total as f32;
     let thumb_h = (track_h * frac_visible).max(20.0);
-    let max_scroll = (total - form::FIELD_POOL) as f32;
+    let max_scroll = (total - window) as f32;
     let t = if max_scroll > 0.0 {
-        scroll.min(total - form::FIELD_POOL) as f32 / max_scroll
+        scroll.min(total - window) as f32 / max_scroll
     } else {
         0.0
     };
@@ -714,11 +752,18 @@ fn layout_form_scrollbar(world: &mut World, total: usize, scroll: usize, o: [f32
 // The floating value dropdown for an open enum / ref field: an opaque backing
 // plus its option rows (the current selection highlighted) and, when it
 // overflows, its own thin scrollbar.
-fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: usize) {
+fn layout_field_dropdown(
+    world: &mut World,
+    view: &FormView,
+    o: [f32; 2],
+    w: f32,
+    window: usize,
+    open: usize,
+) {
     let Some(field) = view.form_fields.get(open) else {
         return;
     };
-    let Some(slot) = field_slot(view, open) else {
+    let Some(slot) = field_slot(view, window, open) else {
         return;
     };
     let total = field.variants.len();
@@ -727,7 +772,7 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
     place_rounded(
         world,
         DROP_BG,
-        field_dropdown_backing(o, slot, shown),
+        field_dropdown_backing(o, w, slot, shown),
         DROP_BG_TINT,
         theme::CONTROL_RADIUS,
         true,
@@ -737,7 +782,7 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
         if idx >= total {
             break;
         }
-        let rect = field_option_rect(o, slot, r);
+        let rect = field_option_rect(o, w, slot, r);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         let tint = if hovered {
             OPTION_TINT_HOVER
@@ -764,7 +809,7 @@ fn layout_field_dropdown(world: &mut World, view: &FormView, o: [f32; 2], open: 
         );
     }
     if total > MAX_DROP_ROWS {
-        let back = field_dropdown_backing(o, slot, shown);
+        let back = field_dropdown_backing(o, w, slot, shown);
         let track = [
             back[0] + back[2] - SCROLLBAR_W,
             back[1],
@@ -876,8 +921,8 @@ pub(crate) fn hide_all(world: &mut World) {
 // dropdown) which must sit above the slot chrome.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG];
-    ids.extend((0..form::FIELD_POOL).map(form_toggle_bg));
-    ids.extend((0..form::FIELD_POOL).map(form_swatch));
+    ids.extend((0..form::FIELD_POOL_MAX).map(form_toggle_bg));
+    ids.extend((0..form::FIELD_POOL_MAX).map(form_swatch));
     ids.extend([FORM_TRACK, FORM_THUMB, DROP_BG]);
     ids.extend((0..MAX_DROP_ROWS).map(drop_row_bg));
     ids.extend([DROP_TRACK, DROP_THUMB]);
@@ -887,15 +932,15 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 // draw above the slot captions the dropdown floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
     let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, FORM_STATUS];
-    ids.extend((0..form::FIELD_POOL).map(form_row_label));
-    ids.extend((0..form::FIELD_POOL).map(form_enum_label));
+    ids.extend((0..form::FIELD_POOL_MAX).map(form_row_label));
+    ids.extend((0..form::FIELD_POOL_MAX).map(form_enum_label));
     ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
     ids
 }
 // Every typed field: the name heading and the arg-field text inputs.
 pub(crate) fn all_field_ids() -> Vec<AssetId> {
     let mut ids = vec![NAME_INPUT];
-    ids.extend((0..form::FIELD_POOL).map(form_input));
+    ids.extend((0..form::FIELD_POOL_MAX).map(form_input));
     ids
 }
 
@@ -1007,17 +1052,17 @@ mod tests {
     #[test]
     fn header_pins_name_and_button_under_the_title_bar() {
         let o = test_origin();
-        let title = title_rect(o);
+        let title = title_rect(o, EDIT_W);
         assert_eq!(title, [o[0], o[1], EDIT_W, widget::TITLE_H]);
-        let close = close_rect(o);
+        let close = close_rect(o, EDIT_W);
         assert_eq!(close[1], o[1], "the X sits in the title bar");
         assert_eq!(
             close[0] + close[2],
             o[0] + EDIT_W,
             "the X is flush to the panel's right edge"
         );
-        let name = name_rect(o);
-        let apply_btn = apply_rect(o);
+        let name = name_rect(o, EDIT_W);
+        let apply_btn = apply_rect(o, EDIT_W);
         assert_eq!(name[1], o[1] + widget::TITLE_H + PAD, "under the title bar");
         assert_eq!(
             name[1], apply_btn[1],
@@ -1034,7 +1079,7 @@ mod tests {
         );
         // The whole panel follows its origin.
         let v = view(&[]);
-        let moved = panel_rect(&v, [40.0, 60.0]);
+        let moved = panel_rect([40.0, 60.0], size(v.form_fields.len()));
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
     }
 
@@ -1052,7 +1097,55 @@ mod tests {
         );
         let fields = float_fields(2);
         let v = view(&fields);
-        assert_eq!(panel_rect(&v, test_origin())[3], short[1]);
+        assert_eq!(
+            panel_rect(test_origin(), size(v.form_fields.len()))[3],
+            short[1]
+        );
+    }
+
+    // Growing the panel taller reveals more field rows (up to the pool); a short
+    // form is height-locked; growing it wider stretches the control column while
+    // the caption column stays fixed.
+    #[test]
+    fn taller_reveals_more_fields_and_wider_grows_the_control_column() {
+        // A form past the default window: the default height shows FIELD_POOL rows,
+        // taller reveals more up to FIELD_POOL_MAX.
+        assert_eq!(rows_for_height(size(40)[1]), form::FIELD_POOL);
+        assert_eq!(
+            rows_for_height(size(40)[1] + 5.0 * FIELD_H),
+            form::FIELD_POOL + 5
+        );
+        assert_eq!(rows_for_height(max_size(40)[1]), form::FIELD_POOL_MAX);
+        assert_eq!(
+            rows_for_height(10_000.0),
+            form::FIELD_POOL_MAX,
+            "capped at the pool"
+        );
+        // A short form's height is locked (max == default): no vertical grab.
+        assert_eq!(max_size(3)[1], size(3)[1]);
+        // Wider widens the control column; the caption column start is fixed.
+        let o = [40.0, 60.0];
+        let narrow = form_control_rect(o, EDIT_W, 0);
+        let wide = form_control_rect(o, EDIT_W + 200.0, 0);
+        assert_eq!(narrow[0], wide[0], "the control column starts at a fixed x");
+        assert!(
+            wide[2] > narrow[2] + 150.0,
+            "the control widens with the panel"
+        );
+    }
+
+    // A taller panel draws field rows past the default window that a default one
+    // would never show.
+    #[test]
+    fn taller_panel_draws_fields_past_the_default_window() {
+        let mut world = injected_world();
+        let fields = float_fields(form::FIELD_POOL_MAX);
+        let tall = [EDIT_W, max_size(fields.len())[1]];
+        apply(&mut world, Some(&view(&fields)), [20.0, 20.0], tall);
+        assert!(
+            input(&world, form_input(form::FIELD_POOL)).visible,
+            "a row past the default window shows only because we grew"
+        );
     }
 
     #[test]
@@ -1060,30 +1153,33 @@ mod tests {
         let fields = float_fields(1);
         let v = view(&fields);
         let o = test_origin();
-        let a = apply_rect(o);
-        let x = close_rect(o);
-        let n = name_rect(o);
+        let a = apply_rect(o, EDIT_W);
+        let x = close_rect(o, EDIT_W);
+        let n = name_rect(o, EDIT_W);
         assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::Confirm)
         );
         assert_eq!(
-            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o),
+            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::Close),
             "the title-bar X closes the form"
         );
         assert_eq!(
-            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o),
+            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::FocusName)
         );
         // A title-bar click off the X is consumed (the hook grabs drags before this).
-        let t = title_rect(o);
+        let t = title_rect(o, EDIT_W);
         assert_eq!(
-            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o),
+            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::Consume)
         );
         // A miss falls through.
-        assert_eq!(hit_test(&v, 10.0, 700.0, o), None);
+        assert_eq!(
+            hit_test(&v, 10.0, 700.0, o, size(v.form_fields.len())),
+            None
+        );
     }
 
     // The title bar carries the heading, the confirm button is captioned "Apply"
@@ -1093,7 +1189,7 @@ mod tests {
         let fields = float_fields(1);
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&view(&fields)), o);
+        apply(&mut world, Some(&view(&fields)), o, size(fields.len()));
         assert_eq!(label(&world, TITLE_LABEL).content, "New PointLight");
         assert_eq!(label(&world, APPLY_LABEL).content, "Add");
         assert_eq!(
@@ -1107,7 +1203,12 @@ mod tests {
         let mut editing = view(&fields);
         editing.editing = true;
         editing.title = "Edit Camera3D";
-        apply(&mut world, Some(&editing), o);
+        apply(
+            &mut world,
+            Some(&editing),
+            o,
+            size(editing.form_fields.len()),
+        );
         assert_eq!(label(&world, TITLE_LABEL).content, "Edit Camera3D");
         assert_eq!(label(&world, APPLY_LABEL).content, "Apply");
     }
@@ -1120,15 +1221,15 @@ mod tests {
         let fields = float_fields(form::FIELD_POOL + 4);
         let mut world = injected_world();
         let v = view(&fields);
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, FORM_THUMB),
             "the form scrollbar shows"
         );
         // Slot 0 resolves to logical field 0.
-        let c0 = form_control_rect(o, 0);
+        let c0 = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o),
+            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::FocusField(0))
         );
         // Scrolled by three: slot 0 shows logical field 3; the last slot shows
@@ -1136,18 +1237,24 @@ mod tests {
         let mut vs = view(&fields);
         vs.form_scroll = 3;
         assert_eq!(
-            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, o),
+            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, o, size(vs.form_fields.len())),
             Some(FormAction::FocusField(3))
         );
-        let last = form_control_rect(o, form::FIELD_POOL - 1);
+        let last = form_control_rect(o, EDIT_W, form::FIELD_POOL - 1);
         assert_eq!(
-            hit_test(&vs, last[0] + 5.0, last[1] + 5.0, o),
+            hit_test(
+                &vs,
+                last[0] + 5.0,
+                last[1] + 5.0,
+                o,
+                size(vs.form_fields.len())
+            ),
             Some(FormAction::FocusField(3 + form::FIELD_POOL - 1))
         );
         // The Apply button stays pinned in the header regardless.
-        let a = apply_rect(o);
+        let a = apply_rect(o, EDIT_W);
         assert_eq!(
-            hit_test(&vs, a[0] + 5.0, a[1] + 5.0, o),
+            hit_test(&vs, a[0] + 5.0, a[1] + 5.0, o, size(vs.form_fields.len())),
             Some(FormAction::Confirm)
         );
     }
@@ -1156,7 +1263,12 @@ mod tests {
     fn a_form_within_the_pool_has_no_scrollbar() {
         let fields = float_fields(1);
         let mut world = injected_world();
-        apply(&mut world, Some(&view(&fields)), test_origin());
+        apply(
+            &mut world,
+            Some(&view(&fields)),
+            test_origin(),
+            size(fields.len()),
+        );
         assert!(!sprite_visible(&world, FORM_THUMB));
     }
 
@@ -1183,7 +1295,12 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
         }];
-        apply(&mut world, Some(&view(&fields)), test_origin());
+        apply(
+            &mut world,
+            Some(&view(&fields)),
+            test_origin(),
+            size(fields.len()),
+        );
         let sw = sprite(&world, form_swatch(0));
         assert!(sw.visible, "the colour field draws a swatch");
         assert_eq!(sw.tint, [1.0, 0.0, 0.0, 1.0], "swatch tint is the RGB text");
@@ -1213,7 +1330,7 @@ mod tests {
             variant_idx: 0,
         }];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(!sprite_visible(&world, form_swatch(0)), "no colour swatch");
         assert!(
             !input(&world, form_input(0)).visible,
@@ -1228,9 +1345,9 @@ mod tests {
             cap.visible && cap.content == "[3] >",
             "collapsed count + caret"
         );
-        let c = form_control_rect(o, 0);
+        let c = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::ToggleVecExpand(0))
         );
     }
@@ -1266,7 +1383,7 @@ mod tests {
             elem("2"),
         ];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         // The header caret is now `v` (its element leaves follow it).
         assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
         // Slots 1..=3 are the axis-labelled element fields.
@@ -1278,14 +1395,14 @@ mod tests {
             "an element leaf is an editable field"
         );
         // Clicking an element focuses it; clicking the header collapses again.
-        let c1 = form_control_rect(o, 1);
+        let c1 = form_control_rect(o, EDIT_W, 1);
         assert_eq!(
-            hit_test(&v, c1[0] + 5.0, c1[1] + 5.0, o),
+            hit_test(&v, c1[0] + 5.0, c1[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::FocusField(1))
         );
-        let c0 = form_control_rect(o, 0);
+        let c0 = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o),
+            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::ToggleVecExpand(0))
         );
     }
@@ -1305,7 +1422,7 @@ mod tests {
             variant_idx: 1,
         }];
         let v = view(&small);
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "cycle button shows"
@@ -1316,15 +1433,15 @@ mod tests {
             !input(&world, form_input(0)).visible,
             "an enum has no editable text field"
         );
-        let c = form_control_rect(o, 0);
+        let c = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::CycleField(0))
         );
         let big = [ref_field(CYCLE_MAX + 1)];
         let vb = view(&big);
         assert_eq!(
-            hit_test(&vb, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&vb, c[0] + 5.0, c[1] + 5.0, o, size(vb.form_fields.len())),
             Some(FormAction::OpenFieldDropdown(0)),
             "a large variant set opens a dropdown"
         );
@@ -1338,21 +1455,21 @@ mod tests {
         let fields = [ref_field(CYCLE_MAX + 3)];
         let mut v = view(&fields);
         v.field_dropdown = Some(0);
-        let opt = field_option_rect(o, 0, 2);
+        let opt = field_option_rect(o, EDIT_W, 0, 2);
         assert_eq!(
-            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o),
+            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::PickFieldOption(2))
         );
-        let n = name_rect(o);
+        let n = name_rect(o, EDIT_W);
         assert_eq!(
-            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o),
+            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::CloseOverlays),
             "a click off the option list dismisses it"
         );
         v.field_dropdown_scroll = 3;
-        let r0 = field_option_rect(o, 0, 0);
+        let r0 = field_option_rect(o, EDIT_W, 0, 0);
         assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o),
+            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::PickFieldOption(3)),
             "visible row 0 is option `scroll + 0`"
         );
@@ -1369,7 +1486,12 @@ mod tests {
         ];
         let mut v = view(&fields);
         v.field_dropdown = Some(0);
-        apply(&mut world, Some(&v), test_origin());
+        apply(
+            &mut world,
+            Some(&v),
+            test_origin(),
+            size(v.form_fields.len()),
+        );
         assert!(sprite_visible(&world, DROP_BG), "dropdown backing shows");
         assert!(sprite_visible(&world, drop_row_bg(0)), "option row shows");
         let opt0 = label(&world, drop_row_label(0));
@@ -1403,7 +1525,7 @@ mod tests {
             variant_idx: 3,
         }];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o);
+        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "add button shows"
@@ -1415,14 +1537,14 @@ mod tests {
         let cap = label(&world, form_enum_label(0));
         assert!(cap.visible && cap.content == "(3)");
         assert!(!input(&world, form_input(0)).visible);
-        let add = array_add_rect(o, 0);
-        let rem = array_remove_rect(o, 0);
+        let add = array_add_rect(o, EDIT_W, 0);
+        let rem = array_remove_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, add[0] + 3.0, add[1] + 3.0, o),
+            hit_test(&v, add[0] + 3.0, add[1] + 3.0, o, size(v.form_fields.len())),
             Some(FormAction::AddArrayElement(0))
         );
         assert_eq!(
-            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, o),
+            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, o, size(v.form_fields.len())),
             Some(FormAction::RemoveArrayElement(0))
         );
     }
@@ -1435,11 +1557,16 @@ mod tests {
         let mut world = injected_world();
         let mut v = view(&fields);
         v.form_error = Some("Invalid argument");
-        apply(&mut world, Some(&v), test_origin());
+        apply(
+            &mut world,
+            Some(&v),
+            test_origin(),
+            size(v.form_fields.len()),
+        );
         let status = label(&world, FORM_STATUS);
         assert!(status.visible);
         assert_eq!(status.content, "Invalid argument");
-        apply(&mut world, None, [0.0, 0.0]);
+        apply(&mut world, None, [0.0, 0.0], size(0));
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
@@ -1450,9 +1577,9 @@ mod tests {
     fn dropdown_is_injected_after_the_slot_chrome() {
         let sprites = all_sprite_ids();
         let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        let last_slot = (0..form::FIELD_POOL)
+        let last_slot = (0..form::FIELD_POOL_MAX)
             .map(form_toggle_bg)
-            .chain((0..form::FIELD_POOL).map(form_swatch))
+            .chain((0..form::FIELD_POOL_MAX).map(form_swatch))
             .map(spos)
             .max()
             .unwrap();
@@ -1464,9 +1591,9 @@ mod tests {
         assert!(spos(DROP_BG) < first_drop_row, "backing under its rows");
         let labels = all_label_ids();
         let lpos = |id: AssetId| labels.iter().position(|&x| x == id).unwrap();
-        let last_slot_label = (0..form::FIELD_POOL)
+        let last_slot_label = (0..form::FIELD_POOL_MAX)
             .map(form_row_label)
-            .chain((0..form::FIELD_POOL).map(form_enum_label))
+            .chain((0..form::FIELD_POOL_MAX).map(form_enum_label))
             .map(lpos)
             .max()
             .unwrap();
@@ -1511,6 +1638,7 @@ mod tests {
             &mut world,
             Some(&view_with_dropdown(&fields, 0, [0.0, 0.0])),
             o,
+            size(fields.len()),
         );
         assert!(sprite_visible(&world, DROP_BG));
         assert_eq!(label(&world, drop_row_label(0)).content, form::NONE_LABEL);
@@ -1525,13 +1653,16 @@ mod tests {
         let o = test_origin();
         let v = view_with_dropdown(&fields, 0, [0.0, 0.0]);
         // Clicking an option row picks that variant.
-        let opt = field_option_rect(o, 0, 1);
+        let opt = field_option_rect(o, EDIT_W, 0, 1);
         assert_eq!(
-            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o),
+            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::PickFieldOption(1))
         );
         // Clicking off every option dismisses the dropdown.
-        assert_eq!(hit_test(&v, 0.0, 0.0, o), Some(FormAction::CloseOverlays));
+        assert_eq!(
+            hit_test(&v, 0.0, 0.0, o, size(v.form_fields.len())),
+            Some(FormAction::CloseOverlays)
+        );
     }
 
     #[test]
@@ -1541,9 +1672,9 @@ mod tests {
         let fields = vec![ref_field(10)];
         let o = test_origin();
         let v = view(&fields);
-        let c = form_control_rect(o, 0);
+        let c = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::OpenFieldDropdown(0))
         );
     }
@@ -1555,32 +1686,44 @@ mod tests {
         // A bool field toggles from its checkbox rect.
         let bools = vec![field("flag", FieldKind::Bool)];
         let vb = view(&bools);
-        let t = form_toggle_rect(o, 0);
+        let t = form_toggle_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&vb, t[0] + 3.0, t[1] + 3.0, o),
+            hit_test(&vb, t[0] + 3.0, t[1] + 3.0, o, size(vb.form_fields.len())),
             Some(FormAction::ToggleField(0))
         );
 
         // A small enum cycles in place from its control rect.
         let enums = vec![enum_field("mode", &["a", "b"])];
         let ve = view(&enums);
-        let c = form_control_rect(o, 0);
+        let c = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&ve, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&ve, c[0] + 5.0, c[1] + 5.0, o, size(ve.form_fields.len())),
             Some(FormAction::CycleField(0))
         );
 
         // An array header grows / shrinks from its + / - buttons.
         let arrays = vec![field("waves", FieldKind::Array)];
         let va = view(&arrays);
-        let add = array_add_rect(o, 0);
+        let add = array_add_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&va, add[0] + 3.0, add[1] + 3.0, o),
+            hit_test(
+                &va,
+                add[0] + 3.0,
+                add[1] + 3.0,
+                o,
+                size(va.form_fields.len())
+            ),
             Some(FormAction::AddArrayElement(0))
         );
-        let rem = array_remove_rect(o, 0);
+        let rem = array_remove_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&va, rem[0] + 3.0, rem[1] + 3.0, o),
+            hit_test(
+                &va,
+                rem[0] + 3.0,
+                rem[1] + 3.0,
+                o,
+                size(va.form_fields.len())
+            ),
             Some(FormAction::RemoveArrayElement(0))
         );
     }
@@ -1595,9 +1738,9 @@ mod tests {
             ..view(&fields)
         };
         let o = test_origin();
-        let c = form_control_rect(o, 0);
+        let c = form_control_rect(o, EDIT_W, 0);
         assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o),
+            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::Consume)
         );
     }
