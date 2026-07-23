@@ -10,10 +10,10 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 }
 
 // The shared title-bar / close-button rects the routing derives for a panel
-// (per-panel geometry fns were retired with the registry).
+// (the shared geometry lives in `widget`).
 fn title_rect_of(h: &EditorHook, key: PanelKey, vp: [f32; 2]) -> [f32; 4] {
     let o = h.origin(key, vp);
-    [o[0], o[1], registry::panel(key).size(h)[0], widget::TITLE_H]
+    widget::title_rect(o, registry::panel(key).size(h)[0])
 }
 fn close_rect_of(h: &EditorHook, key: PanelKey, vp: [f32; 2]) -> [f32; 4] {
     widget::close_rect(title_rect_of(h, key, vp))
@@ -922,7 +922,7 @@ fn a_panel_press_brings_it_to_the_front() {
     h.panel_open = true;
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
-    let t = panel::title_rect(po, panel::PANEL_W);
+    let t = widget::title_rect(po, panel::PANEL_W);
     // The title bar's interior (clear of the corner / edge resize band) drags.
     let claimed = h.try_panel_press(
         PanelKey::Assets,

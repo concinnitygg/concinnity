@@ -292,23 +292,10 @@ pub(crate) fn size() -> [f32; 2] {
     ]
 }
 
-pub(crate) fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-// The draggable title bar across the panel top, at the effective width `w`.
-pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
-fn header_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H
-}
-
 // The square "+" add button at the header's left.
 pub(crate) fn plus_rect(o: [f32; 2]) -> [f32; 4] {
     let h = HEADER_H - 8.0;
-    [o[0] + PAD, header_y(o) + 4.0, h, h]
+    [o[0] + PAD, widget::header_y(o, 0.0) + 4.0, h, h]
 }
 
 // The search field, filling the header row right of the "+", to the width `w`.
@@ -319,7 +306,7 @@ pub(crate) fn search_rect(o: [f32; 2], w: f32) -> [f32; 4] {
 
 // Where the tree body begins: below the header and the status line.
 fn list_top(o: [f32; 2]) -> f32 {
-    header_y(o) + HEADER_H + STATUS_H
+    widget::header_y(o, 0.0) + HEADER_H + STATUS_H
 }
 
 // Visible row `slot` (0-based within the scroll window), stopping short of the
@@ -527,7 +514,7 @@ pub(crate) fn hit_test(
 
     // Picker closed: clicks outside the panel fall through (the hook's caller
     // decides who else wants them).
-    if !point_in(mx, my, panel_rect(o, s)) {
+    if !point_in(mx, my, widget::outer_rect(o, s)) {
         return None;
     }
     if point_in(mx, my, plus_rect(o)) {
@@ -581,8 +568,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s:
     hide_all(world);
 
     let w = s[0];
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    let title = title_rect(o, w);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Assets");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
@@ -619,7 +606,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s:
 fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
     if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
         l.x = o[0] + PAD;
-        l.y = header_y(o) + HEADER_H;
+        l.y = widget::header_y(o, 0.0) + HEADER_H;
         l.align = TextAlign::Left;
         l.visible = true;
         match view.status {
@@ -642,7 +629,7 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
         // A world that does not cook has no tree to show; the status line
         // already says which, so this only covers the genuinely empty world.
         if view.status.is_none() {
-            place_left_label(
+            widget::place_left_label(
                 world,
                 EMPTY_LABEL,
                 [o[0] + PAD, list_top(o) + PAD],
@@ -715,7 +702,7 @@ fn layout_header_row(
         true,
     );
     let marker = if open { "-" } else { "+" };
-    place_left_label(
+    widget::place_left_label(
         world,
         name_label(slot),
         [r[0] + PAD, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
@@ -765,7 +752,7 @@ fn layout_asset_row(
         true,
     );
     let hidden = view.hidden.contains(name);
-    place_left_label(
+    widget::place_left_label(
         world,
         name_label(slot),
         [r[0] + ASSET_INDENT, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
@@ -906,7 +893,7 @@ fn layout_picker(
     let backing = [o[0], list_top(o), w, shown as f32 * ROW_H + PAD];
     place_sprite(world, PICKER_BG, backing, PICKER_BG_TINT, true);
     if total == 0 {
-        place_left_label(
+        widget::place_left_label(
             world,
             EMPTY_LABEL,
             [o[0] + PAD, list_top(o) + PAD],
@@ -936,7 +923,7 @@ fn layout_picker(
             theme::CONTROL_RADIUS,
             true,
         );
-        place_left_label(
+        widget::place_left_label(
             world,
             picker_row_label(slot),
             [rect[0] + PAD, rect[1] + ROW_H * 0.5 - theme::TEXT_HALF],
@@ -1038,7 +1025,7 @@ fn place_menu_row(
         theme::CONTROL_RADIUS,
         true,
     );
-    place_left_label(
+    widget::place_left_label(
         world,
         ids.1,
         [rect[0] + PAD, rect[1] + MENU_ROW_H * 0.5 - theme::TEXT_HALF],
@@ -1156,27 +1143,9 @@ pub(crate) fn hide_all(world: &mut World) {
     }
 }
 
-fn place_left_label(
-    world: &mut World,
-    id: AssetId,
-    pos: [f32; 2],
-    content: &str,
-    color: [f32; 3],
-    visible: bool,
-) {
-    if let Some(l) = widget::label_mut(world, id) {
-        l.x = pos[0];
-        l.y = pos[1];
-        l.align = TextAlign::Left;
-        l.color = color;
-        l.visible = visible;
-        l.content = content.to_string();
-    }
-}
-
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
 pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    let p = panel_rect(o, s);
+    let p = widget::outer_rect(o, s);
     mx >= p[0] && mx < p[0] + p[2] && my >= list_top(o) && my < p[1] + p[3]
 }
 
@@ -1343,11 +1312,11 @@ mod tests {
     #[test]
     fn default_origin_sits_below_the_top_bar_right_aligned() {
         let o = test_origin();
-        let p = panel_rect(o, size());
+        let p = widget::outer_rect(o, size());
         assert_eq!(p[0] + p[2], 1280.0, "flush to the window right");
         assert_eq!(p[1], hud::body_top(), "starts below the top-bar buttons");
         // The whole panel follows its origin: dragged elsewhere, every rect moves.
-        let moved = panel_rect([40.0, 60.0], size());
+        let moved = widget::outer_rect([40.0, 60.0], size());
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!((moved[2], moved[3]), (p[2], p[3]));
         assert_eq!(size(), [p[2], p[3]], "the drag-clamp footprint matches");
@@ -1359,7 +1328,7 @@ mod tests {
     fn geometry_stacks_and_row_controls_stay_inside_the_row() {
         let o = test_origin();
         assert_eq!(
-            title_rect(o, PANEL_W),
+            widget::title_rect(o, PANEL_W),
             [o[0], o[1], PANEL_W, widget::TITLE_H]
         );
         let plus = plus_rect(o);
@@ -1460,7 +1429,7 @@ mod tests {
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
         assert!(sprite(&world, PANEL_BG).visible);
-        let t = title_rect(o, PANEL_W);
+        let t = widget::title_rect(o, PANEL_W);
         assert_eq!(
             hit_test(&f.view(), t[0] + 5.0, t[1] + 5.0, o, size()),
             Some(PanelAction::Consume)

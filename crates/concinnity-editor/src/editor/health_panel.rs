@@ -88,12 +88,7 @@ pub(crate) fn default_origin(vp: [f32; 2]) -> [f32; 2] {
 }
 
 pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    let s = size();
-    [o[0], o[1], s[0], s[1]]
-}
-
-fn title_rect(o: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], PANEL_W, widget::TITLE_H]
+    widget::outer_rect(o, size())
 }
 
 fn row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
@@ -119,7 +114,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> bool {
 // Position + show the panel at origin `o`.
 pub(crate) fn apply(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse: [f32; 2]) {
     widget::place_panel(world, PANEL_BG, panel_rect(o));
-    let title = title_rect(o);
+    let title = widget::title_rect(o, PANEL_W);
     widget::place_heading(world, TITLE_LABEL, title, "Health");
     let close_hover = point_in(mouse[0], mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);

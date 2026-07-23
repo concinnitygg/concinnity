@@ -92,6 +92,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::widget;
     use super::list_panel::title_label;
     use super::*;
     use crate::assets::{Sprite, TextLabel};
@@ -126,7 +127,7 @@ mod tests {
             hit_test(fly_row[0] + 10.0, fly_row[1] + 10.0, o),
             Some(PreviewAction::ToggleFly)
         );
-        let t = list_panel::title_rect(o, PREVIEW_W);
+        let t = widget::title_rect(o, PREVIEW_W);
         assert_eq!(
             hit_test(t[0] + 5.0, t[1] + 5.0, o),
             Some(PreviewAction::Consume),

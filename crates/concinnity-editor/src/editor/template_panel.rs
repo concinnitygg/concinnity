@@ -123,34 +123,26 @@ pub(crate) fn size(n_rows: usize) -> [f32; 2] {
     [TPL_W, panel_height(visible_rows(n_rows))]
 }
 
-// The panel outer rect at the effective size `s`.
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-// The draggable title bar across the panel top, at the effective width `w`.
-pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The "X" close button, flush in the title bar's top-right corner. The hook
 // checks this before the title-bar drag, so clicking the X closes the panel.
 pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    widget::close_rect(title_rect(o, w))
+    widget::close_rect(widget::title_rect(o, w))
 }
 
 // The header row under the title bar: description on the left, Apply on the right.
-fn header_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + PAD
-}
 pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0] + w - PAD - BTN_W, header_y(o), BTN_W, HEADER_H]
+    [
+        o[0] + w - PAD - BTN_W,
+        widget::header_y(o, PAD),
+        BTN_W,
+        HEADER_H,
+    ]
 }
 // The description area, filling the header row left of the Apply button.
 fn desc_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
         o[0] + PAD,
-        header_y(o),
+        widget::header_y(o, PAD),
         w - 2.0 * PAD - (BTN_W + GAP),
         HEADER_H,
     ]
@@ -158,7 +150,7 @@ fn desc_rect(o: [f32; 2], w: f32) -> [f32; 4] {
 
 // Where the scrollable asset list begins (below the header row).
 fn body_top(o: [f32; 2]) -> f32 {
-    header_y(o) + HEADER_H + PAD
+    widget::header_y(o, PAD) + HEADER_H + PAD
 }
 
 // Full-width rect of visible list row `r` at the effective width `w`.
@@ -168,7 +160,7 @@ fn list_row_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
 
 // Whether the cursor is over the panel (for wheel-scrolling the asset list).
 pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    point_in(mx, my, panel_rect(o, s))
+    point_in(mx, my, widget::outer_rect(o, s))
 }
 
 // Resolve a click against the open panel at origin `o`, size `s`. `None` means
@@ -183,7 +175,7 @@ pub(crate) fn hit_test(
 ) -> Option<TemplateAction> {
     let _ = view;
     let w = s[0];
-    if !point_in(mx, my, panel_rect(o, s)) {
+    if !point_in(mx, my, widget::outer_rect(o, s)) {
         return None;
     }
     if point_in(mx, my, close_rect(o, w)) {
@@ -210,10 +202,16 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2],
 
     let w = s[0];
     let window = rows_for_height(s[1]);
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    widget::place_heading(world, TITLE_LABEL, title_rect(o, w), view.title);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    widget::place_heading(world, TITLE_LABEL, widget::title_rect(o, w), view.title);
     let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o, w));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o, w), close_hover);
+    widget::place_close(
+        world,
+        CLOSE_BG,
+        CLOSE_LABEL,
+        widget::title_rect(o, w),
+        close_hover,
+    );
 
     // The header row: the description (left) and the pinned Apply button (right).
     let desc = desc_rect(o, w);
@@ -380,7 +378,7 @@ mod tests {
     #[test]
     fn header_pins_description_and_apply_under_the_title_bar() {
         let o = test_origin();
-        let title = title_rect(o, TPL_W);
+        let title = widget::title_rect(o, TPL_W);
         assert_eq!(title, [o[0], o[1], TPL_W, widget::TITLE_H]);
         let close = close_rect(o, TPL_W);
         assert_eq!(close[1], o[1], "the X sits in the title bar");
@@ -406,7 +404,7 @@ mod tests {
             "Apply flush to the panel's right pad"
         );
         // The whole panel follows its origin.
-        let moved = panel_rect([40.0, 60.0], size(0));
+        let moved = widget::outer_rect([40.0, 60.0], size(0));
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
         assert_eq!(
             size(0),
@@ -445,7 +443,7 @@ mod tests {
             Some(TemplateAction::Close)
         );
         // A title-bar click off the X is consumed (the hook grabs drags first).
-        let t = title_rect(o, TPL_W);
+        let t = widget::title_rect(o, TPL_W);
         assert_eq!(
             hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, s),
             Some(TemplateAction::Consume)

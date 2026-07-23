@@ -136,14 +136,6 @@ pub(crate) fn size() -> [f32; 2] {
     ]
 }
 
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The Apply button, pinned to the header row's right end.
 pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
@@ -170,7 +162,7 @@ pub(crate) fn line_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
 
 // Whether the cursor is over the scrollable line window (for wheel routing).
 pub(crate) fn cursor_over_lines(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    let p = panel_rect(o, s);
+    let p = widget::outer_rect(o, s);
     mx >= p[0] && mx < p[0] + p[2] && my >= body_top(o) && my < p[1] + p[3]
 }
 
@@ -206,7 +198,7 @@ pub(crate) fn hit_test(
             StoryAction::Consume
         });
     }
-    point_in(mx, my, panel_rect(o, s)).then_some(StoryAction::Consume)
+    point_in(mx, my, widget::outer_rect(o, s)).then_some(StoryAction::Consume)
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
@@ -218,8 +210,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2], s:
     };
     let w = s[0];
     let rows_shown = visible_rows(s[1]);
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    let title = title_rect(o, w);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Story");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);

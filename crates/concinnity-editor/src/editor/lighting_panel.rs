@@ -112,16 +112,6 @@ pub(crate) fn size(n_rows: usize) -> [f32; 2] {
     ]
 }
 
-// The panel outer rect at origin `o` and effective size `s` (the resized
-// footprint; extra height past the field rows is padding below them).
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The Apply button, pinned to the header row's right end.
 pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
@@ -211,7 +201,7 @@ pub(crate) fn hit_test(
             },
         });
     }
-    point_in(mx, my, panel_rect(o, s)).then_some(LightingAction::Consume)
+    point_in(mx, my, widget::outer_rect(o, s)).then_some(LightingAction::Consume)
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
@@ -223,8 +213,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2],
     };
     let w = s[0];
     let n = view.rows.len();
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    let title = title_rect(o, w);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Lighting");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);

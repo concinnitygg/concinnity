@@ -59,14 +59,9 @@ pub(crate) const fn row_label(base: u32, i: usize) -> AssetId {
     AssetId(base + 0x30 + i as u32)
 }
 
-// The draggable title bar across the panel top.
-pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The "X" close button at the title bar's right end.
 pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    widget::close_rect(title_rect(o, w))
+    widget::close_rect(widget::title_rect(o, w))
 }
 
 // Row `i`, stacked below the title bar.
@@ -81,8 +76,7 @@ pub(crate) fn size(w: f32, rows: usize) -> [f32; 2] {
 
 // The panel outer rect at origin `o`.
 pub(crate) fn panel_rect(o: [f32; 2], w: f32, rows: usize) -> [f32; 4] {
-    let s = size(w, rows);
-    [o[0], o[1], s[0], s[1]]
+    widget::outer_rect(o, size(w, rows))
 }
 
 // One row to draw: its caption, an optional checkbox (`Some(on)` draws a box
@@ -135,8 +129,8 @@ pub(crate) fn apply(
     mouse: [f32; 2],
 ) {
     let w = s[0];
-    widget::place_panel(world, panel_bg(base), [o[0], o[1], s[0], s[1]]);
-    let title = title_rect(o, w);
+    widget::place_panel(world, panel_bg(base), widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, title_label(base), title, heading);
     let close_hover = point_in(mouse[0], mouse[1], close_rect(o, w));
     widget::place_close(world, close_bg(base), close_label(base), title, close_hover);
@@ -263,7 +257,7 @@ mod tests {
     fn geometry_stacks_rows_below_the_title_bar() {
         let o = [40.0, 60.0];
         let w = 200.0;
-        assert_eq!(title_rect(o, w), [40.0, 60.0, w, widget::TITLE_H]);
+        assert_eq!(widget::title_rect(o, w), [40.0, 60.0, w, widget::TITLE_H]);
         assert_eq!(row_rect(o, w, 0)[1], 60.0 + widget::TITLE_H);
         assert_eq!(row_rect(o, w, 1)[1], 60.0 + widget::TITLE_H + ROW_H);
         assert_eq!(size(w, 3)[1], widget::TITLE_H + 3.0 * ROW_H + BOTTOM_PAD);

@@ -55,6 +55,42 @@ pub(crate) fn place_heading(world: &mut World, label: AssetId, rect: [f32; 4], h
     }
 }
 
+// A panel's outer rect from its origin `o` and effective size `s`.
+pub(crate) fn outer_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
+    [o[0], o[1], s[0], s[1]]
+}
+
+// The draggable title bar across a panel's top, at the effective width `w`.
+pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [o[0], o[1], w, TITLE_H]
+}
+
+// The y where a panel's header row begins: just below the title bar, plus a
+// per-panel `gap`.
+pub(crate) fn header_y(o: [f32; 2], gap: f32) -> f32 {
+    o[1] + TITLE_H + gap
+}
+
+// Position a left-aligned label at `pos`, setting its text, color, and
+// visibility. A no-op if the label is absent.
+pub(crate) fn place_left_label(
+    world: &mut World,
+    id: AssetId,
+    pos: [f32; 2],
+    content: &str,
+    color: [f32; 3],
+    visible: bool,
+) {
+    if let Some(l) = label_mut(world, id) {
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = TextAlign::Left;
+        l.color = color;
+        l.visible = visible;
+        l.content = content.to_string();
+    }
+}
+
 // The square close-button rect at the right end of a `title` bar rect.
 pub(crate) fn close_rect(title: [f32; 4]) -> [f32; 4] {
     [title[0] + title[2] - TITLE_H, title[1], TITLE_H, TITLE_H]
@@ -423,5 +459,53 @@ mod tests {
             clamp_origin([10.0, 300.0], [320.0, 900.0], vp, top),
             [10.0, top]
         );
+    }
+
+    // The outer rect is the origin with the size as its width / height.
+    #[test]
+    fn outer_rect_is_origin_plus_size() {
+        assert_eq!(
+            outer_rect([40.0, 60.0], [320.0, 400.0]),
+            [40.0, 60.0, 320.0, 400.0]
+        );
+    }
+
+    // The title bar spans the given width at the origin, one bar tall.
+    #[test]
+    fn title_rect_spans_the_width_at_the_bar_height() {
+        let t = title_rect([40.0, 60.0], 320.0);
+        assert_eq!(t, [40.0, 60.0, 320.0, TITLE_H]);
+        // The close button flushes to the bar's right edge (the paired helper).
+        assert_eq!(close_rect(t)[0] + TITLE_H, t[0] + t[2]);
+    }
+
+    // The header row sits one title bar below the origin, plus the panel's gap.
+    #[test]
+    fn header_y_sits_below_the_title_bar_plus_gap() {
+        assert_eq!(header_y([40.0, 60.0], 0.0), 60.0 + TITLE_H);
+        assert_eq!(header_y([40.0, 60.0], 10.0), 60.0 + TITLE_H + 10.0);
+    }
+
+    // A left label takes the given position, text, and color; a missing id is a
+    // no-op rather than a panic.
+    #[test]
+    fn place_left_label_positions_and_no_ops_when_absent() {
+        let mut world = world_with(&[AssetId(1)]);
+        place_left_label(
+            &mut world,
+            AssetId(1),
+            [12.0, 34.0],
+            "hi",
+            [0.1, 0.2, 0.3],
+            true,
+        );
+        let l = label_mut(&mut world, AssetId(1)).unwrap();
+        assert_eq!((l.x, l.y), (12.0, 34.0));
+        assert_eq!(l.align, TextAlign::Left);
+        assert_eq!(l.color, [0.1, 0.2, 0.3]);
+        assert!(l.visible && l.content == "hi");
+        // A never-injected id changes nothing and does not panic.
+        place_left_label(&mut world, AssetId(999), [0.0, 0.0], "x", [0.0; 3], true);
+        assert_eq!(world.query::<TextLabel>().count(), 1);
     }
 }

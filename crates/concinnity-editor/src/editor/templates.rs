@@ -12,7 +12,7 @@
 
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};
-use super::widget::point_in;
+use super::widget::{self, point_in};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -58,12 +58,6 @@ pub(crate) fn size() -> [f32; 2] {
     list_panel::size(TEMPLATES_W, count())
 }
 
-// The panel outer rect at origin `o` and effective size `s` (the resized
-// footprint; extra height past the template rows is padding below them).
-pub(crate) fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
 // Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`.
 // `None` means the click missed the panel. Title-bar presses never reach this:
 // the hook intercepts them first to start a drag (the shared routing owns the
@@ -72,7 +66,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Tem
     if let Some(i) = list_panel::hit_row(mx, my, o, s[0], count()) {
         return Some(TemplatesAction::Pick(i));
     }
-    point_in(mx, my, panel_rect(o, s)).then_some(TemplatesAction::Consume)
+    point_in(mx, my, widget::outer_rect(o, s)).then_some(TemplatesAction::Consume)
 }
 
 // Position + show the panel at origin `o`, effective size `s`, highlighting the
@@ -136,7 +130,7 @@ mod tests {
             hit_test(r0[0] + 10.0, r0[1] + 10.0, o, s),
             Some(TemplatesAction::Pick(0))
         );
-        let t = list_panel::title_rect(o, TEMPLATES_W);
+        let t = widget::title_rect(o, TEMPLATES_W);
         assert_eq!(
             hit_test(t[0] + 5.0, t[1] + 5.0, o, s),
             Some(TemplatesAction::Consume)

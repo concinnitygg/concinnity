@@ -199,30 +199,24 @@ pub(crate) fn max_size() -> [f32; 2] {
     ]
 }
 
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The header row's controls, right to left: Add pinned to the right end, the
 // Browse button beside it, and the path field filling the rest.
-fn header_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + 4.0
-}
 const CTRL_H: f32 = HEADER_H - 8.0;
 
 pub(crate) fn add_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0] + w - PAD - BTN_W, header_y(o), BTN_W, CTRL_H]
+    [
+        o[0] + w - PAD - BTN_W,
+        widget::header_y(o, 4.0),
+        BTN_W,
+        CTRL_H,
+    ]
 }
 
 // The "Browse..." button, opening the native file picker.
 pub(crate) fn browse_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
         add_rect(o, w)[0] - GAP - BROWSE_W,
-        header_y(o),
+        widget::header_y(o, 4.0),
         BROWSE_W,
         CTRL_H,
     ]
@@ -232,7 +226,7 @@ pub(crate) fn path_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     let left = o[0] + PAD;
     [
         left,
-        header_y(o),
+        widget::header_y(o, 4.0),
         (browse_rect(o, w)[0] - GAP - left).max(0.0),
         CTRL_H,
     ]
@@ -254,7 +248,7 @@ pub(crate) fn row_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
 
 // Whether the cursor is over the scrollable import list (for wheel routing).
 pub(crate) fn cursor_over_list(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    let p = panel_rect(o, s);
+    let p = widget::outer_rect(o, s);
     mx >= p[0] && mx < p[0] + p[2] && my >= list_top(o) && my < p[1] + p[3]
 }
 
@@ -289,7 +283,7 @@ pub(crate) fn hit_test(
             ImportAction::Consume
         });
     }
-    point_in(mx, my, panel_rect(o, s)).then_some(ImportAction::Consume)
+    point_in(mx, my, widget::outer_rect(o, s)).then_some(ImportAction::Consume)
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
@@ -301,8 +295,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
     };
     let w = s[0];
     let rows_shown = visible_rows(s[1]);
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    let title = title_rect(o, w);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Import");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
@@ -545,7 +539,7 @@ mod tests {
         assert_eq!(p[0] + p[2] + GAP, b[0], "the field fills up to Browse");
         assert!(p[2] > 200.0, "the path field stays usable: {}", p[2]);
         for r in [p, b, a] {
-            assert_eq!(r[1], header_y(o));
+            assert_eq!(r[1], widget::header_y(o, 4.0));
             assert_eq!(r[3], CTRL_H);
         }
     }

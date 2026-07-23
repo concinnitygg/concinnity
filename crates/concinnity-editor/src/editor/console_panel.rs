@@ -117,14 +117,6 @@ pub(crate) fn max_size() -> [f32; 2] {
     ]
 }
 
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 fn log_top(o: [f32; 2]) -> f32 {
     o[1] + widget::TITLE_H + PAD * 0.5
 }
@@ -163,7 +155,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Con
     if point_in(mx, my, input_rect(o, s)) {
         return Some(ConsoleAction::FocusInput);
     }
-    point_in(mx, my, panel_rect(o, s)).then_some(ConsoleAction::Consume)
+    point_in(mx, my, widget::outer_rect(o, s)).then_some(ConsoleAction::Consume)
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
@@ -175,8 +167,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], 
     };
     let w = s[0];
     let shown = visible_lines(s[1]);
-    widget::place_panel(world, PANEL_BG, panel_rect(o, s));
-    let title = title_rect(o, w);
+    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
+    let title = widget::title_rect(o, w);
     widget::place_heading(world, TITLE_LABEL, title, "Console");
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
@@ -335,7 +327,7 @@ mod tests {
     fn input_pins_to_the_bottom_and_log_fills_the_body() {
         let o = [0.0, 0.0];
         let s = size();
-        let p = panel_rect(o, s);
+        let p = widget::outer_rect(o, s);
         let i = input_rect(o, s);
         assert!(i[1] + i[3] < p[1] + p[3], "input inside the panel");
         let last = line_rect(o, s[0], LINE_POOL - 1);
@@ -383,7 +375,7 @@ mod tests {
                 .unwrap()
                 .visible
         );
-        let p = panel_rect([20.0, 20.0], tall);
+        let p = widget::outer_rect([20.0, 20.0], tall);
         let i = input_rect([20.0, 20.0], tall);
         assert!(
             i[1] + i[3] < p[1] + p[3],

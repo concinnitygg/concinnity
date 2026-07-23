@@ -175,42 +175,34 @@ pub(crate) fn max_size(n_fields: usize) -> [f32; 2] {
     ]
 }
 
-// The panel outer rect at the effective size `s`.
-fn panel_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    [o[0], o[1], s[0], s[1]]
-}
-
-// The draggable title bar across the panel top, at the effective width `w`.
-pub(crate) fn title_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0], o[1], w, widget::TITLE_H]
-}
-
 // The "X" close button, a square flush in the title bar's top-right corner. The
 // hook checks this before the title-bar drag, so clicking the X closes the form
 // rather than starting a drag.
 pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    widget::close_rect(title_rect(o, w))
+    widget::close_rect(widget::title_rect(o, w))
 }
 
 // The header row under the title bar: name heading + the pinned Apply button.
-fn header_y(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + PAD
-}
 pub(crate) fn name_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [
         o[0] + PAD,
-        header_y(o),
+        widget::header_y(o, PAD),
         w - 2.0 * PAD - (BTN_W + GAP),
         NAME_H,
     ]
 }
 pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0] + w - PAD - BTN_W, header_y(o), BTN_W, NAME_H]
+    [
+        o[0] + w - PAD - BTN_W,
+        widget::header_y(o, PAD),
+        BTN_W,
+        NAME_H,
+    ]
 }
 
 // Where the scrollable field area begins (below the header + status line).
 fn fields_top(o: [f32; 2]) -> f32 {
-    header_y(o) + NAME_H + 4.0 + STATUS_H
+    widget::header_y(o, PAD) + NAME_H + 4.0 + STATUS_H
 }
 
 // The full-width rect of visible field slot `r` at the effective width `w`.
@@ -380,7 +372,7 @@ pub(crate) struct FormView<'a> {
 
 // Whether the cursor is over the panel (for wheel-scrolling the field window).
 pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    point_in(mx, my, panel_rect(o, s))
+    point_in(mx, my, widget::outer_rect(o, s))
 }
 
 // Resolve a click against the open form panel at origin `o`, effective size `s`.
@@ -415,7 +407,7 @@ pub(crate) fn hit_test(
         return Some(FormAction::CloseOverlays);
     }
 
-    if !point_in(mx, my, panel_rect(o, s)) {
+    if !point_in(mx, my, widget::outer_rect(o, s)) {
         return None;
     }
     // The "X" in the title bar closes the form. (The hook checks this before the
@@ -493,13 +485,19 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
 
     let w = s[0];
     let window = rows_for_height(s[1]);
-    widget::place_panel(world, EDIT_BG, panel_rect(o, s));
-    widget::place_heading(world, TITLE_LABEL, title_rect(o, w), view.title);
+    widget::place_panel(world, EDIT_BG, widget::outer_rect(o, s));
+    widget::place_heading(world, TITLE_LABEL, widget::title_rect(o, w), view.title);
 
     // The "X" close button in the title bar's top-right corner (blends into the
     // title bar until hovered; shared look across every panel).
     let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o, w));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title_rect(o, w), close_hover);
+    widget::place_close(
+        world,
+        CLOSE_BG,
+        CLOSE_LABEL,
+        widget::title_rect(o, w),
+        close_hover,
+    );
 
     // The header row: the asset-name heading (drawn larger) and the pinned Apply
     // button at the panel's top right.
@@ -520,10 +518,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
     // A validation error, if the last commit was rejected (a reserved line, so
     // showing it never shifts the fields below).
     if let Some(err) = view.form_error {
-        place_left_label(
+        widget::place_left_label(
             world,
             FORM_STATUS,
-            [o[0] + PAD, header_y(o) + NAME_H + 6.0],
+            [o[0] + PAD, widget::header_y(o, PAD) + NAME_H + 6.0],
             err,
             ERROR_LABEL,
             true,
@@ -559,7 +557,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
         // vector element reads as its axis (x / y / z / w).
         let depth = field.key.matches('.').count();
         let caption = field_caption(view.form_fields, field);
-        place_left_label(
+        widget::place_left_label(
             world,
             form_row_label(r),
             [
@@ -601,7 +599,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
                 // A header for a variable-length array: its element count and a
                 // red `[-]` remove + green `[+]` add button.
                 let c = form_control_rect(o, w, r);
-                place_left_label(
+                widget::place_left_label(
                     world,
                     form_enum_label(r),
                     [c[0], c[1] + c[3] * 0.5 - theme::TEXT_HALF],
@@ -643,7 +641,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
                 );
                 let open = vec_expanded(view.form_fields, j);
                 let caption = format!("[{}] {}", vec_len(field.kind), if open { "v" } else { ">" });
-                place_left_label(
+                widget::place_left_label(
                     world,
                     form_enum_label(r),
                     [c[0] + 8.0, c[1] + c[3] * 0.5 - theme::TEXT_HALF],
@@ -799,7 +797,7 @@ fn layout_field_dropdown(
             theme::CONTROL_RADIUS,
             true,
         );
-        place_left_label(
+        widget::place_left_label(
             world,
             drop_row_label(r),
             [rect[0] + PAD, rect[1] + DROP_ROW_H * 0.5 - theme::TEXT_HALF],
@@ -877,24 +875,6 @@ fn place_center_label(
         l.x = rect[0] + rect[2] * 0.5;
         l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
         l.align = TextAlign::Center;
-        l.color = color;
-        l.visible = visible;
-        l.content = content.to_string();
-    }
-}
-
-fn place_left_label(
-    world: &mut World,
-    id: AssetId,
-    pos: [f32; 2],
-    content: &str,
-    color: [f32; 3],
-    visible: bool,
-) {
-    if let Some(l) = widget::label_mut(world, id) {
-        l.x = pos[0];
-        l.y = pos[1];
-        l.align = TextAlign::Left;
         l.color = color;
         l.visible = visible;
         l.content = content.to_string();
@@ -1052,7 +1032,7 @@ mod tests {
     #[test]
     fn header_pins_name_and_button_under_the_title_bar() {
         let o = test_origin();
-        let title = title_rect(o, EDIT_W);
+        let title = widget::title_rect(o, EDIT_W);
         assert_eq!(title, [o[0], o[1], EDIT_W, widget::TITLE_H]);
         let close = close_rect(o, EDIT_W);
         assert_eq!(close[1], o[1], "the X sits in the title bar");
@@ -1079,7 +1059,7 @@ mod tests {
         );
         // The whole panel follows its origin.
         let v = view(&[]);
-        let moved = panel_rect([40.0, 60.0], size(v.form_fields.len()));
+        let moved = widget::outer_rect([40.0, 60.0], size(v.form_fields.len()));
         assert_eq!((moved[0], moved[1]), (40.0, 60.0));
     }
 
@@ -1098,7 +1078,7 @@ mod tests {
         let fields = float_fields(2);
         let v = view(&fields);
         assert_eq!(
-            panel_rect(test_origin(), size(v.form_fields.len()))[3],
+            widget::outer_rect(test_origin(), size(v.form_fields.len()))[3],
             short[1]
         );
     }
@@ -1170,7 +1150,7 @@ mod tests {
             Some(FormAction::FocusName)
         );
         // A title-bar click off the X is consumed (the hook grabs drags before this).
-        let t = title_rect(o, EDIT_W);
+        let t = widget::title_rect(o, EDIT_W);
         assert_eq!(
             hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::Consume)
