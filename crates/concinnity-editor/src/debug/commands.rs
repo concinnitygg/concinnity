@@ -15,6 +15,33 @@
 // engine has stalled.
 const SPAWN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+// Run one runtime command end to end: open a one-shot reply channel, hand its
+// sender to `enqueue` (which builds the command around it and pushes it onto the
+// matching per-frame queue), then block up to `timeout` for the debug drive to
+// answer. The engine's `Result<T, String>` reply becomes JSON via `on_ok` on
+// success, or the shared `error_reply` on an engine error or a timeout (tagged
+// with `label`, the command name).
+fn run_with_reply<T>(
+    label: &str,
+    timeout: std::time::Duration,
+    enqueue: impl FnOnce(std::sync::mpsc::SyncSender<Result<T, String>>),
+    on_ok: impl FnOnce(T) -> String,
+) -> String {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    enqueue(tx);
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(value)) => on_ok(value),
+        Ok(Err(e)) => error_reply(&e),
+        Err(_) => error_reply(&format!("{label}: timed out waiting for engine")),
+    }
+}
+
+// Parse a command's JSON body, tagging a decode failure with `label` (the
+// command name) as a ready-to-return `error_reply` string.
+fn parse_request<T: serde::de::DeserializeOwned>(label: &str, text: &str) -> Result<T, String> {
+    serde_json::from_str(text).map_err(|e| error_reply(&format!("{label}: {e}")))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(default)]
 struct DecalAddRequest {
@@ -41,9 +68,9 @@ impl Default for DecalAddRequest {
 }
 
 pub(super) fn handle_decal_add(text: &str) -> String {
-    let req: DecalAddRequest = match serde_json::from_str(text) {
+    let req: DecalAddRequest = match parse_request("decal-add", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("decal-add: {e}")),
+        Err(reply) => return reply,
     };
     let args = super::runtime_spawn::DecalSpawnArgs {
         texture: req.texture,
@@ -52,16 +79,17 @@ pub(super) fn handle_decal_add(text: &str) -> String {
         size: req.size,
         tint: req.tint,
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalAdd {
-        args,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(id)) => serde_json::json!({ "ok": true, "id": id }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("decal-add: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "decal-add",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalAdd {
+                args,
+                reply,
+            });
+        },
+        |id| serde_json::json!({ "ok": true, "id": id }).to_string(),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -70,20 +98,21 @@ struct IdRequest {
 }
 
 pub(super) fn handle_decal_remove(text: &str) -> String {
-    let req: IdRequest = match serde_json::from_str(text) {
+    let req: IdRequest = match parse_request("decal-remove", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("decal-remove: {e}")),
+        Err(reply) => return reply,
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalRemove {
-        id: req.id,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "removed": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("decal-remove: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "decal-remove",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalRemove {
+                id: req.id,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "removed": true }).to_string(),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -133,9 +162,9 @@ impl Default for EmitterAddRequest {
 }
 
 pub(super) fn handle_emitter_add(text: &str) -> String {
-    let req: EmitterAddRequest = match serde_json::from_str(text) {
+    let req: EmitterAddRequest = match parse_request("emitter-add", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("emitter-add: {e}")),
+        Err(reply) => return reply,
     };
     let args = super::runtime_spawn::EmitterSpawnArgs {
         texture: req.texture,
@@ -154,33 +183,35 @@ pub(super) fn handle_emitter_add(text: &str) -> String {
         color_start: req.color_start,
         color_end: req.color_end,
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterAdd {
-        args,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(id)) => serde_json::json!({ "ok": true, "id": id }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("emitter-add: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "emitter-add",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterAdd {
+                args,
+                reply,
+            });
+        },
+        |id| serde_json::json!({ "ok": true, "id": id }).to_string(),
+    )
 }
 
 pub(super) fn handle_emitter_remove(text: &str) -> String {
-    let req: IdRequest = match serde_json::from_str(text) {
+    let req: IdRequest = match parse_request("emitter-remove", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("emitter-remove: {e}")),
+        Err(reply) => return reply,
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterRemove {
-        id: req.id,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "removed": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("emitter-remove: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "emitter-remove",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterRemove {
+                id: req.id,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "removed": true }).to_string(),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -194,9 +225,9 @@ struct AnimCrossfadeRequest {
 }
 
 pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
-    let req: AnimCrossfadeRequest = match serde_json::from_str(text) {
+    let req: AnimCrossfadeRequest = match parse_request("anim-crossfade", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("anim-crossfade: {e}")),
+        Err(reply) => return reply,
     };
     if req.target.is_empty() {
         return error_reply("anim-crossfade: missing 'target'");
@@ -211,20 +242,21 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
         ));
     };
     let target = crate::ecs::asset_id::AssetId(asset_idx as u32);
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::Crossfade {
-        req: crate::app::anim_runtime::CrossfadeRequest {
-            target,
-            weights: req.weights,
-            duration_secs: req.duration_secs,
+    run_with_reply(
+        "anim-crossfade",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::Crossfade {
+                req: crate::app::anim_runtime::CrossfadeRequest {
+                    target,
+                    weights: req.weights,
+                    duration_secs: req.duration_secs,
+                },
+                reply,
+            });
         },
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("anim-crossfade: timed out waiting for engine"),
-    }
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Resolve a `target` asset name against the interner names table (indexed by
@@ -256,9 +288,9 @@ struct AnimParamRequest {
 }
 
 pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
-    let req: AnimParamRequest = match serde_json::from_str(text) {
+    let req: AnimParamRequest = match parse_request("anim-param", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("anim-param: {e}")),
+        Err(reply) => return reply,
     };
     if req.name.is_empty() {
         return error_reply("anim-param: missing 'name' (a graph parameter)");
@@ -267,20 +299,21 @@ pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
         Ok(t) => t,
         Err(e) => return error_reply(&e),
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::SetParam {
-        req: crate::app::anim_runtime::SetParamRequest {
-            target,
-            name: req.name,
-            value: req.value,
+    run_with_reply(
+        "anim-param",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::SetParam {
+                req: crate::app::anim_runtime::SetParamRequest {
+                    target,
+                    name: req.name,
+                    value: req.value,
+                },
+                reply,
+            });
         },
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("anim-param: timed out waiting for engine"),
-    }
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -290,21 +323,24 @@ struct AnimStateRequest {
 }
 
 pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
-    let req: AnimStateRequest = match serde_json::from_str(text) {
+    let req: AnimStateRequest = match parse_request("anim-state", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("anim-state: {e}")),
+        Err(reply) => return reply,
     };
     let target = match resolve_target("anim-state", &req.target, names) {
         Ok(t) => t,
         Err(e) => return error_reply(&e),
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::QueryState {
-        target,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(report)) => {
+    run_with_reply(
+        "anim-state",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::QueryState {
+                target,
+                reply,
+            });
+        },
+        |report| {
             let params: serde_json::Map<String, serde_json::Value> = report
                 .params
                 .into_iter()
@@ -320,10 +356,8 @@ pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
                 "params": params,
             })
             .to_string()
-        }
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("anim-state: timed out waiting for engine"),
-    }
+        },
+    )
 }
 
 // Longer than the spawn timeout: the capture idles the GPU, copies the
@@ -338,23 +372,24 @@ struct ScreenshotRequest {
 }
 
 pub(super) fn handle_screenshot(text: &str) -> String {
-    let req: ScreenshotRequest = match serde_json::from_str(text) {
+    let req: ScreenshotRequest = match parse_request("screenshot", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("screenshot: {e}")),
+        Err(reply) => return reply,
     };
     if req.path.trim().is_empty() {
         return error_reply("screenshot: missing 'path'");
     }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Screenshot {
-        path: req.path,
-        reply: tx,
-    });
-    match rx.recv_timeout(SCREENSHOT_REPLY_TIMEOUT) {
-        Ok(Ok(path)) => serde_json::json!({ "ok": true, "path": path }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("screenshot: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "screenshot",
+        SCREENSHOT_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Screenshot {
+                path: req.path,
+                reply,
+            });
+        },
+        |path| serde_json::json!({ "ok": true, "path": path }).to_string(),
+    )
 }
 
 // Teleport the active camera. `position` / `yaw` / `pitch` are required in
@@ -385,9 +420,9 @@ impl Default for CameraSetRequest {
 }
 
 pub(super) fn handle_camera_set(text: &str) -> String {
-    let req: CameraSetRequest = match serde_json::from_str(text) {
+    let req: CameraSetRequest = match parse_request("camera-set", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("camera-set: {e}")),
+        Err(reply) => return reply,
     };
     let args = super::runtime_spawn::CameraSetArgs {
         position: req.position,
@@ -395,16 +430,17 @@ pub(super) fn handle_camera_set(text: &str) -> String {
         pitch: req.pitch,
         fov_y_degrees: req.fov_y_degrees,
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraSet {
-        args,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "set": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("camera-set: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "camera-set",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraSet {
+                args,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "set": true }).to_string(),
+    )
 }
 
 // Toggle a Quality-group graphics setting. `setting` is the engine key
@@ -435,9 +471,9 @@ impl Default for QualitySetRequest {
 // path and screenshot the result. The reply fires once the command is queued
 // (the GraphicsSystem applies it on its next step, before the next present).
 pub(super) fn handle_quality_set(text: &str) -> String {
-    let req: QualitySetRequest = match serde_json::from_str(text) {
+    let req: QualitySetRequest = match parse_request("quality-set", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("quality-set: {e}")),
+        Err(reply) => return reply,
     };
     if req.setting.is_empty() {
         return error_reply("quality-set: missing 'setting'");
@@ -451,17 +487,18 @@ pub(super) fn handle_quality_set(text: &str) -> String {
             ));
         }
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::QualitySet {
-        setting: req.setting,
-        op,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("quality-set: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "quality-set",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::QualitySet {
+                setting: req.setting,
+                op,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Rebind a movement action to a key. `setting` is the engine key
@@ -482,9 +519,9 @@ struct RebindRequest {
 // `set_keymap` path. `cn debug` only; lets a headless harness exercise the live
 // rebind and screenshot the row label flipping. The reply fires once queued.
 pub(super) fn handle_rebind(text: &str) -> String {
-    let req: RebindRequest = match serde_json::from_str(text) {
+    let req: RebindRequest = match parse_request("rebind", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("rebind: {e}")),
+        Err(reply) => return reply,
     };
     if req.setting.is_empty() {
         return error_reply("rebind: missing 'setting' (e.g. key_forward)");
@@ -501,17 +538,18 @@ pub(super) fn handle_rebind(text: &str) -> String {
                 ));
             }
         };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Rebind {
-        setting: req.setting,
-        key,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("rebind: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "rebind",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Rebind {
+                setting: req.setting,
+                key,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Despawn an authored placement by its declared name.
@@ -530,23 +568,24 @@ struct DespawnCmdRequest {
 // a headless harness remove an entity and screenshot it gone. The reply fires
 // once the command is queued.
 pub(super) fn handle_despawn(text: &str) -> String {
-    let req: DespawnCmdRequest = match serde_json::from_str(text) {
+    let req: DespawnCmdRequest = match parse_request("despawn", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("despawn: {e}")),
+        Err(reply) => return reply,
     };
     if req.name.trim().is_empty() {
         return error_reply("despawn: missing 'name'");
     }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Despawn {
-        name: req.name,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("despawn: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "despawn",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Despawn {
+                name: req.name,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Drive the story system: `action` is `start`, `advance`, `choose` / `slot`
@@ -566,9 +605,9 @@ struct StoryCmdRequest {
 // story and screenshot each page. `cn debug` only. The reply fires once the
 // command is queued.
 pub(super) fn handle_story(text: &str) -> String {
-    let req: StoryCmdRequest = match serde_json::from_str(text) {
+    let req: StoryCmdRequest = match parse_request("story", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("story: {e}")),
+        Err(reply) => return reply,
     };
     let command = match req.action.as_str() {
         "start" => crate::assets::StoryCommand::Start,
@@ -586,16 +625,17 @@ pub(super) fn handle_story(text: &str) -> String {
         "settings_back" => crate::assets::StoryCommand::CloseSettings,
         other => return error_reply(&format!("story: unknown action '{other}'")),
     };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Story {
-        command,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("story: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "story",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Story {
+                command,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Re-parent an authored placement. `child` is moved under `parent`; a null or
@@ -616,25 +656,26 @@ struct ReparentCmdRequest {
 // harness move an entity under a new parent and screenshot the result. The reply
 // fires once queued.
 pub(super) fn handle_reparent(text: &str) -> String {
-    let req: ReparentCmdRequest = match serde_json::from_str(text) {
+    let req: ReparentCmdRequest = match parse_request("reparent", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("reparent: {e}")),
+        Err(reply) => return reply,
     };
     if req.child.trim().is_empty() {
         return error_reply("reparent: missing 'child'");
     }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Reparent {
-        child: req.child,
-        // An empty / whitespace parent name detaches the child to a root.
-        parent: req.parent.filter(|p| !p.trim().is_empty()),
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("reparent: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "reparent",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Reparent {
+                child: req.child,
+                // An empty / whitespace parent name detaches the child to a root.
+                parent: req.parent.filter(|p| !p.trim().is_empty()),
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Spawn a runtime copy of an authored placement. `template` names the existing
@@ -662,9 +703,9 @@ struct SpawnCmdRequest {
 // `cn debug` only; lets a headless harness spawn an instance and screenshot it,
 // then watch its Lifetime expire. The reply fires once the command is queued.
 pub(super) fn handle_spawn(text: &str) -> String {
-    let req: SpawnCmdRequest = match serde_json::from_str(text) {
+    let req: SpawnCmdRequest = match parse_request("spawn", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("spawn: {e}")),
+        Err(reply) => return reply,
     };
     if req.template.trim().is_empty() {
         return error_reply("spawn: missing 'template'");
@@ -672,21 +713,22 @@ pub(super) fn handle_spawn(text: &str) -> String {
     if req.name.trim().is_empty() {
         return error_reply("spawn: missing 'name'");
     }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Spawn {
-        template: req.template,
-        name: req.name,
-        position: req.position,
-        rotation_deg: req.rotation_deg,
-        scale: req.scale,
-        lifetime: req.lifetime,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "queued": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("spawn: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "spawn",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Spawn {
+                template: req.template,
+                name: req.name,
+                position: req.position,
+                rotation_deg: req.rotation_deg,
+                scale: req.scale,
+                lifetime: req.lifetime,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
+    )
 }
 
 // Move the active camera by a per-frame delta over a span of frames. All delta
@@ -721,9 +763,9 @@ impl Default for CameraMoveRequest {
 }
 
 pub(super) fn handle_camera_move(text: &str) -> String {
-    let req: CameraMoveRequest = match serde_json::from_str(text) {
+    let req: CameraMoveRequest = match parse_request("camera-move", text) {
         Ok(r) => r,
-        Err(e) => return error_reply(&format!("camera-move: {e}")),
+        Err(reply) => return reply,
     };
     let args = super::runtime_spawn::CameraMoveArgs {
         forward: req.forward,
@@ -735,28 +777,30 @@ pub(super) fn handle_camera_move(text: &str) -> String {
     };
     let frames = args.frames;
     let holding = frames == 0;
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraMove {
-        args,
-        reply: tx,
-    });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => {
-            serde_json::json!({ "ok": true, "frames": frames, "holding": holding }).to_string()
-        }
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("camera-move: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "camera-move",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraMove {
+                args,
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "frames": frames, "holding": holding }).to_string(),
+    )
 }
 
 pub(super) fn handle_camera_stop() -> String {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraStop { reply: tx });
-    match rx.recv_timeout(SPAWN_REPLY_TIMEOUT) {
-        Ok(Ok(())) => serde_json::json!({ "ok": true, "stopped": true }).to_string(),
-        Ok(Err(e)) => error_reply(&e),
-        Err(_) => error_reply("camera-stop: timed out waiting for engine"),
-    }
+    run_with_reply(
+        "camera-stop",
+        SPAWN_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraStop {
+                reply,
+            });
+        },
+        |()| serde_json::json!({ "ok": true, "stopped": true }).to_string(),
+    )
 }
 
 pub(super) fn error_reply(msg: &str) -> String {
