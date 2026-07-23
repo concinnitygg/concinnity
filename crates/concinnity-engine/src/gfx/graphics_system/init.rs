@@ -102,6 +102,14 @@ struct DecodedShaders {
     vert_instanced_bytes: Vec<u8>,
 }
 
+// The text/sprite atlas pool from `decode_text_atlases`: RGBA atlases (font
+// atlases first, dense by FontHandle, then appended sprite/story textures) and
+// the blob indices the font payloads occupy (for the blob-release step).
+struct TextAtlases {
+    atlases: Vec<(u32, u32, Vec<u8>)>,
+    font_blob_indices: Vec<u32>,
+}
+
 // Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
 // streamed mesh, its scoring centre, and its decoded per-mesh geometry copy.
 // The three vecs are column-aligned.
@@ -1743,6 +1751,254 @@ impl GraphicsSystem {
         });
     }
 
+    // Read the sole EnvironmentMap (handle 0) from its resource table and capture
+    // its IBL payload; extra declarations are logged and ignored. Under `cn debug`
+    // (`capture_sources`) also captures the resolved HDR source path + convolution
+    // sizing for the hot-reload watcher (procedural generators have no file to
+    // watch). Returns (payload bytes, source), or None (self.failed set) if the
+    // payload is unreadable.
+    fn decode_environment_map(
+        &mut self,
+        ctx: &mut PipelineContext,
+        capture_sources: bool,
+    ) -> Option<(
+        Option<Vec<u8>>,
+        Option<super::hot_reload_sources::EnvironmentMapSource>,
+    )> {
+        let env_map_table = ctx
+            .resource::<crate::resource::EnvironmentMapTable>()
+            .cloned()
+            .unwrap_or_default();
+        if env_map_table.len() > 1 {
+            tracing::warn!(
+                "GraphicsSystem: {} EnvironmentMaps declared; only the first is used",
+                env_map_table.len()
+            );
+        }
+        let mut env_map_bytes: Option<Vec<u8>> = None;
+        let mut environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource> =
+            None;
+        // The runtime uses handle 0; a compiled EnvironmentMap always carries a
+        // payload (procedural generators bake one too), so a `None` locator here
+        // means simply "no EnvironmentMap declared".
+        if let Some(locator) = env_map_table.locator(0) {
+            match ctx.read_payload(&locator) {
+                Ok(b) => env_map_bytes = Some(b.to_vec()),
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+        if capture_sources
+            && let Some(info) = ctx
+                .resource::<crate::resource::EnvironmentMapSources>()
+                .and_then(|s| s.0.clone())
+        {
+            environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
+                resolved_path: crate::build::environment_map::resolve_source_path(&info.source),
+                prefilter_face_size: info.prefilter_face_size,
+                irradiance_face_size: info.irradiance_face_size,
+                prefilter_samples: info.prefilter_samples,
+                prefilter_clamp: info.prefilter_clamp,
+            });
+        }
+        Some((env_map_bytes, environment_map_source))
+    }
+
+    // Read the sole ColorLut (handle 0) from its resource table and capture its
+    // colour-grading payload; extras are logged and ignored. Under `cn debug`
+    // captures the resolved source path for the hot-reload watcher. Returns
+    // (payload bytes, source), or None (self.failed set) if unreadable.
+    fn decode_color_lut(
+        &mut self,
+        ctx: &mut PipelineContext,
+        capture_sources: bool,
+    ) -> Option<(
+        Option<Vec<u8>>,
+        Option<super::hot_reload_sources::ColorLutSource>,
+    )> {
+        let color_lut_table = ctx
+            .resource::<crate::resource::ColorLutTable>()
+            .cloned()
+            .unwrap_or_default();
+        if color_lut_table.len() > 1 {
+            tracing::warn!(
+                "GraphicsSystem: {} ColorLuts declared; only the first is used",
+                color_lut_table.len()
+            );
+        }
+        let mut color_lut_bytes: Option<Vec<u8>> = None;
+        let mut color_lut_source: Option<super::hot_reload_sources::ColorLutSource> = None;
+        // Handle 0 is the sole LUT the renderer applies; a compiled ColorLut always
+        // carries a payload, so a `None` locator means "no ColorLut declared".
+        if let Some(locator) = color_lut_table.locator(0) {
+            match ctx.read_payload(&locator) {
+                Ok(b) => color_lut_bytes = Some(b.to_vec()),
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {:?}", e);
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+        if capture_sources
+            && let Some(src) = ctx
+                .resource::<crate::resource::ColorLutSources>()
+                .and_then(|c| c.0.clone())
+        {
+            color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
+                resolved_path: crate::build::color_lut::resolve_source_path(&src),
+            });
+        }
+        Some((color_lut_bytes, color_lut_source))
+    }
+
+    // Build the shared text/sprite atlas pool: deserialise each Font's atlas +
+    // metrics into `self.loaded_fonts` (its FontHandle == its dense atlas slot),
+    // then append each distinct Sprite / Story-stage texture (resolved through
+    // `texture_locators`) into `self.sprite_texture_slots`. An unresolved sprite
+    // texture demotes to its tint (warned, not fatal). Returns the RGBA atlases +
+    // the font payloads' blob indices, or None (self.failed set) on a Font decode
+    // or read failure.
+    fn decode_text_atlases(
+        &mut self,
+        ctx: &mut PipelineContext,
+        texture_locators: &[crate::ecs::PayloadLocator],
+    ) -> Option<TextAtlases> {
+        let font_table = ctx
+            .resource::<crate::resource::FontTable>()
+            .cloned()
+            .unwrap_or_default();
+        let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+        for (slot, entry) in font_table.0.iter().enumerate() {
+            let locator = match &entry.payload {
+                Some(l) => l.clone(),
+                None => {
+                    tracing::error!(
+                        "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
+                        slot
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            let bytes = match ctx.read_payload(&locator) {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: failed to read Font handle {} payload: {:?}",
+                        slot,
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            match crate::build::font::deserialise(&bytes) {
+                Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
+                    let metrics_map: std::collections::HashMap<
+                        u32,
+                        crate::build::font::GlyphMetrics,
+                    > = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+                    let size_px = size_px as f32;
+                    self.loaded_fonts.insert(
+                        crate::ecs::FontHandle(slot as u32),
+                        text::LoadedFont {
+                            atlas_slot: slot,
+                            cap_px: text::derive_cap_px(&metrics_map, size_px),
+                            metrics: metrics_map,
+                            atlas_w: aw,
+                            atlas_h: ah,
+                            size_px,
+                            supersample: (supersample.max(1)) as f32,
+                        },
+                    );
+                    text_atlas_data.push((aw, ah, rgba));
+                }
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: malformed Font payload: {}", e);
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+
+        // Sprite textures ride the text-atlas pool: each distinct Texture a
+        // Sprite references is decoded and appended after the font atlases,
+        // drawn by the same pipeline (positive vertex mode = RGBA quad). A
+        // Story's stage images are gathered too: the story system swaps them
+        // onto the stage sprites at runtime, so they must be resident even
+        // though no sprite references them yet. A texture that cannot be
+        // resolved demotes its sprite to the solid tint fill, warned rather
+        // than fatal.
+        let sprite_texture_ids: Vec<crate::ecs::TextureHandle> = {
+            let mut ids: Vec<crate::ecs::TextureHandle> = ctx
+                .query::<crate::assets::Sprite>()
+                .filter_map(|s| s.texture)
+                .collect();
+            for story in ctx.query::<crate::assets::Story>() {
+                let stages = story.nodes.iter().flat_map(|n| {
+                    n.pages
+                        .iter()
+                        .map(|p| &p.stage)
+                        .chain(std::iter::once(&n.choice_stage))
+                });
+                for stage in stages {
+                    for image in [&stage.bg, &stage.left, &stage.center, &stage.right]
+                        .into_iter()
+                        .flatten()
+                    {
+                        ids.push(image.texture);
+                    }
+                }
+            }
+            ids.sort_unstable_by_key(|id| id.0);
+            ids.dedup();
+            ids
+        };
+        for tex_id in sprite_texture_ids {
+            // The texture handle is the texture's declaration-order pool slot,
+            // so it indexes the locator table directly.
+            let Some(locator) = texture_locators.get(tex_id.index()).cloned() else {
+                tracing::warn!(
+                    "GraphicsSystem: Sprite references unknown texture {:?}; drawing its tint",
+                    tex_id
+                );
+                continue;
+            };
+            match ctx.read_payload(&locator) {
+                Ok(bytes) => match crate::build::texture::deserialise(bytes)
+                    .and_then(|image| image.into_rgba8())
+                {
+                    Ok((w, h, rgba)) => {
+                        self.sprite_texture_slots
+                            .insert(tex_id, text_atlas_data.len());
+                        text_atlas_data.push((w, h, rgba));
+                    }
+                    Err(e) => {
+                        tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e)
+                    }
+                },
+                Err(e) => tracing::warn!(
+                    "GraphicsSystem: sprite texture {:?} payload read failed: {:?}",
+                    tex_id,
+                    e
+                ),
+            }
+        }
+
+        let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
+        Some(TextAtlases {
+            atlases: text_atlas_data,
+            font_blob_indices,
+        })
+    }
+
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         let ResolvedRenderConfig {
             post,
@@ -1898,221 +2154,25 @@ impl GraphicsSystem {
             }
         }
 
-        // Read the first EnvironmentMap from its resource table and capture its payload.
-        // The runtime supports at most one IBL environment per world;
-        // additional declarations are logged and ignored. Under `cn debug` we also
-        // capture the resolved HDR source path + sizing knobs into
-        // `environment_map_source` so the hot-reload watcher knows what to
-        // subscribe to and the reload helper can re-run the convolutions with
-        // matching dimensions. Procedural `generator` declarations have no
-        // file to watch and are skipped.
-        let env_map_table = ctx
-            .resource::<crate::resource::EnvironmentMapTable>()
-            .cloned()
-            .unwrap_or_default();
-        if env_map_table.len() > 1 {
-            tracing::warn!(
-                "GraphicsSystem: {} EnvironmentMaps declared; only the first is used",
-                env_map_table.len()
-            );
-        }
-        let mut env_map_bytes: Option<Vec<u8>> = None;
-        let mut environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource> =
-            None;
-        // The runtime uses handle 0; a compiled EnvironmentMap always carries a
-        // payload (procedural generators bake one too), so a `None` locator here
-        // means simply "no EnvironmentMap declared".
-        if let Some(locator) = env_map_table.locator(0) {
-            match ctx.read_payload(&locator) {
-                Ok(b) => env_map_bytes = Some(b.to_vec()),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
-                        e
-                    );
-                    self.failed = true;
-                    return;
-                }
-            }
-        }
-        if capture_sources
-            && let Some(info) = ctx
-                .resource::<crate::resource::EnvironmentMapSources>()
-                .and_then(|s| s.0.clone())
-        {
-            environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
-                resolved_path: crate::build::environment_map::resolve_source_path(&info.source),
-                prefilter_face_size: info.prefilter_face_size,
-                irradiance_face_size: info.irradiance_face_size,
-                prefilter_samples: info.prefilter_samples,
-                prefilter_clamp: info.prefilter_clamp,
-            });
-        }
-
-        // Read the first ColorLut from its resource table and capture its payload.
-        // At most one colour-grading LUT per world; extras are logged and ignored.
-        // Under `cn debug` we also capture the resolved source path (from the dev
-        // source catalogue) into `color_lut_source` so the hot-reload watcher knows
-        // what to subscribe to and the reload helper knows where to re-read the LUT.
-        let color_lut_table = ctx
-            .resource::<crate::resource::ColorLutTable>()
-            .cloned()
-            .unwrap_or_default();
-        if color_lut_table.len() > 1 {
-            tracing::warn!(
-                "GraphicsSystem: {} ColorLuts declared; only the first is used",
-                color_lut_table.len()
-            );
-        }
-        let mut color_lut_bytes: Option<Vec<u8>> = None;
-        let mut color_lut_source: Option<super::hot_reload_sources::ColorLutSource> = None;
-        // Handle 0 is the sole LUT the renderer applies; a compiled ColorLut always
-        // carries a payload, so a `None` locator means "no ColorLut declared".
-        if let Some(locator) = color_lut_table.locator(0) {
-            match ctx.read_payload(&locator) {
-                Ok(b) => color_lut_bytes = Some(b.to_vec()),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {:?}", e);
-                    self.failed = true;
-                    return;
-                }
-            }
-        }
-        if capture_sources
-            && let Some(src) = ctx
-                .resource::<crate::resource::ColorLutSources>()
-                .and_then(|c| c.0.clone())
-        {
-            color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
-                resolved_path: crate::build::color_lut::resolve_source_path(&src),
-            });
-        }
-
-        // Read Font resources from the FontTable; deserialise each atlas + metrics
-        // for text rendering. A font's `FontHandle` is its atlas slot (dense 0..N),
-        // so the handle indexes both `loaded_fonts` and the leading `text_atlas_data`
-        // slots. `size_px` now rides in the payload (it left the component column).
-        let font_table = ctx
-            .resource::<crate::resource::FontTable>()
-            .cloned()
-            .unwrap_or_default();
-        let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
-        for (slot, entry) in font_table.0.iter().enumerate() {
-            let locator = match &entry.payload {
-                Some(l) => l.clone(),
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
-                        slot
-                    );
-                    self.failed = true;
-                    return;
-                }
+        // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
+        // text/sprite atlas pool.
+        let (env_map_bytes, environment_map_source) =
+            match self.decode_environment_map(ctx, capture_sources) {
+                Some(decoded) => decoded,
+                None => return,
             };
-            let bytes = match ctx.read_payload(&locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read Font handle {} payload: {:?}",
-                        slot,
-                        e
-                    );
-                    self.failed = true;
-                    return;
-                }
-            };
-            match crate::build::font::deserialise(&bytes) {
-                Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
-                    let metrics_map: std::collections::HashMap<
-                        u32,
-                        crate::build::font::GlyphMetrics,
-                    > = metrics.into_iter().map(|m| (m.char_code, m)).collect();
-                    let size_px = size_px as f32;
-                    self.loaded_fonts.insert(
-                        crate::ecs::FontHandle(slot as u32),
-                        text::LoadedFont {
-                            atlas_slot: slot,
-                            cap_px: text::derive_cap_px(&metrics_map, size_px),
-                            metrics: metrics_map,
-                            atlas_w: aw,
-                            atlas_h: ah,
-                            size_px,
-                            supersample: (supersample.max(1)) as f32,
-                        },
-                    );
-                    text_atlas_data.push((aw, ah, rgba));
-                }
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: malformed Font payload: {}", e);
-                    self.failed = true;
-                    return;
-                }
-            }
-        }
-
-        // Sprite textures ride the text-atlas pool: each distinct Texture a
-        // Sprite references is decoded and appended after the font atlases,
-        // drawn by the same pipeline (positive vertex mode = RGBA quad). A
-        // Story's stage images are gathered too: the story system swaps them
-        // onto the stage sprites at runtime, so they must be resident even
-        // though no sprite references them yet. A texture that cannot be
-        // resolved demotes its sprite to the solid tint fill, warned rather
-        // than fatal.
-        let sprite_texture_ids: Vec<crate::ecs::TextureHandle> = {
-            let mut ids: Vec<crate::ecs::TextureHandle> = ctx
-                .query::<crate::assets::Sprite>()
-                .filter_map(|s| s.texture)
-                .collect();
-            for story in ctx.query::<crate::assets::Story>() {
-                let stages = story.nodes.iter().flat_map(|n| {
-                    n.pages
-                        .iter()
-                        .map(|p| &p.stage)
-                        .chain(std::iter::once(&n.choice_stage))
-                });
-                for stage in stages {
-                    for image in [&stage.bg, &stage.left, &stage.center, &stage.right]
-                        .into_iter()
-                        .flatten()
-                    {
-                        ids.push(image.texture);
-                    }
-                }
-            }
-            ids.sort_unstable_by_key(|id| id.0);
-            ids.dedup();
-            ids
+        let (color_lut_bytes, color_lut_source) = match self.decode_color_lut(ctx, capture_sources)
+        {
+            Some(decoded) => decoded,
+            None => return,
         };
-        for tex_id in sprite_texture_ids {
-            // The texture handle is the texture's declaration-order pool slot,
-            // so it indexes the locator table directly.
-            let Some(locator) = texture_locators.get(tex_id.index()).cloned() else {
-                tracing::warn!(
-                    "GraphicsSystem: Sprite references unknown texture {:?}; drawing its tint",
-                    tex_id
-                );
-                continue;
-            };
-            match ctx.read_payload(&locator) {
-                Ok(bytes) => match crate::build::texture::deserialise(bytes)
-                    .and_then(|image| image.into_rgba8())
-                {
-                    Ok((w, h, rgba)) => {
-                        self.sprite_texture_slots
-                            .insert(tex_id, text_atlas_data.len());
-                        text_atlas_data.push((w, h, rgba));
-                    }
-                    Err(e) => {
-                        tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e)
-                    }
-                },
-                Err(e) => tracing::warn!(
-                    "GraphicsSystem: sprite texture {:?} payload read failed: {:?}",
-                    tex_id,
-                    e
-                ),
-            }
-        }
+        let TextAtlases {
+            atlases: text_atlas_data,
+            font_blob_indices,
+        } = match self.decode_text_atlases(ctx, &texture_locators) {
+            Some(decoded) => decoded,
+            None => return,
+        };
 
         // Indirect-ambient multiplier from PostProcessConfig, folded into the
         // shared LightUniforms so every backend's main pass scales its IBL /
@@ -2132,8 +2192,6 @@ impl GraphicsSystem {
             &light_data.lights,
             ambient_intensity,
         );
-
-        let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
 
         // AudioSystem inits after GraphicsSystem and reads audio-clip payloads
         // from the `AudioClipTable`, so any blob a clip lives in must survive this
