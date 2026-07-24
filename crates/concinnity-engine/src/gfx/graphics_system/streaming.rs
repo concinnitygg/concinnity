@@ -51,6 +51,46 @@ pub(super) fn chunk_reserve_count(vw: &VoxelWorld) -> usize {
     (evict_span * evict_span).min(MAX_CHUNK_RECORDS) as usize
 }
 
+// Texture slots whose payloads init skips: exclusively owned by a scene other
+// than the start scene, gated behind streaming (the streamer is the runtime
+// load path that brings them in when their scene pins). Disk-backed, a skipped
+// payload -- and any scene blob holding only skipped payloads -- is never read
+// at init. Empty when streaming is off or the world declares no scenes.
+pub(super) fn deferred_texture_slots(
+    ctx: &crate::ecs::PipelineContext,
+    streaming: bool,
+    slot_count: usize,
+) -> std::collections::HashSet<usize> {
+    let mut deferred = std::collections::HashSet::new();
+    if !streaming || !cfg!(target_os = "macos") {
+        return deferred;
+    }
+    // Scenes are still undrained at this point; the first declared is the
+    // start scene (the one setup_scene_flow pins).
+    let Some(start) = ctx
+        .query::<crate::assets::Scene>()
+        .next()
+        .map(|s| s.asset_id)
+    else {
+        return deferred;
+    };
+    let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
+        return deferred;
+    };
+    let texture_kind = concinnity_core::ecs::ResourceKind::Texture as u8;
+    for group in &groups.0 {
+        if group.scene == start {
+            continue;
+        }
+        for &(kind, handle) in &group.resources {
+            if kind == texture_kind && (handle as usize) < slot_count {
+                deferred.insert(handle as usize);
+            }
+        }
+    }
+    deferred
+}
+
 impl GraphicsSystem {
     // Build scene residency over the streaming pools: texture members come
     // from the blob's baked per-scene groups (a streamed texture's slot is its

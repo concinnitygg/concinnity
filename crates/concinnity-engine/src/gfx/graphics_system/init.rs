@@ -2132,7 +2132,37 @@ impl GraphicsSystem {
         // Left empty when the blobs are disk-backed: the streamer then re-reads
         // each payload from its blob file instead of holding a RAM copy.
         let mut texture_payloads: Vec<Vec<u8>> = Vec::new();
-        for locator in &texture_locators {
+        // Slots owned by a scene other than the start scene enter the pool as
+        // 1x1 placeholders instead of decoding: they are blocked from
+        // streaming until their scene pins, at which point the streamer
+        // decodes them off the main thread.
+        let deferred_slots = super::streaming::deferred_texture_slots(
+            ctx,
+            streaming_config.is_some(),
+            texture_locators.len(),
+        );
+        for (slot, locator) in texture_locators.iter().enumerate() {
+            if deferred_slots.contains(&slot) {
+                texture_data.push(crate::build::texture::TextureImage::rgba8(
+                    1,
+                    1,
+                    vec![0, 0, 0, 255],
+                ));
+                if !blob_disk_backed {
+                    match ctx.read_payload(locator) {
+                        Ok(b) => texture_payloads.push(b.to_vec()),
+                        Err(e) => {
+                            tracing::error!(
+                                "GraphicsSystem: failed to read texture payload: {:?}",
+                                e
+                            );
+                            self.failed = true;
+                            return;
+                        }
+                    }
+                }
+                continue;
+            }
             let tex_bytes = match ctx.read_payload(locator) {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
@@ -2152,6 +2182,12 @@ impl GraphicsSystem {
             if !blob_disk_backed {
                 texture_payloads.push(tex_bytes);
             }
+        }
+        if !deferred_slots.is_empty() {
+            tracing::info!(
+                "GraphicsSystem: deferred {} scene-owned texture payload(s) past init",
+                deferred_slots.len()
+            );
         }
 
         // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
