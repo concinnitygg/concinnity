@@ -118,6 +118,7 @@ macro_rules! for_each_component {
             Reaction          => $crate::assets::Reaction { gen, external, id },
             TriggerVolume     => $crate::assets::TriggerVolume { gen, external, id, useful_blank },
             Hidden            => $crate::assets::Hidden { runtime },
+            LoadingOverlay    => $crate::assets::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
         }
     };
 }

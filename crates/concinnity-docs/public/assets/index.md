@@ -29,6 +29,7 @@
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action string.
 - [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, colour, background, padding) but their `x`/`y` are overwritten each frame.
 - [LightRig](LightRig.md) - A named grouping of lights.
+- [LoadingOverlay](LoadingOverlay.md) - Requests the scene-loading overlay: a full-window backdrop with a progress bar, shown while a scene jump waits for its streamed content and faded out once the destination scene is fully resident.
 - [MainMenu](MainMenu.md) - A ready-made menu declared in a single line.
 - [Material](Material.md) - A Material bundles the surface parameters that control how a [Prop](Prop.md) is lit and shaded.
 - [MaterialPalette](MaterialPalette.md) - A named set of [Material](Material.md) entries with short aliases.

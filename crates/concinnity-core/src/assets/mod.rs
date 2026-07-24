@@ -103,6 +103,7 @@ pub use concinnity_asset::HitRegion;
 pub use concinnity_asset::IndirectLighting;
 pub use concinnity_asset::KeyBinding;
 pub use concinnity_asset::LightRig;
+pub use concinnity_asset::LoadingOverlay;
 pub use concinnity_asset::Material;
 pub use concinnity_asset::MaterialPalette;
 pub use concinnity_asset::OptionSelect;

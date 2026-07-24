@@ -3,8 +3,10 @@
 // assets it does not declare itself. A world that renders (has a
 // GraphicsConfig after the first companion round) receives a DebugHud with
 // its chip TextLabels and font, a StatHud with its chips when the world
-// declares a MainMenu (the menu's performance-stats toggles drive them), and,
-// when an EnvironmentMap is present, the sky mesh that displays it.
+// declares a MainMenu (the menu's performance-stats toggles drive them), a
+// LoadingOverlay with its screen and progress bar when the world declares
+// Scenes and a StreamingConfig, and, when an EnvironmentMap is present, the
+// sky mesh that displays it.
 //
 // Override and opt-out rules:
 //   - Declaring an asset of the same type pre-empts the whole default (an
@@ -80,11 +82,171 @@ pub(crate) fn inject_engine_defaults(
             ],
         )?;
     }
+    if toggles.loading_overlay {
+        inject_loading_overlay(assets, report)?;
+    }
     // A story world with no menu of its own gets an Escape-toggled pause menu.
     // Injected after the HUD defaults so it does not turn on the StatHud: the
     // trimmed pause menu carries no performance-stats toggles to drive it.
     if toggles.story_pause_menu {
         inject_story_pause_menu(assets, report)?;
+    }
+    Ok(())
+}
+
+// The overlay's ref fields, each paired with the default piece it receives.
+const LOADING_OVERLAY_FIELDS: [(&str, &str); 5] = [
+    ("screen", "loading_screen"),
+    ("backdrop", "loading_screen_backdrop"),
+    ("track", "loading_screen_track"),
+    ("fill", "loading_screen_fill"),
+    ("label", "loading_screen_label"),
+];
+
+// The default UI piece behind one LoadingOverlay ref field: its asset type and
+// args. The pieces are named `loading_screen_*` so the screen-prefix rule also
+// binds them to the overlay's screen.
+fn loading_piece(field: &str) -> (&'static str, serde_json::Value) {
+    match field {
+        "screen" => ("Screen", serde_json::json!({ "fade_in_secs": 0.15 })),
+        "backdrop" => (
+            "Sprite",
+            serde_json::json!({
+                "x": 0, "y": 0, "width": 1280, "height": 720,
+                "tint": [0.0, 0.0, 0.0, 1.0], "fit": "cover",
+            }),
+        ),
+        "track" => (
+            "Sprite",
+            serde_json::json!({
+                "x": 400, "y": 600, "width": 480, "height": 8,
+                "tint": [0.25, 0.25, 0.25, 1.0], "corner_radius": 4,
+            }),
+        ),
+        "fill" => (
+            "Sprite",
+            serde_json::json!({
+                "x": 400, "y": 600, "width": 0, "height": 8,
+                "tint": [0.92, 0.92, 0.92, 1.0], "corner_radius": 4,
+                "visible": false,
+            }),
+        ),
+        "label" => (
+            "TextLabel",
+            serde_json::json!({
+                "font": HUD_FONT_NAME, "content": "Loading",
+                "x": 640, "y": 566, "align": "center",
+            }),
+        ),
+        _ => unreachable!("unknown LoadingOverlay field '{field}'"),
+    }
+}
+
+// Synthesize the LoadingOverlay for a world that jumps between streamed
+// scenes, fill its unset ref fields with the default piece names, and inject
+// any pieces (and the label's font) those fields now reference but the world
+// does not provide. An authored LoadingOverlay is completed the same way
+// wherever it appears; one is synthesized only when the world declares Scenes
+// and a StreamingConfig (without both there is nothing to wait for).
+fn inject_loading_overlay(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), String> {
+    let overlay_index = match assets.iter().position(|v| type_norm(v) == "loadingoverlay") {
+        Some(i) => i,
+        None => {
+            let has_scene = assets.iter().any(|v| type_norm(v) == "scene");
+            let has_streaming = assets.iter().any(|v| type_norm(v) == "streamingconfig");
+            if !(has_scene && has_streaming) {
+                return Ok(());
+            }
+            if name_claimed(
+                assets,
+                report,
+                "loading_overlay",
+                "loading_overlay",
+                "LoadingOverlay",
+            )? {
+                // Unreachable in practice: a same-name same-type asset would
+                // have matched the type scan above.
+                return Ok(());
+            }
+            inject(
+                assets,
+                report,
+                "loading_overlay",
+                "loading_overlay",
+                "LoadingOverlay",
+                serde_json::json!({}),
+            );
+            assets.len() - 1
+        }
+    };
+
+    // Fill unset ref fields on the overlay (authored or synthesized) and
+    // collect the pieces those fields now reference.
+    let mut needed: Vec<(&str, &str)> = Vec::new();
+    {
+        let overlay = &mut assets[overlay_index];
+        if overlay.get("args").is_none() {
+            overlay["args"] = serde_json::json!({});
+        }
+        let args = overlay
+            .get_mut("args")
+            .and_then(|a| a.as_object_mut())
+            .ok_or_else(|| "LoadingOverlay: args must be an object".to_string())?;
+        for (field, piece) in LOADING_OVERLAY_FIELDS {
+            let unset = args
+                .get(field)
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true);
+            if unset {
+                args.insert(field.to_string(), serde_json::json!(piece));
+                needed.push((field, piece));
+            }
+        }
+    }
+
+    // Keep the report's copy of a synthesized overlay in sync with the
+    // filled-in ref fields, so the lock shows the args the blob carries.
+    if let Some(entry) = report
+        .injected
+        .iter_mut()
+        .find(|i| i.asset_type == "LoadingOverlay")
+    {
+        entry.args = assets[overlay_index]
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+    }
+
+    let mut label_injected = false;
+    for (field, piece) in needed {
+        let (piece_type, piece_args) = loading_piece(field);
+        if name_claimed(assets, report, "loading_overlay", piece, piece_type)? {
+            continue;
+        }
+        inject(
+            assets,
+            report,
+            "loading_overlay",
+            piece,
+            piece_type,
+            piece_args,
+        );
+        label_injected |= field == "label";
+    }
+
+    if label_injected && !name_claimed(assets, report, "loading_overlay", HUD_FONT_NAME, "Font")? {
+        inject(
+            assets,
+            report,
+            "loading_overlay",
+            HUD_FONT_NAME,
+            "Font",
+            serde_json::json!({ "size_px": HUD_FONT_SIZE_PX }),
+        );
     }
     Ok(())
 }
@@ -977,6 +1139,148 @@ mod tests {
         })];
         patch_story_scaffold(&mut assets, "tale", "tale_pause");
         assert_eq!(assets[0]["args"]["scaffold"], 7);
+    }
+
+    fn scene_and_streaming() -> [serde_json::Value; 2] {
+        [
+            serde_json::json!({"name":"town","type":"Scene","args":{}}),
+            serde_json::json!({"name":"stream","type":"StreamingConfig","args":{}}),
+        ]
+    }
+
+    #[test]
+    fn scene_streaming_world_gets_the_loading_overlay_set() {
+        let [scene, streaming] = scene_and_streaming();
+        let mut assets = world(&[gfx(), scene, streaming]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        assert_eq!(
+            names_of_type(&assets, "loadingoverlay"),
+            vec!["loading_overlay"]
+        );
+        assert_eq!(names_of_type(&assets, "screen"), vec!["loading_screen"]);
+        let sprites = names_of_type(&assets, "sprite");
+        for piece in [
+            "loading_screen_backdrop",
+            "loading_screen_track",
+            "loading_screen_fill",
+        ] {
+            assert!(sprites.contains(&piece.to_string()), "missing {piece}");
+        }
+        let labels = names_of_type(&assets, "textlabel");
+        assert!(labels.contains(&"loading_screen_label".to_string()));
+        assert_eq!(names_of_type(&assets, "font"), vec![HUD_FONT_NAME]);
+
+        // The overlay's ref fields point at the injected pieces.
+        let overlay = assets
+            .iter()
+            .find(|v| type_norm(v) == "loadingoverlay")
+            .unwrap();
+        assert_eq!(overlay["args"]["screen"], "loading_screen");
+        assert_eq!(overlay["args"]["fill"], "loading_screen_fill");
+        // The lock's copy carries the filled-in refs.
+        let entry = report
+            .injected
+            .iter()
+            .find(|i| i.asset_type == "LoadingOverlay")
+            .unwrap();
+        assert_eq!(entry.args["backdrop"], "loading_screen_backdrop");
+    }
+
+    #[test]
+    fn no_scenes_or_no_streaming_means_no_loading_overlay() {
+        let [scene, streaming] = scene_and_streaming();
+        for extra in [scene, streaming] {
+            let mut assets = world(&[gfx(), extra]);
+            let mut report = ExpandReport::default();
+            inject_engine_defaults(&mut assets, &mut report).unwrap();
+            assert!(names_of_type(&assets, "loadingoverlay").is_empty());
+            assert!(names_of_type(&assets, "screen").is_empty());
+        }
+    }
+
+    #[test]
+    fn engine_defaults_opts_out_of_the_loading_overlay() {
+        let [scene, streaming] = scene_and_streaming();
+        let mut assets = world(&[
+            gfx(),
+            scene,
+            streaming,
+            serde_json::json!({"name":"d","type":"EngineDefaults","args":{
+                "loading_overlay": false
+            }}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "loadingoverlay").is_empty());
+    }
+
+    // An authored overlay is completed even in a world that would not have one
+    // synthesized (no StreamingConfig); declaring it is the opt-in.
+    #[test]
+    fn authored_loading_overlay_gets_unset_refs_filled() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"load","type":"LoadingOverlay","args":{
+                "backdrop":"my_backdrop"
+            }}),
+            serde_json::json!({"name":"my_backdrop","type":"Sprite","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        let overlay = assets
+            .iter()
+            .find(|v| type_norm(v) == "loadingoverlay")
+            .unwrap();
+        assert_eq!(asset_name(overlay), "load");
+        assert_eq!(overlay["args"]["backdrop"], "my_backdrop");
+        assert_eq!(overlay["args"]["track"], "loading_screen_track");
+        let sprites = names_of_type(&assets, "sprite");
+        assert!(!sprites.contains(&"loading_screen_backdrop".to_string()));
+        assert!(sprites.contains(&"loading_screen_fill".to_string()));
+    }
+
+    #[test]
+    fn authored_loading_piece_replaces_the_injected_one() {
+        let [scene, streaming] = scene_and_streaming();
+        let mut assets = world(&[
+            gfx(),
+            scene,
+            streaming,
+            serde_json::json!({"name":"loading_screen_backdrop","type":"Sprite","args":{
+                "tint":[0.1,0.0,0.0,1.0]
+            }}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        let backdrops: Vec<_> = assets
+            .iter()
+            .filter(|v| asset_name(v) == "loading_screen_backdrop")
+            .collect();
+        assert_eq!(backdrops.len(), 1);
+        assert_eq!(backdrops[0]["args"]["tint"][0], serde_json::json!(0.1));
+        let shadowed: Vec<&str> = report.shadowed.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            shadowed.contains(&"loading_screen_backdrop"),
+            "{shadowed:?}"
+        );
+    }
+
+    #[test]
+    fn a_loading_piece_name_held_by_another_type_is_an_error() {
+        let [scene, streaming] = scene_and_streaming();
+        let mut assets = world(&[
+            gfx(),
+            scene,
+            streaming,
+            serde_json::json!({"name":"loading_screen","type":"Window","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains("loading_screen"), "{err}");
     }
 
     #[test]

@@ -33,6 +33,9 @@
 //     runs inside draw_frame, so sampling right after the draw snapshots the
 //     freshest events. It deposits `FrameInput` (drained by no one -- the next
 //     sample replaces it) for every consumer below.
+//   * LoadingOverlaySystem after StreamingSystem (it reads the residency
+//     status published this tick) and before UiInputSystem (its screen
+//     commands apply the same tick).
 //   * PhysicsSystem before the camera controllers: physics consumes the
 //     camera's previous-frame `desired_move` (a one-frame-lagged resolution).
 //   * Camera3DSystem / ThirdPersonSystem before AudioSystem: the audio
@@ -81,6 +84,10 @@ crate::define_systems! {
     DebugHud => crate::hud::debug_hud::DebugHudSystem {
         gate: schedule::debug_hud,
         present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
+    },
+    LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
+        gate: schedule::loading_overlay,
+        present_when: "the world declares a LoadingOverlay",
     },
     PhysicsSystem => concinnity_physics::PhysicsSystem {
         gate: schedule::physics,

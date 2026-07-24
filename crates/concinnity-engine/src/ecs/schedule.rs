@@ -123,6 +123,16 @@ pub(crate) fn debug_hud(world: &World) -> Option<SystemAsset> {
         .map(|cfg| crate::hud::debug_hud::DebugHudSystem::new(cfg).into())
 }
 
+// LoadingOverlaySystem: present whenever the world declares a `LoadingOverlay`;
+// built from that component (its screen + element refs).
+pub(crate) fn loading_overlay(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::LoadingOverlay>()
+        .next()
+        .cloned()
+        .map(|cfg| crate::hud::loading_overlay::LoadingOverlaySystem::new(cfg).into())
+}
+
 // PhysicsSystem: present whenever the world has physics content, namely a
 // `PhysicsConfig` (optional floor / terrain tuning), a `RigidBody` (character
 // capsule), a `PropBody` (dynamic prop), or a `TriggerVolume` (sensor

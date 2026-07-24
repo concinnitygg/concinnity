@@ -662,6 +662,7 @@ mod tests {
                 "StreamingConfig",
                 "PhysicsConfig",
                 "Application",
+                "LoadingOverlay",
             ]
         );
         assert_eq!(
@@ -680,6 +681,7 @@ mod tests {
                 "MainMenu",
                 "DebugHud",
                 "TextInput",
+                "LoadingOverlay",
             ]
         );
         for &ty in ComponentType::all() {

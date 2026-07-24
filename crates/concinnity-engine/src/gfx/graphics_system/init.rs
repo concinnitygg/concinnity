@@ -3161,6 +3161,7 @@ impl GraphicsSystem {
             pressure_stage: crate::gfx::streaming_system::pressure::StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,
+            heartbeats: Default::default(),
         });
 
         // Init-time wiring is done: park the backend in the world's shared

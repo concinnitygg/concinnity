@@ -137,6 +137,13 @@ impl SceneResidency {
             .map(derive_progress)
     }
 
+    // Whether any pinned scene still has members loading.
+    pub fn any_loading(&self) -> bool {
+        self.sets
+            .iter()
+            .any(|s| derive_state(s) == SceneLoadState::Loading)
+    }
+
     // Every scene's `(id, state, progress)`, in declaration order.
     pub fn status(&self) -> Vec<(AssetId, SceneLoadState, f32)> {
         self.sets
@@ -271,6 +278,21 @@ mod tests {
         let mut r = residency();
         r.note_resident((CHANNEL_TEXTURE, 99), true);
         assert_eq!(r.progress(AssetId(1)), Some(0.0));
+    }
+
+    #[test]
+    fn any_loading_tracks_pinned_scenes_only() {
+        let mut r = residency();
+        assert!(!r.any_loading());
+        r.sync_pins(&[AssetId(1)]);
+        assert!(r.any_loading());
+        r.note_resident((CHANNEL_TEXTURE, 0), true);
+        r.note_resident((CHANNEL_TEXTURE, 1), true);
+        r.note_resident((CHANNEL_MESH, 5), true);
+        assert!(!r.any_loading());
+        // Unpinning drains through Unloading, which is not a load in flight.
+        r.sync_pins(&[]);
+        assert!(!r.any_loading());
     }
 
     #[test]

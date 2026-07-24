@@ -24,6 +24,7 @@ use crate::gfx::overlay::OverlayFrame;
 use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE, SceneResidency};
 
 pub(crate) mod pressure;
+pub(crate) mod stats_log;
 
 const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 
@@ -144,6 +145,9 @@ pub(crate) struct StreamingState {
     pub(crate) pressure_stage: pressure::StreamPressureStage,
     pub(crate) pressure_factor: f64,
     pub(crate) last_sampled_rss: Option<u64>,
+    // Gates the periodic per-pool counter line so a settled pool logs its
+    // counts once rather than every sample.
+    pub(crate) heartbeats: stats_log::PoolHeartbeats,
 }
 
 impl std::fmt::Debug for StreamingState {
@@ -201,7 +205,9 @@ impl System for StreamingSystem {
             .unwrap_or((IDENTITY4, [0.0; 3]));
         // Peek (not remove) the overlay's world-hidden flag: OverlaySystem
         // published it first this tick and GraphicsSystem removes it later.
-        // Streaming pauses behind an opaque menu (the world is not drawn).
+        // Streaming pauses behind an opaque menu (the world is not drawn),
+        // unless a pinned scene is still loading: a loading screen's opaque
+        // backdrop must not starve the load it reports (see `drive`).
         let world_hidden = ctx
             .resource::<OverlayFrame>()
             .map(|o| o.world_hidden)
@@ -301,6 +307,15 @@ impl StreamingState {
             }
         }
 
+        // A pinned scene mid-load keeps the pools dispatching even while the
+        // world is hidden, so a loading screen's opaque backdrop does not
+        // pause the very load whose progress it shows.
+        let world_hidden = world_hidden
+            && !self
+                .scene_residency
+                .as_ref()
+                .is_some_and(|r| r.any_loading());
+
         // Drive albedo-texture streaming: re-score every slot by camera
         // distance, dispatch this frame's background loads within budget, then
         // apply completed uploads + evictions. Each backend's
@@ -327,10 +342,13 @@ impl StreamingState {
                     residency.note_resident((CHANNEL_TEXTURE, slot as u32), true);
                 }
             });
-            // Surface streaming progress periodically so a headless run can
+            // Surface streaming progress as it moves so a headless run can
             // confirm textures are coming resident.
-            if self.frame_count.is_multiple_of(120) {
-                let (resident, pending, unloaded) = streamer.stats();
+            if let Some((resident, pending, unloaded)) = self
+                .heartbeats
+                .texture
+                .sample(self.frame_count, || streamer.stats())
+            {
                 tracing::info!(
                     "StreamingSystem: texture streaming -- {} resident, {} pending, {} unloaded",
                     resident,
@@ -380,8 +398,11 @@ impl StreamingState {
                 }
                 result
             });
-            if self.frame_count.is_multiple_of(120) {
-                let (resident, pending, unloaded) = streamer.stats();
+            if let Some((resident, pending, unloaded)) = self
+                .heartbeats
+                .mesh
+                .sample(self.frame_count, || streamer.stats())
+            {
                 tracing::info!(
                     "StreamingSystem: mesh streaming -- {} resident, {} pending, {} unloaded",
                     resident,
@@ -478,9 +499,13 @@ impl StreamingState {
             final_view =
                 crate::gfx::chunk_coord::camera_relative_view(view_matrix, cam_pos, origin);
             final_cam_pos = [cam_pos[0] - ox, cam_pos[1], cam_pos[2] - oz];
-            if self.frame_count.is_multiple_of(120) {
-                let (resident, pending) = cs.streamer.stats();
-                let (near, far) = cs.streamer.detail_counts();
+            if let Some((resident, pending, near, far)) =
+                self.heartbeats.chunk.sample(self.frame_count, || {
+                    let (resident, pending) = cs.streamer.stats();
+                    let (near, far) = cs.streamer.detail_counts();
+                    (resident, pending, near, far)
+                })
+            {
                 tracing::info!(
                     "StreamingSystem: chunk streaming -- {} resident ({} full, {} impostor), {} pending",
                     resident,
@@ -709,6 +734,7 @@ mod tests {
             pressure_stage: StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,
+            heartbeats: Default::default(),
         }
     }
 

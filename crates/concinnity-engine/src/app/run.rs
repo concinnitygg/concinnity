@@ -91,6 +91,7 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
 // app, then runs the world loop until the window closes, a system stops the
 // world, or CTRL+C is received.
 pub fn start_runtime(mut app: App) -> std::io::Result<()> {
+    tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&app);
 
     // Resolved before `start()` (while the GraphicsConfig is still present) and

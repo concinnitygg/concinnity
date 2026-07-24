@@ -37,6 +37,12 @@ pub struct EngineDefaults {
     /// leave a story with no pause menu, or declare your own `MainMenu` to
     /// replace it.
     pub story_pause_menu: bool,
+    /// Inject the [LoadingOverlay](#loadingoverlay) with its screen, backdrop,
+    /// progress bar, and label when the world declares [Scene](#scene)s and a
+    /// [StreamingConfig](#streamingconfig) but no `LoadingOverlay`. Disable to
+    /// jump between scenes with no loading screen while their content streams
+    /// in.
+    pub loading_overlay: bool,
 }
 
 impl Default for EngineDefaults {
@@ -46,6 +52,7 @@ impl Default for EngineDefaults {
             debug_hud: true,
             sky: true,
             story_pause_menu: true,
+            loading_overlay: true,
         }
     }
 }
