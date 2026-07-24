@@ -65,7 +65,7 @@ use objc2_metal::{
 };
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
-use super::screenshot::f16_to_f32;
+use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase};
 
 // Captured cube-face resolution (mip 0 of the prefilter chain). The fragment

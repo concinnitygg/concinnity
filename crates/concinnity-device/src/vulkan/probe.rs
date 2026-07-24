@@ -35,6 +35,7 @@ use super::texture::{
     upload_probe_prefilter_cube,
 };
 use crate::gfx::frustum::Frustum;
+use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, ProbePlacement};
 
 // Captured cube-face resolution (mip 0 of the prefilter chain). Matches the
@@ -1569,7 +1570,7 @@ fn decode_probe_face_rgba16f(raw: &[u8], face_size: u32) -> Vec<f32> {
     let texels = (face_size as usize) * (face_size as usize);
     let mut out = vec![0.0f32; texels * 4];
     for (texel, px) in raw.chunks_exact(8).take(texels).enumerate() {
-        let half = |o: usize| super::screenshot::f16_to_f32(u16::from_le_bytes([px[o], px[o + 1]]));
+        let half = |o: usize| f16_to_f32(u16::from_le_bytes([px[o], px[o + 1]]));
         let base = texel * 4;
         out[base] = half(0);
         out[base + 1] = half(2);

@@ -41,8 +41,12 @@
 use ash::{Device, vk};
 
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
+use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 use crate::vulkan::uniforms::SkinParams;
+// The dynamic-update mode ladder lives in concinnity-render; re-exported so the
+// `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
+pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
 use super::pipeline::{compile_glsl_rt, spv_module};
 use super::texture::create_buffer;
@@ -53,49 +57,12 @@ use super::texture::create_buffer;
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
 
-// Marks a `RtGeomEntry.normal_index` as belonging to a skinned object: the
-// reflection trace then fetches the hit triangle from the deformed-vertex / u16
-// skinned index buffers instead of the static u32 ones. Bit 31 is free (bindless
-// pool indices never approach 2^31); matches render_types / rt_reflections.frag.
-const RT_SKINNED_FLAG: u32 = 0x8000_0000;
-
 // GLSL source for the RT skinning compute kernel (compiled via shaderc to
 // SPIR-V 1.4 / Vulkan 1.2, the same target the ray-query shaders use).
 const RT_SKIN_COMP_GLSL: &str = include_str!("shaders/rt_skin.comp");
 
 // `SkinParams` (the `rt_skin` compute push constant) is a GPU-free layout struct
 // that lives in concinnity-render (imported above).
-
-// How the scene acceleration structure is kept current when props move. Selected
-// once at init from `CN_RT_DYNAMIC`; unset gives `Auto`, the shipping behaviour.
-// Mirrors the DirectX mode ladder.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum RtDynamicMode {
-    // Build once, never update. Forces a static BVH even if props move.
-    Off,
-    // Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
-    // the frames a participating transform actually changed.
-    Auto,
-    // Force a full TLAS + table rebuild every frame, dirty or not. Diagnostic.
-    Rebuild,
-    // Same GPU work as `Auto` minus the dirty gate. Diagnostic.
-    Tlas,
-}
-
-impl RtDynamicMode {
-    pub(super) fn from_env() -> Self {
-        match std::env::var("CN_RT_DYNAMIC").as_deref() {
-            Ok("off") => Self::Off,
-            Ok("rebuild") => Self::Rebuild,
-            Ok("tlas") => Self::Tlas,
-            _ => Self::Auto,
-        }
-    }
-
-    pub(super) fn is_dynamic(self) -> bool {
-        self != Self::Off
-    }
-}
 
 // Pack a column-major object-to-world `model` matrix into a Vulkan instance
 // transform: a 3x4 ROW-major affine (`VkTransformMatrixKHR`, `matrix[3][4]`),
@@ -120,98 +87,6 @@ pub(super) fn pack_instance_transform(model: [[f32; 4]; 4]) -> vk::TransformMatr
             model[3][2],
         ],
     }
-}
-
-// Shared-pool (albedo, normal) indices for a draw whose authored albedo /
-// normal-map slots are `texture_slot` / `normal_map_slot`. Albedo and normal
-// maps share one handle-indexed image set, so albedo = `texture_slot` and normal
-// = the normal map's own handle (or the flat-normal fallback slot when the draw
-// has none), resolved through the shared `render_types` helpers and matching
-// `draw.rs::build_object_buffer`. `texture_count` is the real-texture count (the
-// flat-normal fallback sits at `texture_count`). The textured RT shader binds
-// that same pool and indexes it with these.
-fn pool_indices(texture_slot: usize, normal_map_slot: usize, texture_count: usize) -> (u32, u32) {
-    (
-        crate::gfx::render_types::albedo_pool_index(texture_slot, texture_count as u32),
-        crate::gfx::render_types::normal_pool_index(normal_map_slot, texture_count as u32),
-    )
-}
-
-// Build the geometry-table entry for one static draw object.
-fn geom_entry(obj: &DrawObject, texture_count: usize) -> RtGeomEntry {
-    let (albedo_index, normal_index) =
-        pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: obj.index_offset as u32,
-        base_vertex: obj.base_vertex as u32,
-        albedo_index,
-        normal_index,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        metallic: obj.material.metallic,
-        emissive: obj.material.emissive,
-        model: obj.model,
-        emissive_map_index: obj.material.emissive_map_index,
-        _pad: [0; 3],
-    }
-}
-
-// Build the geometry-table entry for one instance of an instanced cluster. The
-// cluster's shared mesh slice uses base_vertex 0 (its indices are absolute);
-// `model` is this instance's transform.
-fn cluster_geom_entry(
-    cluster: &InstancedCluster,
-    model: [[f32; 4]; 4],
-    texture_count: usize,
-) -> RtGeomEntry {
-    let (albedo_index, normal_index) =
-        pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: cluster.index_offset as u32,
-        base_vertex: 0,
-        albedo_index,
-        normal_index,
-        tint: cluster.material.tint,
-        roughness: cluster.material.roughness,
-        metallic: cluster.material.metallic,
-        emissive: cluster.material.emissive,
-        model,
-        emissive_map_index: cluster.material.emissive_map_index,
-        _pad: [0; 3],
-    }
-}
-
-// Build the geometry-table entry for one skinned object. The skinned BLAS is
-// baked from the posed (model-space) deformed buffer with absolute u16 indices,
-// so `base_vertex` is 0 and the model matrix brings the hit to world space. The
-// skinned flag is OR'd into `normal_index` so the trace fetches from the
-// deformed / u16 buffers. The skinned object's albedo / normal-map images bake
-// into the shared bindless pool from the same `texture_slot` / `normal_map_slot`
-// as the static path, so its pool indices come out of `pool_indices` exactly
-// like a static draw, letting skinned hits shade textured. Mirrors
-// `directx::raytrace::skinned_geom_entry`.
-fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: usize) -> RtGeomEntry {
-    let (albedo_index, normal_index) =
-        pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: obj.index_offset as u32,
-        base_vertex: 0,
-        albedo_index,
-        normal_index: normal_index | RT_SKINNED_FLAG,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        metallic: obj.material.metallic,
-        emissive: obj.material.emissive,
-        model: obj.model,
-        emissive_map_index: obj.material.emissive_map_index,
-        _pad: [0; 3],
-    }
-}
-
-// True when any participating object's current model matrix differs from the one
-// baked into the live TLAS. Pure (no GPU) so the dirty gate is unit-testable.
-fn models_dirty(cached: &[[[f32; 4]; 4]], current: &[[[f32; 4]; 4]]) -> bool {
-    cached.len() != current.len() || cached.iter().zip(current).any(|(a, b)| a != b)
 }
 
 // One TLAS instance descriptor: explicit 3x4 transform, custom index (indexes
@@ -1094,7 +969,7 @@ pub(super) fn build_rt_accel(
     for (slot, &i) in object_indices.iter().enumerate() {
         let obj = &draw_objects[i];
         instances.push(tlas_instance(obj.model, slot as u32, blas_addresses[slot]));
-        geom_entries.push(geom_entry(obj, albedo_count));
+        geom_entries.push(geom_entry(obj, albedo_count as u32));
     }
     let mut cluster_instances: Vec<vk::AccelerationStructureInstanceKHR> = Vec::new();
     let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
@@ -1103,7 +978,7 @@ pub(super) fn build_rt_accel(
         for model in &c.instances {
             let id = (instances.len() + cluster_instances.len()) as u32;
             cluster_instances.push(tlas_instance(*model, id, blas_address));
-            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count));
+            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count as u32));
         }
     }
     instances.extend_from_slice(&cluster_instances);
@@ -1615,7 +1490,7 @@ impl RtAccelData {
         for (slot, &idx) in new_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
             instances.push(tlas_instance(obj.model, slot as u32, new_addrs[slot]));
-            geom_entries.push(geom_entry(obj, self.albedo_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
         }
         instances.extend_from_slice(&rebaked_clusters);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -1852,7 +1727,7 @@ impl RtAccelData {
                 slot as u32,
                 self.blas_addresses[slot],
             ));
-            geom_entries.push(geom_entry(obj, self.albedo_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
         }
         instances.extend_from_slice(&self.cluster_instances);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -2263,7 +2138,7 @@ impl RtAccelData {
                 slot as u32,
                 self.blas_addresses[slot],
             ));
-            geom_entries.push(geom_entry(obj, self.albedo_count));
+            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
         }
         instances.extend_from_slice(&self.cluster_instances);
         geom_entries.extend_from_slice(&self.cluster_geom);
@@ -2273,7 +2148,7 @@ impl RtAccelData {
             // The skinned object's textures bake into the shared bindless pool
             // from its own `texture_slot` / `normal_map_slot`, so the pool index
             // reads off `obj` directly (no list-position dependence).
-            geom_entries.push(skinned_geom_entry(obj, self.albedo_count));
+            geom_entries.push(skinned_geom_entry(obj, self.albedo_count as u32));
         }
         let instance_count = instances.len() as u32;
 
@@ -2800,16 +2675,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dynamic_mode_from_env_default_is_auto() {
-        // The env var isn't set in the test process, so it resolves to Auto.
-        assert_eq!(RtDynamicMode::from_env(), RtDynamicMode::Auto);
-        assert!(RtDynamicMode::Auto.is_dynamic());
-        assert!(RtDynamicMode::Rebuild.is_dynamic());
-        assert!(RtDynamicMode::Tlas.is_dynamic());
-        assert!(!RtDynamicMode::Off.is_dynamic());
-    }
-
-    #[test]
     fn next_slot_wraps_around_the_ring() {
         // Advancing the static-rebuild cursor cycles through every slot and wraps
         // at the end, so a slot is revisited only after a full ring cycle.
@@ -2860,20 +2725,6 @@ mod tests {
     }
 
     #[test]
-    fn pool_indices_share_one_handle_indexed_pool() {
-        // Albedo and a real normal map both index the shared pool by their own
-        // handle. 5 real textures; the flat-normal fallback sits at slot 5.
-        assert_eq!(pool_indices(2, 1, 5), (2, 1));
-        // Clamping: out-of-range real slots saturate to the last real texture (4).
-        assert_eq!(pool_indices(9, 9, 5), (4, 4));
-        // A draw with no normal map addresses the flat-normal fallback slot.
-        assert_eq!(
-            pool_indices(2, crate::gfx::render_types::NO_NORMAL_MAP_SLOT, 5),
-            (2, 5)
-        );
-    }
-
-    #[test]
     fn instance_packs_custom_index_and_full_mask() {
         let d = tlas_instance(
             [
@@ -2891,22 +2742,6 @@ mod tests {
             unsafe { d.acceleration_structure_reference.device_handle },
             0xDEAD_BEEF
         );
-    }
-
-    #[test]
-    fn models_dirty_detects_a_changed_transform() {
-        let a = [[
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ]];
-        let mut b = a;
-        assert!(!models_dirty(&a, &b));
-        b[0][3][0] = 5.0;
-        assert!(models_dirty(&a, &b));
-        // A length change is dirty.
-        assert!(models_dirty(&a, &[]));
     }
 
     #[test]
@@ -2968,68 +2803,5 @@ mod tests {
         assert_eq!(offset_of!(Vertex, tangent), 24);
         assert_eq!(offset_of!(Vertex, color), 36);
         assert_eq!(offset_of!(Vertex, uv), 48);
-    }
-
-    #[test]
-    fn skinned_flag_is_bit_31_and_masks_back_to_the_pool_index() {
-        // The flag occupies the top bit; the shader recovers the real bindless
-        // normal index with `normal_index & ~RT_SKINNED_FLAG`. Matches the bit-31
-        // flag in rt_reflections.frag + render_types / directx / metal.
-        assert_eq!(RT_SKINNED_FLAG, 1u32 << 31);
-        for normal_index in [0u32, 1, 5, 96, 1000] {
-            let flagged = normal_index | RT_SKINNED_FLAG;
-            assert_ne!(flagged & RT_SKINNED_FLAG, 0, "flag set");
-            assert_eq!(flagged & !RT_SKINNED_FLAG, normal_index, "masks back");
-        }
-        // Realistic bindless pool indices never reach the flag bit, so a static
-        // entry's normal index is never misread as skinned.
-        assert_eq!(96u32 & RT_SKINNED_FLAG, 0);
-    }
-
-    #[test]
-    fn skinned_geom_entry_flags_and_zeroes_base_vertex() {
-        use crate::gfx::render_types::{MaterialUniforms, SkinnedDrawObject};
-        let material = MaterialUniforms {
-            tint: [0.2, 0.4, 0.6],
-            roughness: 0.3,
-            metallic: 0.5,
-            emissive: [0.1, 0.0, 0.0],
-            ..MaterialUniforms::DEFAULT
-        };
-        let obj = SkinnedDrawObject {
-            vertex_base: 7,
-            vertex_count: 100,
-            index_offset: 42,
-            index_count: 300,
-            model: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [3.0, 4.0, 5.0, 1.0],
-            ],
-            texture_slot: 9,
-            normal_map_slot: 3,
-            material,
-            visible: true,
-            joint_count: 12,
-            local_bb_min: [-1.0, -1.0, -1.0],
-            local_bb_max: [1.0, 1.0, 1.0],
-            lod_alternates: Vec::new(),
-        };
-        let texture_count = 12usize;
-        let e = skinned_geom_entry(&obj, texture_count);
-        // The skinned BLAS bakes absolute indices, so base_vertex is folded to 0.
-        assert_eq!(e.base_vertex, 0);
-        // The skinned flag is set; masking it off recovers the real shared-pool
-        // index, computed the same way as a static draw (so skinned hits texture).
-        let (exp_albedo, exp_normal) =
-            pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
-        assert_ne!(e.normal_index & RT_SKINNED_FLAG, 0);
-        assert_eq!(e.albedo_index, exp_albedo);
-        assert_eq!(e.normal_index & !RT_SKINNED_FLAG, exp_normal);
-        // Material + index offset carry through; the model lifts the hit to world.
-        assert_eq!(e.index_offset, 42);
-        assert_eq!(e.tint, [0.2, 0.4, 0.6]);
-        assert_eq!(e.model[3], [3.0, 4.0, 5.0, 1.0]);
     }
 }

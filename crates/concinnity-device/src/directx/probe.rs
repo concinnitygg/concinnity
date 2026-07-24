@@ -42,11 +42,11 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::context::{DxContext, FRAMES};
-use super::screenshot::f16_to_f32;
 use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
     transition_barrier, upload_probe_prefilter_cube,
 };
+use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase};
 
 // Captured cube-face resolution (mip 0 of the prefilter chain). Matches the

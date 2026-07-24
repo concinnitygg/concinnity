@@ -51,6 +51,7 @@ pub mod reflection_probe;
 // full builder surface.
 #[allow(dead_code)]
 pub mod render_graph;
+pub mod rt_geom;
 pub mod rt_topology;
 pub mod scene_reel;
 pub mod shadow_schedule;

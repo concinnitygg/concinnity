@@ -28,6 +28,7 @@ use objc2_metal::{
 };
 
 use crate::gfx::hdr_output::HdrEncoding;
+use crate::gfx::image_decode::{self, PixelLayout};
 
 use super::context::MtlContext;
 
@@ -123,7 +124,10 @@ impl MtlContext {
             );
         }
 
-        let rgba = decode_to_rgba8(&raw, self.swap_pixel_format, self.hdr_encoding);
+        let rgba = image_decode::decode_to_rgba8(
+            &raw,
+            classify(self.swap_pixel_format, self.hdr_encoding),
+        );
         encode_png(path, width as u32, height as u32, &rgba)?;
         Ok(path.to_string())
     }
@@ -140,103 +144,18 @@ fn swapchain_bytes_per_pixel(format: MTLPixelFormat) -> u32 {
     }
 }
 
-// Convert the tightly-packed read-back bytes to opaque RGBA8, decoding per the
-// swapchain format. The alpha channel is forced to 255 so the saved PNG is
-// opaque regardless of the composited alpha. `encoding` is the resolved HDR
-// encoding (None on the SDR path) and only matters for the float swapchain.
-fn decode_to_rgba8(raw: &[u8], format: MTLPixelFormat, encoding: Option<HdrEncoding>) -> Vec<u8> {
+// Classify the swapchain colour format (+ resolved HDR encoding) into the
+// backend-free `PixelLayout` the shared decoder understands. The MTKView only
+// presents `BGRA8Unorm`/`_sRGB` for SDR or `RGBA16Float` for the HDR EDR path;
+// `encoding` (None on SDR) only matters for the float swapchain.
+fn classify(format: MTLPixelFormat, encoding: Option<HdrEncoding>) -> PixelLayout {
     match format {
-        MTLPixelFormat::RGBA16Float => decode_rgba16f(raw, encoding),
-        _ => decode_8bit(raw, format),
+        MTLPixelFormat::RGBA16Float => PixelLayout::Rgba16F {
+            scrgb: !matches!(encoding, Some(HdrEncoding::Pq)),
+        },
+        MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA8Unorm_sRGB => PixelLayout::Bgra8,
+        _ => PixelLayout::Rgba8,
     }
-}
-
-// 8-bit-per-channel swapchain formats. The Metal SDR swapchain is `BGRA8Unorm`;
-// `RGBA8Unorm` is handled too for completeness.
-fn decode_8bit(raw: &[u8], format: MTLPixelFormat) -> Vec<u8> {
-    let bgra = matches!(
-        format,
-        MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA8Unorm_sRGB
-    );
-    let mut out = Vec::with_capacity(raw.len());
-    for px in raw.chunks_exact(4) {
-        if bgra {
-            out.extend_from_slice(&[px[2], px[1], px[0], 255]);
-        } else {
-            out.extend_from_slice(&[px[0], px[1], px[2], 255]);
-        }
-    }
-    out
-}
-
-// `RGBA16Float` HDR swapchain (8 B/px, four halfs RGBA). On the scRGB-linear
-// path the stored values are linear extended-range (1.0 = SDR white), so apply
-// the sRGB OETF to get a valid (non-tonemapped) image. On the PQ path the
-// stored values are PQ code values already in [0, 1]; pass them through clamped.
-// The PQ capture is not display-ready, but it must still be a valid PNG rather
-// than a crash. Mirrors the DX/Vulkan paths.
-fn decode_rgba16f(raw: &[u8], encoding: Option<HdrEncoding>) -> Vec<u8> {
-    let scrgb = !matches!(encoding, Some(HdrEncoding::Pq));
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    for px in raw.chunks_exact(8) {
-        let r = f16_to_f32(u16::from_le_bytes([px[0], px[1]]));
-        let g = f16_to_f32(u16::from_le_bytes([px[2], px[3]]));
-        let b = f16_to_f32(u16::from_le_bytes([px[4], px[5]]));
-        if scrgb {
-            out.extend_from_slice(&[
-                linear_to_srgb8(r),
-                linear_to_srgb8(g),
-                linear_to_srgb8(b),
-                255,
-            ]);
-        } else {
-            out.extend_from_slice(&[unorm_to_u8(r), unorm_to_u8(g), unorm_to_u8(b), 255]);
-        }
-    }
-    out
-}
-
-// Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals,
-// normals, and inf/NaN. `pub(in crate::metal)` so the reflection-probe readback
-// (metal/probe.rs) decodes its RGBA16Float cube faces through the same path.
-pub(in crate::metal) fn f16_to_f32(h: u16) -> f32 {
-    let sign = if (h >> 15) & 1 == 1 { -1.0 } else { 1.0 };
-    let exp = (h >> 10) & 0x1f;
-    let mant = (h & 0x3ff) as f32;
-    let val = match exp {
-        0 => mant * 2f32.powi(-24),
-        0x1f => {
-            if mant == 0.0 {
-                f32::INFINITY
-            } else {
-                f32::NAN
-            }
-        }
-        _ => (1.0 + mant / 1024.0) * 2f32.powi(exp as i32 - 15),
-    };
-    sign * val
-}
-
-// sRGB OETF (linear -> display), clamped and quantised to 8-bit. NaN maps to 0.
-fn linear_to_srgb8(c: f32) -> u8 {
-    if c.is_nan() {
-        return 0;
-    }
-    let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    unorm_to_u8(s)
-}
-
-// Quantise a [0, 1] value to 8-bit with rounding. NaN maps to 0.
-fn unorm_to_u8(c: f32) -> u8 {
-    if c.is_nan() {
-        return 0;
-    }
-    (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 // Write RGBA8 pixel data to a PNG file.
@@ -268,83 +187,36 @@ mod tests {
     }
 
     #[test]
-    fn f16_round_trips_reference_values() {
-        assert_eq!(f16_to_f32(0x0000), 0.0); // +0
-        assert_eq!(f16_to_f32(0x3c00), 1.0); // 1.0
-        assert_eq!(f16_to_f32(0x3800), 0.5); // 0.5
-        assert_eq!(f16_to_f32(0x4000), 2.0); // 2.0
-        assert_eq!(f16_to_f32(0xbc00), -1.0); // -1.0
-        assert!(f16_to_f32(0x7c00).is_infinite()); // +inf
-        assert!(f16_to_f32(0x7e00).is_nan()); // NaN
-    }
-
-    #[test]
-    fn bgra8_is_swizzled_and_made_opaque() {
-        // One BGRA pixel (B=10, G=20, R=30, A=40) -> RGBA (30, 20, 10, 255).
-        let raw = [10u8, 20, 30, 40];
-        let out = decode_to_rgba8(&raw, MTLPixelFormat::BGRA8Unorm, None);
-        assert_eq!(out, vec![30, 20, 10, 255]);
-    }
-
-    #[test]
-    fn bgra8_srgb_is_also_swizzled() {
-        let raw = [10u8, 20, 30, 40];
-        let out = decode_to_rgba8(&raw, MTLPixelFormat::BGRA8Unorm_sRGB, None);
-        assert_eq!(out, vec![30, 20, 10, 255]);
-    }
-
-    #[test]
-    fn rgba8_passes_through_with_forced_alpha() {
-        let raw = [30u8, 20, 10, 40];
-        let out = decode_to_rgba8(&raw, MTLPixelFormat::RGBA8Unorm, None);
-        assert_eq!(out, vec![30, 20, 10, 255]);
-    }
-
-    #[test]
-    fn scrgb_float_applies_srgb_oetf() {
-        // Linear 1.0 -> sRGB 255, 0.0 -> 0, 0.5 -> ~188 (1.055*0.5^(1/2.4)-0.055).
-        let mut raw = Vec::new();
-        for h in [0x3c00u16, 0x3800, 0x0000, 0x3c00] {
-            raw.extend_from_slice(&h.to_le_bytes());
-        }
-        let out = decode_to_rgba8(
-            &raw,
-            MTLPixelFormat::RGBA16Float,
-            Some(HdrEncoding::ExtendedLinear),
+    fn classify_maps_swapchain_formats_to_pixel_layouts() {
+        // SDR BGRA (both linear + sRGB) swizzles; RGBA passes through.
+        assert_eq!(
+            classify(MTLPixelFormat::BGRA8Unorm, None),
+            PixelLayout::Bgra8
         );
-        assert_eq!(out[0], 255); // r = linear 1.0
-        assert!((out[1] as i32 - 188).abs() <= 1); // g = linear 0.5
-        assert_eq!(out[2], 0); // b = linear 0.0
-        assert_eq!(out[3], 255); // forced opaque
-    }
-
-    #[test]
-    fn scrgb_float_clamps_out_of_range() {
-        // Extended-range > 1.0 and negative clamp to white / black.
-        let mut raw = Vec::new();
-        for h in [0x4000u16, 0xbc00, 0x0000, 0x3c00] {
-            raw.extend_from_slice(&h.to_le_bytes());
-        }
-        let out = decode_to_rgba8(
-            &raw,
-            MTLPixelFormat::RGBA16Float,
-            Some(HdrEncoding::ExtendedLinear),
+        assert_eq!(
+            classify(MTLPixelFormat::BGRA8Unorm_sRGB, None),
+            PixelLayout::Bgra8
         );
-        assert_eq!(out[0], 255); // r = 2.0 clamps high
-        assert_eq!(out[1], 0); // g = -1.0 clamps low
-    }
-
-    #[test]
-    fn pq_float_passes_code_values_through() {
-        // PQ code values are already in [0, 1]; no sRGB OETF, just quantise.
-        let mut raw = Vec::new();
-        for h in [0x3c00u16, 0x3800, 0x0000, 0x3c00] {
-            raw.extend_from_slice(&h.to_le_bytes());
-        }
-        let out = decode_to_rgba8(&raw, MTLPixelFormat::RGBA16Float, Some(HdrEncoding::Pq));
-        assert_eq!(out[0], 255); // 1.0
-        assert_eq!(out[1], 128); // 0.5 -> round(127.5)
-        assert_eq!(out[2], 0); // 0.0
-        assert_eq!(out[3], 255);
+        assert_eq!(
+            classify(MTLPixelFormat::RGBA8Unorm, None),
+            PixelLayout::Rgba8
+        );
+        // The float HDR swapchain applies the sRGB OETF on the scRGB path and
+        // passes PQ code values through; unset encoding is treated as scRGB.
+        assert_eq!(
+            classify(
+                MTLPixelFormat::RGBA16Float,
+                Some(HdrEncoding::ExtendedLinear)
+            ),
+            PixelLayout::Rgba16F { scrgb: true }
+        );
+        assert_eq!(
+            classify(MTLPixelFormat::RGBA16Float, Some(HdrEncoding::Pq)),
+            PixelLayout::Rgba16F { scrgb: false }
+        );
+        assert_eq!(
+            classify(MTLPixelFormat::RGBA16Float, None),
+            PixelLayout::Rgba16F { scrgb: true }
+        );
     }
 }

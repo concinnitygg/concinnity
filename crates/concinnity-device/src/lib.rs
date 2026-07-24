@@ -17,14 +17,14 @@
 #[allow(unused_imports)]
 pub(crate) mod gfx {
     pub use concinnity_core::gfx::{
-        auto_exposure, frustum, lod, mesh_payload, profile, range_alloc, render_types,
-        rt_reflections, ssao, ssgi, ssr,
+        auto_exposure, frustum, image_decode, lod, mesh_payload, profile, range_alloc,
+        render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub use concinnity_render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, fullscreen, hdr_output,
         input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection, reflection_probe,
-        render_graph, rt_topology, scene_reel, shadow_schedule, skinned_pool, slot_rewrites,
-        spot_shadow, transparent, volumetric_fog,
+        render_graph, rt_geom, rt_topology, scene_reel, shadow_schedule, skinned_pool,
+        slot_rewrites, spot_shadow, transparent, volumetric_fog,
     };
 }
 
