@@ -97,6 +97,7 @@ mod tests {
             defs,
             resources,
             manifest,
+            scene_groups: Vec::new(),
         }
     }
 

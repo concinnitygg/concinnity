@@ -209,6 +209,7 @@ mod tests {
             manifest: WorldManifest::from_records(&defs, &[]),
             defs,
             resources: Vec::new(),
+            scene_groups: Vec::new(),
         };
         std::fs::write(
             path_for(0),

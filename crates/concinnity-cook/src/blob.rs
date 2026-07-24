@@ -126,6 +126,7 @@ fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()>
 pub fn write_blobs(
     defs: &[BlobAssetDef],
     resources: &[ResourceRecord],
+    scene_groups: &[concinnity_blob::SceneGroup],
     blob_payloads: &[Vec<u8>],
 ) -> std::io::Result<PackResult> {
     fs::create_dir_all(concinnity_core::paths::data_dir())?;
@@ -137,6 +138,7 @@ pub fn write_blobs(
         defs: defs.to_vec(),
         resources: resources.to_vec(),
         manifest: concinnity_blob::WorldManifest::from_records(defs, resources),
+        scene_groups: scene_groups.to_vec(),
     };
 
     let mut blob_paths = Vec::new();
@@ -158,6 +160,13 @@ pub fn write_blobs(
         blob_paths.push(primary);
     }
 
+    // Remove stale overflow blobs left by a previous, larger build so the
+    // directory matches the manifest exactly.
+    let mut stale = blob_paths.len() as u32;
+    while fs::remove_file(blob_path(stale)).is_ok() {
+        stale += 1;
+    }
+
     Ok(PackResult { blob_paths })
 }
 
@@ -167,6 +176,8 @@ pub struct PayloadPacker {
     blobs: Vec<Vec<u8>>,
     current_blob: u32,
     current_offset: u64,
+    // A group boundary was requested; the next push starts a fresh blob.
+    pending_group: bool,
 }
 
 impl PayloadPacker {
@@ -176,17 +187,29 @@ impl PayloadPacker {
             blobs: vec![Vec::new()],
             current_blob: 0,
             current_offset: 0,
+            pending_group: false,
         }
+    }
+
+    // Start a payload group: the next push lands at the start of a blob that
+    // holds no earlier content and is never blob 0 (whose payload section is
+    // read eagerly at startup), so the group's payloads are contiguous and
+    // separately loadable. A group with no pushes produces no blob.
+    pub fn start_group(&mut self) {
+        self.pending_group = true;
     }
 
     pub fn push(&mut self, data: &[u8]) -> PayloadLocator {
         let len = data.len() as u64;
 
-        if self.current_offset > 0 && self.current_offset + len > self.max_blob_bytes {
+        let group_roll = self.pending_group && (self.current_offset > 0 || self.current_blob == 0);
+        let size_roll = self.current_offset > 0 && self.current_offset + len > self.max_blob_bytes;
+        if group_roll || size_roll {
             self.blobs.push(Vec::new());
             self.current_blob += 1;
             self.current_offset = 0;
         }
+        self.pending_group = false;
 
         let offset = self.current_offset;
         self.blobs[self.current_blob as usize].extend_from_slice(data);
@@ -369,7 +392,7 @@ mod tests {
         }];
         let payloads = vec![vec![1, 2, 3], vec![4, 5, 6, 7]];
         let data_dir = state.data_dir();
-        let paths = write_blobs(&defs, &resources, &payloads)
+        let paths = write_blobs(&defs, &resources, &[], &payloads)
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
@@ -400,12 +423,32 @@ mod tests {
     }
 
     #[test]
+    fn write_blobs_removes_stale_overflow_blobs_from_a_larger_build() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _state = StateDir::new();
+
+        let defs = vec![component_def(3, None)];
+        let payloads = vec![vec![1], vec![2], vec![3]];
+        let first = write_blobs(&defs, &[], &[], &payloads)
+            .expect("write_blobs")
+            .blob_paths;
+        assert_eq!(first.len(), 3);
+
+        let second = write_blobs(&defs, &[], &[], &[vec![1]])
+            .expect("write_blobs")
+            .blob_paths;
+        assert_eq!(second.len(), 1);
+        assert!(!std::path::Path::new(&first[1]).exists(), "stale blob 1");
+        assert!(!std::path::Path::new(&first[2]).exists(), "stale blob 2");
+    }
+
+    #[test]
     fn write_blobs_without_payloads_still_writes_the_primary_blob() {
         let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _state = StateDir::new();
 
         let defs = vec![component_def(5, None)];
-        let paths = write_blobs(&defs, &[], &[])
+        let paths = write_blobs(&defs, &[], &[], &[])
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 1, "a payload-less world still ships blob 0");
@@ -422,7 +465,7 @@ mod tests {
         let state = StateDir::new();
         fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
 
-        let result = write_blobs(&[component_def(1, None)], &[], &[]);
+        let result = write_blobs(&[component_def(1, None)], &[], &[], &[]);
         assert!(result.is_err(), "an unwritable blob path must fail");
     }
 
@@ -436,7 +479,7 @@ mod tests {
             component_def(3, Some(locator(0, 0, 3))),
             component_def(4, None),
         ];
-        let paths = write_blobs(&defs, &[], &[vec![1, 2, 3]])
+        let paths = write_blobs(&defs, &[], &[], &[vec![1, 2, 3]])
             .expect("write_blobs")
             .blob_paths;
         let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];
@@ -552,6 +595,53 @@ mod tests {
         let b = p.push(&[1]);
         assert_eq!((a.blob_index, a.offset, a.len), (0, 0, 0));
         assert_eq!((b.blob_index, b.offset, b.len), (0, 0, 1));
+    }
+
+    #[test]
+    fn packer_group_boundary_starts_a_fresh_blob() {
+        let mut p = PayloadPacker::new(1024);
+        let a = p.push(&[1, 2]);
+        p.start_group();
+        let b = p.push(&[3]);
+        let c = p.push(&[4]);
+        assert_eq!(a.blob_index, 0);
+        assert_eq!((b.blob_index, b.offset), (1, 0));
+        assert_eq!((c.blob_index, c.offset), (1, 1));
+        assert_eq!(p.finish(), vec![vec![1, 2], vec![3, 4]]);
+    }
+
+    #[test]
+    fn packer_empty_group_produces_no_blob() {
+        let mut p = PayloadPacker::new(1024);
+        let a = p.push(&[1]);
+        p.start_group();
+        p.start_group();
+        let b = p.push(&[2]);
+        assert_eq!(a.blob_index, 0);
+        assert_eq!(b.blob_index, 1);
+        assert_eq!(p.finish().len(), 2);
+    }
+
+    #[test]
+    fn packer_group_never_lands_in_blob_zero() {
+        // Even with no earlier content, a group leaves the eagerly-read blob 0
+        // empty and starts at blob 1.
+        let mut p = PayloadPacker::new(1024);
+        p.start_group();
+        let a = p.push(&[1]);
+        assert_eq!((a.blob_index, a.offset), (1, 0));
+        assert_eq!(p.finish(), vec![vec![], vec![1]]);
+    }
+
+    #[test]
+    fn packer_size_rollover_still_applies_within_a_group() {
+        let mut p = PayloadPacker::new(2);
+        p.push(&[1]);
+        p.start_group();
+        let a = p.push(&[2, 3]);
+        let b = p.push(&[4]);
+        assert_eq!(a.blob_index, 1);
+        assert_eq!(b.blob_index, 2, "group content exceeding the cap rolls on");
     }
 
     // The byte-format round-trip tests live in the concinnity-blob crate with

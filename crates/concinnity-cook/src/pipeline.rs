@@ -61,7 +61,12 @@ pub fn write_build_outputs(
     injected: &[crate::world::InjectedAsset],
     shadowed: &[crate::world::ShadowedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
-    let pack_result = crate::blob::write_blobs(&result.defs, &result.resources, &result.payloads)?;
+    let pack_result = crate::blob::write_blobs(
+        &result.defs,
+        &result.resources,
+        &result.scene_groups,
+        &result.payloads,
+    )?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -125,6 +130,8 @@ pub struct PipelineResult {
     // per-kind handle, carried alongside the component defs. Empty until a
     // resource kind migrates off the component registry (AudioClip first).
     pub resources: Vec<ResourceRecord>,
+    // Per-scene exclusively-owned blob content, in scene declaration order.
+    pub scene_groups: Vec<concinnity_blob::SceneGroup>,
     pub payloads: Vec<Vec<u8>>,
     // Compiled-asset payloads served from the build cache this run.
     pub cache_hits: usize,
@@ -394,14 +401,21 @@ pub fn build_compiled(
         };
     }
 
+    // Scene payload ownership, derived from the resolved scene memberships and
+    // the reference graph; drives the grouped packing below.
+    let partition = crate::scene_partition::partition_scenes(&assets);
+
     let compiled = compile_and_pack_payloads(
         &mut named,
         &named_src,
-        &assets,
-        &resource_jobs,
-        config.max_blob_bytes,
-        artifacts_dir,
-        &gltf_cache,
+        PackContext {
+            assets: &assets,
+            resource_jobs: &resource_jobs,
+            partition: &partition,
+            max_blob_bytes: config.max_blob_bytes,
+            artifacts_dir,
+            gltf_cache: &gltf_cache,
+        },
     )?;
 
     // Lock-file provenance for the resource stream: `compiled.resources` is
@@ -431,6 +445,7 @@ pub fn build_compiled(
         defs,
         names,
         resources: compiled.resources,
+        scene_groups: compiled.scene_groups,
         payloads: compiled.blobs,
         cache_hits: compiled.cache_hits,
         cache_misses: compiled.cache_misses,
@@ -1266,23 +1281,41 @@ struct PendingResource {
 // The output of the compile + pack pass: the packed blob payload sections, the
 // resource-stream records (each with its payload locator), and cache accounting.
 struct CompiledOutput {
+    scene_groups: Vec<concinnity_blob::SceneGroup>,
     blobs: Vec<Vec<u8>>,
     resources: Vec<ResourceRecord>,
     cache_hits: usize,
     cache_misses: usize,
 }
 
+// Read-only inputs to the compile + pack pass: the world being packed and the
+// build context, as opposed to the def stream the pass mutates.
+#[derive(Clone, Copy)]
+struct PackContext<'a> {
+    assets: &'a [WorldJsonlAsset],
+    resource_jobs: &'a [(usize, crate::resource_handles::ResourceAssetType, u32)],
+    partition: &'a crate::scene_partition::ScenePartition,
+    max_blob_bytes: u64,
+    artifacts_dir: Option<&'a str>,
+    gltf_cache: &'a std::collections::HashMap<String, GltfCacheEntry>,
+}
+
 fn compile_and_pack_payloads(
     named: &mut [(String, BlobAssetDef)],
     named_src: &[usize],
-    assets: &[WorldJsonlAsset],
-    resource_jobs: &[(usize, crate::resource_handles::ResourceAssetType, u32)],
-    max_blob_bytes: u64,
-    artifacts_dir: Option<&str>,
-    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+    pack_ctx: PackContext<'_>,
 ) -> std::io::Result<CompiledOutput> {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let PackContext {
+        assets,
+        resource_jobs,
+        partition,
+        max_blob_bytes,
+        artifacts_dir,
+        gltf_cache,
+    } = pack_ctx;
 
     let compiled_indices: Vec<usize> = named
         .iter()
@@ -1444,8 +1477,42 @@ fn compile_and_pack_payloads(
     let cache_hits = component_hits + resource_hits;
     let cache_misses = (pending.len() - component_hits) + (resource_pending.len() - resource_hits);
 
+    // Ownership of each payload, precomputed so the packing loops below can
+    // mutate `named` freely. Resource jobs and `resource_pending` are
+    // index-aligned.
+    use crate::scene_partition::Owner;
+    let comp_owners: Vec<Owner> = pending
+        .iter()
+        .map(|(idx, _)| partition.owner(&named[*idx].0))
+        .collect();
+    let res_owners: Vec<Owner> = resource_jobs
+        .iter()
+        .map(|(asset_idx, _, _)| partition.owner(&assets[*asset_idx].name))
+        .collect();
+
+    // One group per scene (declaration order, possibly empty), carrying the
+    // resource-stream entries and payload defs that scene exclusively owns.
+    let scene_groups: Vec<concinnity_blob::SceneGroup> = (0..partition.scenes.len())
+        .map(|s| concinnity_blob::SceneGroup {
+            scene: asset_id::intern(&partition.scenes[s]),
+            resources: resource_jobs
+                .iter()
+                .zip(&res_owners)
+                .filter(|(_, o)| **o == Owner::Scene(s))
+                .map(|((_, rt, handle), _)| (rt.resource_kind() as u8, *handle))
+                .collect(),
+            defs: pending
+                .iter()
+                .zip(&comp_owners)
+                .filter(|(_, o)| **o == Owner::Scene(s))
+                .filter_map(|((idx, _), _)| named[*idx].1.name)
+                .collect(),
+        })
+        .collect();
+
     if pending.is_empty() && resource_pending.is_empty() {
         return Ok(CompiledOutput {
+            scene_groups,
             blobs: vec![Vec::new()],
             resources: Vec::new(),
             cache_hits: 0,
@@ -1453,28 +1520,46 @@ fn compile_and_pack_payloads(
         });
     }
 
-    // Pack component payloads first (recording each def's locator), then the
-    // resource payloads (building each resource record's locator). One packer, so
-    // both streams address the same blob(s).
+    // Pack payloads by ownership group: the global set first (blob 0 onward),
+    // then each scene's exclusive set starting at a fresh blob, so a scene's
+    // payloads are contiguous and stay unread until the scene loads. Within a
+    // group, component payloads pack before resource payloads, both in their
+    // stream order. One packer, so every group addresses the same blob space;
+    // record order in the metadata streams is unchanged (locators are
+    // per-record, so packing order is independent).
     let mut packer = PayloadPacker::new(max_blob_bytes);
+    let mut resource_locators: Vec<Option<concinnity_core::ecs::PayloadLocator>> =
+        vec![None; resource_pending.len()];
 
-    for (idx, bytes) in &pending {
-        let locator = packer.push(bytes);
-        named[*idx].1.payload = Some(locator);
+    for group in 0..=partition.scenes.len() {
+        let owner = match group {
+            0 => Owner::Global,
+            s => Owner::Scene(s - 1),
+        };
+        if group > 0 {
+            packer.start_group();
+        }
+        for ((idx, bytes), item_owner) in pending.iter().zip(&comp_owners) {
+            if *item_owner == owner {
+                named[*idx].1.payload = Some(packer.push(bytes));
+            }
+        }
+        for (i, (res, item_owner)) in resource_pending.iter().zip(&res_owners).enumerate() {
+            if !res.is_data && *item_owner == owner {
+                resource_locators[i] = Some(packer.push(&res.bytes));
+            }
+        }
     }
 
     let mut resources: Vec<ResourceRecord> = Vec::with_capacity(resource_pending.len());
-    for pending in &resource_pending {
+    for (pending, locator) in resource_pending.iter().zip(resource_locators) {
         // A data resource (Material) carries its bytes inline; a payload
         // resource parks its bytes in a blob section and records the locator,
         // plus any hybrid baked data (SkinnedMesh) inline beside it.
         let (payload, data_bytes) = if pending.is_data {
             (None, pending.bytes.clone())
         } else {
-            (
-                Some(packer.push(&pending.bytes)),
-                pending.extra_data.clone(),
-            )
+            (locator, pending.extra_data.clone())
         };
         resources.push(ResourceRecord {
             resource_kind: pending.kind,
@@ -1485,6 +1570,7 @@ fn compile_and_pack_payloads(
     }
 
     Ok(CompiledOutput {
+        scene_groups,
         blobs: packer.finish(),
         resources,
         cache_hits,
@@ -2038,6 +2124,7 @@ mod tests {
             defs: Vec::new(),
             names: Vec::new(),
             resources: Vec::new(),
+            scene_groups: Vec::new(),
             payloads: vec![vec![1, 2, 3]],
             cache_hits: 0,
             cache_misses: 0,
@@ -3594,11 +3681,14 @@ mod tests {
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
-            &assets,
-            &resource_jobs,
-            1024,
-            None,
-            &cache,
+            PackContext {
+                assets: &assets,
+                resource_jobs: &resource_jobs,
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 1024,
+                artifacts_dir: None,
+                gltf_cache: &cache,
+            },
         )
         .expect("probed payloads need no compiler");
 
@@ -3618,6 +3708,80 @@ mod tests {
         );
         assert_eq!(out.resources[0].resource_kind, ResourceKind::Mesh as u8);
         assert_eq!(out.resources[0].handle, 0);
+    }
+
+    // A scene-exclusive resource packs into its own blob after the global set,
+    // and the scene group records it; record order stays resource_jobs order.
+    #[test]
+    fn scene_owned_payloads_pack_into_their_own_blob() {
+        let assets = vec![
+            wja("day", "Scene", serde_json::json!({})),
+            wja(
+                "day_prop",
+                "Prop",
+                serde_json::json!({"mesh":"day_mesh","scene":"day"}),
+            ),
+            wja("bg_prop", "Prop", serde_json::json!({"mesh":"bg_mesh"})),
+            wja(
+                "day_mesh",
+                MESH_TYPE,
+                serde_json::json!({"source": "/no/such/day.glb"}),
+            ),
+            wja(
+                "bg_mesh",
+                MESH_TYPE,
+                serde_json::json!({"source": "/no/such/bg.glb"}),
+            ),
+        ];
+        let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
+        let resource_jobs = vec![
+            (3usize, ResourceAssetType::Mesh, 0u32),
+            (4usize, ResourceAssetType::Mesh, 1u32),
+        ];
+        let cache = std::collections::HashMap::from([
+            (
+                "day_mesh".to_string(),
+                GltfCacheEntry {
+                    key: "day-key".to_string(),
+                    bytes: Some(vec![0xDD; 4]),
+                },
+            ),
+            (
+                "bg_mesh".to_string(),
+                GltfCacheEntry {
+                    key: "bg-key".to_string(),
+                    bytes: Some(vec![0xBB; 2]),
+                },
+            ),
+        ]);
+
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[],
+            PackContext {
+                assets: &assets,
+                resource_jobs: &resource_jobs,
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 1 << 20,
+                artifacts_dir: None,
+                gltf_cache: &cache,
+            },
+        )
+        .expect("probed payloads need no compiler");
+
+        // Global set (bg) fills blob 0; day's exclusive mesh starts blob 1.
+        assert_eq!(out.blobs, vec![vec![0xBB; 2], vec![0xDD; 4]]);
+        let day = out.resources[0].payload.as_ref().expect("day locator");
+        assert_eq!((day.blob_index, day.offset, day.len), (1, 0, 4));
+        let bg = out.resources[1].payload.as_ref().expect("bg locator");
+        assert_eq!((bg.blob_index, bg.offset, bg.len), (0, 0, 2));
+
+        assert_eq!(out.scene_groups.len(), 1);
+        assert_eq!(
+            out.scene_groups[0].resources,
+            vec![(ResourceKind::Mesh as u8, 0)]
+        );
+        assert!(out.scene_groups[0].defs.is_empty());
     }
 
     // A probe that recorded a miss compiles for real, on both the component and
@@ -3650,11 +3814,14 @@ mod tests {
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
-            &assets,
-            &resource_jobs,
-            1 << 20,
-            None,
-            &cache,
+            PackContext {
+                assets: &assets,
+                resource_jobs: &resource_jobs,
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 1 << 20,
+                artifacts_dir: None,
+                gltf_cache: &cache,
+            },
         )
         .expect("a probe miss compiles");
 
@@ -3687,11 +3854,14 @@ mod tests {
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
-            &assets,
-            &[],
-            1024,
-            None,
-            &Default::default(),
+            PackContext {
+                assets: &assets,
+                resource_jobs: &[],
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 1024,
+                artifacts_dir: None,
+                gltf_cache: &Default::default(),
+            },
         )
         .expect("pack");
 
@@ -3725,11 +3895,14 @@ mod tests {
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
-            &assets,
-            &[],
-            1024,
-            None,
-            &Default::default(),
+            PackContext {
+                assets: &assets,
+                resource_jobs: &[],
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 1024,
+                artifacts_dir: None,
+                gltf_cache: &Default::default(),
+            },
         )
         .expect("pack");
 
@@ -3766,8 +3939,19 @@ mod tests {
             ),
         ]);
 
-        let out = compile_and_pack_payloads(&mut named, &[0, 1], &assets, &[], 8, None, &cache)
-            .expect("pack");
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0, 1],
+            PackContext {
+                assets: &assets,
+                resource_jobs: &[],
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                max_blob_bytes: 8,
+                artifacts_dir: None,
+                gltf_cache: &cache,
+            },
+        )
+        .expect("pack");
 
         assert_eq!(out.blobs, vec![vec![0xAA; 6], vec![0xBB; 6]]);
         assert_eq!(named[0].1.payload.as_ref().unwrap().blob_index, 0);

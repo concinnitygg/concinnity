@@ -21,7 +21,11 @@ use std::collections::{HashMap, HashSet};
 
 // Dispatch reference extraction by normalized asset type. Every arm delegates
 // to a `CrossReferenced` impl in the named asset's file.
-fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
+pub(crate) fn cross_refs_for(
+    type_norm: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> Vec<CrossRef> {
     use crate::assets::{
         AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, VoxelChunk, VoxelWorld,
     };

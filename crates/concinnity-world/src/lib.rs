@@ -24,6 +24,7 @@
 pub(crate) use concinnity_core::{assets, build, ecs, paths, result};
 
 pub mod check;
+pub mod refs;
 pub mod registry;
 pub mod resource_type;
 pub mod source_args;

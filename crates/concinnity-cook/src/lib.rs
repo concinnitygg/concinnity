@@ -59,6 +59,7 @@ pub mod mesh_reimport;
 pub mod pipeline;
 pub mod resource_handles;
 pub mod root_motion;
+pub mod scene_partition;
 pub mod shader;
 pub mod texture;
 pub mod tga;

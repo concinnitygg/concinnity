@@ -123,6 +123,21 @@ pub struct BlobMeta {
     pub defs: Vec<BlobAssetDef>,
     pub resources: Vec<ResourceRecord>,
     pub manifest: WorldManifest,
+    pub scene_groups: Vec<SceneGroup>,
+}
+
+// One scene's exclusively-owned blob content: the resource-stream entries and
+// payload-carrying component defs reachable only from that scene's members.
+// Content shared between scenes (or used outside any scene) belongs to no
+// group and loads with the world. Groups are listed in scene declaration
+// order; their payloads are packed into dedicated blobs after the global set.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct SceneGroup {
+    pub scene: AssetId,
+    // (resource_kind, handle) pairs from the resource stream.
+    pub resources: Vec<(u8, u32)>,
+    // Names of payload-carrying component defs.
+    pub defs: Vec<AssetId>,
 }
 
 #[cfg(test)]
@@ -152,6 +167,11 @@ mod tests {
             defs,
             resources,
             manifest,
+            scene_groups: vec![SceneGroup {
+                scene: AssetId(7),
+                resources: vec![(ResourceKind::Material as u8, 5)],
+                defs: vec![AssetId(3)],
+            }],
         }
     }
 
