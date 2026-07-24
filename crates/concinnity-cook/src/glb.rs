@@ -2108,7 +2108,12 @@ mod tests {
     #[test]
     fn resolve_source_anchors_a_bare_filename_under_the_assets_dir() {
         // Nothing by this name exists to be found, so the fallback is the
-        // assets directory joined with the filename.
+        // assets directory joined with the filename. Both reads consult the
+        // process-global anchor, so this shares the build-output lock with the
+        // tests that install a state dir.
+        let _guard = crate::blob::test_output::LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_source("cn_test_no_such_model.glb");
         let expected = concinnity_core::paths::assets_dir().join("cn_test_no_such_model.glb");
         assert_eq!(resolved, expected.to_string_lossy());

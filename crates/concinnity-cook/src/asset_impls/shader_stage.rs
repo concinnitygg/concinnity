@@ -159,8 +159,13 @@ mod tests {
         );
     }
 
+    // The fallback reads the process-global assets anchor, so it shares the
+    // build-output lock with the other tests that install a state dir.
     #[test]
     fn resolve_source_path_for_falls_back_to_the_assets_dir() {
+        let _guard = crate::blob::test_output::LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let expected = concinnity_core::paths::assets_dir()
             .join("cn_no_such.metal")
             .to_string_lossy()
