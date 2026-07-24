@@ -122,7 +122,9 @@ pub use concinnity_asset::{
 // owned by the concinnity-blob format crate; re-exported here under its
 // historical path so the runtime, cook, and the registry macros keep naming
 // `ecs::{BlobAssetDef, ResourceKind, ...}` unchanged.
-pub use concinnity_blob::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
+pub use concinnity_blob::{
+    AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord, SceneGroup,
+};
 
 // PipelineContext -- systems' view of the world during a tick. Renderer-free:
 // it exposes typed component storage, the in-memory blob payload store, and the

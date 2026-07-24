@@ -23,7 +23,8 @@ pub mod schedule;
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
     Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshHandle,
-    PayloadLocator, PipelineContext, Resources, SkinnedMeshHandle, TextureHandle, Tick, asset_id,
+    PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
+    asset_id,
 };
 
 // Renderer-free per-frame protocol resources, moved to concinnity-core so the
@@ -98,6 +99,21 @@ impl ActiveRenderBackend {
 pub struct ActiveSceneFlow {
     pub flow: Option<crate::gfx::scene_flow::SceneFlow>,
     pub epoch: std::time::Instant,
+}
+
+// The blob's baked per-scene exclusive content groups, published at blob load
+// for the streaming/residency wiring to consume at graphics init.
+pub struct BlobSceneGroups(pub Vec<crate::ecs::SceneGroup>);
+
+// Per-scene streamed-content load status, republished by StreamingSystem
+// whenever it changes: `(scene, state, fraction of members resident)` in
+// declaration order. Consumers (menus, loading screens) read, never write.
+pub struct SceneResidencyStatus {
+    pub scenes: Vec<(
+        asset_id::AssetId,
+        crate::gfx::scene_residency::SceneLoadState,
+        f32,
+    )>,
 }
 
 // Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`

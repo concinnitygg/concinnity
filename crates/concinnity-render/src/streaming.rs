@@ -40,6 +40,9 @@ struct Item {
     // re-load estimate after an eviction. Only counted while Resident, so a
     // stale weight on an Unloaded item never inflates `resident_bytes`.
     bytes: u64,
+    // A blocked item is never loaded and is evicted if resident, regardless of
+    // score. Set by scene residency for items whose owning scene is unpinned.
+    blocked: bool,
 }
 
 // The load / evict decisions produced by one [`StreamPlanner::plan`] call.
@@ -86,6 +89,7 @@ impl StreamPlanner {
                     score: 0.0,
                     last_touch: 0,
                     bytes: 0,
+                    blocked: false,
                 };
                 count
             ],
@@ -153,6 +157,15 @@ impl StreamPlanner {
         }
     }
 
+    // Block or unblock item `id`. A blocked item is never scheduled to load;
+    // if resident it is evicted by the next [`plan`](Self::plan) call.
+    // Out-of-range ids are ignored.
+    pub fn set_blocked(&mut self, id: usize, blocked: bool) {
+        if let Some(item) = self.items.get_mut(id) {
+            item.blocked = blocked;
+        }
+    }
+
     // Force item `id` back to `Unloaded` (e.g. after a failed load that
     // should be retried). Out-of-range ids are ignored. The item's last-known
     // byte weight is retained as the estimate for a future re-load; it no
@@ -206,12 +219,22 @@ impl StreamPlanner {
     pub fn plan(&mut self) -> StreamPlan {
         let mut plan = StreamPlan::default();
 
-        // Candidate loads: every Unloaded item, best (lowest) score first.
+        // Blocked residents are evicted unconditionally: their owning scene is
+        // unpinned, so no score keeps them on the GPU. (A blocked Pending item
+        // completes its in-flight load first and is evicted here next call.)
+        for (id, item) in self.items.iter_mut().enumerate() {
+            if item.blocked && item.state == StreamState::Resident {
+                item.state = StreamState::Unloaded;
+                plan.to_evict.push(id);
+            }
+        }
+
+        // Candidate loads: every unblocked Unloaded item, best score first.
         let mut candidates: Vec<usize> = self
             .items
             .iter()
             .enumerate()
-            .filter(|(_, it)| it.state == StreamState::Unloaded)
+            .filter(|(_, it)| it.state == StreamState::Unloaded && !it.blocked)
             .map(|(id, _)| id)
             .collect();
         if candidates.is_empty() {
@@ -447,6 +470,53 @@ mod tests {
         let mut p = StreamPlanner::new(0, 4, 8);
         assert_eq!(p.len(), 0);
         assert_eq!(p.plan(), StreamPlan::default());
+    }
+
+    #[test]
+    fn blocked_item_is_never_scheduled_to_load() {
+        let mut p = StreamPlanner::new(2, 4, 8);
+        p.set_score(0, 1.0);
+        p.set_score(1, 2.0);
+        p.set_blocked(0, true);
+        let plan = p.plan();
+        assert_eq!(plan.to_load, vec![1]);
+        assert_eq!(p.state(0), Some(StreamState::Unloaded));
+    }
+
+    #[test]
+    fn blocked_resident_is_evicted_unconditionally() {
+        let mut p = StreamPlanner::new(2, 4, 8);
+        p.mark_resident(0, 1, 100);
+        p.mark_resident(1, 1, 100);
+        p.set_blocked(0, true);
+        let plan = p.plan();
+        assert_eq!(plan.to_evict, vec![0]);
+        assert!(plan.to_load.is_empty(), "blocked item must not reload");
+        assert_eq!(p.state(0), Some(StreamState::Unloaded));
+        assert_eq!(p.state(1), Some(StreamState::Resident));
+        assert_eq!(p.resident_bytes(), 100);
+    }
+
+    #[test]
+    fn unblocking_makes_an_item_loadable_again() {
+        let mut p = StreamPlanner::new(1, 4, 8);
+        p.set_blocked(0, true);
+        assert!(p.plan().to_load.is_empty());
+        p.set_blocked(0, false);
+        assert_eq!(p.plan().to_load, vec![0]);
+    }
+
+    #[test]
+    fn blocked_pending_item_is_evicted_after_its_load_completes() {
+        let mut p = StreamPlanner::new(1, 4, 8);
+        let plan = p.plan();
+        assert_eq!(plan.to_load, vec![0]);
+        // Blocked while the load is in flight: nothing to do yet.
+        p.set_blocked(0, true);
+        assert_eq!(p.plan(), StreamPlan::default());
+        // The load completes; the next plan evicts it.
+        p.mark_resident(0, 2, 64);
+        assert_eq!(p.plan().to_evict, vec![0]);
     }
 
     // Give an Unloaded item a known byte weight, as if it had been resident and
@@ -723,6 +793,7 @@ mod tests {
                         score: (next() % 6) as f32,
                         last_touch: (next() % 4) as u64,
                         bytes: (next() % 20) as u64,
+                        blocked: false,
                     }
                 })
                 .collect();

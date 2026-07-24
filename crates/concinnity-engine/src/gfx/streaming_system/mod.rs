@@ -17,9 +17,11 @@
 // scores, dispatches, and applies their results each frame.
 
 use crate::assets::Camera3D;
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::{ChunkMesh, RenderBackend};
 use crate::gfx::overlay::OverlayFrame;
+use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE, SceneResidency};
 
 pub(crate) mod pressure;
 
@@ -118,6 +120,10 @@ pub(crate) struct StreamingState {
     // Infinite voxel-world chunk streaming. `Some` only when a `VoxelWorld` was
     // declared and the backend supports it (Metal).
     pub(crate) chunk_stream: Option<ChunkStreamState>,
+    // Scene-pinned residency over the texture/mesh pools. `Some` only when the
+    // world declares scenes and at least one pool streams; unpinned scenes'
+    // members are blocked on the planners (never load, evict if resident).
+    pub(crate) scene_residency: Option<SceneResidency>,
     // This system's frame clock (see the struct doc).
     pub(crate) frame_count: u64,
     // Frames the backend keeps in flight: an eviction's freed region cannot be
@@ -201,6 +207,22 @@ impl System for StreamingSystem {
             .map(|o| o.world_hidden)
             .unwrap_or(false);
 
+        // Scene pins for streamed-content residency: the active scene, plus a
+        // fade target mid-transition so the destination starts loading before
+        // visibility flips.
+        let scene_pins: Option<Vec<AssetId>> = ctx
+            .resource::<crate::ecs::ActiveSceneFlow>()
+            .and_then(|slot| slot.flow.as_ref())
+            .map(|flow| {
+                let mut pins = vec![flow.current];
+                if let crate::gfx::scene_flow::FadePhase::ToBlack { next, .. } = flow.fade
+                    && !pins.contains(&next)
+                {
+                    pins.push(next);
+                }
+                pins
+            });
+
         let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
             // Init succeeded but the backend was taken (should not happen in the
             // schedule): publish the absolute view so the draw is still driven.
@@ -212,10 +234,27 @@ impl System for StreamingSystem {
             return StepResult::Continue;
         };
 
-        let (view, cam_pos) = state.drive(backend.as_mut(), cam_pos, view_matrix, world_hidden);
+        let (view, cam_pos) = state.drive(
+            backend.as_mut(),
+            cam_pos,
+            view_matrix,
+            world_hidden,
+            scene_pins.as_deref(),
+        );
 
         ActiveRenderBackend::put(ctx.resources, backend);
         ctx.insert_resource(CameraRelativeView { view, cam_pos });
+        // Republish the per-scene load status when it changed, so menus and
+        // loading screens can read scene progress without touching the pools.
+        if let Some(residency) = state.scene_residency.as_ref() {
+            let scenes = residency.status();
+            let changed = ctx
+                .resource::<crate::ecs::SceneResidencyStatus>()
+                .is_none_or(|s| s.scenes != scenes);
+            if changed {
+                ctx.insert_resource(crate::ecs::SceneResidencyStatus { scenes });
+            }
+        }
         ctx.resources.insert(state);
         StepResult::Continue
     }
@@ -231,11 +270,36 @@ impl StreamingState {
         cam_pos: [f32; 3],
         view_matrix: [[f32; 4]; 4],
         world_hidden: bool,
+        scene_pins: Option<&[AssetId]>,
     ) -> ([[f32; 4]; 4], [f32; 3]) {
         // Stage 1 of the RAM back-off valve freezes new load dispatch: the pools
         // keep their current residency but stop growing. Stage 2 keeps
         // dispatching (under a reduced byte budget) so the planner can evict.
         let loads_frozen = self.pressure_stage.freezes_loads();
+
+        // Sync scene pins onto the pools: members of a scene leaving the pin
+        // set are blocked (never load, evict next plan), members of a scene
+        // entering it unblock and stream in through the normal planning path.
+        if let (Some(residency), Some(pins)) = (self.scene_residency.as_mut(), scene_pins) {
+            let changes = residency.sync_pins(pins);
+            for (members, blocked) in [(&changes.blocked, true), (&changes.unblocked, false)] {
+                for &(channel, id) in members {
+                    match channel {
+                        CHANNEL_TEXTURE => {
+                            if let Some(s) = &mut self.texture_streamer {
+                                s.set_blocked(id as usize, blocked);
+                            }
+                        }
+                        CHANNEL_MESH => {
+                            if let Some(s) = &mut self.mesh_streamer {
+                                s.set_blocked(id as usize, blocked);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
 
         // Drive albedo-texture streaming: re-score every slot by camera
         // distance, dispatch this frame's background loads within budget, then
@@ -249,11 +313,18 @@ impl StreamingState {
                     if let Err(e) = backend.evict_texture_slot(slot) {
                         tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
                     }
+                    if let Some(residency) = self.scene_residency.as_mut() {
+                        residency.note_resident((CHANNEL_TEXTURE, slot as u32), false);
+                    }
                 }
             }
+            let residency = &mut self.scene_residency;
             streamer.drain_completed(self.frame_count, |slot, image| {
                 if let Err(e) = backend.update_texture_slot(slot, image) {
                     tracing::warn!("StreamingSystem: texture upload slot {}: {}", slot, e);
+                }
+                if let Some(residency) = residency.as_mut() {
+                    residency.note_resident((CHANNEL_TEXTURE, slot as u32), true);
                 }
             });
             // Surface streaming progress periodically so a headless run can
@@ -285,19 +356,29 @@ impl StreamingState {
                     {
                         tracing::warn!("StreamingSystem: mesh evict draw {}: {}", draw_idx, e);
                     }
+                    if let Some(residency) = self.scene_residency.as_mut() {
+                        residency.note_resident((CHANNEL_MESH, stream_id as u32), false);
+                    }
                 }
             }
             let draw_indices = &self.mesh_stream_draw_indices;
             let frame = self.frame_count;
+            let residency = &mut self.scene_residency;
             streamer.drain_completed(self.frame_count, |stream_id, verts, idxs| {
-                match draw_indices.get(stream_id) {
+                let result = match draw_indices.get(stream_id) {
                     // Return the upload result so the streamer can roll a
                     // transient seed-full miss back to Unloaded and retry it once
                     // freed regions reclaim, rather than marking the mesh
                     // resident with no GPU geometry.
                     Some(&draw_idx) => backend.upload_mesh(draw_idx, verts, idxs, frame),
                     None => Ok(()),
+                };
+                if result.is_ok()
+                    && let Some(residency) = residency.as_mut()
+                {
+                    residency.note_resident((CHANNEL_MESH, stream_id as u32), true);
                 }
+                result
             });
             if self.frame_count.is_multiple_of(120) {
                 let (resident, pending, unloaded) = streamer.stats();
@@ -619,6 +700,7 @@ mod tests {
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,
+            scene_residency: None,
             frame_count: 0,
             frames_in_flight: 2,
             texture_baseline_budget: None,
@@ -678,7 +760,7 @@ mod tests {
         done: impl Fn(&StreamingState) -> bool,
     ) {
         for _ in 0..MAX_DRIVE_SPINS {
-            state.drive(backend, cam, IDENTITY4, false);
+            state.drive(backend, cam, IDENTITY4, false, None);
             if done(state) {
                 return;
             }
@@ -916,8 +998,8 @@ mod tests {
     fn drive_advances_the_frame_clock() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = empty_state();
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
         assert_eq!(state.frame_count, 2);
     }
 
@@ -927,7 +1009,7 @@ mod tests {
     fn a_hidden_world_dispatches_no_loads() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, true);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, true, None);
         assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
     }
@@ -936,10 +1018,80 @@ mod tests {
     fn a_visible_world_dispatches_texture_and_mesh_loads() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
         // Dispatch moves an item off Unloaded the same frame it is planned.
         assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
         assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
+    }
+
+    // Scene residency over the pools: only the pinned scene's members stream;
+    // switching the pin set drains the old scene and loads the new one.
+    #[test]
+    fn scene_residency_streams_only_the_pinned_scene_and_swaps_on_switch() {
+        use crate::gfx::scene_residency::SceneLoadState;
+
+        let (_recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        let scene_a = AssetId(70);
+        let scene_b = AssetId(71);
+        let residency = SceneResidency::new(vec![
+            (scene_a, vec![(CHANNEL_TEXTURE, 0), (CHANNEL_MESH, 0)]),
+            (scene_b, vec![(CHANNEL_TEXTURE, 1), (CHANNEL_MESH, 1)]),
+        ]);
+        // Mirror init: every owned member starts blocked.
+        for (channel, id) in residency.all_members().collect::<Vec<_>>() {
+            match channel {
+                CHANNEL_TEXTURE => state
+                    .texture_streamer
+                    .as_mut()
+                    .unwrap()
+                    .set_blocked(id as usize, true),
+                _ => state
+                    .mesh_streamer
+                    .as_mut()
+                    .unwrap()
+                    .set_blocked(id as usize, true),
+            }
+        }
+        state.scene_residency = Some(residency);
+
+        // Pin scene A: its members stream in; B's stay blocked out.
+        let pins_a = [scene_a];
+        for _ in 0..MAX_DRIVE_SPINS {
+            state.drive(&mut backend, [0.0; 3], IDENTITY4, false, Some(&pins_a));
+            let r = state.scene_residency.as_ref().unwrap();
+            if r.state(scene_a) == Some(SceneLoadState::Resident) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let r = state.scene_residency.as_ref().unwrap();
+        assert_eq!(r.state(scene_a), Some(SceneLoadState::Resident));
+        assert_eq!(r.state(scene_b), Some(SceneLoadState::Unloaded));
+        assert_eq!(
+            state.texture_streamer.as_ref().unwrap().stats().0,
+            1,
+            "only A's texture is resident"
+        );
+
+        // Switch the pin to scene B: A drains off the GPU, B streams in.
+        let pins_b = [scene_b];
+        for _ in 0..MAX_DRIVE_SPINS {
+            state.drive(&mut backend, [0.0; 3], IDENTITY4, false, Some(&pins_b));
+            let r = state.scene_residency.as_ref().unwrap();
+            if r.state(scene_b) == Some(SceneLoadState::Resident)
+                && r.state(scene_a) == Some(SceneLoadState::Unloaded)
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let r = state.scene_residency.as_ref().unwrap();
+        assert_eq!(r.state(scene_b), Some(SceneLoadState::Resident));
+        assert_eq!(r.progress(scene_b), Some(1.0));
+        assert_eq!(r.state(scene_a), Some(SceneLoadState::Unloaded));
+        assert_eq!(state.texture_streamer.as_ref().unwrap().stats().0, 1);
+        assert_eq!(state.mesh_streamer.as_ref().unwrap().stats().0, 1);
     }
 
     // Stage 1 of the RAM valve holds residency where it is: no new dispatch.
@@ -950,7 +1102,7 @@ mod tests {
         state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
         state.pressure_stage = StreamPressureStage::Gate;
 
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
         assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(
@@ -966,7 +1118,7 @@ mod tests {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
         state.pressure_stage = StreamPressureStage::Evict;
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
         assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
         assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
     }
@@ -1039,7 +1191,7 @@ mod tests {
         recorded.lock().unwrap().calls.clear();
 
         // Item 1's center is now the near one, so item 0 is displaced.
-        state.drive(&mut backend, [100.0, 0.0, 0.0], IDENTITY4, false);
+        state.drive(&mut backend, [100.0, 0.0, 0.0], IDENTITY4, false, None);
         let s = recorded.lock().unwrap();
         assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
         assert!(s.saw(&Call::EvictMesh(10)), "{:?}", s.calls);
@@ -1051,7 +1203,10 @@ mod tests {
         let mut state = empty_state();
         let view = translation_view(-40.0, -5.0, 40.0);
         let cam = [40.0, 5.0, -40.0];
-        assert_eq!(state.drive(&mut backend, cam, view, false), (view, cam));
+        assert_eq!(
+            state.drive(&mut backend, cam, view, false, None),
+            (view, cam)
+        );
     }
 
     // An unbounded world renders from small coordinates: both the view and the
@@ -1064,7 +1219,7 @@ mod tests {
         // 16-unit chunks: floor(40/16) = 2, floor(-40/16) = -3.
         let cam = [40.0, 5.0, -40.0];
         let view = translation_view(-40.0, -5.0, 40.0);
-        let (out_view, out_cam) = state.drive(&mut backend, cam, view, false);
+        let (out_view, out_cam) = state.drive(&mut backend, cam, view, false, None);
 
         let origin = [32.0, 0.0, -48.0];
         assert_eq!(out_cam, [8.0, 5.0, 8.0]);
@@ -1091,7 +1246,7 @@ mod tests {
         cs.draws.insert(ChunkCoord::new(1, 0), 4);
         state.chunk_stream = Some(cs);
 
-        state.drive(&mut backend, [20.0, 0.0, 0.0], IDENTITY4, false);
+        state.drive(&mut backend, [20.0, 0.0, 0.0], IDENTITY4, false, None);
         {
             let s = recorded.lock().unwrap();
             assert!(s.saw(&Call::SetChunkModel(3)));
@@ -1103,7 +1258,7 @@ mod tests {
         );
 
         recorded.lock().unwrap().calls.clear();
-        state.drive(&mut backend, [21.0, 0.0, 0.0], IDENTITY4, false);
+        state.drive(&mut backend, [21.0, 0.0, 0.0], IDENTITY4, false, None);
         assert!(
             !recorded
                 .lock()
@@ -1126,9 +1281,9 @@ mod tests {
         state.chunk_stream = Some(cs);
 
         // Frame 1 at the origin puts (0, 0) in the window.
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false);
+        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
         // Frame 2 far east: (0, 0) is past the evict band.
-        state.drive(&mut backend, [800.0, 0.0, 0.0], IDENTITY4, false);
+        state.drive(&mut backend, [800.0, 0.0, 0.0], IDENTITY4, false, None);
 
         assert!(recorded.lock().unwrap().saw(&Call::RemoveChunkMesh(9)));
         assert!(

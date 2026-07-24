@@ -133,6 +133,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
     crate::resource::install_resource_tables(&mut world, &mut result.resources);
+    world.insert_resource(crate::ecs::BlobSceneGroups(result.scene_groups));
     // Dev-only source catalogues for the hot-reload watcher (see the scan above).
     world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
     world.insert_resource(crate::resource::EnvironmentMapSources(

@@ -25,15 +25,17 @@ use crate::result::CnResult;
 // the entity it mints for it (the world's name -> entity map).
 type NamedComponent = (Option<AssetId>, ComponentAsset);
 
-pub(crate) fn load() -> Result<
-    (
-        Vec<NamedComponent>,
-        Vec<ResourceRecord>,
-        WorldManifest,
-        BlobData,
-    ),
-    CnResult,
-> {
+// The decoded primary blob: resolved components, the resource stream, the
+// baked per-scene groups, the manifest, and the lazy payload reader.
+pub(crate) struct LoadedBlob {
+    pub(crate) components: Vec<NamedComponent>,
+    pub(crate) resources: Vec<ResourceRecord>,
+    pub(crate) scene_groups: Vec<concinnity_core::ecs::SceneGroup>,
+    pub(crate) manifest: WorldManifest,
+    pub(crate) blob: BlobData,
+}
+
+pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
     let (meta, blob_data) = concinnity_core::blob::load_raw()?;
 
     let components = meta
@@ -50,5 +52,11 @@ pub(crate) fn load() -> Result<
         })
         .collect::<Result<Vec<_>, CnResult>>()?;
 
-    Ok((components, meta.resources, meta.manifest, blob_data))
+    Ok(LoadedBlob {
+        components,
+        resources: meta.resources,
+        scene_groups: meta.scene_groups,
+        manifest: meta.manifest,
+        blob: blob_data,
+    })
 }

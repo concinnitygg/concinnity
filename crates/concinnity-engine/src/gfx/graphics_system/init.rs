@@ -2990,11 +2990,13 @@ impl GraphicsSystem {
             .chunk_stream
             .as_ref()
             .and_then(|cs| cs.streamer.byte_budget());
+        let scene_residency = self.build_scene_residency(ctx);
         ctx.insert_resource(crate::gfx::streaming_system::StreamingState {
             texture_streamer: self.texture_streamer.take(),
             mesh_streamer: self.mesh_streamer.take(),
             mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
             chunk_stream: self.chunk_stream.take(),
+            scene_residency,
             frame_count: 0,
             frames_in_flight: self.frames_in_flight,
             texture_baseline_budget,

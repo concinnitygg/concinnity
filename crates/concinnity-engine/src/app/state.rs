@@ -50,7 +50,14 @@ impl App {
     // load assets and blob payload data from the primary blob and
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let (assets, mut resources, manifest, blob_data) = blob::load()?;
+        let loaded = blob::load()?;
+        let (assets, mut resources, scene_groups, manifest, blob_data) = (
+            loaded.components,
+            loaded.resources,
+            loaded.scene_groups,
+            loaded.manifest,
+            loaded.blob,
+        );
 
         let mut world = World::new(blob_data);
         // The manifest's per-type counts size each column once up front, so
@@ -67,6 +74,7 @@ impl App {
             }
         }
         world.insert_resource(crate::ecs::decompose::EntityByName(by_name));
+        world.insert_resource(crate::ecs::BlobSceneGroups(scene_groups));
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.

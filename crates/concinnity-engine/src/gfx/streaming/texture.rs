@@ -189,6 +189,12 @@ impl TextureStreamer {
         self.planner.resident_bytes()
     }
 
+    // Block or unblock a slot for scene residency: a blocked slot never loads
+    // and is evicted by the next plan if resident.
+    pub fn set_blocked(&mut self, slot: usize, blocked: bool) {
+        self.planner.set_blocked(slot, blocked);
+    }
+
     // The active resident-byte budget, or `None` when byte accounting is off.
     pub fn byte_budget(&self) -> Option<u64> {
         self.planner.byte_budget()

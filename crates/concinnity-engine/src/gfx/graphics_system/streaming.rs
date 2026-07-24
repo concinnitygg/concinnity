@@ -52,6 +52,97 @@ pub(super) fn chunk_reserve_count(vw: &VoxelWorld) -> usize {
 }
 
 impl GraphicsSystem {
+    // Build scene residency over the streaming pools: texture members come
+    // from the blob's baked per-scene groups (a streamed texture's slot is its
+    // resource handle), mesh members from each streamed draw's SceneMember
+    // entity. Every owned member starts blocked; pinning the start scene
+    // unblocks its set, so only it and the global set stream.
+    pub(super) fn build_scene_residency(
+        &mut self,
+        ctx: &crate::ecs::PipelineContext,
+    ) -> Option<crate::gfx::scene_residency::SceneResidency> {
+        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE, SceneResidency};
+
+        let (scenes, current) = {
+            let flow = self.scene_flow.as_ref()?;
+            (flow.scenes.clone(), flow.current)
+        };
+        if self.texture_streamer.is_none() && self.mesh_streamer.is_none() {
+            return None;
+        }
+        let scene_idx: std::collections::HashMap<AssetId, usize> =
+            scenes.iter().enumerate().map(|(i, &s)| (s, i)).collect();
+        let mut members: Vec<Vec<(u8, u32)>> = vec![Vec::new(); scenes.len()];
+
+        if let Some(streamer) = &self.texture_streamer
+            && let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>()
+        {
+            let texture_kind = concinnity_core::ecs::ResourceKind::Texture as u8;
+            for group in &groups.0 {
+                let Some(&idx) = scene_idx.get(&group.scene) else {
+                    continue;
+                };
+                for &(kind, handle) in &group.resources {
+                    if kind == texture_kind && (handle as usize) < streamer.len() {
+                        members[idx].push((CHANNEL_TEXTURE, handle));
+                    }
+                }
+            }
+        }
+
+        if self.mesh_streamer.is_some() {
+            let mut scene_of_draw = std::collections::HashMap::new();
+            for (_, member, handle) in
+                ctx.join2::<crate::assets::SceneMember, crate::assets::RenderHandle>()
+            {
+                for &slot in &handle.draws {
+                    scene_of_draw.insert(slot as usize, member.0);
+                }
+            }
+            for (stream_id, draw_idx) in self.mesh_stream_draw_indices.iter().enumerate() {
+                if let Some(scene) = scene_of_draw.get(draw_idx)
+                    && let Some(&idx) = scene_idx.get(scene)
+                {
+                    members[idx].push((CHANNEL_MESH, stream_id as u32));
+                }
+            }
+        }
+
+        let mut residency = SceneResidency::new(scenes.iter().copied().zip(members).collect());
+        let blocked: Vec<(u8, u32)> = residency.all_members().collect();
+        let unblocked = residency.sync_pins(&[current]).unblocked;
+        for &(channel, id) in &blocked {
+            self.set_stream_blocked(channel, id, true);
+        }
+        for &(channel, id) in &unblocked {
+            self.set_stream_blocked(channel, id, false);
+        }
+        tracing::info!(
+            "GraphicsSystem: scene residency enabled ({} scenes, {} owned members, start scene {})",
+            scenes.len(),
+            blocked.len(),
+            current,
+        );
+        Some(residency)
+    }
+
+    fn set_stream_blocked(&mut self, channel: u8, id: u32, blocked: bool) {
+        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE};
+        match channel {
+            CHANNEL_TEXTURE => {
+                if let Some(s) = &mut self.texture_streamer {
+                    s.set_blocked(id as usize, blocked);
+                }
+            }
+            CHANNEL_MESH => {
+                if let Some(s) = &mut self.mesh_streamer {
+                    s.set_blocked(id as usize, blocked);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn setup_texture_streaming(
         &mut self,
         config: Option<StreamingConfig>,
