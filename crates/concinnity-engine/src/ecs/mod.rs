@@ -22,9 +22,9 @@ pub mod schedule;
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
     AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
-    Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshHandle,
-    PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
-    asset_id,
+    Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshBoundsRecord,
+    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle,
+    TextureHandle, Tick, asset_id,
 };
 
 // Renderer-free per-frame protocol resources, moved to concinnity-core so the
@@ -104,6 +104,11 @@ pub struct ActiveSceneFlow {
 // The blob's baked per-scene exclusive content groups, published at blob load
 // for the streaming/residency wiring to consume at graphics init.
 pub struct BlobSceneGroups(pub Vec<crate::ecs::SceneGroup>);
+
+// The blob's baked per-mesh geometry summaries (AABB + counts by mesh-source
+// handle), published at blob load so graphics init can build draw records for
+// deferred scene-owned meshes without decoding their payloads.
+pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
 
 // Per-scene streamed-content load status, republished by StreamingSystem
 // whenever it changes: `(scene, state, fraction of members resident)` in

@@ -51,10 +51,11 @@ impl App {
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
         let loaded = blob::load()?;
-        let (assets, mut resources, scene_groups, manifest, blob_data) = (
+        let (assets, mut resources, scene_groups, mesh_bounds, manifest, blob_data) = (
             loaded.components,
             loaded.resources,
             loaded.scene_groups,
+            loaded.mesh_bounds,
             loaded.manifest,
             loaded.blob,
         );
@@ -75,6 +76,7 @@ impl App {
         }
         world.insert_resource(crate::ecs::decompose::EntityByName(by_name));
         world.insert_resource(crate::ecs::BlobSceneGroups(scene_groups));
+        world.insert_resource(crate::ecs::BlobMeshBounds(mesh_bounds));
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.

@@ -65,6 +65,7 @@ pub fn write_build_outputs(
         &result.defs,
         &result.resources,
         &result.scene_groups,
+        &result.mesh_bounds,
         &result.payloads,
     )?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
@@ -132,6 +133,8 @@ pub struct PipelineResult {
     pub resources: Vec<ResourceRecord>,
     // Per-scene exclusively-owned blob content, in scene declaration order.
     pub scene_groups: Vec<concinnity_blob::SceneGroup>,
+    // Baked AABB + counts per static mesh payload, by mesh-source handle.
+    pub mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
     pub payloads: Vec<Vec<u8>>,
     // Compiled-asset payloads served from the build cache this run.
     pub cache_hits: usize,
@@ -412,6 +415,7 @@ pub fn build_compiled(
             assets: &assets,
             resource_jobs: &resource_jobs,
             partition: &partition,
+            mesh_source_handles: &resource_handles,
             max_blob_bytes: config.max_blob_bytes,
             artifacts_dir,
             gltf_cache: &gltf_cache,
@@ -446,6 +450,7 @@ pub fn build_compiled(
         names,
         resources: compiled.resources,
         scene_groups: compiled.scene_groups,
+        mesh_bounds: compiled.mesh_bounds,
         payloads: compiled.blobs,
         cache_hits: compiled.cache_hits,
         cache_misses: compiled.cache_misses,
@@ -1282,10 +1287,35 @@ struct PendingResource {
 // resource-stream records (each with its payload locator), and cache accounting.
 struct CompiledOutput {
     scene_groups: Vec<concinnity_blob::SceneGroup>,
+    mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
     blobs: Vec<Vec<u8>>,
     resources: Vec<ResourceRecord>,
     cache_hits: usize,
     cache_misses: usize,
+}
+
+// Baked geometry summary of one compiled static-mesh payload, keyed by its
+// unified mesh-source handle. None when the payload does not parse as a
+// static mesh (VoxelChunk voxel data, a malformed payload); absence means the
+// runtime decodes that payload eagerly.
+fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<concinnity_blob::MeshBoundsRecord> {
+    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
+    let first = verts.first()?;
+    let mut min = first.pos;
+    let mut max = first.pos;
+    for v in &verts {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(v.pos[axis]);
+            max[axis] = max[axis].max(v.pos[axis]);
+        }
+    }
+    Some(concinnity_blob::MeshBoundsRecord {
+        handle,
+        min,
+        max,
+        vertex_count: verts.len() as u32,
+        index_count: idxs.len() as u32,
+    })
 }
 
 // Read-only inputs to the compile + pack pass: the world being packed and the
@@ -1295,6 +1325,7 @@ struct PackContext<'a> {
     assets: &'a [WorldJsonlAsset],
     resource_jobs: &'a [(usize, crate::resource_handles::ResourceAssetType, u32)],
     partition: &'a crate::scene_partition::ScenePartition,
+    mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
     max_blob_bytes: u64,
     artifacts_dir: Option<&'a str>,
     gltf_cache: &'a std::collections::HashMap<String, GltfCacheEntry>,
@@ -1312,6 +1343,7 @@ fn compile_and_pack_payloads(
         assets,
         resource_jobs,
         partition,
+        mesh_source_handles,
         max_blob_bytes,
         artifacts_dir,
         gltf_cache,
@@ -1490,6 +1522,32 @@ fn compile_and_pack_payloads(
         .map(|(asset_idx, _, _)| partition.owner(&assets[*asset_idx].name))
         .collect();
 
+    // Baked AABB + counts for every static mesh payload, resource-stream Mesh
+    // entries first (their resource handle IS the mesh-source handle) then the
+    // compiled mesh-source components, sorted by handle for determinism.
+    let mut mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord> = Vec::new();
+    for ((_, rt, handle), res) in resource_jobs.iter().zip(&resource_pending) {
+        if *rt == crate::resource_handles::ResourceAssetType::Mesh
+            && let Some(record) = mesh_bounds_record(*handle, &res.bytes)
+        {
+            mesh_bounds.push(record);
+        }
+    }
+    for (idx, bytes) in &pending {
+        let asset = &assets[named_src[*idx]];
+        if !crate::resource_handles::is_mesh_source(&asset.asset_type, &asset.args) {
+            continue;
+        }
+        let id = asset_id::intern(&asset.name);
+        if let Some(handle) =
+            mesh_source_handles.get(crate::resource_handles::ResourceKind::Mesh, id)
+            && let Some(record) = mesh_bounds_record(handle, bytes)
+        {
+            mesh_bounds.push(record);
+        }
+    }
+    mesh_bounds.sort_unstable_by_key(|r| r.handle);
+
     // One group per scene (declaration order, possibly empty), carrying the
     // resource-stream entries and payload defs that scene exclusively owns.
     let scene_groups: Vec<concinnity_blob::SceneGroup> = (0..partition.scenes.len())
@@ -1513,6 +1571,7 @@ fn compile_and_pack_payloads(
     if pending.is_empty() && resource_pending.is_empty() {
         return Ok(CompiledOutput {
             scene_groups,
+            mesh_bounds,
             blobs: vec![Vec::new()],
             resources: Vec::new(),
             cache_hits: 0,
@@ -1571,6 +1630,7 @@ fn compile_and_pack_payloads(
 
     Ok(CompiledOutput {
         scene_groups,
+        mesh_bounds,
         blobs: packer.finish(),
         resources,
         cache_hits,
@@ -2125,6 +2185,7 @@ mod tests {
             names: Vec::new(),
             resources: Vec::new(),
             scene_groups: Vec::new(),
+            mesh_bounds: Vec::new(),
             payloads: vec![vec![1, 2, 3]],
             cache_hits: 0,
             cache_misses: 0,
@@ -3685,6 +3746,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &cache,
@@ -3762,6 +3824,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
                 gltf_cache: &cache,
@@ -3782,6 +3845,41 @@ mod tests {
             vec![(ResourceKind::Mesh as u8, 0)]
         );
         assert!(out.scene_groups[0].defs.is_empty());
+    }
+
+    // Every compiled static-mesh payload gets a baked AABB + counts record
+    // keyed by its mesh-source handle.
+    #[test]
+    fn mesh_bounds_are_baked_for_compiled_mesh_sources() {
+        let assets = vec![wja(
+            "shape",
+            "ProceduralMesh",
+            serde_json::json!({"generator": "box"}),
+        )];
+        let mut named = vec![("shape".to_string(), procedural_mesh_def())];
+        let mut handles = crate::resource_handles::ResourceHandles::default();
+        crate::resource_handles::assign_mesh_source_handles(&mut handles, &assets);
+        let out = compile_and_pack_payloads(
+            &mut named,
+            &[0],
+            PackContext {
+                assets: &assets,
+                resource_jobs: &[],
+                partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &handles,
+                max_blob_bytes: 1 << 20,
+                artifacts_dir: None,
+                gltf_cache: &Default::default(),
+            },
+        )
+        .expect("box compiles");
+        assert_eq!(out.mesh_bounds.len(), 1);
+        let record = out.mesh_bounds[0];
+        assert_eq!(record.handle, 0);
+        assert!(record.vertex_count > 0 && record.index_count > 0);
+        for axis in 0..3 {
+            assert!(record.min[axis] < record.max[axis]);
+        }
     }
 
     // A probe that recorded a miss compiles for real, on both the component and
@@ -3818,6 +3916,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
                 gltf_cache: &cache,
@@ -3858,6 +3957,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &Default::default(),
@@ -3899,6 +3999,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &Default::default(),
@@ -3946,6 +4047,7 @@ mod tests {
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &Default::default(),
                 max_blob_bytes: 8,
                 artifacts_dir: None,
                 gltf_cache: &cache,

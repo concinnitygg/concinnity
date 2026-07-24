@@ -31,6 +31,7 @@ pub(crate) struct LoadedBlob {
     pub(crate) components: Vec<NamedComponent>,
     pub(crate) resources: Vec<ResourceRecord>,
     pub(crate) scene_groups: Vec<concinnity_core::ecs::SceneGroup>,
+    pub(crate) mesh_bounds: Vec<concinnity_core::ecs::MeshBoundsRecord>,
     pub(crate) manifest: WorldManifest,
     pub(crate) blob: BlobData,
 }
@@ -56,6 +57,7 @@ pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
         components,
         resources: meta.resources,
         scene_groups: meta.scene_groups,
+        mesh_bounds: meta.mesh_bounds,
         manifest: meta.manifest,
         blob: blob_data,
     })

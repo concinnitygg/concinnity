@@ -210,6 +210,7 @@ mod tests {
             defs,
             resources: Vec::new(),
             scene_groups: Vec::new(),
+            mesh_bounds: Vec::new(),
         };
         std::fs::write(
             path_for(0),

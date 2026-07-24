@@ -155,12 +155,25 @@ fn mesh_stream_data(
     draw_objects: &[crate::gfx::render_types::DrawObject],
     all_vertices: &[Vertex],
     all_indices: &[u32],
+    deferred_draws: &std::collections::HashSet<usize>,
 ) -> MeshStreamData {
     let mut draw_indices: Vec<usize> = Vec::new();
     let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
     let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
     for (draw_idx, obj) in draw_objects.iter().enumerate() {
         if !obj.cullable() {
+            continue;
+        }
+        // A deferred draw appended no geometry (its record carries baked
+        // counts over an empty region): stream it with an empty payload copy;
+        // the deferred source decodes the blob payload instead.
+        if deferred_draws.contains(&draw_idx) {
+            draw_indices.push(draw_idx);
+            centers.push(vec![draw_object_position(obj)]);
+            payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            });
             continue;
         }
         let vstart = obj.vertex_offset / std::mem::size_of::<Vertex>();
@@ -2044,14 +2057,24 @@ impl GraphicsSystem {
             std::collections::HashMap::new()
         };
 
-        let (mesh_geometry, mesh_sources, always_resident_meshes, component_mesh_handles) =
-            match draw_list::load_mesh_geometry(ctx) {
-                Some(m) => m,
-                None => {
-                    self.failed = true;
-                    return;
-                }
-            };
+        // Mesh sources owned by a scene other than the start scene skip their
+        // payload decode: draw records use the blob's baked bounds, and the
+        // mesh streamer decodes the payload when the owning scene pins.
+        let deferred_mesh_sources =
+            super::streaming::deferred_mesh_sources(ctx, streaming_config.is_some());
+        let (
+            mesh_geometry,
+            mesh_sources,
+            always_resident_meshes,
+            component_mesh_handles,
+            deferred_mesh_seeds,
+        ) = match draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed) {
+            Some(m) => m,
+            None => {
+                self.failed = true;
+                return;
+            }
+        };
 
         let (skinned_geometry, skinned_blob_indices) = match self.decode_skinned_geometry(ctx) {
             Some(decoded) => decoded,
@@ -2421,7 +2444,15 @@ impl GraphicsSystem {
             draw_indices: mesh_stream_draw_indices,
             centers: mesh_centers,
             payloads: mesh_payloads,
-        } = mesh_stream_data(&draw_objects, &all_vertices, &all_indices);
+        } = {
+            let deferred_draws: std::collections::HashSet<usize> = deferred_mesh_seeds
+                .keys()
+                .filter_map(|h| mesh_handle_to_draws.get(h))
+                .flatten()
+                .copied()
+                .collect();
+            mesh_stream_data(&draw_objects, &all_vertices, &all_indices, &deferred_draws)
+        };
 
         // Mesh streaming and LOD alternates don't yet cooperate: upload_mesh
         // writes only LOD0 to its newly-allocated region, but obj.lod_alternates
@@ -2462,16 +2493,52 @@ impl GraphicsSystem {
             {
                 match streaming_config.as_ref() {
                     Some(cfg) if !mesh_payloads.is_empty() => {
+                        // A deferred mesh's payload copy is empty (its decode
+                        // was skipped), so its seed contribution comes from
+                        // the baked counts instead.
+                        let draw_to_handle: std::collections::HashMap<usize, usize> =
+                            mesh_handle_to_draws
+                                .iter()
+                                .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
+                                .collect();
                         let sizes: Vec<(u64, u64)> = mesh_payloads
                             .iter()
-                            .map(|m| {
-                                (
-                                    (m.vertices.len() * std::mem::size_of::<Vertex>()) as u64,
-                                    (m.indices.len() * std::mem::size_of::<u32>()) as u64,
-                                )
+                            .zip(&mesh_stream_draw_indices)
+                            .map(|(m, draw_idx)| {
+                                if !m.vertices.is_empty() {
+                                    return (
+                                        (m.vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+                                        (m.indices.len() * std::mem::size_of::<u32>()) as u64,
+                                    );
+                                }
+                                draw_to_handle
+                                    .get(draw_idx)
+                                    .and_then(|h| deferred_mesh_sources.counts.get(&(*h as u32)))
+                                    .map(|&(vc, ic)| {
+                                        (
+                                            vc as u64 * std::mem::size_of::<Vertex>() as u64,
+                                            ic as u64 * std::mem::size_of::<u32>() as u64,
+                                        )
+                                    })
+                                    .unwrap_or((0, 0))
                             })
                             .collect();
-                        match crate::gfx::mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap()) {
+                        // Deferred meshes have no baked region for the
+                        // full-set evict path to free; force the compaction
+                        // path with a whole-set headroom when the cap alone
+                        // would not shrink.
+                        let planned =
+                            crate::gfx::mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap()).or_else(
+                                || {
+                                    (!deferred_mesh_seeds.is_empty()).then(|| {
+                                        (
+                                            sizes.iter().map(|s| s.0).sum(),
+                                            sizes.iter().map(|s| s.1).sum(),
+                                        )
+                                    })
+                                },
+                            );
+                        match planned {
                             Some((seed_vtx, seed_idx)) => {
                                 let mut streamed = vec![false; draw_objects.len()];
                                 for &idx in &mesh_stream_draw_indices {
@@ -2980,13 +3047,66 @@ impl GraphicsSystem {
             blob_disk_backed,
             texture_centers,
         );
+        // Per-stream-id payload refs for the deferred meshes, so the worker
+        // can decode them from the blob payload when their scene pins.
+        let deferred_stream_payloads: std::collections::HashMap<
+            usize,
+            crate::gfx::streaming::mesh::DeferredMeshPayload,
+        > = if deferred_mesh_seeds.is_empty() {
+            Default::default()
+        } else {
+            use crate::gfx::streaming::mesh::DeferredMeshPayload;
+            let draw_to_handle: std::collections::HashMap<usize, usize> = mesh_handle_to_draws
+                .iter()
+                .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
+                .collect();
+            let mut map = std::collections::HashMap::new();
+            for (stream_id, draw_idx) in mesh_stream_draw_indices.iter().enumerate() {
+                let Some(seed) = draw_to_handle
+                    .get(draw_idx)
+                    .and_then(|h| deferred_mesh_seeds.get(h))
+                else {
+                    continue;
+                };
+                let payload = match &seed.bytes {
+                    Some(bytes) => DeferredMeshPayload::Bytes(bytes.clone()),
+                    None => {
+                        let path = crate::blob::blob_path(seed.locator.blob_index);
+                        match crate::blob::payload_section_start(&path) {
+                            Ok(start) => DeferredMeshPayload::Disk {
+                                path,
+                                offset: start + seed.locator.offset,
+                                len: seed.locator.len,
+                            },
+                            Err(e) => {
+                                tracing::warn!(
+                                    "GraphicsSystem: deferred mesh blob {} unreadable: {:?}",
+                                    seed.locator.blob_index,
+                                    e
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                };
+                map.insert(stream_id, payload);
+            }
+            tracing::info!(
+                "GraphicsSystem: deferred {} scene-owned mesh payload(s) past init",
+                map.len()
+            );
+            map
+        };
         self.setup_mesh_streaming(
             streaming_config,
-            mesh_payloads,
-            mesh_centers,
-            mesh_stream_draw_indices,
-            blob_disk_backed,
-            mesh_seed_region,
+            super::streaming::MeshStreamSetup {
+                payloads: mesh_payloads,
+                centers: mesh_centers,
+                draw_indices: mesh_stream_draw_indices,
+                disk_backed: blob_disk_backed,
+                seed_region: mesh_seed_region,
+                deferred_payloads: deferred_stream_payloads,
+            },
         );
         self.setup_voxel_world_streaming(voxel_world, &block_types, &material_map);
 
@@ -3209,7 +3329,7 @@ mod tests {
         // vertex_offset is a BYTE offset; vertex 2 => 2 * size_of::<Vertex>().
         let vbyte = 2 * std::mem::size_of::<Vertex>();
         let objs = vec![draw(vbyte, 2, 0, 3, 0, NO_NORMAL_MAP_SLOT, true)];
-        let data = mesh_stream_data(&objs, &verts, &indices);
+        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
         assert_eq!(data.draw_indices, vec![0]);
         assert_eq!(data.payloads.len(), 1);
         assert_eq!(data.payloads[0].vertices.len(), 2);
@@ -3227,7 +3347,7 @@ mod tests {
             // Cullable but vertex_count overruns the 2-vertex buffer: skipped.
             draw(0, 5, 0, 2, 0, NO_NORMAL_MAP_SLOT, true),
         ];
-        let data = mesh_stream_data(&objs, &verts, &indices);
+        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
         assert!(data.draw_indices.is_empty());
         assert!(data.payloads.is_empty());
     }

@@ -40,7 +40,48 @@ pub(crate) type MeshGeometryMaps = (
     std::collections::HashMap<usize, MeshSourceMeta>,
     std::collections::HashSet<usize>,
     std::collections::HashMap<AssetId, usize>,
+    std::collections::HashMap<usize, DeferredMeshSeed>,
 );
+
+// A deferred mesh's payload reference, captured while its decode was skipped:
+// the locator, plus the raw bytes when the blob is RAM-backed (an in-memory
+// world may release its payload sections after init, so the bytes are copied
+// out now; a disk-backed world re-reads the blob file range instead).
+pub(crate) struct DeferredMeshSeed {
+    pub locator: crate::ecs::PayloadLocator,
+    pub bytes: Option<Vec<u8>>,
+}
+
+// Mesh sources whose payload decode init defers: exclusively owned by a scene
+// other than the start scene, with baked bounds from the blob. `bounds` and
+// `counts` are keyed by mesh-source handle; a member with no baked record
+// decodes eagerly.
+#[derive(Default)]
+pub(crate) struct DeferredMeshSources {
+    pub by_handle: std::collections::HashSet<u32>,
+    pub by_def: std::collections::HashSet<AssetId>,
+    pub bounds: std::collections::HashMap<u32, ([f32; 3], [f32; 3])>,
+    pub counts: std::collections::HashMap<u32, (u32, u32)>,
+}
+
+impl DeferredMeshSources {
+    // Baked bounds for a deferred resource-stream Mesh, or None to decode.
+    fn resource_bounds(&self, handle: usize) -> Option<([f32; 3], [f32; 3])> {
+        if !self.by_handle.contains(&(handle as u32)) {
+            return None;
+        }
+        self.bounds.get(&(handle as u32)).copied()
+    }
+
+    // Baked bounds for a deferred mesh-source component at its push position,
+    // or None to decode.
+    fn def_bounds(&self, id: AssetId, handle: usize) -> Option<([f32; 3], [f32; 3])> {
+        if !self.by_def.contains(&id) {
+            return None;
+        }
+        self.bounds.get(&(handle as u32)).copied()
+    }
+}
 
 // Output of `build_draw_list`. `prop_draw_indices` and `prop_local_bounds`
 // are column-aligned with the input `items`; `mesh_handle_to_draws` backs
@@ -354,6 +395,13 @@ pub(crate) struct LoadedMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,
     pub lod_alternates: Vec<(f32, Vec<u16>)>,
+    // Baked local AABB for a deferred mesh whose vertices were not decoded;
+    // None computes bounds from the vertices.
+    pub bounds: Option<([f32; 3], [f32; 3])>,
+    // Baked (vertex, index) counts for a deferred mesh, so its draw record
+    // matches the geometry the streamer uploads later; None uses the decoded
+    // lengths.
+    pub counts: Option<(u32, u32)>,
 }
 
 // Hot-reload source metadata for a file-backed `Mesh`. Captured by
@@ -379,7 +427,13 @@ pub(crate) struct MeshSourceMeta {
 // `cn debug` (from the dev `MeshSources` catalogue), the set of handles whose
 // props must always stay resident (skybox-class geometry that encloses the
 // camera), and the asset id -> handle map for the still-component producers.
-pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeometryMaps> {
+pub(crate) fn load_mesh_geometry(
+    ctx: &mut PipelineContext,
+    deferred: &DeferredMeshSources,
+    blob_disk_backed: bool,
+) -> Option<MeshGeometryMaps> {
+    let mut deferred_payloads: std::collections::HashMap<usize, DeferredMeshSeed> =
+        std::collections::HashMap::new();
     let mesh_table = ctx
         .resource::<crate::resource::MeshTable>()
         .cloned()
@@ -448,6 +502,34 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
                 return None;
             }
         };
+        if let Some(bounds) = deferred.resource_bounds(handle) {
+            let bytes = if blob_disk_backed {
+                None
+            } else {
+                match ctx.read_payload(locator) {
+                    Ok(b) => Some(b.to_vec()),
+                    Err(e) => {
+                        tracing::error!("GraphicsSystem: failed to read Mesh payload: {:?}", e);
+                        return None;
+                    }
+                }
+            };
+            deferred_payloads.insert(
+                handle,
+                DeferredMeshSeed {
+                    locator: locator.clone(),
+                    bytes,
+                },
+            );
+            geometry.push(LoadedMesh {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+                lod_alternates: Vec::new(),
+                bounds: Some(bounds),
+                counts: deferred.counts.get(&(handle as u32)).copied(),
+            });
+            continue;
+        }
         let bytes = match ctx.read_payload(locator) {
             Ok(b) => b.to_vec(),
             Err(e) => {
@@ -463,6 +545,8 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
                 vertices: verts,
                 indices: idxs,
                 lod_alternates: alternates,
+                bounds: None,
+                counts: None,
             }),
             Err(e) => {
                 tracing::error!("GraphicsSystem: malformed Mesh payload: {}", e);
@@ -486,6 +570,40 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
                         return None;
                     }
                 };
+                if let Some(bounds) = deferred.def_bounds(mesh.asset_id, geometry.len()) {
+                    let bytes = if blob_disk_backed {
+                        None
+                    } else {
+                        match ctx.read_payload(locator) {
+                            Ok(b) => Some(b.to_vec()),
+                            Err(e) => {
+                                tracing::error!(
+                                    "GraphicsSystem: failed to read {} payload: {:?}",
+                                    $label,
+                                    e
+                                );
+                                return None;
+                            }
+                        }
+                    };
+                    deferred_payloads.insert(
+                        geometry.len(),
+                        DeferredMeshSeed {
+                            locator: locator.clone(),
+                            bytes,
+                        },
+                    );
+                    component_mesh_handles.insert(mesh.asset_id, geometry.len());
+                    let counts = deferred.counts.get(&(geometry.len() as u32)).copied();
+                    geometry.push(LoadedMesh {
+                        vertices: Vec::new(),
+                        indices: Vec::new(),
+                        lod_alternates: Vec::new(),
+                        bounds: Some(bounds),
+                        counts,
+                    });
+                    continue;
+                }
                 let bytes = match ctx.read_payload(locator) {
                     Ok(b) => b.to_vec(),
                     Err(e) => {
@@ -507,6 +625,8 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
                             vertices: verts,
                             indices: idxs,
                             lod_alternates: alternates,
+                            bounds: None,
+                            counts: None,
                         });
                     }
                     Err(e) => {
@@ -535,6 +655,7 @@ pub(crate) fn load_mesh_geometry(ctx: &mut PipelineContext) -> Option<MeshGeomet
         mesh_sources,
         always_resident_meshes,
         component_mesh_handles,
+        deferred_payloads,
     ))
 }
 
@@ -692,7 +813,9 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         let vertex_byte_offset = all_vertices.len() * std::mem::size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
         let base = all_vertices.len() as u32;
-        let (bb_min, bb_max) = local_bounds(&loaded.vertices);
+        let (bb_min, bb_max) = loaded
+            .bounds
+            .unwrap_or_else(|| local_bounds(&loaded.vertices));
         all_vertices.extend_from_slice(&loaded.vertices);
         all_indices.extend(loaded.indices.iter().map(|i| u32::from(*i) + base));
         let mut lod_slices: Vec<LodSlice> = Vec::with_capacity(loaded.lod_alternates.len());
@@ -705,11 +828,17 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 switch_distance: *switch_distance,
             });
         }
+        // A deferred mesh appended no bytes; its draw record carries the baked
+        // counts so the streamed upload's size check matches the real geometry.
+        let (vertex_count, index_count) = loaded
+            .counts
+            .map(|(v, i)| (v as usize, i as usize))
+            .unwrap_or((loaded.vertices.len(), loaded.indices.len()));
         Some((
             vertex_byte_offset,
-            loaded.vertices.len(),
+            vertex_count,
             index_elem_offset,
-            loaded.indices.len(),
+            index_count,
             lod_slices,
             bb_min,
             bb_max,
@@ -1472,6 +1601,8 @@ mod tests {
             vertices: v,
             indices: i,
             lod_alternates: Vec::new(),
+            bounds: None,
+            counts: None,
         }
     }
 
@@ -2182,8 +2313,8 @@ mod tests {
         let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
         let mut ctx = world.ctx();
 
-        let (geometry, sources, resident, component_handles) =
-            load_mesh_geometry(&mut ctx).expect("decoded");
+        let (geometry, sources, resident, component_handles, _deferred) =
+            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
         assert_eq!(geometry.len(), 1);
         let m = &geometry[0];
         assert_eq!(m.vertices.len(), 3);
@@ -2198,6 +2329,53 @@ mod tests {
             resident.is_empty(),
             "no skybox mesh -> nothing always-resident"
         );
+    }
+
+    // A deferred Mesh skips its decode: empty geometry with the baked bounds,
+    // and its payload seed (locator + RAM bytes) is captured for the streamer.
+    #[test]
+    fn load_mesh_geometry_defers_scene_owned_mesh_with_baked_bounds() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
+        let mut ctx = world.ctx();
+
+        let mut deferred = DeferredMeshSources::default();
+        deferred.by_handle.insert(0);
+        deferred
+            .bounds
+            .insert(0, ([-1.0, -2.0, -3.0], [1.0, 2.0, 3.0]));
+
+        let (geometry, _sources, _resident, _handles, seeds) =
+            load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
+        assert_eq!(geometry.len(), 1);
+        assert!(geometry[0].vertices.is_empty(), "decode skipped");
+        assert_eq!(
+            geometry[0].bounds,
+            Some(([-1.0, -2.0, -3.0], [1.0, 2.0, 3.0]))
+        );
+        let seed = seeds.get(&0).expect("payload seed captured");
+        assert!(
+            seed.bytes.as_deref().is_some_and(|b| !b.is_empty()),
+            "RAM-backed seed carries the payload bytes"
+        );
+    }
+
+    // A deferred member with no baked bounds record decodes eagerly.
+    #[test]
+    fn load_mesh_geometry_decodes_eagerly_without_baked_bounds() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
+        let mut ctx = world.ctx();
+
+        let mut deferred = DeferredMeshSources::default();
+        deferred.by_handle.insert(0);
+
+        let (geometry, _sources, _resident, _handles, seeds) =
+            load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
+        assert_eq!(geometry[0].vertices.len(), 3, "no bounds record -> decode");
+        assert!(seeds.is_empty());
     }
 
     // A skybox ProceduralMesh decodes and is marked always-resident so its props
@@ -2215,8 +2393,8 @@ mod tests {
         let mut world = b.seal();
         let mut ctx = world.ctx();
 
-        let (geometry, _sources, resident, component_handles) =
-            load_mesh_geometry(&mut ctx).expect("decoded");
+        let (geometry, _sources, resident, component_handles, _deferred) =
+            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
         // The lone component-backed producer got the first handle.
         assert_eq!(component_handles.get(&AssetId(2)), Some(&0));
         assert_eq!(geometry.len(), 1);
@@ -2228,7 +2406,7 @@ mod tests {
     fn load_mesh_geometry_missing_locator_returns_none() {
         let mut world = BlobWorld::new().seal().with_mesh_table(vec![None]);
         let mut ctx = world.ctx();
-        assert!(load_mesh_geometry(&mut ctx).is_none());
+        assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
     // A malformed payload (too short to hold its declared vertices) aborts.
@@ -2239,7 +2417,7 @@ mod tests {
         let loc = b.payload(&1u32.to_le_bytes());
         let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
         let mut ctx = world.ctx();
-        assert!(load_mesh_geometry(&mut ctx).is_none());
+        assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
     // An empty world (no mesh sources at all) still succeeds with empty maps.
@@ -2247,8 +2425,8 @@ mod tests {
     fn load_mesh_geometry_empty_world_is_ok_and_empty() {
         let mut world = BlobWorld::new().seal();
         let mut ctx = world.ctx();
-        let (geometry, sources, resident, component_handles) =
-            load_mesh_geometry(&mut ctx).expect("ok");
+        let (geometry, sources, resident, component_handles, _deferred) =
+            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("ok");
         assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
         assert!(component_handles.is_empty());
     }

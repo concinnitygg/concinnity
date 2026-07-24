@@ -91,6 +91,65 @@ pub(super) fn deferred_texture_slots(
     deferred
 }
 
+// Mesh sources whose payload decode init defers: exclusively owned by a scene
+// other than the start scene, gated behind streaming like the texture path.
+// Members without a baked bounds record fall out (they decode eagerly).
+pub(super) fn deferred_mesh_sources(
+    ctx: &crate::ecs::PipelineContext,
+    streaming: bool,
+) -> crate::gfx::draw_list::DeferredMeshSources {
+    let mut out = crate::gfx::draw_list::DeferredMeshSources::default();
+    if !streaming || !cfg!(target_os = "macos") {
+        return out;
+    }
+    let Some(start) = ctx
+        .query::<crate::assets::Scene>()
+        .next()
+        .map(|s| s.asset_id)
+    else {
+        return out;
+    };
+    let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
+        return out;
+    };
+    let Some(baked) = ctx.resource::<crate::ecs::BlobMeshBounds>() else {
+        return out;
+    };
+    for record in &baked.0 {
+        out.bounds.insert(record.handle, (record.min, record.max));
+        out.counts
+            .insert(record.handle, (record.vertex_count, record.index_count));
+    }
+    let mesh_kind = concinnity_core::ecs::ResourceKind::Mesh as u8;
+    for group in &groups.0 {
+        if group.scene == start {
+            continue;
+        }
+        for &(kind, handle) in &group.resources {
+            if kind == mesh_kind {
+                out.by_handle.insert(handle);
+            }
+        }
+        for &def in &group.defs {
+            out.by_def.insert(def);
+        }
+    }
+    out
+}
+
+// The mesh-streaming inputs init assembles: per-stream geometry copies,
+// scoring centers, draw mapping, the seed headroom, and the deferred payload
+// refs the worker decodes on demand.
+pub(super) struct MeshStreamSetup {
+    pub payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
+    pub centers: Vec<Vec<[f32; 3]>>,
+    pub draw_indices: Vec<usize>,
+    pub disk_backed: bool,
+    pub seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion>,
+    pub deferred_payloads:
+        std::collections::HashMap<usize, crate::gfx::streaming::mesh::DeferredMeshPayload>,
+}
+
 impl GraphicsSystem {
     // Build scene residency over the streaming pools: texture members come
     // from the blob's baked per-scene groups (a streamed texture's slot is its
@@ -264,12 +323,16 @@ impl GraphicsSystem {
     pub(super) fn setup_mesh_streaming(
         &mut self,
         config: Option<StreamingConfig>,
-        mesh_payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
-        mesh_centers: Vec<Vec<[f32; 3]>>,
-        mesh_draw_indices: Vec<usize>,
-        disk_backed: bool,
-        seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion>,
+        setup: MeshStreamSetup,
     ) {
+        let MeshStreamSetup {
+            payloads: mesh_payloads,
+            centers: mesh_centers,
+            draw_indices: mesh_draw_indices,
+            disk_backed,
+            seed_region,
+            deferred_payloads,
+        } = setup;
         let Some(config) = config else { return };
         if mesh_payloads.is_empty() {
             return;
@@ -319,6 +382,17 @@ impl GraphicsSystem {
             } else {
                 std::sync::Arc::new(crate::gfx::streaming::mesh::MemMeshSource::new(
                     mesh_payloads,
+                ))
+            };
+        // Deferred meshes have no geometry copy in the base source; their
+        // fetch decodes the blob payload instead.
+        let source: std::sync::Arc<dyn crate::gfx::streaming::mesh::MeshPayloadSource> =
+            if deferred_payloads.is_empty() {
+                source
+            } else {
+                std::sync::Arc::new(crate::gfx::streaming::mesh::SceneDeferredMeshSource::new(
+                    source,
+                    deferred_payloads,
                 ))
             };
         let mut streamer = crate::gfx::streaming::mesh::MeshStreamer::new(
@@ -681,16 +755,19 @@ mod tests {
         let (recorded, mut gs) = system_with_backend();
         gs.setup_mesh_streaming(
             Some(StreamingConfig::default()),
-            mesh_payloads(2),
-            centers(2),
-            vec![4, 7],
-            false,
-            Some(crate::gfx::mesh_seed::MeshSeedRegion {
-                vtx_offset: 0,
-                vtx_bytes: 1024,
-                idx_offset: 0,
-                idx_bytes: 512,
-            }),
+            MeshStreamSetup {
+                payloads: mesh_payloads(2),
+                centers: centers(2),
+                draw_indices: vec![4, 7],
+                disk_backed: false,
+                seed_region: Some(crate::gfx::mesh_seed::MeshSeedRegion {
+                    vtx_offset: 0,
+                    vtx_bytes: 1024,
+                    idx_offset: 0,
+                    idx_bytes: 512,
+                }),
+                deferred_payloads: Default::default(),
+            },
         );
 
         let s = recorded.lock().unwrap();
@@ -708,11 +785,14 @@ mod tests {
         let (recorded, mut gs) = system_with_backend();
         gs.setup_mesh_streaming(
             Some(StreamingConfig::default()),
-            mesh_payloads(2),
-            centers(2),
-            vec![4, 7],
-            false,
-            None,
+            MeshStreamSetup {
+                payloads: mesh_payloads(2),
+                centers: centers(2),
+                draw_indices: vec![4, 7],
+                disk_backed: false,
+                seed_region: None,
+                deferred_payloads: Default::default(),
+            },
         );
 
         assert_eq!(gs.mesh_streamer.as_ref().map(|s| s.len()), Some(2));
@@ -726,16 +806,29 @@ mod tests {
     #[test]
     fn mesh_setup_is_skipped_without_a_config_payloads_or_backend() {
         let (recorded, mut gs) = system_with_backend();
-        gs.setup_mesh_streaming(None, mesh_payloads(1), centers(1), vec![0], false, None);
+        gs.setup_mesh_streaming(
+            None,
+            MeshStreamSetup {
+                payloads: mesh_payloads(1),
+                centers: centers(1),
+                draw_indices: vec![0],
+                disk_backed: false,
+                seed_region: None,
+                deferred_payloads: Default::default(),
+            },
+        );
         assert!(gs.mesh_streamer.is_none(), "no StreamingConfig declared");
 
         gs.setup_mesh_streaming(
             Some(StreamingConfig::default()),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            None,
+            MeshStreamSetup {
+                payloads: Vec::new(),
+                centers: Vec::new(),
+                draw_indices: Vec::new(),
+                disk_backed: false,
+                seed_region: None,
+                deferred_payloads: Default::default(),
+            },
         );
         assert!(gs.mesh_streamer.is_none(), "no mesh to stream");
         assert!(recorded.lock().unwrap().calls.is_empty());
@@ -743,11 +836,14 @@ mod tests {
         let mut headless = GraphicsSystem::new();
         headless.setup_mesh_streaming(
             Some(StreamingConfig::default()),
-            mesh_payloads(1),
-            centers(1),
-            vec![0],
-            false,
-            None,
+            MeshStreamSetup {
+                payloads: mesh_payloads(1),
+                centers: centers(1),
+                draw_indices: vec![0],
+                disk_backed: false,
+                seed_region: None,
+                deferred_payloads: Default::default(),
+            },
         );
         assert!(headless.mesh_streamer.is_none(), "no backend");
     }
@@ -760,11 +856,14 @@ mod tests {
                 mesh_budget_mb: 16,
                 ..Default::default()
             }),
-            mesh_payloads(1),
-            centers(1),
-            vec![0],
-            false,
-            None,
+            MeshStreamSetup {
+                payloads: mesh_payloads(1),
+                centers: centers(1),
+                draw_indices: vec![0],
+                disk_backed: false,
+                seed_region: None,
+                deferred_payloads: Default::default(),
+            },
         );
         assert_eq!(
             gs.mesh_streamer.as_ref().unwrap().byte_budget(),

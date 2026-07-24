@@ -45,7 +45,8 @@ pub use encode::encode_cnb;
 pub use error::BlobError;
 pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
 pub use schema::{
-    AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord, SceneGroup, WorldManifest,
+    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, ResourceKind, ResourceRecord, SceneGroup,
+    WorldManifest,
 };
 
 // The identity and payload-address types the records carry, owned by the

@@ -123,7 +123,7 @@ pub use concinnity_asset::{
 // historical path so the runtime, cook, and the registry macros keep naming
 // `ecs::{BlobAssetDef, ResourceKind, ...}` unchanged.
 pub use concinnity_blob::{
-    AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord, SceneGroup,
+    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, ResourceKind, ResourceRecord, SceneGroup,
 };
 
 // PipelineContext -- systems' view of the world during a tick. Renderer-free:

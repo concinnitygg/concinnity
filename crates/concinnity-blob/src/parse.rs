@@ -98,6 +98,7 @@ mod tests {
             resources,
             manifest,
             scene_groups: Vec::new(),
+            mesh_bounds: Vec::new(),
         }
     }
 

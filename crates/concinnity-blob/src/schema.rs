@@ -124,6 +124,20 @@ pub struct BlobMeta {
     pub resources: Vec<ResourceRecord>,
     pub manifest: WorldManifest,
     pub scene_groups: Vec<SceneGroup>,
+    pub mesh_bounds: Vec<MeshBoundsRecord>,
+}
+
+// Baked geometry summary of one static mesh payload, keyed by its unified
+// mesh-source handle. Lets the runtime build draw records (AABB) and size
+// geometry reservations (counts) without decoding the payload; a payload with
+// no record decodes eagerly.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MeshBoundsRecord {
+    pub handle: u32,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub vertex_count: u32,
+    pub index_count: u32,
 }
 
 // One scene's exclusively-owned blob content: the resource-stream entries and
@@ -171,6 +185,13 @@ mod tests {
                 scene: AssetId(7),
                 resources: vec![(ResourceKind::Material as u8, 5)],
                 defs: vec![AssetId(3)],
+            }],
+            mesh_bounds: vec![MeshBoundsRecord {
+                handle: 2,
+                min: [-1.0, 0.0, -1.0],
+                max: [1.0, 2.0, 1.0],
+                vertex_count: 24,
+                index_count: 36,
             }],
         }
     }

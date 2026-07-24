@@ -127,6 +127,7 @@ pub fn write_blobs(
     defs: &[BlobAssetDef],
     resources: &[ResourceRecord],
     scene_groups: &[concinnity_blob::SceneGroup],
+    mesh_bounds: &[concinnity_blob::MeshBoundsRecord],
     blob_payloads: &[Vec<u8>],
 ) -> std::io::Result<PackResult> {
     fs::create_dir_all(concinnity_core::paths::data_dir())?;
@@ -139,6 +140,7 @@ pub fn write_blobs(
         resources: resources.to_vec(),
         manifest: concinnity_blob::WorldManifest::from_records(defs, resources),
         scene_groups: scene_groups.to_vec(),
+        mesh_bounds: mesh_bounds.to_vec(),
     };
 
     let mut blob_paths = Vec::new();
@@ -392,7 +394,7 @@ mod tests {
         }];
         let payloads = vec![vec![1, 2, 3], vec![4, 5, 6, 7]];
         let data_dir = state.data_dir();
-        let paths = write_blobs(&defs, &resources, &[], &payloads)
+        let paths = write_blobs(&defs, &resources, &[], &[], &payloads)
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
@@ -429,12 +431,12 @@ mod tests {
 
         let defs = vec![component_def(3, None)];
         let payloads = vec![vec![1], vec![2], vec![3]];
-        let first = write_blobs(&defs, &[], &[], &payloads)
+        let first = write_blobs(&defs, &[], &[], &[], &payloads)
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(first.len(), 3);
 
-        let second = write_blobs(&defs, &[], &[], &[vec![1]])
+        let second = write_blobs(&defs, &[], &[], &[], &[vec![1]])
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(second.len(), 1);
@@ -448,7 +450,7 @@ mod tests {
         let _state = StateDir::new();
 
         let defs = vec![component_def(5, None)];
-        let paths = write_blobs(&defs, &[], &[], &[])
+        let paths = write_blobs(&defs, &[], &[], &[], &[])
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 1, "a payload-less world still ships blob 0");
@@ -465,7 +467,7 @@ mod tests {
         let state = StateDir::new();
         fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
 
-        let result = write_blobs(&[component_def(1, None)], &[], &[], &[]);
+        let result = write_blobs(&[component_def(1, None)], &[], &[], &[], &[]);
         assert!(result.is_err(), "an unwritable blob path must fail");
     }
 
@@ -479,7 +481,7 @@ mod tests {
             component_def(3, Some(locator(0, 0, 3))),
             component_def(4, None),
         ];
-        let paths = write_blobs(&defs, &[], &[], &[vec![1, 2, 3]])
+        let paths = write_blobs(&defs, &[], &[], &[], &[vec![1, 2, 3]])
             .expect("write_blobs")
             .blob_paths;
         let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];

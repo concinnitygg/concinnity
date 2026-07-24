@@ -117,6 +117,51 @@ impl Drop for DiskMeshSource {
     }
 }
 
+// One deferred streamed mesh's compiled payload: init skipped its decode
+// (owned by a scene other than the start scene), so no geometry copy exists
+// in the scratch/RAM source and the worker decodes the blob payload instead.
+pub enum DeferredMeshPayload {
+    // RAM-backed world: the raw compiled payload bytes.
+    Bytes(Vec<u8>),
+    // Disk-backed world: the payload's absolute byte range in its blob file.
+    Disk { path: String, offset: u64, len: u64 },
+}
+
+// Wraps a base mesh source with per-id deferred payload overrides.
+pub struct SceneDeferredMeshSource {
+    base: std::sync::Arc<dyn MeshPayloadSource>,
+    deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
+}
+
+impl SceneDeferredMeshSource {
+    pub fn new(
+        base: std::sync::Arc<dyn MeshPayloadSource>,
+        deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
+    ) -> Self {
+        Self { base, deferred }
+    }
+}
+
+impl MeshPayloadSource for SceneDeferredMeshSource {
+    fn fetch(&self, id: usize) -> Result<DecodedMesh, String> {
+        match self.deferred.get(&id) {
+            None => self.base.fetch(id),
+            Some(DeferredMeshPayload::Bytes(bytes)) => decode_deferred_payload(bytes),
+            Some(DeferredMeshPayload::Disk { path, offset, len }) => {
+                let bytes = super::file_range::read_at(path, *offset, *len)?;
+                decode_deferred_payload(&bytes)
+            }
+        }
+    }
+}
+
+// Decode a compiled mesh payload into LOD0 geometry (streamed draws strip
+// their LOD alternates, so only LOD0 is ever uploaded).
+fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
+    let (vertices, indices, _) = crate::gfx::mesh_payload::deserialise_with_lods(bytes)?;
+    Ok(DecodedMesh { vertices, indices })
+}
+
 // Write every streamed mesh's geometry to `path` and return a
 // [`DiskMeshSource`] that re-reads each record on demand.
 //
