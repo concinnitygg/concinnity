@@ -71,7 +71,7 @@ impl Default for FollowController {
 /// A `Camera3D` whose `controller` is set (the default) is driven each frame by
 /// the internal camera controller, which turns mouse/keyboard input into a
 /// camera orientation and a movement intent. Set `controller` to `null` for a
-/// camera driven by something else (a `CameraShot` / `SceneReel` cutscene).
+/// camera driven by something else (a `CameraShot` / `Scene` cutscene).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CameraController {
@@ -144,7 +144,7 @@ pub struct Camera3DArgs {
     /// Initial pitch in radians.
     pub pitch: f32,
     /// Input controller settings, or `null` to leave the camera uncontrolled
-    /// (driven by a [CameraShot](#camerashot) / [SceneReel](#scenereel)
+    /// (driven by a [CameraShot](#camerashot) / [Scene](#scene)
     /// cutscene). Omitted defaults to a free-fly inspector controller.
     #[serde(default = "default_controller")]
     pub controller: Option<CameraController>,

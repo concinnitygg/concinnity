@@ -1,16 +1,16 @@
-// GraphicsSystem scene-reel wiring and per-frame scene visibility application.
+// GraphicsSystem scene-flow wiring and per-frame scene visibility application.
 
-use crate::assets::{RenderHandle, Scene, SceneMember, SceneReel};
+use crate::assets::{RenderHandle, Scene, SceneMember};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::gfx::scene_reel;
+use crate::gfx::scene_flow;
 
 use super::*;
 
 // Build the (draw-slots, scene) visibility pairs from the per-entity
 // components: every entity with a RenderHandle contributes its GPU draw slots,
 // tagged with the SceneMember scene it belongs to (None = always visible),
-// consumed by the scene_reel visibility functions. The two returned vectors are
+// consumed by the scene_flow visibility functions. The two returned vectors are
 // index-aligned: pair i is one entity's draws and its scene.
 pub(crate) fn decomposed_visibility_snapshot(
     ctx: &PipelineContext,
@@ -35,42 +35,26 @@ pub(crate) fn decomposed_visibility_snapshot(
 }
 
 impl GraphicsSystem {
-    pub(super) fn setup_scene_reel(&mut self, ctx: &mut PipelineContext) {
-        let scenes: Vec<Scene> = ctx.drain::<Scene>();
-        let scene_map: std::collections::HashMap<AssetId, Scene> =
-            scenes.into_iter().map(|s| (s.asset_id, s)).collect();
-        let reel_opt = ctx.drain::<SceneReel>().into_iter().next();
-        if let Some(reel) = reel_opt {
-            if reel.scenes.is_empty() {
-                tracing::warn!("SceneReel {} has no scenes, ignored", reel.asset_id);
-            } else {
-                let entries: Vec<scene_reel::ReelEntry> = reel
-                    .scenes
-                    .iter()
-                    .map(|&scene_id| {
-                        let scene = scene_map.get(&scene_id);
-                        scene_reel::ReelEntry {
-                            scene: scene_id,
-                            duration_secs: scene.and_then(|s| s.duration_secs),
-                            transition: scene
-                                .map(|s| s.transition.clone())
-                                .unwrap_or_else(|| "Cut".to_string()),
-                        }
-                    })
-                    .collect();
-                let start_idx = (reel.start_index as usize).min(entries.len() - 1);
-                let active_scene = entries[start_idx].scene;
-                self.apply_scene_visibility(ctx, active_scene);
-                self.reel = Some(scene_reel::ReelState {
-                    entries,
-                    current_idx: start_idx,
-                    looping: reel.looping,
-                    scene_started_at: 0.0,
-                    fade: scene_reel::FadePhase::None,
-                    base_clear_color: self.clear_color,
-                });
-            }
+    // Drain the world's Scene assets into the flow state. The first declared
+    // Scene is active at world start; its props are shown and every other
+    // scene's props are hidden.
+    pub(super) fn setup_scene_flow(&mut self, ctx: &mut PipelineContext) {
+        let scenes: Vec<AssetId> = ctx
+            .drain::<Scene>()
+            .into_iter()
+            .map(|s| s.asset_id)
+            .collect();
+        if scenes.is_empty() {
+            return;
         }
+        let active_scene = scenes[0];
+        self.apply_scene_visibility(ctx, active_scene);
+        self.scene_flow = Some(scene_flow::SceneFlow {
+            scenes,
+            current: active_scene,
+            fade: scene_flow::FadePhase::None,
+            base_clear_color: self.clear_color,
+        });
     }
 
     pub(super) fn apply_scene_visibility(&mut self, ctx: &PipelineContext, active_scene: AssetId) {
@@ -79,7 +63,7 @@ impl GraphicsSystem {
         // runs.
         let (draws, scenes) = decomposed_visibility_snapshot(ctx);
         if let Some(backend) = self.backend.as_deref_mut() {
-            scene_reel::set_scene_visibility(&draws, &scenes, active_scene, backend);
+            scene_flow::set_scene_visibility(&draws, &scenes, active_scene, backend);
         }
     }
 }

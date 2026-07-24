@@ -52,7 +52,6 @@ macro_rules! for_each_component {
             ProceduralMesh    => $crate::assets::ProceduralMesh { gen, external, compiled, id },
             Model             => $crate::assets::Model { gen, external, id },
             Scene             => $crate::assets::Scene { gen, external, id, refs: [("camera_shot", "Camera3D")] },
-            SceneReel         => $crate::assets::SceneReel { gen, external, id },
             TextLabel         => $crate::assets::TextLabel { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
             LightRig          => $crate::assets::LightRig { gen, build_only },
             MaterialPalette   => $crate::assets::MaterialPalette { gen, build_only },

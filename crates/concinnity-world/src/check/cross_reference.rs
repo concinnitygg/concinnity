@@ -23,15 +23,13 @@ use std::collections::{HashMap, HashSet};
 // to a `CrossReferenced` impl in the named asset's file.
 fn cross_refs_for(type_norm: &str, name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, SceneReel, VoxelChunk,
-        VoxelWorld,
+        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, VoxelChunk, VoxelWorld,
     };
     match type_norm {
         "animgraph" => AnimGraph::cross_refs(name, args),
         "camera3d" => Camera3D::cross_refs(name, args),
         "prop" => Prop::cross_refs(name, args),
         "model" => Model::cross_refs(name, args),
-        "scenereel" | "scenreel" => SceneReel::cross_refs(name, args),
         "instancedprop" | "instanced" => InstancedProp::cross_refs(name, args),
         "voxelchunk" | "chunk" => VoxelChunk::cross_refs(name, args),
         "voxelworld" => VoxelWorld::cross_refs(name, args),
@@ -682,44 +680,22 @@ mod tests {
     }
 
     #[test]
-    fn scene_reel_valid_scenes_pass() {
+    fn scene_camera_shot_valid_passes() {
         let assets = vec![
-            asset(
-                "day",
-                "Scene",
-                serde_json::json!({"duration_secs":3.0,"transition":"FadeBlack"}),
-            ),
-            asset(
-                "night",
-                "Scene",
-                serde_json::json!({"duration_secs":3.0,"transition":"FadeBlack"}),
-            ),
-            asset(
-                "reel",
-                "SceneReel",
-                serde_json::json!({"scenes":["day","night"]}),
-            ),
+            asset("cam", "Camera3D", serde_json::json!({})),
+            asset("day", "Scene", serde_json::json!({"camera_shot":"cam"})),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
 
     #[test]
-    fn scene_reel_missing_scene_fails() {
-        let assets = vec![
-            asset("day", "Scene", serde_json::json!({})),
-            asset(
-                "reel",
-                "SceneReel",
-                serde_json::json!({"scenes":["day","ghost_scene"]}),
-            ),
-        ];
-        assert!(err_text(&assets).contains("ghost_scene"));
-    }
-
-    #[test]
-    fn scene_reel_empty_scenes_fails() {
-        let assets = vec![asset("reel", "SceneReel", serde_json::json!({"scenes":[]}))];
-        assert!(err_text(&assets).contains("empty"));
+    fn scene_camera_shot_missing_fails() {
+        let assets = vec![asset(
+            "day",
+            "Scene",
+            serde_json::json!({"camera_shot":"ghost_cam"}),
+        )];
+        assert!(err_text(&assets).contains("ghost_cam"));
     }
 
     #[test]

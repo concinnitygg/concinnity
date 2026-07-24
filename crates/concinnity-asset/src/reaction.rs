@@ -159,7 +159,7 @@ pub enum ReactionAction {
         #[serde(default = "unit_volume")]
         volume: f32,
     },
-    /// Jump the world's [SceneReel](#scenereel) to a named [Scene](#scene).
+    /// Jump the world to a named [Scene](#scene).
     Scene {
         /// The scene to jump to.
         #[serde(default, deserialize_with = "de_opt_asset_ref")]

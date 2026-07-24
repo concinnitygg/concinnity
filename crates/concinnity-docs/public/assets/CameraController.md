@@ -7,7 +7,7 @@ First-person / fly-through controller settings carried on a `Camera3D`.
 A `Camera3D` whose `controller` is set (the default) is driven each frame by
 the internal camera controller, which turns mouse/keyboard input into a
 camera orientation and a movement intent. Set `controller` to `null` for a
-camera driven by something else (a `CameraShot` / `SceneReel` cutscene).
+camera driven by something else (a `CameraShot` / `Scene` cutscene).
 
 ## Parameters
 

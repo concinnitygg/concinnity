@@ -937,7 +937,7 @@ pub struct DrawObject {
     // Per-draw material scalars pushed to the fragment shader at buffer(3).
     pub material: MaterialUniforms,
     // When false the object is skipped in both the shadow and main passes.
-    // Controlled by SceneReel to hide props belonging to inactive scenes.
+    // Controlled by scene switches to hide props belonging to inactive scenes.
     pub visible: bool,
     // When false the object's geometry is not yet uploaded to the GPU buffers
     // and the object is skipped in every pass. Always true unless the asset-

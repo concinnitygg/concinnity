@@ -162,7 +162,6 @@ pub use concinnity_asset::RigidBody;
 pub use concinnity_asset::RoomArgs;
 pub use concinnity_asset::Scene;
 pub use concinnity_asset::SceneImport;
-pub use concinnity_asset::SceneReel;
 pub use concinnity_asset::{Condition, Reaction, ReactionAction, ReactionSource, StoryPlayback};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use concinnity_asset::{TriggerFilter, TriggerVolume};
@@ -295,6 +294,5 @@ mod tests {
         exercise::<ParticleEmitter>();
         exercise::<VoxelWorld>();
         exercise::<VoxelChunk>();
-        exercise::<SceneReel>();
     }
 }

@@ -627,7 +627,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
     // default backend trait impl errors on
     // `update_world_shader_pipelines`; an empty map must not hit it.
     struct DummyBackend;
-    impl crate::gfx::scene_reel::SceneControl for DummyBackend {
+    impl crate::gfx::scene_flow::SceneControl for DummyBackend {
         fn update_visibility(&mut self, _: usize, _: bool) {}
         fn update_clear_color(&mut self, _: [f32; 4]) {}
     }
@@ -774,7 +774,7 @@ struct RecordingBackend {
     fail_env_updates: bool,
 }
 
-impl crate::gfx::scene_reel::SceneControl for RecordingBackend {
+impl crate::gfx::scene_flow::SceneControl for RecordingBackend {
     fn update_visibility(&mut self, _: usize, _: bool) {}
     fn update_clear_color(&mut self, _: [f32; 4]) {}
 }

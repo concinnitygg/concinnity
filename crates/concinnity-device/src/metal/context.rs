@@ -1119,7 +1119,7 @@ impl MtlContext {
     }
 
     // Replace the framebuffer clear colour for the next draw_frame call.
-    // Used by SceneReel to lerp toward black during FadeBlack transitions.
+    // Used by scene transitions to lerp toward black during FadeBlack.
     pub fn update_clear_color(&mut self, color: [f32; 4]) {
         self.clear_color = color;
     }
@@ -1333,7 +1333,7 @@ impl MtlContext {
     }
 }
 
-impl crate::gfx::scene_reel::SceneControl for MtlContext {
+impl crate::gfx::scene_flow::SceneControl for MtlContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

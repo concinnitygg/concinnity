@@ -53,7 +53,7 @@ pub mod reflection_probe;
 pub mod render_graph;
 pub mod rt_geom;
 pub mod rt_topology;
-pub mod scene_reel;
+pub mod scene_flow;
 pub mod shadow_schedule;
 pub mod skinned_pool;
 pub mod slot_rewrites;

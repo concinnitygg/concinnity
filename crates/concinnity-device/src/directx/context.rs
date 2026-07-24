@@ -2208,7 +2208,7 @@ impl DxContext {
     }
 }
 
-impl crate::gfx::scene_reel::SceneControl for DxContext {
+impl crate::gfx::scene_flow::SceneControl for DxContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

@@ -1,8 +1,8 @@
 // src/check/asset_refs.rs
 //
 // Per-asset cross-reference declarations for the STRUCTURED references a flat
-// registry `refs:` pair cannot express: lists (Model submeshes, SceneReel
-// scenes, voxel palettes), the polymorphic mesh sources, nested fields
+// registry `refs:` pair cannot express: lists (Model submeshes, voxel
+// palettes), the polymorphic mesh sources, nested fields
 // (Camera3D's follow controller), and required-ness (a missing mandatory
 // field is an authoring error, not an absent optional). Each such asset
 // implements `CrossReferenced`; the validator in `cross_reference.rs` resolves
@@ -16,8 +16,8 @@
 // concinnity-core.
 
 use crate::assets::{
-    AnimGraph, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, Reaction, SceneReel,
-    VoxelChunk, VoxelWorld,
+    AnimGraph, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, Reaction, VoxelChunk,
+    VoxelWorld,
 };
 
 // The category of asset a structured name reference must resolve to.
@@ -219,41 +219,6 @@ impl CrossReferenced for Model {
                         error: format!(
                             "Model '{}': submesh[{}] material '{}' not found, add a Material asset with that name",
                             name, i, sub_mat
-                        ),
-                    });
-                }
-            }
-        }
-
-        refs
-    }
-}
-
-impl CrossReferenced for SceneReel {
-    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        let mut refs = Vec::new();
-
-        if let Some(entries) = args.get("scenes").and_then(|v| v.as_array()) {
-            if entries.is_empty() {
-                refs.push(CrossRef::Issue(format!(
-                    "SceneReel '{}': scenes list is empty",
-                    name
-                )));
-            }
-            for (i, entry) in entries.iter().enumerate() {
-                let scene_ref = entry.as_str().unwrap_or("");
-                if scene_ref.is_empty() {
-                    refs.push(CrossRef::Issue(format!(
-                        "SceneReel '{}': scenes[{}] is not a valid scene name string",
-                        name, i
-                    )));
-                } else {
-                    refs.push(CrossRef::Resolve {
-                        kind: RefKind::Scene,
-                        target: scene_ref.to_string(),
-                        error: format!(
-                            "SceneReel '{}': scenes[{}] references unknown scene '{}', add a Scene asset with that name",
-                            name, i, scene_ref
                         ),
                     });
                 }
@@ -595,18 +560,6 @@ mod tests {
         assert_eq!(tally(&refs), (2, 1));
         assert!(resolves_to(&refs, RefKind::MeshSource, "m0"));
         assert!(resolves_to(&refs, RefKind::Material, "mat0"));
-    }
-
-    #[test]
-    fn scene_reel_cross_refs_scenes_list() {
-        // Empty scenes list -> one Issue.
-        assert_eq!(
-            tally(&SceneReel::cross_refs("r", &json!({"scenes": []}))),
-            (0, 1)
-        );
-        let refs = SceneReel::cross_refs("r", &json!({"scenes": ["a", ""]}));
-        assert_eq!(tally(&refs), (1, 1));
-        assert!(resolves_to(&refs, RefKind::Scene, "a"));
     }
 
     fn graph_json() -> serde_json::Value {

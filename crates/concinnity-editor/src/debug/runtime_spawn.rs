@@ -1153,7 +1153,7 @@ mod tests {
     // failure arms the dispatch reply surfaces to a WS client.
     struct StubBackend;
 
-    impl crate::gfx::scene_reel::SceneControl for StubBackend {
+    impl crate::gfx::scene_flow::SceneControl for StubBackend {
         fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
         fn update_clear_color(&mut self, _color: [f32; 4]) {}
     }

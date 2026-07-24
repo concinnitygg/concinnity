@@ -49,9 +49,8 @@
 - [ReflectionProbe](ReflectionProbe.md) - A localized reflection probe. The renderer captures the surrounding scene into a cubemap from `position` and uses it for the specular reflection on glossy surfaces within the influence box (`position` plus or minus `half_extents`). The box is also the parallax-correction volume, so a reflection stays anchored to the surrounding geometry as the camera moves.
 - [RigidBody](RigidBody.md) - Gives a player [Camera3D](Camera3D.md) gravity, jumping, and a grounded character body.
 - [Room](Room.md) - A self-contained room (floor, ceiling, four walls), with optional texturing.
-- [Scene](Scene.md) - A named group marker with timing and transition settings for [SceneReel](SceneReel.md).
+- [Scene](Scene.md) - A named group of world content.
 - [SceneImport](SceneImport.md) - Imports a 3D scene file as a single declaration.
-- [SceneReel](SceneReel.md) - An ordered playlist of named [Scene](Scene.md)s.
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.

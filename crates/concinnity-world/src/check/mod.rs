@@ -14,7 +14,6 @@ pub(crate) mod asset_refs;
 pub mod cross_reference;
 pub mod instanced_prop;
 pub mod prop;
-pub mod scene_reel;
 pub mod sdf_volume;
 pub mod shader;
 pub(crate) mod shape;
@@ -50,7 +49,6 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
         "animgraph" => anim_graph::check(name, args),
         "shaderstage" => shader::check(name, args),
         "prop" => prop::check(name, args),
-        "scenereel" | "scenreel" => scene_reel::check(name, args),
         "sdfvolume" | "sdf" => sdf_volume::check(name, args),
         "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
         "voxelworld" => voxel_world::check(name, args),

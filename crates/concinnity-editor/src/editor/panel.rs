@@ -1921,7 +1921,6 @@ mod tests {
             "Reaction",
             "RigidBody",
             "Scene",
-            "SceneReel",
             "ScrollPanel",
             "Spawner",
             "Story",

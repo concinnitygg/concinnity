@@ -3366,9 +3366,9 @@ mod tests {
         // Args of the wrong shape survive the structural world checks and are
         // rejected when the def is built.
         let bad = concat!(
-            r#"{"name":"t1","type":"Scene","args":{"duration_secs":"soon"}}"#,
+            r#"{"name":"t1","type":"PointLight","args":{"intensity":"soon"}}"#,
             "\n",
-            r#"{"name":"t2","type":"Scene","args":{"duration_secs":"later"}}"#,
+            r#"{"name":"t2","type":"PointLight","args":{"intensity":"later"}}"#,
             "\n",
         );
         let err = validate_world_jsonl(bad).expect_err("mistyped args do not resolve");

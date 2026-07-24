@@ -112,7 +112,7 @@ pub struct Prop {
     /// [Scene](#scene) this prop belongs to. Resolved automatically from the
     /// naming convention (a prop named `<scene>_*` belongs to scene `<scene>`);
     /// you don't set this directly. `None` means the prop is visible in every
-    /// scene. Used by [SceneReel](#scenereel) for per-scene visibility.
+    /// scene. Used by scene switches for per-scene visibility.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub scene: Option<AssetId>,
     /// Name of a [Prefab](#prefab) to instantiate at this prop's transform. When

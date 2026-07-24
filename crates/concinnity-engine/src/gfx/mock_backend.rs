@@ -15,7 +15,7 @@ use crate::gfx::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
-use crate::gfx::scene_reel::SceneControl;
+use crate::gfx::scene_flow::SceneControl;
 
 // Everything a test injects into GraphicsSystem before init: the settings
 // store contents (so the on-disk file is never read or written), the GPU

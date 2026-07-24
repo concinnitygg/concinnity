@@ -7,7 +7,7 @@ use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
 use crate::gfx::backend::FrameParams;
-use crate::gfx::{draw_list, scene_reel, settings};
+use crate::gfx::{draw_list, scene_flow, settings};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
 use crate::gfx::settings_system::rows::{
@@ -231,25 +231,25 @@ impl GraphicsSystem {
                 // SceneCommand / SettingCommand application lives in
                 // SettingsSystem, scheduled just before this system, so a
                 // change is already on the backend for this frame's submit
-                // and a scene jump has primed the reel below.
+                // and a scene jump has primed the flow below.
 
-                // Advance the SceneReel and apply fade / visibility changes,
-                // sourcing visibility from the live per-entity components (the
-                // snapshot is rebuilt each frame the reel exists). The reel is
-                // the shared `ActiveSceneReel` resource SettingsSystem also
-                // jumps; its `epoch` is the shared clock for the fade timing.
-                let reel_active = ctx
-                    .resource::<crate::ecs::ActiveSceneReel>()
-                    .is_some_and(|r| r.reel.is_some());
-                if reel_active {
+                // Advance any in-flight scene fade, sourcing visibility from
+                // the live per-entity components (the snapshot is rebuilt each
+                // frame the flow exists). The flow is the shared
+                // `ActiveSceneFlow` resource SettingsSystem also jumps; its
+                // `epoch` is the shared clock for the fade timing.
+                let flow_active = ctx
+                    .resource::<crate::ecs::ActiveSceneFlow>()
+                    .is_some_and(|f| f.flow.is_some());
+                if flow_active {
                     let (draws, scenes) = super::scene::decomposed_visibility_snapshot(ctx);
-                    if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneReel>() {
-                        let reel_elapsed = slot.epoch.elapsed().as_secs_f32();
-                        scene_reel::tick_reel(
-                            &mut slot.reel,
+                    if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
+                        let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
+                        scene_flow::tick_transitions(
+                            &mut slot.flow,
                             &draws,
                             &scenes,
-                            reel_elapsed,
+                            flow_elapsed,
                             backend,
                         );
                     }

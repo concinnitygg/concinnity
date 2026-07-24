@@ -30,7 +30,7 @@ pub(crate) use concinnity_core::gfx::chunk_coord;
 // this crate). `pub` for the pieces the editor / app crates name, `pub(crate)`
 // for the rest.
 pub use concinnity_render::{
-    backend, backend_init, decal, input, particles, scene_reel, volumetric_fog,
+    backend, backend_init, decal, input, particles, scene_flow, volumetric_fog,
 };
 pub(crate) use concinnity_render::{cursor, display_mode, keymap, lights, sprite, text};
 // Seeded / driven by the client's GraphicsSystem on Metal today; the other

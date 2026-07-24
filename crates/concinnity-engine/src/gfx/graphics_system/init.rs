@@ -2956,7 +2956,7 @@ impl GraphicsSystem {
 
         self.finalize_backend_config(ctx);
 
-        self.setup_scene_reel(ctx);
+        self.setup_scene_flow(ctx);
 
         // Hand the overlay build inputs assembled above (font atlases, sprite
         // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
@@ -3012,11 +3012,11 @@ impl GraphicsSystem {
 
         let start = Instant::now();
         self.start_time = Some(start);
-        // Hand the SceneReel to the shared slot SettingsSystem jumps and this
+        // Hand the scene flow to the shared slot SettingsSystem jumps and this
         // system ticks. `epoch` shares this system's start clock so a jump's
         // fade timing matches the render clock.
-        ctx.insert_resource(crate::ecs::ActiveSceneReel {
-            reel: self.reel.take(),
+        ctx.insert_resource(crate::ecs::ActiveSceneFlow {
+            flow: self.scene_flow.take(),
             epoch: start,
         });
         tracing::info!(

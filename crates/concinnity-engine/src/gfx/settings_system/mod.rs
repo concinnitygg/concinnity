@@ -23,7 +23,7 @@ use crate::assets::SceneCommand;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
-use crate::gfx::scene_reel;
+use crate::gfx::scene_flow;
 
 mod apply;
 pub(crate) mod rows;
@@ -162,7 +162,7 @@ impl System for SettingsSystem {
 impl SettingsState {
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
     // out of the event queue so the borrow is released before the jump touches
-    // the backend. The reel lives in the shared `ActiveSceneReel` resource
+    // the backend. The flow lives in the shared `ActiveSceneFlow` resource
     // (GraphicsSystem ticks its fades later this same tick, so a jump's fade
     // starts on this frame).
     fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, backend: &mut dyn RenderBackend) {
@@ -181,13 +181,13 @@ impl SettingsState {
         // snapshotting once for the whole command batch.
         let (draws, scenes) =
             crate::gfx::graphics_system::scene::decomposed_visibility_snapshot(ctx);
-        let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneReel>() else {
+        let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() else {
             return;
         };
         let elapsed = slot.epoch.elapsed().as_secs_f32();
         for cmd in scene_cmds {
-            scene_reel::jump_to_scene(
-                &mut slot.reel,
+            scene_flow::jump_to_scene(
+                &mut slot.flow,
                 &draws,
                 &scenes,
                 elapsed,

@@ -88,15 +88,15 @@ impl ActiveRenderBackend {
     }
 }
 
-// The active SceneReel bookkeeping, shared between SettingsSystem (which
+// The active scene-flow bookkeeping, shared between SettingsSystem (which
 // applies imperative scene jumps from `SceneCommand`) and GraphicsSystem
 // (which ticks the timed advance + fades and submits the visibility changes).
-// Published by GraphicsSystem's init when the world declares a `SceneReel`;
-// `reel` is `None` when it declared none, so both systems no-op. `epoch` is the
+// Published by GraphicsSystem's init when the world declares `Scene` assets;
+// `flow` is `None` when it declared none, so both systems no-op. `epoch` is the
 // shared clock both derive their `elapsed` from, set to GraphicsSystem's own
 // `start_time` so fade timing matches the render clock.
-pub struct ActiveSceneReel {
-    pub reel: Option<crate::gfx::scene_reel::ReelState>,
+pub struct ActiveSceneFlow {
+    pub flow: Option<crate::gfx::scene_flow::SceneFlow>,
     pub epoch: std::time::Instant,
 }
 

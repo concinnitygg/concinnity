@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::assets::{
     Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
-    ReparentRequest, Scene, SceneCommand, SceneReel, ShaderKind, ShaderStage, SpawnRequest, Sprite,
+    ReparentRequest, Scene, SceneCommand, ShaderKind, ShaderStage, SpawnRequest, Sprite,
     StreamingConfig, TextLabel, Transform, Window,
 };
 use crate::blob::BlobData;
@@ -708,7 +708,7 @@ fn missing_shader_stage_fails_init() {
 }
 
 #[test]
-fn scene_reel_applies_start_scene_visibility() {
+fn first_declared_scene_applies_start_visibility() {
     let scene_a = AssetId(20);
     let scene_b = AssetId(21);
     let (state, hooks) = recording_hooks();
@@ -729,21 +729,11 @@ fn scene_reel_applies_start_scene_visibility() {
         }
         ctx.push(Scene {
             asset_id: scene_a,
-            duration_secs: None,
-            transition: "Cut".to_string(),
             camera_shot: None,
         });
         ctx.push(Scene {
             asset_id: scene_b,
-            duration_secs: None,
-            transition: "Cut".to_string(),
             camera_shot: None,
-        });
-        ctx.push(SceneReel {
-            asset_id: AssetId(22),
-            scenes: vec![scene_a, scene_b],
-            looping: false,
-            start_index: 0,
         });
     }
     let mut gs = init_graphics(&mut world, hooks);

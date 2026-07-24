@@ -9,14 +9,14 @@
 //   frame.rs     run_step: the per-frame transform upload + draw submit
 //   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
 //                (the per-frame drive lives in gfx::streaming_system)
-//   scene.rs     scene-reel wiring + scene visibility
+//   scene.rs     scene-flow wiring + scene visibility
 //   helpers.rs   shared free functions
 
 use crate::assets::{PostProcessResolve, WindowArgs};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
-use crate::gfx::{scene_reel, text};
+use crate::gfx::{scene_flow, text};
 use std::time::Instant;
 
 const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
@@ -142,10 +142,10 @@ pub struct GraphicsSystem {
     // frame encode, InputSystem's poll) takes and returns it; `None` from then
     // on.
     backend: Option<Box<dyn RenderBackend>>,
-    // active SceneReel bookkeeping while init builds it; handed to the shared
-    // `ActiveSceneReel` resource at the end of init (SettingsSystem jumps it,
-    // this system ticks it). None when no SceneReel was declared.
-    reel: Option<scene_reel::ReelState>,
+    // active scene-flow bookkeeping while init builds it; handed to the shared
+    // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
+    // this system ticks it). None when no Scene assets were declared.
+    scene_flow: Option<scene_flow::SceneFlow>,
     // Overlay build inputs assembled during init() and handed to OverlaySystem
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
@@ -410,7 +410,7 @@ impl GraphicsSystem {
             render_scale: crate::assets::UpscaleQuality::default(),
             upscale_backend: crate::assets::UpscalerBackend::default(),
             backend: None,
-            reel: None,
+            scene_flow: None,
             loaded_fonts: std::collections::HashMap::new(),
             sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),

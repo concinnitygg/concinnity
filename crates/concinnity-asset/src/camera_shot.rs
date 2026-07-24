@@ -8,17 +8,18 @@ use alloc::string::String;
 /// Used standalone, it expands into a [Camera3D](#camera3d) with the same
 /// parameters.
 ///
-/// **Library presets** (JSON files in `assets/shots/`):
+/// **Examples**
 ///
+/// With Scenes: camera switches per scene (declared on each Scene):
 /// ```jsonl
-/// // With SceneReel: camera switches per scene (declared on each Scene):
 /// {"name":"wide", "type":"CameraShot","args":{"fov_y_degrees":80,"position":[0,1.75,8],"yaw":3.14}}
 /// {"name":"close","type":"CameraShot","args":{"fov_y_degrees":55,"position":[0,1.5,3],"yaw":3.14}}
-/// {"name":"intro", "type":"Scene","args":{"duration_secs":4.0,"camera_shot":"wide", "transition":"FadeBlack"}}
-/// {"name":"detail","type":"Scene","args":{"duration_secs":4.0,"camera_shot":"close","transition":"FadeBlack"}}
-/// {"name":"reel","type":"SceneReel","args":{"looping":true,"scenes":["intro","detail"]}}
+/// {"name":"intro", "type":"Scene","args":{"camera_shot":"wide"}}
+/// {"name":"detail","type":"Scene","args":{"camera_shot":"close"}}
+/// ```
 ///
-/// // From library preset (standalone, replaces Camera3D):
+/// From library preset (standalone, replaces Camera3D):
+/// ```jsonl
 /// {"name":"cam","type":"CameraShot","args":{"preset":"shot_outdoor_wide"}}
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

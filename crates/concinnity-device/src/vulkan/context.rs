@@ -2225,7 +2225,7 @@ impl VkContext {
     }
 }
 
-impl crate::gfx::scene_reel::SceneControl for VkContext {
+impl crate::gfx::scene_flow::SceneControl for VkContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

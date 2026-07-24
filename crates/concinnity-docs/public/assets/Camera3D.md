@@ -25,4 +25,4 @@ Declares the 3D camera. One per scene.
 - `position`: An array of 3 floats. Initial eye position in world space [x, y, z]. Defaults to `[0.0, 1.7, 0.0]`.
 - `yaw`: A float. Initial yaw in radians (0 = looking toward -Z). Defaults to `0.0`.
 - `pitch`: A float. Initial pitch in radians. Defaults to `0.0`.
-- `controller`: A [CameraController](CameraController.md) object. Input controller settings, or `null` to leave the camera uncontrolled (driven by a [CameraShot](CameraShot.md) / [SceneReel](SceneReel.md) cutscene). Omitted defaults to a free-fly inspector controller.
+- `controller`: A [CameraController](CameraController.md) object. Input controller settings, or `null` to leave the camera uncontrolled (driven by a [CameraShot](CameraShot.md) / [Scene](Scene.md) cutscene). Omitted defaults to a free-fly inspector controller.
