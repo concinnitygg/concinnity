@@ -33,6 +33,10 @@ pub use concinnity_cook::paths;
 // cached under `.concinnity/cache/` (relative to the current directory), so a
 // second run with unchanged sources skips the expensive decode/compile.
 pub fn compile_world(content: &str) -> std::io::Result<World> {
+    // The cook ships no shader compilers of its own; hand it this build's
+    // before any ShaderStage is compiled.
+    concinnity_shader::install();
+
     let loaded: LoadedWorld =
         prepare_world(content).map_err(|errs| report_validation_errors(&errs))?;
 

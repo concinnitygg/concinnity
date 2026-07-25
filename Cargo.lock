@@ -628,6 +628,7 @@ dependencies = [
  "concinnity-editor",
  "concinnity-engine",
  "concinnity-memory",
+ "concinnity-shader",
  "concinnity-toolchain",
  "glfw",
  "serde_json",
@@ -661,12 +662,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "shaderc",
  "tempfile",
  "thiserror 2.0.18",
  "time",
  "tracing",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -743,6 +742,7 @@ dependencies = [
  "concinnity-device",
  "concinnity-engine",
  "concinnity-memory",
+ "concinnity-shader",
  "concinnity-templates",
  "concinnity-toolchain",
  "ctrlc",
@@ -828,6 +828,19 @@ dependencies = [
  "concinnity-engine",
  "concinnity-toolchain",
  "tempfile",
+]
+
+[[package]]
+name = "concinnity-shader"
+version = "0.15.0"
+dependencies = [
+ "concinnity-cook",
+ "concinnity-device",
+ "concinnity-toolchain",
+ "shaderc",
+ "tempfile",
+ "tracing",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1193,6 +1206,7 @@ version = "0.15.0"
 dependencies = [
  "concinnity-cook",
  "concinnity-engine",
+ "concinnity-shader",
 ]
 
 [[package]]

@@ -28,6 +28,7 @@ vulkan = [
 [dependencies]
 concinnity-editor = { path = "../concinnity-editor" }
 concinnity-cook = { path = "../concinnity-cook" }
+concinnity-shader = { path = "../concinnity-shader" }
 concinnity-engine = { path = "../concinnity-engine" }
 concinnity-memory = { path = "../concinnity-memory" }
 

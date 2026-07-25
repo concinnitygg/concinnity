@@ -429,6 +429,11 @@ pub fn run() -> std::io::Result<()> {
     // Must run before any thread spawns or the Metal framework initialises.
     reexec_with_metal_validation(&cli);
 
+    // Give the cook this build's shader compilers. `cn build` reaches the
+    // compile pipeline directly rather than through the authoring API, so
+    // installing once here is what covers every subcommand that compiles.
+    concinnity_shader::install();
+
     match &cli.command {
         Commands::Init => cli::init(),
         Commands::New(args) => cli::new(&args.path),

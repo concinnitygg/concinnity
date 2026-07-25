@@ -18,7 +18,7 @@ doctest = false
 vulkan = [
     "concinnity-engine/vulkan",
     "concinnity-device/vulkan",
-    "concinnity-cook/vulkan",
+    "concinnity-shader/vulkan",
     "concinnity-core/vulkan",
 ]
 
@@ -26,6 +26,7 @@ vulkan = [
 concinnity-engine = { path = "../concinnity-engine" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-cook = { path = "../concinnity-cook" }
+concinnity-shader = { path = "../concinnity-shader" }
 concinnity-core = { path = "../concinnity-core" }
 concinnity-memory = { path = "../concinnity-memory" }
 concinnity-templates = { path = "../concinnity-templates" }

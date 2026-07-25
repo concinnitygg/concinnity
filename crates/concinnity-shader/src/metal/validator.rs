@@ -1,11 +1,12 @@
-// Bridge that registers the Metal shader-layout validator with the core build
+// Bridge that registers the Metal shader-layout validator with the cook build
 // pipeline. The Metal reflection itself lives in `concinnity_device::metal` (the
 // only place that touches the Metal reflection API); this file is the thin
 // adapter that plugs it into the cook `ShaderBuildValidator` seam and wraps a
 // mismatch with the offending asset's name so `cn build` reports which shader to
-// fix. It is the one spot that depends on both cook and the device backend.
+// fix.
 //
-// Compiled only under the Metal backend.
+// Compiled only under the Metal backend, alongside the Metal shader compiler it
+// checks the output of.
 
 use std::sync::Once;
 

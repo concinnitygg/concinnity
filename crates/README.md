@@ -9,6 +9,7 @@
 | `concinnity-world`     | lib       |                    | Authored world source, args schema, and validation.                 |
 | `concinnity-engine`    | lib       |                    | Runtime engine: ECS schedule and graphics/spawn/streaming systems.  |
 | `concinnity-device`    | lib       |                    | GPU backends (Metal/Vulkan/DX) behind a device facade.              |
+| `concinnity-shader`    | lib       |                    | Build-time shader compilers for the backend being built.            |
 | `concinnity-render`    | lib       |                    | GPU-free render preparation.                                        |
 | `concinnity-physics`   | lib       |                    | Physics system (rapier3d).                                          |
 | `concinnity-audio`     | lib       |                    | Audio system (kira).                                                |

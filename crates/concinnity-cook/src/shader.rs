@@ -1,12 +1,17 @@
-// Dispatches to the correct backend compiler based on the source file extension.
-//   .metal -> xcrun metal + xcrun metallib -> raw .metallib bytes (macOS only)
-//   all others -> glslc or shaderc -> SPIR-V bytes
+// Shader compilation seam. Dispatches on the source file extension to the
+// registered toolchain:
+//   .metal -> MSL   .hlsl -> HLSL   anything else -> GLSL
+//
+// This crate produces no shader bytecode itself: every backend's compiler needs
+// a platform toolchain (xcrun, the Direct3D compiler, shaderc), and the cook
+// runs on build hosts that have none of them. The concrete compilers live in
+// concinnity-shader and are installed here by the binary before a build.
 //
 // Built-in shader sources are embedded into the binary at compile time so the
 // runtime never depends on `assets/` for them. Any caller-supplied source path
 // whose bare filename matches a built-in name resolves to the embedded bytes.
-// Source is handed straight to the platform compiler (over stdin or in
-// memory); no shader source file is written to disk.
+// Source is handed to the toolchain in memory; no shader source file is written
+// to disk.
 //
 // The built-in source table (`builtin_shader_source` and the embedded const
 // strings) stays in concinnity-core; this crate's compile path resolves bare
@@ -14,29 +19,81 @@
 
 use concinnity_core::build::shader::builtin_shader_source;
 
-// A unique temp-file stem for a shader compile's transient artifacts (`.air` /
-// `.metallib` / `.spv`). Keying on the process id plus a per-process counter makes
-// it unique across concurrent compiles in the same process (parallel builds, the
-// test suite) and across separate processes, so they never collide on one path; and
-// rooting it in the OS temp dir keeps the working directory untouched.
-#[cfg(backend_metal)]
-fn transient_stem(asset_name: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "cn-shader-{}-{}-{}",
-        asset_name,
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ))
-}
-
 #[derive(Debug, Clone)]
 pub struct ShaderCompileArgs {
     pub source_path: String,
     pub asset_name: String,
-    #[allow(dead_code)]
     pub kind: String,
+}
+
+// The platform shader compilers for the backend this build targets, installed
+// by the binary through [`set_shader_toolchain`]. A toolchain implements only
+// the source languages its backend consumes; the rest report `Unsupported`
+// through the defaults, so a world authored for another backend fails the build
+// with a clear message rather than emitting bytecode nothing can load.
+pub trait ShaderToolchain: Send + Sync {
+    // Compile Metal Shading Language source to a `.metallib`.
+    fn compile_metal(
+        &self,
+        _source: &str,
+        args: &ShaderCompileArgs,
+    ) -> Result<Vec<u8>, std::io::Error> {
+        Err(unsupported_language(".metal", args))
+    }
+
+    // Compile HLSL source to shader bytecode.
+    fn compile_hlsl(
+        &self,
+        _source: &str,
+        args: &ShaderCompileArgs,
+    ) -> Result<Vec<u8>, std::io::Error> {
+        Err(unsupported_language(".hlsl", args))
+    }
+
+    // Compile the GLSL source at `args.source_path` to SPIR-V. Takes the path
+    // rather than the source text: a GLSL source is never an engine built-in,
+    // and the GLSL compilers resolve `#include` relative to the source file.
+    fn compile_glsl(&self, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
+        Err(unsupported_language("GLSL", args))
+    }
+}
+
+// The error a toolchain's default arm reports for a language it does not
+// compile.
+fn unsupported_language(language: &str, args: &ShaderCompileArgs) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "Asset '{}': {language} shaders are not supported by this build's shader toolchain",
+            args.asset_name
+        ),
+    )
+}
+
+static SHADER_TOOLCHAIN: std::sync::OnceLock<Box<dyn ShaderToolchain>> = std::sync::OnceLock::new();
+
+// Register the process-wide shader toolchain. The first registration wins, so
+// build entry points can call this unconditionally.
+pub fn set_shader_toolchain(toolchain: Box<dyn ShaderToolchain>) {
+    let _ = SHADER_TOOLCHAIN.set(toolchain);
+}
+
+// Unwrap the toolchain at the point a compiler is actually needed. Not having
+// one is a wiring mistake in the binary rather than a fault in the world being
+// built, so the message names the missing step.
+fn require<'a>(
+    toolchain: Option<&'a dyn ShaderToolchain>,
+    args: &ShaderCompileArgs,
+) -> Result<&'a dyn ShaderToolchain, std::io::Error> {
+    toolchain.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!(
+                "Asset '{}': no shader toolchain is registered, so no shader can be compiled",
+                args.asset_name
+            ),
+        )
+    })
 }
 
 // Backend hook the build pipeline calls after a user shader compiles, so a
@@ -73,11 +130,6 @@ pub fn set_shader_build_validator(validator: Box<dyn ShaderBuildValidator>) {
 // (built-ins are correct by construction and covered by the `*_layout_matches_msl`
 // unit tests; only user-authored sources are checked). A validation error is
 // surfaced as an `InvalidData` build error so `cn build` fails.
-//
-// Only reached from `compile_metal`, which is `#[cfg(backend_metal)]`; on the
-// other backends it's exercised solely by the unit tests, so allow dead code
-// there rather than gating the function (the tests call it unconditionally).
-#[cfg_attr(not(backend_metal), allow(dead_code))]
 fn validate_compiled_metal(source: &str, args: &ShaderCompileArgs) -> Result<(), std::io::Error> {
     if builtin_shader_source(&args.source_path).is_some() {
         return Ok(());
@@ -91,18 +143,39 @@ fn validate_compiled_metal(source: &str, args: &ShaderCompileArgs) -> Result<(),
 }
 
 pub fn compile_shader(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
+    compile_with(SHADER_TOOLCHAIN.get().map(|t| t.as_ref()), &args)
+}
+
+// Route one stage to the toolchain's arm for its source language. Source
+// resolution happens before the toolchain is unwrapped, so a source that cannot
+// be read fails as a read error rather than as a missing compiler.
+fn compile_with(
+    toolchain: Option<&dyn ShaderToolchain>,
+    args: &ShaderCompileArgs,
+) -> Result<Vec<u8>, std::io::Error> {
     let ext = std::path::Path::new(&args.source_path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    // .metal/.hlsl source is passed to the backend in memory; .glsl is only
-    // ever caller-supplied (never a built-in), so that path keeps reading
-    // from its own file.
+    // .metal/.hlsl source is resolved here and passed to the toolchain in
+    // memory; .glsl is only ever caller-supplied (never a built-in), so that
+    // path hands over the source path instead.
     match ext {
-        "metal" => compile_metal(&read_shader_source(&args.source_path)?, &args),
-        "hlsl" => compile_hlsl(&read_shader_source(&args.source_path)?, &args),
-        _ => compile_glsl(args),
+        "metal" => {
+            let source = read_shader_source(&args.source_path)?;
+            let bytes = require(toolchain, args)?.compile_metal(&source, args)?;
+            // The shader compiled; now check that every engine-provided buffer
+            // struct it reads matches the engine's layout. A mismatch fails the
+            // build here rather than faulting the GPU at run time.
+            validate_compiled_metal(&source, args)?;
+            Ok(bytes)
+        }
+        "hlsl" => {
+            let source = read_shader_source(&args.source_path)?;
+            require(toolchain, args)?.compile_hlsl(&source, args)
+        }
+        _ => require(toolchain, args)?.compile_glsl(args),
     }
 }
 
@@ -122,315 +195,92 @@ fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     }
 }
 
-#[cfg(backend_metal)]
-fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    use std::fs;
-    use std::io::Write;
-    use std::process::Stdio;
+// A toolchain for tests whose worlds pull in a ShaderStage but assert on the
+// surrounding build rather than on bytecode. Registering it keeps the cook's own
+// tests off the platform compilers, so they behave identically on every host.
+#[cfg(test)]
+pub(crate) fn install_stub_toolchain() {
+    struct StubToolchain;
 
-    // Transient intermediates go to a UNIQUE path in the OS temp dir (not a shared
-    // `.concinnity/data/<name>` under the working directory): parallel compiles of
-    // the same shader -- concurrent builds, or the test suite cooking several worlds
-    // at once -- must not race on one path (one removing the file mid-read of
-    // another), and a cook must not read or write the working directory.
-    let stem = transient_stem(&args.asset_name);
-    let air_path = format!("{}.air", stem.display());
-    let lib_path = format!("{}.metallib", stem.display());
-
-    // Feed the source to `xcrun metal` over stdin (`-x metal` selects the
-    // language since stdin has no extension, `-` is the stdin input) so no
-    // shader source file is written to disk. The .air and .metallib it emits
-    // are intermediate artifacts under .concinnity/data/, removed once read.
-    let mut metal = std::process::Command::new("xcrun")
-        .args(["metal", "-x", "metal", "-c", "-", "-o", &air_path])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    metal
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(source.as_bytes())?;
-    let metal_output = metal.wait_with_output()?;
-
-    if !metal_output.status.success() {
-        let _ = fs::remove_file(&air_path);
-        return Err(std::io::Error::other(format!(
-            "xcrun metal failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            args.asset_name,
-            String::from_utf8_lossy(&metal_output.stdout),
-            String::from_utf8_lossy(&metal_output.stderr),
-        )));
-    }
-
-    let lib_output = std::process::Command::new("xcrun")
-        .args(["metallib", &air_path, "-o", &lib_path])
-        .output()?;
-
-    let _ = fs::remove_file(&air_path);
-
-    if !lib_output.status.success() {
-        let _ = fs::remove_file(&lib_path);
-        return Err(std::io::Error::other(format!(
-            "xcrun metallib failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            args.asset_name,
-            String::from_utf8_lossy(&lib_output.stdout),
-            String::from_utf8_lossy(&lib_output.stderr),
-        )));
-    }
-
-    let bytes = fs::read(&lib_path).map_err(|e| {
-        std::io::Error::new(
-            e.kind(),
-            format!("Failed to read metallib '{}': {}", lib_path, e),
-        )
-    })?;
-
-    let _ = fs::remove_file(&lib_path);
-
-    // The shader compiled; now check that every engine-provided buffer struct it
-    // reads matches the engine's layout. A mismatch fails the build here rather
-    // than faulting the GPU at run time.
-    validate_compiled_metal(source, args)?;
-
-    Ok(bytes)
-}
-
-#[cfg(not(backend_metal))]
-fn compile_metal(_source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        format!(
-            "Asset '{}': .metal shaders can only be compiled on macOS",
-            args.asset_name
-        ),
-    ))
-}
-
-// Vulkan build: compile GLSL in-process via the shaderc crate.
-#[cfg(backend_vk)]
-fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    use shaderc::{CompileOptions, Compiler, EnvVersion, OptimizationLevel, ShaderKind, TargetEnv};
-
-    let source = std::fs::read_to_string(&args.source_path).map_err(|e| {
-        std::io::Error::new(
-            e.kind(),
-            format!("Failed to read '{}': {}", args.source_path, e),
-        )
-    })?;
-
-    let compiler = Compiler::new()
-        .map_err(|e| std::io::Error::other(format!("shaderc init failed: {}", e)))?;
-
-    let mut options = CompileOptions::new()
-        .map_err(|e| std::io::Error::other(format!("shaderc options init: {}", e)))?;
-    options.set_optimization_level(OptimizationLevel::Performance);
-    // Target Vulkan 1.2 so the emitted module is SPIR-V 1.5 (not the 1.6 a 1.3
-    // target produces). The runtime instance is created at Vulkan 1.2 (see
-    // `concinnity_device::vulkan::init`), and `vkCreateShaderModule` rejects a SPIR-V version
-    // newer than the instance's, so a world-authored ShaderStage compiled to
-    // SPIR-V 1.6 fails to load. 1.5 loads cleanly on a 1.2-or-newer instance.
-    options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
-
-    let kind = match args.kind.to_lowercase().as_str() {
-        "vertex" | "vert" => ShaderKind::Vertex,
-        "fragment" | "frag" => ShaderKind::Fragment,
-        _ => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Unsupported shader kind: '{}'", args.kind),
-            ));
+    impl ShaderToolchain for StubToolchain {
+        fn compile_metal(
+            &self,
+            _source: &str,
+            _args: &ShaderCompileArgs,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(b"stub-shader".to_vec())
         }
-    };
 
-    let artifact = compiler
-        .compile_into_spirv(&source, kind, &args.source_path, "main", Some(&options))
-        .map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Asset '{}' compile error:\n{}", args.asset_name, e),
-            )
-        })?;
+        fn compile_hlsl(
+            &self,
+            _source: &str,
+            _args: &ShaderCompileArgs,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(b"stub-shader".to_vec())
+        }
 
-    if artifact.get_num_warnings() > 0 {
-        tracing::warn!(
-            "Asset '{}' GLSL warnings:\n{}",
-            args.asset_name,
-            artifact.get_warning_messages()
-        );
+        fn compile_glsl(&self, _args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
+            Ok(b"stub-shader".to_vec())
+        }
     }
 
-    let spv_bytes: Vec<u8> = artifact
-        .as_binary()
-        .iter()
-        .flat_map(|w| w.to_le_bytes())
-        .collect();
-
-    Ok(spv_bytes)
+    set_shader_toolchain(Box::new(StubToolchain));
 }
 
-// DirectX build: worlds use HLSL, so GLSL is never compiled.
-#[cfg(backend_dx)]
-fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        format!(
-            "Asset '{}': GLSL/SPIR-V compilation is not supported by the DirectX backend (use HLSL)",
-            args.asset_name
-        ),
-    ))
-}
-
-#[cfg(backend_dx)]
-fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    use windows::Win32::Graphics::Direct3D::Fxc::{
-        D3DCOMPILE_DEBUG, D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR,
-        D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompile,
-    };
-
-    let target = match args.kind.to_lowercase().as_str() {
-        "fragment" | "frag" => "ps_5_1",
-        _ => "vs_5_1",
-    };
-
-    let src_c = std::ffi::CString::new(source).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("hlsl src: {e}"))
-    })?;
-    let entry_c = std::ffi::CString::new("main").unwrap();
-    let target_c = std::ffi::CString::new(target).unwrap();
-
-    // Force column-major matrix storage so matrices inside `StructuredBuffer`
-    // structs read as column-major (matching Rust's upload layout). FXC
-    // silently ignores `#pragma pack_matrix(column_major)` for SRV-resident
-    // matrices and defaults them to row_major; without this flag a custom
-    // shader that reads e.g. an instance-matrix StructuredBuffer would see
-    // every transform transposed. Mirrors the same flag in
-    // `concinnity_device::directx::pipeline::compile_hlsl`.
-    let flags = if cfg!(debug_assertions) {
-        D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION | D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-    } else {
-        D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-    };
-
-    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-
-    let result = unsafe {
-        D3DCompile(
-            src_c.as_ptr() as *const std::ffi::c_void,
-            source.len(),
-            None,
-            None,
-            None,
-            windows::core::PCSTR(entry_c.as_ptr() as *const u8),
-            windows::core::PCSTR(target_c.as_ptr() as *const u8),
-            flags,
-            0,
-            &mut blob,
-            Some(&mut error),
-        )
-    };
-
-    if result.is_err() {
-        let msg = error
-            .as_ref()
-            .map(|e| {
-                let ptr = unsafe { e.GetBufferPointer() } as *const u8;
-                let len = unsafe { e.GetBufferSize() };
-                String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
-                    .into_owned()
-            })
-            .unwrap_or_else(|| "unknown compile error".to_string());
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "Asset '{}' compile error ({target}):\n{msg}",
-                args.asset_name
-            ),
-        ));
+#[cfg(test)]
+fn args_for(asset_name: &str, source_path: &str) -> ShaderCompileArgs {
+    ShaderCompileArgs {
+        source_path: source_path.to_string(),
+        asset_name: asset_name.to_string(),
+        kind: "fragment".to_string(),
     }
-
-    let b = blob.ok_or_else(|| {
-        std::io::Error::other(format!(
-            "Asset '{}': D3DCompile returned no blob",
-            args.asset_name
-        ))
-    })?;
-    let ptr = unsafe { b.GetBufferPointer() } as *const u8;
-    let len = unsafe { b.GetBufferSize() };
-    Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
-}
-
-#[cfg(not(backend_dx))]
-fn compile_hlsl(_source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        format!(
-            "Asset '{}': .hlsl shaders are only supported by the DirectX backend",
-            args.asset_name
-        ),
-    ))
-}
-
-// macOS (Metal backend) compiles GLSL by shelling out to glslc.
-#[cfg(backend_metal)]
-fn compile_glsl(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    // A unique temp path (see `transient_stem`): keeps parallel compiles from racing
-    // on a shared file and leaves the working directory untouched.
-    let out_path = format!("{}.spv", transient_stem(&args.asset_name).display());
-
-    let output = std::process::Command::new("glslc")
-        .args([
-            "--target-env=vulkan1.0",
-            "-fshader-stage",
-            &args.kind,
-            &args.source_path,
-            "-o",
-            &out_path,
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&out_path);
-        return Err(std::io::Error::other(format!(
-            "glslc failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            args.asset_name,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )));
-    }
-
-    let bytes = std::fs::read(&out_path).map_err(|e| {
-        std::io::Error::new(
-            e.kind(),
-            format!("failed to read SPIR-V '{}': {}", out_path, e),
-        )
-    })?;
-
-    let _ = std::fs::remove_file(&out_path);
-
-    Ok(bytes)
 }
 
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
 
-    fn args(asset_name: &str, source_path: &str) -> ShaderCompileArgs {
-        ShaderCompileArgs {
-            source_path: source_path.to_string(),
-            asset_name: asset_name.to_string(),
-            kind: "fragment".to_string(),
+    use super::args_for as args;
+
+    // A toolchain that compiles nothing but names the arm it was routed to, so
+    // dispatch is assertable without any platform compiler. Passed to
+    // `compile_with` directly rather than registered, so these tests neither
+    // depend on nor disturb the process-wide toolchain.
+    struct ArmNamingToolchain;
+
+    impl ShaderToolchain for ArmNamingToolchain {
+        fn compile_metal(
+            &self,
+            source: &str,
+            _args: &ShaderCompileArgs,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(format!("metal:{source}").into_bytes())
+        }
+
+        fn compile_hlsl(
+            &self,
+            source: &str,
+            _args: &ShaderCompileArgs,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(format!("hlsl:{source}").into_bytes())
+        }
+
+        fn compile_glsl(&self, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
+            Ok(format!("glsl:{}", args.source_path).into_bytes())
         }
     }
 
+    fn routed(source_path: &str) -> Result<String, std::io::Error> {
+        compile_with(Some(&ArmNamingToolchain), &args("user", source_path))
+            .map(|b| String::from_utf8(b).expect("test toolchain emits utf8"))
+    }
+
     // A `.metal` source that is neither a built-in nor an on-disk file fails in
-    // `read_shader_source` before `compile_metal` runs, so no `xcrun` is spawned.
-    // This holds on every backend: the read happens in the dispatch arm.
+    // `read_shader_source` before the toolchain is consulted, so no compiler
+    // runs. The read happens in the dispatch arm, ahead of the unwrap.
     #[test]
     fn missing_metal_source_fails_at_read_before_any_compile() {
-        let err = compile_shader(args("user", "/no/such/user_frag.metal")).unwrap_err();
+        let err = routed("/no/such/user_frag.metal").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(
             err.to_string().contains("Failed to read shader source"),
@@ -438,21 +288,21 @@ mod dispatch_tests {
         );
     }
 
-    // On any backend other than DirectX, an `.hlsl` source (here a built-in, so
-    // the read always succeeds) routes to the Unsupported stub. On the DirectX
-    // backend this path really compiles, so the test is scoped away from it.
-    #[cfg(not(backend_dx))]
+    // A `.hlsl` source (here a built-in, so the read always succeeds) routes to
+    // the HLSL arm with its resolved text, on every backend.
     #[test]
-    fn builtin_hlsl_routes_to_unsupported_stub() {
-        let err = compile_shader(args("user", "default_frag.hlsl")).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    fn a_builtin_hlsl_source_routes_to_the_hlsl_arm() {
+        assert!(
+            routed("default_frag.hlsl").unwrap().starts_with("hlsl:"),
+            "expected the hlsl arm"
+        );
     }
 
     // The `.hlsl` arm reads its source in the dispatch match too, so a missing
-    // file fails there rather than in any backend compiler.
+    // file fails there rather than in the toolchain.
     #[test]
     fn missing_hlsl_source_fails_at_read_before_any_compile() {
-        let err = compile_shader(args("user", "/no/such/user_frag.hlsl")).unwrap_err();
+        let err = routed("/no/such/user_frag.hlsl").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(
             err.to_string().contains("Failed to read shader source"),
@@ -461,16 +311,45 @@ mod dispatch_tests {
     }
 
     // Anything that is not `.metal` or `.hlsl` falls through to the GLSL arm,
-    // which hands the path to the backend's compiler instead of reading it
-    // here. Only the dispatch is asserted: whether a GLSL toolchain is
-    // installed decides which error comes back, and both are failures.
+    // which hands over the path instead of reading it here -- a path that does
+    // not exist still reaches the compiler.
     #[test]
-    fn other_extensions_route_to_the_glsl_arm() {
-        let err = compile_shader(args("user", "/no/such/user_frag.glsl")).unwrap_err();
-        assert!(
-            !err.to_string().contains("Failed to read shader source"),
-            "GLSL sources must not be read by the dispatch: {err}"
+    fn other_extensions_route_to_the_glsl_arm_without_reading() {
+        assert_eq!(
+            routed("/no/such/user_frag.glsl").unwrap(),
+            "glsl:/no/such/user_frag.glsl"
         );
+    }
+
+    // A `.metal` source routes to the MSL arm carrying the resolved built-in
+    // text, not the path.
+    #[test]
+    fn a_builtin_metal_source_routes_to_the_metal_arm_with_its_text() {
+        let out = routed("default.metal").unwrap();
+        assert!(out.starts_with("metal:"), "expected the metal arm: {out}");
+        assert!(out.contains("vertex"), "expected the embedded source text");
+    }
+
+    // With no toolchain installed, a source that resolves still fails -- and
+    // says so as a wiring problem rather than a fault in the world.
+    #[test]
+    fn without_a_toolchain_a_resolvable_source_reports_the_missing_toolchain() {
+        let err = compile_with(None, &args("user", "default.metal")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert!(
+            err.to_string()
+                .contains("no shader toolchain is registered"),
+            "got: {err}"
+        );
+        assert!(err.to_string().contains("user"), "names the asset: {err}");
+    }
+
+    // The read still runs first without a toolchain, so an unreadable source is
+    // reported as the read error it is.
+    #[test]
+    fn without_a_toolchain_an_unreadable_source_still_fails_at_read() {
+        let err = compile_with(None, &args("user", "/no/such/user_frag.metal")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -507,7 +386,56 @@ mod dispatch_tests {
 }
 
 #[cfg(test)]
+mod toolchain_tests {
+    use super::args_for as args;
+    use super::*;
+
+    // A toolchain that implements no language, so every call falls to the
+    // trait's default arm.
+    struct NoLanguages;
+    impl ShaderToolchain for NoLanguages {}
+
+    #[test]
+    fn a_language_the_toolchain_does_not_implement_is_unsupported() {
+        let t = NoLanguages;
+        let a = args("user", "user_frag.hlsl");
+        for err in [
+            t.compile_metal("src", &a).unwrap_err(),
+            t.compile_hlsl("src", &a).unwrap_err(),
+            t.compile_glsl(&a).unwrap_err(),
+        ] {
+            assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+            assert!(err.to_string().contains("user"), "names the asset: {err}");
+        }
+    }
+
+    // A partial toolchain keeps its own arms and falls back to the defaults for
+    // the rest, so a world authored for another backend fails on the language
+    // rather than on the missing registration.
+    #[test]
+    fn a_partial_toolchain_keeps_its_own_arms() {
+        struct MetalOnly;
+        impl ShaderToolchain for MetalOnly {
+            fn compile_metal(
+                &self,
+                _source: &str,
+                _args: &ShaderCompileArgs,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                Ok(vec![1])
+            }
+        }
+        let a = args("user", "user_frag.metal");
+        assert_eq!(MetalOnly.compile_metal("src", &a).unwrap(), vec![1]);
+        assert_eq!(
+            MetalOnly.compile_hlsl("src", &a).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+    }
+}
+
+#[cfg(test)]
 mod hook_tests {
+    use super::args_for as args;
     use super::*;
 
     // A validator that only objects to one sentinel asset name, so registering
@@ -528,14 +456,6 @@ mod hook_tests {
             } else {
                 Ok(())
             }
-        }
-    }
-
-    fn args(asset_name: &str, source_path: &str) -> ShaderCompileArgs {
-        ShaderCompileArgs {
-            source_path: source_path.to_string(),
-            asset_name: asset_name.to_string(),
-            kind: "fragment".to_string(),
         }
     }
 

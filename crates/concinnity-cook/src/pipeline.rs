@@ -1826,6 +1826,7 @@ mod tests {
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
         let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
         // box=0, day=1, day_crate=2 in declaration order.
         let world = concat!(
             r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
@@ -1857,6 +1858,7 @@ mod tests {
     #[test]
     fn build_pipeline_records_resource_lock_provenance() {
         let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
             "\n",
@@ -1942,6 +1944,7 @@ mod tests {
     #[test]
     fn build_pipeline_resolves_screen_prefix_on_ui_assets() {
         let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
             "\n",
@@ -2204,6 +2207,7 @@ mod tests {
     #[test]
     fn build_from_path_writes_the_blobs_and_the_lock_beside_them() {
         let _shaders = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
         let _output = crate::blob::test_output::LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());

@@ -17,28 +17,19 @@ use concinnity_cook::world::LoadedWorld;
 // validation and asset fetching behave identically. The `cn build` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
-    // Install the render backend's shader-layout validator before any shader
-    // compiles, so a user shader that mis-declares an engine buffer struct fails
-    // the build with a clear message instead of faulting the GPU at run time.
-    // One call here covers the CLI build, `run`, and the FFI entry points.
-    ensure_shader_layout_validator();
+    // Install this build's shader toolchain (and the backend's shader-layout
+    // validator, where it ships one) before any shader compiles: the cook has no
+    // compiler of its own, and a user shader that mis-declares an engine buffer
+    // struct should fail the build with a clear message instead of faulting the
+    // GPU at run time. Idempotent, so covering `run` and the FFI entry points
+    // here costs nothing when the CLI already installed at startup.
+    concinnity_shader::install();
 
     let loaded = concinnity_cook::prepare_world(content)
         .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
 
     Ok(loaded)
 }
-
-// Register the backend's shader-layout validator with the core build pipeline.
-// Only the Metal backend ships one today; other backends leave the hook
-// unregistered and build exactly as before.
-#[cfg(backend_metal)]
-fn ensure_shader_layout_validator() {
-    crate::shader_reflect::register_shader_layout_validator();
-}
-
-#[cfg(not(backend_metal))]
-fn ensure_shader_layout_validator() {}
 
 // Normalized asset-type match (lowercase, underscores stripped), matching the
 // convention used across the cook world passes.

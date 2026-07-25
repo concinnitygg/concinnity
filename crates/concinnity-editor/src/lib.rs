@@ -25,11 +25,6 @@ mod debug_hook;
 mod editor;
 mod run;
 
-// The Metal shader-layout validator bridge, installed before any build. Only
-// the Metal backend ships one; other backends leave the hook unregistered.
-#[cfg(backend_metal)]
-mod shader_reflect;
-
 // Process-global test serialization lock; test builds only.
 #[cfg(test)]
 mod test_support;
