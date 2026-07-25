@@ -79,6 +79,9 @@ impl VkContext {
                 ShaderBytes {
                     vert: vert_bytes,
                     frag: frag_bytes,
+                    // The built-in default's SPIR-V payload is already empty, so
+                    // the bindless path is selected by the bytes alone.
+                    main_is_engine_default: _,
                     shadow: shadow_bytes,
                     vert_instanced: vert_instanced_bytes,
                 },

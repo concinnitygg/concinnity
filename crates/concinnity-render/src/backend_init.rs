@@ -48,6 +48,12 @@ pub struct SceneData<'a> {
 pub struct ShaderBytes<'a> {
     pub vert: &'a [u8],
     pub frag: &'a [u8],
+    // True when `vert` / `frag` came from the engine's built-in default main
+    // shader rather than a world-authored override. A backend whose bindless
+    // main pass is keyed on the absence of an override uses this to tell the
+    // two apart, since the built-in compiles to non-empty bytes on some
+    // toolchains and to nothing on others.
+    pub main_is_engine_default: bool,
     // Compiled shadow-pass vertex shader; consumed by DirectX / Vulkan. Metal
     // compiles its shadow shader internally (shadow_map.metal) and ignores it.
     pub shadow: &'a [u8],

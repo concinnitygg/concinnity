@@ -2180,6 +2180,7 @@ impl VkContext {
     pub fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
+            selectable_upscaler: true,
         }
     }
 

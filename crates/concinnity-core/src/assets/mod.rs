@@ -198,9 +198,6 @@ pub use concinnity_asset::{Window, WindowArgs, WindowMode};
 pub use interact_signal::InteractSignal;
 pub use screen_command::ScreenCommand;
 pub use screen_shown::ScreenShown;
-#[cfg(backend_metal)]
-#[allow(unused_imports)]
-pub use sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR, SDF_PARAMS_LEN};
 pub use shader_stage::{ShaderKind, ShaderStage, ShaderStageExt};
 pub use skeleton_pose::SkeletonPose;
 pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};

@@ -2491,13 +2491,17 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
 // A settings row whose feature the backend cannot honour is grayed out and made
 // inert, and the gray expands from its value label to the whole scroll row
 // (background, name, value, steppers) so the row reads as unavailable as a unit.
-// The upscaler-backend selector is the row the compile-time backend decides:
-// Metal always uses MetalFX, so the selector is dead there.
+// Driven here by a device that reports a fixed upscaler, which grays the
+// upscaler-selector row.
 #[test]
 fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     use crate::assets::{ScrollPanel, ScrollRow};
 
-    let (_state, hooks) = recording_hooks();
+    let (state, hooks) = recording_hooks();
+    state.lock().unwrap().caps = crate::gfx::backend::DeviceCapabilities {
+        selectable_upscaler: false,
+        ..crate::gfx::backend::DeviceCapabilities::ALL
+    };
     let mut b = post_config_scene(Default::default());
     // The gated row: name + value labels, both listed in one scroll row.
     push_settings_row(&mut b, "upscale_backend", "next", AssetId(600));
@@ -2526,16 +2530,14 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    let gated = cfg!(backend_metal);
-    let expected = if gated { DISABLED } else { LIT };
     assert_eq!(
         label_color(&mut world, AssetId(600)),
-        expected,
+        DISABLED,
         "the gated row's value label"
     );
     assert_eq!(
         label_color(&mut world, AssetId(601)),
-        expected,
+        DISABLED,
         "the gray expands to the row's name label, not just its value"
     );
     assert_eq!(
@@ -2550,7 +2552,7 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
         .filter(|r| r.action.starts_with("setting:upscale_backend"))
         .map(|r| r.disabled)
         .collect();
-    assert_eq!(disabled, vec![gated]);
+    assert_eq!(disabled, vec![true]);
 }
 
 // The muted gray a disabled settings row is recolored to.

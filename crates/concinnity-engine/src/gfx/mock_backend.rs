@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::gfx::backend::{ChunkMesh, FrameParams, GpuProfile, RenderBackend};
+use crate::gfx::backend::{ChunkMesh, DeviceCapabilities, FrameParams, GpuProfile, RenderBackend};
 use crate::gfx::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
@@ -145,6 +145,10 @@ pub(crate) struct MockState {
     pub next_input: RenderInput,
     // Reported logical viewport size.
     pub logical_size: (f32, f32),
+    // Capabilities reported to init, which uses them to gray out the settings
+    // rows the device cannot honour. Set before `init_graphics` to stand in for
+    // a device missing a feature.
+    pub caps: DeviceCapabilities,
     // Next slot index clone_static_draw_object / add_chunk_mesh hand out;
     // seeded by the factory to the init draw count.
     pub next_slot: usize,
@@ -163,6 +167,7 @@ impl Default for MockState {
             next_input: RenderInput::default(),
             logical_size: (1280.0, 720.0),
             next_slot: 0,
+            caps: DeviceCapabilities::ALL,
         }
     }
 }
@@ -472,6 +477,10 @@ impl RenderBackend for MockBackend {
 
     fn logical_size(&self) -> (f32, f32) {
         self.state.lock().unwrap().logical_size
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        self.state.lock().unwrap().caps
     }
 
     fn set_ui_cursor_hidden(&mut self, hidden: bool) {

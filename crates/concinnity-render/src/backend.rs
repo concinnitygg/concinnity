@@ -156,13 +156,20 @@ pub struct DeviceCapabilities {
     // ray-query device extensions on Vulkan (and not under XeSS), and
     // `MTLDevice::supportsRaytracing` on Metal.
     pub ray_tracing: bool,
+    // Whether the upscaler implementation is a choice (FSR3 / DLSS / XeSS)
+    // rather than fixed. DirectX and Vulkan offer the selection; Metal always
+    // upscales through MetalFX, so the row has nothing to pick.
+    pub selectable_upscaler: bool,
 }
 
 impl DeviceCapabilities {
     // Every capability present. The trait default, so a backend that does not
     // report capabilities never wrongly disables a toggle (it keeps the prior
     // behavior: the feature no-ops with a warning on an incapable device).
-    pub const ALL: Self = Self { ray_tracing: true };
+    pub const ALL: Self = Self {
+        ray_tracing: true,
+        selectable_upscaler: true,
+    };
 }
 
 impl Default for DeviceCapabilities {
@@ -1306,6 +1313,7 @@ mod tests {
             shaders: ShaderBytes {
                 vert: &[],
                 frag: &[],
+                main_is_engine_default: false,
                 shadow: &[],
                 vert_instanced: &[],
             },

@@ -88,9 +88,9 @@ struct TextureTableDecode {
 
 // The world's decoded shaders from `decode_shaders`: each stage's compiled
 // payload bytes (the main vertex + fragment, an engine-internal empty shadow
-// slice, and the optional instanced-vertex stage), the payload locators kept for
-// the blob-release step, and the dev-only source map the hot-reload watcher
-// subscribes to.
+// slice, and the optional instanced-vertex stage), whether the main stage is the
+// engine's built-in default, the payload locators kept for the blob-release
+// step, and the dev-only source map the hot-reload watcher subscribes to.
 struct DecodedShaders {
     vert_locator: crate::ecs::PayloadLocator,
     frag_locator: crate::ecs::PayloadLocator,
@@ -98,6 +98,7 @@ struct DecodedShaders {
     source_map: super::hot_reload_sources::ShaderStageSourceMap,
     vert_bytes: Vec<u8>,
     frag_bytes: Vec<u8>,
+    main_is_engine_default: bool,
     shadow_bytes: Vec<u8>,
     vert_instanced_bytes: Vec<u8>,
 }
@@ -1564,32 +1565,19 @@ impl GraphicsSystem {
             }
         };
 
-        // The DirectX backend engages its bindless main pass only when the
-        // main-shader override is empty (it then uses its embedded bindless
-        // pipeline + the embedded default for any legacy/streamed fallback). The
-        // built-in default ShaderStage compiles to non-empty DXBC, which would
-        // pin every built-in world to the legacy per-draw path. When the world's
-        // main shader IS the built-in default, hand DX empty bytes so it takes
-        // the bindless path, matching Vulkan (whose default payload is already
-        // empty) and Metal (whose `default.metal` drives its own bindless pass).
-        // Custom-shader worlds keep their compiled bytes and the legacy path.
-        // Metal loads its metallib from these bytes, so it is left untouched.
-        #[cfg(backend_dx)]
-        let (vert_bytes, frag_bytes) = {
-            let is_builtin_main = |src: Option<String>| {
-                matches!(
-                    src.as_deref(),
-                    Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
-                )
-            };
-            if is_builtin_main(vert_shader.current_platform_source())
-                && is_builtin_main(frag_shader.current_platform_source())
-            {
-                (Vec::new(), Vec::new())
-            } else {
-                (vert_bytes, frag_bytes)
-            }
+        // Whether this world's main shader is the engine's built-in default
+        // rather than an authored override. Reported to the backend, which
+        // decides what it means: the built-in compiles to non-empty bytes on
+        // some toolchains and to nothing on others, so the byte length alone
+        // does not distinguish the two.
+        let is_builtin_main = |src: Option<String>| {
+            matches!(
+                src.as_deref(),
+                Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
+            )
         };
+        let main_is_engine_default = is_builtin_main(vert_shader.current_platform_source())
+            && is_builtin_main(frag_shader.current_platform_source());
         // The shadow shader is engine-internal now (compiled from
         // `shadow_map.metal`), so there is no per-world shadow payload. The
         // DX / Vulkan constructors still take a shadow byte slice pending their
@@ -1618,6 +1606,7 @@ impl GraphicsSystem {
             source_map: shader_stage_source_map,
             vert_bytes,
             frag_bytes,
+            main_is_engine_default,
             shadow_bytes,
             vert_instanced_bytes,
         })
@@ -2103,6 +2092,7 @@ impl GraphicsSystem {
             source_map: shader_stage_source_map,
             vert_bytes,
             frag_bytes,
+            main_is_engine_default,
             shadow_bytes,
             vert_instanced_bytes,
         } = match self.decode_shaders(ctx) {
@@ -2480,100 +2470,86 @@ impl GraphicsSystem {
         // (tolerating a transient alloc miss while freed regions await their
         // retire frame). Done before `init_backend` so the GPU buffers are born
         // small and the RT acceleration structure (built over resident draws
-        // inside init) sees the final offsets. Gated to the backends whose
-        // `seed_mesh_streaming` seeds the sub-allocators with the headroom block.
-        #[cfg(any(backend_metal, backend_dx, backend_vk))]
+        // inside init) sees the final offsets.
         let mut all_vertices = all_vertices;
-        #[cfg(any(backend_metal, backend_dx, backend_vk))]
         let mut all_indices = all_indices;
-        #[cfg(any(backend_metal, backend_dx, backend_vk))]
         let mut instanced_clusters = instanced_clusters;
-        let mesh_seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion> = {
-            #[cfg(any(backend_metal, backend_dx, backend_vk))]
-            {
-                match streaming_config.as_ref() {
-                    Some(cfg) if !mesh_payloads.is_empty() => {
-                        // A deferred mesh's payload copy is empty (its decode
-                        // was skipped), so its seed contribution comes from
-                        // the baked counts instead.
-                        let draw_to_handle: std::collections::HashMap<usize, usize> =
-                            mesh_handle_to_draws
-                                .iter()
-                                .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
-                                .collect();
-                        let sizes: Vec<(u64, u64)> = mesh_payloads
-                            .iter()
-                            .zip(&mesh_stream_draw_indices)
-                            .map(|(m, draw_idx)| {
-                                if !m.vertices.is_empty() {
-                                    return (
-                                        (m.vertices.len() * std::mem::size_of::<Vertex>()) as u64,
-                                        (m.indices.len() * std::mem::size_of::<u32>()) as u64,
-                                    );
-                                }
-                                draw_to_handle
-                                    .get(draw_idx)
-                                    .and_then(|h| deferred_mesh_sources.counts.get(&(*h as u32)))
-                                    .map(|&(vc, ic)| {
-                                        (
-                                            vc as u64 * std::mem::size_of::<Vertex>() as u64,
-                                            ic as u64 * std::mem::size_of::<u32>() as u64,
-                                        )
-                                    })
-                                    .unwrap_or((0, 0))
-                            })
-                            .collect();
-                        // Deferred meshes have no baked region for the
-                        // full-set evict path to free; force the compaction
-                        // path with a whole-set headroom when the cap alone
-                        // would not shrink.
-                        let planned =
-                            crate::gfx::mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap()).or_else(
-                                || {
-                                    (!deferred_mesh_seeds.is_empty()).then(|| {
-                                        (
-                                            sizes.iter().map(|s| s.0).sum(),
-                                            sizes.iter().map(|s| s.1).sum(),
-                                        )
-                                    })
-                                },
+        let mesh_seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion> = match streaming_config
+            .as_ref()
+        {
+            Some(cfg) if !mesh_payloads.is_empty() => {
+                // A deferred mesh's payload copy is empty (its decode
+                // was skipped), so its seed contribution comes from
+                // the baked counts instead.
+                let draw_to_handle: std::collections::HashMap<usize, usize> = mesh_handle_to_draws
+                    .iter()
+                    .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
+                    .collect();
+                let sizes: Vec<(u64, u64)> = mesh_payloads
+                    .iter()
+                    .zip(&mesh_stream_draw_indices)
+                    .map(|(m, draw_idx)| {
+                        if !m.vertices.is_empty() {
+                            return (
+                                (m.vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+                                (m.indices.len() * std::mem::size_of::<u32>()) as u64,
                             );
-                        match planned {
-                            Some((seed_vtx, seed_idx)) => {
-                                let mut streamed = vec![false; draw_objects.len()];
-                                for &idx in &mesh_stream_draw_indices {
-                                    if let Some(s) = streamed.get_mut(idx) {
-                                        *s = true;
-                                    }
-                                }
-                                let region = crate::gfx::mesh_seed::compact_for_streaming(
-                                    &mut all_vertices,
-                                    &mut all_indices,
-                                    &mut draw_objects,
-                                    &mut instanced_clusters,
-                                    &streamed,
-                                    seed_vtx,
-                                    seed_idx,
-                                );
-                                tracing::info!(
-                                    "GraphicsSystem: shrinkable seed VRAM -- {} streamed mesh(es), cap {}, seed headroom {} KiB vtx + {} KiB idx",
-                                    mesh_stream_draw_indices.len(),
-                                    cfg.mesh_cap(),
-                                    seed_vtx / 1024,
-                                    seed_idx / 1024,
-                                );
-                                Some(region)
-                            }
-                            None => None,
                         }
+                        draw_to_handle
+                            .get(draw_idx)
+                            .and_then(|h| deferred_mesh_sources.counts.get(&(*h as u32)))
+                            .map(|&(vc, ic)| {
+                                (
+                                    vc as u64 * std::mem::size_of::<Vertex>() as u64,
+                                    ic as u64 * std::mem::size_of::<u32>() as u64,
+                                )
+                            })
+                            .unwrap_or((0, 0))
+                    })
+                    .collect();
+                // Deferred meshes have no baked region for the
+                // full-set evict path to free; force the compaction
+                // path with a whole-set headroom when the cap alone
+                // would not shrink.
+                let planned = crate::gfx::mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap())
+                    .or_else(|| {
+                        (!deferred_mesh_seeds.is_empty()).then(|| {
+                            (
+                                sizes.iter().map(|s| s.0).sum(),
+                                sizes.iter().map(|s| s.1).sum(),
+                            )
+                        })
+                    });
+                match planned {
+                    Some((seed_vtx, seed_idx)) => {
+                        let mut streamed = vec![false; draw_objects.len()];
+                        for &idx in &mesh_stream_draw_indices {
+                            if let Some(s) = streamed.get_mut(idx) {
+                                *s = true;
+                            }
+                        }
+                        let region = crate::gfx::mesh_seed::compact_for_streaming(
+                            &mut all_vertices,
+                            &mut all_indices,
+                            &mut draw_objects,
+                            &mut instanced_clusters,
+                            &streamed,
+                            seed_vtx,
+                            seed_idx,
+                        );
+                        tracing::info!(
+                            "GraphicsSystem: shrinkable seed VRAM -- {} streamed mesh(es), cap {}, seed headroom {} KiB vtx + {} KiB idx",
+                            mesh_stream_draw_indices.len(),
+                            cfg.mesh_cap(),
+                            seed_vtx / 1024,
+                            seed_idx / 1024,
+                        );
+                        Some(region)
                     }
-                    _ => None,
+                    None => None,
                 }
             }
-            #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
-            {
-                None
-            }
+            _ => None,
         };
 
         let draw_object_count = draw_objects.len();
@@ -2770,6 +2746,7 @@ impl GraphicsSystem {
             shaders: ShaderBytes {
                 vert: &vert_bytes,
                 frag: &frag_bytes,
+                main_is_engine_default,
                 shadow: &shadow_bytes,
                 vert_instanced: &vert_instanced_bytes,
             },

@@ -1043,6 +1043,8 @@ impl MtlContext {
     pub fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: super::raytrace::raytracing_supported(&self.device),
+            // Upscaling always goes through MetalFX; there is no selector.
+            selectable_upscaler: false,
         }
     }
 

@@ -110,6 +110,9 @@ impl MtlContext {
                 ShaderBytes {
                     vert: vert_lib_bytes,
                     frag: frag_lib_bytes,
+                    // `default.metal` drives Metal's own bindless pass, so the
+                    // built-in and an authored override load identically.
+                    main_is_engine_default: _,
                     // The Metal shadow shader is engine-internal.
                     shadow: _,
                     vert_instanced: vert_instanced_lib_bytes,

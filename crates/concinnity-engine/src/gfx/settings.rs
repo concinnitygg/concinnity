@@ -29,12 +29,9 @@ pub(crate) use concinnity_core::gfx::settings::{QUALITY_TOGGLE_KEYS, is_quality_
 pub(crate) fn setting_available(key: &str, caps: &crate::gfx::backend::DeviceCapabilities) -> bool {
     match key {
         "ray_traced_reflections" => caps.ray_tracing,
-        // The upscaler-backend selector (FSR3 / DLSS / XeSS) is honoured only by
-        // the DirectX and Vulkan backends; Metal always uses MetalFX, so the row
-        // grays out (clearly disabled) on a Metal build rather than offering a
-        // dead selection. `cfg!` resolves per backend at compile time, so this
-        // needs no per-backend capability flag and no Metal-side code.
-        "upscale_backend" => cfg!(not(backend_metal)),
+        // The upscaler selector (FSR3 / DLSS / XeSS) grays out on a device whose
+        // upscaler is fixed, rather than offering a dead selection.
+        "upscale_backend" => caps.selectable_upscaler,
         _ => true,
     }
 }
@@ -622,7 +619,10 @@ mod tests {
         for key in ["perf_stats", "show_fps", "show_vram"] {
             assert_eq!(options(key), Some(&["Off", "On"][..]), "{key}");
             // Both are available regardless of GPU capability (not gated).
-            let caps = crate::gfx::backend::DeviceCapabilities { ray_tracing: false };
+            let caps = crate::gfx::backend::DeviceCapabilities {
+                ray_tracing: false,
+                ..crate::gfx::backend::DeviceCapabilities::ALL
+            };
             assert!(setting_available(key, &caps), "{key}");
         }
     }
@@ -674,8 +674,14 @@ mod tests {
     #[test]
     fn rt_toggle_gated_on_ray_tracing_capability() {
         use crate::gfx::backend::DeviceCapabilities;
-        let capable = DeviceCapabilities { ray_tracing: true };
-        let incapable = DeviceCapabilities { ray_tracing: false };
+        let capable = DeviceCapabilities {
+            ray_tracing: true,
+            ..DeviceCapabilities::ALL
+        };
+        let incapable = DeviceCapabilities {
+            ray_tracing: false,
+            ..DeviceCapabilities::ALL
+        };
         // RT reflections follow the device's ray-tracing capability.
         assert!(setting_available("ray_traced_reflections", &capable));
         assert!(!setting_available("ray_traced_reflections", &incapable));
@@ -1068,16 +1074,19 @@ mod tests {
             UpscalerBackend::Xess,
             GpuVendor::Nvidia
         ));
-        // The whole row is gated to DirectX / Vulkan (Metal uses MetalFX, no
-        // external selector), so `setting_available` grays it out on a Metal
-        // build regardless of device capabilities.
-        assert_eq!(
-            setting_available(
-                "upscale_backend",
-                &crate::gfx::backend::DeviceCapabilities::ALL
-            ),
-            cfg!(not(backend_metal))
-        );
+        // The whole row is capability-gated: a device that offers a choice of
+        // upscaler keeps it, one with a fixed upscaler grays it out.
+        assert!(setting_available(
+            "upscale_backend",
+            &crate::gfx::backend::DeviceCapabilities::ALL
+        ));
+        assert!(!setting_available(
+            "upscale_backend",
+            &crate::gfx::backend::DeviceCapabilities {
+                selectable_upscaler: false,
+                ..crate::gfx::backend::DeviceCapabilities::ALL
+            }
+        ));
     }
 
     #[test]

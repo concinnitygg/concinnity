@@ -10,8 +10,6 @@
 // sizes at init. Each backend creates only the cheap handle it needs and
 // classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
 // device / swapchain), Vulkan a surface-free instance (destroyed immediately).
-// The fallback returns UNKNOWN (which the resolver treats as "no ceiling") only
-// when no backend is configured.
 pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     #[cfg(backend_dx)]
     {
@@ -24,10 +22,6 @@ pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     #[cfg(backend_metal)]
     {
         crate::metal::probe_gpu_profile()
-    }
-    #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
-    {
-        crate::gfx::backend::GpuProfile::UNKNOWN
     }
 }
 
