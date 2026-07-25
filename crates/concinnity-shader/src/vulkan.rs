@@ -53,7 +53,7 @@ fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
         .map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}' compile error:\n{}", args.asset_name, e),
+                format!("shaderc failed for '{}':\n{}", args.asset_name, e),
             )
         })?;
 
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn an_unknown_compile_kind_is_rejected_before_compiling() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_source(&dir, "s.glsl", "#version 450\nvoid main() {}\n");
+        let path = write_source(dir.path(), "s.glsl", "#version 450\nvoid main() {}\n");
         let err = compile_glsl(&args("stage", "geometry", &path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("geometry"), "got: {err}");
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn a_source_that_does_not_compile_names_the_asset() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_source(&dir, "bad.glsl", "this is not valid GLSL");
+        let path = write_source(dir.path(), "bad.glsl", "this is not valid GLSL");
         let err = compile_glsl(&args("bad_stage", "fragment", &path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("bad_stage"), "got: {err}");
@@ -122,7 +122,7 @@ mod tests {
     fn a_valid_source_compiles_to_spirv() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_source(
-            &dir,
+            dir.path(),
             "ok.glsl",
             "#version 450\nlayout(location=0) out vec4 c;\nvoid main() { c = vec4(0); }\n",
         );

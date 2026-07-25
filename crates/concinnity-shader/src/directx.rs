@@ -85,16 +85,16 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
             .map(|e| {
                 let ptr = unsafe { e.GetBufferPointer() } as *const u8;
                 let len = unsafe { e.GetBufferSize() };
+                // The error blob's size counts its NUL terminator; keeping it
+                // would embed a NUL in the middle of the build error text.
                 String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
-                    .into_owned()
+                    .trim_end_matches(['\0', '\n'])
+                    .to_string()
             })
             .unwrap_or_else(|| "unknown compile error".to_string());
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "Asset '{}' compile error ({target}):\n{msg}",
-                args.asset_name
-            ),
+            format!("FXC failed for '{}' ({target}):\n{msg}", args.asset_name),
         ));
     }
 
@@ -138,6 +138,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("bad_stage"), "names the asset: {msg}");
         assert!(msg.contains("ps_5_1"), "names the target profile: {msg}");
+        assert!(!msg.contains('\0'), "no NUL from the error blob: {msg:?}");
     }
 
     #[test]
