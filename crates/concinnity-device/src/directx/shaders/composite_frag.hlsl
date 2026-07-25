@@ -7,8 +7,8 @@ Texture2D    bloom_tex      : register(t1);
 Texture3D    lut_tex        : register(t2);
 SamplerState linear_sampler : register(s0);
 
-// Post-process tunables. Layout matches gfx::render_types::PostProcessParams
-// (32 bytes - 8 floats). `hdr_output` is the runtime EDR toggle: `0.0` keeps
+// Composite tunables. Layout matches gfx::render_types::CompositeParams
+// (40 bytes - 10 floats). `hdr_output` is the runtime EDR toggle: `0.0` keeps
 // the SDR ACES + gamma + FXAA + LUT chain; `> 0.5` skips them and emits the
 // HDR scene with the matching encoding. Inside the HDR branch, `pq_output`
 // picks scRGB-linear passthrough (`0.0` - the compositor handles the panel
@@ -27,7 +27,15 @@ cbuffer PostBlock : register(b0)
     // 1.0 = run the FXAA edge filter on the SDR path; 0.0 = skip it (the Off
     // anti-aliasing mode). Ignored on the HDR path, which never runs FXAA.
     float fxaa;
+    // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
+    float fade;
 };
+
+// Scene-transition fade as a multiplier: 1 = un-faded, 0 = fully black.
+float fade_scale()
+{
+    return 1.0 - saturate(fade);
+}
 
 // SDR reference white in cd/m² (nits). BT.2408 recommends 203 nits as the
 // HDR mixing reference; classic D-Cinema uses 100. 203 keeps SDR content
@@ -143,10 +151,13 @@ float4 main(PsIn p) : SV_TARGET
     // Vignette is applied in linear space before the optional PQ encode
     // because it is a multiplicative falloff defined on luminance. Mirrors
     // the HDR branch in metal/shaders/post.metal.
+    // The scene fade rides the vignette multiplier: both are plain scalars on
+    // the output colour, and folding them keeps the fade in linear light here
+    // (so it scales luminance) ahead of the optional PQ encode.
     if (hdr_output > 0.5)
     {
         float3 hdr_c = scene_sample(p.uv);
-        float vig_hdr = vignette_factor(p.uv);
+        float vig_hdr = vignette_factor(p.uv) * fade_scale();
         float3 hdr_vig = hdr_c * vig_hdr;
         if (pq_output > 0.5)
         {
@@ -158,13 +169,14 @@ float4 main(PsIn p) : SV_TARGET
     // Tonemap the centre sample and its 4-neighbourhood; each neighbour goes
     // through the same tonemap so the FXAA luma compares stay consistent.
     float3 c = tonemap(p.uv);
+    float vig = vignette_factor(p.uv) * fade_scale();
 
     // FXAA gated by `fxaa` (off for the Off anti-aliasing mode). When disabled,
     // grade + vignette the tonemapped centre directly and skip the neighbour
     // samples the edge filter would otherwise take.
     if (fxaa < 0.5)
     {
-        return float4(grade(c) * vignette_factor(p.uv), 1.0);
+        return float4(grade(c) * vig, 1.0);
     }
 
     float3 n = tonemap(p.uv + float2(0.0, -inv_size.y));
@@ -181,8 +193,6 @@ float4 main(PsIn p) : SV_TARGET
     float l_min = min(lC, min(min(lN, lS), min(lE, lW)));
     float l_max = max(lC, max(max(lN, lS), max(lE, lW)));
     float l_range = l_max - l_min;
-
-    float vig = vignette_factor(p.uv);
 
     // Flat regions skip the blur entirely; they are still colour-graded and
     // vignetted.

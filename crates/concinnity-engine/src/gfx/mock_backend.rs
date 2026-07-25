@@ -119,7 +119,7 @@ pub(crate) enum Call {
         draw_idx: usize,
         visible: bool,
     },
-    UpdateClearColor([f32; 4]),
+    SetFade(f32),
 }
 
 // Shared mutable state behind the mock: the ordered call log, the captured
@@ -301,8 +301,8 @@ impl SceneControl for MockBackend {
         s.calls.push(Call::UpdateVisibility { draw_idx, visible });
     }
 
-    fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.record(Call::UpdateClearColor(color));
+    fn set_fade(&mut self, fade: f32) {
+        self.record(Call::SetFade(fade));
     }
 }
 

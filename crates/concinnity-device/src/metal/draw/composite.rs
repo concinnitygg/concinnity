@@ -65,10 +65,15 @@ impl MtlContext {
             // LUT stands in when the world declares no ColorLut.
             post_encoder.setFragmentTexture_atIndex(Some(self.color_lut.as_ref()), 2);
             post_encoder.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
-            // Post-process tunables (bloom intensity) at buffer(0).
+            // Post-process tunables (bloom intensity) plus the scene-transition
+            // fade at buffer(0).
+            let composite = crate::gfx::render_types::CompositeParams {
+                post: self.post_process,
+                fade: self.scene_fade,
+            };
             post_encoder.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.post_process).cast(),
-                std::mem::size_of::<crate::gfx::render_types::PostProcessParams>(),
+                std::ptr::NonNull::from(&composite).cast(),
+                std::mem::size_of::<crate::gfx::render_types::CompositeParams>(),
                 0,
             );
             // Fullscreen triangle: 3 vertices, no vertex buffer (post_vertex_main

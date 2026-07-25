@@ -1210,6 +1210,7 @@ impl MtlContext {
             n_skinned: 0,
             instanced_pipeline_state,
             clear_color,
+            scene_fade: 0.0,
             geometry_less,
             view_matrix: IDENTITY4,
             textures: gpu_textures,

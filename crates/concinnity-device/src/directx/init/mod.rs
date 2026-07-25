@@ -2406,6 +2406,7 @@ impl DxContext {
                 bucket_layouts: std::sync::RwLock::new(vec![Vec::new(); n_clusters]),
             },
             clear_color,
+            scene_fade: 0.0,
             view_matrix: IDENTITY4,
             text_upload: super::draw::TextUploadRing::new(FRAMES),
             info_queue,

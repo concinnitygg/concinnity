@@ -208,6 +208,11 @@ pub struct MtlContext {
     pub(super) instanced_pipeline_state:
         Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub(super) clear_color: [f32; 4],
+    // Scene-transition fade to black in [0, 1], applied in the composite pass.
+    // Backend-owned rather than a `PostProcessParams` field so a settings push
+    // cannot reset an in-flight fade, and kept out of `clear_color` so it fades
+    // the whole image, not just the pixels no geometry covers.
+    pub(super) scene_fade: f32,
     // True when the world has no 3D geometry (e.g. a text-only world). The
     // off-screen HDR / bloom / effect targets are then allocated at 1x1 since
     // nothing is rendered into them; the composite pass still runs at the full
@@ -1118,10 +1123,10 @@ impl MtlContext {
         }
     }
 
-    // Replace the framebuffer clear colour for the next draw_frame call.
-    // Used by scene transitions to lerp toward black during FadeBlack.
-    pub fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.clear_color = color;
+    // Set the scene-transition fade for the next draw_frame call. Applied in
+    // the composite pass, so a FadeBlack fades the whole image.
+    pub fn set_fade(&mut self, fade: f32) {
+        self.scene_fade = fade.clamp(0.0, 1.0);
     }
 
     // Instantiate a runtime copy of an existing draw object at a new transform:
@@ -1338,8 +1343,8 @@ impl crate::gfx::scene_flow::SceneControl for MtlContext {
         self.update_visibility(draw_idx, visible);
     }
 
-    fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.update_clear_color(color);
+    fn set_fade(&mut self, fade: f32) {
+        self.set_fade(fade);
     }
 }
 

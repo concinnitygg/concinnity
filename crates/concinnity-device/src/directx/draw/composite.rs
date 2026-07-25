@@ -12,10 +12,11 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
-use crate::gfx::render_types::{PostProcessParams, TextDrawCall, TextVertex};
+use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 
 use crate::directx::context::DxContext;
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
+use crate::directx::pipeline::COMPOSITE_ROOT_CONSTANTS;
 use crate::directx::texture::transition_barrier;
 
 // Root constants for the text pass (16 bytes = 4 DWORDs): window dimensions.
@@ -92,14 +93,18 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             cmd.SetGraphicsRootDescriptorTable(0, args.scene_srv);
             // Root param [1]: bloom mip 0 SRV (t1).
             cmd.SetGraphicsRootDescriptorTable(1, self.bloom.mip_srv_gpus[0]);
-            // Root param [2]: PostProcessParams (exposure / vignette / bloom +
-            // the `hdr_output` + `pq_output` HDR-branch toggles, 8 DWORDs
-            // total, matching the root-sig declaration). Pushed verbatim so
-            // the HLSL cbuffer reads the same byte order as the Rust struct.
+            // Root param [2]: CompositeParams (the post-process tunables plus
+            // the scene-transition fade, matching the root-sig declaration).
+            // Pushed verbatim so the HLSL cbuffer reads the same byte order as
+            // the Rust struct.
+            let composite = CompositeParams {
+                post: self.post_process,
+                fade: self.scene_fade,
+            };
             cmd.SetGraphicsRoot32BitConstants(
                 2,
-                8,
-                &self.post_process as *const PostProcessParams as *const std::ffi::c_void,
+                COMPOSITE_ROOT_CONSTANTS,
+                &composite as *const CompositeParams as *const std::ffi::c_void,
                 0,
             );
             // Root param [3]: 3D colour-grading LUT SRV (t2).

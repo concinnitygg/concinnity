@@ -629,7 +629,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
     struct DummyBackend;
     impl crate::gfx::scene_flow::SceneControl for DummyBackend {
         fn update_visibility(&mut self, _: usize, _: bool) {}
-        fn update_clear_color(&mut self, _: [f32; 4]) {}
+        fn set_fade(&mut self, _: f32) {}
     }
     impl crate::gfx::backend::RenderBackend for DummyBackend {
         fn window_closed(&mut self) -> bool {
@@ -776,7 +776,7 @@ struct RecordingBackend {
 
 impl crate::gfx::scene_flow::SceneControl for RecordingBackend {
     fn update_visibility(&mut self, _: usize, _: bool) {}
-    fn update_clear_color(&mut self, _: [f32; 4]) {}
+    fn set_fade(&mut self, _: f32) {}
 }
 
 impl crate::gfx::backend::RenderBackend for RecordingBackend {

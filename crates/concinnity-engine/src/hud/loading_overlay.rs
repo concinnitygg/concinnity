@@ -271,7 +271,6 @@ mod tests {
                 scenes: vec![SCENE],
                 current: SCENE,
                 fade: FadePhase::None,
-                base_clear_color: [0.0; 4],
             }),
             epoch: Instant::now(),
         });

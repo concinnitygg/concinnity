@@ -15,22 +15,24 @@ pub struct SceneFlow {
     pub scenes: Vec<AssetId>,
     pub current: AssetId,
     pub fade: FadePhase,
-    // Clear colour before any fade was applied (restored after fade-in).
-    pub base_clear_color: [f32; 4],
 }
 
 pub enum FadePhase {
     None,
-    // Fading clear_color toward black; next is the scene to activate mid-fade.
+    // Fading the composited image toward black; next is the scene to activate
+    // mid-fade.
     ToBlack { started_at: f32, next: AssetId },
-    // New scene is active; fading clear_color back from black.
+    // New scene is active; fading the composited image back from black.
     FromBlack { started_at: f32 },
 }
 
 // Backend operations required to drive scene visibility and fade transitions.
 pub trait SceneControl {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool);
-    fn update_clear_color(&mut self, color: [f32; 4]);
+    // Fade the composited image to black by `fade` in `[0, 1]`: 0 leaves the
+    // frame untouched, 1 renders it fully black. Applied in the composite pass
+    // so the whole image fades, not just the pixels no geometry covers.
+    fn set_fade(&mut self, fade: f32);
 }
 
 // Set draw-object visibility according to which scene is currently active.
@@ -54,7 +56,7 @@ pub fn set_scene_visibility<B: SceneControl + ?Sized>(
     }
 }
 
-// Advance any in-flight fade transition, updating the clear colour and
+// Advance any in-flight fade transition, updating the composite fade and
 // switching visibility to the target scene mid-fade.
 pub fn tick_transitions<B: SceneControl + ?Sized>(
     flow_opt: &mut Option<SceneFlow>,
@@ -71,8 +73,7 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
     match flow.fade {
         FadePhase::ToBlack { started_at, next } => {
             let t = ((elapsed - started_at) / FADE_HALF_SECS).clamp(0.0, 1.0);
-            let [r, g, b, a] = flow.base_clear_color;
-            backend.update_clear_color([r * (1.0 - t), g * (1.0 - t), b * (1.0 - t), a]);
+            backend.set_fade(t);
             if t >= 1.0 {
                 flow.current = next;
                 flow.fade = FadePhase::FromBlack {
@@ -84,10 +85,8 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
         }
         FadePhase::FromBlack { started_at } => {
             let t = ((elapsed - started_at) / FADE_HALF_SECS).clamp(0.0, 1.0);
-            let [r, g, b, a] = flow.base_clear_color;
-            backend.update_clear_color([r * t, g * t, b * t, a]);
+            backend.set_fade(1.0 - t);
             if t >= 1.0 {
-                backend.update_clear_color(flow.base_clear_color);
                 flow.fade = FadePhase::None;
             }
         }
@@ -153,15 +152,15 @@ mod tests {
     #[derive(Default)]
     struct TestBackend {
         visibility: Vec<(usize, bool)>,
-        clear_colors: Vec<[f32; 4]>,
+        fades: Vec<f32>,
     }
 
     impl SceneControl for TestBackend {
         fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
             self.visibility.push((draw_idx, visible));
         }
-        fn update_clear_color(&mut self, color: [f32; 4]) {
-            self.clear_colors.push(color);
+        fn set_fade(&mut self, fade: f32) {
+            self.fades.push(fade);
         }
     }
 
@@ -170,7 +169,6 @@ mod tests {
             scenes: scenes.to_vec(),
             current: scenes[0],
             fade: FadePhase::None,
-            base_clear_color: [1.0, 1.0, 1.0, 1.0],
         }
     }
 
@@ -211,14 +209,13 @@ mod tests {
         let mut backend = TestBackend::default();
         tick_transitions(&mut opt, &[], &[], 999.0, &mut backend);
         assert!(backend.visibility.is_empty());
-        assert!(backend.clear_colors.is_empty());
+        assert!(backend.fades.is_empty());
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
     }
 
     #[test]
-    fn tick_fade_to_black_darkens_clear_color() {
+    fn tick_fade_to_black_ramps_the_fade_up() {
         let mut flow = make_flow(&[AssetId(0), AssetId(1)]);
-        flow.base_clear_color = [1.0, 0.0, 0.0, 1.0];
         flow.fade = FadePhase::ToBlack {
             started_at: 0.0,
             next: AssetId(1),
@@ -227,10 +224,11 @@ mod tests {
         let mut backend = TestBackend::default();
         // elapsed = FADE_HALF_SECS / 2 → t = 0.5
         tick_transitions(&mut opt, &[], &[], FADE_HALF_SECS * 0.5, &mut backend);
-        assert_eq!(backend.clear_colors.len(), 1);
-        let [r, _g, _b, a] = backend.clear_colors[0];
-        assert!((r - 0.5).abs() < 1e-5, "red should be half-dimmed");
-        assert!((a - 1.0).abs() < 1e-5, "alpha unchanged");
+        assert_eq!(backend.fades.len(), 1);
+        assert!(
+            (backend.fades[0] - 0.5).abs() < 1e-5,
+            "half way to black at the midpoint of the first half"
+        );
         // Still in ToBlack, no scene switch yet.
         assert!(matches!(
             opt.as_ref().unwrap().fade,
@@ -255,17 +253,33 @@ mod tests {
     }
 
     #[test]
-    fn tick_fade_from_black_restores_clear_color() {
+    fn tick_fade_from_black_clears_the_fade() {
         let mut flow = make_flow(&[AssetId(0)]);
-        flow.base_clear_color = [1.0, 1.0, 1.0, 1.0];
         flow.fade = FadePhase::FromBlack { started_at: 0.0 };
         let mut opt = Some(flow);
         let mut backend = TestBackend::default();
         // elapsed = FADE_HALF_SECS → t = 1.0, fade ends
         tick_transitions(&mut opt, &[], &[], FADE_HALF_SECS, &mut backend);
         assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
-        // The final clear_color call restores the base color.
-        assert_eq!(*backend.clear_colors.last().unwrap(), [1.0, 1.0, 1.0, 1.0]);
+        // The last push leaves the image un-faded.
+        assert_eq!(*backend.fades.last().unwrap(), 0.0);
+    }
+
+    // The fade-in half runs the fade back down, so a frame partway through it
+    // is partially, not fully, black.
+    #[test]
+    fn tick_fade_from_black_ramps_the_fade_down() {
+        let mut flow = make_flow(&[AssetId(0)]);
+        flow.fade = FadePhase::FromBlack { started_at: 0.0 };
+        let mut opt = Some(flow);
+        let mut backend = TestBackend::default();
+        tick_transitions(&mut opt, &[], &[], FADE_HALF_SECS * 0.25, &mut backend);
+        assert_eq!(backend.fades.len(), 1);
+        assert!((backend.fades[0] - 0.75).abs() < 1e-5);
+        assert!(matches!(
+            opt.as_ref().unwrap().fade,
+            FadePhase::FromBlack { .. }
+        ));
     }
 
     #[test]

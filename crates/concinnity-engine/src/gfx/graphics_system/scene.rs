@@ -53,7 +53,6 @@ impl GraphicsSystem {
             scenes,
             current: active_scene,
             fade: scene_flow::FadePhase::None,
-            base_clear_color: self.clear_color,
         });
     }
 

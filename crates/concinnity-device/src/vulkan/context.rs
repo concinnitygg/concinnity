@@ -1411,6 +1411,11 @@ pub struct VkContext {
         crate::gfx::render_graph::CompiledGraph,
     )>,
     pub(super) clear_color: [f32; 4],
+    // Scene-transition fade to black in [0, 1], applied in the composite pass.
+    // Backend-owned rather than a `PostProcessParams` field so a settings push
+    // cannot reset an in-flight fade, and kept out of `clear_color` so it fades
+    // the whole image, not just the pixels no geometry covers.
+    pub(super) scene_fade: f32,
     pub(super) view_matrix: [[f32; 4]; 4],
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = no
     // EnvironmentMap declared; the fragment shader uses this as the IBL
@@ -1901,8 +1906,8 @@ impl VkContext {
         }
     }
 
-    pub fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.clear_color = color;
+    pub fn set_fade(&mut self, fade: f32) {
+        self.scene_fade = fade.clamp(0.0, 1.0);
     }
 
     // The live platform window. Present for every constructed context; `None`
@@ -2229,8 +2234,8 @@ impl crate::gfx::scene_flow::SceneControl for VkContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }
-    fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.update_clear_color(color);
+    fn set_fade(&mut self, fade: f32) {
+        self.set_fade(fade);
     }
 }
 

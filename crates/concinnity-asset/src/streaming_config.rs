@@ -60,9 +60,6 @@ impl Default for StreamingConfig {
     }
 }
 
-// These accessors feed the Metal asset-streaming path for now
-// (Vulkan / DirectX catch-up is a follow-up).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl StreamingConfig {
     /// Per-frame texture load budget as a `usize`, floored at 1 so a stray 0
     /// cannot wedge streaming permanently.

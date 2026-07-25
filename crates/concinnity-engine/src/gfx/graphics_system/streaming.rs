@@ -62,7 +62,7 @@ pub(super) fn deferred_texture_slots(
     slot_count: usize,
 ) -> std::collections::HashSet<usize> {
     let mut deferred = std::collections::HashSet::new();
-    if !streaming || !cfg!(target_os = "macos") {
+    if !streaming {
         return deferred;
     }
     // Scenes are still undrained at this point; the first declared is the
@@ -99,7 +99,7 @@ pub(super) fn deferred_mesh_sources(
     streaming: bool,
 ) -> crate::gfx::draw_list::DeferredMeshSources {
     let mut out = crate::gfx::draw_list::DeferredMeshSources::default();
-    if !streaming || !cfg!(target_os = "macos") {
+    if !streaming {
         return out;
     }
     let Some(start) = ctx
@@ -602,6 +602,189 @@ mod tests {
     use crate::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     const MIB: u64 = 1024 * 1024;
+
+    // Owns the storage a PipelineContext borrows from, for the boot-set
+    // deferral tests: the declared Scenes plus the blob's baked scene groups
+    // and mesh-bounds records.
+    struct ResidencyWorld {
+        components: crate::ecs::ComponentStorage,
+        blob: crate::blob::BlobData,
+        profile: crate::gfx::profile::FrameProfile,
+        resources: crate::ecs::Resources,
+    }
+
+    impl ResidencyWorld {
+        // `scenes` are pushed in declaration order, so the first is the start
+        // scene the deferral spares.
+        fn new(scenes: &[AssetId]) -> Self {
+            let mut components = crate::ecs::ComponentStorage::default();
+            for &asset_id in scenes {
+                components.push_typed(crate::assets::Scene {
+                    asset_id,
+                    camera_shot: None,
+                });
+            }
+            Self {
+                components,
+                blob: crate::blob::BlobData::empty(),
+                profile: Default::default(),
+                resources: crate::ecs::Resources::new(),
+            }
+        }
+
+        fn with_groups(mut self, groups: Vec<crate::ecs::SceneGroup>) -> Self {
+            self.resources.insert(crate::ecs::BlobSceneGroups(groups));
+            self
+        }
+
+        fn with_mesh_bounds(mut self, records: Vec<crate::ecs::MeshBoundsRecord>) -> Self {
+            self.resources.insert(crate::ecs::BlobMeshBounds(records));
+            self
+        }
+
+        fn ctx(&mut self) -> crate::ecs::PipelineContext<'_> {
+            crate::ecs::PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+            }
+        }
+    }
+
+    fn group(
+        scene: AssetId,
+        resources: Vec<(u8, u32)>,
+        defs: Vec<AssetId>,
+    ) -> crate::ecs::SceneGroup {
+        crate::ecs::SceneGroup {
+            scene,
+            resources,
+            defs,
+        }
+    }
+
+    fn bounds_record(
+        handle: u32,
+        vertex_count: u32,
+        index_count: u32,
+    ) -> crate::ecs::MeshBoundsRecord {
+        crate::ecs::MeshBoundsRecord {
+            handle,
+            min: [-1.0; 3],
+            max: [1.0; 3],
+            vertex_count,
+            index_count,
+        }
+    }
+
+    const TEXTURE_KIND: u8 = concinnity_core::ecs::ResourceKind::Texture as u8;
+    const MESH_KIND: u8 = concinnity_core::ecs::ResourceKind::Mesh as u8;
+
+    const START: AssetId = AssetId(10);
+    const LATER: AssetId = AssetId(11);
+
+    // Only a non-start scene's exclusively-owned texture payloads are skipped at
+    // init: the start scene renders on the first frame, so its slots must decode
+    // eagerly.
+    #[test]
+    fn texture_deferral_spares_the_start_scene() {
+        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![
+            group(START, vec![(TEXTURE_KIND, 0)], Vec::new()),
+            group(
+                LATER,
+                vec![(TEXTURE_KIND, 1), (TEXTURE_KIND, 2)],
+                Vec::new(),
+            ),
+        ]);
+        let deferred = deferred_texture_slots(&world.ctx(), true, 8);
+        assert_eq!(deferred, std::collections::HashSet::from([1, 2]));
+    }
+
+    // A group entry that is not a Texture, or whose handle is past the streamed
+    // slot count, is not a texture slot this path can defer.
+    #[test]
+    fn texture_deferral_ignores_other_kinds_and_out_of_range_handles() {
+        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![group(
+            LATER,
+            vec![(TEXTURE_KIND, 1), (MESH_KIND, 2), (TEXTURE_KIND, 9)],
+            Vec::new(),
+        )]);
+        let deferred = deferred_texture_slots(&world.ctx(), true, 3);
+        assert_eq!(deferred, std::collections::HashSet::from([1]));
+    }
+
+    // The streamer is the runtime load path that brings a deferred payload in,
+    // so with no StreamingConfig -- or no Scene to own the content, or no baked
+    // groups -- everything decodes at init as before.
+    #[test]
+    fn texture_deferral_is_empty_without_streaming_scenes_or_groups() {
+        let groups = vec![group(LATER, vec![(TEXTURE_KIND, 1)], Vec::new())];
+
+        let mut unstreamed = ResidencyWorld::new(&[START, LATER]).with_groups(groups.clone());
+        assert!(deferred_texture_slots(&unstreamed.ctx(), false, 8).is_empty());
+
+        let mut sceneless = ResidencyWorld::new(&[]).with_groups(groups);
+        assert!(deferred_texture_slots(&sceneless.ctx(), true, 8).is_empty());
+
+        let mut ungrouped = ResidencyWorld::new(&[START, LATER]);
+        assert!(deferred_texture_slots(&ungrouped.ctx(), true, 8).is_empty());
+    }
+
+    // Mesh deferral mirrors the texture path over both mesh-source forms
+    // (resource-stream handles and payload-carrying defs), while the baked
+    // bounds + counts are taken from every record: they are looked up by handle
+    // for whichever sources end up deferred.
+    #[test]
+    fn mesh_deferral_marks_later_scene_sources_and_keeps_every_baked_record() {
+        let start_def = AssetId(20);
+        let later_def = AssetId(21);
+        let mut world = ResidencyWorld::new(&[START, LATER])
+            .with_groups(vec![
+                group(START, vec![(MESH_KIND, 0)], vec![start_def]),
+                group(
+                    LATER,
+                    vec![(MESH_KIND, 1), (TEXTURE_KIND, 5)],
+                    vec![later_def],
+                ),
+            ])
+            .with_mesh_bounds(vec![bounds_record(0, 24, 36), bounds_record(1, 8, 12)]);
+
+        let sources = deferred_mesh_sources(&world.ctx(), true);
+        assert_eq!(sources.by_handle, std::collections::HashSet::from([1]));
+        assert_eq!(
+            sources.by_def,
+            std::collections::HashSet::from([later_def]),
+            "only the later scene's defs defer"
+        );
+        // Draw records for a deferred mesh are built from these, so both the
+        // spared and the deferred record must be readable.
+        assert_eq!(sources.counts.get(&0), Some(&(24, 36)));
+        assert_eq!(sources.counts.get(&1), Some(&(8, 12)));
+        assert_eq!(sources.bounds.get(&1), Some(&([-1.0; 3], [1.0; 3])));
+    }
+
+    // A mesh source with no baked bounds record cannot be deferred (init has
+    // nothing to size its draw record from), and neither can any source in a
+    // world whose blob predates the baked table.
+    #[test]
+    fn mesh_deferral_is_empty_without_streaming_or_baked_bounds() {
+        let groups = vec![group(LATER, vec![(MESH_KIND, 1)], Vec::new())];
+
+        let mut unstreamed = ResidencyWorld::new(&[START, LATER])
+            .with_groups(groups.clone())
+            .with_mesh_bounds(vec![bounds_record(1, 8, 12)]);
+        assert!(
+            deferred_mesh_sources(&unstreamed.ctx(), false)
+                .by_handle
+                .is_empty()
+        );
+
+        let mut unbaked = ResidencyWorld::new(&[START, LATER]).with_groups(groups);
+        let sources = deferred_mesh_sources(&unbaked.ctx(), true);
+        assert!(sources.by_handle.is_empty());
+        assert!(sources.counts.is_empty());
+    }
 
     // A GraphicsSystem carrying the recording backend, as init has it while the
     // setup routines wire the pools onto it. The mock reports the UNKNOWN GPU

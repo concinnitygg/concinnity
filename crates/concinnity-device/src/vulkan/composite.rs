@@ -13,7 +13,7 @@
 
 use ash::vk;
 
-use crate::gfx::render_types::{PostProcessParams, TextDrawCall, TextVertex};
+use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 use crate::vulkan::uniforms::TextPush;
 
 use super::context::VkContext;
@@ -78,15 +78,20 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                 std::slice::from_ref(&self.composite_sets[args.frame_idx]),
                 &[],
             );
-            // Post-process tunables (bloom intensity, exposure, vignette).
+            // Post-process tunables (bloom intensity, exposure, vignette) plus
+            // the scene-transition fade.
+            let composite = CompositeParams {
+                post: self.post_process,
+                fade: self.scene_fade,
+            };
             device.cmd_push_constants(
                 *cmd,
                 self.composite_pipeline_layout,
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
-                    &self.post_process as *const PostProcessParams as *const u8,
-                    std::mem::size_of::<PostProcessParams>(),
+                    &composite as *const CompositeParams as *const u8,
+                    std::mem::size_of::<CompositeParams>(),
                 ),
             );
             // Fullscreen triangle: three vertices, no vertex buffer.

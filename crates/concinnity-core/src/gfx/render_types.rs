@@ -549,6 +549,26 @@ impl PostProcessParams {
     };
 }
 
+/// Fragment constants for the composite pass: the authored post-process
+/// tunables plus the scene-transition fade the backend owns. Pushed verbatim to
+/// the composite fragment shader, so the layout must stay in sync with the
+/// `CompositeUniforms` struct there. 40 bytes.
+///
+/// The fade is not a `PostProcessParams` field because that struct is resolved
+/// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
+/// moves, which would reset an in-flight fade. It is also pushed to the bloom
+/// prefilter, which has no use for it.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct CompositeParams {
+    pub post: PostProcessParams,
+    /// Scene-transition fade to black in `[0, 1]`: 0 renders the composited
+    /// image untouched, 1 renders it fully black. The shader scales by
+    /// `1 - fade` in linear light on the HDR path and on the display-referred
+    /// result on the SDR path.
+    pub fade: f32,
+}
+
 // Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
 // clamped authored tunables plus the view-ray scale the kernel needs to
 // rebuild a view-space position from the linear depth the SSAO pre-pass
@@ -1821,6 +1841,17 @@ mod tests {
         assert_eq!(offset_of!(PostProcessParams, hdr_output), 24);
         assert_eq!(offset_of!(PostProcessParams, pq_output), 28);
         assert_eq!(offset_of!(PostProcessParams, fxaa), 32);
+    }
+
+    #[test]
+    fn composite_params_layout_matches_msl() {
+        // MSL `CompositeUniforms` in post.metal: the nine `PostUniforms` floats
+        // followed by the fade.
+        assert_eq!(size_of::<CompositeParams>(), 40);
+        assert_eq!(offset_of!(CompositeParams, post), 0);
+        assert_eq!(offset_of!(CompositeParams, post.bloom_intensity), 0);
+        assert_eq!(offset_of!(CompositeParams, post.fxaa), 32);
+        assert_eq!(offset_of!(CompositeParams, fade), 36);
     }
 
     #[test]

@@ -334,11 +334,16 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Ve
     Ok((vs, ps))
 }
 
+// Number of 32-bit root constants the composite pass declares at b0: one per
+// `CompositeParams` float, so the shader's cbuffer is fully backed.
+pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
+    (std::mem::size_of::<crate::gfx::render_types::CompositeParams>() / 4) as u32;
+
 // Root signature for the composite pass: a 1-SRV descriptor table at t0 (the
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
-// table at t1 (bloom mip 0), six 32-bit root constants at b0
-// (`PostProcessParams`), a 1-SRV descriptor table at t2 (the 3D colour-grading
-// LUT), and a static linear-clamp sampler at s0. The scene SRV is its own
+// table at t1 (bloom mip 0), `COMPOSITE_ROOT_CONSTANTS` 32-bit root constants
+// at b0 (`CompositeParams`), a 1-SRV descriptor table at t2 (the 3D
+// colour-grading LUT), and a static linear-clamp sampler at s0. The scene SRV is its own
 // table (separate from bloom mip 0) so the runtime can re-point it at the
 // per-frame TAA output without the two needing to be heap-contiguous. Clamp
 // keeps the FXAA neighbour taps from wrapping at screen edges and the LUT taps
@@ -392,15 +397,17 @@ pub(super) fn create_composite_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [2] Root constants: PostProcessParams (8 floats: 6 post tunables +
-        // the `hdr_output` + `pq_output` HDR-branch toggles) at b0.
+        // [2] Root constants: CompositeParams (10 floats: the 9 PostProcessParams
+        // tunables + the scene-transition fade) at b0. The count must cover the
+        // whole struct: constants past `Num32BitValues` read as zero in the
+        // shader, which silently disabled the `fxaa` flag while this was 8.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 8,
+                    Num32BitValues: COMPOSITE_ROOT_CONSTANTS,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,

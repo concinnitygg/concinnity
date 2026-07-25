@@ -14,16 +14,13 @@
 // concinnity-core and are re-exported here so the historical
 // crate::gfx::<module> paths keep resolving.
 // `pub` so the editor crate can reach these core GPU-layout modules through
-// `concinnity_engine::gfx::*` (e.g. shader-layout reflection).
+// `concinnity_engine::gfx::*` (e.g. shader-layout reflection); `chunk_coord` is
+// named only by the chunk-streaming drive, so it stays crate-private.
+pub(crate) use concinnity_core::gfx::chunk_coord;
 pub use concinnity_core::gfx::{
     anim_graph, auto_exposure, camera, frustum, ik, lod, mesh_payload, mesh_seed, profile,
     render_types, root_motion, rt_reflections, skinning, ssao, ssgi, ssr,
 };
-// Chunk-streaming layout helper: driven only by the Metal backend's streaming
-// path today, so the re-export is unused on other backends (mirrors the
-// chunk_window / streaming gating below).
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
-pub(crate) use concinnity_core::gfx::chunk_coord;
 
 // Render-prep from concinnity-render that the client's own systems consume (the
 // device backends reach the rest through concinnity-device's own bridge, not
@@ -32,15 +29,13 @@ pub(crate) use concinnity_core::gfx::chunk_coord;
 pub use concinnity_render::{
     backend, backend_init, decal, input, particles, scene_flow, scene_residency, volumetric_fog,
 };
-pub(crate) use concinnity_render::{cursor, display_mode, keymap, lights, sprite, text};
+pub(crate) use concinnity_render::{
+    chunk_window, cursor, display_mode, keymap, lights, sprite, text,
+};
 // Seeded / driven by the client's GraphicsSystem on Metal today; the other
 // backends' probe + planar ports have not landed, so unused off macOS.
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
-// Chunk-window streaming layout: driven only by the Metal backend's streaming
-// path today, so unused on other backends.
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
-pub(crate) use concinnity_render::chunk_window;
 // Consumed only by the runtime-spawn unit tests (draw-slot allocator +
 // skinned-instance pool); the production spawn path lives in the backends.
 #[cfg(test)]

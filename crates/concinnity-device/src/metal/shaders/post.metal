@@ -33,8 +33,9 @@ inline float fxaa_luma(float3 rgb) {
     return dot(rgb, float3(0.299, 0.587, 0.114));
 }
 
-// Post-process tunables. Layout matches render_types::PostProcessParams.
-struct PostUniforms {
+// Composite tunables. Layout matches render_types::CompositeParams: the
+// PostProcessParams fields followed by the scene-transition fade.
+struct CompositeUniforms {
     float bloom_intensity;
     float bloom_threshold;
     float bloom_knee;
@@ -52,6 +53,8 @@ struct PostUniforms {
     // 1.0 = run the FXAA edge filter on the SDR path; 0.0 = skip it (the Off
     // anti-aliasing mode). Ignored on the HDR path, which never runs FXAA.
     float fxaa;
+    // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
+    float fade;
 };
 
 // SDR reference white in cd/m² (nits). BT.2408 recommends 203 nits as the
@@ -114,14 +117,17 @@ fragment float4 post_fragment_main(
     texture2d<float> bloom [[texture(1)]],
     texture3d<float> lut [[texture(2)]],
     sampler smp [[sampler(0)]],
-    constant PostUniforms& post [[buffer(0)]]
+    constant CompositeUniforms& post [[buffer(0)]]
 ) {
     float2 uv = in.uv;
     float2 tex_size = float2(hdr.get_width(), hdr.get_height());
     float2 inv_size = 1.0 / tex_size;
     float bi = post.bloom_intensity;
     float ex = post.exposure;
-    float vig = vignette_factor(uv, post.vignette);
+    // The scene fade rides the vignette multiplier: both are plain scalars on
+    // the output colour, so the HDR path fades in linear light ahead of the
+    // optional PQ encode and the SDR path fades the display-referred result.
+    float vig = vignette_factor(uv, post.vignette) * (1.0 - saturate(post.fade));
 
     // 1) Composite bloom onto the HDR scene, then ACES tonemap + gamma encode.
     float3 hdr_c = scene_sample(hdr, bloom, smp, uv, bi, ex);

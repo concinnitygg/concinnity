@@ -1313,11 +1313,18 @@ impl VkContext {
         .map_err(|e| format!("text pipeline layout: {e}"))?;
 
         // Post-process push constant: the full `PostProcessParams` struct,
-        // fragment-stage. Shared by the composite + bloom-prefilter shaders.
+        // fragment-stage. Read by the bloom-prefilter shader.
         let post_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(std::mem::size_of::<crate::gfx::render_types::PostProcessParams>() as u32);
+
+        // The composite shader reads the same tunables plus the scene fade, so
+        // its range covers the wider `CompositeParams`.
+        let composite_pc_range = vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(std::mem::size_of::<crate::gfx::render_types::CompositeParams>() as u32);
 
         // Composite layout: one descriptor set (HDR resolve + bloom mip 0).
         let composite_set_layouts = [composite_set_layout];
@@ -1325,7 +1332,7 @@ impl VkContext {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&composite_set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&post_pc_range)),
+                    .push_constant_ranges(std::slice::from_ref(&composite_pc_range)),
                 None,
             )
         }
@@ -3989,6 +3996,7 @@ impl VkContext {
             frame_graph_cache: None,
             draw_objects,
             clear_color,
+            scene_fade: 0.0,
             view_matrix: IDENTITY4,
             prefilter_mip_count: env_map.prefilter_mip_count,
             cube_sampler,

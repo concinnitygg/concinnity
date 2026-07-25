@@ -1090,6 +1090,12 @@ pub struct DxContext {
     // `DxInstanced`.
     pub(super) instanced: DxInstanced,
     pub(super) clear_color: [f32; 4],
+    // Scene-transition fade to black in [0, 1], applied in the composite pass.
+    // Backend-owned rather than a `PostProcessParams` field so a settings push
+    // cannot reset an in-flight fade. Stays out of `clear_color`: folding it
+    // there would tint only the pixels no geometry covers, and would mismatch
+    // the colour target's baked D3D12 optimized clear value every frame.
+    pub(super) scene_fade: f32,
     pub(super) view_matrix: [[f32; 4]; 4],
 
     // Per-frame-slot persistent upload buffers for transient HUD text geometry.
@@ -1784,8 +1790,8 @@ impl DxContext {
         }
     }
 
-    pub fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.clear_color = color;
+    pub fn set_fade(&mut self, fade: f32) {
+        self.scene_fade = fade.clamp(0.0, 1.0);
     }
 
     // Render statistics for the most recent `draw_frame`, for the profiler
@@ -2212,8 +2218,8 @@ impl crate::gfx::scene_flow::SceneControl for DxContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }
-    fn update_clear_color(&mut self, color: [f32; 4]) {
-        self.update_clear_color(color);
+    fn set_fade(&mut self, fade: f32) {
+        self.set_fade(fade);
     }
 }
 

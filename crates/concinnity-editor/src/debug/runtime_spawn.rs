@@ -1155,7 +1155,7 @@ mod tests {
 
     impl crate::gfx::scene_flow::SceneControl for StubBackend {
         fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
-        fn update_clear_color(&mut self, _color: [f32; 4]) {}
+        fn set_fade(&mut self, _fade: f32) {}
     }
 
     impl crate::gfx::backend::RenderBackend for StubBackend {
