@@ -53,6 +53,10 @@ impl Component for Shader {
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
     }
+
+    fn inject_name(&mut self, id: crate::ecs::asset_id::AssetId) {
+        self.asset_id = id;
+    }
 }
 
 /// Returns the platform key used to look up entries in the `sources` map.

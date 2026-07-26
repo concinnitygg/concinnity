@@ -11,4 +11,5 @@ pub(crate) use concinnity_render::streaming::*;
 pub(crate) mod chunk;
 mod file_range;
 pub(crate) mod mesh;
+pub(crate) mod shader;
 pub(crate) mod texture;

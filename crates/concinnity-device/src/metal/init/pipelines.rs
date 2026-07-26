@@ -178,56 +178,95 @@ pub(crate) fn build_main_pipeline(
     })
 }
 
+// The main-pass pipelines of the material-referenced world shaders, indexed by
+// `shader_bucket - 1`. `None` marks a bucket whose Shader is not resident.
+pub(crate) type WorldPipelineTable =
+    Vec<Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>>;
+
 // Pipelines for the material-referenced world shaders past the default
 // (ShaderHandle 1..), in bucket order. Extra world shaders render only through
 // the GPU-driven bindless path (the cull kernel routes their draws into
 // per-bucket ICBs), so each fragment library must expose
 // `fragment_main_bindless` with the engine's BindlessTextures layout; a shader
 // without it is a hard error rather than a silently default-shaded bucket.
+//
+// A bucket whose stage bytes are empty was deferred by init (its Shader is
+// owned by a scene that has not pinned) and stays `None` until
+// [`super::super::MtlContext::install_world_shader`] builds it.
 pub(crate) fn build_world_pipeline_table(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     extra_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
-) -> Result<Vec<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>, String> {
+    mut archive: Option<&mut crate::metal::pipeline_archive::PipelineArchive>,
+) -> Result<WorldPipelineTable, String> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
-        let bucket = i + 1;
-        let vert_library = load_library(device, shader.vert)
-            .map_err(|e| format!("shader bucket {bucket}: failed to load vertex metallib: {e}"))?;
-        let frag_library = load_library(device, shader.frag).map_err(|e| {
-            format!("shader bucket {bucket}: failed to load fragment metallib: {e}")
-        })?;
-        let vert_fn = vert_library
-            .newFunctionWithName(&ns_str("vertex_main"))
-            .ok_or_else(|| format!("shader bucket {bucket}: vertex_main not found in metallib"))?;
-        let frag_fn = frag_library
-            .newFunctionWithName(&ns_str("fragment_main_bindless"))
-            .ok_or_else(|| {
-                format!(
-                    "shader bucket {bucket}: fragment_main_bindless not found in metallib -- a \
-                     material-referenced Shader must define the bindless entry points"
-                )
-            })?;
-
-        let desc = MTLRenderPipelineDescriptor::new();
-        desc.setVertexDescriptor(Some(vert_desc));
-        desc.setVertexFunction(Some(&vert_fn));
-        desc.setFragmentFunction(Some(&frag_fn));
-        desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
-        unsafe {
-            desc.colorAttachments()
-                .objectAtIndexedSubscript(0)
-                .setPixelFormat(MTLPixelFormat::RGBA16Float);
+        if shader.vert.is_empty() && shader.frag.is_empty() {
+            table.push(None);
+            continue;
         }
-        desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-        desc.setSupportIndirectCommandBuffers(true);
-
-        let pso = device
-            .newRenderPipelineStateWithDescriptor_error(&desc)
-            .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))?;
-        table.push(pso);
+        table.push(Some(build_bucket_pipeline(
+            device,
+            vert_desc,
+            i + 1,
+            shader.vert,
+            shader.frag,
+            archive.as_deref_mut(),
+        )?));
     }
     Ok(table)
+}
+
+// One material-referenced shader bucket's bindless main-pass pipeline. When an
+// archive is supplied the build reads its stored binary instead of compiling,
+// and a freshly compiled pipeline is added back to it.
+pub(crate) fn build_bucket_pipeline(
+    device: &ProtocolObject<dyn MTLDevice>,
+    vert_desc: &MTLVertexDescriptor,
+    bucket: usize,
+    vert_bytes: &[u8],
+    frag_bytes: &[u8],
+    archive: Option<&mut crate::metal::pipeline_archive::PipelineArchive>,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+    let vert_library = load_library(device, vert_bytes)
+        .map_err(|e| format!("shader bucket {bucket}: failed to load vertex metallib: {e}"))?;
+    let frag_library = load_library(device, frag_bytes)
+        .map_err(|e| format!("shader bucket {bucket}: failed to load fragment metallib: {e}"))?;
+    let vert_fn = vert_library
+        .newFunctionWithName(&ns_str("vertex_main"))
+        .ok_or_else(|| format!("shader bucket {bucket}: vertex_main not found in metallib"))?;
+    let frag_fn = frag_library
+        .newFunctionWithName(&ns_str("fragment_main_bindless"))
+        .ok_or_else(|| {
+            format!(
+                "shader bucket {bucket}: fragment_main_bindless not found in metallib -- a \
+                 material-referenced Shader must define the bindless entry points"
+            )
+        })?;
+
+    let desc = MTLRenderPipelineDescriptor::new();
+    desc.setVertexDescriptor(Some(vert_desc));
+    desc.setVertexFunction(Some(&vert_fn));
+    desc.setFragmentFunction(Some(&frag_fn));
+    desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    unsafe {
+        desc.colorAttachments()
+            .objectAtIndexedSubscript(0)
+            .setPixelFormat(MTLPixelFormat::RGBA16Float);
+    }
+    desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
+    desc.setSupportIndirectCommandBuffers(true);
+
+    if let Some(archive) = &archive {
+        archive.attach(&desc);
+    }
+    let pso = device
+        .newRenderPipelineStateWithDescriptor_error(&desc)
+        .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))?;
+    if let Some(archive) = archive {
+        archive.record(&desc);
+    }
+    Ok(pso)
 }
 
 // Optional instanced pipeline: pairs vertex_main_instanced with the existing

@@ -7,7 +7,7 @@
 // garbage, causing ambient-only rendering. Always use `packed_float3` for vector
 // fields in these structs.
 
-use crate::PayloadLocator;
+use crate::{AssetId, PayloadLocator};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -140,6 +140,9 @@ impl StageSource {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Shader {
+    /// Asset identity; injected via `inject_name`. Not part of `args`.
+    #[serde(skip)]
+    pub asset_id: AssetId,
     /// The vertex stage. Required.
     pub vertex: StageSource,
     /// The fragment stage. Required.
@@ -167,6 +170,7 @@ impl Shader {
 impl Default for Shader {
     fn default() -> Self {
         Self {
+            asset_id: AssetId::default(),
             vertex: StageSource::per_platform([
                 ("metal", "default.metal"),
                 ("hlsl", "default_vert.hlsl"),

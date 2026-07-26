@@ -15,6 +15,9 @@ pub type Member = (u8, u32);
 
 pub const CHANNEL_TEXTURE: u8 = 0;
 pub const CHANNEL_MESH: u8 = 1;
+// A shader bucket's render pipeline, built on pin and released on unload. The
+// item id is the bucket (the material's `ShaderHandle` value).
+pub const CHANNEL_SHADER: u8 = 2;
 
 // Load state of one scene's streamed content, derived from pins + residency.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

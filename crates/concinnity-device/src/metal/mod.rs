@@ -28,6 +28,7 @@ mod parallel_encoder;
 mod particle;
 mod pass_timing;
 mod pipeline;
+mod pipeline_archive;
 mod planar;
 mod post;
 mod probe;
@@ -45,6 +46,7 @@ mod transient_pool;
 mod transparent;
 mod water;
 mod window_delegate;
+mod world_shaders;
 
 // GPU-free host-side pieces live in the concinnity-render crate (compiled
 // unconditionally so their unit tests count toward coverage); re-exported here

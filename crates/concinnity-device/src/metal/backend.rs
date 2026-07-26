@@ -116,9 +116,22 @@ impl RenderBackend for MtlContext {
         fn add_emitter(&mut self, record: crate::gfx::particles::ParticleEmitterRecord) -> Result<usize, String>;
         fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
+        fn evict_world_shader(&mut self, bucket: u32);
     }
 
     // Methods that are NOT a 1:1 forward; written out by hand.
+
+    // The inherent takes the two stage slices it needs rather than the whole
+    // payload struct: a bucket pipeline pairs `vertex_main` with
+    // `fragment_main_bindless` and has no instanced or shadow variant.
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+    ) -> Result<(), String> {
+        debug_assert_main_thread("install_world_shader");
+        MtlContext::install_world_shader(self, bucket, shader.vert, shader.frag)
+    }
 
     // Trait method returns unit; the inherent returns Result (buffer
     // allocation can fail), so the forwarder logs instead of propagating.

@@ -480,8 +480,10 @@ impl MtlContext {
             };
             for (b, icb) in icbs.iter().enumerate() {
                 if b > 0 {
-                    let Some(pso) = self.world_pipelines.get(b - 1) else {
-                        debug_assert!(false, "shader bucket {b} has no pipeline");
+                    // A bucket whose Shader is not resident yet (its scene has
+                    // not pinned) has no pipeline: skip it until warmup builds
+                    // one rather than drawing it with the wrong program.
+                    let Some(pso) = self.world_pipeline(b) else {
                         continue;
                     };
                     enc.setRenderPipelineState(pso);

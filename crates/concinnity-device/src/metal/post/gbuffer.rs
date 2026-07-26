@@ -540,8 +540,13 @@ impl MtlContext {
             // The pre-pass writes normals/depth/velocity under its single
             // engine pipeline, so every bucket's ICB executes with the same
             // PSO; together the buckets cover the whole record range exactly
-            // once.
-            for icb in &self.cull.icbs {
+            // once. A bucket the main pass skips (Shader not resident) is
+            // skipped here too, so depth and velocity never carry geometry the
+            // colour pass leaves out.
+            for (b, icb) in self.cull.icbs.iter().enumerate() {
+                if !self.world_shader_resident(b) {
+                    continue;
+                }
                 // SAFETY: [0, base) spans the static + instance + chunk command
                 // slots; every reused main ICB is sized for cull_count() >= base.
                 unsafe {

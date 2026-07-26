@@ -91,10 +91,38 @@ struct TextureTableDecode {
 // slice, and the optional instanced-vertex stage), whether the main stage is the
 // engine's built-in default, the payload locators kept for the blob-release
 // step, and the dev-only source map the hot-reload watcher subscribes to.
+// All three stages empty marks a bucket init deferred: the backend leaves its
+// pipeline unbuilt until the streaming pump warms it.
+#[derive(Default)]
 struct DecodedShaderBytes {
     vert: Vec<u8>,
     frag: Vec<u8>,
     vert_instanced: Vec<u8>,
+}
+
+// Where the streaming pump re-reads a deferred bucket's stage container: the
+// blob's byte range when the world is disk-backed (`cn run`, so the bytes
+// never stay RAM-resident), else a copy of the in-memory payload.
+fn deferred_shader_source(
+    ctx: &mut PipelineContext,
+    locator: &crate::ecs::PayloadLocator,
+    blob_disk_backed: bool,
+) -> Result<crate::gfx::streaming::shader::ShaderPayloadSource, String> {
+    use crate::gfx::streaming::shader::ShaderPayloadSource;
+    if !blob_disk_backed {
+        let bytes = ctx
+            .read_payload(locator)
+            .map_err(|e| format!("{e:?}"))?
+            .to_vec();
+        return Ok(ShaderPayloadSource::Bytes(bytes));
+    }
+    let path = crate::blob::blob_path(locator.blob_index);
+    let start = crate::blob::payload_section_start(&path).map_err(|e| format!("{e:?}"))?;
+    Ok(ShaderPayloadSource::Disk {
+        path,
+        offset: start + locator.offset,
+        len: locator.len,
+    })
 }
 
 struct DecodedShaders {
@@ -1465,7 +1493,11 @@ impl GraphicsSystem {
     // watcher can recompile + rebuild its pipelines on a shader save. Returns
     // None (self.failed set) if no Shader exists or any payload is missing or
     // unreadable.
-    fn decode_shaders(&mut self, ctx: &mut PipelineContext) -> Option<DecodedShaders> {
+    fn decode_shaders(
+        &mut self,
+        ctx: &mut PipelineContext,
+        streaming: bool,
+    ) -> Option<DecodedShaders> {
         let world_shaders = ctx.drain::<Shader>();
         if world_shaders.is_empty() {
             tracing::error!("GraphicsSystem: no Shader found -- add one to world.jsonl");
@@ -1473,9 +1505,27 @@ impl GraphicsSystem {
             return None;
         }
 
+        // Buckets a non-start scene exclusively owns skip their decode and
+        // pipeline build here; the streaming pump warms them when that scene
+        // pins. The backend sees empty stage bytes for them and leaves the
+        // bucket's pipeline unbuilt.
+        let shader_ids: Vec<AssetId> = world_shaders.iter().map(|s| s.asset_id).collect();
+        self.deferred_shader_scenes =
+            super::streaming::deferred_shader_buckets(ctx, streaming, &shader_ids)
+                .into_iter()
+                .map(|(bucket, scene)| (bucket as u32, scene))
+                .collect();
+        let deferred_buckets: std::collections::HashSet<u32> = self
+            .deferred_shader_scenes
+            .iter()
+            .map(|&(bucket, _)| bucket)
+            .collect();
+        let blob_disk_backed = ctx.blob.disk_backed();
+        let mut deferred_sources = Vec::new();
+
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
-        for shader in &world_shaders {
+        for (bucket, shader) in world_shaders.iter().enumerate() {
             let locator = match &shader.locator {
                 Some(l) => l.clone(),
                 None => {
@@ -1484,6 +1534,28 @@ impl GraphicsSystem {
                     return None;
                 }
             };
+            if deferred_buckets.contains(&(bucket as u32)) {
+                match deferred_shader_source(ctx, &locator, blob_disk_backed) {
+                    Ok(source) => {
+                        deferred_sources.push((bucket as u32, source));
+                        locators.push(locator);
+                        shaders.push(DecodedShaderBytes::default());
+                        continue;
+                    }
+                    Err(e) => {
+                        // Fall through to the eager decode: a bucket that
+                        // cannot be deferred still has to render.
+                        tracing::warn!(
+                            "GraphicsSystem: shader bucket {} cannot be deferred ({}); \
+                             building it at init instead",
+                            bucket,
+                            e
+                        );
+                        self.deferred_shader_scenes
+                            .retain(|&(b, _)| b != bucket as u32);
+                    }
+                }
+            }
             // Read the stage container before the blob is released -- it may
             // share one blob with the mesh/texture payloads read elsewhere in
             // init.
@@ -1512,6 +1584,16 @@ impl GraphicsSystem {
                 frag: stage_bytes(ShaderKind::Fragment),
                 vert_instanced: stage_bytes(ShaderKind::VertexInstanced),
             });
+        }
+
+        if !deferred_sources.is_empty() {
+            tracing::info!(
+                "GraphicsSystem: deferred {} scene-owned shader pipeline(s) past init",
+                deferred_sources.len()
+            );
+            self.shader_warmup = Some(crate::gfx::streaming::shader::ShaderWarmup::new(
+                deferred_sources,
+            ));
         }
 
         // Capture the default shader's declared stage source paths so the
@@ -2064,7 +2146,7 @@ impl GraphicsSystem {
             shaders: decoded_shaders,
             main_is_engine_default,
             shadow_bytes,
-        } = match self.decode_shaders(ctx) {
+        } = match self.decode_shaders(ctx, streaming_config.is_some()) {
             Some(decoded) => decoded,
             None => return,
         };
@@ -3109,6 +3191,7 @@ impl GraphicsSystem {
             mesh_streamer: self.mesh_streamer.take(),
             mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
             chunk_stream: self.chunk_stream.take(),
+            shader_warmup: self.shader_warmup.take(),
             scene_residency,
             frame_count: 0,
             frames_in_flight: self.frames_in_flight,

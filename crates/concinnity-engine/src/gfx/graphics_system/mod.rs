@@ -172,6 +172,12 @@ pub struct GraphicsSystem {
     // and evictions are applied to the right draw. Empty when not streaming.
     mesh_stream_draw_indices: Vec<usize>,
     chunk_stream: Option<crate::gfx::streaming_system::ChunkStreamState>,
+    // Shader buckets whose pipeline init deferred, with the payload source the
+    // pump reads when their scene pins. Init scratch like the pools above.
+    shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
+    // Which scene exclusively owns each deferred bucket, so scene residency
+    // can claim it as a member.
+    deferred_shader_scenes: Vec<(u32, AssetId)>,
     // Source catalogues captured at init for asset hot-reload, handed off to
     // the `cn debug` binary's reload machinery (which owns the watcher + the
     // live `AssetHotReloadState`). `Some` only under `cn debug` with at least
@@ -420,6 +426,8 @@ impl GraphicsSystem {
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,
+            shader_warmup: None,
+            deferred_shader_scenes: Vec::new(),
             pending_hot_reload_sources: None,
             world_reload: None,
             last_fog_settings: None,
