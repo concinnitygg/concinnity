@@ -506,6 +506,10 @@ pub(super) fn reload_shader_stages(
                 }
             ),
             kind: entry.kind.compile_kind().to_string(),
+            // Hot reload only ever recompiles the world default Shader's
+            // captured stages; a world whose shader set forces the bindless
+            // entry point had that checked at `cn build`.
+            required_entry: None,
         };
         match concinnity_cook::shader::compile_shader(compile_args) {
             Ok(bytes) => {

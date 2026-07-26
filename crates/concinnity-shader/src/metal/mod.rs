@@ -159,6 +159,7 @@ mod tests {
             source_path: "user_frag.metal".to_string(),
             asset_name: asset_name.to_string(),
             kind: "fragment".to_string(),
+            ..Default::default()
         }
     }
 

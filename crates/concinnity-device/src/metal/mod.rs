@@ -60,4 +60,6 @@ pub use context::{MtlContext, set_embedded_pump_events, set_preview_view};
 pub(crate) use gpu_profile::probe_gpu_profile;
 // Build-time Metal shader-layout reflection, driven by the cook pipeline through
 // the thin `ShaderBuildValidator` bridge in concinnity-editor.
-pub use shader_reflect::{ShaderLayoutIssue, metal_device_available, validate_metal_shader_layout};
+pub use shader_reflect::{
+    ShaderLayoutIssue, metal_device_available, metal_source_defines, validate_metal_shader_layout,
+};

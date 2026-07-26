@@ -1321,7 +1321,8 @@ impl DrawArgsFlags {
 
 // Upper bound on world shader buckets a cull dispatch can route between (the
 // ICB argument-buffer array length in the cull shaders). Mirrored by
-// MAX_SHADER_BUCKETS in cull.metal.
+// MAX_SHADER_BUCKETS in cull.metal, enforced by the world-shape check, and
+// quoted as a number in the Shader asset docs.
 pub const MAX_SHADER_BUCKETS: usize = 8;
 
 // Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the

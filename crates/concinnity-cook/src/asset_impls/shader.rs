@@ -38,6 +38,25 @@ const STAGES: &[(&str, ShaderKind)] = &[
     ("vertex_instanced", ShaderKind::VertexInstanced),
 ];
 
+// The entry point a stage must define given the world it belongs to. A world
+// declaring more than one Shader renders every bucket through the GPU-driven
+// bindless main pass, so each fragment stage needs `fragment_main_bindless`;
+// a single-Shader world may still use the per-draw path and needs nothing.
+fn required_entry(kind: ShaderKind, ctx: &BuildCtx<'_>) -> Option<String> {
+    if kind != ShaderKind::Fragment || !multi_shader_world(ctx) {
+        return None;
+    }
+    Some("fragment_main_bindless".to_string())
+}
+
+fn multi_shader_world(ctx: &BuildCtx<'_>) -> bool {
+    ctx.all_assets
+        .iter()
+        .filter(|a| a.asset_type.to_lowercase().replace('_', "") == "shader")
+        .count()
+        > 1
+}
+
 // Compile one declared stage to backend bytecode. `None` when the stage
 // resolves no source for this platform (the Vulkan inline-GLSL carve-out).
 fn compile_stage(
@@ -82,6 +101,7 @@ fn compile_stage(
         source_path,
         asset_name: ctx.name.to_string(),
         kind: kind.compile_kind().to_string(),
+        required_entry: required_entry(kind, ctx),
     };
     crate::shader::compile_shader(compile_args)
         .map(Some)

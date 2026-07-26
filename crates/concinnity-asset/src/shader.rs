@@ -102,6 +102,42 @@ impl StageSource {
 ///   "vertex":{"source":"my.metal"},"fragment":{"source":"my.metal"}}}
 /// ```
 ///
+/// # More than one Shader
+///
+/// The first declared Shader is the world's default: everything renders with it
+/// unless a [Material](#material) names another one through its `shader` field.
+/// A world may declare up to 8 Shaders in total.
+///
+/// ```jsonl
+/// {"name":"scene_shader","type":"Shader","args":{
+///   "vertex":{"source":"default.metal"},"fragment":{"source":"default.metal"}}}
+/// {"name":"water_shader","type":"Shader","args":{
+///   "vertex":{"source":"water.metal"},"fragment":{"source":"water.metal"}}}
+/// {"name":"pond_mat","type":"Material","args":{"shader":"water_shader"}}
+/// ```
+///
+/// Three rules come with the second Shader, all enforced at build time:
+///
+/// - **Every fragment stage must define `fragment_main_bindless`.** Multi-Shader
+///   worlds render through the GPU-driven bindless path, which is the only path
+///   that can switch programs per draw. A single-Shader world has no such
+///   requirement and may define just `fragment_main`.
+/// - **Instanced, skinned, and voxel-chunk draws always use the world default.**
+///   A Material naming a Shader cannot be used by an
+///   [InstancedProp](#instancedprop), a [SkinnedMesh](#skinnedmesh), or a
+///   [VoxelWorld](#voxelworld); give those a Material without one.
+/// - **At most 8 Shaders**, the default included.
+///
+/// Planar reflections are the one case with no build-time signal: a surface
+/// reflected in a mirror is drawn with the world default Shader regardless of
+/// its Material.
+///
+/// A Shader referenced only by materials belonging to one [Scene](#scene) is
+/// owned by that scene: its pipeline is built when the scene loads (behind the
+/// loading screen, alongside that scene's textures and meshes) and released when
+/// the scene unloads. A Shader used across scenes, or by the world default,
+/// loads at startup.
+///
 /// **Custom shader vertex layout**: the engine always supplies vertices with 5
 /// attributes at a fixed 56-byte stride. Any custom `.metal` shader **must** declare
 /// `struct Vertex` exactly as shown below: wrong attribute indices cause tangent
