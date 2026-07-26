@@ -126,6 +126,10 @@ pub struct MtlContext {
     // (render requirements derived `scene == false`): the Main pass then
     // encodes as a bare clear and every geometry sub-path early-outs.
     pub(super) pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Pipelines for the material-referenced world shaders, indexed by
+    // `shader_bucket - 1` (bucket 0 is `pipeline_state`). Each executes its
+    // bucket's ICB in the main pass; empty for single-shader worlds.
+    pub(super) world_pipelines: Vec<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // True when the static main-pass pipeline runs the bindless fragment
     // shader (`fragment_main_bindless`). The static draw loop then reads each
     // object from the per-frame `GpuObjectData` buffer and a bindless texture
@@ -813,15 +817,19 @@ impl MtlContext {
             Some(e) => e.clone(),
             None => return Ok(()),
         };
-        if self.cull.icb.is_some() && count <= self.cull.icb_capacity {
+        if !self.cull.icbs.is_empty() && count <= self.cull.icb_capacity {
             return Ok(());
         }
         let new_cap = count.next_power_of_two().max(64);
+        let bucket_count = self.cull.bucket_count.max(1);
 
-        let icb = self.build_cull_icb(new_cap)?;
+        let mut icbs = Vec::with_capacity(bucket_count);
+        for _ in 0..bucket_count {
+            icbs.push(self.build_cull_icb(new_cap)?);
+        }
 
-        // The argument buffer is a fixed-size handle to the ICB; create it
-        // once, then re-encode it to point at each freshly built ICB.
+        // The argument buffer is a fixed-size handle to the ICB array; create
+        // it once, then re-encode it to point at each freshly built set.
         if self.cull.icb_arg_buffer.is_none() {
             let len = arg_encoder.encodedLength().max(16);
             let buf = self
@@ -835,12 +843,15 @@ impl MtlContext {
             .icb_arg_buffer
             .as_ref()
             .expect("ICB argument buffer was just ensured");
-        // SAFETY: the argument buffer was sized to `encodedLength()`, and the
-        // ICB is encoded at slot 0: the single `[[id(0)]]` member of the
-        // kernel's `ICBContainer` argument-buffer struct.
+        // SAFETY: the argument buffer was sized to `encodedLength()`, and each
+        // bucket's ICB is encoded at its bucket index within the `icbs`
+        // `[[id(0)]]` array of the kernel's `ICBContainer` struct. Entries
+        // past `bucket_count` stay null; the kernel never touches them.
         unsafe {
             arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0);
-            arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
+            for (b, icb) in icbs.iter().enumerate() {
+                arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
+            }
         }
 
         // Per-object status buffer: one u32 per command slot, private storage
@@ -865,7 +876,10 @@ impl MtlContext {
                     );
                 }
             };
-            let icb2 = self.build_cull_icb(new_cap)?;
+            let mut icbs_2 = Vec::with_capacity(bucket_count);
+            for _ in 0..bucket_count {
+                icbs_2.push(self.build_cull_icb(new_cap)?);
+            }
             if self.cull.icb_2_arg_buffer.is_none() {
                 let len = arg_encoder2.encodedLength().max(16);
                 let buf = self
@@ -879,16 +893,18 @@ impl MtlContext {
                 .icb_2_arg_buffer
                 .as_ref()
                 .expect("phase-2 ICB argument buffer was just ensured");
-            // SAFETY: same layout as the phase-1 encoder: the phase-2 kernel's
-            // ICBContainer argument buffer is a single `[[id(0)]]` member.
+            // SAFETY: same layout as the phase-1 encoder: each bucket's ICB at
+            // its index within the `icbs` `[[id(0)]]` array.
             unsafe {
                 arg_encoder2.setArgumentBuffer_offset(Some(arg_buf2), 0);
-                arg_encoder2.setIndirectCommandBuffer_atIndex(Some(&icb2), 0);
+                for (b, icb) in icbs_2.iter().enumerate() {
+                    arg_encoder2.setIndirectCommandBuffer_atIndex(Some(icb), b);
+                }
             }
-            self.cull.icb_2 = Some(icb2);
+            self.cull.icbs_2 = icbs_2;
         }
 
-        self.cull.icb = Some(icb);
+        self.cull.icbs = icbs;
         self.cull.icb_capacity = new_cap;
         Ok(())
     }
@@ -1161,6 +1177,7 @@ impl MtlContext {
             texture_slot: src.texture_slot,
             normal_map_slot: src.normal_map_slot,
             material: src.material,
+            shader_bucket: src.shader_bucket,
             visible: true,
             resident: true,
             bb_min: [f32::NAN; 3],

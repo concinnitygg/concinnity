@@ -1310,13 +1310,13 @@ mod tests {
                 n_skinned: 0,
                 n_chunk_max: 0,
             },
-            shaders: ShaderBytes {
+            shaders: vec![ShaderBytes {
                 vert: &[],
                 frag: &[],
                 main_is_engine_default: false,
                 shadow: &[],
                 vert_instanced: &[],
-            },
+            }],
             media: MediaPayloads {
                 textures: &[],
                 text_atlases: Vec::new(),

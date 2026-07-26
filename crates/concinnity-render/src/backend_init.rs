@@ -154,7 +154,10 @@ pub struct BackendInit<'a> {
     // True only under `cn debug`: disk-first shader resolution + watcher.
     pub hot_reload: bool,
     pub scene: SceneData<'a>,
-    pub shaders: ShaderBytes<'a>,
+    // One entry per world Shader, indexed by the dense ShaderHandle value a
+    // DrawObject's `shader_bucket` carries; entry 0 is the world default
+    // program. Never empty for a rendering world.
+    pub shaders: Vec<ShaderBytes<'a>>,
     pub media: MediaPayloads<'a>,
     pub light_uniforms: LightUniforms,
     // Every local light (point + spot + area) for the clustered forward pass,

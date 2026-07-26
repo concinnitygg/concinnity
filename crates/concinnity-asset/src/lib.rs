@@ -25,9 +25,10 @@ mod resolver;
 
 pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
-    MaterialHandle, MeshHandle, SkinnedMeshHandle, TextureHandle, de_audio_clip_handle_vec,
-    de_opt_audio_clip_handle, de_opt_font_handle, de_opt_material_handle, de_opt_mesh_handle,
-    de_opt_skinned_mesh_handle, de_opt_texture_handle, de_texture_handle,
+    MaterialHandle, MeshHandle, ShaderHandle, SkinnedMeshHandle, TextureHandle,
+    de_audio_clip_handle_vec, de_opt_audio_clip_handle, de_opt_font_handle, de_opt_material_handle,
+    de_opt_mesh_handle, de_opt_shader_handle, de_opt_skinned_mesh_handle, de_opt_texture_handle,
+    de_texture_handle,
 };
 pub use id::{AssetId, de_opt_asset_ref};
 pub use locator::PayloadLocator;
@@ -35,7 +36,7 @@ pub use reference::{AssetRef, de_opt_asset_ref_typed};
 pub use resolver::{
     HandleResolveFn, ResolveFn, set_audio_clip_handle_resolver, set_font_handle_resolver,
     set_material_handle_resolver, set_mesh_handle_resolver, set_name_resolver,
-    set_skinned_mesh_handle_resolver, set_texture_handle_resolver,
+    set_shader_handle_resolver, set_skinned_mesh_handle_resolver, set_texture_handle_resolver,
 };
 
 // Asset data schema: one module per asset type, mirroring the impl-side layout

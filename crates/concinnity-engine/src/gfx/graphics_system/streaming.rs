@@ -457,14 +457,15 @@ impl GraphicsSystem {
             .collect();
 
         // Resolve the shared material to texture-pool slots + scalars.
-        let (texture_slot, normal_map_slot, material) = vw
-            .material
-            .and_then(|id| material_map.get(&id).copied())
-            .unwrap_or((
+        let mat_entry = vw.material.and_then(|id| material_map.get(&id).copied());
+        let (texture_slot, normal_map_slot, material) = match mat_entry {
+            Some(entry) => (entry.albedo_slot, entry.normal_map_slot, entry.uniforms),
+            None => (
                 0,
                 crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
                 crate::gfx::render_types::MaterialUniforms::DEFAULT,
-            ));
+            ),
+        };
 
         let chunk_blocks = vw.chunk_blocks();
         let block_size = vw.block_size();
@@ -1084,7 +1085,15 @@ mod tests {
             ),
             (ground, solid_block()),
         ]);
-        let material_map = std::collections::HashMap::from([(handle, (5usize, 6usize, material))]);
+        let material_map = std::collections::HashMap::from([(
+            handle,
+            crate::gfx::draw_list::MaterialEntry {
+                albedo_slot: 5,
+                normal_map_slot: 6,
+                uniforms: material,
+                shader_bucket: 0,
+            },
+        )]);
 
         gs.setup_voxel_world_streaming(
             Some(VoxelWorld {

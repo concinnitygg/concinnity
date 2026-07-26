@@ -275,6 +275,9 @@ pub fn build_compiled(
     // second pass in the fixed block order the runtime enumerates mesh sources
     // rather than through the per-type classifier above.
     crate::resource_handles::assign_mesh_source_handles(&mut resource_handles, &assets);
+    // Shader handles walk the same list, so a Material's `shader` reference
+    // bakes to the position the runtime encounters that Shader at drain time.
+    crate::resource_handles::assign_shader_handles(&mut resource_handles, &assets);
     // Install a clone; the original is kept to look up each resource asset's
     // handle while partitioning below.
     crate::resource_handles::install_resource_handles(resource_handles.clone());

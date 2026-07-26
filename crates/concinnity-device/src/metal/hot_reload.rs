@@ -395,10 +395,10 @@ impl MtlContext {
             // re-binds to the new arg encoders the new cull kernels produced.
             // The status buffer + phase-2 ICB are rebuilt by the same
             // `ensure_icb_capacity` pass that rebuilds the phase-1 ICB.
-            self.cull.icb = None;
+            self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icb_2 = None;
+            self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
         }
@@ -607,10 +607,10 @@ impl MtlContext {
             // Force a fresh ICB on the next frame so its argument-buffer encoding
             // re-binds to the new encoder. Matches the `cull` swap in
             // `reload_shaders`; the phase-2 ICB + status buffer rebuild alongside.
-            self.cull.icb = None;
+            self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icb_2 = None;
+            self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
         }

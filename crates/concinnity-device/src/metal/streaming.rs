@@ -126,6 +126,8 @@ impl MtlContext {
             texture_slot,
             normal_map_slot,
             material,
+            // Streamed chunks always render under the world default shader.
+            shader_bucket: 0,
             visible: true,
             resident: true,
             // Non-cullable: degenerate AABB disables frustum/distance culling.

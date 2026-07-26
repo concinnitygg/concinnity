@@ -91,14 +91,21 @@ struct TextureTableDecode {
 // slice, and the optional instanced-vertex stage), whether the main stage is the
 // engine's built-in default, the payload locators kept for the blob-release
 // step, and the dev-only source map the hot-reload watcher subscribes to.
+struct DecodedShaderBytes {
+    vert: Vec<u8>,
+    frag: Vec<u8>,
+    vert_instanced: Vec<u8>,
+}
+
 struct DecodedShaders {
-    locator: crate::ecs::PayloadLocator,
+    locators: Vec<crate::ecs::PayloadLocator>,
     source_map: super::hot_reload_sources::ShaderStageSourceMap,
-    vert_bytes: Vec<u8>,
-    frag_bytes: Vec<u8>,
+    // One entry per world Shader, in drain order == cook handle order, so a
+    // baked ShaderHandle value indexes this directly. Entry 0 is the world
+    // default pipeline's program.
+    shaders: Vec<DecodedShaderBytes>,
     main_is_engine_default: bool,
     shadow_bytes: Vec<u8>,
-    vert_instanced_bytes: Vec<u8>,
 }
 
 // The text/sprite atlas pool from `decode_text_atlases`: RGBA atlases (font
@@ -1022,24 +1029,28 @@ impl GraphicsSystem {
             lod_alternates: lod_alts,
         } in skinned_geometry
         {
-            let (texture_slot, normal_map_slot, material) =
-                match crate::gfx::draw_list::resolve_material_slots(
-                    sm.material,
-                    sm.texture,
-                    material_map,
-                    texture_count,
-                ) {
-                    Ok(entry) => entry,
-                    Err(mat_id) => {
-                        tracing::error!(
-                            "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                            name_id,
-                            mat_id.index()
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                };
+            let mat_entry = match crate::gfx::draw_list::resolve_material_slots(
+                sm.material,
+                sm.texture,
+                material_map,
+                texture_count,
+            ) {
+                Ok(entry) => entry,
+                Err(mat_id) => {
+                    tracing::error!(
+                        "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
+                        name_id,
+                        mat_id.index()
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
+            let (texture_slot, normal_map_slot, material) = (
+                mat_entry.albedo_slot,
+                mat_entry.normal_map_slot,
+                mat_entry.uniforms,
+            );
 
             let base = skinned_vertices.len() as u16;
             let index_offset = skinned_indices.len();
@@ -1433,45 +1444,84 @@ impl GraphicsSystem {
             };
             material_map.insert(
                 crate::ecs::MaterialHandle(material_handle as u32),
-                (albedo_slot, normal_map_slot, uniforms),
+                MaterialEntry {
+                    albedo_slot,
+                    normal_map_slot,
+                    uniforms,
+                    shader_bucket: mat.shader.map_or(0, |h| h.0),
+                },
             );
         }
         Some(material_map)
     }
 
-    // Drain the world's Shader components, read the first one's compiled
-    // stage container, and split it into the per-stage byte slices the
-    // backend consumes. The first Shader drives the world pipeline (mirroring
-    // how the first Scene is the start scene). Under `cn debug` also records
-    // each stage's resolved on-disk source path so the asset hot-reload
-    // watcher can recompile + rebuild pipelines on a shader save. Returns
-    // None (self.failed set) if no Shader exists or its payload is missing or
+    // Drain the world's Shader components, read every compiled stage
+    // container, and split each into the per-stage byte sets the backend's
+    // pipeline table consumes. Drain order matches cook's shader handle
+    // assignment (both walk the declaration-ordered asset list), so a baked
+    // `ShaderHandle` indexes the returned list directly; entry 0 drives the
+    // world default pipeline. Under `cn debug` also records the default
+    // shader's resolved on-disk stage source paths so the asset hot-reload
+    // watcher can recompile + rebuild its pipelines on a shader save. Returns
+    // None (self.failed set) if no Shader exists or any payload is missing or
     // unreadable.
     fn decode_shaders(&mut self, ctx: &mut PipelineContext) -> Option<DecodedShaders> {
-        let mut shaders = ctx.drain::<Shader>();
-        if shaders.is_empty() {
+        let world_shaders = ctx.drain::<Shader>();
+        if world_shaders.is_empty() {
             tracing::error!("GraphicsSystem: no Shader found -- add one to world.jsonl");
             self.failed = true;
             return None;
         }
-        let shader = shaders.remove(0);
 
-        let locator = match &shader.locator {
-            Some(l) => l.clone(),
-            None => {
-                tracing::error!("GraphicsSystem: Shader has no compiled payload");
-                self.failed = true;
-                return None;
-            }
-        };
+        let mut locators = Vec::with_capacity(world_shaders.len());
+        let mut shaders = Vec::with_capacity(world_shaders.len());
+        for shader in &world_shaders {
+            let locator = match &shader.locator {
+                Some(l) => l.clone(),
+                None => {
+                    tracing::error!("GraphicsSystem: Shader has no compiled payload");
+                    self.failed = true;
+                    return None;
+                }
+            };
+            // Read the stage container before the blob is released -- it may
+            // share one blob with the mesh/texture payloads read elsewhere in
+            // init.
+            let payload = match ctx.read_payload(&locator) {
+                Ok(b) => match crate::assets::ShaderPayload::decode(b) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
+                        self.failed = true;
+                        return None;
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: failed to read shader payload: {:?}", e);
+                    self.failed = true;
+                    return None;
+                }
+            };
+            // A stage the cook compiled nothing for (the Vulkan inline-GLSL
+            // carve-out) reads as empty bytes; the backend falls back per stage.
+            let stage_bytes =
+                |kind: ShaderKind| payload.stage(kind).map(<[u8]>::to_vec).unwrap_or_default();
+            locators.push(locator);
+            shaders.push(DecodedShaderBytes {
+                vert: stage_bytes(ShaderKind::Vertex),
+                frag: stage_bytes(ShaderKind::Fragment),
+                vert_instanced: stage_bytes(ShaderKind::VertexInstanced),
+            });
+        }
 
-        // Capture each declared stage's resolved on-disk source path so the
-        // asset hot-reload watcher can recompile + rebuild pipelines on a
+        // Capture the default shader's declared stage source paths so the
+        // asset hot-reload watcher can recompile + rebuild its pipelines on a
         // `.metal` / `.hlsl` / `.glsl` save. Stages whose current-platform
         // source is the embedded GLSL fallback (or whose declaration uses a
         // non-platform-compatible extension) carry no file to watch and are
         // skipped; the inline GLSL path keeps rendering at whatever was baked
-        // in.
+        // in. Material-referenced shaders past entry 0 reload via `cn build`.
+        let default_shader = &world_shaders[0];
         let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
         if crate::app::dev_flags::enabled() {
             let mut capture = |stage_opt: Option<&StageSource>, kind: ShaderKind| {
@@ -1498,38 +1548,13 @@ impl GraphicsSystem {
                     },
                 );
             };
-            capture(Some(&shader.vertex), ShaderKind::Vertex);
-            capture(Some(&shader.fragment), ShaderKind::Fragment);
+            capture(Some(&default_shader.vertex), ShaderKind::Vertex);
+            capture(Some(&default_shader.fragment), ShaderKind::Fragment);
             capture(
-                shader.vertex_instanced.as_ref(),
+                default_shader.vertex_instanced.as_ref(),
                 ShaderKind::VertexInstanced,
             );
         }
-
-        // Read the stage container before the blob is released -- it may share
-        // one blob with the mesh/texture payloads read elsewhere in init.
-        let payload = match ctx.read_payload(&locator) {
-            Ok(b) => match crate::assets::ShaderPayload::decode(b) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
-                    self.failed = true;
-                    return None;
-                }
-            },
-            Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read shader payload: {:?}", e);
-                self.failed = true;
-                return None;
-            }
-        };
-        // A stage the cook compiled nothing for (the Vulkan inline-GLSL
-        // carve-out) reads as empty bytes; the backend falls back per stage.
-        let stage_bytes =
-            |kind: ShaderKind| payload.stage(kind).map(<[u8]>::to_vec).unwrap_or_default();
-        let vert_bytes = stage_bytes(ShaderKind::Vertex);
-        let frag_bytes = stage_bytes(ShaderKind::Fragment);
-        let vert_instanced_bytes = stage_bytes(ShaderKind::VertexInstanced);
 
         // Whether this world's main shader is the engine's built-in default
         // rather than an authored override. Reported to the backend, which
@@ -1542,8 +1567,9 @@ impl GraphicsSystem {
                 Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
             )
         };
-        let main_is_engine_default = is_builtin_main(shader.vertex.current_platform_source())
-            && is_builtin_main(shader.fragment.current_platform_source());
+        let main_is_engine_default =
+            is_builtin_main(default_shader.vertex.current_platform_source())
+                && is_builtin_main(default_shader.fragment.current_platform_source());
         // The shadow shader is engine-internal now (compiled from
         // `shadow_map.metal`), so there is no per-world shadow payload. The
         // DX / Vulkan constructors still take a shadow byte slice pending their
@@ -1551,13 +1577,11 @@ impl GraphicsSystem {
         let shadow_bytes: Vec<u8> = Vec::new();
 
         Some(DecodedShaders {
-            locator,
+            locators,
             source_map: shader_stage_source_map,
-            vert_bytes,
-            frag_bytes,
+            shaders,
             main_is_engine_default,
             shadow_bytes,
-            vert_instanced_bytes,
         })
     }
 
@@ -2035,17 +2059,19 @@ impl GraphicsSystem {
         };
 
         let DecodedShaders {
-            locator: shader_locator,
+            locators: shader_locators,
             source_map: shader_stage_source_map,
-            vert_bytes,
-            frag_bytes,
+            shaders: decoded_shaders,
             main_is_engine_default,
             shadow_bytes,
-            vert_instanced_bytes,
         } = match self.decode_shaders(ctx) {
             Some(decoded) => decoded,
             None => return,
         };
+        // The world default program (ShaderHandle 0): skinned upload and the
+        // DX / Vulkan single-pipeline paths consume these directly.
+        let vert_bytes = decoded_shaders[0].vert.clone();
+        let frag_bytes = decoded_shaders[0].frag.clone();
 
         // Read the shared texture pool + the material table into the maps the
         // draw list resolves against. `capture_sources` (cn debug) also gathers
@@ -2208,7 +2234,9 @@ impl GraphicsSystem {
         // payload, so those blobs must also survive this sweep.
         let terrain_blobs = crate::assets::procedural_mesh::heightfield_blob_indices(ctx);
         let mut released = std::collections::HashSet::new();
-        for idx in std::iter::once(shader_locator.blob_index)
+        for idx in shader_locators
+            .iter()
+            .map(|l| l.blob_index)
             .chain(texture_locators.iter().map(|l| l.blob_index))
             .chain(room_blob_indices)
             .chain(font_blob_indices)
@@ -2688,13 +2716,20 @@ impl GraphicsSystem {
                 n_skinned: skinned_draw_objects.len(),
                 n_chunk_max,
             },
-            shaders: ShaderBytes {
-                vert: &vert_bytes,
-                frag: &frag_bytes,
-                main_is_engine_default,
-                shadow: &shadow_bytes,
-                vert_instanced: &vert_instanced_bytes,
-            },
+            // One entry per world Shader, indexed by ShaderHandle value;
+            // entry 0 is the world default program. `main_is_engine_default`
+            // is a property of the default program alone.
+            shaders: decoded_shaders
+                .iter()
+                .enumerate()
+                .map(|(i, s)| ShaderBytes {
+                    vert: &s.vert,
+                    frag: &s.frag,
+                    main_is_engine_default: i == 0 && main_is_engine_default,
+                    shadow: &shadow_bytes,
+                    vert_instanced: &s.vert_instanced,
+                })
+                .collect(),
             media: MediaPayloads {
                 textures: &texture_data,
                 text_atlases: text_atlas_data,
@@ -3196,6 +3231,7 @@ mod tests {
             index_offset,
             index_count,
             base_vertex: 0,
+            shader_bucket: 0,
             model: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],

@@ -1,7 +1,6 @@
 // Surface-material schema.
 
-use crate::{AssetId, TextureHandle, de_opt_texture_handle};
-use alloc::string::String;
+use crate::{AssetId, ShaderHandle, TextureHandle, de_opt_shader_handle, de_opt_texture_handle};
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
 /// lit and shaded.
@@ -119,7 +118,8 @@ pub struct Material {
     /// from a material ties that shader's lifetime to the material's: a shader
     /// referenced only by scene-exclusive materials loads and unloads with the
     /// scene.
-    pub shader: Option<String>,
+    #[serde(deserialize_with = "de_opt_shader_handle")]
+    pub shader: Option<ShaderHandle>,
 }
 
 impl Default for Material {

@@ -163,6 +163,7 @@ mod tests {
             index_offset,
             index_count,
             base_vertex,
+            shader_bucket: 0,
             model,
             texture_slot: 0,
             normal_map_slot: NO_NORMAL_MAP_SLOT,

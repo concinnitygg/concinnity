@@ -492,14 +492,16 @@ impl MtlContext {
             deformed_current,
             deformed_prev,
         } = gpu;
-        let (Some(pipeline), Some(icb), Some(object_buffer), Some(prev_models)) = (
+        let (Some(pipeline), Some(object_buffer), Some(prev_models)) = (
             self.gbuffer.bindless_pipeline.as_ref(),
-            self.cull.icb.as_ref(),
             object_buffer,
             prev_model_buffer,
         ) else {
             return 0;
         };
+        if self.cull.icbs.is_empty() {
+            return 0;
+        }
         enc.setRenderPipelineState(pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
         unsafe {
@@ -535,12 +537,18 @@ impl MtlContext {
                 location: 0,
                 length: base,
             };
-            // SAFETY: [0, base) spans the static + instance + chunk command slots;
-            // the reused main ICB is sized for cull_count() >= base.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+            // The pre-pass writes normals/depth/velocity under its single
+            // engine pipeline, so every bucket's ICB executes with the same
+            // PSO; together the buckets cover the whole record range exactly
+            // once.
+            for icb in &self.cull.icbs {
+                // SAFETY: [0, base) spans the static + instance + chunk command
+                // slots; every reused main ICB is sized for cull_count() >= base.
+                unsafe {
+                    enc.executeCommandsInBuffer_withRange(icb, range);
+                }
+                draw_calls += 1;
             }
-            draw_calls += 1;
         }
 
         // Folded skinned tail [base, total): current deformed at stream 0,
@@ -574,9 +582,10 @@ impl MtlContext {
                 location: base,
                 length: total - base,
             };
+            // Skinned records are always bucket 0.
             // SAFETY: [base, total) spans the folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+                enc.executeCommandsInBuffer_withRange(&self.cull.icbs[0], range);
             }
             draw_calls += 1;
             // The current deformed slot now holds a valid pose, so next frame's
