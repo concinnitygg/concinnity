@@ -39,22 +39,6 @@ pub(crate) enum FullscreenBlend {
     PremultipliedOver,
 }
 
-// Compile a post-pass shader library from inline MSL `source`. `label` names
-// the shader in the returned compile error (e.g. "SSR", "bloom"). Pulled out
-// so a builder that produces several pipelines from one source (bloom) still
-// compiles it once and the per-effect files don't each repeat the compile
-// dance.
-pub(crate) fn compile_library(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    source: &str,
-    label: &str,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
-    let options = objc2_metal::MTLCompileOptions::new();
-    device
-        .newLibraryWithSource_options_error(&ns_str(source), Some(&options))
-        .map_err(|e| format!("{} shader compile error: {:?}", label, e))
-}
-
 // Build a render pipeline state for a fullscreen-triangle post pass: the two
 // named functions from `library`, a single colour attachment at `format` with
 // the requested `blend`, single-sample, no vertex descriptor, no depth. The

@@ -18,9 +18,9 @@ use objc2_metal::{
 
 use crate::gfx::ssao::SsaoSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
+use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
@@ -51,8 +51,7 @@ pub(crate) fn build_ssao_pipeline(
     fragment_entry: &str,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "ssao.metal");
-    let library = compile_library(device, msl.as_ref(), "SSAO")?;
+    let library = shader_library(device, hot_reload, "ssao.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,

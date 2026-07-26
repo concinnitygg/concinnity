@@ -22,7 +22,7 @@ use objc2_metal::{
 use crate::gfx::mesh_payload::Vertex;
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::{ns_str, shader_source};
+use crate::metal::pipeline::{ns_str, shader_library};
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::{GBufferView, SsrPrepassMat, VelocityModelUniforms};
 
@@ -127,11 +127,7 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
     vertex_entry: &str,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "gbuffer_prepass.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("G-buffer pre-pass shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
     let vert_fn = library
         .newFunctionWithName(&ns_str(vertex_entry))
         .ok_or_else(|| format!("{} not found in G-buffer pre-pass metallib", vertex_entry))?;
@@ -210,11 +206,7 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "gbuffer_prepass.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("G-buffer bindless shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
     let vert_fn = library
         .newFunctionWithName(&ns_str("gbuffer_prepass_vertex_bindless"))
         .ok_or("gbuffer_prepass_vertex_bindless not found in G-buffer pre-pass metallib")?;

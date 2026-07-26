@@ -32,7 +32,7 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSRange, NSString};
+use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLPixelFormat, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
@@ -40,7 +40,7 @@ use objc2_metal::{
 };
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) push struct; lives in concinnity-render so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
@@ -89,11 +89,7 @@ pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<HizPipelines, String> {
-    let msl = shader_source(hot_reload, "hiz_build.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("hiz shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "hiz_build.metal")?;
     let init_fn = library
         .newFunctionWithName(&ns_str("hiz_init_msaa"))
         .ok_or("hiz_init_msaa not found in hiz library")?;

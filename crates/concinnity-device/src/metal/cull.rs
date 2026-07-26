@@ -7,7 +7,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLArgumentEncoder, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
     MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderCommandEncoder as _,
@@ -15,7 +14,7 @@ use objc2_metal::{
 };
 
 use super::context::*;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
 
@@ -1071,12 +1070,7 @@ pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<CullPipeline, String> {
-    let msl = shader_source(hot_reload, "cull.metal");
-
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("cull shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "cull.metal")?;
 
     let cull_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
@@ -1131,11 +1125,7 @@ pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<ShadowCullPipeline, String> {
-    let msl = shader_source(hot_reload, "cull.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("shadow cull shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "cull.metal")?;
     let shadow_fn = library
         .newFunctionWithName(&ns_str("cull_encode_shadow"))
         .ok_or("cull_encode_shadow not found in cull library")?;

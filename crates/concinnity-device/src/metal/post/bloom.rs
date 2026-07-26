@@ -13,9 +13,9 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
+use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
 
 // Pixel format of every mip in the bloom chain, including the `bloom_top` mip
@@ -46,9 +46,8 @@ pub(crate) fn build_bloom_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<BloomPipelines, String> {
-    let msl = shader_source(hot_reload, "bloom.metal");
-    // Compiled once; all three pipelines share the same `bloom.metal` library.
-    let library = compile_library(device, msl.as_ref(), "bloom")?;
+    // Loaded once; all three pipelines share the same `bloom.metal` library.
+    let library = shader_library(device, hot_reload, "bloom.metal")?;
     let build = |frag_name: &str, blend: FullscreenBlend| {
         build_fullscreen_pipeline(
             device,

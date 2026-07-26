@@ -1680,14 +1680,7 @@ pub(crate) fn build_rt_skin_pipeline(
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>, String> {
     use objc2_metal::{MTLDevice as _, MTLLibrary as _};
-    let msl = crate::metal::pipeline::shader_source(hot_reload, "rt_skin.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(
-            &crate::metal::pipeline::ns_str(msl.as_ref()),
-            Some(&options),
-        )
-        .map_err(|e| format!("RT skinning shader compile error: {:?}", e))?;
+    let library = crate::metal::pipeline::shader_library(device, hot_reload, "rt_skin.metal")?;
     let func = library
         .newFunctionWithName(&crate::metal::pipeline::ns_str("rt_skin"))
         .ok_or("rt_skin kernel not found")?;

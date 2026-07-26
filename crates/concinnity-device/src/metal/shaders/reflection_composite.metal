@@ -30,8 +30,9 @@ vertex ReflCompVtxOut reflection_composite_vertex(uint vid [[vertex_id]]) {
 
 // Below REFLECTION_ROUGHNESS_CUT the blur radius (in UV) ramps from a sharp
 // mirror at 0 to this maximum; at or above the cut the reflection weight is
-// already 0. The cut is the shared `constant` injected by pipeline.rs, so it
-// matches the SSR / RT resolve gates exactly.
+// already 0. The cut is locked to concinnity_core::gfx::ssr's value by unit
+// test, so it matches the SSR / RT resolve gates exactly.
+constant float REFLECTION_ROUGHNESS_CUT = 0.6;
 constant float REFL_BLUR_MAX  = 0.02;
 
 // Two 8-tap rings (45-degree steps) at half and full radius approximate the

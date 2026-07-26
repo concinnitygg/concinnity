@@ -9,7 +9,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLResourceOptions, MTLSize,
@@ -18,7 +17,7 @@ use objc2_metal::{
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 
 // Clustered-lighting GPU state: the binning compute pipeline and the per-cluster
@@ -89,11 +88,7 @@ pub(super) fn build_light_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let msl = shader_source(hot_reload, "light_cull.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("light cull shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "light_cull.metal")?;
     let func = library
         .newFunctionWithName(&ns_str("light_cull_kernel"))
         .ok_or("light_cull_kernel not found")?;

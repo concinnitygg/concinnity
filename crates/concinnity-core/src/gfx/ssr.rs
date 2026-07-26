@@ -36,15 +36,15 @@ const MIN_ASPECT: f32 = 1.0e-3;
 // Canonical roughness cut for sharp reflections: surfaces rougher than this get
 // no screen-space / ray-traced reflection. One value drives four shaders that
 // must agree for the reflection pipeline to be self-consistent:
-//   - the SSR resolve gate          (SSR_ROUGH_CUT in ssr.metal)
-//   - the RT-reflection resolve gate (RT_ROUGH_CUT in rt_reflections.metal)
-//   - the roughness blur ramp        (REFL_ROUGH_CUT in reflection_composite.metal)
+//   - the SSR resolve gate           (ssr.metal)
+//   - the RT-reflection resolve gate (rt_reflections.metal)
+//   - the roughness blur ramp        (reflection_composite.metal)
 //   - the forward double-count fade  (REFL_RESOLVE_CUT in default.metal)
-// The first three (client, runtime-compiled) reference this value through a
-// generated MSL prelude, so they are literally single-sourced. The forward
-// shader is compiled offline and baked, so it keeps its own declaration locked
-// to this value by a unit test. As an MSL `constant` it folds at compile time:
-// sharing it costs nothing at runtime.
+// All four shaders are compiled offline, so each declares the literal itself
+// and a unit test locks every declaration to this value (the engine shaders in
+// reflection_shaders_lock_shared_roughness_cut, default.metal alongside this
+// module). As an MSL `constant` it folds at compile time: sharing it costs
+// nothing at runtime.
 pub const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;
 
 // Clamped SSR tunables resolved from the authored asset fields. Held by the

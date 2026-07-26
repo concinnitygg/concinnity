@@ -14,7 +14,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLCommandBuffer as _, MTLDevice as _, MTLIndexType, MTLLibrary as _,
     MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
@@ -23,7 +22,7 @@ use objc2_metal::{
 };
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::{DecalParams, DecalView};
 use crate::gfx::decal::DecalRecord;
@@ -221,12 +220,7 @@ pub(super) fn build_decal_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "decal.metal");
-
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("decal shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "decal.metal")?;
 
     let vert_fn = library
         .newFunctionWithName(&ns_str("decal_vertex"))

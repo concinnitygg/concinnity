@@ -20,8 +20,7 @@ use objc2_metal::{
 use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT};
 use crate::metal::cull::build_cull_pipeline;
-use crate::metal::pipeline::{load_library, ns_str, shader_source};
-use crate::metal::post::fullscreen::compile_library;
+use crate::metal::pipeline::{load_library, ns_str, shader_library};
 
 pub(crate) struct MainPipelineBundle {
     pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
@@ -235,8 +234,7 @@ pub(crate) fn build_shadow_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "shadow_map.metal");
-    let shadow_lib = compile_library(device, msl.as_ref(), "shadow_map")?;
+    let shadow_lib = shader_library(device, hot_reload, "shadow_map.metal")?;
     let shadow_fn = shadow_lib
         .newFunctionWithName(&ns_str("shadow_vertex_main"))
         .ok_or("shadow_vertex_main not found in shadow library")?;
@@ -263,8 +261,7 @@ pub(crate) fn build_shadow_bindless_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "shadow_map.metal");
-    let shadow_lib = compile_library(device, msl.as_ref(), "shadow_map")?;
+    let shadow_lib = shader_library(device, hot_reload, "shadow_map.metal")?;
     let shadow_fn = shadow_lib
         .newFunctionWithName(&ns_str("shadow_vertex_bindless"))
         .ok_or("shadow_vertex_bindless not found in shadow library")?;

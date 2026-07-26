@@ -21,8 +21,8 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
-use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline, compile_library};
+use crate::metal::pipeline::shader_library;
+use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 // Build one RT-reflection pipeline for the given fragment entry: a
@@ -38,8 +38,7 @@ pub(crate) fn build_rt_reflection_pipeline(
     fragment_entry: &str,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "rt_reflections.metal");
-    let library = compile_library(device, msl.as_ref(), "RT reflections")?;
+    let library = shader_library(device, hot_reload, "rt_reflections.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,

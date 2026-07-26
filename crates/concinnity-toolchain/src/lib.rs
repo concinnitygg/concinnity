@@ -1,6 +1,7 @@
 // Shared build-script support for the workspace.
 //
-// Two responsibilities, both previously copy-pasted between the runtime crate's
+// Besides the Metal shader precompilation in `metal_shaders`, two
+// responsibilities, both previously copy-pasted between the runtime crate's
 // build script and the editor crate's build script (and missing entirely from
 // the example binaries, which is why they failed to link against the runtime's
 // DLSS code on Windows):
@@ -28,8 +29,10 @@
 
 use std::path::{Path, PathBuf};
 
+mod metal_shaders;
 mod sdks;
 
+pub use metal_shaders::precompile_metal_shaders;
 use sdks::SdkEnv;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
