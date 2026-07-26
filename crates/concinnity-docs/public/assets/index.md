@@ -55,7 +55,7 @@
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
-- [ShaderStage](ShaderStage.md) - Declares a compiled shader stage.
+- [Shader](Shader.md) - Declares a complete shader program: the vertex and fragment stages every rendered world needs, plus the optional GPU-instanced vertex stage.
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
@@ -110,11 +110,11 @@
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [ScrollPanel](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [ScrollPanel](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [MainMenu](MainMenu.md)'s `"settings"` item builds.
-- [ShaderKind](ShaderKind.md) - Which stage in the render pipeline this shader drives.
 - [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
+- [StageSource](StageSource.md) - Source declaration for one stage of a [Shader](Shader.md).
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
 - [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
 - [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.

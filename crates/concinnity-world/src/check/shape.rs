@@ -139,11 +139,11 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// A rendering world (one with a GraphicsConfig) needs a Window and a vertex
-// ShaderStage. Filled by companion injection: any `renders`-flagged type pulls
-// in the GraphicsConfig marker, which pulls in a Window and, when the world
-// declares no ShaderStage at all, the bundled default shader set. This fires
-// only when the world declares an incomplete render stack of its own.
+// A rendering world (one with a GraphicsConfig) needs a Window and a Shader.
+// Filled by companion injection: any `renders`-flagged type pulls in the
+// GraphicsConfig marker, which pulls in a Window and, when the world declares
+// no Shader at all, the bundled default shader. This fires only when the
+// world declares an incomplete render stack of its own.
 fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let has_graphics = assets
         .iter()
@@ -159,14 +159,11 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
                 .to_string(),
         );
     }
-    let has_vertex_stage = assets.iter().any(|a| {
-        norm(&a.asset_type) == "shaderstage"
-            && a.args.get("kind").and_then(|v| v.as_str()) == Some("vertex")
-    });
-    if !has_vertex_stage {
+    let has_shader = assets.iter().any(|a| norm(&a.asset_type) == "shader");
+    if !has_shader {
         errors.push(
-            "world renders (has a GraphicsConfig) but has no vertex ShaderStage, \
-             add a ShaderStage with kind \"vertex\" and a `source` path"
+            "world renders (has a GraphicsConfig) but has no Shader, add a \
+             Shader with `vertex` and `fragment` stage sources"
                 .to_string(),
         );
     }
@@ -195,9 +192,12 @@ mod tests {
             asset("gfx", "GraphicsConfig", serde_json::json!({})),
             asset("win", "Window", serde_json::json!({})),
             asset(
-                "vert",
-                "ShaderStage",
-                serde_json::json!({"kind": "vertex", "sources": {"metal": "x.metal"}}),
+                "scene_shader",
+                "Shader",
+                serde_json::json!({
+                    "vertex": {"sources": {"metal": "x.metal"}},
+                    "fragment": {"sources": {"metal": "x.metal"}}
+                }),
             ),
         ]
     }
@@ -316,14 +316,11 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_window_or_vertex_stage_reports_both() {
+    fn graphics_config_without_window_or_shader_reports_both() {
         let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
-        assert!(
-            errs.iter().any(|e| e.contains("vertex ShaderStage")),
-            "{errs:?}"
-        );
+        assert!(errs.iter().any(|e| e.contains("no Shader")), "{errs:?}");
     }
 
     #[test]

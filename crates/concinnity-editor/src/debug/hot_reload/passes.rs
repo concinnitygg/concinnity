@@ -1,6 +1,6 @@
 // src/debug/hot_reload/passes.rs
 //
-// The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded ShaderStage
+// The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded Shader stage
 // reload passes: re-read the on-disk source, diff against the captured state,
 // and apply changes through the backend. Each returns a small tally the drive
 // logs.
@@ -434,13 +434,13 @@ pub(super) fn reload_stories(
 // tallies so a single info line per asset class keeps the log readable.
 #[derive(Default, Debug)]
 pub struct ShaderStageReloadResult {
-    // `ShaderStage` sources that re-compiled successfully and contributed
+    // Shader stage sources that re-compiled successfully and contributed
     // to the backend pipeline rebuild. Counts every kind that the caller
     // re-read off disk, including stages whose source bytes were
     // byte-for-byte unchanged (a no-op shader save still re-compiles,
     // detecting a no-op would mean caching every shader's byte payload).
     pub recompiled: usize,
-    // `ShaderStage` sources that failed to compile (logged per-stage in
+    // Shader stage sources that failed to compile (logged per-stage in
     // the helper). The backend rebuild is skipped entirely on any failure:
     // the live pipelines stay bound and the next save can recover.
     pub failed: usize,
@@ -451,7 +451,7 @@ pub struct ShaderStageReloadResult {
     pub pipelines_rebuilt: bool,
 }
 
-// Re-compile every captured world-loaded `ShaderStage` source from disk and
+// Re-compile every captured world-loaded Shader stage source from disk and
 // hand the fresh bytes to the backend for a main / instanced / shadow
 // pipeline rebuild. Sibling of [`reload_shaders`] in
 // [`crate::metal::hot_reload`] (which targets the engine's bundled shader
@@ -475,7 +475,7 @@ pub(super) fn reload_shader_stages(
     shader_stages: &ShaderStageSourceMap,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> ShaderStageReloadResult {
-    use crate::assets::shader_stage::ShaderKind;
+    use crate::assets::shader::ShaderKind;
 
     let mut result = ShaderStageReloadResult::default();
     if shader_stages.is_empty() {
@@ -509,12 +509,12 @@ pub(super) fn reload_shader_stages(
         };
         match concinnity_cook::shader::compile_shader(compile_args) {
             Ok(bytes) => {
-                compiled.insert(entry.kind.clone(), bytes);
+                compiled.insert(entry.kind, bytes);
                 result.recompiled += 1;
             }
             Err(e) => {
                 tracing::error!(
-                    "ShaderStage hot-reload: failed to compile '{}' ({:?}): {} \
+                    "Shader hot-reload: failed to compile '{}' ({:?}): {} \
                      (live pipelines kept their previous source)",
                     entry.resolved_path,
                     entry.kind,
@@ -541,7 +541,7 @@ pub(super) fn reload_shader_stages(
         }
         Err(e) => {
             tracing::error!(
-                "ShaderStage hot-reload: backend pipeline rebuild rejected: {} \
+                "Shader hot-reload: backend pipeline rebuild rejected: {} \
                  (live pipelines kept their previous source)",
                 e
             );

@@ -10,7 +10,7 @@
 //      out specs whose `asset_type` already appears in the world or whose
 //      `name` was already collected this round (by-name dedup within a round
 //      so a single asset can request multiple companions of the same type,
-//      e.g. GraphicsSystem's default vertex + fragment ShaderStages).
+//      e.g. GraphicsSystem's default Shader).
 //
 //   2. The default-font pass (`apply_default_font`) runs once with the final
 //      world: when there are TextLabels but no Font, it injects one from the
@@ -123,7 +123,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
     loop {
         // Snapshot the world for this round. New companions added in this
         // round only enter the visible set on the next iteration; that keeps
-        // multi-spec batches (e.g. vertex + fragment ShaderStages) from
+        // multi-spec batches from
         // shadowing each other through the per-spec type-dedup.
         let snapshot = assets.clone();
         let present_types: HashSet<String> = snapshot.iter().map(asset_type_norm).collect();
@@ -337,35 +337,31 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_injects_default_shader_stages() {
-        // TextLabel injects a GraphicsConfig, which in turn injects the default
-        // vertex + fragment shader stages.
+    fn graphics_config_injects_default_shader() {
+        // TextLabel injects a GraphicsConfig, which in turn injects the
+        // default Shader with its vertex + fragment stages.
         let mut assets =
             vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
         inject(&mut assets);
-        let kinds: Vec<&str> = assets
+        let shader = assets
             .iter()
-            .filter(|v| type_norm(v) == "shaderstage")
-            .filter_map(|v| v["args"]["kind"].as_str())
-            .collect();
-        assert!(kinds.contains(&"vertex"));
-        assert!(kinds.contains(&"fragment"));
+            .find(|v| type_norm(v) == "shader")
+            .expect("default Shader injected");
+        assert!(shader["args"]["vertex"].is_object());
+        assert!(shader["args"]["fragment"].is_object());
     }
 
     #[test]
-    fn does_not_inject_shader_stages_when_one_declared() {
+    fn does_not_inject_a_shader_when_one_declared() {
         let mut assets = vec![
             serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
             serde_json::json!({
-                "name":"vert","type":"ShaderStage",
-                "args":{"kind":"vertex","source":"custom.metal"}
+                "name":"custom","type":"Shader",
+                "args":{"vertex":{"source":"custom.metal"},"fragment":{"source":"custom.metal"}}
             }),
         ];
         inject(&mut assets);
-        let shader_count = assets
-            .iter()
-            .filter(|v| type_norm(v) == "shaderstage")
-            .count();
+        let shader_count = assets.iter().filter(|v| type_norm(v) == "shader").count();
         assert_eq!(shader_count, 1);
     }
 

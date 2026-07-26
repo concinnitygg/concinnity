@@ -1,0 +1,254 @@
+// Shader schema: one asset = one complete shader program (all stages).
+//
+// CRITICAL: `packed_float3` in light structs. In MSL constant buffers `float3`
+// has size=16, but Rust `[f32; 3]` (what the engine sends) has size=12. If you
+// declare `DirectionalLightData` or `PointLightData` with plain `float3`, the
+// color field will read as zeros (black light) and `num_directional` will read
+// garbage, causing ambient-only rendering. Always use `packed_float3` for vector
+// fields in these structs.
+
+use crate::PayloadLocator;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+/// A stage slot within a [Shader](#shader).
+///
+/// `VertexInstanced` is the GPU-instanced sibling of `Vertex`, reading per-
+/// instance model matrices instead of a per-draw transform. Required for any
+/// world containing [InstancedProp](#instancedprop) components; otherwise
+/// unused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum ShaderKind {
+    #[default]
+    Vertex,
+    Fragment,
+    #[serde(rename = "vertex_instanced", alias = "vertexinstanced")]
+    VertexInstanced,
+}
+
+impl ShaderKind {
+    /// The compile kind string expected by ShaderCompileArgs.
+    pub fn compile_kind(&self) -> &'static str {
+        match self {
+            ShaderKind::Vertex | ShaderKind::VertexInstanced => "vertex",
+            ShaderKind::Fragment => "fragment",
+        }
+    }
+}
+
+/// Source declaration for one stage of a [Shader](#shader).
+///
+/// Provide either `source` (single platform) or `sources` (multi-platform).
+/// When both are present, `sources` takes priority for the current platform.
+///
+/// **Platform keys:** `"metal"` (macOS), `"hlsl"` (Windows), `"glsl"` (Linux/Vulkan).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct StageSource {
+    /// Single-platform source path; used when `sources` is absent or lacks the current platform key.
+    #[serde(default)]
+    pub source: String,
+    /// Per-platform source paths keyed by `"metal"`, `"hlsl"`, or `"glsl"`. Takes priority over `source`.
+    #[serde(default)]
+    pub sources: Option<BTreeMap<String, String>>,
+}
+
+impl StageSource {
+    /// A stage source declaring per-platform paths.
+    pub fn per_platform<I, K, V>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        Self {
+            source: String::new(),
+            sources: Some(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// Declares a complete shader program: the vertex and fragment stages every
+/// rendered world needs, plus the optional GPU-instanced vertex stage.
+///
+/// **A rendering world needs at least one Shader.** When a world declares
+/// none, the bundled default set is injected automatically. The shadow pass is
+/// engine-internal (no Shader stage of its own); enable or size it with
+/// `shadow_map_size` in [GraphicsConfig](#graphicsconfig).
+///
+/// **Bundled sources:**
+///
+/// - `"default.metal"` / `"default_vert.hlsl"` / `"default_frag.hlsl"`: standard diffuse/specular lighting.
+///
+/// The engine-internal shadow map covers a ±20 m world-space region centred at
+/// the origin with 80 m depth. For larger scenes, increase `shadow_map_size` in
+/// [GraphicsConfig](#graphicsconfig) to maintain resolution.
+///
+/// ```jsonl
+/// // Multi-platform standard scene:
+/// {"name":"scene_shader","type":"Shader","args":{
+///   "vertex":{"sources":{"metal":"default.metal","hlsl":"default_vert.hlsl"}},
+///   "fragment":{"sources":{"metal":"default.metal","hlsl":"default_frag.hlsl"}}}}
+///
+/// // Single-platform (macOS only):
+/// {"name":"scene_shader","type":"Shader","args":{
+///   "vertex":{"source":"my.metal"},"fragment":{"source":"my.metal"}}}
+/// ```
+///
+/// **Custom shader vertex layout**: the engine always supplies vertices with 5
+/// attributes at a fixed 56-byte stride. Any custom `.metal` shader **must** declare
+/// `struct Vertex` exactly as shown below: wrong attribute indices cause tangent
+/// data to be read as vertex colour, producing red/green/blue geometry:
+///
+/// ```metal
+/// struct Vertex {
+///     float3 pos     [[attribute(0)]];  // offset  0
+///     float3 normal  [[attribute(1)]];  // offset 12
+///     float3 tangent [[attribute(2)]];  // offset 24
+///     float3 color   [[attribute(3)]];  // offset 36
+///     float2 uv      [[attribute(4)]];  // offset 48
+/// };
+/// ```
+///
+/// Buffer and texture bindings that must match:
+///
+/// ```metal
+/// struct DirectionalLightData {
+///     packed_float3 direction;
+///     float         intensity;
+///     packed_float3 color;
+///     float         _pad;
+/// };
+///
+/// struct PointLightData {
+///     packed_float3 position;
+///     float         range;
+///     packed_float3 color;
+///     float         intensity;
+/// };
+///
+/// struct ShadowUniforms {
+///     float4x4 light_vp;
+/// };
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Shader {
+    /// The vertex stage. Required.
+    pub vertex: StageSource,
+    /// The fragment stage. Required.
+    pub fragment: StageSource,
+    /// The GPU-instanced vertex stage. Required only for worlds with
+    /// [InstancedProp](#instancedprop) components.
+    #[serde(default)]
+    pub vertex_instanced: Option<StageSource>,
+    /// Injected at load time from BlobAssetDef::payload.
+    #[serde(skip)]
+    pub locator: Option<PayloadLocator>,
+}
+
+impl Shader {
+    /// The declared source for `kind`, if that stage is present.
+    pub fn stage(&self, kind: ShaderKind) -> Option<&StageSource> {
+        match kind {
+            ShaderKind::Vertex => Some(&self.vertex),
+            ShaderKind::Fragment => Some(&self.fragment),
+            ShaderKind::VertexInstanced => self.vertex_instanced.as_ref(),
+        }
+    }
+}
+
+impl Default for Shader {
+    fn default() -> Self {
+        Self {
+            vertex: StageSource::per_platform([
+                ("metal", "default.metal"),
+                ("hlsl", "default_vert.hlsl"),
+            ]),
+            fragment: StageSource::per_platform([
+                ("metal", "default.metal"),
+                ("hlsl", "default_frag.hlsl"),
+            ]),
+            vertex_instanced: None,
+            locator: None,
+        }
+    }
+}
+
+/// The compiled payload a [`Shader`] carries in the blob: every compiled stage,
+/// tagged by kind. Written by the cook, decoded once by the renderer at load.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ShaderPayload {
+    pub stages: Vec<(ShaderKind, Vec<u8>)>,
+}
+
+impl ShaderPayload {
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+
+    /// The compiled bytes for `kind`, if that stage was compiled.
+    pub fn stage(&self, kind: ShaderKind) -> Option<&[u8]> {
+        self.stages
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, b)| b.as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn payload_round_trips_and_indexes_by_kind() {
+        let payload = ShaderPayload {
+            stages: vec![
+                (ShaderKind::Vertex, vec![1, 2, 3]),
+                (ShaderKind::Fragment, vec![4, 5]),
+            ],
+        };
+        let bytes = payload.encode().expect("encode");
+        let decoded = ShaderPayload::decode(&bytes).expect("decode");
+        assert_eq!(decoded, payload);
+        assert_eq!(decoded.stage(ShaderKind::Vertex), Some(&[1u8, 2, 3][..]));
+        assert_eq!(decoded.stage(ShaderKind::Fragment), Some(&[4u8, 5][..]));
+        assert_eq!(decoded.stage(ShaderKind::VertexInstanced), None);
+    }
+
+    #[test]
+    fn default_declares_the_bundled_set() {
+        let s = Shader::default();
+        let vert = s.vertex.sources.as_ref().expect("vertex sources");
+        assert_eq!(vert.get("metal").map(String::as_str), Some("default.metal"));
+        assert_eq!(
+            vert.get("hlsl").map(String::as_str),
+            Some("default_vert.hlsl")
+        );
+        let frag = s.fragment.sources.as_ref().expect("fragment sources");
+        assert_eq!(
+            frag.get("hlsl").map(String::as_str),
+            Some("default_frag.hlsl")
+        );
+        assert!(s.vertex_instanced.is_none());
+    }
+
+    #[test]
+    fn stage_lookup_covers_every_kind() {
+        let s = Shader::default();
+        assert!(s.stage(ShaderKind::Vertex).is_some());
+        assert!(s.stage(ShaderKind::Fragment).is_some());
+        assert!(s.stage(ShaderKind::VertexInstanced).is_none());
+    }
+}

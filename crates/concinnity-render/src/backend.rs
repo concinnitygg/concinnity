@@ -918,7 +918,7 @@ pub trait RenderBackend: SceneControl + Send {
 
     // Rebuild the live main / instanced / shadow render pipelines from
     // freshly compiled world-loaded shader stage bytes. Driven by asset
-    // hot-reload (`cn debug` only) when one of the captured `ShaderStage`
+    // hot-reload (`cn debug` only) when one of the captured `Shader`
     // source files is saved or a debug-WS `reload-assets` command fires.
     // Each `Some(bytes)` replaces the matching live pipeline (and any
     // dependent state: bindless-texture argument encoder, cull pipeline,

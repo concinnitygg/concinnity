@@ -13,8 +13,8 @@
 //   state    `AssetHotReloadState` + decode result types + `run_frame` entry
 //   watcher  the `notify` filesystem watcher
 //   decode   off-thread payload decode + poll/apply (textures, meshes, IBL)
-//   passes   world.jsonl / ProceduralMesh / VolumetricFog / ShaderStage reload
-//   pending  process-wide world.jsonl / ShaderStage "changed" flags
+//   passes   world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
+//   pending  process-wide world.jsonl / Shader "changed" flags
 
 mod decode;
 mod passes;

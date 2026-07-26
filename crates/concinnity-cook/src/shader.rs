@@ -195,7 +195,7 @@ fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     }
 }
 
-// A toolchain for tests whose worlds pull in a ShaderStage but assert on the
+// A toolchain for tests whose worlds pull in a Shader but assert on the
 // surrounding build rather than on bytecode. Registering it keeps the cook's own
 // tests off the platform compilers, so they behave identically on every host.
 #[cfg(test)]

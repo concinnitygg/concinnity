@@ -2,7 +2,7 @@
 //
 // Process-wide flags shared between the engine loop (library) and the
 // binary-only `cn debug` subsystem. Only the two flags the library itself
-// names live here; the world.jsonl / ShaderStage "changed" flags and the
+// names live here; the world.jsonl / shader-stage "changed" flags and the
 // decal / emitter spawn queue moved fully into the binary-only debug tree
 // (`crate::debug`), since nothing in the library references them.
 //

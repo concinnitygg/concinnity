@@ -1965,7 +1965,7 @@ impl DxContext {
     }
 }
 
-// World-ShaderStage runtime hot-swap (RenderBackend::update_world_shader_pipelines)
+// World-Shader runtime hot-swap (RenderBackend::update_world_shader_pipelines)
 
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
@@ -1976,7 +1976,7 @@ impl DxContext {
 )]
 impl DxContext {
     // Rebuild the world-driven graphics pipelines from freshly compiled
-    // `ShaderStage` bytes and hot-swap them, for the live-reload path
+    // Shader stage bytes and hot-swap them, for the live-reload path
     // (`reload_shader_stages` -> here). A custom-shader world's vertex +
     // fragment stages drive the legacy static main pipeline; the instanced
     // pipeline pairs the world's instanced vertex stage with the same fragment;

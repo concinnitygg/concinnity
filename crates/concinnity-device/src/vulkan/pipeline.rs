@@ -1257,7 +1257,7 @@ mod tests {
     }
 
     // The shader-resolution helpers that `update_world_shader_pipelines`
-    // composes when hot-swapping a world's `ShaderStage` pipelines: valid
+    // composes when hot-swapping a world's Shader pipelines: valid
     // SPIR-V (the bytes the hot-reload recompile always produces) is passed
     // through verbatim, while non-SPIR-V selects the built-in GLSL fallback.
     // No device is needed, so this guards the world-shader hot-swap path the

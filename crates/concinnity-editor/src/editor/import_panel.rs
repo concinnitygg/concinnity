@@ -48,7 +48,7 @@ pub(crate) const IMPORT_TYPES: &[&str] = &[
     "EnvironmentMap",
     "AudioClip",
     "Font",
-    "ShaderStage",
+    "Shader",
     "LLM",
 ];
 

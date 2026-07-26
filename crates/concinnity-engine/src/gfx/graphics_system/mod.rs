@@ -30,7 +30,7 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 //   ProceduralMesh  -- generator-built geometry payloads (keyed by asset name)
 //   Model           -- multi-mesh model definitions (keyed by asset name)
 //   Prop            -- scene objects referencing a Mesh/ProceduralMesh or Model
-//   ShaderStage     -- compiled shader payloads (vertex, fragment, shadow)
+//   Shader          -- compiled shader payloads (vertex, fragment, instanced)
 //   Texture         -- one or more compiled RGBA texture payloads (keyed by asset name)
 //
 // Components queried (not drained) each step():

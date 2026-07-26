@@ -33,7 +33,7 @@ impl ShaderBuildValidator for MetalShaderValidator {
                 "shader asset '{asset_name}': {msg}\nThe shader declares an engine-provided buffer \
                  struct with a different memory layout than the engine's, so the GPU would read the \
                  engine's data through the wrong offsets. Match the documented layout (see the \
-                 ShaderStage asset reference)."
+                 Shader asset reference)."
             )),
             Err(ShaderLayoutIssue::Infra(reason)) => {
                 // Fail open: never break a build over a reflection-infrastructure

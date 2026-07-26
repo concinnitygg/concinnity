@@ -157,7 +157,7 @@ impl ProceduralMeshSourceMap {
     }
 }
 
-// Resolve a `ShaderStage`'s declared source to the on-disk path the watcher
+// Resolve a Shader stage's declared source to the on-disk path the watcher
 // subscribes to and the runtime recompile reads, applying the same
 // bare-filename fallback the build pipeline runs: bare filenames are searched
 // in `.concinnity/assets/` (recursively), then fall back to a direct path under
@@ -177,7 +177,7 @@ pub fn resolve_runtime_source_path(raw: &str) -> String {
     raw.to_string()
 }
 
-// One world-loaded [`crate::assets::ShaderStage`] reload entry. Captures
+// One world-loaded Shader stage reload entry. Captures
 // the stage's kind + the resolved on-disk source path that the build
 // pipeline read at compile time, so the hot-reload helper can rerun
 // [`concinnity_cook::shader::compile_shader`] on the same file and feed the
@@ -187,18 +187,18 @@ pub fn resolve_runtime_source_path(raw: &str) -> String {
 // caller before reaching this map.
 #[derive(Debug, Clone)]
 pub struct ShaderStageSourceEntry {
-    pub kind: crate::assets::shader_stage::ShaderKind,
+    pub kind: crate::assets::shader::ShaderKind,
     // Resolved on-disk path the build pipeline read at compile time. Stored
     // resolved (not raw) so the watcher can subscribe to a real parent
     // directory even when the asset declaration used a bare filename.
     pub resolved_path: String,
 }
 
-// Catalogue of every world-loaded `ShaderStage` whose source the renderer
+// Catalogue of every world-loaded Shader stage whose source the renderer
 // can hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed
 // by [`reload_shader_stages`] when the asset hot-reload watcher fires on a
 // captured shader-source file. The map holds at most one entry per
-// [`crate::assets::shader_stage::ShaderKind`] (vertex, fragment, shadow,
+// [`crate::assets::shader::ShaderKind`] (vertex, fragment, shadow,
 // vertex_instanced): the runtime drains one stage per kind at init.
 #[derive(Debug, Clone, Default)]
 pub struct ShaderStageSourceMap {
@@ -530,7 +530,7 @@ mod tests {
     // Shader stages watch their resolved paths, one entry per kind.
     #[test]
     fn shader_stage_map_watches_resolved_parents() {
-        use crate::assets::shader_stage::ShaderKind;
+        use crate::assets::shader::ShaderKind;
 
         let mut map = ShaderStageSourceMap::new();
         assert!(map.is_empty());
@@ -559,7 +559,7 @@ mod tests {
     fn shader_stage_map_skips_an_empty_resolved_path() {
         let mut map = ShaderStageSourceMap::new();
         map.entries.push(ShaderStageSourceEntry {
-            kind: crate::assets::shader_stage::ShaderKind::Fragment,
+            kind: crate::assets::shader::ShaderKind::Fragment,
             resolved_path: String::new(),
         });
         assert!(map.watch_dirs().is_empty());

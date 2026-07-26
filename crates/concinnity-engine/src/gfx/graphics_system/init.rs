@@ -4,7 +4,7 @@
 use crate::assets::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
-    SdfVolume, ShaderKind, ShaderStage, ShaderStageExt, SkinnedMeshGeometry, SpotLight,
+    SdfVolume, Shader, ShaderKind, SkinnedMeshGeometry, SpotLight, StageSource, StageSourceExt,
     StreamingConfig, TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::PipelineContext;
@@ -92,9 +92,7 @@ struct TextureTableDecode {
 // engine's built-in default, the payload locators kept for the blob-release
 // step, and the dev-only source map the hot-reload watcher subscribes to.
 struct DecodedShaders {
-    vert_locator: crate::ecs::PayloadLocator,
-    frag_locator: crate::ecs::PayloadLocator,
-    vert_instanced_locator: Option<crate::ecs::PayloadLocator>,
+    locator: crate::ecs::PayloadLocator,
     source_map: super::hot_reload_sources::ShaderStageSourceMap,
     vert_bytes: Vec<u8>,
     frag_bytes: Vec<u8>,
@@ -1441,83 +1439,42 @@ impl GraphicsSystem {
         Some(material_map)
     }
 
-    // Drain the world's ShaderStage components, resolve the required main vertex +
-    // fragment stages (and the optional instanced-vertex stage) to their compiled
-    // payload locators, and read their bytes. Under `cn debug` also records each
-    // stage's resolved on-disk source path so the asset hot-reload watcher can
-    // recompile + rebuild pipelines on a shader save. Returns None (self.failed
-    // set) if a required stage or its payload is missing or unreadable.
+    // Drain the world's Shader components, read the first one's compiled
+    // stage container, and split it into the per-stage byte slices the
+    // backend consumes. The first Shader drives the world pipeline (mirroring
+    // how the first Scene is the start scene). Under `cn debug` also records
+    // each stage's resolved on-disk source path so the asset hot-reload
+    // watcher can recompile + rebuild pipelines on a shader save. Returns
+    // None (self.failed set) if no Shader exists or its payload is missing or
+    // unreadable.
     fn decode_shaders(&mut self, ctx: &mut PipelineContext) -> Option<DecodedShaders> {
-        let mut shaders = ctx.drain::<ShaderStage>();
-        let find_shader = |shaders: &mut Vec<ShaderStage>, kind: ShaderKind| {
-            shaders
-                .iter()
-                .position(|s| s.kind == kind)
-                .map(|i| shaders.remove(i))
-        };
+        let mut shaders = ctx.drain::<Shader>();
+        if shaders.is_empty() {
+            tracing::error!("GraphicsSystem: no Shader found -- add one to world.jsonl");
+            self.failed = true;
+            return None;
+        }
+        let shader = shaders.remove(0);
 
-        let vert_instanced_shader = find_shader(&mut shaders, ShaderKind::VertexInstanced);
-
-        let vert_shader = match find_shader(&mut shaders, ShaderKind::Vertex) {
-            Some(s) => s,
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: no vertex ShaderStage found -- add one to world.jsonl"
-                );
-                self.failed = true;
-                return None;
-            }
-        };
-        let frag_shader = match find_shader(&mut shaders, ShaderKind::Fragment) {
-            Some(s) => s,
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: no fragment ShaderStage found -- add one to world.jsonl"
-                );
-                self.failed = true;
-                return None;
-            }
-        };
-
-        let vert_locator = match &vert_shader.locator {
+        let locator = match &shader.locator {
             Some(l) => l.clone(),
             None => {
-                tracing::error!(
-                    "GraphicsSystem: vertex ShaderStage '{}' has no compiled payload",
-                    vert_shader.source
-                );
-                self.failed = true;
-                return None;
-            }
-        };
-        let frag_locator = match &frag_shader.locator {
-            Some(l) => l.clone(),
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: fragment ShaderStage '{}' has no compiled payload",
-                    frag_shader.source
-                );
+                tracing::error!("GraphicsSystem: Shader has no compiled payload");
                 self.failed = true;
                 return None;
             }
         };
 
-        // instanced vertex shader is optional; required only when at least
-        // one InstancedProp is in the world (which we don't know yet).
-        let vert_instanced_locator = vert_instanced_shader
-            .as_ref()
-            .and_then(|s| s.locator.clone());
-
-        // Capture every world-loaded ShaderStage's resolved on-disk source
-        // path so the asset hot-reload watcher can recompile + rebuild
-        // pipelines on a `.metal` / `.hlsl` / `.glsl` save. Stages whose
-        // current-platform source is the embedded GLSL fallback (or whose
-        // declaration uses a non-platform-compatible extension) carry no
-        // file to watch and are skipped; the inline GLSL path keeps
-        // rendering at whatever was baked in.
+        // Capture each declared stage's resolved on-disk source path so the
+        // asset hot-reload watcher can recompile + rebuild pipelines on a
+        // `.metal` / `.hlsl` / `.glsl` save. Stages whose current-platform
+        // source is the embedded GLSL fallback (or whose declaration uses a
+        // non-platform-compatible extension) carry no file to watch and are
+        // skipped; the inline GLSL path keeps rendering at whatever was baked
+        // in.
         let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
         if crate::app::dev_flags::enabled() {
-            let mut capture = |stage_opt: Option<&ShaderStage>, kind: ShaderKind| {
+            let mut capture = |stage_opt: Option<&StageSource>, kind: ShaderKind| {
                 let Some(stage) = stage_opt else {
                     return;
                 };
@@ -1541,29 +1498,38 @@ impl GraphicsSystem {
                     },
                 );
             };
-            capture(Some(&vert_shader), ShaderKind::Vertex);
-            capture(Some(&frag_shader), ShaderKind::Fragment);
-            capture(vert_instanced_shader.as_ref(), ShaderKind::VertexInstanced);
+            capture(Some(&shader.vertex), ShaderKind::Vertex);
+            capture(Some(&shader.fragment), ShaderKind::Fragment);
+            capture(
+                shader.vertex_instanced.as_ref(),
+                ShaderKind::VertexInstanced,
+            );
         }
 
-        // Read all shader payloads before the blob is released -- they may share
+        // Read the stage container before the blob is released -- it may share
         // one blob with the mesh/texture payloads read elsewhere in init.
-        let vert_bytes = match ctx.read_payload(&vert_locator) {
-            Ok(b) => b.to_vec(),
+        let payload = match ctx.read_payload(&locator) {
+            Ok(b) => match crate::assets::ShaderPayload::decode(b) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
+                    self.failed = true;
+                    return None;
+                }
+            },
             Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read vertex shader: {:?}", e);
+                tracing::error!("GraphicsSystem: failed to read shader payload: {:?}", e);
                 self.failed = true;
                 return None;
             }
         };
-        let frag_bytes = match ctx.read_payload(&frag_locator) {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read fragment shader: {:?}", e);
-                self.failed = true;
-                return None;
-            }
-        };
+        // A stage the cook compiled nothing for (the Vulkan inline-GLSL
+        // carve-out) reads as empty bytes; the backend falls back per stage.
+        let stage_bytes =
+            |kind: ShaderKind| payload.stage(kind).map(<[u8]>::to_vec).unwrap_or_default();
+        let vert_bytes = stage_bytes(ShaderKind::Vertex);
+        let frag_bytes = stage_bytes(ShaderKind::Fragment);
+        let vert_instanced_bytes = stage_bytes(ShaderKind::VertexInstanced);
 
         // Whether this world's main shader is the engine's built-in default
         // rather than an authored override. Reported to the backend, which
@@ -1576,33 +1542,16 @@ impl GraphicsSystem {
                 Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
             )
         };
-        let main_is_engine_default = is_builtin_main(vert_shader.current_platform_source())
-            && is_builtin_main(frag_shader.current_platform_source());
+        let main_is_engine_default = is_builtin_main(shader.vertex.current_platform_source())
+            && is_builtin_main(shader.fragment.current_platform_source());
         // The shadow shader is engine-internal now (compiled from
         // `shadow_map.metal`), so there is no per-world shadow payload. The
         // DX / Vulkan constructors still take a shadow byte slice pending their
         // own internal-shadow migration; Metal ignores it.
         let shadow_bytes: Vec<u8> = Vec::new();
-        let vert_instanced_bytes = if let Some(ref locator) = vert_instanced_locator {
-            match ctx.read_payload(locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read instanced vertex shader: {:?}",
-                        e
-                    );
-                    self.failed = true;
-                    return None;
-                }
-            }
-        } else {
-            Vec::new()
-        };
 
         Some(DecodedShaders {
-            vert_locator,
-            frag_locator,
-            vert_instanced_locator,
+            locator,
             source_map: shader_stage_source_map,
             vert_bytes,
             frag_bytes,
@@ -2086,9 +2035,7 @@ impl GraphicsSystem {
         };
 
         let DecodedShaders {
-            vert_locator,
-            frag_locator,
-            vert_instanced_locator,
+            locator: shader_locator,
             source_map: shader_stage_source_map,
             vert_bytes,
             frag_bytes,
@@ -2261,9 +2208,7 @@ impl GraphicsSystem {
         // payload, so those blobs must also survive this sweep.
         let terrain_blobs = crate::assets::procedural_mesh::heightfield_blob_indices(ctx);
         let mut released = std::collections::HashSet::new();
-        for idx in std::iter::once(vert_locator.blob_index)
-            .chain(std::iter::once(frag_locator.blob_index))
-            .chain(vert_instanced_locator.iter().map(|l| l.blob_index))
+        for idx in std::iter::once(shader_locator.blob_index)
             .chain(texture_locators.iter().map(|l| l.blob_index))
             .chain(room_blob_indices)
             .chain(font_blob_indices)
@@ -2923,7 +2868,7 @@ impl GraphicsSystem {
                 "asset hot-reload: captured {} file-backed texture source(s), {} \
                  ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
                  source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-                 {} ShaderStage source(s), and world.jsonl path = {:?}",
+                 {} shader stage source(s), and world.jsonl path = {:?}",
                 asset_source_map.len(),
                 color_lut_source.as_ref().map(|_| 1).unwrap_or(0),
                 environment_map_source.as_ref().map(|_| 1).unwrap_or(0),

@@ -7,7 +7,7 @@
 // `BuildCtx` is the build-time context handed to each impl. It lives here
 // because it is build-only: the runtime never compiles a payload. `Platform`
 // and the `SourceBacked` trait stay in concinnity-core, since the engine reads
-// a `ShaderStage`'s current-platform source at runtime.
+// a Shader stage's current-platform source at runtime.
 
 use crate::ecs::Component;
 use crate::world::WorldJsonlAsset;
@@ -29,7 +29,7 @@ pub enum SourceInput {
 // paths the walk would miss.
 //
 // `Only` replaces the walk entirely and is the complete input set. Use it when
-// the walk over-approximates in a way that matters -- a `ShaderStage` declaring
+// the walk over-approximates in a way that matters -- a Shader stage declaring
 // both an `.hlsl` and a `.glsl` source reads exactly one of them, so hashing
 // both makes an edit to the unused variant invalidate the other backend's
 // cached payload. The tradeoff is that the safety net is gone: an input this
@@ -64,7 +64,7 @@ pub trait BuildAsset: Component {
 
     // True when identical source bytes compile to a different payload per
     // backend, so the compile target is itself an input to the payload and
-    // belongs in the cache key. `ShaderStage` sets this: the same file can be
+    // belongs in the cache key. `Shader` sets this: the same file can be
     // selected by two backends (`Platform::accepts_ext` accepts any
     // unrecognised extension, and a `sources` map entry is taken without an
     // extension check at all) and compiles to DXIL on one and SPIR-V on the

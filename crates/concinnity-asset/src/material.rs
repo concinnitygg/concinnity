@@ -1,6 +1,7 @@
 // Surface-material schema.
 
 use crate::{AssetId, TextureHandle, de_opt_texture_handle};
+use alloc::string::String;
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
 /// lit and shaded.
@@ -113,6 +114,12 @@ pub struct Material {
     /// the glass is actually modelled, so it is opt-in per material. Setting it
     /// implies `transparent`.
     pub see_through: bool,
+    /// The [Shader](#shader) asset that shades surfaces using this material.
+    /// When omitted, the world's default shader is used. Referencing a shader
+    /// from a material ties that shader's lifetime to the material's: a shader
+    /// referenced only by scene-exclusive materials loads and unloads with the
+    /// scene.
+    pub shader: Option<String>,
 }
 
 impl Default for Material {
@@ -136,6 +143,7 @@ impl Default for Material {
             opacity: 1.0,
             transparent: false,
             see_through: false,
+            shader: None,
         }
     }
 }

@@ -7,7 +7,7 @@
 // - Sorts: components first, then systems in declared order
 
 use crate::assets::FileKind;
-use crate::world::{WorldConfig, WorldJsonlAsset, normalize_single_shader_type};
+use crate::world::{WorldConfig, WorldJsonlAsset};
 
 use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
@@ -174,8 +174,6 @@ pub fn validate_asset(
     // to a real slot, which single-asset validation never needs).
     asset_id::reset_interner();
     crate::resource_handles::reset_resource_handles();
-    let (asset_type, args) = normalize_single_shader_type(asset_type, args);
-    let asset_type = asset_type.as_str();
     let type_norm = asset_type.to_lowercase().replace('_', "");
 
     // Build-time types are valid in world.jsonl; they are consumed by expansion
@@ -191,7 +189,7 @@ pub fn validate_asset(
     // they never build a component def; validate them as known types with a
     // structural check instead of routing through `create_asset_def`.
     if crate::resource_handles::ResourceAssetType::parse(asset_type).is_some() {
-        crate::check::check_asset(&type_norm, name, &args)?;
+        crate::check::check_asset(&type_norm, name, args)?;
         return Ok(());
     }
 
@@ -201,7 +199,7 @@ pub fn validate_asset(
     };
     asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{}': {}", name, e))?;
 
-    crate::check::check_asset(&type_norm, name, &args)?;
+    crate::check::check_asset(&type_norm, name, args)?;
 
     Ok(())
 }
@@ -1651,13 +1649,13 @@ fn compile_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
-    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, ShaderStage, VoxelChunk};
+    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     match ct {
         ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::compile_payload(args, ctx),
         ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
         ComponentType::File => <File as BuildAsset>::compile_payload(args, ctx),
         ComponentType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::ShaderStage => <ShaderStage as BuildAsset>::compile_payload(args, ctx),
+        ComponentType::Shader => <Shader as BuildAsset>::compile_payload(args, ctx),
         ComponentType::SdfVolume => <SdfVolume as BuildAsset>::compile_payload(args, ctx),
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -1683,7 +1681,7 @@ fn cache_inputs_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> crate::asset::CacheInputs {
     use crate::asset::{BuildAsset, CacheInputs};
-    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, ShaderStage, VoxelChunk};
+    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     macro_rules! inputs {
         ($t:ty) => {
             CacheInputs {
@@ -1697,7 +1695,7 @@ fn cache_inputs_by_type(
         ComponentType::VoxelChunk => inputs!(VoxelChunk),
         ComponentType::File => inputs!(File),
         ComponentType::Room => inputs!(Room),
-        ComponentType::ShaderStage => inputs!(ShaderStage),
+        ComponentType::Shader => inputs!(Shader),
         ComponentType::SdfVolume => inputs!(SdfVolume),
         _ => CacheInputs::extra(Vec::new()),
     }
@@ -1819,8 +1817,7 @@ mod tests {
 
     // Default-shader compilation writes intermediates to a shared
     // .concinnity/data path keyed by asset name, so tests whose worlds pull in
-    // the default ShaderStages (any rendering world) must not build
-    // concurrently.
+    // the default Shader (any rendering world) must not build concurrently.
     static SHADER_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -2100,8 +2097,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_payload_compiles_end_to_end() {
-        let world = r#"{"name":"vert","type":"ShaderStage","args":{"kind":"vertex","source":"x.metal"}}
-{"name":"frag","type":"ShaderStage","args":{"kind":"fragment","source":"x.metal"}}
+        let world = r#"{"name":"scene_shader","type":"Shader","args":{"vertex":{"source":"x.metal"},"fragment":{"source":"x.metal"}}}
 {"name":"air","type":"BlockType","args":{"solid":false}}
 {"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
 {"name":"chunk","type":"VoxelChunk","args":{"palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}}
@@ -4396,18 +4392,23 @@ mod tests {
         );
     }
 
-    // The ShaderStage wrapper's non-compiling arms: a missing source is either
-    // a hard error (Metal/HLSL) or the inline-GLSL stub (Vulkan). Neither shells
-    // out to a shader toolchain, so the test stays backend-agnostic.
+    // The Shader wrapper's non-compiling arms: a missing stage source is
+    // either a hard error (Metal/HLSL) or the inline-GLSL stub (Vulkan).
+    // Neither shells out to a shader toolchain, so the test stays
+    // backend-agnostic.
     #[test]
-    fn compile_by_type_shader_stage_missing_source_does_not_shell_out() {
+    fn compile_by_type_shader_missing_source_does_not_shell_out() {
         let out = compile_by_type(
-            ct("ShaderStage"),
-            &serde_json::json!({"kind": "vertex"}),
+            ct("Shader"),
+            &serde_json::json!({"vertex": {}, "fragment": {}}),
             &ctx(),
         );
         match out {
-            Ok(bytes) => assert!(bytes.is_empty(), "glsl stub yields empty bytes"),
+            Ok(bytes) => {
+                let payload = concinnity_core::assets::ShaderPayload::decode(&bytes)
+                    .expect("empty container decodes");
+                assert!(payload.stages.is_empty(), "glsl stub compiles no stages");
+            }
             Err(e) => assert!(e.to_string().contains("no shader source"), "got: {e}"),
         }
     }
@@ -4439,8 +4440,8 @@ mod tests {
             SourceFiles::Only(Vec::new())
         );
 
-        // ShaderStage compiles its source, so the target is an input.
-        let no_source = cache_inputs_by_type(ct("ShaderStage"), &serde_json::json!({}), &ctx());
+        // Shader compiles its stage sources, so the target is an input.
+        let no_source = cache_inputs_by_type(ct("Shader"), &serde_json::json!({}), &ctx());
         assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
         assert!(no_source.target_dependent);
 
@@ -4454,9 +4455,11 @@ mod tests {
             _ => None,
         };
         if let Some(name) = builtin {
-            let args = serde_json::json!({ "sources": { "metal": name, "hlsl": name } });
+            let args = serde_json::json!({
+                "vertex": { "sources": { "metal": name, "hlsl": name } }
+            });
             assert_eq!(
-                cache_inputs_by_type(ct("ShaderStage"), &args, &ctx()).sources,
+                cache_inputs_by_type(ct("Shader"), &args, &ctx()).sources,
                 SourceFiles::Only(vec![SourceInput::Builtin(name.to_string())])
             );
         }

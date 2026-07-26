@@ -69,7 +69,7 @@ pub fn resolve_source_path(source: &str) -> String {
 // Resolve an EnvironmentMap source string into a filesystem path. Bare
 // filenames are searched under `.concinnity/assets/` (recursively) so worlds
 // can reference HDRIs by filename only, matching the lookup semantics of
-// `ShaderStage` source paths. Anything containing a directory separator is
+// `Shader` stage source paths. Anything containing a directory separator is
 // returned unchanged, so absolute or relative paths still work.
 pub fn resolve_hdr_source(source: &str) -> String {
     let p = std::path::Path::new(source);

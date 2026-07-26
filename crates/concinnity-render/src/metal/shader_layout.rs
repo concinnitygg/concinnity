@@ -2,7 +2,7 @@
 //
 // The engine's buffer-binding contract for user-authored Metal shaders, plus
 // the pure comparison that catches CPU/GPU struct-layout mismatches. A custom
-// ShaderStage is linked into the engine's standard pipeline and inherits the
+// Shader is linked into the engine's standard pipeline and inherits the
 // engine's buffer bindings (per-frame view uniforms, per-object data, lights,
 // shadow cascades). If the user declares one of those structs with a different
 // layout than the engine's `#[repr(C)]` struct, the GPU reads the engine's
@@ -44,7 +44,7 @@ pub struct ExpectedStruct {
     pub fields: Vec<ExpectedField>,
 }
 
-// Which engine pipeline stage an entry point belongs to. A custom ShaderStage
+// Which engine pipeline stage an entry point belongs to. A custom Shader stage
 // declared `kind: "vertex"` can be a main vertex shader or a shadow caster;
 // they bind different engine buffers, so the reflector resolves the stage from
 // the entry-point name (see `shader_reflect.rs`).

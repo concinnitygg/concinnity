@@ -10,9 +10,9 @@ use concinnity_world::source_args::current_platform_source_arg;
 //      location once a world has been built and `cn run` fetches its
 //      dependencies).
 //   2. `.concinnity/assets/<bare>` recursive search: same bare-filename
-//      match `ShaderStage` does.
+//      match `Shader` does.
 //   3. `<artifacts_dir>/<raw>`: LLM-written artifact under
-//      `data/artifacts/<account_id>/`, matching the existing ShaderStage path.
+//      `data/artifacts/<account_id>/`, matching the existing Shader stage path.
 //   4. `assets/<raw>`: source-tree convenience for `cn debug` run from
 //      `concinnity-engine/` against shaders authored in the repo's `assets/`
 //      directory.

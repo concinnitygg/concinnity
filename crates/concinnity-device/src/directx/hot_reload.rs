@@ -174,7 +174,7 @@ impl DxContext {
     // main / shadow / instanced pipelines (`main_pso`, `shadow_pso`,
     // `main_instanced_pso`) and the skinned-main / skinned-shadow PSOs
     // are out of scope here; their fragment payload comes from the
-    // world's `ShaderStage` library and is reloaded through a separate
+    // world's Shader library and is reloaded through a separate
     // `update_world_shader_pipelines` path (not yet implemented on
     // DirectX).
     pub(super) fn reload_shaders(&mut self) -> Result<(), String> {

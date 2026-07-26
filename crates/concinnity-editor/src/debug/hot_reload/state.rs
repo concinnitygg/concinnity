@@ -114,7 +114,7 @@ pub struct AssetHotReloadState {
     // live `world.jsonl`. No file watcher: the trigger is the same
     // `PENDING_WORLD` flag the Prop-diff path consumes.
     pub procedural_meshes: ProceduralMeshSourceMap,
-    // World-loaded `ShaderStage` assets whose source files can be re-
+    // World-loaded `Shader` assets whose source files can be re-
     // compiled from disk. The asset watcher recognises `.metal` / `.hlsl`
     // / `.glsl` events against the parent directories of these entries and
     // sets [`super::pending::set_pending_shader_stages`] (separate
@@ -333,14 +333,14 @@ pub(crate) fn run_frame(
         reload_assets(state);
     }
 
-    // World-loaded ShaderStage reload poll. The backend builds every
+    // World-loaded Shader reload poll. The backend builds every
     // replacement into a temporary first and only swaps on success, so a typo
     // in one shader leaves the live pipelines untouched.
     if super::pending::take_pending_shader_stages() {
         let ss_result = reload_shader_stages(&state.shader_stages, apply.backend);
         if ss_result.recompiled > 0 || ss_result.failed > 0 {
             tracing::info!(
-                "ShaderStage hot-reload: recompiled={} failed={} pipelines_rebuilt={}",
+                "Shader hot-reload: recompiled={} failed={} pipelines_rebuilt={}",
                 ss_result.recompiled,
                 ss_result.failed,
                 ss_result.pipelines_rebuilt,

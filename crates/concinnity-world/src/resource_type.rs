@@ -184,6 +184,7 @@ impl ResourceAssetType {
                 ("orm_map", "Texture"),
                 ("albedo_secondary", "Texture"),
                 ("normal_secondary", "Texture"),
+                ("shader", "Shader"),
             ],
             _ => &[],
         }

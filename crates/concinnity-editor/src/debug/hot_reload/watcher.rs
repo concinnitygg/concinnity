@@ -62,7 +62,7 @@ pub(super) fn spawn_watcher(
         // reload: the backend asset payloads (textures, IBL, meshes,
         // skinned, animations) don't live in the JSONL, only Prop
         // transforms and the asset-graph topology do. `.metal` / `.hlsl`
-        // / `.glsl` events kick the world-loaded ShaderStage reload pass
+        // / `.glsl` events kick the world-loaded shader reload pass
         // alone (recompile + pipeline rebuild, no texture / mesh decode
         // is needed). Everything else (`.glb` / `.png` / `.hdr` / `.cube`)
         // kicks the asset reload + the animation reload but not the world
@@ -238,11 +238,11 @@ pub(super) fn is_asset_event(event: &Event) -> bool {
 }
 
 // True for the shader-source extensions recognised by world-loaded
-// `ShaderStage` hot-reload. Case-insensitive so a `.METAL` save still
+// `Shader` hot-reload. Case-insensitive so a `.METAL` save still
 // triggers the rebuild. `.metal` files in the engine's bundled shader
 // directory are handled by a separate watcher in
 // [`crate::metal::hot_reload`]; the asset watcher here only subscribes
-// to the parent directories of *captured* `ShaderStage` sources, so the
+// to the parent directories of *captured* Shader stage sources, so the
 // two watchers never observe the same file even though they share an
 // extension list.
 pub(super) fn is_shader_extension(ext: &str) -> bool {

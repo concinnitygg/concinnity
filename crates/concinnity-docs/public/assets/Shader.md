@@ -1,19 +1,16 @@
 <!-- Auto-generated - do not edit. -->
 
-# ShaderStage
+# Shader
 
-Declares a compiled shader stage.
+Declares a complete shader program: the vertex and fragment stages every
+rendered world needs, plus the optional GPU-instanced vertex stage.
 
-**Vertex and fragment stages are required for anything to render.** The
-shadow pass is engine-internal (no `ShaderStage` of its own); enable or
-size it with `shadow_map_size` in [GraphicsConfig](GraphicsConfig.md).
+**A rendering world needs at least one Shader.** When a world declares
+none, the bundled default set is injected automatically. The shadow pass is
+engine-internal (no Shader stage of its own); enable or size it with
+`shadow_map_size` in [GraphicsConfig](GraphicsConfig.md).
 
-Provide either `source` (single platform) or `sources` (multi-platform). When both are
-present, `sources` takes priority for the current platform.
-
-**Platform keys:** `"metal"` (macOS), `"hlsl"` (Windows), `"glsl"` (Linux/Vulkan).
-
-**Bundled shaders:**
+**Bundled sources:**
 
 - `"default.metal"` / `"default_vert.hlsl"` / `"default_frag.hlsl"`: standard diffuse/specular lighting.
 
@@ -23,11 +20,13 @@ the origin with 80 m depth. For larger scenes, increase `shadow_map_size` in
 
 ```jsonl
 // Multi-platform standard scene:
-{"name":"vert","type":"ShaderStage","args":{"kind":"vertex","sources":{"metal":"default.metal","hlsl":"default_vert.hlsl"}}}
-{"name":"frag","type":"ShaderStage","args":{"kind":"fragment","sources":{"metal":"default.metal","hlsl":"default_frag.hlsl"}}}
+{"name":"scene_shader","type":"Shader","args":{
+  "vertex":{"sources":{"metal":"default.metal","hlsl":"default_vert.hlsl"}},
+  "fragment":{"sources":{"metal":"default.metal","hlsl":"default_frag.hlsl"}}}}
 
 // Single-platform (macOS only):
-{"name":"vert","type":"ShaderStage","args":{"kind":"vertex","source":"default.metal"}}
+{"name":"scene_shader","type":"Shader","args":{
+  "vertex":{"source":"my.metal"},"fragment":{"source":"my.metal"}}}
 ```
 
 **Custom shader vertex layout**: the engine always supplies vertices with 5
@@ -69,6 +68,6 @@ struct ShadowUniforms {
 
 ## Parameters
 
-- `kind`: A string (see [ShaderKind](ShaderKind.md)). Which stage this shader drives.
-- `source`: A string. Single-platform source path; used when `sources` is absent or lacks the current platform key.
-- `sources`: An object. Per-platform source paths keyed by `"metal"`, `"hlsl"`, or `"glsl"`. Takes priority over `source`. Optional.
+- `vertex`: A [StageSource](StageSource.md) object. The vertex stage. Required.
+- `fragment`: A [StageSource](StageSource.md) object. The fragment stage. Required.
+- `vertex_instanced`: A [StageSource](StageSource.md) object. The GPU-instanced vertex stage. Required only for worlds with [InstancedProp](InstancedProp.md) components. Optional.

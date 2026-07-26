@@ -33,7 +33,7 @@ fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     // Target Vulkan 1.2 so the emitted module is SPIR-V 1.5 (not the 1.6 a 1.3
     // target produces). The runtime instance is created at Vulkan 1.2 (see
     // `concinnity_device::vulkan::init`), and `vkCreateShaderModule` rejects a SPIR-V version
-    // newer than the instance's, so a world-authored ShaderStage compiled to
+    // newer than the instance's, so a world-authored Shader stage compiled to
     // SPIR-V 1.6 fails to load. 1.5 loads cleanly on a 1.2-or-newer instance.
     options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
 

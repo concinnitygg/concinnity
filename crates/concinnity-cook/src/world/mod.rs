@@ -27,7 +27,6 @@ pub(crate) mod panel;
 pub(crate) mod prefab;
 pub(crate) mod room;
 pub(crate) mod scene_import;
-pub(crate) mod shader;
 pub(crate) mod slider;
 pub(crate) mod story;
 pub use story::validate_story_source;
@@ -42,7 +41,6 @@ pub use config::{DEFAULT_MAX_BLOB_BYTES, WorldConfig};
 pub use expand::{
     ExpandReport, GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world, expand_world_from_str,
 };
-pub use shader::normalize_single_shader_type;
 
 // A world.jsonl that has been loaded, structurally validated, expanded, and
 // semantically checked: everything the compile stage needs, computed once.

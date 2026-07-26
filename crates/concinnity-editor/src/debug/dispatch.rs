@@ -213,7 +213,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 Some(flag) => {
                     flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     // AnimationSystem, the GraphicsSystem world-reload pass,
-                    // and the world-loaded ShaderStage reload pass each
+                    // and the world-loaded shader reload pass each
                     // listen on their own sibling flags. Fire all four here
                     // so a single WS command reloads every hot-reloadable
                     // surface in one shot.
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(r["reload_queued"], true);
         assert!(flag.load(Ordering::SeqCst));
-        // The world, ShaderStage, and animation reload surfaces were signalled;
+        // The world, Shader-stage, and animation reload surfaces were signalled;
         // drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
         assert!(hot_reload::take_pending_shader_stages());
