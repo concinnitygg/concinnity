@@ -1042,9 +1042,8 @@ fn max_frames_stops_the_run() {
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
 }
 
-// A launch-imposed cap (the `cn export` shader-warm pass) overrides whatever the
-// world asked for, including a world that set no cap at all and would otherwise
-// run until its window closed.
+// A launch-imposed cap overrides whatever the world asked for, including a world
+// that set no cap at all and would otherwise run until its window closed.
 #[test]
 fn a_launch_frame_cap_overrides_the_world() {
     let (_state, hooks) = recording_hooks();

@@ -347,8 +347,7 @@ impl GraphicsSystem {
             self.vsync = args.vsync;
             self.fps_cap = args.fps_cap;
             self.clear_color = args.clear_color;
-            // A launch-imposed cap (the export shader-warm pass) wins over the
-            // world's own, so warming exits after a frame instead of playing.
+            // A launch-imposed cap wins over the world's own.
             self.max_frames = crate::app::dev_flags::max_frames().or(args.max_frames);
             self.shadow_map_size = args.shadow_map_size;
             self.shadow_update = args.shadow_update;

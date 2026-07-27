@@ -29,9 +29,9 @@
 //                        running process, so the CLI re-execs with the env var
 //                        instead; this flag does not drive Metal.
 //   MAX_FRAMES           "exit after this many frames, whatever the world says."
-//                        Set by the runtime player when `cn export` launches it
-//                        to warm the shader cache; read by `GraphicsSystem::init`
-//                        in place of `GraphicsConfig.max_frames`. Unset for a
+//                        Read by `GraphicsSystem::init` in place of
+//                        `GraphicsConfig.max_frames`, for a host that needs a
+//                        world it does not own to render and exit. Unset for a
 //                        normal launch, leaving the world's own value in effect.
 //   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
 //                        editor's `cn debug` / `cn editor` entry once the world
@@ -125,12 +125,10 @@ pub(crate) fn validation() -> Option<bool> {
 }
 
 // Cap the frame count regardless of what the world's `GraphicsConfig` asked
-// for. Set by the runtime player when `cn export` launches it to warm the
-// shader cache: renderer init is the part that matters, so the process renders
-// a frame and exits rather than opening the game.
+// for, so a host can render a world it does not author and exit.
 //
-// `dead_code` allow: only the runtime binary calls this; the library only reads
-// it, so `cargo check --lib` reports it unused.
+// `dead_code` allow: nothing in the workspace sets this today, only reads it.
+// Remove the allow along with the seam if no host claims it.
 #[allow(dead_code)]
 pub fn set_max_frames(frames: Option<u64>) {
     *MAX_FRAMES.lock().unwrap() = frames;
