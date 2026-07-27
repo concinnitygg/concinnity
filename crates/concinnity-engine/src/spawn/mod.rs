@@ -15,12 +15,25 @@
 // list. The world clock (Lifetime + Spawner) freezes while a menu is open
 // (`MenuActive`, published by OverlaySystem earlier this tick).
 
-use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, VisibilityRequest};
+use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, Target, VisibilityRequest};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
 use crate::gfx::draw_list;
 use std::time::Instant;
+
+// Resolve a request target to a live entity. A named target goes through the
+// world's name index; an entity-addressed one is already what the caller means,
+// including entities that never had a name.
+fn resolve_target(
+    by_name: &std::collections::BTreeMap<AssetId, crate::ecs::Entity>,
+    target: Target,
+) -> Option<crate::ecs::Entity> {
+    match target {
+        Target::Name(name) => by_name.get(&name).copied(),
+        Target::Entity(entity) => Some(entity),
+    }
+}
 
 mod despawn;
 mod template;
@@ -101,23 +114,23 @@ impl SpawnSystem {
         // GraphicsSystem's transform push so a despawned entity is already
         // gone from the GlobalTransform x RenderHandle join this frame and
         // contributes nothing to any pass.
-        let despawn_names: Vec<AssetId> = match ctx.events::<DespawnRequest>() {
+        let despawn_targets: Vec<Target> = match ctx.events::<DespawnRequest>() {
             Some(events) => events
                 .read(&mut self.despawn_cmd_cursor)
                 .into_iter()
-                .map(|r| r.name)
+                .map(|r| r.target)
                 .collect(),
             None => Vec::new(),
         };
-        if !despawn_names.is_empty() {
+        if !despawn_targets.is_empty() {
             // Clone the name index out so the ctx borrow ends before the
             // despawns, which take &mut ctx.
             let by_name = ctx
                 .resource::<crate::ecs::decompose::EntityByName>()
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
-            for name in despawn_names {
-                if let Some(&entity) = by_name.get(&name) {
+            for target in despawn_targets {
+                if let Some(entity) = resolve_target(&by_name, target) {
                     despawn::despawn_subtree(ctx, backend, entity);
                 }
             }
@@ -141,7 +154,7 @@ impl SpawnSystem {
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
             for req in vis_reqs {
-                if let Some(&entity) = by_name.get(&req.name) {
+                if let Some(entity) = resolve_target(&by_name, req.target) {
                     visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
                 }
             }
@@ -166,10 +179,10 @@ impl SpawnSystem {
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
             for req in reparents {
-                let Some(&child) = by_name.get(&req.child) else {
+                let Some(child) = resolve_target(&by_name, req.child) else {
                     continue;
                 };
-                let parent = req.parent.and_then(|p| by_name.get(&p).copied());
+                let parent = req.parent.and_then(|p| resolve_target(&by_name, p));
                 // A named-but-unresolved parent skips, so a typo never
                 // silently detaches the child to a root.
                 if req.parent.is_some() && parent.is_none() {

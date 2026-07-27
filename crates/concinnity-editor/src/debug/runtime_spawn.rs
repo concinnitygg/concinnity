@@ -564,7 +564,7 @@ pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut crate::ecs::Worl
     };
     world
         .events_mut::<crate::assets::DespawnRequest>()
-        .send(crate::assets::DespawnRequest { name: id });
+        .send(crate::assets::DespawnRequest { target: id.into() });
     let _ = reply.send(Ok(()));
 }
 
@@ -607,8 +607,8 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
     world
         .events_mut::<crate::assets::ReparentRequest>()
         .send(crate::assets::ReparentRequest {
-            child: child_id,
-            parent: parent_id,
+            child: child_id.into(),
+            parent: parent_id.map(Into::into),
         });
     let _ = reply.send(Ok(()));
 }
@@ -1676,7 +1676,10 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         let seen = events.read(&mut cursor);
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].name, crate::ecs::asset_id::AssetId(1));
+        assert_eq!(
+            seen[0].target.name().unwrap(),
+            crate::ecs::asset_id::AssetId(1)
+        );
 
         // An unknown name is a clean error.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1716,8 +1719,14 @@ mod tests {
                 .expect("reparent request queued");
             let seen = events.read(&mut cursor);
             assert_eq!(seen.len(), 1);
-            assert_eq!(seen[0].child, crate::ecs::asset_id::AssetId(0));
-            assert_eq!(seen[0].parent, Some(crate::ecs::asset_id::AssetId(1)));
+            assert_eq!(
+                seen[0].child.name().unwrap(),
+                crate::ecs::asset_id::AssetId(0)
+            );
+            assert_eq!(
+                seen[0].parent.and_then(|p| p.name()),
+                Some(crate::ecs::asset_id::AssetId(1))
+            );
         }
 
         // A None parent detaches the child to a root.

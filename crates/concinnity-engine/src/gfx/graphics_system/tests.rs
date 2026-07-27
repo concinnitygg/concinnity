@@ -1105,7 +1105,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
         let mut ctx = world.ctx();
         ctx.events_mut::<VisibilityRequest>()
             .send(VisibilityRequest {
-                name: PROP,
+                target: PROP.into(),
                 visible: false,
             });
     }
@@ -1124,7 +1124,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
         let mut ctx = world.ctx();
         ctx.events_mut::<VisibilityRequest>()
             .send(VisibilityRequest {
-                name: PROP,
+                target: PROP.into(),
                 visible: true,
             });
     }
@@ -1148,8 +1148,9 @@ fn despawn_request_retires_draw_slots() {
 
     {
         let mut ctx = world.ctx();
-        ctx.events_mut::<DespawnRequest>()
-            .send(DespawnRequest { name: PROP });
+        ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
+            target: PROP.into(),
+        });
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
@@ -1371,8 +1372,9 @@ fn spawn_system_without_a_backend_leaves_the_churn_pending() {
 
     {
         let mut ctx = world.ctx();
-        ctx.events_mut::<DespawnRequest>()
-            .send(DespawnRequest { name: PROP });
+        ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
+            target: PROP.into(),
+        });
     }
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
@@ -1400,8 +1402,8 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
     {
         let mut ctx = world.ctx();
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
-            child: OTHER,
-            parent: Some(PROP),
+            child: OTHER.into(),
+            parent: Some(PROP.into()),
         });
     }
     let mut spawn = crate::spawn::SpawnSystem::new();
@@ -1446,8 +1448,8 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
         let mut ctx = world.ctx();
         crate::gfx::draw_list::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
-            child: OTHER,
-            parent: Some(GHOST),
+            child: OTHER.into(),
+            parent: Some(GHOST.into()),
         });
     }
     let mut spawn = crate::spawn::SpawnSystem::new();
@@ -1477,7 +1479,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
         let mut ctx = world.ctx();
         crate::gfx::draw_list::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
-            child: OTHER,
+            child: OTHER.into(),
             parent: None,
         });
     }
@@ -3628,8 +3630,8 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
     {
         let mut ctx = world.ctx();
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
-            child: AssetId(901),
-            parent: Some(PROP),
+            child: AssetId(901).into(),
+            parent: Some(PROP.into()),
         });
     }
     let mut spawn = crate::spawn::SpawnSystem::new();

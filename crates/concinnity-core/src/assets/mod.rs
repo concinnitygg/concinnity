@@ -48,6 +48,7 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
+mod target;
 mod visibility_request;
 mod volume_event;
 
@@ -207,6 +208,7 @@ pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;
+pub use target::Target;
 pub use visibility_request::VisibilityRequest;
 pub use volume_event::VolumeEvent;
 // `MAX_WATER_WAVES` stays in core: the build-side water-surface validator

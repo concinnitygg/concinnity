@@ -57,6 +57,10 @@ crate::define_systems! {
         gate: schedule::logic,
         present_when: "the world declares any Reaction",
     },
+    BehaviorSystem => crate::behavior::BehaviorSystem {
+        gate: schedule::behavior,
+        present_when: "the world declares any Behavior",
+    },
     SpawnSystem => crate::spawn::SpawnSystem {
         gate: schedule::spawn,
         present_when: "the world declares a GraphicsConfig",

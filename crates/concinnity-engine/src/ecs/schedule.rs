@@ -44,6 +44,15 @@ pub(crate) fn logic(world: &World) -> Option<SystemAsset> {
         .map(|_| crate::logic::ReactionSystem::new().into())
 }
 
+// BehaviorSystem: present whenever the world declares any `Behavior`. Shares
+// ReactionSystem's slot and ordering guarantees.
+pub(crate) fn behavior(world: &World) -> Option<SystemAsset> {
+    world
+        .query::<crate::assets::Behavior>()
+        .next()
+        .map(|_| crate::behavior::BehaviorSystem::new().into())
+}
+
 // SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
 // clones the GPU draw slots graphics owns. Scheduled immediately before it so
 // a despawn is applied before the transform push and a spawn reuses slots

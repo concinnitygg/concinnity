@@ -44,14 +44,15 @@ pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) -> 
             }
             ReactionAction::Despawn { target } => {
                 let Some(target) = *target else { continue };
-                ctx.events_mut::<DespawnRequest>()
-                    .send(DespawnRequest { name: target });
+                ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
+                    target: target.into(),
+                });
             }
             ReactionAction::Reparent { child, parent } => {
                 let Some(child) = *child else { continue };
                 ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
-                    child,
-                    parent: *parent,
+                    child: child.into(),
+                    parent: parent.map(Into::into),
                 });
             }
             ReactionAction::Sound { clip, kind, volume } => {
@@ -85,7 +86,10 @@ pub(super) fn execute(ctx: &mut PipelineContext, actions: &[ReactionAction]) -> 
                 let Some(name) = *target else { continue };
                 let visible = matches!(action, ReactionAction::Show { .. });
                 ctx.events_mut::<VisibilityRequest>()
-                    .send(VisibilityRequest { name, visible });
+                    .send(VisibilityRequest {
+                        target: name.into(),
+                        visible,
+                    });
             }
             ReactionAction::Save => save_requested = true,
         }

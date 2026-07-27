@@ -256,6 +256,12 @@ impl<'a> PipelineContext<'a> {
         self.components.get::<C>(entity)
     }
 
+    // Every entity carrying the component with this tag. Serves the queries a
+    // Behavior declares by component name, which no type parameter can express.
+    pub fn entities_with_tag(&self, tag: u8) -> &[Entity] {
+        self.components.entities_with_tag(tag)
+    }
+
     // Read-only join over two component types: iterate the first type's rows
     // and yield both refs for every entity that also has the second. Allowed
     // dead for the same cross-crate reason as `insert`.
@@ -382,6 +388,26 @@ macro_rules! define_components {
             $( $variant ),+
         }
 
+        impl ComponentTag {
+            // The registry name of this tag, as a world authors it.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $( ComponentTag::$variant => stringify!($variant) ),+
+                }
+            }
+
+            // The tag a component name denotes. Resolves the component names a
+            // Behavior declares in its `scope` and `queries`.
+            pub fn parse(name: &str) -> Option<ComponentTag> {
+                $(
+                    if name == stringify!($variant) {
+                        return Some(ComponentTag::$variant);
+                    }
+                )+
+                None
+            }
+        }
+
         $crate::__define_asset_kind! {
             asset_enum: ComponentAsset,
             asset_kind: Component,
@@ -435,6 +461,18 @@ macro_rules! define_components {
                 match asset {
                     $( ComponentAsset::$variant(c) => self.push_typed(c), )+
                 }
+            }
+
+            // Every entity carrying the component with this tag, in column
+            // order. Serves the declared-query resolution in BehaviorSystem,
+            // which selects components by authored name rather than by type.
+            pub fn entities_with_tag(&self, tag: u8) -> &[$crate::ecs::Entity] {
+                $(
+                    if tag == ComponentTag::$variant as u8 {
+                        return self.$variant.entities();
+                    }
+                )+
+                &[]
             }
 
             // The component tag of every stored component, one per instance.

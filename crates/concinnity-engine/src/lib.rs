@@ -48,6 +48,7 @@ pub(crate) mod hud;
 pub(crate) mod input;
 // Declarative when/if/then logic (Reaction components + the shared Variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
+pub(crate) mod behavior;
 pub(crate) mod logic;
 // The rayon job pool now lives in concinnity-render (the lowest layer the device
 // backends and the client's animation fan-out share); re-export it under the

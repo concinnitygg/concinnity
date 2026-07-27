@@ -466,9 +466,9 @@ fn show_and_hide_actions_send_visibility_requests() {
     let events = ctx.events::<VisibilityRequest>().unwrap();
     let reqs: Vec<&VisibilityRequest> = events.read(&mut cursor).into_iter().collect();
     assert_eq!(reqs.len(), 2);
-    assert_eq!(reqs[0].name, AssetId(3));
+    assert_eq!(reqs[0].target.name().unwrap(), AssetId(3));
     assert!(!reqs[0].visible);
-    assert_eq!(reqs[1].name, AssetId(4));
+    assert_eq!(reqs[1].target.name().unwrap(), AssetId(4));
     assert!(reqs[1].visible);
 }
 
