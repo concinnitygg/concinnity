@@ -294,7 +294,7 @@ impl System for Camera3DSystem {
                         t.rotation_deg[1]
                     );
                 }
-                // Announce the press for declarative logic (Reaction interact
+                // Announce the press for declarative logic (Behavior interact
                 // sources); an unnamed entity has no addressable identity to
                 // announce.
                 let target = ctx

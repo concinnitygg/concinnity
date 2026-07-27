@@ -51,7 +51,7 @@ fn merge(a: Option<Owner>, b: Owner) -> Owner {
 // references them. Resource assets plus the component types that only exist
 // to be referenced (mesh sources and Model). Everything else is a root whose
 // label is fixed — labels never merge INTO a root, so a logic asset naming a
-// scene prop (an AnimGraph target, a Reaction show/hide) does not drag that
+// scene prop (an AnimGraph target, a Behavior show/hide) does not drag that
 // prop's resources into the global set.
 fn is_reference_target(type_norm: &str) -> bool {
     concinnity_world::resource_type::ResourceAssetType::all()
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn logic_reference_to_a_scene_prop_does_not_globalize_its_resources() {
-        // A Reaction naming a day prop (show/hide) must not drag the prop's
+        // A Behavior naming a day prop (show/hide) must not drag the prop's
         // exclusive resources into the global set: roots keep their labels.
         let assets = vec![
             scene("day"),
@@ -314,8 +314,8 @@ mod tests {
             asset("m", "ProceduralMesh", serde_json::json!({})),
             asset(
                 "toggle",
-                "Reaction",
-                serde_json::json!({"on":{"interact":{"target":"day_a"}},"actions":[{"hide":{"target":"day_a"}}]}),
+                "Behavior",
+                serde_json::json!({"on":{"interact":"day_a"},"do":[{"hide":{"target":{"named":"day_a"}}}]}),
             ),
         ];
         let p = partition_scenes(&assets);

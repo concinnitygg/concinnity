@@ -11,7 +11,7 @@
 // the body sees a snapshot and produces effects, and only then does anything
 // change, so no behavior observes another's writes mid-tick.
 //
-// Scheduled in ReactionSystem's slot -- before SpawnSystem, so a spawn
+// Scheduled before SpawnSystem, so a spawn
 // requested this tick lands this tick, and before SettingsSystem / StorySystem
 // / AudioSystem so scene, story, and audio requests land the same tick too.
 // Clocks freeze while a menu is open, like the rest of the world clock.
@@ -220,10 +220,6 @@ impl System for BehaviorSystem {
                 }
             }
         }
-        // Baseline variable sources against the restored values, so restoring
-        // a variable does not read as a change on tick one.
-        self.sync_variable_baselines();
-
         tracing::info!(
             "BehaviorSystem: {} behavior(s), {} variable(s), restored {}",
             self.programs.len(),
@@ -276,23 +272,6 @@ struct Snapshot {
 }
 
 impl BehaviorSystem {
-    fn sync_variable_baselines(&mut self) {
-        for (i, program) in self.programs.iter().enumerate() {
-            let BehaviorSource::Variable(name) = &program.def.on else {
-                continue;
-            };
-            let value = self
-                .var_table
-                .slot_of(name)
-                .and_then(|s| self.vars.get(s as usize))
-                .copied()
-                .unwrap_or(0);
-            for instance in &mut self.instances[i] {
-                instance.last_value = value;
-            }
-        }
-    }
-
     // Entities carrying every one of these component tags, in stable order.
     // Column order shifts as entities are removed (swap-remove), so the result
     // is sorted: an unstable iteration order would make a body's effects depend
@@ -371,10 +350,28 @@ impl BehaviorSystem {
     // Create instances for newly matching entities and drop those whose entity
     // is gone, preserving the state of everything that persists.
     fn resync_instances(&mut self, snapshot: &Snapshot) {
+        // A variable source starts baselined at the variable's current value,
+        // so a restored save does not read as a change on the instance's first
+        // tick. Read before the loop, which borrows `self.instances` mutably.
+        let baselines: Vec<i32> = self
+            .programs
+            .iter()
+            .map(|p| match &p.def.on {
+                BehaviorSource::Variable(name) => self
+                    .var_table
+                    .slot_of(name)
+                    .and_then(|s| self.vars.get(s as usize))
+                    .copied()
+                    .unwrap_or(0),
+                _ => 0,
+            })
+            .collect();
         for (i, program) in self.programs.iter().enumerate() {
             if !program.is_scoped() {
                 if self.instances[i].is_empty() {
-                    self.instances[i].push(Instance::new(None, Vec::new(), false));
+                    let mut instance = Instance::new(None, Vec::new(), false);
+                    instance.last_value = baselines[i];
+                    self.instances[i].push(instance);
                 }
                 continue;
             }
@@ -393,11 +390,10 @@ impl BehaviorSystem {
                 {
                     continue;
                 }
-                self.instances[i].push(Instance::new(
-                    Some(*entity),
-                    program.local_inits.clone(),
-                    self.populated,
-                ));
+                let mut instance =
+                    Instance::new(Some(*entity), program.local_inits.clone(), self.populated);
+                instance.last_value = baselines[i];
+                self.instances[i].push(instance);
             }
             self.instances[i].sort_by_key(|inst| inst.entity.map(|e| e.to_bits()));
         }

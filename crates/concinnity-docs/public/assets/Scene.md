@@ -10,7 +10,7 @@ prefixed by any scene name are visible in every scene.
 
 The first declared Scene is active at world start. Scene changes are driven
 by actions: a UI `scene:<name>` action ([HitRegion](HitRegion.md) /
-[KeyBinding](KeyBinding.md)) or a [Reaction](Reaction.md) scene action jumps to
+[KeyBinding](KeyBinding.md)) or a [Behavior](Behavior.md) scene node jumps to
 the named scene, with the transition ("Cut" or "FadeBlack") declared on the
 jump.
 
@@ -18,7 +18,7 @@ jump.
 {"name":"day",  "type":"Scene","args":{}}
 {"name":"night","type":"Scene","args":{}}
 // Props named "day_*" belong to Scene "day"; "night_*" to Scene "night"
-{"name":"nightfall","type":"Reaction","args":{"on":{"timer":{"interval":5.0}},"actions":[{"scene":{"scene":"night"}}]}}
+{"name":"nightfall","type":"Behavior","args":{"on":{"timer":{"interval":5.0}},"do":[{"scene":{"scene":"night"}}]}}
 ```
 
 ## Parameters

@@ -51,7 +51,7 @@ pub struct SpawnSystem {
     // `spawn`, and gameplay-driven spawning once that path exists).
     spawn_cmd_cursor: crate::ecs::EventCursor,
     // Cursor into the Events<VisibilityRequest> queue (runtime show/hide:
-    // Reaction show/hide actions).
+    // Behavior show/hide nodes).
     visibility_cmd_cursor: crate::ecs::EventCursor,
     // Clock base and the cumulative elapsed seconds at the previous step, so
     // each step derives the per-frame dt for the Lifetime / Spawner ticks.

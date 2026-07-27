@@ -34,18 +34,9 @@ pub(crate) fn overlay(world: &World) -> Option<SystemAsset> {
         .map(|_| crate::gfx::overlay::OverlaySystem::new().into())
 }
 
-// ReactionSystem: present whenever the world declares any `Reaction`.
+// BehaviorSystem: present whenever the world declares any `Behavior`.
 // Scheduled before SpawnSystem / SettingsSystem / StorySystem / AudioSystem so
-// the requests its firing rules emit are drained the same tick.
-pub(crate) fn logic(world: &World) -> Option<SystemAsset> {
-    world
-        .query::<crate::assets::Reaction>()
-        .next()
-        .map(|_| crate::logic::ReactionSystem::new().into())
-}
-
-// BehaviorSystem: present whenever the world declares any `Behavior`. Shares
-// ReactionSystem's slot and ordering guarantees.
+// the requests its firing bodies emit are drained the same tick.
 pub(crate) fn behavior(world: &World) -> Option<SystemAsset> {
     world
         .query::<crate::assets::Behavior>()
@@ -236,7 +227,7 @@ pub(crate) fn story(world: &World) -> Option<SystemAsset> {
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
 // (positional sound), `AudioCue` (screen-triggered sound), `Story`
-// (page-triggered sound), or `Reaction` with a sound action. Its init opens
+// (page-triggered sound), or `Behavior` with a sound node. Its init opens
 // an audio device, so a world with none of them stays silent and device-free.
 pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
     let needs = world
@@ -257,8 +248,8 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
                 })
             })
         || world
-            .query::<crate::assets::Reaction>()
-            .any(crate::assets::Reaction::plays_sound);
+            .query::<crate::assets::Behavior>()
+            .any(crate::assets::Behavior::plays_sound);
     if !needs {
         return None;
     }

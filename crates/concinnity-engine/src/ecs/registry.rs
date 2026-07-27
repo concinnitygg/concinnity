@@ -13,7 +13,7 @@
 //   * OverlaySystem first: it shapes the overlay draw list (from the HUD
 //     content written last tick) and publishes the menu state (`MenuActive`)
 //     that gates simulation, input, and the draw this same tick.
-//   * ReactionSystem after OverlaySystem (it honors the menu freeze) and
+//   * BehaviorSystem after OverlaySystem (it honors the menu freeze) and
 //     before SpawnSystem / SettingsSystem / StorySystem / AudioSystem: the
 //     requests its firing rules emit (spawn/despawn, scene, story, audio) are
 //     drained the same tick.
@@ -52,10 +52,6 @@ crate::define_systems! {
     OverlaySystem => crate::gfx::overlay::OverlaySystem {
         gate: schedule::overlay,
         present_when: "the world declares a GraphicsConfig",
-    },
-    ReactionSystem => crate::logic::ReactionSystem {
-        gate: schedule::logic,
-        present_when: "the world declares any Reaction",
     },
     BehaviorSystem => crate::behavior::BehaviorSystem {
         gate: schedule::behavior,
@@ -119,7 +115,7 @@ crate::define_systems! {
     },
     AudioSystem => concinnity_audio::AudioSystem {
         gate: schedule::audio,
-        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Reaction with a sound action",
+        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Behavior with a sound node",
     },
     UiInputSystem => crate::ui::UiInputSystem {
         gate: schedule::ui_input,

@@ -1,7 +1,7 @@
 // src/scene_flow.rs
 //
 // Platform-agnostic active-scene state and transition logic. Scenes are pure
-// content groupings; changes are imperative jumps (UI actions, Reactions), so
+// content groupings; changes are imperative jumps (UI actions, Behaviors), so
 // this module tracks only which scene is active and drives fade transitions.
 // The SceneControl trait decouples this module from any specific backend;
 // callers supply a concrete backend that implements the two mutation methods.

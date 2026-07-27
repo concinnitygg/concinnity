@@ -5,7 +5,7 @@
 An invisible sensor region that reports when something enters or leaves it.
 
 A trigger volume senses overlap and never collides: nothing bounces off
-it and it blocks no movement. [Reaction](Reaction.md)s listen for its
+it and it blocks no movement. [Behavior](Behavior.md)s listen for its
 crossings with an `enter` or `exit` source, so "when the player steps into
 this area, open that door" is two declared assets. `detects` filters what
 sets it off: the player character, dynamic props, or anything. Volumes
@@ -13,7 +13,7 @@ sense at their authored position; they do not move at runtime.
 
 ```jsonl
 {"name":"vault_zone","type":"TriggerVolume","args":{"position":[4,1,-2],"collider":{"shape":"cuboid","half_extents":[2,1.5,2]}}}
-{"name":"vault_opens","type":"Reaction","args":{"on":{"enter":"vault_zone"},"actions":[{"despawn":{"target":"vault_door"}}],"once":true}}
+{"name":"vault_opens","type":"Behavior","args":{"on":{"enter":"vault_zone"},"do":[{"despawn":{"target":{"named":"vault_door"}}}],"once":true}}
 ```
 
 ## Parameters

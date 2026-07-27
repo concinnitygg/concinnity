@@ -357,3 +357,14 @@ pub struct StoryReload {
     /// stage screen reference.
     pub story: Story,
 }
+
+/// The [Story](#story) playback command a [Behavior](#behavior) node sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StoryPlayback {
+    /// Start the story from its beginning.
+    #[default]
+    Start,
+    /// Resume the story from its auto-save.
+    Continue,
+}

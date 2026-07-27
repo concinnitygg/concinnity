@@ -27,8 +27,7 @@ pub(crate) fn cross_refs_for(
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Behavior, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, VoxelChunk,
-        VoxelWorld,
+        AnimGraph, Behavior, Camera3D, InstancedProp, Joint, Model, Prop, VoxelChunk, VoxelWorld,
     };
     match type_norm {
         "animgraph" => AnimGraph::cross_refs(name, args),
@@ -40,7 +39,6 @@ pub(crate) fn cross_refs_for(
         "voxelchunk" | "chunk" => VoxelChunk::cross_refs(name, args),
         "voxelworld" => VoxelWorld::cross_refs(name, args),
         "joint" => Joint::cross_refs(name, args),
-        "reaction" => Reaction::cross_refs(name, args),
         _ => Vec::new(),
     }
 }
@@ -1225,49 +1223,6 @@ mod tests {
     }
 
     #[test]
-    fn reaction_enter_volume_resolves_against_trigger_volumes() {
-        let volume = asset("zone", "TriggerVolume", serde_json::json!({}));
-        let ok = asset(
-            "opens",
-            "Reaction",
-            serde_json::json!({"on":{"enter":"zone"},"actions":[]}),
-        );
-        assert!(validate_cross_references(&[volume.clone(), ok]).is_ok());
-
-        let ghost = asset(
-            "opens",
-            "Reaction",
-            serde_json::json!({"on":{"exit":"ghost_zone"},"actions":[]}),
-        );
-        assert!(err_text(&[volume, ghost]).contains("ghost_zone"));
-    }
-
-    #[test]
-    fn reaction_interact_and_visibility_targets_are_validated() {
-        let mesh = asset(
-            "box_mesh",
-            "ProceduralMesh",
-            serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
-        );
-        let prop = asset("lever", "Prop", serde_json::json!({"mesh":"box_mesh"}));
-        let ok = asset(
-            "pull",
-            "Reaction",
-            serde_json::json!({"on":{"interact":"lever"},"actions":[{"hide":{"target":"lever"}}]}),
-        );
-        assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
-
-        let ghost = asset(
-            "pull",
-            "Reaction",
-            serde_json::json!({"on":{"interact":"ghost_lever"},"actions":[{"show":{"target":"ghost_door"}}]}),
-        );
-        let errs = err_text(&[mesh, prop, ghost]);
-        assert!(errs.contains("ghost_lever"));
-        assert!(errs.contains("ghost_door"));
-    }
-
-    #[test]
     fn reaction_action_refs_are_validated() {
         let mesh = asset(
             "box_mesh",
@@ -1277,15 +1232,15 @@ mod tests {
         let prop = asset("crate", "Prop", serde_json::json!({"mesh":"box_mesh"}));
         let ok = asset(
             "spawner_rule",
-            "Reaction",
-            serde_json::json!({"actions":[{"spawn":{"template":"crate"}}]}),
+            "Behavior",
+            serde_json::json!({"do":[{"spawn":{"template":"crate"}}]}),
         );
         assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
 
         let ghost = asset(
             "spawner_rule",
-            "Reaction",
-            serde_json::json!({"actions":[{"despawn":{"target":"ghost_prop"}}]}),
+            "Behavior",
+            serde_json::json!({"do":[{"despawn":{"target":{"named":"ghost_prop"}}}]}),
         );
         assert!(err_text(&[mesh, prop, ghost]).contains("ghost_prop"));
     }

@@ -24,7 +24,7 @@ pub(super) struct BehaviorSave {
 }
 
 pub(super) fn state_file(dir: &Path) -> PathBuf {
-    dir.join("behavior-state")
+    dir.join("state")
 }
 
 // Content hash of a behavior definition (asset identity excluded via its serde

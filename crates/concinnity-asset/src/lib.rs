@@ -84,7 +84,6 @@ mod prefab;
 mod procedural_mesh;
 mod prop;
 mod prop_body;
-mod reaction;
 mod rect_area_light;
 mod reflection_probe;
 mod rigid_body;
@@ -159,7 +158,6 @@ pub use prefab::{Prefab, PrefabEntry, PrefabKind};
 pub use procedural_mesh::ProceduralMesh;
 pub use prop::{Prop, PropCollider};
 pub use prop_body::PropBody;
-pub use reaction::{Condition, Reaction, ReactionAction, ReactionSource, StoryPlayback};
 pub use rect_area_light::RectAreaLight;
 pub use reflection_probe::ReflectionProbe;
 pub use rigid_body::RigidBody;
@@ -178,7 +176,7 @@ pub use sprite::{Sprite, SpriteFit};
 pub use stat_hud::StatHud;
 pub use story::{
     CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
-    StoryPage, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
+    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
 pub use story_import::StoryImport;
 pub use streaming_config::StreamingConfig;

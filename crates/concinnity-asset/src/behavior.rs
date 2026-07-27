@@ -14,13 +14,13 @@ use crate::{AssetId, AudioClipHandle, StoryPlayback, de_opt_asset_ref, de_opt_au
 /// behavior with a `scope` runs once per matching entity, each with its own
 /// copy of `locals`, and `"self"` resolves to that entity.
 ///
-/// `locals` and `queries` are declared here and resolved to dense slots when
-/// the world is built, so nothing is looked up by name while the world runs.
-/// A query naming an unknown component is a build error.
+/// `locals` and `queries` are declared here and resolved to dense slots once,
+/// when the world starts, so nothing is looked up by name while it runs. A
+/// query naming an unknown component is a build error.
 ///
 /// `once` limits a behavior to a single firing; `cooldown` enforces a minimum
 /// number of seconds between firings; `delay` postpones the nodes after the
-/// firing decision (conditions are checked at fire time, not after the delay).
+/// firing decision, which is made at fire time rather than after the delay.
 /// Timers, delays, and cooldowns freeze while a menu is open, like the rest of
 /// the world clock.
 ///

@@ -514,3 +514,356 @@ fn a_cooldown_rate_limits_firing() {
     tick(&mut sys, &mut world, 1.2);
     assert_eq!(var(&sys, "n"), 2);
 }
+
+// Source events, the menu freeze, persistence, and the system gate.
+
+fn save_dir(test: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cn-behavior-{}-{}", std::process::id(), test));
+    std::fs::remove_dir_all(&dir).ok();
+    dir
+}
+
+fn persisting_system(world: &mut TestWorld, dir: &std::path::Path) -> BehaviorSystem {
+    let mut sys = BehaviorSystem::new();
+    sys.save_dir = dir.to_path_buf();
+    sys.init(&mut world.ctx());
+    sys
+}
+
+fn counter_behavior() -> Behavior {
+    Behavior {
+        asset_id: AssetId(1),
+        body: vec![set_var("visits", 1, true), Node::Save],
+        once: true,
+        ..Default::default()
+    }
+}
+
+fn despawn_named(target: u32) -> Node {
+    Node::Despawn {
+        target: Expr::Named(Some(AssetId(target))),
+    }
+}
+
+#[test]
+fn a_oneshot_timer_fires_exactly_once() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Timer {
+            interval: 1.0,
+            repeat: false,
+        },
+        body: vec![set_var("n", 1, true)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 1.5);
+    tick(&mut sys, &mut world, 1.5);
+    tick(&mut sys, &mut world, 1.5);
+    assert_eq!(var(&sys, "n"), 1);
+}
+
+#[test]
+fn once_limits_a_repeating_source() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Tick,
+        once: true,
+        body: vec![set_var("n", 1, true)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    for _ in 0..5 {
+        tick(&mut sys, &mut world, 0.016);
+    }
+    assert_eq!(var(&sys, "n"), 1);
+}
+
+#[test]
+fn nodes_apply_in_body_order() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Start,
+        body: vec![
+            set_var("n", 5, false),
+            set_var("n", 2, true),
+            set_var("n", 1, true),
+        ],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "n"), 8);
+}
+
+#[test]
+fn enter_fires_on_matching_crossings_only() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Enter(Some(AssetId(5))),
+        body: vec![despawn_named(7)],
+        ..Default::default()
+    }]);
+    let mut index = std::collections::BTreeMap::new();
+    let entity = world.components.push_typed(Prop::default());
+    index.insert(AssetId(7), entity);
+    world
+        .resources
+        .insert(crate::ecs::decompose::EntityByName(index));
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: true,
+    });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+
+    // An exit of the same volume, or an enter of another, does not.
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: false,
+    });
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(6),
+        entered: true,
+    });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+}
+
+#[test]
+fn crossings_survive_a_menu_pause() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Enter(Some(AssetId(5))),
+        body: vec![despawn_named(7)],
+        ..Default::default()
+    }]);
+    let mut index = std::collections::BTreeMap::new();
+    let entity = world.components.push_typed(Prop::default());
+    index.insert(AssetId(7), entity);
+    world
+        .resources
+        .insert(crate::ecs::decompose::EntityByName(index));
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    // The crossing lands while the menu is open: the paused step drains it but
+    // holds it, and the first unpaused step fires it.
+    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
+        volume: AssetId(5),
+        entered: true,
+    });
+    world.ctx().insert_resource(crate::ecs::MenuActive(true));
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    world.ctx().insert_resource(crate::ecs::MenuActive(false));
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn interact_fires_on_matching_press_only() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Interact(Some(AssetId(4))),
+        body: vec![despawn_named(7)],
+        ..Default::default()
+    }]);
+    let mut index = std::collections::BTreeMap::new();
+    let entity = world.components.push_typed(Prop::default());
+    index.insert(AssetId(7), entity);
+    world
+        .resources
+        .insert(crate::ecs::decompose::EntityByName(index));
+    let mut sys = system(&mut world);
+    let mut cursor = EventCursor::default();
+
+    world
+        .ctx()
+        .events_mut::<InteractSignal>()
+        .send(InteractSignal { target: AssetId(9) });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
+
+    world
+        .ctx()
+        .events_mut::<InteractSignal>()
+        .send(InteractSignal { target: AssetId(4) });
+    sys.step(&mut world.ctx());
+    assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn show_and_hide_send_visibility_requests() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Start,
+        body: vec![
+            Node::Hide {
+                target: Expr::Named(Some(AssetId(3))),
+            },
+            Node::Show {
+                target: Expr::Named(Some(AssetId(3))),
+            },
+        ],
+        ..Default::default()
+    }]);
+    let mut index = std::collections::BTreeMap::new();
+    let entity = world.components.push_typed(Prop::default());
+    index.insert(AssetId(3), entity);
+    world
+        .resources
+        .insert(crate::ecs::decompose::EntityByName(index));
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    let mut cursor = EventCursor::default();
+    let visible: Vec<bool> = world
+        .ctx()
+        .events::<VisibilityRequest>()
+        .map(|e| e.read(&mut cursor).iter().map(|r| r.visible).collect())
+        .unwrap_or_default();
+    assert_eq!(visible, vec![false, true], "hide then show, in body order");
+}
+
+#[test]
+fn story_sends_the_playback_command() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Start,
+        body: vec![Node::Story(StoryPlayback::Continue)],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    let mut cursor = EventCursor::default();
+    assert_eq!(count::<StoryCommand>(&mut world, &mut cursor), 1);
+}
+
+#[test]
+fn save_persists_vars_and_fired_state_across_runs() {
+    let dir = save_dir("roundtrip");
+
+    let mut world = world_with(vec![counter_behavior()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "visits"), 1);
+
+    // A fresh run over the same world: the variable is restored and the fired
+    // `once` behavior stays fired.
+    let mut world2 = world_with(vec![counter_behavior()]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(var(&sys2, "visits"), 1, "variable restored at init");
+    tick(&mut sys2, &mut world2, 0.016);
+    assert_eq!(
+        var(&sys2, "visits"),
+        1,
+        "the fired once behavior does not fire again"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_edited_behavior_loses_its_persisted_fired_flag() {
+    let dir = save_dir("edited");
+
+    let mut world = world_with(vec![counter_behavior()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+
+    // Same asset id, different content: the flag no longer applies, so the
+    // behavior fires once more.
+    let mut edited = counter_behavior();
+    edited.body[0] = set_var("visits", 5, true);
+    let mut world2 = world_with(vec![edited]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    tick(&mut sys2, &mut world2, 0.016);
+    assert_eq!(var(&sys2, "visits"), 6, "restored 1 + refired add 5");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn worlds_without_a_save_node_never_read_state() {
+    let dir = save_dir("optin");
+
+    let mut world = world_with(vec![counter_behavior()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+
+    // Same directory, but nothing saves: the world starts fresh.
+    let mut world2 = world_with(vec![Behavior {
+        body: vec![set_var("visits", 0, false)],
+        ..Default::default()
+    }]);
+    let sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(var(&sys2, "visits"), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_restored_variable_is_not_an_edge_for_variable_sources() {
+    let dir = save_dir("baseline");
+
+    let mut world = world_with(vec![
+        counter_behavior(),
+        Behavior {
+            asset_id: AssetId(2),
+            on: BehaviorSource::Variable("visits".into()),
+            body: vec![set_var("echo", 1, true)],
+            ..Default::default()
+        },
+    ]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+
+    // A second run starts with `visits` already 1; that is not a change, so
+    // the variable-sourced behavior must not fire on tick one.
+    let mut world2 = world_with(vec![
+        counter_behavior(),
+        Behavior {
+            asset_id: AssetId(2),
+            on: BehaviorSource::Variable("visits".into()),
+            body: vec![set_var("echo", 1, true)],
+            ..Default::default()
+        },
+    ]);
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    tick(&mut sys2, &mut world2, 0.016);
+    assert_eq!(var(&sys2, "echo"), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn behavior_gates_the_system_and_a_menu_freezes_it() {
+    let mut world = crate::ecs::World::new_empty();
+    // A `story` node emits unconditionally; `named` targets would need a live
+    // entity and a name index this bare world has not built.
+    world.add_component(Behavior {
+        body: vec![Node::Story(StoryPlayback::Start)],
+        ..Default::default()
+    });
+    world.start().unwrap();
+    let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+    assert_eq!(names, ["BehaviorSystem"]);
+
+    let mut cursor = EventCursor::default();
+    world.insert_resource(crate::ecs::MenuActive(true));
+    world.step();
+    let fired = world
+        .events::<StoryCommand>()
+        .map(|e| e.read(&mut cursor).len())
+        .unwrap_or(0);
+    assert_eq!(fired, 0, "a paused world fires nothing");
+
+    world.insert_resource(crate::ecs::MenuActive(false));
+    world.step();
+    let fired = world
+        .events::<StoryCommand>()
+        .expect("the behavior fired after unpause")
+        .read(&mut cursor)
+        .len();
+    assert_eq!(fired, 1);
+}
