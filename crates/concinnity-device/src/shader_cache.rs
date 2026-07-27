@@ -17,8 +17,9 @@
 // to enumerate by hand.
 //
 // Every operation is best-effort: a miss, an unreadable entry, or a failed write
-// all fall back to compiling normally, so the cache can never break a run. Set
-// `CN_SHADER_CACHE=0` to bypass it entirely.
+// all fall back to compiling normally, so the cache can never break a run.
+// Deleting the directory is the way to force a full recompile; a toolchain whose
+// output changes for identical source wants a `CACHE_FORMAT_VERSION` bump.
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -95,6 +96,46 @@ pub(crate) fn cached(
     Ok(bytes)
 }
 
+// How `ensure_in` satisfied a request: the artifact was already in the target
+// directory, was copied over from this machine's local cache tiers, or had to
+// be compiled fresh.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Ensured {
+    Present,
+    Copied,
+    Compiled,
+}
+
+// Make sure the artifact for `key` exists in `dir` (a bundle's shader-cache/),
+// compiling only when neither `dir` nor the local cache tiers already hold it.
+// A fresh compile is also stored locally, so repeated exports stay warm. Used
+// by the export-time precompile; the runtime path stays on `cached`.
+pub(crate) fn ensure_in(
+    dir: &Path,
+    key: &Key<'_>,
+    compile: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<Ensured, String> {
+    let digest = key.digest();
+    if load_in(dir, &digest).is_some() {
+        return Ok(Ensured::Present);
+    }
+    if enabled()
+        && let Some(bytes) = load(&digest)
+    {
+        store_in(dir, &digest, &bytes);
+        return Ok(Ensured::Copied);
+    }
+    let bytes = compile()?;
+    if bytes.is_empty() {
+        return Err("compile produced an empty artifact".to_string());
+    }
+    store_in(dir, &digest, &bytes);
+    if enabled() {
+        store(&digest, &bytes);
+    }
+    Ok(Ensured::Compiled)
+}
+
 // Log what the cache did during a renderer init, and reclaim orphaned entries.
 // Called once per backend init. Shaders built lazily after it (the skinned-mesh
 // pipelines on first upload, a world shader bucket on scene pin) are cached the
@@ -117,10 +158,10 @@ pub(crate) fn report_init_and_prune() {
     }
 }
 
+// Off under `cargo test` so the suite neither writes into a developer's state dir
+// nor lets an entry from a previous run mask a compile change.
 fn enabled() -> bool {
-    // Off under `cargo test` so the suite neither writes into a developer's
-    // state dir nor lets an entry from a previous run mask a compile change.
-    !cfg!(test) && std::env::var("CN_SHADER_CACHE").as_deref() != Ok("0")
+    !cfg!(test)
 }
 
 fn cache_dir() -> PathBuf {
@@ -128,7 +169,28 @@ fn cache_dir() -> PathBuf {
 }
 
 fn load(digest: &str) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(cache_dir().join(digest)).ok()?;
+    dirs_to_read(
+        cache_dir(),
+        concinnity_core::paths::bundled_shader_cache_dir(),
+    )
+    .iter()
+    .find_map(|dir| load_in(dir, digest))
+}
+
+// Directories to search, in order: the writable dir this process stores into,
+// then the read-only tier a bundle ships. Split from `load` so the de-duplication
+// is unit-testable: the two resolve to the same path unless a read-only install
+// redirected writable state, and searching it twice would be wasted syscalls.
+fn dirs_to_read(writable: PathBuf, bundled: PathBuf) -> Vec<PathBuf> {
+    if bundled == writable {
+        vec![writable]
+    } else {
+        vec![writable, bundled]
+    }
+}
+
+fn load_in(dir: &Path, digest: &str) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(dir.join(digest)).ok()?;
     // A zero-length artifact is never a legitimate compile result; treat it as
     // a miss so a truncated entry recompiles instead of failing pipeline
     // creation with an empty bytecode blob.
@@ -258,6 +320,56 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn a_shared_path_is_searched_once() {
+        let p = PathBuf::from("/state/shader-cache");
+        assert_eq!(dirs_to_read(p.clone(), p.clone()), vec![p]);
+    }
+
+    #[test]
+    fn a_read_only_install_searches_writable_then_bundled() {
+        let writable = PathBuf::from("/user/appdata/shader-cache");
+        let bundled = PathBuf::from("/program files/game/shader-cache");
+        assert_eq!(
+            dirs_to_read(writable.clone(), bundled.clone()),
+            vec![writable, bundled]
+        );
+    }
+
+    // A bundle ships its artifacts read-only; a player's first launch must find
+    // them there even though nothing has been written to the writable dir yet.
+    #[test]
+    fn an_artifact_is_found_in_the_bundled_tier() {
+        let tmp = std::env::temp_dir().join(format!("cn_sc_tiers_{}", std::process::id()));
+        let writable = tmp.join("writable");
+        let bundled = tmp.join("bundled");
+        let _ = std::fs::remove_dir_all(&tmp);
+        store_in(&bundled, "cafe", &[9, 9]);
+
+        let dirs = dirs_to_read(writable.clone(), bundled.clone());
+        assert_eq!(
+            dirs.iter().find_map(|d| load_in(d, "cafe")),
+            Some(vec![9, 9])
+        );
+        // The writable tier wins when both hold the key, so a locally recompiled
+        // artifact is never shadowed by a stale bundled one.
+        store_in(&writable, "cafe", &[1, 1]);
+        assert_eq!(
+            dirs.iter().find_map(|d| load_in(d, "cafe")),
+            Some(vec![1, 1])
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn a_truncated_artifact_reads_as_a_miss() {
+        let tmp = std::env::temp_dir().join(format!("cn_sc_trunc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        store_in(&tmp, "empty", &[]);
+        assert_eq!(load_in(&tmp, "empty"), None);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
     fn entry(secs: u64, len: u64, name: &str) -> (SystemTime, u64, PathBuf) {
         (
             SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
@@ -287,5 +399,32 @@ mod tests {
     fn eviction_can_clear_everything_for_a_zero_budget() {
         let mut listing = [entry(1, 40, "a"), entry(2, 40, "b")];
         assert_eq!(evictions(&mut listing, 0).len(), 2);
+    }
+
+    #[test]
+    fn ensure_in_compiles_once_then_finds_the_artifact_present() {
+        let dir = std::env::temp_dir().join(format!("cn_sc_ensure_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let k = key("ensure src", "main", "ps_5_1", 3);
+
+        let first = ensure_in(&dir, &k, || Ok(vec![7, 7, 7])).unwrap();
+        assert_eq!(first, Ensured::Compiled);
+        assert_eq!(load_in(&dir, &k.digest()), Some(vec![7, 7, 7]));
+
+        // The second request must be served from `dir` without recompiling.
+        let second = ensure_in(&dir, &k, || panic!("must not recompile")).unwrap();
+        assert_eq!(second, Ensured::Present);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ensure_in_propagates_a_compile_error_and_stores_nothing() {
+        let dir = std::env::temp_dir().join(format!("cn_sc_ensure_err_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let k = key("bad src", "main", "ps_5_1", 0);
+        assert!(ensure_in(&dir, &k, || Err("boom".to_string())).is_err());
+        assert!(ensure_in(&dir, &k, || Ok(Vec::new())).is_err(), "empty");
+        assert_eq!(load_in(&dir, &k.digest()), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

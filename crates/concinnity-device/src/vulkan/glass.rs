@@ -25,16 +25,12 @@ use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::RtParamsInputs;
 
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::{compile_glsl, compile_glsl_rt, inject_define, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::texture::{
     GpuAllocContext, GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_buffer,
     create_image, create_image_view, one_shot_submit, transition_image_layout_range,
 };
-
-const GLASS_VERT: &str = include_str!("shaders/glass.vert");
-const GLASS_FRAG: &str = include_str!("shaders/glass.frag");
-const GLASS_RT_FRAG: &str = include_str!("shaders/glass_rt.frag");
 
 // The live acceleration-structure handles wired into the glass RT descriptor ring.
 // Passed once at init (`None` when RT is not live at launch) and re-pointed every
@@ -110,32 +106,18 @@ fn ordered_visible(centres: &[[f32; 3]], visible: &[bool], cam: [f32; 3]) -> Vec
 }
 
 // Compile the glass vertex + fragment shaders, injecting the MSAA define so the
-// depth sampler type matches the main-depth resource's sample count.
+// depth sampler type matches the main-depth resource's sample count. The
+// fragment's shared reflection-probe sampling ({PROBE_DESC_SET} = 2, the global
+// set carrying the probe set/cubes here) is substituted by the builtins
+// assembly. Mirrors compile_ssr_shaders.
 fn compile_glass_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let define = if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
-    };
-    // Inject the shared reflection-probe sampling at the fragment's PROBE_COMMON
-    // marker; {MAX_PROBES} + the global-set index {PROBE_DESC_SET} = 2 (the global
-    // set carrying the probe set/cubes is bound as set 2 here) substitute in the
-    // same pass. Mirrors compile_ssr_shaders.
-    let probe_common = shader_source(
+    let ctx = super::builtins::Ctx {
         hot_reload,
-        "probe_common.glsl",
-        crate::vulkan::pipeline::PROBE_COMMON_GLSL,
-    );
-    let vert_src = inject_define(&shader_source(hot_reload, "glass.vert", GLASS_VERT), define);
-    let frag_src = inject_define(&shader_source(hot_reload, "glass.frag", GLASS_FRAG), define)
-        .replace("{PROBE_COMMON}", &probe_common)
-        .replace(
-            "{MAX_PROBES}",
-            &crate::vulkan::probe_uniforms::MAX_PROBES.to_string(),
-        )
-        .replace("{PROBE_DESC_SET}", "2");
-    let vert = compile_glsl(&vert_src, shaderc::ShaderKind::Vertex, "glass.vert")?;
-    let frag = compile_glsl(&frag_src, shaderc::ShaderKind::Fragment, "glass.frag")?;
+        msaa,
+        pool_size: 0,
+    };
+    let vert = super::builtins::GLASS_VERT.compile(&ctx)?;
+    let frag = super::builtins::GLASS_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -160,37 +142,17 @@ fn compile_glass_rt_shaders(
     msaa: bool,
     pool_size: usize,
 ) -> Result<GlassRtShaders, String> {
-    let define = if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
-    };
-    let probe_common = shader_source(
+    // The pool declaration needs at least one slot even when the bindless pool
+    // is absent (the textured variant is then skipped).
+    let ctx = super::builtins::Ctx {
         hot_reload,
-        "probe_common.glsl",
-        crate::vulkan::pipeline::PROBE_COMMON_GLSL,
-    );
-    let vert_src = inject_define(&shader_source(hot_reload, "glass.vert", GLASS_VERT), define);
-    let frag_base = inject_define(
-        &shader_source(hot_reload, "glass_rt.frag", GLASS_RT_FRAG),
-        define,
-    )
-    .replace("{PROBE_COMMON}", &probe_common)
-    .replace(
-        "{MAX_PROBES}",
-        &crate::vulkan::probe_uniforms::MAX_PROBES.to_string(),
-    )
-    .replace("{PROBE_DESC_SET}", "2")
-    .replace("{POOL_SIZE}", &pool_size.max(1).to_string());
-    let vs = compile_glsl_rt(&vert_src, shaderc::ShaderKind::Vertex, "glass.vert")?;
-    let flat_fs = compile_glsl_rt(&frag_base, shaderc::ShaderKind::Fragment, "glass_rt.frag")?;
+        msaa,
+        pool_size: pool_size.max(1),
+    };
+    let vs = super::builtins::GLASS_RT_VERT.compile(&ctx)?;
+    let flat_fs = super::builtins::GLASS_RT_FRAG.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        let textured_src = inject_define(&frag_base, "#define RT_TEXTURED 1\n");
-        Some(compile_glsl_rt(
-            &textured_src,
-            shaderc::ShaderKind::Fragment,
-            "glass_rt_textured.frag",
-        )?)
+        Some(super::builtins::GLASS_RT_FRAG_TEXTURED.compile(&ctx)?)
     } else {
         None
     };

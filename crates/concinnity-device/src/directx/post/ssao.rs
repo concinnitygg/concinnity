@@ -16,17 +16,12 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::gfx::render_types::SsaoParams;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
-
-// HLSL sources
-
-pub const SSAO_FULLSCREEN_VERT_HLSL: &str = include_str!("../shaders/ssao_fullscreen_vert.hlsl");
-pub const SSAO_KERNEL_FRAG_HLSL: &str = include_str!("../shaders/ssao_kernel_frag.hlsl");
-pub const SSAO_BLUR_FRAG_HLSL: &str = include_str!("../shaders/ssao_blur_frag.hlsl");
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value. Both the GTAO kernel and the
@@ -45,26 +40,11 @@ struct SsaoShaders {
 // Compile every SSAO shader stage. Both the kernel + blur are fullscreen
 // passes that read the unified G-buffer; neither has a geometry input.
 fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     Ok(SsaoShaders {
-        fullscreen_vs: compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "ssao_fullscreen_vert.hlsl",
-                SSAO_FULLSCREEN_VERT_HLSL,
-            ),
-            "main",
-            "vs_5_1",
-        )?,
-        kernel_ps: compile_hlsl(
-            &shader_source(hot_reload, "ssao_kernel_frag.hlsl", SSAO_KERNEL_FRAG_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
-        blur_ps: compile_hlsl(
-            &shader_source(hot_reload, "ssao_blur_frag.hlsl", SSAO_BLUR_FRAG_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
+        fullscreen_vs: builtins::SSAO_FULLSCREEN_VERT.compile(&ctx)?,
+        kernel_ps: builtins::SSAO_KERNEL_FRAG.compile(&ctx)?,
+        blur_ps: builtins::SSAO_BLUR_FRAG.compile(&ctx)?,
     })
 }
 

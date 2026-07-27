@@ -11,30 +11,12 @@ use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
 
+use super::builtins::{self, Ctx};
 use super::context::*;
 use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
 use super::math::*;
-use super::pipeline::{
-    compile_hlsl, serialize_and_create_root_sig, shader_source, skinned_input_layout,
-};
+use super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::texture::*;
-
-// Skinned-mesh HLSL sources
-
-// Skeletally animated sibling of MAIN_VERT_HLSL. Each vertex carries four joint
-// indices + blend weights; the shader blends up to four joint matrices from the
-// per-object structured buffer at t3 (linear blend skinning), applies the
-// blended matrix to position/normal/tangent, then proceeds exactly like
-// MAIN_VERT_HLSL. Paired with the regular MAIN_FRAG_HLSL.
-const SKINNED_VERT_HLSL: &str = include_str!("shaders/skinned_vert.hlsl");
-
-// Skeletally animated sibling of SHADOW_VERT_HLSL. Blends the joint matrices so
-// a skinned mesh casts a correctly deformed shadow. Reads the per-object joint
-// buffer at t0 (the shadow root signature has no texture registers, so t0 is
-// free).
-const SKINNED_SHADOW_VERT_HLSL: &str = include_str!("shaders/skinned_shadow_vert.hlsl");
-
-const MAIN_FRAG_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_FRAG_HLSL;
 
 // Skinned pipeline builders
 //
@@ -46,29 +28,18 @@ const MAIN_FRAG_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_FRA
 // shadow_skinned_vs, frag_ps). The main skinned VS pairs with the standard
 // fragment shader; the shadow skinned VS is depth-only. `frag_bytes`, when
 // non-empty, is treated as pre-compiled DXBC (the same resolution the static
-// path applies); otherwise the built-in `MAIN_FRAG_HLSL` is compiled.
+// path applies); otherwise the built-in default fragment shader is compiled.
 // Compiled skinned-mesh shaders: main vertex, shadow vertex, fragment bytecode.
 type SkinnedShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 fn compile_skinned_shaders(frag_bytes: &[u8], hot_reload: bool) -> Result<SkinnedShaders, String> {
-    let main_vs = compile_hlsl(
-        &shader_source(hot_reload, "skinned_vert.hlsl", SKINNED_VERT_HLSL),
-        "main",
-        "vs_5_1",
-    )?;
-    let shadow_vs = compile_hlsl(
-        &shader_source(
-            hot_reload,
-            "skinned_shadow_vert.hlsl",
-            SKINNED_SHADOW_VERT_HLSL,
-        ),
-        "main",
-        "vs_5_1",
-    )?;
+    let ctx = Ctx::plain(hot_reload);
+    let main_vs = builtins::SKINNED_VERT.compile(&ctx)?;
+    let shadow_vs = builtins::SKINNED_SHADOW_VERT.compile(&ctx)?;
     let frag_ps = if !frag_bytes.is_empty() {
         frag_bytes.to_vec()
     } else {
-        compile_hlsl(MAIN_FRAG_HLSL, "main", "ps_5_1")?
+        builtins::MAIN_FRAG.compile(&ctx)?
     };
     Ok((main_vs, shadow_vs, frag_ps))
 }

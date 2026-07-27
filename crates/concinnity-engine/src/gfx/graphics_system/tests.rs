@@ -1020,8 +1020,11 @@ fn draw_frame_error_stops_the_loop() {
     assert!(lock(&state).saw(&Call::WaitIdle));
 }
 
+// Reaching the cap must Stop rather than report Done: `World::step` treats Done
+// as "retire this system and carry on with the others", which would leave a real
+// world running headlessly forever once the renderer removed itself.
 #[test]
-fn max_frames_finishes_the_system() {
+fn max_frames_stops_the_run() {
     let (_state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
@@ -1036,7 +1039,28 @@ fn max_frames_finishes_the_system() {
     let mut gs = init_graphics(&mut world, hooks);
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    assert_eq!(step(&mut gs, &mut world), StepResult::Done);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
+}
+
+// A launch-imposed cap (the `cn export` shader-warm pass) overrides whatever the
+// world asked for, including a world that set no cap at all and would otherwise
+// run until its window closed.
+#[test]
+fn a_launch_frame_cap_overrides_the_world() {
+    let (_state, hooks) = recording_hooks();
+    let mut b = WorldBuilder::new();
+    b.push(Window::default());
+    b.push(GraphicsConfig::default());
+    b.push_shaders();
+    b.push(Camera3D::bake(Default::default()));
+    b.push_textured_quad(MESH, TEX, MAT, PROP);
+    let mut world = b.build();
+
+    crate::app::dev_flags::set_max_frames(Some(1));
+    let mut gs = init_graphics(&mut world, hooks);
+    let result = step(&mut gs, &mut world);
+    crate::app::dev_flags::set_max_frames(None);
+    assert_eq!(result, StepResult::Stop);
 }
 
 #[test]

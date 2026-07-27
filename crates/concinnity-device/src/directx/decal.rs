@@ -15,37 +15,28 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{
     HDR_FORMAT, ScopedBarrier, create_buffer, upload_buffer, write_texture_srv,
 };
 use crate::gfx::decal::DecalRecord;
 
-// HLSL sources
-
-pub const DECAL_VERT_HLSL: &str = include_str!("shaders/decal_vert.hlsl");
-pub const DECAL_FRAG_HLSL: &str = include_str!("shaders/decal_frag.hlsl");
-
-// Compile the decal vertex + fragment shaders, prepending the MSAA define so
-// the depth SRV declaration in the fragment shader matches the resource's
+// Compile the decal vertex + fragment shaders; the MSAA define keeps the
+// fragment shader's depth SRV declaration in sync with the resource's
 // sample count. Used by [`DecalResources::new`] at init and by shader hot-
 // reload to rebuild the decal PSO.
 pub(in crate::directx) fn compile_decal_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let define_line = if msaa_samples > 1 {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    let ctx = Ctx {
+        hot_reload,
+        msaa: msaa_samples > 1,
     };
-    let vs_body = shader_source(hot_reload, "decal_vert.hlsl", DECAL_VERT_HLSL);
-    let ps_body = shader_source(hot_reload, "decal_frag.hlsl", DECAL_FRAG_HLSL);
-    let vs_src = format!("{define_line}{vs_body}");
-    let ps_src = format!("{define_line}{ps_body}");
-    let vs = compile_hlsl(&vs_src, "main", "vs_5_1")?;
-    let ps = compile_hlsl(&ps_src, "main", "ps_5_1")?;
+    let vs = builtins::DECAL_VERT.compile(&ctx)?;
+    let ps = builtins::DECAL_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 

@@ -18,13 +18,10 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::transition_barrier;
-
-// HLSL source
-
-pub const CULL_COMPUTE_HLSL: &str = include_str!("shaders/cull.hlsl");
 
 // DWORD count of the cull kernel's `CullParams` cbuffer: `float4 planes[6]`
 // (24) + `float3 cam_pos` + `uint object_count` (4) + `float4x4
@@ -47,32 +44,20 @@ pub(in crate::directx) use crate::directx::uniforms::CullParams;
 
 // Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
 pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    compile_hlsl(
-        &shader_source(hot_reload, "cull.hlsl", CULL_COMPUTE_HLSL),
-        "main",
-        "cs_5_1",
-    )
+    builtins::CULL.compile(&Ctx::plain(hot_reload))
 }
 
 // Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
 // occlusion. Same source / root signature as phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, String> {
-    compile_hlsl(
-        &shader_source(hot_reload, "cull.hlsl", CULL_COMPUTE_HLSL),
-        "main_phase2",
-        "cs_5_1",
-    )
+    builtins::CULL_PHASE2.compile(&Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
 // phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Result<Vec<u8>, String> {
-    compile_hlsl(
-        &shader_source(hot_reload, "cull.hlsl", CULL_COMPUTE_HLSL),
-        "main_shadow",
-        "cs_5_1",
-    )
+    builtins::CULL_SHADOW.compile(&Ctx::plain(hot_reload))
 }
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant

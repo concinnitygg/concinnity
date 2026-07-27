@@ -31,10 +31,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources
-const RT_FULLSCREEN_VERT_GLSL: &str = include_str!("../shaders/rt_reflections.vert");
-const RT_REFLECTIONS_FRAG_GLSL: &str = include_str!("../shaders/rt_reflections.frag");
-
 // SPIR-V blobs for the RT pipelines. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by
 // `rebuild_rt_pipelines` during shader hot-reload.
@@ -54,40 +50,19 @@ pub(in crate::vulkan) fn compile_rt_shaders(
     hot_reload: bool,
     pool_size: usize,
 ) -> Result<RtShaders, String> {
-    let vs = compile_glsl_rt(
-        &shader_source(hot_reload, "rt_reflections.vert", RT_FULLSCREEN_VERT_GLSL),
-        shaderc::ShaderKind::Vertex,
-        "rt_reflections.vert",
-    )?;
-    let frag_template = shader_source(hot_reload, "rt_reflections.frag", RT_REFLECTIONS_FRAG_GLSL);
-    // Inject the shared reflection-probe sampling (its own {MAX_PROBES} + the
-    // global-set index {PROBE_DESC_SET} = 1 are substituted after), then the
-    // bindless pool size. The probe set/cubes ride the global set bound at set 1.
-    let probe_common = shader_source(
+    use super::super::builtins;
+    // The fragment's probe sampling ({PROBE_DESC_SET} = 1, the global set the
+    // probe set/cubes ride) and the bindless pool size are substituted by the
+    // builtins assembly; the pool declaration needs at least one slot.
+    let ctx = builtins::Ctx {
         hot_reload,
-        "probe_common.glsl",
-        super::super::pipeline::PROBE_COMMON_GLSL,
-    );
-    let frag_src = frag_template
-        .replace("{PROBE_COMMON}", &probe_common)
-        .replace(
-            "{MAX_PROBES}",
-            &crate::vulkan::probe_uniforms::MAX_PROBES.to_string(),
-        )
-        .replace("{PROBE_DESC_SET}", "1")
-        .replace("{POOL_SIZE}", &pool_size.max(1).to_string());
-    let flat_fs = compile_glsl_rt(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "rt_reflections.frag",
-    )?;
+        msaa: false,
+        pool_size: pool_size.max(1),
+    };
+    let vs = builtins::RT_FULLSCREEN_VERT.compile(&ctx)?;
+    let flat_fs = builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        let textured_src = inject_define(&frag_src, "#define RT_TEXTURED 1\n");
-        Some(compile_glsl_rt(
-            &textured_src,
-            shaderc::ShaderKind::Fragment,
-            "rt_reflections_textured.frag",
-        )?)
+        Some(builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?)
     } else {
         None
     };

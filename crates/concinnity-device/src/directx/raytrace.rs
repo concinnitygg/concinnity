@@ -39,9 +39,8 @@ use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 // `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
+use super::builtins::{self, Ctx};
 use super::context::FRAMES;
-use super::dxc::compile_hlsl_dxc;
-use super::pipeline::shader_source;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
@@ -49,9 +48,6 @@ use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 // shader fetches attributes at this stride. The deformed (posed) skinned vertex
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
-
-// HLSL source for the RT skinning compute kernel (compiled via DXC to SM 6.5).
-const RT_SKIN_HLSL: &str = include_str!("shaders/rt_skin.hlsl");
 
 // `SkinParams` (the `rt_skin` compute root-constant block) is a GPU-free layout
 // struct that lives in concinnity-render; re-export it so
@@ -389,8 +385,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
 // skin pipeline `None` and skinned geometry is absent from the BVH (the RT pass
 // still runs for static geometry).
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPipeline, String> {
-    let src = shader_source(hot_reload, "rt_skin.hlsl", RT_SKIN_HLSL);
-    let cs = compile_hlsl_dxc(&src, "rt_skin", "cs_6_5")?;
+    let cs = builtins::RT_SKIN.compile(&Ctx::plain(hot_reload))?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         // Borrow the root signature without an AddRef. `pRootSignature` is a

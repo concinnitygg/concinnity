@@ -16,11 +16,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::assets::GlassPanel;
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::dxc::compile_hlsl_dxc;
-use crate::directx::pipeline::{
-    compile_hlsl, main_input_layout, serialize_desc_and_create, shader_source,
-};
+use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_hdr_resolve_target, transition_barrier, upload_buffer,
 };
@@ -29,18 +27,6 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::RtParamsInputs;
 
-pub const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
-// Shared reflection-probe sampling, concatenated ahead of the glass shader (no
-// #include handler on DX) so the pane can box-project the local probe instead of
-// only the sky cube. Glass has t7 / b4 / s2 free, so probe_common's defaults fit.
-const PROBE_COMMON_HLSL: &str = include_str!("shaders/probe_common.hlsl");
-
-// Ray-traced reflection variant of the glass shader (DXC, SM 6.5 for inline
-// RayQuery). Selected over GLASS_HLSL only while RT is live. The RT path needs
-// the RT geometry SRVs at t4..t10, so the probe cube array is remapped off t7 to
-// t20; the bindless pool stays at (t0, space1).
-const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
-const GLASS_RT_PROBE_DEFINES: &str = "#define PROBE_CUBES_REGISTER t20\n";
 // RtParams push size (144 B; see gfx::render_types::RtParams), shared with the
 // RT-reflection resolve.
 const RT_PARAMS_UBO_SIZE: u64 = 144;
@@ -158,25 +144,19 @@ fn ordered_visible(centres: &[[f32; 3]], visible: &[bool], cam: [f32; 3]) -> Vec
         .collect()
 }
 
-// Compile the glass vertex + fragment shaders, prepending the MSAA define so
-// the depth SRV declaration matches the resource's sample count. Used at init
-// and by shader hot-reload.
+// Compile the glass vertex + fragment shaders; the MSAA define keeps the
+// depth SRV declaration in sync with the resource's sample count. Used at
+// init and by shader hot-reload.
 pub(in crate::directx) fn compile_glass_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let define_line = if msaa_samples > 1 {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    let ctx = Ctx {
+        hot_reload,
+        msaa: msaa_samples > 1,
     };
-    // Concatenate the probe sampling helpers ahead of the body (the DX HLSL path
-    // has no #include handler); the USE_MSAA define stays first.
-    let probe_common = shader_source(hot_reload, "probe_common.hlsl", PROBE_COMMON_HLSL);
-    let body = shader_source(hot_reload, "glass.hlsl", GLASS_HLSL);
-    let src = format!("{define_line}{probe_common}\n{body}");
-    let vs = compile_hlsl(&src, "vs_main", "vs_5_1")?;
-    let ps = compile_hlsl(&src, "ps_main", "ps_5_1")?;
+    let vs = builtins::GLASS_VERT.compile(&ctx)?;
+    let ps = builtins::GLASS_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 
@@ -455,18 +435,14 @@ struct GlassRtShaders {
 // `Err` (which the caller turns into a None RT pipeline + the base path) when
 // DXC is unavailable or the shader fails to compile. Mirrors `compile_rt_shaders`.
 fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<GlassRtShaders, String> {
-    let define_line = if msaa_samples > 1 {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    let ctx = Ctx {
+        hot_reload,
+        msaa: msaa_samples > 1,
     };
-    let probe_common = shader_source(hot_reload, "probe_common.hlsl", PROBE_COMMON_HLSL);
-    let body = shader_source(hot_reload, "glass_rt.hlsl", GLASS_RT_HLSL);
-    let src = format!("{define_line}{GLASS_RT_PROBE_DEFINES}{probe_common}\n{body}");
     Ok(GlassRtShaders {
-        vs: compile_hlsl_dxc(&src, "vs_main", "vs_6_5")?,
-        flat_ps: compile_hlsl_dxc(&src, "ps_main_rt", "ps_6_5")?,
-        textured_ps: compile_hlsl_dxc(&src, "ps_main_rt_textured", "ps_6_5")?,
+        vs: builtins::GLASS_RT_VERT.compile(&ctx)?,
+        flat_ps: builtins::GLASS_RT_FRAG.compile(&ctx)?,
+        textured_ps: builtins::GLASS_RT_FRAG_TEXTURED.compile(&ctx)?,
     })
 }
 

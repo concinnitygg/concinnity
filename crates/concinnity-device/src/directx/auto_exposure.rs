@@ -13,8 +13,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES};
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier};
 
 // Build a D3D12 UAV barrier for one buffer resource. `pResource` is borrowed
@@ -34,18 +35,14 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     }
 }
 
-// HLSL source for the two compute kernels (build + average). Compiled with
-// entry points `build` and `average`.
-pub const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
-
 // Compile the auto-exposure `build` + `average` compute kernels. Used at
 // init and by shader hot-reload to rebuild the two compute PSOs.
 pub(in crate::directx) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let src = shader_source(hot_reload, "auto_exposure.hlsl", AUTO_EXPOSURE_HLSL);
-    let build_cs = compile_hlsl(&src, "build", "cs_5_1")?;
-    let average_cs = compile_hlsl(&src, "average", "cs_5_1")?;
+    let ctx = Ctx::plain(hot_reload);
+    let build_cs = builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
+    let average_cs = builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
     Ok((build_cs, average_cs))
 }
 

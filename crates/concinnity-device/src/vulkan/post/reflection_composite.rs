@@ -27,12 +27,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources. The fullscreen vertex shader is shared with the SSR resolve (same
-// no-flip [0,1] UV convention, so the composite taps line up with the resolve's).
-const COMPOSITE_VERT_GLSL: &str = include_str!("../shaders/ssr_fullscreen.vert");
-const REFLECTION_BLUR_FRAG_GLSL: &str = include_str!("../shaders/reflection_blur.frag");
-const REFLECTION_COMPOSITE_FRAG_GLSL: &str = include_str!("../shaders/reflection_composite.frag");
-
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
 // reflections are active (both feed this composite). All `vk::*` handles are owned
 // here and freed on `destroy`.
@@ -86,34 +80,17 @@ pub(in crate::vulkan) struct ReflectionCompositeShaders {
 }
 
 // Compile the shared fullscreen vertex shader + the blur + composite fragments.
+// The vertex shader is the SSR resolve's fullscreen triangle (same no-flip
+// [0,1] UV convention, so the composite taps line up with the resolve's).
 pub(in crate::vulkan) fn compile_reflection_composite_shaders(
     hot_reload: bool,
 ) -> Result<ReflectionCompositeShaders, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(ReflectionCompositeShaders {
-        vs: compile_glsl(
-            &shader_source(hot_reload, "ssr_fullscreen.vert", COMPOSITE_VERT_GLSL),
-            shaderc::ShaderKind::Vertex,
-            "ssr_fullscreen.vert",
-        )?,
-        blur_fs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "reflection_blur.frag",
-                REFLECTION_BLUR_FRAG_GLSL,
-            ),
-            shaderc::ShaderKind::Fragment,
-            "reflection_blur.frag",
-        )?,
-        composite_fs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "reflection_composite.frag",
-                REFLECTION_COMPOSITE_FRAG_GLSL,
-            ),
-            shaderc::ShaderKind::Fragment,
-            "reflection_composite.frag",
-        )?,
+        vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
+        blur_fs: builtins::REFLECTION_BLUR_FRAG.compile(&ctx)?,
+        composite_fs: builtins::REFLECTION_COMPOSITE_FRAG.compile(&ctx)?,
     })
 }
 

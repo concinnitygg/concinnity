@@ -14,29 +14,15 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::gfx::render_types::PostProcessParams;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
-use crate::directx::pipeline::{
-    COMPOSITE_VERT_HLSL, compile_hlsl, serialize_desc_and_create, shader_source,
-};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
-
-// HLSL sources
-
-// Prefilter: HDR scene -> bloom mip 0. Karis 13-tap downsample, then an
-// exposure multiply and a quadratic soft-knee luminance threshold.
-pub const BLOOM_PREFILTER_HLSL: &str = include_str!("../shaders/bloom_prefilter.hlsl");
-
-// Downsample: bloom mip i-1 -> mip i. Plain (non-Karis) 13-tap.
-pub const BLOOM_DOWNSAMPLE_HLSL: &str = include_str!("../shaders/bloom_downsample.hlsl");
-
-// Upsample: bloom mip i+1 -> mip i. 9-tap tent filter; the result is additively
-// blended onto the destination mip by the pipeline blend state.
-pub const BLOOM_UPSAMPLE_HLSL: &str = include_str!("../shaders/bloom_upsample.hlsl");
 
 // Shader compilation
 
 // Compiled bloom-chain shader bytecode. All three passes share the
-// fullscreen-triangle vertex shader (`COMPOSITE_VERT_HLSL`).
+// fullscreen-triangle composite vertex shader.
 pub(in crate::directx) struct BloomShaders {
     pub vs: Vec<u8>,
     pub prefilter_ps: Vec<u8>,
@@ -46,27 +32,12 @@ pub(in crate::directx) struct BloomShaders {
 
 // Compile the bloom prefilter / downsample / upsample shaders.
 pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     Ok(BloomShaders {
-        vs: compile_hlsl(
-            &shader_source(hot_reload, "composite_vert.hlsl", COMPOSITE_VERT_HLSL),
-            "main",
-            "vs_5_1",
-        )?,
-        prefilter_ps: compile_hlsl(
-            &shader_source(hot_reload, "bloom_prefilter.hlsl", BLOOM_PREFILTER_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
-        downsample_ps: compile_hlsl(
-            &shader_source(hot_reload, "bloom_downsample.hlsl", BLOOM_DOWNSAMPLE_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
-        upsample_ps: compile_hlsl(
-            &shader_source(hot_reload, "bloom_upsample.hlsl", BLOOM_UPSAMPLE_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
+        vs: builtins::COMPOSITE_VERT.compile(&ctx)?,
+        prefilter_ps: builtins::BLOOM_PREFILTER.compile(&ctx)?,
+        downsample_ps: builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
+        upsample_ps: builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
     })
 }
 

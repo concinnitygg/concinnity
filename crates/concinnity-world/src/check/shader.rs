@@ -47,13 +47,18 @@ mod tests {
         });
         assert!(check_args(&ok).is_ok());
 
+        // The stage that IS declared resolves on every platform, so the error can
+        // only be about the missing one. A bare `source` would instead resolve
+        // only where its extension matches, making the assertion platform-specific.
+        let resolvable =
+            json!({"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
         assert!(
-            check_args(&json!({"fragment": {"source": "a.metal"}}))
+            check_args(&json!({"fragment": resolvable}))
                 .unwrap_err()
                 .contains("`vertex`"),
         );
         assert!(
-            check_args(&json!({"vertex": {"source": "a.metal"}}))
+            check_args(&json!({"vertex": resolvable}))
                 .unwrap_err()
                 .contains("`fragment`"),
         );

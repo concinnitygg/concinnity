@@ -19,14 +19,11 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::pipeline::{
-    compile_hlsl, reflection_cut_prelude, serialize_desc_and_create, shader_source,
-};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
 use crate::directx::texture::{create_rt_target, write_format_rtv, write_format_srv};
-
-pub const REFLECTION_COMPOSITE_HLSL: &str = include_str!("../shaders/reflection_composite.hlsl");
 
 // The blur pass runs at render-resolution / `blur_scale`. The blur is low-
 // frequency (a widening glossy cone), so running it reduced and bilinear-
@@ -48,17 +45,11 @@ struct ReflCompShaders {
 // points (FXC ps_5_1). The shared `REFLECTION_ROUGHNESS_CUT` is injected ahead so
 // the blur ramp matches the SSR / RT resolve gates.
 fn compile_refl_composite_shaders(hot_reload: bool) -> Result<ReflCompShaders, String> {
-    let cut = reflection_cut_prelude();
-    let src = shader_source(
-        hot_reload,
-        "reflection_composite.hlsl",
-        REFLECTION_COMPOSITE_HLSL,
-    );
-    let full = format!("{cut}{src}");
+    let ctx = Ctx::plain(hot_reload);
     Ok(ReflCompShaders {
-        vs: compile_hlsl(&full, "vs_main", "vs_5_1")?,
-        blur_ps: compile_hlsl(&full, "reflection_blur", "ps_5_1")?,
-        composite_ps: compile_hlsl(&full, "reflection_composite", "ps_5_1")?,
+        vs: builtins::REFLECTION_COMPOSITE_VERT.compile(&ctx)?,
+        blur_ps: builtins::REFLECTION_BLUR_FRAG.compile(&ctx)?,
+        composite_ps: builtins::REFLECTION_COMPOSITE_FRAG.compile(&ctx)?,
     })
 }
 

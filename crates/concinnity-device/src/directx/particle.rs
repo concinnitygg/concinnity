@@ -24,19 +24,14 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
 };
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
-
-// HLSL sources (resolved by `shader_source`).
-
-pub const PARTICLE_SIMULATE_HLSL: &str = include_str!("shaders/particle_simulate.hlsl");
-pub const PARTICLE_VERT_HLSL: &str = include_str!("shaders/particle_vert.hlsl");
-pub const PARTICLE_FRAG_HLSL: &str = include_str!("shaders/particle_frag.hlsl");
 
 // Cap on the number of simultaneously-live particle emitters. The SRV heap
 // reserves a fixed block of `MAX_EMITTERS` per-emitter albedo SRV slots at
@@ -58,12 +53,10 @@ type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 pub(in crate::directx) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> Result<ParticleShaders, String> {
-    let cs_src = shader_source(hot_reload, "particle_simulate.hlsl", PARTICLE_SIMULATE_HLSL);
-    let vs_src = shader_source(hot_reload, "particle_vert.hlsl", PARTICLE_VERT_HLSL);
-    let ps_src = shader_source(hot_reload, "particle_frag.hlsl", PARTICLE_FRAG_HLSL);
-    let cs = compile_hlsl(&cs_src, "main", "cs_5_1")?;
-    let vs = compile_hlsl(&vs_src, "main", "vs_5_1")?;
-    let ps = compile_hlsl(&ps_src, "main", "ps_5_1")?;
+    let ctx = Ctx::plain(hot_reload);
+    let cs = builtins::PARTICLE_SIMULATE.compile(&ctx)?;
+    let vs = builtins::PARTICLE_VERT.compile(&ctx)?;
+    let ps = builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, ps))
 }
 

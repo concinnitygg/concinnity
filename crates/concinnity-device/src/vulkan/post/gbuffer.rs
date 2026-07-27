@@ -32,22 +32,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources
-const GBUFFER_PREPASS_VERT_GLSL: &str = include_str!("../shaders/gbuffer_prepass.vert");
-const GBUFFER_PREPASS_INSTANCED_VERT_GLSL: &str =
-    include_str!("../shaders/gbuffer_prepass_instanced.vert");
-const GBUFFER_PREPASS_SKINNED_VERT_GLSL: &str =
-    include_str!("../shaders/gbuffer_prepass_skinned.vert");
-const GBUFFER_PREPASS_FRAG_GLSL: &str = include_str!("../shaders/gbuffer_prepass.frag");
-
-// GPU-driven (bindless) G-buffer pre-pass shaders. The VS reads model +
-// roughness from the per-frame GpuObjectData SSBO by gl_InstanceIndex and the
-// previous-frame model from a parallel SSBO; the FS mirrors gbuffer_prepass.frag
-// but sources roughness from a flat VS varying. Drive the same MRT, reusing the
-// main pass's GPU-culled indirect buffer.
-const GBUFFER_BINDLESS_VERT_GLSL: &str = include_str!("../shaders/gbuffer_bindless.vert");
-const GBUFFER_BINDLESS_FRAG_GLSL: &str = include_str!("../shaders/gbuffer_bindless.frag");
-
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
 // the SSR G-buffer so the resolve maths is byte-identical.
@@ -80,48 +64,17 @@ pub(in crate::vulkan) struct GbufferShaders {
 }
 
 // Compile every G-buffer pre-pass GLSL source. `hot_reload` routes each source
-// resolve through [`crate::vulkan::pipeline::shader_source`].
+// resolve through the builtins' disk-first path.
 pub(in crate::vulkan) fn compile_gbuffer_shaders(
     hot_reload: bool,
 ) -> Result<GbufferShaders, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(GbufferShaders {
-        prepass_vs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass.vert",
-                GBUFFER_PREPASS_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "gbuffer_prepass.vert",
-        )?,
-        prepass_instanced_vs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_instanced.vert",
-                GBUFFER_PREPASS_INSTANCED_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "gbuffer_prepass_instanced.vert",
-        )?,
-        prepass_skinned_vs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_skinned.vert",
-                GBUFFER_PREPASS_SKINNED_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "gbuffer_prepass_skinned.vert",
-        )?,
-        prepass_fs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass.frag",
-                GBUFFER_PREPASS_FRAG_GLSL,
-            ),
-            shaderc::ShaderKind::Fragment,
-            "gbuffer_prepass.frag",
-        )?,
+        prepass_vs: builtins::GBUFFER_PREPASS_VERT.compile(&ctx)?,
+        prepass_instanced_vs: builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(&ctx)?,
+        prepass_skinned_vs: builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?,
+        prepass_fs: builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?,
     })
 }
 
@@ -537,7 +490,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     scene: GbufferBindlessScene,
     hot_reload: bool,
 ) -> Result<GbufferBindless, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
 
     let GbufferDeviceCtx {
         instance,
@@ -555,24 +508,9 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         frames,
     } = scene;
 
-    let vs = compile_glsl(
-        &shader_source(
-            hot_reload,
-            "gbuffer_bindless.vert",
-            GBUFFER_BINDLESS_VERT_GLSL,
-        ),
-        shaderc::ShaderKind::Vertex,
-        "gbuffer_bindless.vert",
-    )?;
-    let fs = compile_glsl(
-        &shader_source(
-            hot_reload,
-            "gbuffer_bindless.frag",
-            GBUFFER_BINDLESS_FRAG_GLSL,
-        ),
-        shaderc::ShaderKind::Fragment,
-        "gbuffer_bindless.frag",
-    )?;
+    let compile_ctx = builtins::Ctx::plain(hot_reload);
+    let vs = builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
+    let fs = builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
 
     // Set 0: GbView UBO (binding 0) + prev_model SSBO (binding 1), both VERTEX.
     let set_layout = create_descriptor_set_layout(
@@ -1265,25 +1203,10 @@ impl GbufferResources {
             )
         }
         .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?;
-        use super::super::pipeline::shader_source;
-        let sk_vs = compile_glsl(
-            &shader_source(
-                self.hot_reload,
-                "gbuffer_prepass_skinned.vert",
-                GBUFFER_PREPASS_SKINNED_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "gbuffer_prepass_skinned.vert",
-        )?;
-        let prepass_fs = compile_glsl(
-            &shader_source(
-                self.hot_reload,
-                "gbuffer_prepass.frag",
-                GBUFFER_PREPASS_FRAG_GLSL,
-            ),
-            shaderc::ShaderKind::Fragment,
-            "gbuffer_prepass.frag",
-        )?;
+        use super::super::builtins;
+        let compile_ctx = builtins::Ctx::plain(self.hot_reload);
+        let sk_vs = builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&compile_ctx)?;
+        let prepass_fs = builtins::GBUFFER_PREPASS_FRAG.compile(&compile_ctx)?;
         let (sbindings, sattrs) = skinned_vertex_input();
         let pso = create_prepass_pipeline(
             device,

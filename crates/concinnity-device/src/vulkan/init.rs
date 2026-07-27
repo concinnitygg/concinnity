@@ -650,7 +650,7 @@ impl VkContext {
         //  Shadow map (4-layer D32_SFLOAT array image, one slice per cascade)
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
         // shadows). The shadow vertex shader is engine-internal (the baked
-        // SHADOW_VERT_GLSL), so an empty `shadow_bytes` override no longer means
+        // shadow.vert), so an empty `shadow_bytes` override no longer means
         // "no shadows": it just selects the built-in shader. Mirrors the Metal
         // internal-shadow path.
         let effective_shadow_size = shadow_map_size;
@@ -1701,10 +1701,12 @@ impl VkContext {
         // there is ANYTHING to GPU-drive -- build-time static geometry, instances,
         // streamed chunks, or skinned meshes (`n_cull > 0`). A pure-voxel world has
         // no build-time geometry but folds its chunks here. Its texture pool is the
-        // deduplicated [albedo..] ++ [normal-map..] image set.
+        // deduplicated [albedo..] ++ [normal-map..] image set
+        // (`gpu_textures.len() + gpu_normal_maps.len()`); the helper derives the
+        // same value from the texture table so the export-time precompile matches.
         let bindless_active = !is_spirv(vert_bytes) && !is_spirv(frag_bytes) && n_cull > 0;
         let bindless_pool_size = if bindless_active {
-            gpu_textures.len() + gpu_normal_maps.len()
+            super::builtins::bindless_pool_size(textures.len())
         } else {
             0
         };

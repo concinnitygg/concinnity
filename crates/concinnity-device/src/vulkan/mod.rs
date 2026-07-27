@@ -4,6 +4,7 @@
 mod auto_exposure;
 mod backend;
 mod barrier_translate;
+pub(crate) mod builtins;
 mod composite;
 mod context;
 mod cull;

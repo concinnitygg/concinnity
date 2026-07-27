@@ -28,6 +28,11 @@
 //                        Metal's validation layer cannot be toggled from a
 //                        running process, so the CLI re-execs with the env var
 //                        instead; this flag does not drive Metal.
+//   MAX_FRAMES           "exit after this many frames, whatever the world says."
+//                        Set by the runtime player when `cn export` launches it
+//                        to warm the shader cache; read by `GraphicsSystem::init`
+//                        in place of `GraphicsConfig.max_frames`. Unset for a
+//                        normal launch, leaving the world's own value in effect.
 //   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
 //                        editor's `cn debug` / `cn editor` entry once the world
 //                        path is resolved; read by `GraphicsSystem::init` (only
@@ -55,6 +60,9 @@ static VALIDATION: AtomicU8 = AtomicU8::new(0);
 
 // Path to the world.jsonl the dev host is running, or None outside a dev host.
 static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+// Launch-imposed frame cap overriding the world's own, or None.
+static MAX_FRAMES: Mutex<Option<u64>> = Mutex::new(None);
 
 // Mark this process as running under `cn debug` (or another dev-loop entry
 // point that opts in). Call once before world build.
@@ -114,6 +122,24 @@ pub(crate) fn validation() -> Option<bool> {
         2 => Some(true),
         _ => None,
     }
+}
+
+// Cap the frame count regardless of what the world's `GraphicsConfig` asked
+// for. Set by the runtime player when `cn export` launches it to warm the
+// shader cache: renderer init is the part that matters, so the process renders
+// a frame and exits rather than opening the game.
+//
+// `dead_code` allow: only the runtime binary calls this; the library only reads
+// it, so `cargo check --lib` reports it unused.
+#[allow(dead_code)]
+pub fn set_max_frames(frames: Option<u64>) {
+    *MAX_FRAMES.lock().unwrap() = frames;
+}
+
+// The launch-imposed frame cap, or None when the world's own `max_frames`
+// governs. Read by `GraphicsSystem::init`.
+pub(crate) fn max_frames() -> Option<u64> {
+    *MAX_FRAMES.lock().unwrap()
 }
 
 // Record the world.jsonl path the dev host resolved, so the hot-reload watcher

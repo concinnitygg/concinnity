@@ -1,9 +1,8 @@
 // src/directx/init/pipelines.rs
 //
 // Core render-pipeline construction extracted from DxContext::new:
-//   * Built-in HLSL shader sources for main + shadow passes (the equivalents
-//     of Metal's vertex/fragment_main metallibs).
-//   * Shader compilation (`compile_shaders`, `compile_main_bindless_shaders`).
+//   * Shader compilation (`compile_shaders`, `compile_main_bindless_shaders`),
+//     from the built-in program declarations in `directx/builtins.rs`.
 //   * Root-signature + PSO builders for the main pass, the GPU-cull bindless
 //     variant, the GPU-instanced main pass, and the depth-only shadow pass.
 //   * High-level `build_main_pipelines`/`build_shadow_pipeline`/etc.
@@ -18,6 +17,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader, compile_cull_shader_phase2,
@@ -25,54 +25,11 @@ use crate::directx::cull::{
     create_cull_root_signature,
 };
 use crate::directx::pipeline::{
-    compile_composite_shaders, compile_hlsl, compile_text_shaders, create_composite_pso,
+    compile_composite_shaders, compile_text_shaders, create_composite_pso,
     create_composite_root_signature, create_text_pso, create_text_root_signature,
-    main_input_layout, reflection_cut_prelude, serialize_and_create_root_sig, shader_source,
+    main_input_layout, serialize_and_create_root_sig,
 };
 use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
-
-// Built-in HLSL sources for the main + shadow passes
-//
-// The build emits HLSL bytecode into `build/shaders/`; the SHADOW_VERT_HLSL
-// path matches the per-world shadow VS. Built-ins are used when the world
-// supplied no override; pre-compiled DXBC overrides skip these.
-
-const MAIN_VERT_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_VERT_HLSL;
-const MAIN_FRAG_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_FRAG_HLSL;
-
-// Bindless siblings of MAIN_VERT_HLSL / MAIN_FRAG_HLSL for the bindless
-// static main pass. Instead of rebinding the model matrix + material
-// per draw, each object's record lives in a per-frame
-// `StructuredBuffer<GpuObjectData>` (root SRV at t3); the draw call passes the
-// object id through the b0 root constant. Albedo + normal maps are fetched
-// from an unbounded bindless `Texture2D` pool (register space1) by the
-// per-object pool indices. Only build-time static objects render through
-// these; streamed VoxelWorld chunks keep the legacy per-draw pipeline
-// (MAIN_VERT_HLSL / MAIN_FRAG_HLSL), which the instanced + skinned passes also
-// still use. The fragment BRDF mirrors MAIN_FRAG_HLSL; only the
-// model/material/texture binding model differs.
-const MAIN_VERT_BINDLESS_HLSL: &str = include_str!("../shaders/main_bindless_vert.hlsl");
-const MAIN_FRAG_BINDLESS_HLSL: &str = include_str!("../shaders/main_bindless_frag.hlsl");
-// Shared reflection-probe sampling, concatenated ahead of the bindless fragment
-// shader (the DX HLSL path has no #include handler). See probe_common.hlsl.
-const PROBE_COMMON_HLSL: &str = include_str!("../shaders/probe_common.hlsl");
-
-// GPU-instanced sibling of MAIN_VERT_HLSL. Reads per-instance world matrices
-// from a root SRV at t3 instead of the PushConstants `model` field (which is
-// ignored here). Paired with the regular MAIN_FRAG_HLSL.
-const MAIN_VERT_INSTANCED_HLSL: &str =
-    concinnity_core::build::shader::BUILTIN_DEFAULT_VERT_INSTANCED_HLSL;
-
-const SHADOW_VERT_HLSL: &str = concinnity_core::build::shader::BUILTIN_SHADOW_MAP_VERT_HLSL;
-
-// Depth-only bindless sibling of SHADOW_VERT_HLSL for the GPU-driven shadow pass.
-// Reads `model` from the per-frame `StructuredBuffer<GpuObjectData>` (root SRV at
-// t0) by the per-command b0 object-id root constant and projects through
-// `light_vps[cascade_idx]` (cascade index = a per-ExecuteIndirect b2 root
-// constant). Consumes the same cull-written indirect buffers the bindless main
-// pass uses, so the shadow pass issues each cascade with one `ExecuteIndirect`
-// instead of a CPU per-object loop.
-const SHADOW_VERT_BINDLESS_HLSL: &str = include_str!("../shaders/shadow_bindless_vert.hlsl");
 
 // Shader compilation
 
@@ -97,29 +54,30 @@ pub(super) fn compile_all_shaders(
     need_instanced: bool,
     hot_reload: bool,
 ) -> Result<CompiledShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     let main_vs = if !vert_bytes.is_empty() {
         vert_bytes.to_vec()
     } else {
-        compile_hlsl(MAIN_VERT_HLSL, "main", "vs_5_1")?
+        builtins::MAIN_VERT.compile(&ctx)?
     };
     let main_ps = if !frag_bytes.is_empty() {
         frag_bytes.to_vec()
     } else {
-        compile_hlsl(MAIN_FRAG_HLSL, "main", "ps_5_1")?
+        builtins::MAIN_FRAG.compile(&ctx)?
     };
     // The shadow vertex shader is engine-internal: a real DXBC override (>4
     // bytes) is used verbatim, otherwise (empty / stub) the baked
-    // SHADOW_VERT_HLSL is compiled. Whether the shadow pass runs is gated by
-    // `effective_shadow_size` at the call site, not by an empty override here.
+    // `builtins::SHADOW_VERT` is compiled. Whether the shadow pass runs is gated
+    // by `effective_shadow_size` at the call site, not by an empty override here.
     let shadow_vs = if shadow_bytes.len() > 4 {
         Some(shadow_bytes.to_vec())
     } else {
-        Some(compile_hlsl(SHADOW_VERT_HLSL, "main", "vs_5_1")?)
+        Some(builtins::SHADOW_VERT.compile(&ctx)?)
     };
     let main_vs_instanced = if !vert_instanced_bytes.is_empty() {
         Some(vert_instanced_bytes.to_vec())
     } else if need_instanced {
-        Some(compile_hlsl(MAIN_VERT_INSTANCED_HLSL, "main", "vs_5_1")?)
+        Some(builtins::MAIN_VERT_INSTANCED.compile(&ctx)?)
     } else {
         None
     };
@@ -140,27 +98,9 @@ pub(super) fn compile_all_shaders(
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vs = compile_hlsl(
-        &shader_source(
-            hot_reload,
-            "main_bindless_vert.hlsl",
-            MAIN_VERT_BINDLESS_HLSL,
-        ),
-        "main",
-        "vs_5_1",
-    )?;
-    // The probe sampling helpers + the probe cube array / ProbeSet cbuffer are
-    // declared in probe_common.hlsl, concatenated ahead of the fragment source.
-    // The shared REFLECTION_ROUGHNESS_CUT prelude goes first so the forward
-    // specular fade keys off the same cut as the SSR/RT resolve + composite.
-    let cut = reflection_cut_prelude();
-    let probe_common = shader_source(hot_reload, "probe_common.hlsl", PROBE_COMMON_HLSL);
-    let frag = shader_source(
-        hot_reload,
-        "main_bindless_frag.hlsl",
-        MAIN_FRAG_BINDLESS_HLSL,
-    );
-    let ps = compile_hlsl(&format!("{cut}{probe_common}\n{frag}"), "main", "ps_5_1")?;
+    let ctx = Ctx::plain(hot_reload);
+    let vs = builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
+    let ps = builtins::MAIN_BINDLESS_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 
@@ -168,15 +108,7 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 // alongside the bindless main pass (same built-in-shader gate); a depth-only
 // PSO with no pixel shader consumes it.
 pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
-    compile_hlsl(
-        &shader_source(
-            hot_reload,
-            "shadow_bindless_vert.hlsl",
-            SHADOW_VERT_BINDLESS_HLSL,
-        ),
-        "main",
-        "vs_5_1",
-    )
+    builtins::SHADOW_BINDLESS_VERT.compile(&Ctx::plain(hot_reload))
 }
 
 // Root signature builders

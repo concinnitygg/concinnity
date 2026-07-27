@@ -1,8 +1,11 @@
 // Vulkan pipeline creation for the main, shadow, and text render passes.
-// GLSL shader sources are defined inline here and compiled to SPIR-V at context
-// init time via shaderc, unless the caller supplies valid SPIR-V bytes directly.
+// Built-in GLSL programs are declared in `super::builtins` and compiled to
+// SPIR-V at context init time via shaderc, unless the caller supplies valid
+// SPIR-V bytes directly.
 
 use ash::{Device, vk};
+
+use super::builtins;
 
 //  GLSL source strings
 
@@ -20,69 +23,12 @@ use ash::{Device, vk};
 //    MaterialUniforms uses vec3 tint/emissive which in std430 have alignment 16;
 //    the Rust struct places them at offsets 16 and 32 (both 16-byte aligned) ✓.
 
-const VERT_GLSL: &str = include_str!("shaders/main.vert");
-
-const FRAG_GLSL: &str = include_str!("shaders/main.frag");
-
-// Bindless siblings of VERT_GLSL / FRAG_GLSL for the bindless static
-// main pass. Instead of a per-draw push constant + per-object descriptor set,
-// every object's transform + material + texture-pool indices live in one
-// per-frame `GpuObjectData` storage buffer (set 1, binding 0), indexed by the
-// object id the draw call passes as `gl_InstanceIndex` (Vulkan's
-// `gl_InstanceIndex` includes `firstInstance`). Albedo + normal maps come from
-// a bindless `sampler2D tex_pool[]` (set 1, binding 1). Only build-time static
-// objects render through these; streamed VoxelWorld chunks keep the legacy
-// per-draw pipeline (VERT_GLSL / FRAG_GLSL, also used by the instanced +
-// skinned passes). The fragment BRDF mirrors FRAG_GLSL; only the binding
-// model differs. `{POOL_SIZE}` in the fragment source is substituted with the
-// texture-pool size at compile time.
-const VERT_BINDLESS_GLSL: &str = include_str!("shaders/main_bindless.vert");
-
-const FRAG_BINDLESS_GLSL: &str = include_str!("shaders/main_bindless.frag");
-
 // Shared reflection-probe sampling (box-parallax partition-of-unity blend),
-// substituted into the bindless fragment shader at its `{PROBE_COMMON}` marker
-// (shaderc has no #include). `{MAX_PROBES}` inside it is replaced with the bind
-// count so the GLSL array sizes stay locked to `probe_uniforms::MAX_PROBES`.
+// substituted into probe-consuming fragment shaders at their `{PROBE_COMMON}`
+// marker (shaderc has no #include). `{MAX_PROBES}` inside it is replaced with
+// the bind count so the GLSL array sizes stay locked to
+// `probe_uniforms::MAX_PROBES`. Applied by `builtins::GlslProgram::source`.
 pub(in crate::vulkan) const PROBE_COMMON_GLSL: &str = include_str!("shaders/probe_common.glsl");
-
-// GPU-instanced sibling of VERT_GLSL. Reads per-instance world matrices from a
-// storage buffer at set=2,binding=0 indexed by gl_InstanceIndex instead of the
-// push-constant model field (which is ignored here). Paired with FRAG_GLSL.
-const VERT_INSTANCED_GLSL: &str = include_str!("shaders/instanced.vert");
-
-const SHADOW_VERT_GLSL: &str = include_str!("shaders/shadow.vert");
-
-// Depth-only bindless sibling of SHADOW_VERT_GLSL for the GPU-driven shadow
-// pass: reads `model` from the per-frame GpuObjectData SSBO (set 1) by
-// gl_InstanceIndex and projects through light_vps[cascade_idx] (cascade index =
-// a push constant). Consumes the cull-written per-cascade indirect buffers.
-const SHADOW_VERT_BINDLESS_GLSL: &str = include_str!("shaders/shadow_bindless.vert");
-
-// Skeletally animated sibling of VERT_GLSL. Each vertex carries four joint
-// indices + blend weights; the shader blends up to four joint matrices from the
-// per-object storage buffer at set=2,binding=0 (linear blend skinning), applies
-// the blended matrix to position/normal/tangent, then proceeds exactly like
-// VERT_GLSL. Paired with FRAG_GLSL.
-const SKINNED_VERT_GLSL: &str = include_str!("shaders/skinned.vert");
-
-// Skeletally animated sibling of SHADOW_VERT_GLSL. Blends the joint matrices so
-// a skinned mesh casts a correctly deformed shadow. Reads the per-object joint
-// storage buffer at set=1,binding=0 (the shadow pass has no per-object texture
-// set, so set 1 is free).
-const SKINNED_SHADOW_VERT_GLSL: &str = include_str!("shaders/skinned_shadow.vert");
-
-const TEXT_VERT_GLSL: &str = include_str!("shaders/text.vert");
-
-const TEXT_FRAG_GLSL: &str = include_str!("shaders/text.frag");
-
-// Composite (post-process) pass. A fullscreen triangle samples the resolved
-// HDR scene image, composites bloom, applies the Narkowicz ACES tonemap +
-// gamma 2.2 encode, a single FXAA 3.11-style edge pass, a 3D-LUT colour grade,
-// and a radial vignette. Mirrors `post_fragment_main` in metal/pipeline.rs.
-pub(in crate::vulkan) const COMPOSITE_VERT_GLSL: &str = include_str!("shaders/composite.vert");
-
-const COMPOSITE_FRAG_GLSL: &str = include_str!("shaders/composite.frag");
 
 //  Shader compilation
 
@@ -120,34 +66,19 @@ pub(in crate::vulkan) fn shader_source(
 
 // Compile the bindless static-pass shaders (bindless). `pool_size` is
 // the bindless texture-pool length, substituted into the fragment source's
-// `sampler2D tex_pool[]` array declaration. Always built from the inline
+// `sampler2D tex_pool[]` array declaration. Always built from the built-in
 // GLSL: the bindless path only drives the built-in shader.
 pub(super) fn compile_bindless_shaders(
     hot_reload: bool,
     pool_size: usize,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(hot_reload, "main_bindless.vert", VERT_BINDLESS_GLSL);
-    let vert = compile_glsl(&vert_src, shaderc::ShaderKind::Vertex, "vert_bindless.glsl")?;
-    let frag_src_template = shader_source(hot_reload, "main_bindless.frag", FRAG_BINDLESS_GLSL);
-    // Inject the shared probe sampling first (it contains its own {MAX_PROBES}),
-    // then substitute the bind counts. `{MAX_PROBES}` is locked to the Rust
-    // `probe_uniforms::MAX_PROBES` so the GLSL array sizes match the descriptor
-    // layout's probe cube array + the ProbeSet UBO byte layout.
-    let probe_common = shader_source(hot_reload, "probe_common.glsl", PROBE_COMMON_GLSL);
-    let frag_src = frag_src_template
-        .replace("{PROBE_COMMON}", &probe_common)
-        .replace(
-            "{MAX_PROBES}",
-            &super::probe_uniforms::MAX_PROBES.to_string(),
-        )
-        // The global set IS set 0 in the forward bindless pass.
-        .replace("{PROBE_DESC_SET}", "0")
-        .replace("{POOL_SIZE}", &pool_size.to_string());
-    let frag = compile_glsl(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "frag_bindless.glsl",
-    )?;
+    let ctx = builtins::Ctx {
+        hot_reload,
+        msaa: false,
+        pool_size,
+    };
+    let vert = builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
+    let frag = builtins::MAIN_BINDLESS_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -165,7 +96,6 @@ pub(super) fn compile_bindless_shaders(
 // mirror `gfx::render_types` under std430; the command struct mirrors
 // `VkDrawIndexedIndirectCommand`. The object id rides `first_instance` (the
 // bindless vertex shader reads it as `gl_InstanceIndex`).
-const CULL_COMPUTE_GLSL: &str = include_str!("shaders/cull.comp");
 
 // Byte size of the cull kernel's `CullParams` push-constant block: six
 // `vec4` planes (96) + `vec3 cam_pos` + `uint object_count` (the trailing
@@ -175,8 +105,7 @@ pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    let src = shader_source(hot_reload, "cull.comp", CULL_COMPUTE_GLSL);
-    compile_glsl(&src, shaderc::ShaderKind::Compute, "cull_compute.glsl")
+    builtins::CULL.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the phase-2 (two-pass occlusion) variant of the cull kernel. Same
@@ -185,13 +114,7 @@ pub(super) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
 // Hi-Z-occluded objects against the rebuilt pyramid). Mirrors the MSAA
 // `#define` split the Hi-Z init kernel uses.
 pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, String> {
-    let src = shader_source(hot_reload, "cull.comp", CULL_COMPUTE_GLSL);
-    let src = inject_define(&src, "#define CULL_PHASE2 1\n");
-    compile_glsl(
-        &src,
-        shaderc::ShaderKind::Compute,
-        "cull_compute_phase2.glsl",
-    )
+    builtins::CULL_PHASE2.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow cull kernel: the same cull source with a
@@ -199,23 +122,12 @@ pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, St
 // bindings and does a frustum + distance test against each cascade's light
 // frustum. Paired with the lean 3-SSBO shadow cull set layout.
 pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    let src = shader_source(hot_reload, "cull.comp", CULL_COMPUTE_GLSL);
-    let src = inject_define(&src, "#define SHADOW_CULL 1\n");
-    compile_glsl(
-        &src,
-        shaderc::ShaderKind::Compute,
-        "cull_compute_shadow.glsl",
-    )
+    builtins::CULL_SHADOW.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
 pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
-    let src = shader_source(
-        hot_reload,
-        "shadow_bindless.vert",
-        SHADOW_VERT_BINDLESS_GLSL,
-    );
-    compile_glsl(&src, shaderc::ShaderKind::Vertex, "shadow_bindless.vert")
+    builtins::SHADOW_BINDLESS_VERT.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Inject a `#define` line immediately after the `#version` directive.
@@ -276,6 +188,36 @@ fn with_compiler<R>(f: impl FnOnce(&shaderc::Compiler) -> Result<R, String>) -> 
     })
 }
 
+// Cache key for a default-target (Vulkan 1.0) shaderc compile. Shared by the
+// runtime compile path and the export-time precompile so the two can never
+// key the same inputs differently.
+pub(in crate::vulkan) fn glsl_cache_key<'a>(
+    source: &'a str,
+    kind: shaderc::ShaderKind,
+) -> crate::shader_cache::Key<'a> {
+    crate::shader_cache::Key {
+        compiler: "shaderc",
+        source,
+        entry: "main",
+        target: "vulkan1.0",
+        options: kind as u64,
+    }
+}
+
+// `glsl_cache_key` for the ray-query target (`compile_glsl_rt`).
+pub(in crate::vulkan) fn glsl_rt_cache_key<'a>(
+    source: &'a str,
+    kind: shaderc::ShaderKind,
+) -> crate::shader_cache::Key<'a> {
+    crate::shader_cache::Key {
+        compiler: "shaderc",
+        source,
+        entry: "main",
+        target: "vulkan1.2/spv1.4",
+        options: kind as u64,
+    }
+}
+
 // Compile GLSL to SPIR-V, reusing a cached artifact when this exact source has
 // been compiled for the same target before. See `crate::shader_cache`.
 pub(in crate::vulkan) fn compile_glsl(
@@ -283,13 +225,7 @@ pub(in crate::vulkan) fn compile_glsl(
     kind: shaderc::ShaderKind,
     label: &str,
 ) -> Result<Vec<u8>, String> {
-    let key = crate::shader_cache::Key {
-        compiler: "shaderc",
-        source,
-        entry: "main",
-        target: "vulkan1.0",
-        options: kind as u64,
-    };
+    let key = glsl_cache_key(source, kind);
     crate::shader_cache::cached(&key, label, || compile_glsl_uncached(source, kind, label))
 }
 
@@ -324,13 +260,7 @@ pub(in crate::vulkan) fn compile_glsl_rt(
     kind: shaderc::ShaderKind,
     label: &str,
 ) -> Result<Vec<u8>, String> {
-    let key = crate::shader_cache::Key {
-        compiler: "shaderc",
-        source,
-        entry: "main",
-        target: "vulkan1.2/spv1.4",
-        options: kind as u64,
-    };
+    let key = glsl_rt_cache_key(source, kind);
     crate::shader_cache::cached(&key, label, || {
         compile_glsl_rt_uncached(source, kind, label)
     })
@@ -379,14 +309,12 @@ pub(super) fn resolve_main_shaders(
     let vert = if is_spirv(vert_bytes) {
         vert_bytes.to_vec()
     } else {
-        let src = shader_source(hot_reload, "main.vert", VERT_GLSL);
-        compile_glsl(&src, shaderc::ShaderKind::Vertex, "vert.glsl")?
+        builtins::MAIN_VERT.compile(&builtins::Ctx::plain(hot_reload))?
     };
     let frag = if is_spirv(frag_bytes) {
         frag_bytes.to_vec()
     } else {
-        let src = shader_source(hot_reload, "main.frag", FRAG_GLSL);
-        compile_glsl(&src, shaderc::ShaderKind::Fragment, "frag.glsl")?
+        builtins::MAIN_FRAG.compile(&builtins::Ctx::plain(hot_reload))?
     };
     Ok((vert, frag))
 }
@@ -404,8 +332,7 @@ pub(super) fn resolve_instanced_shader(
     let spv = if is_spirv(vert_instanced_bytes) {
         vert_instanced_bytes.to_vec()
     } else {
-        let src = shader_source(hot_reload, "instanced.vert", VERT_INSTANCED_GLSL);
-        compile_glsl(&src, shaderc::ShaderKind::Vertex, "vert_instanced.glsl")?
+        builtins::MAIN_VERT_INSTANCED.compile(&builtins::Ctx::plain(hot_reload))?
     };
     Ok(Some(spv))
 }
@@ -415,28 +342,18 @@ pub(super) fn resolve_instanced_shader(
 type SkinnedShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 // (Fragment is shared with the static path; `frag_bytes`, when valid SPIR-V, is
-// used directly, otherwise the built-in `FRAG_GLSL` is compiled.)
+// used directly, otherwise the built-in `main.frag` is compiled.)
 pub(super) fn compile_skinned_shaders(
     hot_reload: bool,
     frag_bytes: &[u8],
 ) -> Result<SkinnedShaderSpirv, String> {
-    let main_vs_src = shader_source(hot_reload, "skinned.vert", SKINNED_VERT_GLSL);
-    let main_vs = compile_glsl(
-        &main_vs_src,
-        shaderc::ShaderKind::Vertex,
-        "skinned_vert.glsl",
-    )?;
-    let shadow_vs_src = shader_source(hot_reload, "skinned_shadow.vert", SKINNED_SHADOW_VERT_GLSL);
-    let shadow_vs = compile_glsl(
-        &shadow_vs_src,
-        shaderc::ShaderKind::Vertex,
-        "skinned_shadow_vert.glsl",
-    )?;
+    let ctx = builtins::Ctx::plain(hot_reload);
+    let main_vs = builtins::SKINNED_VERT.compile(&ctx)?;
+    let shadow_vs = builtins::SKINNED_SHADOW_VERT.compile(&ctx)?;
     let frag = if is_spirv(frag_bytes) {
         frag_bytes.to_vec()
     } else {
-        let src = shader_source(hot_reload, "main.frag", FRAG_GLSL);
-        compile_glsl(&src, shaderc::ShaderKind::Fragment, "frag.glsl")?
+        builtins::MAIN_FRAG.compile(&ctx)?
     };
     Ok((main_vs, shadow_vs, frag))
 }
@@ -446,39 +363,28 @@ pub(super) fn resolve_shadow_shader(
     shadow_bytes: &[u8],
 ) -> Result<Option<Vec<u8>>, String> {
     // The shadow vertex shader is engine-internal: a non-SPIR-V or empty
-    // `shadow_bytes` selects the baked SHADOW_VERT_GLSL; only a real SPIR-V
+    // `shadow_bytes` selects the baked shadow.vert; only a real SPIR-V
     // override is used verbatim. Whether the shadow pass runs at all is gated by
     // `effective_shadow_size` at the call site, not by this function.
     let spv = if is_spirv(shadow_bytes) {
         shadow_bytes.to_vec()
     } else {
-        let src = shader_source(hot_reload, "shadow.vert", SHADOW_VERT_GLSL);
-        compile_glsl(&src, shaderc::ShaderKind::Vertex, "shadow_vert.glsl")?
+        builtins::SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))?
     };
     Ok(Some(spv))
 }
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(hot_reload, "text.vert", TEXT_VERT_GLSL);
-    let vert = compile_glsl(&vert_src, shaderc::ShaderKind::Vertex, "text_vert.glsl")?;
-    let frag_src = shader_source(hot_reload, "text.frag", TEXT_FRAG_GLSL);
-    let frag = compile_glsl(&frag_src, shaderc::ShaderKind::Fragment, "text_frag.glsl")?;
+    let ctx = builtins::Ctx::plain(hot_reload);
+    let vert = builtins::TEXT_VERT.compile(&ctx)?;
+    let frag = builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(hot_reload, "composite.vert", COMPOSITE_VERT_GLSL);
-    let vert = compile_glsl(
-        &vert_src,
-        shaderc::ShaderKind::Vertex,
-        "composite_vert.glsl",
-    )?;
-    let frag_src = shader_source(hot_reload, "composite.frag", COMPOSITE_FRAG_GLSL);
-    let frag = compile_glsl(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "composite_frag.glsl",
-    )?;
+    let ctx = builtins::Ctx::plain(hot_reload);
+    let vert = builtins::COMPOSITE_VERT.compile(&ctx)?;
+    let frag = builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -1331,10 +1237,9 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        FRAG_BINDLESS_GLSL, FRAG_GLSL, PROBE_COMMON_GLSL, VERT_GLSL, compile_bindless_shaders,
-        compile_cull_shader, compile_cull_shader_phase2, compile_shadow_bindless_vs,
-        compile_shadow_cull_shader, compile_skinned_shaders, is_spirv, resolve_instanced_shader,
-        resolve_main_shaders,
+        builtins, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
+        compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shaders, is_spirv,
+        resolve_instanced_shader, resolve_main_shaders,
     };
 
     // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
@@ -1374,14 +1279,11 @@ mod tests {
         assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
         assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
         // The probe markers must be fully substituted (no literal token survives).
-        let frag_src = FRAG_BINDLESS_GLSL
-            .replace("{PROBE_COMMON}", PROBE_COMMON_GLSL)
-            .replace(
-                "{MAX_PROBES}",
-                &crate::vulkan::probe_uniforms::MAX_PROBES.to_string(),
-            )
-            .replace("{PROBE_DESC_SET}", "0")
-            .replace("{POOL_SIZE}", "4");
+        let frag_src = builtins::MAIN_BINDLESS_FRAG.source(&builtins::Ctx {
+            hot_reload: false,
+            msaa: false,
+            pool_size: 4,
+        });
         assert!(!frag_src.contains("{PROBE_COMMON}"));
         assert!(!frag_src.contains("{MAX_PROBES}"));
         assert!(!frag_src.contains("{PROBE_DESC_SET}"));
@@ -1399,9 +1301,9 @@ mod tests {
         // Build real SPIR-V from the bundled GLSL, then confirm
         // `resolve_main_shaders` returns it unchanged (the hot-swap's main
         // pipeline reuses these bytes directly).
-        let vert_spv = super::compile_glsl(VERT_GLSL, shaderc::ShaderKind::Vertex, "vert").unwrap();
-        let frag_spv =
-            super::compile_glsl(FRAG_GLSL, shaderc::ShaderKind::Fragment, "frag").unwrap();
+        let ctx = builtins::Ctx::plain(false);
+        let vert_spv = builtins::MAIN_VERT.compile(&ctx).unwrap();
+        let frag_spv = builtins::MAIN_FRAG.compile(&ctx).unwrap();
         let (v, f) = resolve_main_shaders(false, &vert_spv, &frag_spv).unwrap();
         assert_eq!(v, vert_spv, "SPIR-V vertex bytes pass through unchanged");
         assert_eq!(f, frag_spv, "SPIR-V fragment bytes pass through unchanged");

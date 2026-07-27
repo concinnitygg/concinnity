@@ -602,7 +602,7 @@ impl DxContext {
         // binding type stays identical between disabled and enabled cases.
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
         // shadows). The shadow vertex shader is engine-internal (the baked
-        // SHADOW_VERT_HLSL), so an empty `shadow_bytes` override no longer means
+        // `builtins::SHADOW_VERT`), so an empty `shadow_bytes` override no longer means
         // "no shadows": it just selects the built-in shader. Mirrors the Metal
         // internal-shadow path.
         let effective_shadow_size = shadow_map_size;

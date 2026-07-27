@@ -302,7 +302,11 @@ impl GraphicsSystem {
             {
                 tracing::info!("GraphicsSystem: max_frames ({}) reached", max);
                 backend.wait_idle();
-                return StepResult::Done;
+                // Stop, not Done: `Done` only retires this system and lets the
+                // world keep stepping the rest, which for a frame cap means the
+                // renderer shuts down and the process spins on headlessly. Stop
+                // ends the run, matching what closing the window does.
+                return StepResult::Stop;
             }
         }
 

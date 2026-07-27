@@ -101,21 +101,30 @@ fn fxc_flags() -> u32 {
     }
 }
 
+// Cache key for an FXC compile. Shared by the runtime compile path and the
+// export-time precompile so the two can never key the same inputs differently.
+pub(super) fn fxc_cache_key<'a>(
+    source: &'a str,
+    entry: &'a str,
+    target: &'a str,
+) -> crate::shader_cache::Key<'a> {
+    crate::shader_cache::Key {
+        compiler: "fxc",
+        source,
+        entry,
+        target,
+        options: u64::from(fxc_flags()),
+    }
+}
+
 // Compile HLSL to DXBC, reusing a cached artifact when this exact source has
 // been compiled with the same entry, target, and flags before. FXC dominates
 // renderer init (measured 993 ms of a 1.58 s release init across 45 built-in
 // shaders), and none of those inputs change between runs of an unedited build.
 pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
-    let flags = fxc_flags();
-    let key = crate::shader_cache::Key {
-        compiler: "fxc",
-        source,
-        entry,
-        target,
-        options: u64::from(flags),
-    };
+    let key = fxc_cache_key(source, entry, target);
     crate::shader_cache::cached(&key, target, || {
-        compile_hlsl_uncached(source, entry, target, flags)
+        compile_hlsl_uncached(source, entry, target, fxc_flags())
     })
 }
 
@@ -348,24 +357,14 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT colour grade, and a radial vignette, then writes the
 // swapchain backbuffer. Mirrors the Vulkan COMPOSITE_*_GLSL and the Metal post
-// pipeline. `COMPOSITE_VERT_HLSL` is also reused by the bloom + TAA resolve
-// passes (each as their fullscreen-triangle VS).
-
-pub(super) const COMPOSITE_VERT_HLSL: &str = include_str!("shaders/composite_vert.hlsl");
-pub(super) const COMPOSITE_FRAG_HLSL: &str = include_str!("shaders/composite_frag.hlsl");
+// pipeline. `builtins::COMPOSITE_VERT` is also reused by the bloom + TAA
+// resolve passes (each as their fullscreen-triangle VS).
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vs = compile_hlsl(
-        &shader_source(hot_reload, "composite_vert.hlsl", COMPOSITE_VERT_HLSL),
-        "main",
-        "vs_5_1",
-    )?;
-    let ps = compile_hlsl(
-        &shader_source(hot_reload, "composite_frag.hlsl", COMPOSITE_FRAG_HLSL),
-        "main",
-        "ps_5_1",
-    )?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let vs = super::builtins::COMPOSITE_VERT.compile(&ctx)?;
+    let ps = super::builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 
@@ -561,21 +560,11 @@ pub(super) fn create_composite_pso(
 // straight alpha-blending. Per-call vertex + index buffers are uploaded
 // dynamically by `encode_composite_and_text`.
 
-pub(super) const TEXT_VERT_HLSL: &str = include_str!("shaders/text_vert.hlsl");
-pub(super) const TEXT_FRAG_HLSL: &str = include_str!("shaders/text_frag.hlsl");
-
 // Compile the text overlay shaders.
 pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let text_vs = compile_hlsl(
-        &shader_source(hot_reload, "text_vert.hlsl", TEXT_VERT_HLSL),
-        "main",
-        "vs_5_1",
-    )?;
-    let text_ps = compile_hlsl(
-        &shader_source(hot_reload, "text_frag.hlsl", TEXT_FRAG_HLSL),
-        "main",
-        "ps_5_1",
-    )?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let text_vs = super::builtins::TEXT_VERT.compile(&ctx)?;
+    let text_ps = super::builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((text_vs, text_ps))
 }
 

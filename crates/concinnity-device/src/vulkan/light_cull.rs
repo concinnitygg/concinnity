@@ -12,10 +12,8 @@ use ash::vk;
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 use super::context::VkContext;
-use super::pipeline::{compile_glsl, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::texture::create_buffer;
-
-pub(in crate::vulkan) const LIGHT_CULL_GLSL: &str = include_str!("shaders/light_cull.comp");
 
 // Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
 // CLUSTER_LIGHT_LIST_STRIDE u32 (slot 0 = count, slots 1.. = light indices).
@@ -206,8 +204,7 @@ pub(in crate::vulkan) fn build_light_cull(
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("light cull pipeline layout: {e}"))?;
 
-    let src = shader_source(hot_reload, "light_cull.comp", LIGHT_CULL_GLSL);
-    let spirv = compile_glsl(&src, shaderc::ShaderKind::Compute, "light_cull.comp")?;
+    let spirv = super::builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spirv)?;
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -371,10 +368,11 @@ mod tests {
     // Rust values the CPU sizes the buffer with.
     #[test]
     fn glsl_cluster_constants_match_render_types() {
-        assert!(LIGHT_CULL_GLSL.contains(&format!(
+        let src = crate::vulkan::builtins::LIGHT_CULL.embedded;
+        assert!(src.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));
-        assert!(LIGHT_CULL_GLSL.contains(&format!(
+        assert!(src.contains(&format!(
             "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
         )));
     }

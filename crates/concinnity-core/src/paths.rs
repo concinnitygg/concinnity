@@ -180,14 +180,26 @@ pub fn cache_dir() -> PathBuf {
     state_dir().join("cache")
 }
 
-/// Directory holding compiled built-in shader binaries, keyed by a hash of
-/// their compile inputs. Written by the renderer on a cache miss, so it resolves
-/// under the writable-state dir rather than beside the read-only `data/` a
-/// shipped install may ship. Distinct from [`cache_dir`], which holds cooked
-/// asset payloads: these artifacts belong to the machine's shader compiler, not
-/// to the build.
+/// Directory the renderer writes compiled built-in shader binaries to, keyed by
+/// a hash of their compile inputs. Resolves under the writable-state dir, since
+/// a shipped install's content root may be read-only. Distinct from
+/// [`cache_dir`], which holds cooked asset payloads: these artifacts belong to
+/// the machine's shader compiler, not to the build.
 pub fn shader_cache_dir() -> PathBuf {
     writable_state_dir().join("shader-cache")
+}
+
+/// Directory holding shader binaries shipped inside a bundle, read-only. `cn
+/// export` warms this so a player's first launch does not pay the compile;
+/// because the artifacts are backend IR (DXBC / SPIR-V) rather than machine
+/// code, one warmed at package time is valid on any machine.
+///
+/// Equal to [`shader_cache_dir`] whenever the content root is writable (the
+/// portable-folder case). The two diverge only for a read-only install, which
+/// redirects writable state to a per-user directory: the bundled artifacts then
+/// stay readable here while new ones land in the writable dir.
+pub fn bundled_shader_cache_dir() -> PathBuf {
+    state_dir().join("shader-cache")
 }
 
 // Recursively search `assets_dir()` for a file matching the given bare

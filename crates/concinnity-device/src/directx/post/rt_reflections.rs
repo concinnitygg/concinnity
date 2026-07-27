@@ -22,23 +22,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::dxc::compile_hlsl_dxc;
-use crate::directx::pipeline::{reflection_cut_prelude, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_rt_target, transition_barrier, write_format_rtv,
     write_format_srv,
 };
-
-// HLSL source (compiled via DXC to SM 6.5 for inline `RayQuery`).
-pub const RT_REFLECTIONS_HLSL: &str = include_str!("../shaders/rt_reflections.hlsl");
-// Shared reflection-probe sampling, concatenated ahead of the RT shader (no #include
-// handler on DX) so a missed ray box-projects the local probe. The RT shader already
-// uses t7 (prefilter) and s2 (repeat sampler), so the probe cube array + its sampler
-// remap to t10 / s3 via the prepended #defines; b4 (ProbeSet) is free.
-const PROBE_COMMON_HLSL: &str = include_str!("../shaders/probe_common.hlsl");
-const PROBE_REGISTER_DEFINES: &str =
-    "#define PROBE_CUBES_REGISTER t10\n#define PROBE_SAMPLER_REGISTER s3\n";
 
 // Size of the RT-reflection fragment-shader uniform block. 144 bytes; see
 // `gfx::render_types::RtParams`.
@@ -56,17 +46,11 @@ struct RtShaders {
 // DXC (SM 6.5). Returns an `Err` (which the caller turns into an SSR fallback)
 // when DXC is unavailable or the shader fails to compile.
 fn compile_rt_shaders(hot_reload: bool) -> Result<RtShaders, String> {
-    let body = shader_source(hot_reload, "rt_reflections.hlsl", RT_REFLECTIONS_HLSL);
-    // The shared REFLECTION_ROUGHNESS_CUT prelude, then the register remap #defines
-    // (before probe_common's #ifndef-guarded defaults), then the shared probe
-    // helpers, then the RT shader body.
-    let cut = reflection_cut_prelude();
-    let probe_common = shader_source(hot_reload, "probe_common.hlsl", PROBE_COMMON_HLSL);
-    let src = format!("{cut}{PROBE_REGISTER_DEFINES}{probe_common}\n{body}");
+    let ctx = Ctx::plain(hot_reload);
     Ok(RtShaders {
-        vs: compile_hlsl_dxc(&src, "rt_fullscreen_vert", "vs_6_5")?,
-        flat_ps: compile_hlsl_dxc(&src, "rt_reflections_frag", "ps_6_5")?,
-        textured_ps: compile_hlsl_dxc(&src, "rt_reflections_frag_textured", "ps_6_5")?,
+        vs: builtins::RT_FULLSCREEN_VERT.compile(&ctx)?,
+        flat_ps: builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?,
+        textured_ps: builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?,
     })
 }
 

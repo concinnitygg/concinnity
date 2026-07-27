@@ -37,15 +37,12 @@
 
 use ash::{Device, vk};
 
-use super::pipeline::{compile_glsl, inject_define, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
     LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
     transition_image_layout_range,
 };
-
-const HIZ_INIT_GLSL: &str = include_str!("shaders/hiz_init.comp");
-const HIZ_DOWNSAMPLE_GLSL: &str = include_str!("shaders/hiz_downsample.comp");
 
 // Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
 // for the per-downsample-step sets. `hiz_mip_count` caps at 32 - leading_zeros,
@@ -221,20 +218,13 @@ fn build_hiz_pipelines(
     // The init kernel branches on a `USE_MSAA` define injected after `#version`
     // (the depth resource is a `sampler2DMS` when multisampled, a `sampler2D`
     // otherwise), mirroring the decal shader's MSAA split.
-    let init_src_raw = shader_source(hot_reload, "hiz_init.comp", HIZ_INIT_GLSL);
-    let define = if sample_count > 1 {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    let ctx = super::builtins::Ctx {
+        hot_reload,
+        msaa: sample_count > 1,
+        pool_size: 0,
     };
-    let init_src = inject_define(&init_src_raw, define);
-    let init_spv = compile_glsl(&init_src, shaderc::ShaderKind::Compute, "hiz_init.glsl")?;
-    let downsample_src = shader_source(hot_reload, "hiz_downsample.comp", HIZ_DOWNSAMPLE_GLSL);
-    let downsample_spv = compile_glsl(
-        &downsample_src,
-        shaderc::ShaderKind::Compute,
-        "hiz_downsample.glsl",
-    )?;
+    let init_spv = super::builtins::HIZ_INIT.compile(&ctx)?;
+    let downsample_spv = super::builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;
     let init = create_compute_pipeline(device, init_layout, &init_spv)?;
     let downsample = create_compute_pipeline(device, downsample_layout, &downsample_spv)?;
     Ok((init, downsample))

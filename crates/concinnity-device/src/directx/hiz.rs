@@ -25,11 +25,10 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::dump_on_err;
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::transition_barrier;
-
-pub const HIZ_BUILD_HLSL: &str = include_str!("shaders/hiz_build.hlsl");
 
 // DWORD count of the `HizParams` cbuffer (dst_w, dst_h, src_mip, sample_count).
 const HIZ_PARAMS_DWORDS: u32 = 4;
@@ -89,10 +88,10 @@ pub(super) struct HiZResources {
 type HizShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> Result<HizShaders, String> {
-    let src = shader_source(hot_reload, "hiz_build.hlsl", HIZ_BUILD_HLSL);
-    let init_single = compile_hlsl(&src, "init_single", "cs_5_1")?;
-    let init_msaa = compile_hlsl(&src, "init_msaa", "cs_5_1")?;
-    let downsample = compile_hlsl(&src, "downsample", "cs_5_1")?;
+    let ctx = Ctx::plain(hot_reload);
+    let init_single = builtins::HIZ_INIT_SINGLE.compile(&ctx)?;
+    let init_msaa = builtins::HIZ_INIT_MSAA.compile(&ctx)?;
+    let downsample = builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;
     Ok((init_single, init_msaa, downsample))
 }
 

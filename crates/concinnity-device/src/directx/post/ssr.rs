@@ -15,23 +15,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{
-    compile_hlsl, reflection_cut_prelude, serialize_desc_and_create, shader_source,
-};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::texture::{
     create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };
-
-// HLSL sources
-
-pub const SSR_FULLSCREEN_VERT_HLSL: &str = include_str!("../shaders/ssr_fullscreen_vert.hlsl");
-pub const SSR_RESOLVE_FRAG_HLSL: &str = include_str!("../shaders/ssr_resolve_frag.hlsl");
-// Shared reflection-probe sampling (sample_probe_radiance + probe_set_specular),
-// concatenated ahead of the resolve shader so a missed ray can box-project the
-// local probe instead of the sky cube. The DX HLSL path has no #include handler.
-const PROBE_COMMON_HLSL: &str = include_str!("../shaders/probe_common.hlsl");
 
 // HDR-format SSR resolve output. Replaces `hdr_resolve` as the scene colour
 // the TAA / bloom / composite passes consume when SSR is on.
@@ -52,27 +42,10 @@ struct SsrShaders {
 // geometry input; the view normal / depth / roughness come from the unified
 // G-buffer pre-pass.
 fn compile_ssr_shaders(hot_reload: bool) -> Result<SsrShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     Ok(SsrShaders {
-        resolve_vs: compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "ssr_fullscreen_vert.hlsl",
-                SSR_FULLSCREEN_VERT_HLSL,
-            ),
-            "main",
-            "vs_5_1",
-        )?,
-        resolve_ps: {
-            // Concatenate probe_common.hlsl ahead of the resolve shader (no #include
-            // handler on DX). It declares the probe cube array (t7), the ProbeSet
-            // cbuffer (b4), and the cube sampler (s2) the miss fallback samples; all
-            // three registers are free in the resolve shader. The cut prelude (the
-            // shared REFLECTION_ROUGHNESS_CUT) goes first.
-            let cut = reflection_cut_prelude();
-            let probe_common = shader_source(hot_reload, "probe_common.hlsl", PROBE_COMMON_HLSL);
-            let frag = shader_source(hot_reload, "ssr_resolve_frag.hlsl", SSR_RESOLVE_FRAG_HLSL);
-            compile_hlsl(&format!("{cut}{probe_common}\n{frag}"), "main", "ps_5_1")?
-        },
+        resolve_vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
+        resolve_ps: builtins::SSR_RESOLVE_FRAG.compile(&ctx)?,
     })
 }
 
