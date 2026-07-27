@@ -1335,6 +1335,16 @@ impl DxContext {
             );
         }
         self.inc_draw_calls(1);
+        // The material-referenced shader buckets write their own regions of the
+        // command buffer. The pre-pass shades nothing, so every bucket runs under
+        // this single pipeline; a bucket whose Shader is not resident is skipped,
+        // matching what the colour pass will draw.
+        self.inc_draw_calls(self.execute_bucket_regions_shared_pso(
+            cmd,
+            cmd_sig,
+            indirect,
+            prefix as u32,
+        ));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
         // deformed VB (slot 1) + the skinned u16 IB, then one `ExecuteIndirect`

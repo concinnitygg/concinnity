@@ -70,6 +70,13 @@ pub(in crate::directx) fn reflection_cut_prelude() -> String {
     )
 }
 
+// A stable pseudo-filename for the in-memory source. Without one FXC names the
+// module after the source buffer's address, which lands in the debug info and
+// makes the same shader compile to different bytes every run -- so a shipped
+// binary's pipeline cache would never hit, and error messages would read
+// `Shader@0x00007ff...` instead of something a developer recognises.
+const HLSL_SOURCE_NAME: &std::ffi::CStr = c"concinnity.hlsl";
+
 pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
     let src_c = std::ffi::CString::new(source).map_err(|e| format!("hlsl src cstr: {e}"))?;
     let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("hlsl entry cstr: {e}"))?;
@@ -101,7 +108,7 @@ pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Ve
         D3DCompile(
             src_c.as_ptr() as *const std::ffi::c_void,
             source.len(),
-            None,
+            windows::core::PCSTR(HLSL_SOURCE_NAME.as_ptr() as *const u8),
             None,
             None,
             windows::core::PCSTR(entry_c.as_ptr() as *const u8),

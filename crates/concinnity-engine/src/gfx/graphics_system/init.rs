@@ -98,6 +98,17 @@ struct DecodedShaderBytes {
     vert: Vec<u8>,
     frag: Vec<u8>,
     vert_instanced: Vec<u8>,
+    // This Shader declares the engine's built-in default sources rather than an
+    // authored program. Carried per entry because a material-referenced Shader
+    // can name the built-in too, and a backend whose built-in default has more
+    // than one form (DirectX ships a per-draw and a bindless variant) needs to
+    // know which program the world actually asked for.
+    is_engine_default: bool,
+    // The payload was left undecoded because a scene other than the start scene
+    // owns this bucket. Recorded explicitly rather than inferred from empty stage
+    // bytes: a backend whose built-in default ships no compiled payload sees
+    // empty bytes for an engine-default program too.
+    deferred: bool,
 }
 
 // Where the streaming pump re-reads a deferred bucket's stage container: the
@@ -132,7 +143,6 @@ struct DecodedShaders {
     // baked ShaderHandle value indexes this directly. Entry 0 is the world
     // default pipeline's program.
     shaders: Vec<DecodedShaderBytes>,
-    main_is_engine_default: bool,
     shadow_bytes: Vec<u8>,
 }
 
@@ -1523,9 +1533,26 @@ impl GraphicsSystem {
         let blob_disk_backed = ctx.blob.disk_backed();
         let mut deferred_sources = Vec::new();
 
+        // Whether a Shader declares the engine's built-in default sources rather
+        // than an authored program. Reported to the backend, which decides what it
+        // means: the built-in compiles to non-empty bytes on some toolchains and
+        // to nothing on others, so the byte length alone does not distinguish the
+        // two.
+        let is_builtin_main = |src: Option<String>| {
+            matches!(
+                src.as_deref(),
+                Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
+            )
+        };
+        let declares_engine_default = |shader: &Shader| {
+            is_builtin_main(shader.vertex.current_platform_source())
+                && is_builtin_main(shader.fragment.current_platform_source())
+        };
+
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
         for (bucket, shader) in world_shaders.iter().enumerate() {
+            let is_engine_default = declares_engine_default(shader);
             let locator = match &shader.locator {
                 Some(l) => l.clone(),
                 None => {
@@ -1537,9 +1564,17 @@ impl GraphicsSystem {
             if deferred_buckets.contains(&(bucket as u32)) {
                 match deferred_shader_source(ctx, &locator, blob_disk_backed) {
                     Ok(source) => {
-                        deferred_sources.push((bucket as u32, source));
+                        deferred_sources.push(crate::gfx::streaming::shader::DeferredBucket {
+                            bucket: bucket as u32,
+                            source,
+                            is_engine_default,
+                        });
                         locators.push(locator);
-                        shaders.push(DecodedShaderBytes::default());
+                        shaders.push(DecodedShaderBytes {
+                            is_engine_default,
+                            deferred: true,
+                            ..Default::default()
+                        });
                         continue;
                     }
                     Err(e) => {
@@ -1583,6 +1618,8 @@ impl GraphicsSystem {
                 vert: stage_bytes(ShaderKind::Vertex),
                 frag: stage_bytes(ShaderKind::Fragment),
                 vert_instanced: stage_bytes(ShaderKind::VertexInstanced),
+                is_engine_default,
+                deferred: false,
             });
         }
 
@@ -1638,20 +1675,6 @@ impl GraphicsSystem {
             );
         }
 
-        // Whether this world's main shader is the engine's built-in default
-        // rather than an authored override. Reported to the backend, which
-        // decides what it means: the built-in compiles to non-empty bytes on
-        // some toolchains and to nothing on others, so the byte length alone
-        // does not distinguish the two.
-        let is_builtin_main = |src: Option<String>| {
-            matches!(
-                src.as_deref(),
-                Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
-            )
-        };
-        let main_is_engine_default =
-            is_builtin_main(default_shader.vertex.current_platform_source())
-                && is_builtin_main(default_shader.fragment.current_platform_source());
         // The shadow shader is engine-internal now (compiled from
         // `shadow_map.metal`), so there is no per-world shadow payload. The
         // DX / Vulkan constructors still take a shadow byte slice pending their
@@ -1662,7 +1685,6 @@ impl GraphicsSystem {
             locators,
             source_map: shader_stage_source_map,
             shaders,
-            main_is_engine_default,
             shadow_bytes,
         })
     }
@@ -2144,7 +2166,6 @@ impl GraphicsSystem {
             locators: shader_locators,
             source_map: shader_stage_source_map,
             shaders: decoded_shaders,
-            main_is_engine_default,
             shadow_bytes,
         } = match self.decode_shaders(ctx, streaming_config.is_some()) {
             Some(decoded) => decoded,
@@ -2799,17 +2820,16 @@ impl GraphicsSystem {
                 n_chunk_max,
             },
             // One entry per world Shader, indexed by ShaderHandle value;
-            // entry 0 is the world default program. `main_is_engine_default`
-            // is a property of the default program alone.
+            // entry 0 is the world default program.
             shaders: decoded_shaders
                 .iter()
-                .enumerate()
-                .map(|(i, s)| ShaderBytes {
+                .map(|s| ShaderBytes {
                     vert: &s.vert,
                     frag: &s.frag,
-                    main_is_engine_default: i == 0 && main_is_engine_default,
+                    main_is_engine_default: s.is_engine_default,
                     shadow: &shadow_bytes,
                     vert_instanced: &s.vert_instanced,
+                    deferred: s.deferred,
                 })
                 .collect(),
             media: MediaPayloads {

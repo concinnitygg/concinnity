@@ -111,6 +111,8 @@ impl RenderBackend for DxContext {
         fn rebuild_static_geometry(&mut self, changes: Vec<crate::gfx::backend::DrawGeometryUpdate>) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
         fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4]) -> Result<usize, String>;
+        fn install_world_shader(&mut self, bucket: u32, shader: crate::gfx::backend_init::ShaderBytes<'_>) -> Result<(), String>;
+        fn evict_world_shader(&mut self, bucket: u32);
     }
 
     // Non-1:1 forwarders kept explicit.

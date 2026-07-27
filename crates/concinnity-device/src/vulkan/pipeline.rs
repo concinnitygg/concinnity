@@ -169,9 +169,9 @@ const CULL_COMPUTE_GLSL: &str = include_str!("shaders/cull.comp");
 
 // Byte size of the cull kernel's `CullParams` push-constant block: six
 // `vec4` planes (96) + `vec3 cam_pos` + `uint object_count` (the trailing
-// scalar shares the camera position's 16-byte std430 slot). Within the
-// 128-byte minimum guaranteed push-constant range.
-pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 112;
+// scalar shares the camera position's 16-byte std430 slot) + the shader-bucket
+// routing pair (8). Within the 128-byte minimum guaranteed push-constant range.
+pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
@@ -592,6 +592,83 @@ pub(super) struct MeshPipelineTargets<'a> {
     pub layout: vk::PipelineLayout,
     pub vert_spv: &'a [u8],
     pub frag_spv: &'a [u8],
+}
+
+// The main-pass targets a material-referenced world shader's bucket pipeline is
+// built against. Every bucket shares the bindless pipeline layout and render
+// pass; only the stage SPIR-V differs.
+#[derive(Copy, Clone)]
+pub(super) struct BucketPipelineTargets {
+    pub render_pass: vk::RenderPass,
+    pub layout: vk::PipelineLayout,
+    pub msaa_samples: vk::SampleCountFlags,
+    pub swapchain_format: vk::Format,
+}
+
+// Build one shader bucket's bindless main-pass pipeline. `bucket` is the
+// `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
+// program) and names the bucket in error messages.
+//
+// A bucket whose Shader resolves to the engine's built-in default renders the
+// engine's own bindless program. On Vulkan the cook compiles nothing for a
+// built-in-only Shader (the inline-GLSL carve-out), so the bucket carries no
+// bytes and the engine's already-compiled bindless SPIR-V stands in -- the same
+// substitution bucket 0 makes for a built-in world.
+pub(super) fn build_bucket_pipeline(
+    device: &Device,
+    targets: BucketPipelineTargets,
+    bucket: usize,
+    shader: crate::gfx::backend_init::ShaderBytes<'_>,
+    engine_default: &(Vec<u8>, Vec<u8>),
+) -> Result<vk::Pipeline, String> {
+    let use_default = shader.main_is_engine_default || shader.vert.is_empty();
+    let (vert_spv, frag_spv) = if use_default {
+        (engine_default.0.as_slice(), engine_default.1.as_slice())
+    } else {
+        (shader.vert, shader.frag)
+    };
+    if vert_spv.is_empty() || frag_spv.is_empty() {
+        return Err(format!("shader bucket {bucket} carries no SPIR-V stages"));
+    }
+    create_main_pipeline(
+        device,
+        MeshPipelineTargets {
+            render_pass: targets.render_pass,
+            layout: targets.layout,
+            vert_spv,
+            frag_spv,
+        },
+        targets.msaa_samples,
+        targets.swapchain_format,
+    )
+    .map_err(|e| format!("shader bucket {bucket}: {e}"))
+}
+
+// Build the per-bucket pipeline table from the world's material-referenced
+// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
+// streaming pump installs later (its Shader is owned by a scene that has not
+// pinned, so `decode_shaders` deferred its payload).
+pub(super) fn build_world_pipeline_table(
+    device: &Device,
+    targets: BucketPipelineTargets,
+    bucket_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
+    engine_default: &(Vec<u8>, Vec<u8>),
+) -> Result<Vec<Option<vk::Pipeline>>, String> {
+    let mut table = Vec::with_capacity(bucket_shaders.len());
+    for (i, shader) in bucket_shaders.iter().enumerate() {
+        if shader.deferred {
+            table.push(None);
+            continue;
+        }
+        table.push(Some(build_bucket_pipeline(
+            device,
+            targets,
+            i + 1,
+            *shader,
+            engine_default,
+        )?));
+    }
+    Ok(table)
 }
 
 pub(super) fn create_main_pipeline(

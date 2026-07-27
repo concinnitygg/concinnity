@@ -29,8 +29,9 @@ pub const CULL_COMPUTE_HLSL: &str = include_str!("shaders/cull.hlsl");
 // DWORD count of the cull kernel's `CullParams` cbuffer: `float4 planes[6]`
 // (24) + `float3 cam_pos` + `uint object_count` (4) + `float4x4
 // prev_view_proj` (16) + `float2 hiz_size` + `uint hiz_mip_count` + `uint
-// hiz_enabled` (4) = 48 DWORDs. Pushed inline as a root-constant block.
-pub(in crate::directx) const CULL_PARAMS_DWORDS: u32 = 48;
+// hiz_enabled` (4) + `uint bucket_count` + `uint bucket_stride` + 2 pad (4)
+// = 52 DWORDs. Pushed inline as a root-constant block.
+pub(in crate::directx) const CULL_PARAMS_DWORDS: u32 = 52;
 
 // Byte stride of one `IndirectCommand` in the cull kernel's output buffer: a
 // 1-DWORD object-id root constant + `D3D12_DRAW_INDEXED_ARGUMENTS` (5 DWORDs).
@@ -263,6 +264,19 @@ impl DxContext {
         self.n_objects + self.n_instances + self.n_chunk
     }
 
+    // Shader-bucket regions the cull kernel routes between: the world default
+    // program plus one per material-referenced world shader. 1 when the world
+    // declares no extra shaders, which collapses the indirect buffer to the
+    // single region every pass used before buckets existed.
+    pub(in crate::directx) fn shader_bucket_count(&self) -> usize {
+        1 + self.cull.world_pipelines.len()
+    }
+
+    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
+    pub(in crate::directx) fn bucket_region_offset(&self, bucket: usize) -> u64 {
+        (bucket * self.cull.bucket_stride) as u64 * INDIRECT_COMMAND_STRIDE as u64
+    }
+
     // Rebuild this frame's `StructuredBuffer<GpuDrawArgs>` for the GPU-cull
     // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
     // the indexed-draw arguments the kernel encodes plus the per-frame
@@ -272,7 +286,7 @@ impl DxContext {
     // slice picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `metal/cull.rs`.
     pub(in crate::directx) fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3]) {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let Some(&ptr) = self.cull.draw_args_buffer_ptrs.get(frame_idx) else {
             return;
         };
@@ -286,7 +300,10 @@ impl DxContext {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
+                // The record's shader bucket rides the upper flag bits so the
+                // cull kernel can route its command into that bucket's region.
+                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
+                    | draw_args_bucket_bits(obj.shader_bucket),
             };
             // SAFETY: the buffer was sized for `n_objects` records and the
             // loop is bounded by `take(n_objects)`, so `i * stride` is in range.
@@ -453,6 +470,9 @@ impl DxContext {
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
+            bucket_count: self.shader_bucket_count() as u32,
+            bucket_stride: self.cull.bucket_stride as u32,
+            _pad: [0; 2],
         };
         for (i, p) in frustum.planes.iter().enumerate() {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -541,6 +561,12 @@ impl DxContext {
             hiz_size: [1.0, 1.0],
             hiz_mip_count: 1,
             hiz_enabled: 0,
+            // The bake renders one command stream under the default bindless
+            // pipeline, so every record is routed into region 0: a bucketed draw
+            // is captured into the probe cube with default shading.
+            bucket_count: 1,
+            bucket_stride: self.cull.bucket_stride as u32,
+            _pad: [0; 2],
         };
         for (i, p) in frustum.planes.iter().enumerate() {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -667,6 +693,12 @@ impl DxContext {
                     hiz_size,
                     hiz_mip_count,
                     hiz_enabled: 0,
+                    // The shadow kernel writes one depth-only stream at `tid`;
+                    // the cascade offset comes from the bound UAV address below,
+                    // so it never strides by bucket.
+                    bucket_count: 1,
+                    bucket_stride: n_cull as u32,
+                    _pad: [0; 2],
                 };
                 for (i, p) in frustum.planes.iter().enumerate() {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -782,6 +814,12 @@ impl DxContext {
                     hiz_size,
                     hiz_mip_count,
                     hiz_enabled: 0,
+                    // The mirror renders one command stream under the default
+                    // bindless pipeline, so every record is routed into region 0:
+                    // a bucketed draw appears in the mirror with default shading.
+                    bucket_count: 1,
+                    bucket_stride: region_count as u32,
+                    _pad: [0; 2],
                 };
                 for (i, p) in frustum.planes.iter().enumerate() {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -860,6 +898,9 @@ impl DxContext {
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
+            bucket_count: self.shader_bucket_count() as u32,
+            bucket_stride: self.cull.bucket_stride as u32,
+            _pad: [0; 2],
         };
         for (i, p) in frustum.planes.iter().enumerate() {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];

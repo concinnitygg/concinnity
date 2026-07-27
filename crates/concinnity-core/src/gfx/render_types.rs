@@ -1340,6 +1340,16 @@ pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
     flags
 }
 
+// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
+// clamped to the routing budget the cull kernels implement. A bucket past the
+// budget renders with the world default program rather than reading a command
+// region that does not exist; the world-shape check fails such a world at build
+// time, so the clamp is a backstop.
+pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
+    let bucket = (shader_bucket as usize).min(MAX_SHADER_BUCKETS - 1) as u32;
+    bucket << DrawArgsFlags::BUCKET_SHIFT
+}
+
 // One GPU-instanced draw: a shared mesh slice + material rendered at many
 // world-space transforms in a single `drawIndexedInstanced` / `cmd_draw_indexed`
 // (instance_count > 1). The cluster has a single union AABB across all
@@ -2444,5 +2454,24 @@ mod tests {
         assert_eq!(draw_args_flags(false, true, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(true, false, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(false, false, false), 0);
+    }
+
+    // The bucket rides bits 8..16 and never collides with the cull-decision bits,
+    // so the two ORed together survive a round trip through the cull kernels'
+    // shift + mask.
+    #[test]
+    fn bucket_bits_ride_above_the_cull_decision_bits() {
+        assert_eq!(draw_args_bucket_bits(0), 0);
+        assert_eq!(draw_args_bucket_bits(1), 1 << 8);
+        assert_eq!(draw_args_bucket_bits(3), 3 << 8);
+        // A bucket past the routing budget clamps to the last routable one.
+        let last = (MAX_SHADER_BUCKETS - 1) as u32;
+        assert_eq!(draw_args_bucket_bits(MAX_SHADER_BUCKETS as u32), last << 8);
+        assert_eq!(draw_args_bucket_bits(u32::MAX), last << 8);
+        // Packed alongside the decision bits, each half reads back unchanged.
+        let flags = draw_args_flags(true, true, true) | draw_args_bucket_bits(2);
+        assert_eq!(flags & DrawArgsFlags::ENABLED, DrawArgsFlags::ENABLED);
+        assert_eq!(flags & DrawArgsFlags::CULLABLE, DrawArgsFlags::CULLABLE);
+        assert_eq!((flags >> DrawArgsFlags::BUCKET_SHIFT) & 0xFF, 2);
     }
 }

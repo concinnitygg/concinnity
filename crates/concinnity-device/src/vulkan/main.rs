@@ -248,6 +248,11 @@ impl VkContext {
                 // The skinned tail is drawn by a second indirect draw below (deformed
                 // VB + skinned IB), reading the same indirect buffer from
                 // `skinned_record_base()` on.
+                //
+                // Once per shader bucket: bucket 0 runs under the bindless pipeline
+                // bound above, each later bucket under its material shader's own
+                // pipeline. The cull kernel wrote every record's command into
+                // exactly one bucket's region, so the regions never double-draw.
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers[frame_idx],
@@ -260,6 +265,15 @@ impl VkContext {
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors DirectX / Metal.
             self.inc_draw_calls(1);
+            self.inc_draw_calls(self.draw_bucket_regions(
+                cmd,
+                self.cull.indirect_buffers[frame_idx],
+                self.skinned_record_base() as u32,
+            ));
+            // Restore the default bindless pipeline for the sub-paths below.
+            if self.shader_bucket_count() > 1 {
+                unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
+            }
         }
 
         // Legacy per-draw main pass. Draws every visible object when the
@@ -723,7 +737,7 @@ impl VkContext {
                 &[],
             );
             // Indirect draw #1: the static + instance prefix against the static
-            // VB/IB bound above.
+            // VB/IB bound above, once per shader bucket.
             device.cmd_draw_indexed_indirect(
                 cmd,
                 self.cull.indirect_buffers2[frame_idx],
@@ -733,15 +747,22 @@ impl VkContext {
             );
         }
         self.inc_draw_calls(1);
+        self.inc_draw_calls(self.draw_bucket_regions(
+            cmd,
+            self.cull.indirect_buffers2[frame_idx],
+            self.skinned_record_base() as u32,
+        ));
 
         // Indirect draw #2: the skinned tail against the deformed VB + skinned IB.
-        // The pipeline + descriptor sets bound above persist (same bindless
-        // pipeline), so only the vertex/index buffers rebind.
+        // The descriptor sets bound above persist, so only the pipeline (a bucket
+        // may have replaced it) and the vertex/index buffers rebind. Skinned draws
+        // always render bucket 0.
         if self.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
             unsafe {
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,

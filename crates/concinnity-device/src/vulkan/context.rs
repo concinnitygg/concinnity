@@ -520,6 +520,20 @@ pub(super) struct VkCull {
     pub(super) bindless_pipeline: Option<vk::Pipeline>,
     pub(super) bindless_pipeline_layout: Option<vk::PipelineLayout>,
     pub(super) bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
+    // (bucket 0 is `bindless_pipeline`). Each renders its bucket's slice of the
+    // GPU-culled command buffer through the shared bindless pipeline layout.
+    // `None` marks a bucket whose Shader is not resident yet: its scene has not
+    // pinned, so the pass skips those draws (see `world_shaders.rs`).
+    pub(super) world_pipelines: Vec<Option<vk::Pipeline>>,
+    // Commands reserved per shader-bucket region in the indirect buffers, fixed at
+    // init to the record capacity the buffers were sized for. Bucket `b`'s region
+    // starts at command `b * bucket_stride`.
+    pub(super) bucket_stride: usize,
+    // The engine's compiled bindless main-pass SPIR-V, retained so a bucket that
+    // resolves to the engine default can build its pipeline without recompiling
+    // the GLSL. Empty when the world authored its own main shader.
+    pub(super) bindless_main_spv: (Vec<u8>, Vec<u8>),
     // One bindless descriptor set per frame-in-flight: binding 0 is that frame's
     // GpuObjectData storage buffer, binding 1 the shared texture pool.
     pub(super) bindless_sets: Vec<vk::DescriptorSet>,
@@ -635,6 +649,9 @@ impl VkCull {
         unsafe {
             if let Some(p) = self.bindless_pipeline {
                 device.destroy_pipeline(p, None);
+            }
+            for p in self.world_pipelines.iter().flatten() {
+                device.destroy_pipeline(*p, None);
             }
             if let Some(pl) = self.bindless_pipeline_layout {
                 device.destroy_pipeline_layout(pl, None);

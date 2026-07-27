@@ -83,6 +83,7 @@ mod tests {
             source_path: source_path.to_string(),
             asset_name: asset_name.to_string(),
             kind: kind.to_string(),
+            ..Default::default()
         }
     }
 

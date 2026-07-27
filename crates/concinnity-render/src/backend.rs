@@ -1339,6 +1339,7 @@ mod tests {
                 main_is_engine_default: false,
                 shadow: &[],
                 vert_instanced: &[],
+                deferred: false,
             }],
             media: MediaPayloads {
                 textures: &[],

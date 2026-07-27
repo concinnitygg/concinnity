@@ -34,6 +34,7 @@ mod resources;
 mod screenshot;
 mod texture;
 mod transient_pool;
+mod world_shaders;
 
 pub use context::DxContext;
 pub(crate) use gpu_profile::probe_gpu_profile;

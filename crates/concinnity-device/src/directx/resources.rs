@@ -632,6 +632,7 @@ impl DxContext {
             bb_max: [f32::NAN; 3],
             cull_distance,
             lod_alternates: src.lod_alternates.clone(),
+            shader_bucket: src.shader_bucket,
         };
 
         // Reuse a vacated clone descriptor-pool offset, else grow the pool up to
@@ -1252,6 +1253,8 @@ impl DxContext {
             cull_distance: 0.0,
             // Streamed chunks always render at the build-time mesh; no LOD.
             lod_alternates: Vec::new(),
+            // Streamed chunks render through the world default program.
+            shader_bucket: 0,
         };
 
         // Reuse a vacated draw slot when one is free, else append. A slot

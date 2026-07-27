@@ -26,11 +26,23 @@ pub struct ShaderStages {
     pub vert: Vec<u8>,
     pub frag: Vec<u8>,
     pub vert_instanced: Vec<u8>,
+    // The bucket declares the engine's built-in default sources; carried through
+    // so a warmed bucket reaches the backend with the same information the
+    // init-time path hands it.
+    pub is_engine_default: bool,
+}
+
+// One deferred bucket as init recorded it.
+pub struct DeferredBucket {
+    pub bucket: u32,
+    pub source: ShaderPayloadSource,
+    pub is_engine_default: bool,
 }
 
 struct Entry {
     bucket: u32,
     source: ShaderPayloadSource,
+    is_engine_default: bool,
     // Set while the owning scene is unpinned.
     blocked: bool,
     resident: bool,
@@ -43,13 +55,14 @@ pub struct ShaderWarmup {
 impl ShaderWarmup {
     // Every deferred bucket starts blocked and non-resident, matching every
     // scene starting unpinned: the first pin sync unblocks the start scene's.
-    pub fn new(deferred: Vec<(u32, ShaderPayloadSource)>) -> Self {
+    pub fn new(deferred: Vec<DeferredBucket>) -> Self {
         Self {
             entries: deferred
                 .into_iter()
-                .map(|(bucket, source)| Entry {
-                    bucket,
-                    source,
+                .map(|d| Entry {
+                    bucket: d.bucket,
+                    source: d.source,
+                    is_engine_default: d.is_engine_default,
                     blocked: true,
                     resident: false,
                 })
@@ -97,6 +110,7 @@ impl ShaderWarmup {
             vert: stage(ShaderKind::Vertex),
             frag: stage(ShaderKind::Fragment),
             vert_instanced: stage(ShaderKind::VertexInstanced),
+            is_engine_default: entry.is_engine_default,
         })
     }
 
@@ -123,10 +137,18 @@ mod tests {
         .expect("encode")
     }
 
+    fn deferred(bucket: u32, source: ShaderPayloadSource) -> DeferredBucket {
+        DeferredBucket {
+            bucket,
+            source,
+            is_engine_default: false,
+        }
+    }
+
     fn warmup() -> ShaderWarmup {
         ShaderWarmup::new(vec![
-            (1, ShaderPayloadSource::Bytes(payload_bytes())),
-            (2, ShaderPayloadSource::Bytes(payload_bytes())),
+            deferred(1, ShaderPayloadSource::Bytes(payload_bytes())),
+            deferred(2, ShaderPayloadSource::Bytes(payload_bytes())),
         ])
     }
 
@@ -183,7 +205,7 @@ mod tests {
         let mut file = std::fs::File::create(&path).unwrap();
         file.write_all(b"header").unwrap();
         file.write_all(&bytes).unwrap();
-        let w = ShaderWarmup::new(vec![(
+        let w = ShaderWarmup::new(vec![deferred(
             3,
             ShaderPayloadSource::Disk {
                 path,
@@ -197,7 +219,7 @@ mod tests {
     #[test]
     fn load_reports_an_unknown_bucket_and_a_corrupt_payload() {
         assert!(warmup().load(9).is_err());
-        let w = ShaderWarmup::new(vec![(1, ShaderPayloadSource::Bytes(vec![0xff; 4]))]);
+        let w = ShaderWarmup::new(vec![deferred(1, ShaderPayloadSource::Bytes(vec![0xff; 4]))]);
         assert!(w.load(1).is_err());
     }
 

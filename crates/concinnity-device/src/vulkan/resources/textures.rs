@@ -545,6 +545,7 @@ impl VkContext {
             bb_max: [f32::NAN; 3],
             cull_distance,
             lod_alternates: src.lod_alternates.clone(),
+            shader_bucket: src.shader_bucket,
         };
 
         let last_tex = self.textures.len().saturating_sub(1);

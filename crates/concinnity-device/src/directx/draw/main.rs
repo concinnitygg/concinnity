@@ -364,6 +364,12 @@ impl DxContext {
                 // above). The skinned tail is drawn by a second ExecuteIndirect
                 // below (different bound VB/IB), reading the same indirect buffer
                 // from `skinned_record_base()` on.
+                //
+                // Once per shader bucket: bucket 0 runs under the bindless
+                // pipeline bound above, each later bucket under its material
+                // shader's own pipeline. The cull kernel wrote every record's
+                // command into exactly one bucket's region, so the regions never
+                // double-draw.
                 cmd.ExecuteIndirect(
                     cull_sig,
                     self.skinned_record_base() as u32,
@@ -377,6 +383,16 @@ impl DxContext {
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors Metal's bindless main pass.
             self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_bucket_regions(
+                cmd,
+                cull_sig,
+                indirect,
+                self.skinned_record_base() as u32,
+            ));
+            // Restore the default bindless pipeline for the sub-paths below.
+            if self.shader_bucket_count() > 1 {
+                unsafe { cmd.SetPipelineState(bindless_pso) };
+            }
         }
 
         // Legacy per-draw main pass. Draws every visible object when the
@@ -856,7 +872,7 @@ impl DxContext {
                     self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress(),
                 );
                 // ExecuteIndirect #1: static + instance prefix against the static
-                // VB/IB (bound above).
+                // VB/IB (bound above), once per shader bucket.
                 cmd.ExecuteIndirect(
                     cull_sig,
                     self.skinned_record_base() as u32,
@@ -867,14 +883,22 @@ impl DxContext {
                 );
             }
             self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_bucket_regions(
+                cmd,
+                cull_sig,
+                indirect,
+                self.skinned_record_base() as u32,
+            ));
 
             // ExecuteIndirect #2: skinned tail against the deformed VB + skinned
-            // IB. The PSO + root signature + root descriptors set above persist
-            // (same bindless pipeline), so only the vertex/index buffers rebind.
+            // IB. The root signature + root descriptors set above persist, so only
+            // the pipeline (a bucket may have replaced it) and the vertex/index
+            // buffers rebind. Skinned draws always render bucket 0.
             if self.n_skinned > 0
                 && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
             {
                 unsafe {
+                    cmd.SetPipelineState(bindless_pso);
                     cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
                     cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(

@@ -422,17 +422,14 @@ impl MtlContext {
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
-            // The record's shader bucket rides the upper flag bits so the cull
-            // kernel can route its command into that bucket's ICB.
-            let bucket = (obj.shader_bucket as usize)
-                .min(crate::gfx::render_types::MAX_SHADER_BUCKETS - 1)
-                as u32;
             args.push(GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
+                // The record's shader bucket rides the upper flag bits so the
+                // cull kernel can route its command into that bucket's ICB.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | (bucket << crate::gfx::render_types::DrawArgsFlags::BUCKET_SHIFT),
+                    | crate::gfx::render_types::draw_args_bucket_bits(obj.shader_bucket),
             });
         }
         // Append the instances' draw args in the SAME cluster-then-instance

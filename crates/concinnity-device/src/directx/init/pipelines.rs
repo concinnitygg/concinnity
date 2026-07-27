@@ -1251,6 +1251,86 @@ pub(in crate::directx) fn create_shadow_pso(
         .map_err(|e| format!("create shadow PSO: {e}"))
 }
 
+// Material-referenced world shader pipelines
+
+// The engine's own compiled bindless main-pass stages, kept past init so a
+// shader bucket that resolves to the engine default can build its pipeline
+// without recompiling the HLSL. Recompiling cost ~140 ms per bucket install,
+// which is the whole point of warming a pipeline behind a loading screen.
+pub(in crate::directx) struct BindlessMainShaders {
+    pub vs: Vec<u8>,
+    pub ps: Vec<u8>,
+}
+
+// Build one shader bucket's bindless main-pass pipeline. `bucket` is the
+// `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
+// program) and names the bucket in error messages.
+//
+// A bucket whose Shader resolves to the engine's built-in default renders the
+// engine's own bindless program: the DXBC the cook produced for
+// `default_{vert,frag}.hlsl` is the LEGACY per-draw shader, which does not match
+// the bindless root signature, so the embedded bindless bytes are substituted --
+// the same substitution bucket 0 makes for a built-in world.
+pub(in crate::directx) fn build_bucket_pipeline(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    bindless_root_sig: &ID3D12RootSignature,
+    bucket: usize,
+    shader: crate::gfx::backend_init::ShaderBytes<'_>,
+    msaa_samples: u32,
+    engine_default: &BindlessMainShaders,
+) -> Result<ID3D12PipelineState, String> {
+    let (vs, ps) = if shader.main_is_engine_default {
+        (engine_default.vs.as_slice(), engine_default.ps.as_slice())
+    } else {
+        (shader.vert, shader.frag)
+    };
+    if vs.is_empty() || ps.is_empty() {
+        return Err(format!(
+            "shader bucket {bucket} carries no vertex/fragment bytecode"
+        ));
+    }
+    dump_on_err(
+        info_queue,
+        create_main_pso(device, bindless_root_sig, vs, ps, HDR_FORMAT, msaa_samples),
+    )
+    .map_err(|e| format!("shader bucket {bucket}: {e}"))
+}
+
+// Build the per-bucket pipeline table from the world's material-referenced
+// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
+// streaming pump installs later (its Shader is owned by a scene that has not
+// pinned, so `decode_shaders` handed over an all-empty payload).
+fn build_world_pipeline_table(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    bindless_root_sig: &ID3D12RootSignature,
+    bucket_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
+    msaa_samples: u32,
+    engine_default: &BindlessMainShaders,
+) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
+    let mut table = Vec::with_capacity(bucket_shaders.len());
+    for (i, shader) in bucket_shaders.iter().enumerate() {
+        let bucket = i + 1;
+        // A bucket whose Shader a non-start scene owns has no payload yet; the
+        // streaming pump installs it when that scene pins.
+        if shader.deferred {
+            table.push(None);
+            continue;
+        }
+        table.push(Some(build_bucket_pipeline(
+            device,
+            info_queue,
+            bindless_root_sig,
+            bucket,
+            *shader,
+            msaa_samples,
+            engine_default,
+        )?));
+    }
+    Ok(table)
+}
+
 // Init-time orchestration
 
 pub(super) struct MainPipelines {
@@ -1258,6 +1338,15 @@ pub(super) struct MainPipelines {
     pub main_pso: ID3D12PipelineState,
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
+    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`.
+    // Empty unless the world declares more than one Shader.
+    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
+    // Commands reserved per bucket region in the indirect buffers.
+    pub bucket_stride: usize,
+    // The engine's compiled bindless main-pass stages, retained for the buckets a
+    // scene warms mid-session. Empty when the world authored its own main shader
+    // (there is no bindless path to warm into).
+    pub bindless_main_shaders: BindlessMainShaders,
     pub object_buffer_resources: Vec<ID3D12Resource>,
     pub object_buffer_ptrs: Vec<*mut u8>,
     pub cull_root_sig: Option<ID3D12RootSignature>,
@@ -1319,6 +1408,12 @@ pub(super) struct MainPipelineShaders<'a> {
     pub vert_bytes: &'a [u8],
     // Precompiled DXBC override for a custom fragment shader (empty = use built-in).
     pub frag_bytes: &'a [u8],
+    // The world's material-referenced shaders (`BackendInit::shaders[1..]`), one
+    // per shader bucket past the default. Each gets its own bindless main-pass
+    // pipeline; an entry with empty stage bytes is a bucket whose Shader is
+    // deferred to its owning scene and is installed later by
+    // `install_world_shader`.
+    pub bucket_shaders: &'a [crate::gfx::backend_init::ShaderBytes<'a>],
 }
 
 // Record counts + MSAA that size the GPU-driven bindless pass's cull / object /
@@ -1361,6 +1456,7 @@ pub(super) fn build_main_pipelines(
         shaders,
         vert_bytes,
         frag_bytes,
+        bucket_shaders,
     } = pipeline_shaders;
     let MainPipelineConfig {
         n_objects,
@@ -1398,6 +1494,10 @@ pub(super) fn build_main_pipelines(
     // main shader was supplied; a world with its own shader keeps the legacy
     // per-draw pipeline.
     let main_is_builtin = vert_bytes.is_empty() && frag_bytes.is_empty();
+    let mut bindless_main_shaders = BindlessMainShaders {
+        vs: Vec::new(),
+        ps: Vec::new(),
+    };
     let (main_bindless_root_sig, main_bindless_pso) = if main_is_builtin {
         let (bvs, bps) = compile_main_bindless_shaders(hot_reload)?;
         let brs = dump_on_err(info_queue, create_main_bindless_root_signature(device))?;
@@ -1405,10 +1505,44 @@ pub(super) fn build_main_pipelines(
             info_queue,
             create_main_pso(device, &brs, &bvs, &bps, HDR_FORMAT, msaa_samples),
         )?;
+        bindless_main_shaders = BindlessMainShaders { vs: bvs, ps: bps };
         (Some(brs), Some(bpso))
     } else {
         (None, None)
     };
+
+    // Material-referenced shaders (ShaderHandle 1..) each get their own bindless
+    // main-pass pipeline, so their draws route into their own region of the
+    // GPU-culled command buffer. They exist only on the bindless path: a world
+    // with a legacy per-draw main shader carries no bucket routing at all.
+    let world_pipelines = match main_bindless_root_sig.as_ref() {
+        Some(brs) if !bucket_shaders.is_empty() => {
+            let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+            if bucket_shaders.len() + 1 > max {
+                return Err(format!(
+                    "world declares {} Shaders but at most {max} can be routed",
+                    bucket_shaders.len() + 1
+                ));
+            }
+            build_world_pipeline_table(
+                device,
+                info_queue,
+                brs,
+                bucket_shaders,
+                msaa_samples,
+                &bindless_main_shaders,
+            )?
+        }
+        _ if !bucket_shaders.is_empty() => {
+            return Err(
+                "material-referenced world shaders need the bindless main pass, which a \
+                 world-authored main shader disables"
+                    .to_string(),
+            );
+        }
+        _ => Vec::new(),
+    };
+    let bucket_count = 1 + world_pipelines.len();
 
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
     // when the bindless pass is active and the world has build-time static
@@ -1486,8 +1620,12 @@ pub(super) fn build_main_pipelines(
             (n_cull * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>()) as u64,
         );
         // Default-heap indirect-command buffers (UAV target for the cull
-        // kernel; ExecuteIndirect source for the bindless static pass).
-        let indirect_size = align256((n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
+        // kernel; ExecuteIndirect source for the bindless static pass). One
+        // `n_cull`-command region per shader bucket: the cull kernel writes every
+        // record's slot in each region and the main pass issues one
+        // `ExecuteIndirect` per region under that bucket's pipeline.
+        let indirect_size =
+            align256((bucket_count * n_cull) as u64 * INDIRECT_COMMAND_STRIDE as u64);
         // Per-object cull-status buffer (one u32 each). Always allocated when
         // the cull path is active (matches Metal); resting state `UAV` so it
         // binds as a root UAV with no transition.
@@ -1610,6 +1748,9 @@ pub(super) fn build_main_pipelines(
         main_pso,
         main_bindless_root_sig,
         main_bindless_pso,
+        world_pipelines,
+        bucket_stride: n_cull,
+        bindless_main_shaders,
         object_buffer_resources,
         object_buffer_ptrs,
         cull_root_sig,

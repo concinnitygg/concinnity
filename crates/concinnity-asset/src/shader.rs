@@ -121,7 +121,10 @@ impl StageSource {
 /// - **Every fragment stage must define `fragment_main_bindless`.** Multi-Shader
 ///   worlds render through the GPU-driven bindless path, which is the only path
 ///   that can switch programs per draw. A single-Shader world has no such
-///   requirement and may define just `fragment_main`.
+///   requirement and may define just `fragment_main`. This applies to `.metal`
+///   sources, which carry one program per entry point; an `.hlsl` or GLSL stage
+///   compiles a single `main`, so there is no entry point to pick -- what it must
+///   match instead is the bindless binding layout (see below).
 /// - **Instanced, skinned, and voxel-chunk draws always use the world default.**
 ///   A Material naming a Shader cannot be used by an
 ///   [InstancedProp](#instancedprop), a [SkinnedMesh](#skinnedmesh), or a
@@ -130,7 +133,15 @@ impl StageSource {
 ///
 /// Planar reflections are the one case with no build-time signal: a surface
 /// reflected in a mirror is drawn with the world default Shader regardless of
-/// its Material.
+/// its Material. Reflection probe cubes capture it the same way.
+///
+/// A non-default Shader's stages must be written against the engine's **bindless**
+/// binding layout, not the per-draw one: the material, transform, and texture
+/// indices come from the per-frame object buffer rather than per-draw constants.
+/// A Shader that names the engine's own built-in sources (`default.metal`, or
+/// `default_vert.hlsl` + `default_frag.hlsl`) is understood as "render this
+/// material with the engine default program" and is wired to the engine's
+/// bindless program, whichever backend is in use.
 ///
 /// A Shader referenced only by materials belonging to one [Scene](#scene) is
 /// owned by that scene: its pipeline is built when the scene loads (behind the

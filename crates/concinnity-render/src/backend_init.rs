@@ -45,6 +45,7 @@ pub struct SceneData<'a> {
 
 // Compiled shader payloads. Each backend loads the format its toolchain
 // produced (metallib / DXBC / SPIR-V).
+#[derive(Clone, Copy)]
 pub struct ShaderBytes<'a> {
     pub vert: &'a [u8],
     pub frag: &'a [u8],
@@ -60,6 +61,12 @@ pub struct ShaderBytes<'a> {
     // Compiled GPU-instanced vertex shader; empty slice = no instanced
     // pipeline (any InstancedProp in the world will fail to render).
     pub vert_instanced: &'a [u8],
+    // This entry's payload was not decoded because a scene other than the start
+    // scene owns it: the backend leaves the bucket's pipeline unbuilt and the
+    // streaming pump installs it when that scene pins. Distinct from empty stage
+    // bytes, which a backend whose built-in default ships no compiled payload
+    // (Vulkan's inline GLSL) also sees for an engine-default program.
+    pub deferred: bool,
 }
 
 // Decoded image payloads: texture pools, glyph atlases, and the serialised

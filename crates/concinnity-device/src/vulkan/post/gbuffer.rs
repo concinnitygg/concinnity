@@ -1803,6 +1803,13 @@ impl VkContext {
                 self.inc_draw_calls(1);
             }
         }
+        // The material-referenced shader buckets write their own regions of the
+        // command buffer. The pre-pass shades nothing, so every bucket runs under
+        // this single pipeline; a bucket whose Shader is not resident is skipped,
+        // matching what the colour pass will draw.
+        if prefix > 0 {
+            self.inc_draw_calls(self.draw_bucket_regions_shared_pipeline(cmd, indirect, prefix));
+        }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame
         // deformed VB (binding 1) + the skinned u16 IB. Records carry base_vertex

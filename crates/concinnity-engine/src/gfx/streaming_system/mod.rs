@@ -286,9 +286,12 @@ impl StreamingState {
                     let shader = crate::gfx::backend_init::ShaderBytes {
                         vert: &stages.vert,
                         frag: &stages.frag,
-                        main_is_engine_default: false,
+                        main_is_engine_default: stages.is_engine_default,
                         shadow: &[],
                         vert_instanced: &stages.vert_instanced,
+                        // The payload is in hand; this install is what ends the
+                        // deferral.
+                        deferred: false,
                     };
                     let started = std::time::Instant::now();
                     match backend.install_world_shader(bucket, shader) {

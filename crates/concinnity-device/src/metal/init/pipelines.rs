@@ -201,7 +201,9 @@ pub(crate) fn build_world_pipeline_table(
 ) -> Result<WorldPipelineTable, String> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
-        if shader.vert.is_empty() && shader.frag.is_empty() {
+        // A bucket whose Shader a non-start scene owns has no payload yet; the
+        // streaming pump installs it when that scene pins.
+        if shader.deferred {
             table.push(None);
             continue;
         }
