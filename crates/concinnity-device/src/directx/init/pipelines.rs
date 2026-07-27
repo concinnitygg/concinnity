@@ -1410,8 +1410,8 @@ pub(super) struct MainPipelineShaders<'a> {
     pub frag_bytes: &'a [u8],
     // The world's material-referenced shaders (`BackendInit::shaders[1..]`), one
     // per shader bucket past the default. Each gets its own bindless main-pass
-    // pipeline; an entry with empty stage bytes is a bucket whose Shader is
-    // deferred to its owning scene and is installed later by
+    // pipeline; an entry flagged `deferred` is a bucket whose Shader belongs to
+    // a scene that has not pinned, and is installed later by
     // `install_world_shader`.
     pub bucket_shaders: &'a [crate::gfx::backend_init::ShaderBytes<'a>],
 }

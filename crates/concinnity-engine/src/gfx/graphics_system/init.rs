@@ -1517,8 +1517,8 @@ impl GraphicsSystem {
 
         // Buckets a non-start scene exclusively owns skip their decode and
         // pipeline build here; the streaming pump warms them when that scene
-        // pins. The backend sees empty stage bytes for them and leaves the
-        // bucket's pipeline unbuilt.
+        // pins. The backend sees them flagged `deferred` and leaves the bucket's
+        // pipeline unbuilt.
         let shader_ids: Vec<AssetId> = world_shaders.iter().map(|s| s.asset_id).collect();
         self.deferred_shader_scenes =
             super::streaming::deferred_shader_buckets(ctx, streaming, &shader_ids)

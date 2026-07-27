@@ -190,8 +190,8 @@ pub(crate) type WorldPipelineTable =
 // `fragment_main_bindless` with the engine's BindlessTextures layout; a shader
 // without it is a hard error rather than a silently default-shaded bucket.
 //
-// A bucket whose stage bytes are empty was deferred by init (its Shader is
-// owned by a scene that has not pinned) and stays `None` until
+// A bucket flagged `deferred` (its Shader is owned by a scene that has not
+// pinned) stays `None` until
 // [`super::super::MtlContext::install_world_shader`] builds it.
 pub(crate) fn build_world_pipeline_table(
     device: &ProtocolObject<dyn MTLDevice>,
