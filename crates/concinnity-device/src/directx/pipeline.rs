@@ -71,20 +71,14 @@ pub(in crate::directx) fn reflection_cut_prelude() -> String {
 }
 
 // A stable pseudo-filename for the in-memory source. Without one FXC names the
-// module after the source buffer's address, which lands in the debug info and
-// makes the same shader compile to different bytes every run -- so a shipped
-// binary's pipeline cache would never hit, and error messages would read
+// module after the source buffer's address, so compile errors read
 // `Shader@0x00007ff...` instead of something a developer recognises.
 const HLSL_SOURCE_NAME: &std::ffi::CStr = c"concinnity.hlsl";
 
-pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
-    let src_c = std::ffi::CString::new(source).map_err(|e| format!("hlsl src cstr: {e}"))?;
-    let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("hlsl entry cstr: {e}"))?;
-    let target_c = std::ffi::CString::new(target).map_err(|e| format!("hlsl target cstr: {e}"))?;
-
-    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-
+// FXC flag set for this build. Debug trades code quality for compile speed;
+// release asks for full optimisation. Folded into the shader cache key, so the
+// two builds never replay one another's bytes.
+fn fxc_flags() -> u32 {
     // Force column-major matrix storage globally. Every built-in HLSL shader
     // already sets `#pragma pack_matrix(column_major)` at the top of its
     // source; this flag is defensive belt-and-suspenders against any future
@@ -93,16 +87,50 @@ pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Ve
     // The bindless main fragment shader declares an unbounded
     // `Texture2D tex_pool[] : register(t0, space1)` array; FXC refuses
     // unbounded descriptor tables without this opt-in flag.
-    let flags = if cfg!(debug_assertions) {
-        windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_DEBUG
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_SKIP_OPTIMIZATION
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES
-    } else {
-        windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_OPTIMIZATION_LEVEL3
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES
+    use windows::Win32::Graphics::Direct3D::Fxc::{
+        D3DCOMPILE_DEBUG, D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES,
+        D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR,
+        D3DCOMPILE_SKIP_OPTIMIZATION,
     };
+    let common =
+        D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES;
+    if cfg!(debug_assertions) {
+        common | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION
+    } else {
+        common | D3DCOMPILE_OPTIMIZATION_LEVEL3
+    }
+}
+
+// Compile HLSL to DXBC, reusing a cached artifact when this exact source has
+// been compiled with the same entry, target, and flags before. FXC dominates
+// renderer init (measured 993 ms of a 1.58 s release init across 45 built-in
+// shaders), and none of those inputs change between runs of an unedited build.
+pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
+    let flags = fxc_flags();
+    let key = crate::shader_cache::Key {
+        compiler: "fxc",
+        source,
+        entry,
+        target,
+        options: u64::from(flags),
+    };
+    crate::shader_cache::cached(&key, target, || {
+        compile_hlsl_uncached(source, entry, target, flags)
+    })
+}
+
+fn compile_hlsl_uncached(
+    source: &str,
+    entry: &str,
+    target: &str,
+    flags: u32,
+) -> Result<Vec<u8>, String> {
+    let src_c = std::ffi::CString::new(source).map_err(|e| format!("hlsl src cstr: {e}"))?;
+    let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("hlsl entry cstr: {e}"))?;
+    let target_c = std::ffi::CString::new(target).map_err(|e| format!("hlsl target cstr: {e}"))?;
+
+    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
+    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
 
     let result = unsafe {
         D3DCompile(

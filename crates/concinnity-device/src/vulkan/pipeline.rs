@@ -257,23 +257,60 @@ pub(super) fn create_cull_pipeline(
     Ok(pipeline)
 }
 
+// One shaderc compiler per thread, created on first use. `Compiler::new` builds
+// glslang's builtin symbol tables, which cost ~50 ms -- paid per call, that was
+// 2.6 of the 3.0 seconds the 53 built-in shaders took at init. The handle is not
+// thread-safe, hence thread-local rather than a shared static.
+thread_local! {
+    static SHADERC: std::cell::OnceCell<shaderc::Compiler> = const { std::cell::OnceCell::new() };
+}
+
+fn with_compiler<R>(f: impl FnOnce(&shaderc::Compiler) -> Result<R, String>) -> Result<R, String> {
+    SHADERC.with(|cell| {
+        if cell.get().is_none() {
+            let compiler =
+                shaderc::Compiler::new().map_err(|e| format!("shaderc init failed: {e}"))?;
+            let _ = cell.set(compiler);
+        }
+        f(cell.get().expect("shaderc compiler present"))
+    })
+}
+
+// Compile GLSL to SPIR-V, reusing a cached artifact when this exact source has
+// been compiled for the same target before. See `crate::shader_cache`.
 pub(in crate::vulkan) fn compile_glsl(
     source: &str,
     kind: shaderc::ShaderKind,
     label: &str,
 ) -> Result<Vec<u8>, String> {
-    let compiler = shaderc::Compiler::new().map_err(|e| format!("shaderc init failed: {e}"))?;
-    let mut opts =
-        shaderc::CompileOptions::new().map_err(|e| format!("shaderc options failed: {e}"))?;
-    opts.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_0 as u32,
-    );
-    opts.set_optimization_level(shaderc::OptimizationLevel::Performance);
-    let artifact = compiler
-        .compile_into_spirv(source, kind, label, "main", Some(&opts))
-        .map_err(|e| format!("compile {label}: {e}"))?;
-    Ok(artifact.as_binary_u8().to_vec())
+    let key = crate::shader_cache::Key {
+        compiler: "shaderc",
+        source,
+        entry: "main",
+        target: "vulkan1.0",
+        options: kind as u64,
+    };
+    crate::shader_cache::cached(&key, label, || compile_glsl_uncached(source, kind, label))
+}
+
+fn compile_glsl_uncached(
+    source: &str,
+    kind: shaderc::ShaderKind,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    with_compiler(|compiler| {
+        let mut opts =
+            shaderc::CompileOptions::new().map_err(|e| format!("shaderc options failed: {e}"))?;
+        opts.set_target_env(
+            shaderc::TargetEnv::Vulkan,
+            shaderc::EnvVersion::Vulkan1_0 as u32,
+        );
+        opts.set_optimization_level(shaderc::OptimizationLevel::Performance);
+        let artifact = compiler
+            .compile_into_spirv(source, kind, label, "main", Some(&opts))
+            .map_err(|e| format!("compile {label}: {e}"))?;
+        Ok(artifact.as_binary_u8().to_vec())
+    })
 }
 
 // Compile GLSL that uses `GL_EXT_ray_query` (the hardware ray-traced reflection
@@ -287,19 +324,37 @@ pub(in crate::vulkan) fn compile_glsl_rt(
     kind: shaderc::ShaderKind,
     label: &str,
 ) -> Result<Vec<u8>, String> {
-    let compiler = shaderc::Compiler::new().map_err(|e| format!("shaderc init failed: {e}"))?;
-    let mut opts =
-        shaderc::CompileOptions::new().map_err(|e| format!("shaderc options failed: {e}"))?;
-    opts.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_2 as u32,
-    );
-    opts.set_target_spirv(shaderc::SpirvVersion::V1_4);
-    opts.set_optimization_level(shaderc::OptimizationLevel::Performance);
-    let artifact = compiler
-        .compile_into_spirv(source, kind, label, "main", Some(&opts))
-        .map_err(|e| format!("compile {label}: {e}"))?;
-    Ok(artifact.as_binary_u8().to_vec())
+    let key = crate::shader_cache::Key {
+        compiler: "shaderc",
+        source,
+        entry: "main",
+        target: "vulkan1.2/spv1.4",
+        options: kind as u64,
+    };
+    crate::shader_cache::cached(&key, label, || {
+        compile_glsl_rt_uncached(source, kind, label)
+    })
+}
+
+fn compile_glsl_rt_uncached(
+    source: &str,
+    kind: shaderc::ShaderKind,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    with_compiler(|compiler| {
+        let mut opts =
+            shaderc::CompileOptions::new().map_err(|e| format!("shaderc options failed: {e}"))?;
+        opts.set_target_env(
+            shaderc::TargetEnv::Vulkan,
+            shaderc::EnvVersion::Vulkan1_2 as u32,
+        );
+        opts.set_target_spirv(shaderc::SpirvVersion::V1_4);
+        opts.set_optimization_level(shaderc::OptimizationLevel::Performance);
+        let artifact = compiler
+            .compile_into_spirv(source, kind, label, "main", Some(&opts))
+            .map_err(|e| format!("compile {label}: {e}"))?;
+        Ok(artifact.as_binary_u8().to_vec())
+    })
 }
 
 pub(in crate::vulkan) fn spv_module(

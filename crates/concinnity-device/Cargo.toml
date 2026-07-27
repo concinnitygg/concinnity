@@ -33,6 +33,8 @@ bytemuck = { version = "1", features = ["derive"] }
 libloading = "0.9.0"
 png = "0.18.1"
 rayon = "1"
+# Keys the built-in shader binary cache (src/shader_cache.rs).
+sha2 = "0.10.9"
 tracing = "0.1.44"
 # Backend shader hot-reload watches each backend's shader dir for edits.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }

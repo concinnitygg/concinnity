@@ -45,5 +45,11 @@ pub mod vulkan;
 #[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
 pub(crate) mod win32;
 
+// Disk cache for the built-in shader binaries the DirectX and Vulkan backends
+// compile at init. Metal reaches its equivalent at build time (the toolchain
+// crate precompiles every `.metal` into the binary), so it has no use for this.
+#[cfg(any(backend_dx, backend_vk))]
+pub(crate) mod shader_cache;
+
 mod factory;
 pub use factory::{init_backend, probe_gpu_profile};

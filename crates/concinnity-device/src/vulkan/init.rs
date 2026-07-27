@@ -4098,6 +4098,7 @@ impl VkContext {
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         me.upload_initial_particles(particles)?;
+        crate::shader_cache::report_init_and_prune();
         Ok(me)
     }
 

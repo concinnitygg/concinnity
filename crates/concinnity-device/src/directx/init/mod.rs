@@ -2155,6 +2155,8 @@ impl DxContext {
             None
         };
 
+        crate::shader_cache::report_init_and_prune();
+
         Ok(Self {
             win_state: Some(win_state),
             fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode::new(),

@@ -180,6 +180,16 @@ pub fn cache_dir() -> PathBuf {
     state_dir().join("cache")
 }
 
+/// Directory holding compiled built-in shader binaries, keyed by a hash of
+/// their compile inputs. Written by the renderer on a cache miss, so it resolves
+/// under the writable-state dir rather than beside the read-only `data/` a
+/// shipped install may ship. Distinct from [`cache_dir`], which holds cooked
+/// asset payloads: these artifacts belong to the machine's shader compiler, not
+/// to the build.
+pub fn shader_cache_dir() -> PathBuf {
+    writable_state_dir().join("shader-cache")
+}
+
 // Recursively search `assets_dir()` for a file matching the given bare
 // filename, returning the first match. Source strings that are bare filenames
 // (a texture, HDRI, `.cube` LUT, or shader named without a directory) are
