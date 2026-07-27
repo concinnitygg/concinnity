@@ -91,8 +91,6 @@ struct TextureTableDecode {
 // slice, and the optional instanced-vertex stage), whether the main stage is the
 // engine's built-in default, the payload locators kept for the blob-release
 // step, and the dev-only source map the hot-reload watcher subscribes to.
-// All three stages empty marks a bucket init deferred: the backend leaves its
-// pipeline unbuilt until the streaming pump warms it.
 #[derive(Default)]
 struct DecodedShaderBytes {
     vert: Vec<u8>,

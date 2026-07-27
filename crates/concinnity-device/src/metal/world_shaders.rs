@@ -31,21 +31,16 @@ impl MtlContext {
             bucket as usize,
             vert_bytes,
             frag_bytes,
-            self.pipeline_archive.as_mut(),
         )?;
         self.world_pipelines[slot] = Some(pso);
-        // Persist here rather than at shutdown: a scene load is a natural
-        // pause, and a session that never exits cleanly still leaves the cache
-        // warm for the next run.
-        if let Some(archive) = &mut self.pipeline_archive {
-            archive.flush();
-        }
         Ok(())
     }
 
-    // Release one bucket's pipeline. Commands already encoded against it keep
-    // it alive through their command buffer, so dropping the reference here is
-    // safe mid-frame; the next frame's main pass skips the bucket.
+    // Release one bucket's pipeline. A Metal command buffer retains the
+    // pipelines encoded into it, so dropping this reference mid-frame is safe
+    // and the next frame's main pass simply skips the bucket. That retention is
+    // Metal's alone: DirectX and Vulkan command lists do NOT keep a pipeline
+    // alive, so their evict drains the device first.
     pub(super) fn evict_world_shader(&mut self, bucket: u32) {
         if let Ok(slot) = self.world_pipeline_slot(bucket) {
             self.world_pipelines[slot] = None;

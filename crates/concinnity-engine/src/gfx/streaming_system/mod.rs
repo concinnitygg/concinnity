@@ -296,8 +296,7 @@ impl StreamingState {
                     let started = std::time::Instant::now();
                     match backend.install_world_shader(bucket, shader) {
                         // The elapsed time is the frame cost this warmup keeps
-                        // out of gameplay, and shows whether the backend's
-                        // pipeline cache served the build.
+                        // out of gameplay.
                         Ok(()) => tracing::info!(
                             "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
                             bucket,

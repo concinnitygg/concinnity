@@ -241,13 +241,6 @@ impl MtlContext {
 
         // Material-referenced shaders (ShaderHandle 1..) each get a bindless
         // pipeline; the cull kernel routes their draws into per-bucket ICBs.
-        // Their compiled binaries are cached across runs, which matters most
-        // for the buckets a scene warms mid-session (see world_shaders.rs).
-        let mut pipeline_archive = if requirements.scene && world_shaders.len() > 1 {
-            crate::metal::pipeline_archive::PipelineArchive::open(&device)
-        } else {
-            None
-        };
         let world_pipelines = if requirements.scene && world_shaders.len() > 1 {
             let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
             if world_shaders.len() > max {
@@ -263,16 +256,7 @@ impl MtlContext {
                         .to_string(),
                 );
             }
-            let table = pipelines::build_world_pipeline_table(
-                &device,
-                &vert_desc,
-                &world_shaders[1..],
-                pipeline_archive.as_mut(),
-            )?;
-            if let Some(archive) = &mut pipeline_archive {
-                archive.flush();
-            }
-            table
+            pipelines::build_world_pipeline_table(&device, &vert_desc, &world_shaders[1..])?
         } else {
             Vec::new()
         };
@@ -1197,7 +1181,6 @@ impl MtlContext {
             last_present_texture: None,
             pipeline_state,
             world_pipelines,
-            pipeline_archive,
             bindless,
             cull: super::cull::CullState {
                 pipeline: cull_pipeline,

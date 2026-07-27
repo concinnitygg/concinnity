@@ -197,7 +197,6 @@ pub(crate) fn build_world_pipeline_table(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     extra_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
-    mut archive: Option<&mut crate::metal::pipeline_archive::PipelineArchive>,
 ) -> Result<WorldPipelineTable, String> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
@@ -213,22 +212,18 @@ pub(crate) fn build_world_pipeline_table(
             i + 1,
             shader.vert,
             shader.frag,
-            archive.as_deref_mut(),
         )?));
     }
     Ok(table)
 }
 
-// One material-referenced shader bucket's bindless main-pass pipeline. When an
-// archive is supplied the build reads its stored binary instead of compiling,
-// and a freshly compiled pipeline is added back to it.
+// One material-referenced shader bucket's bindless main-pass pipeline.
 pub(crate) fn build_bucket_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
     vert_bytes: &[u8],
     frag_bytes: &[u8],
-    archive: Option<&mut crate::metal::pipeline_archive::PipelineArchive>,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     let vert_library = load_library(device, vert_bytes)
         .map_err(|e| format!("shader bucket {bucket}: failed to load vertex metallib: {e}"))?;
@@ -259,16 +254,9 @@ pub(crate) fn build_bucket_pipeline(
     desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
     desc.setSupportIndirectCommandBuffers(true);
 
-    if let Some(archive) = &archive {
-        archive.attach(&desc);
-    }
-    let pso = device
+    device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))?;
-    if let Some(archive) = archive {
-        archive.record(&desc);
-    }
-    Ok(pso)
+        .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))
 }
 
 // Optional instanced pipeline: pairs vertex_main_instanced with the existing

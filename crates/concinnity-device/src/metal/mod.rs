@@ -28,7 +28,6 @@ mod parallel_encoder;
 mod particle;
 mod pass_timing;
 mod pipeline;
-mod pipeline_archive;
 mod planar;
 mod post;
 mod probe;

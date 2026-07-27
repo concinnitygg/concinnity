@@ -133,10 +133,6 @@ pub struct MtlContext {
     // by a scene other than the start scene, and `install_world_shader` builds
     // it when that scene pins. Draws carrying a `None` bucket are skipped.
     pub(super) world_pipelines: super::init::pipelines::WorldPipelineTable,
-    // Persistent GPU-binary cache backing the bucket pipelines above, so a
-    // pipeline built when a scene pins is loaded rather than recompiled on
-    // later runs. `None` when the cache is unavailable.
-    pub(super) pipeline_archive: Option<super::pipeline_archive::PipelineArchive>,
     // True when the static main-pass pipeline runs the bindless fragment
     // shader (`fragment_main_bindless`). The static draw loop then reads each
     // object from the per-frame `GpuObjectData` buffer and a bindless texture
