@@ -16,8 +16,8 @@
 // concinnity-core.
 
 use crate::assets::{
-    AnimGraph, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, Reaction, VoxelChunk,
-    VoxelWorld,
+    AnimGraph, Behavior, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, Reaction,
+    VoxelChunk, VoxelWorld,
 };
 
 // The category of asset a structured name reference must resolve to.
@@ -337,6 +337,139 @@ impl CrossReferenced for Joint {
         }
 
         refs
+    }
+}
+
+impl CrossReferenced for Behavior {
+    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
+        let mut refs = Vec::new();
+        walk_behavior_nodes(args.get("do"), name, &mut refs);
+
+        if let Some(source) = args.get("on") {
+            // A `variable` source watching an unnamed variable never fires.
+            if let Some(var) = source.get("variable")
+                && var.as_str().unwrap_or("").is_empty()
+            {
+                refs.push(CrossRef::Issue(format!(
+                    "Behavior '{name}': `variable` source requires a variable name"
+                )));
+            }
+            for verb in ["enter", "exit"] {
+                match source.get(verb) {
+                    Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                        refs.push(CrossRef::Resolve {
+                            kind: RefKind::TriggerVolume,
+                            target: target.clone(),
+                            error: format!(
+                                "Behavior '{name}': `{verb}` volume '{target}' not found, \
+                                 add a TriggerVolume asset with that name"
+                            ),
+                        });
+                    }
+                    Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                        refs.push(CrossRef::Issue(format!(
+                            "Behavior '{name}': `{verb}` source requires a TriggerVolume name"
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            match source.get("interact") {
+                Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                    refs.push(CrossRef::Resolve {
+                        kind: RefKind::AnyAsset,
+                        target: target.clone(),
+                        error: format!("Behavior '{name}': `interact` target '{target}' not found"),
+                    });
+                }
+                Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                    refs.push(CrossRef::Issue(format!(
+                        "Behavior '{name}': `interact` source requires an entity name"
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        refs
+    }
+}
+
+// Every asset name a behavior body references, at any nesting depth. Nodes and
+// expressions are both single-key objects, so one descent covers both: `named`
+// expressions anywhere, plus the four nodes carrying an asset field.
+fn walk_behavior_nodes(value: Option<&serde_json::Value>, name: &str, refs: &mut Vec<CrossRef>) {
+    // One node field: required-ness plus resolution against `kind`'s name-set.
+    // An integer value is an already-resolved id and passes.
+    fn field(
+        node: &serde_json::Value,
+        verb: &str,
+        key: &str,
+        kind: RefKind,
+        name: &str,
+        refs: &mut Vec<CrossRef>,
+    ) {
+        match node.get(key) {
+            Some(serde_json::Value::String(target)) if !target.is_empty() => {
+                refs.push(CrossRef::Resolve {
+                    kind,
+                    target: target.clone(),
+                    error: format!("Behavior '{name}': {verb} {key} '{target}' not found"),
+                });
+            }
+            None | Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                refs.push(CrossRef::Issue(format!(
+                    "Behavior '{name}': `{verb}` node requires `{key}`"
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    let Some(value) = value else { return };
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                walk_behavior_nodes(Some(item), name, refs);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, body) in map {
+                if key == "named" {
+                    match body {
+                        serde_json::Value::String(target) if !target.is_empty() => {
+                            refs.push(CrossRef::Resolve {
+                                kind: RefKind::AnyAsset,
+                                target: target.clone(),
+                                error: format!(
+                                    "Behavior '{name}': `named` entity '{target}' not found"
+                                ),
+                            });
+                        }
+                        serde_json::Value::String(_) | serde_json::Value::Null => {
+                            refs.push(CrossRef::Issue(format!(
+                                "Behavior '{name}': `named` requires an entity name"
+                            )));
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                // Only an object body is a node; the same words appear as
+                // inner field names carrying plain strings.
+                if body.is_object() {
+                    match key.as_str() {
+                        "spawn" => field(body, "spawn", "template", RefKind::AnyAsset, name, refs),
+                        "sound" => field(body, "sound", "clip", RefKind::AudioClip, name, refs),
+                        "scene" => field(body, "scene", "scene", RefKind::Scene, name, refs),
+                        "screen" => field(body, "screen", "screen", RefKind::Screen, name, refs),
+                        _ => {}
+                    }
+                }
+                walk_behavior_nodes(Some(body), name, refs);
+            }
+        }
+        _ => {}
     }
 }
 

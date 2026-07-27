@@ -116,6 +116,7 @@ macro_rules! for_each_component {
             TextInput         => $crate::assets::TextInput { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
             Panel             => $crate::assets::Panel { gen, build_only },
             Reaction          => $crate::assets::Reaction { gen, external, id },
+            Behavior          => $crate::assets::Behavior { gen, external, id },
             TriggerVolume     => $crate::assets::TriggerVolume { gen, external, id, useful_blank },
             Hidden            => $crate::assets::Hidden { runtime },
             LoadingOverlay    => $crate::assets::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },

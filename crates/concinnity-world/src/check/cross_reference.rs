@@ -27,10 +27,12 @@ pub(crate) fn cross_refs_for(
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, VoxelChunk, VoxelWorld,
+        AnimGraph, Behavior, Camera3D, InstancedProp, Joint, Model, Prop, Reaction, VoxelChunk,
+        VoxelWorld,
     };
     match type_norm {
         "animgraph" => AnimGraph::cross_refs(name, args),
+        "behavior" => Behavior::cross_refs(name, args),
         "camera3d" => Camera3D::cross_refs(name, args),
         "prop" => Prop::cross_refs(name, args),
         "model" => Model::cross_refs(name, args),
@@ -1151,6 +1153,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn behavior_named_entities_resolve_at_any_nesting_depth() {
+        let mesh = asset(
+            "box_mesh",
+            "ProceduralMesh",
+            serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
+        );
+        let prop = asset("door", "Prop", serde_json::json!({"mesh":"box_mesh"}));
+        // A `named` buried inside an if/for_each body still resolves.
+        let ok = asset(
+            "open",
+            "Behavior",
+            serde_json::json!({"on":"start","do":[
+                {"if":{"cond":{"bool":true},"then":[{"hide":{"target":{"named":"door"}}}]}}
+            ]}),
+        );
+        assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "open",
+            "Behavior",
+            serde_json::json!({"on":"start","do":[
+                {"if":{"cond":{"bool":true},"then":[{"hide":{"target":{"named":"ghost_door"}}}]}}
+            ]}),
+        );
+        assert!(err_text(&[mesh, prop, ghost]).contains("ghost_door"));
+    }
+
+    #[test]
+    fn behavior_scene_node_does_not_double_report_its_inner_field() {
+        let scene = asset("level2", "Scene", serde_json::json!({}));
+        let ok = asset(
+            "advance",
+            "Behavior",
+            serde_json::json!({"on":"start","do":[{"scene":{"scene":"level2"}}]}),
+        );
+        assert!(validate_cross_references(&[scene.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "advance",
+            "Behavior",
+            serde_json::json!({"on":"start","do":[{"scene":{"scene":"ghost_level"}}]}),
+        );
+        let errs = err_text(&[scene, ghost]);
+        assert_eq!(
+            errs.matches("ghost_level").count(),
+            1,
+            "the node verb and its inner field must not both report; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn behavior_enter_volume_resolves_against_trigger_volumes() {
+        let volume = asset("zone", "TriggerVolume", serde_json::json!({}));
+        let ok = asset(
+            "opens",
+            "Behavior",
+            serde_json::json!({"on":{"enter":"zone"},"do":[]}),
+        );
+        assert!(validate_cross_references(&[volume.clone(), ok]).is_ok());
+
+        let ghost = asset(
+            "opens",
+            "Behavior",
+            serde_json::json!({"on":{"exit":"ghost_zone"},"do":[]}),
+        );
+        assert!(err_text(&[volume, ghost]).contains("ghost_zone"));
     }
 
     #[test]

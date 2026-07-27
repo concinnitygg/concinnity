@@ -1914,6 +1914,7 @@ mod tests {
             // Defined by nested content / a source the scalar form can't supply, so
             // a blank instance is inert.
             "Animation",
+            "Behavior",
             "File",
             "LayoutContainer",
             "Model",

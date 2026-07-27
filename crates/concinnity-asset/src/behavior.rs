@@ -153,6 +153,8 @@ pub enum Expr {
     Local(String),
     /// Reads a name bound earlier by a `let` or `for_each` node.
     Bind(String),
+    /// An entity declared in the world, addressed by asset name.
+    Named(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
     /// The entity this behavior instance runs for. Only valid with a `scope`.
     #[serde(rename = "self")]
     SelfEntity,
