@@ -32,6 +32,7 @@
 // rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
 
 use super::asset_tree::{self, TreeGroup, TreeRow};
+use super::axes;
 use super::console::{self, ConsoleSink};
 use super::console_panel::{self, ConsoleAction, ConsoleView};
 use super::form::{self, FormField};
@@ -104,6 +105,9 @@ pub(crate) struct EditorHook {
     world_capture: bool,
     // Whether the whole HUD is shown (F1 toggle). Starts shown.
     hud_visible: bool,
+    // Whether the world-origin axes draw in the viewport (Preview panel row).
+    // Starts on: the axes are the viewport's orientation reference.
+    axes_visible: bool,
     // Set whenever the authored entries change (add / edit / delete / template);
     // consumed by `apply_world_swap` to rebuild the live preview world from the
     // in-memory entries. SAVE does not set this -- the preview is already current.
@@ -362,6 +366,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 
 // Named to avoid colliding with the `use super::asset_tree` module import.
 mod asset_tree_edit;
+mod axes_drive;
 mod billboard_drive;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
@@ -395,6 +400,7 @@ impl EditorHook {
             dirty: false,
             world_capture: false,
             hud_visible: true,
+            axes_visible: true,
             rebuild_preview: false,
             templates_open: false,
             open_template: None,
@@ -635,6 +641,11 @@ impl DebugHook for EditorHook {
         // live while the frozen world is flown through.
         world.insert_resource(MenuOverride(Some(!self.world_capture)));
         world.insert_resource(crate::ecs::FlyCam(self.fly && !self.world_capture));
+        // Publish the world-origin axes for the renderer's line pass.
+        // Republished every frame (the renderer expands whatever it finds), and
+        // emptied while they are toggled off or the HUD is hidden, which drops
+        // the pass from the frame graph entirely.
+        world.insert_resource(crate::ecs::WorldLines(self.axis_lines(world)));
         // Publish the editor-session hidden set (resolved to this world's ids)
         // so the renderer collapses those objects this frame.
         world.insert_resource(crate::ecs::EditorHidden(self.hidden_asset_ids()));

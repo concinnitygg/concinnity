@@ -58,6 +58,7 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         "glass_rt.metal" => include_str!("shaders/glass_rt.metal"),
         "hiz_build.metal" => include_str!("shaders/hiz_build.metal"),
         "light_cull.metal" => include_str!("shaders/light_cull.metal"),
+        "line.metal" => include_str!("shaders/line.metal"),
         "particle.metal" => include_str!("shaders/particle.metal"),
         "post.metal" => include_str!("shaders/post.metal"),
         "reflection_composite.metal" => include_str!("shaders/reflection_composite.metal"),

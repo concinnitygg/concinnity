@@ -261,6 +261,29 @@ impl GraphicsSystem {
                 // `final_view` / `final_cam_pos` were read from its
                 // `CameraRelativeView` at the top of this step.
 
+                // World-space lines published this frame (the `cn editor`
+                // origin axes), expanded into ribbon geometry against the same
+                // camera the frame draws with. Empty when nothing published
+                // any, which keeps the pass out of the render graph entirely.
+                let lines = super::lines::build(
+                    ctx,
+                    super::lines::LineFrame {
+                        view: final_view,
+                        cam_pos: final_cam_pos,
+                        // Lines are authored in absolute world space; a
+                        // streaming voxel world draws rebased onto the chunk
+                        // render origin, so shift them into that same space.
+                        rebase: [
+                            final_cam_pos[0] - cam_pos[0],
+                            final_cam_pos[1] - cam_pos[1],
+                            final_cam_pos[2] - cam_pos[2],
+                        ],
+                        fov_y_radians,
+                        near,
+                        viewport: backend.logical_size(),
+                    },
+                );
+
                 // On Metal, pump_ns_events runs inside draw_frame, so update_view
                 // is called first so any key/mouse events that arrived since the
                 // last tick are in InputState before InputSystem's take_input()
@@ -273,6 +296,7 @@ impl GraphicsSystem {
                     far,
                     cam_pos: final_cam_pos,
                     text_calls: &overlay.calls,
+                    lines: &lines,
                     world_hidden: overlay.world_hidden,
                 }) {
                     Ok(()) => {}

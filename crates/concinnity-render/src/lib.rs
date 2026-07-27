@@ -11,8 +11,8 @@
 // render-prep modules reach them as `crate::<type>` (they were `crate::gfx::<type>`
 // in the client, where gfx/mod.rs re-exported the same core modules).
 pub use concinnity_core::gfx::{
-    auto_exposure, chunk_coord, frustum, mesh_payload, profile, render_types, rt_reflections, ssao,
-    ssgi, ssr,
+    auto_exposure, chunk_coord, frustum, lines, mesh_payload, profile, render_types,
+    rt_reflections, ssao, ssgi, ssr,
 };
 
 // Backend-agnostic foundation the moved modules reach by their historical

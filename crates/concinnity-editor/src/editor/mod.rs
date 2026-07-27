@@ -8,6 +8,7 @@
 
 mod asset_list;
 mod asset_tree;
+mod axes;
 mod billboards;
 mod console;
 mod console_panel;

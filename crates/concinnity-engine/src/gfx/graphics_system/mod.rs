@@ -6,6 +6,7 @@
 // system is large enough that splitting it by responsibility is worth it:
 //   mod.rs       struct + System/Debug trait impls (init/step delegate out)
 //   init.rs      run_init: one-time backend + draw-list setup
+//   lines.rs     published world-space lines -> ribbon geometry
 //   frame.rs     run_step: the per-frame transform upload + draw submit
 //   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
 //                (the per-frame drive lives in gfx::streaming_system)
@@ -713,6 +714,7 @@ mod frame;
 mod helpers;
 pub mod hot_reload_sources;
 mod init;
+mod lines;
 pub(crate) mod scene;
 mod streaming;
 #[cfg(test)]

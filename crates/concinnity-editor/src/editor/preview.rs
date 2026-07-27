@@ -2,8 +2,9 @@
 //
 // The editor "Preview" panel: a small floating panel holding the controls that
 // affect how the running world is previewed: the capture-mouse checkbox (hand
-// the cursor to the world / play mode) and the fly-camera checkbox (navigate
-// the frozen world; also the F key). Escape leaves either. Like the rest of
+// the cursor to the world / play mode), the fly-camera checkbox (navigate the
+// frozen world; also the F key), and the world-axes checkbox (the origin axis
+// lines drawn in the viewport). Escape leaves either camera mode. Like the rest of
 // the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
 // (injected by `inject.rs`), driven each frame by the editor hook. The title
 // bar, close button, and row draw come from the shared `list_panel`; this
@@ -26,8 +27,8 @@ pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
 pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
 
 const PREVIEW_W: f32 = 200.0;
-// The capture row and the fly row.
-const ROWS: usize = 2;
+// The capture row, the fly row, and the world-axes row.
+const ROWS: usize = 3;
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -52,6 +53,8 @@ pub(crate) enum PreviewAction {
     ToggleCapture,
     // The fly checkbox: toggle the edit-mode fly camera.
     ToggleFly,
+    // The world-axes checkbox: show / hide the origin axis lines.
+    ToggleAxes,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -62,17 +65,27 @@ pub(crate) enum PreviewAction {
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
     match list_panel::hit_row(mx, my, o, PREVIEW_W, ROWS) {
         Some(0) => return Some(PreviewAction::ToggleCapture),
-        Some(_) => return Some(PreviewAction::ToggleFly),
+        Some(1) => return Some(PreviewAction::ToggleFly),
+        Some(_) => return Some(PreviewAction::ToggleAxes),
         None => {}
     }
     point_in(mx, my, panel_rect(o)).then_some(PreviewAction::Consume)
 }
 
+// The panel's checkbox states, in row order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PreviewState {
+    pub capture: bool,
+    pub fly: bool,
+    pub axes: bool,
+}
+
 // Position + show the panel at origin `o`, colouring each checkbox by state.
-pub(crate) fn apply(world: &mut World, o: [f32; 2], capture: bool, fly: bool, mouse: [f32; 2]) {
+pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
     let rows = [
-        Row::checkbox("Capture input", capture),
-        Row::checkbox("Fly camera (F)", fly),
+        Row::checkbox("Capture input", state.capture),
+        Row::checkbox("Fly camera (F)", state.fly),
+        Row::checkbox("World axes", state.axes),
     ];
     list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
 }
@@ -127,6 +140,11 @@ mod tests {
             hit_test(fly_row[0] + 10.0, fly_row[1] + 10.0, o),
             Some(PreviewAction::ToggleFly)
         );
+        let axes_row = list_panel::row_rect(o, PREVIEW_W, 2);
+        assert_eq!(
+            hit_test(axes_row[0] + 10.0, axes_row[1] + 10.0, o),
+            Some(PreviewAction::ToggleAxes)
+        );
         let t = widget::title_rect(o, PREVIEW_W);
         assert_eq!(
             hit_test(t[0] + 5.0, t[1] + 5.0, o),
@@ -140,7 +158,12 @@ mod tests {
     fn apply_shows_heading_and_capture_state() {
         let mut world = injected_world();
         let o = default_origin();
-        apply(&mut world, o, false, false, [0.0, 0.0]);
+        let off_state = PreviewState {
+            capture: false,
+            fly: false,
+            axes: false,
+        };
+        apply(&mut world, o, off_state, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == title_label(BASE))
@@ -151,7 +174,15 @@ mod tests {
             .find(|s| s.asset_id == CHECK_BOX)
             .cloned()
             .unwrap();
-        apply(&mut world, o, true, false, [0.0, 0.0]);
+        apply(
+            &mut world,
+            o,
+            PreviewState {
+                capture: true,
+                ..off_state
+            },
+            [0.0, 0.0],
+        );
         let on = world
             .query::<Sprite>()
             .find(|s| s.asset_id == CHECK_BOX)
@@ -162,7 +193,16 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(), true, true, [0.0, 0.0]);
+        apply(
+            &mut world,
+            default_origin(),
+            PreviewState {
+                capture: true,
+                fly: true,
+                axes: true,
+            },
+            [0.0, 0.0],
+        );
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

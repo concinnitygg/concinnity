@@ -84,6 +84,7 @@ impl MtlContext {
             far,
             cam_pos,
             text_calls,
+            lines,
             world_hidden,
         } = params;
         let mtm = objc2::MainThreadMarker::new()
@@ -637,6 +638,10 @@ impl MtlContext {
         let transparent_active = (self.water_pipeline.is_some() && !self.water_surfaces.is_empty())
             || (self.glass_pipeline.is_some() && !self.glass_panels.is_empty());
 
+        // Line pipeline: built on the first frame that publishes lines,
+        // so the graph gate below can see it live this same frame.
+        self.ensure_line_pipeline(!lines.is_empty());
+
         // Single render-graph dispatch for the full frame.
         // The merged graph contains every Metal pass that once ran
         // inline through `draw_frame`. The compile pass derives
@@ -683,6 +688,10 @@ impl MtlContext {
             // short-circuits an empty draw list, but gating here keeps the
             // graph builder from inserting the slot at all.
             transparent_enabled: transparent_active,
+            // Lines run only on the frames a system published them (the
+            // `cn editor` axes), and only once their pipeline is live: the
+            // build above is lazy, so a shipped runtime never compiles it.
+            lines_enabled: !lines.is_empty() && self.lines.pipeline.is_some(),
             // Raymarch runs when at least one `SdfVolume` is live; the
             // per-volume pipeline cache is populated in lockstep with
             // the volume vec at init. Tightened to the real `is_some()
@@ -772,6 +781,7 @@ impl MtlContext {
             skinned_joint_bufs: &skinned_joint_bufs,
             scene_color: Some(&scene_color),
             text_calls,
+            lines,
             world_hidden,
             elapsed,
             vp,

@@ -112,6 +112,7 @@ mod tests {
             PassId::ReflectionComposite,
             PassId::LightCull,
             PassId::SpotShadow,
+            PassId::Lines,
         ] {
             let (s, e) = pass_pair(0, variant);
             assert!(seen.insert(s), "duplicate start slot for {variant:?}");

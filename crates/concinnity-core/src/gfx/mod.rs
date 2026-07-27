@@ -14,6 +14,7 @@ pub mod dropdown;
 pub mod frustum;
 pub mod ik;
 pub mod image_decode;
+pub mod lines;
 pub mod lod;
 pub mod mesh_payload;
 pub mod mesh_seed;

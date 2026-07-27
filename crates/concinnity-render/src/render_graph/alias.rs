@@ -188,6 +188,7 @@ mod tests {
         ssao_enabled: false,
         upscale_enabled: false,
         transparent_enabled: false,
+        lines_enabled: false,
         raymarch_enabled: false,
         two_pass_occlusion_enabled: false,
         ssgi_enabled: false,

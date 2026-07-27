@@ -478,6 +478,23 @@ pub struct TextVertex {
     pub mode: f32,
 }
 
+// Compact vertex type used exclusively by the line pass. 32 bytes: the
+// expanded ribbon corner in world space, its signed position across the ribbon
+// width (for the shader's edge fade), and the corner colour.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct LineVertex {
+    // World-space position of this ribbon corner. Already offset off the line
+    // centre by the CPU expansion, so the shader only applies the camera VP.
+    pub pos: [f32; 3],
+    // Signed offset across the ribbon: -1 on one edge, +1 on the other. The
+    // fragment fades the outer pixel from it, so lines antialias without MSAA.
+    pub edge: f32,
+    // Linear-space RGBA. Alpha carries the distance fade, interpolated along
+    // the ribbon.
+    pub color: [f32; 4],
+}
+
 // Uniforms pushed to the text vertex shader once per text draw call.
 // Carries the framebuffer size so the shader can convert pixel coords to NDC.
 #[derive(Copy, Clone)]
@@ -1842,6 +1859,17 @@ mod tests {
         assert_eq!(offset_of!(TextVertex, uv), 8);
         assert_eq!(offset_of!(TextVertex, color), 16);
         assert_eq!(offset_of!(TextVertex, mode), 28);
+    }
+
+    #[test]
+    fn line_vertex_layout_matches_msl() {
+        // Consumed through a vertex descriptor whose attributes sit at offsets
+        // 0 (pos), 12 (edge), 16 (color) with a 32-byte stride, matching the
+        // `LineVtxIn` attribute slots in line.metal.
+        assert_eq!(size_of::<LineVertex>(), 32);
+        assert_eq!(offset_of!(LineVertex, pos), 0);
+        assert_eq!(offset_of!(LineVertex, edge), 12);
+        assert_eq!(offset_of!(LineVertex, color), 16);
     }
 
     #[test]

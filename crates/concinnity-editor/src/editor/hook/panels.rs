@@ -286,12 +286,25 @@ impl Panel for PreviewPanel {
                 hook.toggle_fly();
                 true
             }
+            Some(PreviewAction::ToggleAxes) => {
+                hook.axes_visible = !hook.axes_visible;
+                true
+            }
             Some(PreviewAction::Consume) => true,
             None => false,
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        preview::apply(world, o, hook.world_capture, hook.fly, mouse);
+        preview::apply(
+            world,
+            o,
+            preview::PreviewState {
+                capture: hook.world_capture,
+                fly: hook.fly,
+                axes: hook.axes_visible,
+            },
+            mouse,
+        );
     }
     fn hide(&self, world: &mut World) {
         preview::hide_all(world);

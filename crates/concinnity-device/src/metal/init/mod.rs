@@ -1305,6 +1305,10 @@ impl MtlContext {
                 pipeline_textured: rt_pipeline_textured,
                 skin_pipeline: rt_skin_pipeline,
             },
+            lines: super::line::LineState {
+                pipeline: None,
+                build_failed: false,
+            },
             decal: super::decal::DecalState {
                 records: decals.into_iter().map(Some).collect(),
                 free_slots: Vec::new(),

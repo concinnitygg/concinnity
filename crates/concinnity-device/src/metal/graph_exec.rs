@@ -96,6 +96,10 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     pub scene_color: Option<&'a Retained<ProtocolObject<dyn MTLTexture>>>,
     pub text_calls: &'a [TextDrawCall],
+    // This frame's expanded line ribbons, consumed by the WorldLines
+    // pass. Empty whenever nothing published lines, in which case the graph
+    // carries no WorldLines node either.
+    pub lines: &'a [crate::gfx::render_types::LineVertex],
     // An opaque menu backdrop hides the scene: the Main pass runs as a bare
     // clear (it is the only surviving world pass in the masked graph), skipping
     // every geometry sub-path so nothing of the world draws behind the menu.
@@ -658,6 +662,7 @@ impl MtlContext {
                     0
                 }
             }
+            PassId::Lines => self.encode_lines(cmd_buf, params.vp, params.lines)?,
             PassId::Composite => {
                 let scene_color = params.scene_color.ok_or(
                     "graph executor: Composite pass requires scene_color but none was supplied",

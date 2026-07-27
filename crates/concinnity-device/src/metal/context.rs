@@ -20,6 +20,7 @@ use super::cull::CullState;
 use super::decal::DecalState;
 use super::fog::FogState;
 use super::input::KeyState;
+use super::line::LineState;
 use super::particle::ParticleState;
 use super::post::{
     BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState, TaaState,
@@ -422,6 +423,10 @@ pub struct MtlContext {
     // scene acceleration structure, the dynamic-update mode + failure flag, and
     // the resolve / textured-resolve / skinning pipelines. See [`RtState`].
     pub(super) rt: RtState,
+    // World-space line state (editor origin axes, collider previews):
+    // the pipeline, built on the first frame that publishes lines. See
+    // [`LineState`].
+    pub(super) lines: LineState,
     // Projected-decal feature state: the decal records (+ tombstone
     // free-list), the pipeline, the shared unit-cube geometry, and the
     // sampler. See [`DecalState`]. The pipeline / cube buffers / sampler are

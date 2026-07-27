@@ -50,13 +50,14 @@ pub const PASS_NAMES: [&str; PASS_COUNT] = [
     "reflection_composite",
     "light_cull",
     "spot_shadow",
+    "lines",
 ];
 
 // Number of distinct passes the engine times. Sized to match
 // [`PASS_NAMES`]; the per-pass timing array in
 // [`crate::profile::RenderStats`] is sized to at least this many
 // slots.
-pub const PASS_COUNT: usize = 30;
+pub const PASS_COUNT: usize = 31;
 
 // One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
 // `[T; PASS_COUNT]` companion array.
@@ -193,6 +194,13 @@ pub enum PassId {
     // built once; only the depth contents refresh, one slice per frame under
     // `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
     SpotShadow = 29,
+    // World-space line geometry (trajectories, tethers, path previews, the
+    // editor's origin axes). Blend-writes the resolved scene colour after the
+    // world decorations, sampling the resolved scene depth so a line behind
+    // geometry is occluded by it. Gated on `FrameGraphInputs::lines_enabled`:
+    // a frame that submits no lines omits the node entirely, so a frame that
+    // draws none never pays for it.
+    Lines = 30,
 }
 
 impl PassId {
@@ -245,6 +253,7 @@ mod tests {
         PassId::ReflectionComposite,
         PassId::LightCull,
         PassId::SpotShadow,
+        PassId::Lines,
     ];
 
     // Expected timing name per variant. The match has no wildcard arm, so
@@ -282,6 +291,7 @@ mod tests {
             PassId::ReflectionComposite => "reflection_composite",
             PassId::LightCull => "light_cull",
             PassId::SpotShadow => "spot_shadow",
+            PassId::Lines => "lines",
         }
     }
 

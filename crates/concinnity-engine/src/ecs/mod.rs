@@ -34,6 +34,7 @@ pub use concinnity_core::ecs::{
 pub use concinnity_core::ecs::{
     CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, FlyCam, FrameRateCap,
     HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
+    WorldLines,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are

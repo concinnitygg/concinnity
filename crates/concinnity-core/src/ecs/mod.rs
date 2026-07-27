@@ -27,6 +27,7 @@ mod system;
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, FlyCam, FrameRateCap,
     HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
+    WorldLines,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

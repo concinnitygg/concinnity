@@ -25,7 +25,9 @@ use crate::input::RenderInput;
 use crate::keymap::KeyMap;
 use crate::mesh_payload::{SkinnedVertex, Vertex};
 use crate::profile::RenderStats;
-use crate::render_types::{MaterialUniforms, PostProcessParams, SkinnedDrawObject, TextDrawCall};
+use crate::render_types::{
+    LineVertex, MaterialUniforms, PostProcessParams, SkinnedDrawObject, TextDrawCall,
+};
 use crate::rt_reflections::RtReflectionSettings;
 use crate::scene_flow::SceneControl;
 use crate::ssao::SsaoSettings;
@@ -44,6 +46,10 @@ pub struct FrameParams<'a> {
     pub far: f32,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
+    // Expanded line ribbons (`lines::build_vertices`) for this frame's camera,
+    // drawn depth-tested into the scene after the world passes. Empty on any
+    // frame that submits no lines, which also drops the pass from the graph.
+    pub lines: &'a [LineVertex],
     pub world_hidden: bool,
 }
 

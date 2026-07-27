@@ -146,6 +146,12 @@ pub struct FrameGraphInputs {
     // pipeline + descriptor set, the executor receives the sorted list
     // at encode time.
     pub transparent_enabled: bool,
+    // `true` when a system submitted world-space lines this frame AND the
+    // backend's line pipeline is live. The graph adds a `Lines` render pass at
+    // the tail of the hdr_resolve RMW chain: it blend-writes the scene colour
+    // and samples the resolved scene depth so a line behind geometry is
+    // occluded by it. A frame with no lines omits the node entirely.
+    pub lines_enabled: bool,
     // `true` when at least one visible `SdfVolume` is in the world AND
     // the backend's raymarch pipeline is live. The graph adds a
     // `Raymarch` render pass between `AutoExposure` and `Decals` on the
@@ -245,6 +251,7 @@ impl FrameGraphInputs {
             ssao_enabled: false,
             upscale_enabled: false,
             transparent_enabled: false,
+            lines_enabled: false,
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
@@ -310,6 +317,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             ssao_enabled: false,
             upscale_enabled: false,
             transparent_enabled: false,
+            lines_enabled: false,
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
@@ -606,6 +614,13 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         h = b
             .add_pass(PassId::ParticlesDraw, PassKind::Render)
             .write_texture(h);
+    }
+    if inputs.lines_enabled {
+        // Last of the hdr_resolve decorations: debug geometry draws over the
+        // lit + decorated scene, and SSR / TAA then treat it like any other
+        // scene content. Depth is not declared (same rationale as Decals /
+        // Fog / Transparent); the executor binds the live depth at encode.
+        h = b.add_pass(PassId::Lines, PassKind::Render).write_texture(h);
     }
     let hdr_resolve_cur = h;
 
@@ -951,6 +966,7 @@ mod tests {
             ssao_enabled: false,
             upscale_enabled: false,
             transparent_enabled: false,
+            lines_enabled: false,
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
@@ -1456,6 +1472,42 @@ mod tests {
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         assert!(!order.contains(&PassId::Transparent));
+    }
+
+    #[test]
+    fn lines_close_the_hdr_decoration_chain() {
+        // The node RMWs hdr_resolve last, so the lines draw over the lit +
+        // decorated scene and SSR / TAA then consume them like any other
+        // scene content.
+        let mut i = all_off();
+        i.decals_enabled = true;
+        i.particles_enabled = true;
+        i.ssr_enabled = true;
+        i.lines_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::Decals) < pos(PassId::Lines));
+        assert!(pos(PassId::ParticlesDraw) < pos(PassId::Lines));
+        assert!(pos(PassId::Lines) < pos(PassId::SsrResolve));
+    }
+
+    #[test]
+    fn lines_off_means_no_slot() {
+        // A frame that published no lines omits the pass entirely.
+        let g = build_frame_graph(&all_off()).expect("compiles");
+        assert!(!g.passes.iter().any(|p| p.id == PassId::Lines));
+    }
+
+    #[test]
+    fn a_hidden_world_drops_the_lines() {
+        // Behind an opaque menu backdrop nothing of the world is visible, so
+        // the masked graph drops the lines with every other world pass.
+        let mut i = all_off();
+        i.lines_enabled = true;
+        i.world_hidden = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(!g.passes.iter().any(|p| p.id == PassId::Lines));
     }
 
     #[test]

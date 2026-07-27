@@ -240,6 +240,19 @@ pub struct DecalView {
     pub _pad: [f32; 2],
 }
 
+// Per-frame view inputs to the line pass. Layout must match the
+// `LineView` MSL struct in `shaders/line.metal`. 80 bytes.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct LineView {
+    // View-projection matrix used by the main pass (jittered when TAA is on),
+    // so a line lands on the same pixel the geometry it sits on did.
+    pub vp: [[f32; 4]; 4],
+    // Alpha multiplier applied where a line falls behind scene geometry.
+    pub occluded_alpha: f32,
+    pub _pad: [f32; 3],
+}
+
 // Per-decal uniforms pushed before each draw. Layout must match the
 // `DecalParams` MSL struct in `shaders/decal.metal`. 160 bytes (two
 // float4x4s + a float4 tint + four scalars).
@@ -656,6 +669,15 @@ mod tests {
         assert_eq!(offset_of!(DecalParams, _pad0), 148);
         assert_eq!(offset_of!(DecalParams, _pad1), 152);
         assert_eq!(offset_of!(DecalParams, _pad2), 156);
+    }
+
+    #[test]
+    fn line_view_layout_matches_msl() {
+        // MSL `LineView` in line.metal: a float4x4 then four floats.
+        assert_eq!(size_of::<LineView>(), 80);
+        assert_eq!(offset_of!(LineView, vp), 0);
+        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
+        assert_eq!(offset_of!(LineView, _pad), 68);
     }
 
     #[test]

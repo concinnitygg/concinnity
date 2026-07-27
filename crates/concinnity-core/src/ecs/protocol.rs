@@ -84,6 +84,14 @@ pub struct ScreenStack {
     pub captures_input: bool,
 }
 
+// World-space lines to draw this frame (trajectories, tethers, path previews,
+// the editor's origin axes), republished by their producer every frame:
+// GraphicsSystem expands whatever it finds into ribbon geometry and hands it
+// to the backend, so a stale list would keep drawing. Absent when nothing
+// draws lines, which keeps the line pass out of the frame graph.
+#[derive(Debug, Clone, Default)]
+pub struct WorldLines(pub alloc::vec::Vec<crate::gfx::lines::Line>);
+
 // The editor's fly-camera state. While true (published only by the `cn
 // editor` HUD drive), InputSystem keeps the navigation keys and mouse deltas
 // live and GraphicsSystem captures the cursor even though the world is frozen
