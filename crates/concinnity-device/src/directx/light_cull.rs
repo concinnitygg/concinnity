@@ -8,12 +8,11 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier};
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
-
-pub const LIGHT_CULL_COMPUTE_HLSL: &str = include_str!("shaders/light_cull.hlsl");
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
 // buffer. Root CBVs must be 256-byte aligned, so each slot is padded up.
@@ -52,11 +51,7 @@ impl LightCullState {
 
 // Compile the clustered light-binning compute kernel to DXBC.
 pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    compile_hlsl(
-        &shader_source(hot_reload, "light_cull.hlsl", LIGHT_CULL_COMPUTE_HLSL),
-        "main",
-        "cs_5_1",
-    )
+    builtins::LIGHT_CULL.compile(&Ctx::plain(hot_reload))
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
@@ -265,12 +260,13 @@ mod tests {
     // Rust values the CPU sizes the buffer with.
     #[test]
     fn hlsl_cluster_constants_match_render_types() {
-        assert!(LIGHT_CULL_COMPUTE_HLSL.contains(&format!(
+        assert!(builtins::LIGHT_CULL.embedded.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));
         let max_per_cluster = crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
         assert!(
-            LIGHT_CULL_COMPUTE_HLSL
+            builtins::LIGHT_CULL
+                .embedded
                 .contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u"))
         );
     }

@@ -30,15 +30,8 @@ use crate::gfx::render_types::ParticleParams;
 use crate::vulkan::uniforms::{GpuParticle, ParticleView};
 
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::{compile_glsl, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::texture::{GpuAllocContext, GpuUploadContext, create_buffer};
-
-// GLSL sources, shared with the host so the hot-reload pass can pick them
-// up the same way the existing built-in shaders do.
-pub(in crate::vulkan) const PARTICLE_SIMULATE_GLSL: &str =
-    include_str!("shaders/particle_simulate.comp");
-pub(in crate::vulkan) const PARTICLE_VERT_GLSL: &str = include_str!("shaders/particle.vert");
-pub(in crate::vulkan) const PARTICLE_FRAG_GLSL: &str = include_str!("shaders/particle.frag");
 
 // Cap on the number of simultaneously-live particle emitters. The
 // per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
@@ -60,16 +53,10 @@ type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
 pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> Result<ParticleShaderSpirv, String> {
-    let cs_src = shader_source(hot_reload, "particle_simulate.comp", PARTICLE_SIMULATE_GLSL);
-    let vs_src = shader_source(hot_reload, "particle.vert", PARTICLE_VERT_GLSL);
-    let fs_src = shader_source(hot_reload, "particle.frag", PARTICLE_FRAG_GLSL);
-    let cs = compile_glsl(
-        &cs_src,
-        shaderc::ShaderKind::Compute,
-        "particle_simulate.comp",
-    )?;
-    let vs = compile_glsl(&vs_src, shaderc::ShaderKind::Vertex, "particle.vert")?;
-    let fs = compile_glsl(&fs_src, shaderc::ShaderKind::Fragment, "particle.frag")?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let cs = super::builtins::PARTICLE_SIMULATE.compile(&ctx)?;
+    let vs = super::builtins::PARTICLE_VERT.compile(&ctx)?;
+    let fs = super::builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, fs))
 }
 

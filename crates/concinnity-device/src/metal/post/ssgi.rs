@@ -25,9 +25,9 @@ use objc2_metal::{
 
 use crate::gfx::ssgi::SsgiSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
+use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
 
 // All screen-space-GI feature state grouped into one unit: the resolved
@@ -54,8 +54,7 @@ fn build_ssgi_pipeline(
     additive: bool,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "ssgi.metal");
-    let library = compile_library(device, msl.as_ref(), "SSGI")?;
+    let library = shader_library(device, hot_reload, "ssgi.metal")?;
     let blend = if additive {
         FullscreenBlend::Additive
     } else {

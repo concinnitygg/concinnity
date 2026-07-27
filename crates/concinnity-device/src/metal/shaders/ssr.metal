@@ -137,9 +137,10 @@ static float3 probe_set_specular(
 constant int   SSR_MAX_STEPS = 48;
 constant int   SSR_REFINE    = 5;
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no SSR; glossiness ramps in
-// below it. The cut is injected as a shared `constant` (see pipeline.rs /
-// concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT) so the SSR, RT, and
-// composite passes can never disagree on it.
+// below it. Locked to concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT by
+// reflection_shaders_lock_shared_roughness_cut so the SSR, RT, and composite
+// passes can never disagree on it.
+constant float REFLECTION_ROUGHNESS_CUT = 0.6;
 // Dielectric base reflectance (water, glass, polished stone) for the Fresnel.
 constant float SSR_F0        = 0.04;
 // UV margin over which a hit near the screen border fades out.

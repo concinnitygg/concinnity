@@ -356,9 +356,11 @@ impl MtlContext {
             bindless_tex_args,
             deformed_skinned,
         } = gpu;
-        let (Some(obj_buf), Some(tex_args), Some(icb)) =
-            (object_buffer, bindless_tex_args, &self.cull.icb_2)
-        else {
+        let (Some(obj_buf), Some(tex_args), false) = (
+            object_buffer,
+            bindless_tex_args,
+            self.cull.icbs_2.is_empty(),
+        ) else {
             return Ok(0);
         };
 
@@ -409,7 +411,7 @@ impl MtlContext {
             &encoder,
             obj_buf,
             tex_args,
-            icb.as_ref(),
+            &self.cull.icbs_2,
             deformed_skinned,
         );
 
@@ -436,7 +438,7 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         obj_buf: &Retained<ProtocolObject<dyn MTLBuffer>>,
         tex_args: &Retained<ProtocolObject<dyn MTLBuffer>>,
-        icb: &ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>,
+        icbs: &[Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
@@ -459,9 +461,13 @@ impl MtlContext {
         let total = self.cull_count();
         let mut draw_calls = 0u32;
 
-        // Static + instance range [0, base). The static u32 index buffer is
-        // referenced only inside the indirect commands (not bound), so make it
-        // resident; the static vertex buffer is already bound at binding 1.
+        // Static + instance range [0, base), once per shader bucket: bucket 0
+        // executes under the pipeline `bind_main_pass_shared` bound, each later
+        // bucket under its material shader's pipeline. The cull kernel wrote
+        // every record's command into exactly one bucket's ICB, so the ranges
+        // never double-draw. The static u32 index buffer is referenced only
+        // inside the indirect commands (not bound), so make it resident; the
+        // static vertex buffer is already bound at binding 1.
         if base > 0 {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.index_buffer),
@@ -472,19 +478,39 @@ impl MtlContext {
                 location: 0,
                 length: base,
             };
-            // SAFETY: [0, base) spans the static + instance command slots
-            // (`ensure_icb_capacity` sized the ICB for `cull_count()` >= base).
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(icb, range);
+            for (b, icb) in icbs.iter().enumerate() {
+                if b > 0 {
+                    // A bucket whose Shader is not resident yet (its scene has
+                    // not pinned) has no pipeline: skip it until warmup builds
+                    // one rather than drawing it with the wrong program.
+                    let Some(pso) = self.world_pipeline(b) else {
+                        continue;
+                    };
+                    enc.setRenderPipelineState(pso);
+                }
+                // SAFETY: [0, base) spans the static + instance command slots
+                // (`ensure_icb_capacity` sized every ICB for `cull_count()` >= base).
+                unsafe {
+                    enc.executeCommandsInBuffer_withRange(icb, range);
+                }
+                draw_calls += 1;
             }
-            draw_calls += 1;
+            // Restore the default pipeline for the skinned tail below (and for
+            // the caller's subsequent sub-paths, which re-bind anyway).
+            if icbs.len() > 1
+                && let Some(ps) = &self.pipeline_state
+            {
+                enc.setRenderPipelineState(ps);
+            }
         }
 
         // Skinned tail [base, total): bind the deformed vertex buffer (inherited
         // by the ICB commands) and make the skinned u16 index buffer resident
         // (the cull kernel baked it into these commands). `deformed_skinned` is
         // `Some` exactly when the fold is active (n_skinned > 0 => total > base).
-        if let Some(deformed) = deformed_skinned
+        // Skinned draws always render under the world default shader, so only
+        // bucket 0's ICB executes here.
+        if let (Some(deformed), Some(icb0)) = (deformed_skinned, icbs.first())
             && total > base
         {
             unsafe {
@@ -503,7 +529,7 @@ impl MtlContext {
             };
             // SAFETY: [base, total) spans the folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb, range);
+                enc.executeCommandsInBuffer_withRange(icb0, range);
             }
             draw_calls += 1;
         }
@@ -666,15 +692,29 @@ impl MtlContext {
         let last_tex = self.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
 
-        let icb_ref = icb_override.or(self.cull.icb.as_deref());
-        if let (Some(obj_buf), Some(tex_args), Some(icb)) =
-            (object_buffer, bindless_tex_args, icb_ref)
+        // The planar mirror override is a single command stream executed under
+        // the encoder's default pipeline; the main + probe paths execute the
+        // per-bucket main cull set.
+        let override_holder;
+        let bucket_icbs: &[Retained<_>] = match icb_override {
+            Some(icb) => {
+                override_holder = [objc2::Message::retain(icb)];
+                &override_holder
+            }
+            None => &self.cull.icbs,
+        };
+        if let (Some(obj_buf), Some(tex_args), false) =
+            (object_buffer, bindless_tex_args, bucket_icbs.is_empty())
         {
             // Bindless static pass, GPU-driven. Shared with the phase-2 main
             // pass under two-pass occlusion: see `execute_bindless_static_icb`.
-            // Returns 1 (static+instances) or 2 (+ skinned tail) draw calls.
-            draw_calls +=
-                self.execute_bindless_static_icb(enc, obj_buf, tex_args, icb, deformed_skinned);
+            draw_calls += self.execute_bindless_static_icb(
+                enc,
+                obj_buf,
+                tex_args,
+                bucket_icbs,
+                deformed_skinned,
+            );
         } else {
             // Legacy static pass: rebind model/material/textures per draw.
             // Used by shaders without a `fragment_main_bindless` entry point

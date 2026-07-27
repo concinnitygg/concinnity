@@ -519,7 +519,7 @@ fn shader_stage_source_map_round_trips_empty() {
 
 #[test]
 fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use crate::assets::shader_stage::ShaderKind;
+    use crate::assets::shader::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -544,7 +544,7 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
     // subscribe to "" which notify rejects. The debug-WS `reload-assets`
     // command still works for these.
-    use crate::assets::shader_stage::ShaderKind;
+    use crate::assets::shader::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -555,7 +555,7 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
 
 #[test]
 fn metal_extension_is_an_asset_event() {
-    // World-loaded `ShaderStage` sources travel through the same watcher
+    // World-loaded Shader stage sources travel through the same watcher
     // as the texture / mesh paths; the closure routes them to the
     // shader-stage flag rather than the texture-decode batch.
     let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
@@ -593,7 +593,7 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
     // alive so `.metal` saves trigger the recompile pass.
-    use crate::assets::shader_stage::ShaderKind;
+    use crate::assets::shader::ShaderKind;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -622,7 +622,7 @@ fn shader_stage_reload_result_default_is_all_zero() {
 #[test]
 fn reload_shader_stages_on_empty_map_is_a_no_op() {
     // The helper must short-circuit before touching the backend on a
-    // world with no captured ShaderStage sources (e.g. the GLSL-only
+    // world with no captured Shader sources (e.g. the GLSL-only
     // path on Vulkan, or a world that pre-dated the capture). The
     // default backend trait impl errors on
     // `update_world_shader_pipelines`; an empty map must not hit it.
@@ -1995,7 +1995,7 @@ fn reload_stories_ignores_worlds_without_stories() {
 
 #[test]
 fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use crate::assets::shader_stage::ShaderKind;
+    use crate::assets::shader::ShaderKind;
     let dir = tempfile::tempdir().unwrap();
     let mut map = ShaderStageSourceMap::new();
     map.entries.push(ShaderStageSourceEntry {
@@ -2318,7 +2318,7 @@ fn run_frame_consumes_the_shader_stage_flag() {
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
     super::pending::set_pending_shader_stages();
     let _ = drive_run_frame(&mut state);
-    // run_frame swallowed the flag; the empty ShaderStage map made the pass a
+    // run_frame swallowed the flag; the empty Shader map made the pass a
     // no-op, but the flag consumption is the observable that it fired.
     assert!(!super::pending::take_pending_shader_stages());
 }

@@ -20,13 +20,8 @@ use ash::{Device, vk};
 use crate::gfx::decal::DecalRecord;
 
 use super::context::VkContext;
-use super::pipeline::{compile_glsl, inject_define, spv_module};
+use super::pipeline::spv_module;
 use super::texture::{GpuImage, create_buffer};
-
-// GLSL sources, shared with the host so a future hot-reload pass can
-// pick them up the same way the existing built-in shaders do.
-pub(in crate::vulkan) const DECAL_VERT_GLSL: &str = include_str!("shaders/decal.vert");
-pub(in crate::vulkan) const DECAL_FRAG_GLSL: &str = include_str!("shaders/decal.frag");
 
 // Cap on the number of active decals: the descriptor pool reserves a
 // fixed block of `MAX_DECALS` per-decal albedo sets at init, so runtime
@@ -608,24 +603,15 @@ fn write_view_set(
 }
 
 fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let define = if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    // The vert source doesn't branch on USE_MSAA but it costs nothing to
+    // define it there too.
+    let ctx = super::builtins::Ctx {
+        hot_reload,
+        msaa,
+        pool_size: 0,
     };
-    // shaderc accepts a single source string. The vert source doesn't
-    // branch on USE_MSAA but it costs nothing to define it there too.
-    use super::pipeline::shader_source;
-    let vert_src = inject_define(
-        &shader_source(hot_reload, "decal.vert", DECAL_VERT_GLSL),
-        define,
-    );
-    let frag_src = inject_define(
-        &shader_source(hot_reload, "decal.frag", DECAL_FRAG_GLSL),
-        define,
-    );
-    let vert = compile_glsl(&vert_src, shaderc::ShaderKind::Vertex, "decal.vert")?;
-    let frag = compile_glsl(&frag_src, shaderc::ShaderKind::Fragment, "decal.frag")?;
+    let vert = super::builtins::DECAL_VERT.compile(&ctx)?;
+    let frag = super::builtins::DECAL_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

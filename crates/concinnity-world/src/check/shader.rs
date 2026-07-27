@@ -4,9 +4,23 @@ pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
 }
 
-// Validate ShaderStage args without compiling.
+// Validate Shader args without compiling: the required vertex + fragment
+// stages must each resolve a source for the current platform (the optional
+// vertex_instanced stage is checked only when declared).
 fn check_args(args: &serde_json::Value) -> Result<(), String> {
-    if crate::source_args::resolve_source_from_args(args).is_none() {
+    check_stage(args, "vertex", true)?;
+    check_stage(args, "fragment", true)?;
+    check_stage(args, "vertex_instanced", false)
+}
+
+fn check_stage(args: &serde_json::Value, stage: &str, required: bool) -> Result<(), String> {
+    let Some(stage_args) = args.get(stage) else {
+        if required {
+            return Err(format!("Shader requires a `{stage}` stage"));
+        }
+        return Ok(());
+    };
+    if crate::source_args::resolve_source_from_args(stage_args).is_none() {
         // On Linux/Vulkan, missing sources are non-fatal: the runtime falls
         // back to built-in GLSL. See `compile_payload` for the matching carve-out.
         let key = Platform::current().key();
@@ -14,7 +28,7 @@ fn check_args(args: &serde_json::Value) -> Result<(), String> {
             return Ok(());
         }
         return Err(format!(
-            "ShaderStage requires a `source` or a `sources` entry for platform \"{key}\""
+            "Shader stage `{stage}` requires a `source` or a `sources` entry for platform \"{key}\""
         ));
     }
     Ok(())
@@ -26,20 +40,58 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn check_requires_a_current_platform_source() {
-        // With every platform declared, check passes on any backend.
-        let ok = json!({"kind": "vertex", "sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
+    fn check_requires_vertex_and_fragment_stages() {
+        let ok = json!({
+            "vertex": {"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}},
+            "fragment": {"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}}
+        });
         assert!(check_args(&ok).is_ok());
-        assert!(crate::source_args::resolve_source_from_args(&ok).is_some());
 
-        // With nothing declared, GLSL/Vulkan is a non-fatal fallback while the
-        // other backends flag the missing source. Only one arm runs per build,
-        // so branch on the active platform key to stay deterministic.
-        let missing = check_args(&json!({"kind": "vertex"}));
+        // The stage that IS declared resolves on every platform, so the error can
+        // only be about the missing one. A bare `source` would instead resolve
+        // only where its extension matches, making the assertion platform-specific.
+        let resolvable =
+            json!({"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
+        assert!(
+            check_args(&json!({"fragment": resolvable}))
+                .unwrap_err()
+                .contains("`vertex`"),
+        );
+        assert!(
+            check_args(&json!({"vertex": resolvable}))
+                .unwrap_err()
+                .contains("`fragment`"),
+        );
+    }
+
+    #[test]
+    fn check_requires_a_current_platform_source_per_stage() {
+        // A declared stage with no current-platform source: GLSL/Vulkan is a
+        // non-fatal fallback while the other backends flag it. Only one arm
+        // runs per build, so branch on the active platform key.
+        let missing = check_args(&json!({"vertex": {}, "fragment": {}}));
         if Platform::current().key() == "glsl" {
             assert!(missing.is_ok());
         } else {
             assert!(missing.is_err());
+        }
+    }
+
+    #[test]
+    fn undeclared_instanced_stage_is_fine_but_empty_declared_one_is_checked() {
+        let base = json!({
+            "vertex": {"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}},
+            "fragment": {"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}}
+        });
+        assert!(check_args(&base).is_ok());
+
+        let mut with_empty_instanced = base.clone();
+        with_empty_instanced["vertex_instanced"] = json!({});
+        let result = check_args(&with_empty_instanced);
+        if Platform::current().key() == "glsl" {
+            assert!(result.is_ok());
+        } else {
+            assert!(result.unwrap_err().contains("vertex_instanced"));
         }
     }
 }

@@ -11,7 +11,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBuffer, MTLDevice, MTLLibrary as _, MTLPixelFormat,
     MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLVertexDescriptor,
@@ -23,7 +22,7 @@ use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::transparent::{TransparentDraw, bytes_of};
 use super::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 
@@ -215,11 +214,7 @@ fn build_glass_pipeline_from(
     vertex_entry: &str,
     fragment_entry: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, shader_name);
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("{} compile error: {:?}", shader_name, e))?;
+    let library = shader_library(device, hot_reload, shader_name)?;
 
     let vert_fn = library
         .newFunctionWithName(&ns_str(vertex_entry))

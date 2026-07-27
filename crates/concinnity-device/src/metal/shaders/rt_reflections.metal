@@ -93,8 +93,10 @@ struct BindlessTextures {
     texture2d<float>     ssao       [[id(BINDLESS_TEXTURE_COUNT + 3)]];
 };
 
-// Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no reflection. Injected as
-// a shared `constant` (see pipeline.rs) so the SSR / RT / composite gates agree.
+// Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no reflection. Locked to
+// concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT by unit test so the
+// SSR / RT / composite gates agree.
+constant float REFLECTION_ROUGHNESS_CUT = 0.6;
 constant float RT_F0        = 0.04;  // dielectric base reflectance for the Fresnel
 constant float VERTEX_FLOATS = 14.0; // floats per Vertex (stride 56 bytes)
 

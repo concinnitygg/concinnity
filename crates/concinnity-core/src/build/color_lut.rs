@@ -62,7 +62,7 @@ pub fn resolve_source_path(source: &str) -> String {
 
 // Resolve a ColorLut source string into a filesystem path. Bare filenames are
 // searched recursively under the assets directory (the same lookup used by
-// `EnvironmentMap` and `ShaderStage`); anything with a directory component is
+// `EnvironmentMap` and `Shader`); anything with a directory component is
 // returned unchanged so absolute / relative paths still work.
 pub fn resolve_lut_source(source: &str) -> String {
     let p = std::path::Path::new(source);

@@ -1,15 +1,13 @@
-// src/assets/shader_stage.rs
+// src/assets/shader.rs
 //
-// Runtime behavior for the ShaderStage asset. The authored schema
-// (ShaderKind, the ShaderStage struct, and its Default) lives in
+// Runtime behavior for the Shader asset. The authored schema (Shader,
+// StageSource, ShaderKind, and the ShaderPayload container) lives in
 // concinnity-asset; this file keeps the `Component` impl and the
-// `ShaderStageExt::current_platform_source` extension the engine init and
+// `StageSourceExt::current_platform_source` extension the engine init and
 // hot-reload paths use. The JSON-args source selection and validation live in
-// concinnity-world (`source_args`, `check::shader`). The schema types are
-// re-exported so `crate::assets::shader_stage::ShaderKind` paths keep
-// resolving.
+// concinnity-world (`source_args`, `check::shader`).
 
-pub use concinnity_asset::{ShaderKind, ShaderStage};
+pub use concinnity_asset::{Shader, ShaderKind, ShaderPayload, StageSource};
 
 use crate::ecs::{Component, PayloadLocator};
 
@@ -20,12 +18,12 @@ use crate::ecs::{Component, PayloadLocator};
 // no current-platform source is declared (e.g. a stage that only declares `glsl`
 // running on the Metal backend, which loads the embedded GLSL fallback at init
 // and has no on-disk file to hot-reload). Exposed as an extension trait because
-// the schema type now lives in concinnity-asset.
-pub trait ShaderStageExt {
+// the schema type lives in concinnity-asset.
+pub trait StageSourceExt {
     fn current_platform_source(&self) -> Option<String>;
 }
 
-impl ShaderStageExt for ShaderStage {
+impl StageSourceExt for StageSource {
     fn current_platform_source(&self) -> Option<String> {
         let platform = crate::platform::Platform::current();
         if let Some(sources) = &self.sources
@@ -45,8 +43,8 @@ impl ShaderStageExt for ShaderStage {
     }
 }
 
-impl Component for ShaderStage {
-    const NAME: &'static str = "ShaderStage";
+impl Component for Shader {
+    const NAME: &'static str = "Shader";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
         Ok(postcard::from_bytes(bytes)?)
@@ -54,6 +52,10 @@ impl Component for ShaderStage {
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
+    }
+
+    fn inject_name(&mut self, id: crate::ecs::asset_id::AssetId) {
+        self.asset_id = id;
     }
 }
 
@@ -75,35 +77,27 @@ mod tests {
     }
 
     #[test]
-    fn default_declares_metal_and_hlsl_sources() {
-        let s = ShaderStage::default();
-        let sources = s.sources.expect("default has a sources map");
-        assert_eq!(
-            sources.get("metal").map(String::as_str),
-            Some("default.metal")
-        );
-        assert_eq!(
-            sources.get("hlsl").map(String::as_str),
-            Some("default_vert.hlsl")
-        );
-        assert!(s.source.is_empty());
-    }
-
-    #[test]
     fn current_platform_source_resolves_for_any_backend() {
         // Declaring every platform source resolves on whichever backend the
         // test build targets.
-        let stage = ShaderStage {
-            kind: ShaderKind::Vertex,
-            source: String::new(),
-            sources: Some(
-                [("metal", "v.metal"), ("hlsl", "v.hlsl"), ("glsl", "v.glsl")]
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-            ),
-            locator: None,
-        };
+        let stage = StageSource::per_platform([
+            ("metal", "v.metal"),
+            ("hlsl", "v.hlsl"),
+            ("glsl", "v.glsl"),
+        ]);
         assert!(stage.current_platform_source().is_some());
+    }
+
+    #[test]
+    fn single_source_resolves_only_for_matching_extensions() {
+        let stage = StageSource {
+            source: "v.metal".to_string(),
+            sources: None,
+        };
+        let platform = crate::platform::Platform::current();
+        assert_eq!(
+            stage.current_platform_source().is_some(),
+            platform.accepts_ext("metal")
+        );
     }
 }

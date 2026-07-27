@@ -22,8 +22,17 @@ pub(crate) const IDENTITY4: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-// (albedo_slot, normal_map_slot, gpu material uniforms), passed through build_draw_list.
-pub(crate) type MaterialEntry = (usize, usize, MaterialUniforms);
+// One decoded material as build_draw_list consumes it: resolved texture pool
+// slots, the GPU uniforms, and the shader bucket its draws render under.
+#[derive(Clone, Copy)]
+pub(crate) struct MaterialEntry {
+    pub albedo_slot: usize,
+    pub normal_map_slot: usize,
+    pub uniforms: MaterialUniforms,
+    // Dense ShaderHandle value of the material's `shader` reference; 0 (the
+    // world default) when the material names none.
+    pub shader_bucket: u32,
+}
 
 // Geometry decoded for one Room: the asset, its vertices, LOD0 indices, and
 // LOD alternates (switch_distance, indices).
@@ -744,12 +753,16 @@ pub(crate) fn resolve_material_slots(
     if let Some(mat_id) = material {
         return material_map.get(&mat_id).copied().ok_or(mat_id);
     }
-    if let Some(tex_id) = texture {
-        let slot = tex_id.index();
-        let slot = if slot < texture_count { slot } else { 0 };
-        return Ok((slot, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT));
-    }
-    Ok((0, NO_NORMAL_MAP_SLOT, MaterialUniforms::DEFAULT))
+    let albedo_slot = match texture {
+        Some(tex_id) if tex_id.index() < texture_count => tex_id.index(),
+        _ => 0,
+    };
+    Ok(MaterialEntry {
+        albedo_slot,
+        normal_map_slot: NO_NORMAL_MAP_SLOT,
+        uniforms: MaterialUniforms::DEFAULT,
+        shader_bucket: 0,
+    })
 }
 
 pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
@@ -902,7 +915,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         return None;
                     }
                 };
-                let (texture_slot, normal_map_slot, material) =
+                let mat_entry =
                     match resolve_material_slots(sub.material, None, material_map, texture_count) {
                         Ok(entry) => entry,
                         Err(mat_id) => {
@@ -935,9 +948,10 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     // vertex buffer, so no per-draw base.
                     base_vertex: 0,
                     model: model_mat,
-                    texture_slot,
-                    normal_map_slot,
-                    material,
+                    texture_slot: mat_entry.albedo_slot,
+                    normal_map_slot: mat_entry.normal_map_slot,
+                    material: mat_entry.uniforms,
+                    shader_bucket: mat_entry.shader_bucket,
                     visible: true,
                     resident: true,
                     bb_min,
@@ -979,7 +993,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             };
             // The texture handle is the texture's declaration-order pool slot;
             // an out-of-range handle falls back to slot 0.
-            let (texture_slot, normal_map_slot, material) = match resolve_material_slots(
+            let mat_entry = match resolve_material_slots(
                 item.material,
                 item.texture,
                 material_map,
@@ -1014,9 +1028,10 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 index_count,
                 base_vertex: 0,
                 model: model_mat,
-                texture_slot,
-                normal_map_slot,
-                material,
+                texture_slot: mat_entry.albedo_slot,
+                normal_map_slot: mat_entry.normal_map_slot,
+                material: mat_entry.uniforms,
+                shader_bucket: mat_entry.shader_bucket,
                 visible: true,
                 resident: true,
                 bb_min,
@@ -1069,7 +1084,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 return None;
             }
         };
-        let (texture_slot, normal_map_slot, material) = match resolve_material_slots(
+        let mat_entry = match resolve_material_slots(
             inst.material,
             inst.texture,
             material_map,
@@ -1085,6 +1100,11 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 return None;
             }
         };
+        let (texture_slot, normal_map_slot, material) = (
+            mat_entry.albedo_slot,
+            mat_entry.normal_map_slot,
+            mat_entry.uniforms,
+        );
 
         let mut instance_mats: Vec<[[f32; 4]; 4]> = Vec::with_capacity(inst.instances.len());
         let mut cluster_min = [f32::INFINITY; 3];
@@ -1158,6 +1178,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 texture_slot: 0,
                 normal_map_slot: NO_NORMAL_MAP_SLOT,
                 material: MaterialUniforms::DEFAULT,
+                shader_bucket: 0,
                 visible: true,
                 resident: true,
                 bb_min: UNCULLED_BB.0,
@@ -1209,6 +1230,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             texture_slot,
             normal_map_slot: NO_NORMAL_MAP_SLOT,
             material: MaterialUniforms::DEFAULT,
+            shader_bucket: 0,
             visible: true,
             resident: true,
             bb_min: UNCULLED_BB.0,
@@ -1246,13 +1268,19 @@ mod tests {
 
     #[test]
     fn resolve_material_slots_prefers_a_resolved_material() {
-        let entry: MaterialEntry = (7, 3, MaterialUniforms::DEFAULT);
+        let entry = MaterialEntry {
+            albedo_slot: 7,
+            normal_map_slot: 3,
+            uniforms: MaterialUniforms::DEFAULT,
+            shader_bucket: 2,
+        };
         let map = material_map_with(MaterialHandle(2), entry);
         // A material handle wins even when a texture is also present; its albedo
-        // and normal-map slots come straight from the map entry.
+        // and normal-map slots (and shader bucket) come straight from the map entry.
         let got = resolve_material_slots(Some(MaterialHandle(2)), Some(TextureHandle(9)), &map, 16)
             .expect("material resolves");
-        assert_eq!((got.0, got.1), (7, 3));
+        assert_eq!((got.albedo_slot, got.normal_map_slot), (7, 3));
+        assert_eq!(got.shader_bucket, 2);
     }
 
     #[test]
@@ -1266,7 +1294,14 @@ mod tests {
     fn resolve_material_slots_falls_back_to_the_texture_slot() {
         let map = std::collections::HashMap::new();
         let got = resolve_material_slots(None, Some(TextureHandle(4)), &map, 16).expect("ok");
-        assert_eq!((got.0, got.1), (4, NO_NORMAL_MAP_SLOT));
+        assert_eq!(
+            (got.albedo_slot, got.normal_map_slot),
+            (4, NO_NORMAL_MAP_SLOT)
+        );
+        assert_eq!(
+            got.shader_bucket, 0,
+            "texture fallback is the default bucket"
+        );
     }
 
     #[test]
@@ -1274,14 +1309,20 @@ mod tests {
         let map = std::collections::HashMap::new();
         // Handle 20 is past the pool of 16, so it clamps to slot 0.
         let got = resolve_material_slots(None, Some(TextureHandle(20)), &map, 16).expect("ok");
-        assert_eq!((got.0, got.1), (0, NO_NORMAL_MAP_SLOT));
+        assert_eq!(
+            (got.albedo_slot, got.normal_map_slot),
+            (0, NO_NORMAL_MAP_SLOT)
+        );
     }
 
     #[test]
     fn resolve_material_slots_defaults_with_no_material_or_texture() {
         let map = std::collections::HashMap::new();
         let got = resolve_material_slots(None, None, &map, 16).expect("ok");
-        assert_eq!((got.0, got.1), (0, NO_NORMAL_MAP_SLOT));
+        assert_eq!(
+            (got.albedo_slot, got.normal_map_slot),
+            (0, NO_NORMAL_MAP_SLOT)
+        );
     }
 
     fn make_prop(position: [f32; 3]) -> Prop {
@@ -1873,7 +1914,12 @@ mod tests {
         let mut material_map = std::collections::HashMap::new();
         material_map.insert(
             MaterialHandle(20),
-            (3usize, 4usize, MaterialUniforms::DEFAULT),
+            MaterialEntry {
+                albedo_slot: 3,
+                normal_map_slot: 4,
+                uniforms: MaterialUniforms::DEFAULT,
+                shader_bucket: 0,
+            },
         );
 
         let data = build_draw_list(DrawListInputs {

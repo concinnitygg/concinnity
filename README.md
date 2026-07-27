@@ -8,8 +8,6 @@
 [codecov-img]: https://img.shields.io/codecov/c/github/concinnitygg/concinnity?logo=codecov
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
 
-Application software for [`concinnity.gg`](https://concinnity.gg).
-
 ## Overview
 
 Concinnity is an asset-driven 3D rendering engine. Runtime behavior is defined

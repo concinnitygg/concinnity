@@ -15,9 +15,9 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
+use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
 use crate::metal::uniforms::TaaUniforms;
 
@@ -56,8 +56,7 @@ pub(crate) fn build_taa_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "taa.metal");
-    let library = compile_library(device, msl.as_ref(), "TAA")?;
+    let library = shader_library(device, hot_reload, "taa.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,

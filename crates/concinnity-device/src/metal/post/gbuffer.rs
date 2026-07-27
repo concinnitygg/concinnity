@@ -22,7 +22,7 @@ use objc2_metal::{
 use crate::gfx::mesh_payload::Vertex;
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::{ns_str, shader_source};
+use crate::metal::pipeline::{ns_str, shader_library};
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::{GBufferView, SsrPrepassMat, VelocityModelUniforms};
 
@@ -127,11 +127,7 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
     vertex_entry: &str,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "gbuffer_prepass.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("G-buffer pre-pass shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
     let vert_fn = library
         .newFunctionWithName(&ns_str(vertex_entry))
         .ok_or_else(|| format!("{} not found in G-buffer pre-pass metallib", vertex_entry))?;
@@ -210,11 +206,7 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "gbuffer_prepass.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("G-buffer bindless shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
     let vert_fn = library
         .newFunctionWithName(&ns_str("gbuffer_prepass_vertex_bindless"))
         .ok_or("gbuffer_prepass_vertex_bindless not found in G-buffer pre-pass metallib")?;
@@ -500,14 +492,16 @@ impl MtlContext {
             deformed_current,
             deformed_prev,
         } = gpu;
-        let (Some(pipeline), Some(icb), Some(object_buffer), Some(prev_models)) = (
+        let (Some(pipeline), Some(object_buffer), Some(prev_models)) = (
             self.gbuffer.bindless_pipeline.as_ref(),
-            self.cull.icb.as_ref(),
             object_buffer,
             prev_model_buffer,
         ) else {
             return 0;
         };
+        if self.cull.icbs.is_empty() {
+            return 0;
+        }
         enc.setRenderPipelineState(pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
         unsafe {
@@ -543,12 +537,23 @@ impl MtlContext {
                 location: 0,
                 length: base,
             };
-            // SAFETY: [0, base) spans the static + instance + chunk command slots;
-            // the reused main ICB is sized for cull_count() >= base.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+            // The pre-pass writes normals/depth/velocity under its single
+            // engine pipeline, so every bucket's ICB executes with the same
+            // PSO; together the buckets cover the whole record range exactly
+            // once. A bucket the main pass skips (Shader not resident) is
+            // skipped here too, so depth and velocity never carry geometry the
+            // colour pass leaves out.
+            for (b, icb) in self.cull.icbs.iter().enumerate() {
+                if !self.world_shader_resident(b) {
+                    continue;
+                }
+                // SAFETY: [0, base) spans the static + instance + chunk command
+                // slots; every reused main ICB is sized for cull_count() >= base.
+                unsafe {
+                    enc.executeCommandsInBuffer_withRange(icb, range);
+                }
+                draw_calls += 1;
             }
-            draw_calls += 1;
         }
 
         // Folded skinned tail [base, total): current deformed at stream 0,
@@ -582,9 +587,10 @@ impl MtlContext {
                 location: base,
                 length: total - base,
             };
+            // Skinned records are always bucket 0.
             // SAFETY: [base, total) spans the folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+                enc.executeCommandsInBuffer_withRange(&self.cull.icbs[0], range);
             }
             draw_calls += 1;
             // The current deformed slot now holds a valid pose, so next frame's

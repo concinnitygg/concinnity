@@ -294,6 +294,7 @@ mod tests {
             vertex_count: v_count,
             index_offset: i_off,
             index_count: i_count,
+            shader_bucket: 0,
             base_vertex: 0,
             model: [[0.0; 4]; 4],
             texture_slot: 0,

@@ -16,7 +16,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
@@ -29,8 +28,8 @@ use crate::gfx::render_types::{FogFroxelParams, FogParams};
 use crate::gfx::volumetric_fog::FogSettings;
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_source};
-use super::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline, compile_library};
+use super::pipeline::{ns_str, shader_library};
+use super::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
 use super::scoped_encoder::ScopedEncoder;
 
 // All volumetric-fog state grouped into one feature unit: the resolved
@@ -214,8 +213,7 @@ pub(super) fn build_fog_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "fog.metal");
-    let library = compile_library(device, msl.as_ref(), "fog")?;
+    let library = shader_library(device, hot_reload, "fog.metal")?;
     // `(scattered, 1 - T)` over `scene` -> `scene * T + scattered`.
     build_fullscreen_pipeline(
         device,
@@ -235,11 +233,7 @@ pub(super) fn build_fog_froxel_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let msl = shader_source(hot_reload, "fog.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("fog froxel shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "fog.metal")?;
     let func = library
         .newFunctionWithName(&ns_str("fog_froxel_kernel"))
         .ok_or("fog_froxel_kernel not found")?;

@@ -4,6 +4,7 @@
 mod auto_exposure;
 mod backend;
 mod barrier_translate;
+pub(crate) mod builtins;
 mod composite;
 mod context;
 mod cull;
@@ -43,6 +44,7 @@ mod transient_pool;
 mod win32_window;
 #[cfg(not(target_os = "windows"))]
 pub(crate) mod window;
+mod world_shaders;
 
 // The platform window VkContext owns: the shared native Win32 layer on
 // Windows (one window/input implementation with the DirectX backend), GLFW on

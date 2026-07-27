@@ -173,7 +173,7 @@ impl VkContext {
     // args into its own bake-owned buffer against the probe eye. The instance tail
     // is left untouched (a zeroed bake buffer keeps it disabled = skipped).
     pub(in crate::vulkan) fn build_draw_args_records_into(&self, ptr: *mut u8, cam_pos: [f32; 3]) {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let stride = std::mem::size_of::<GpuDrawArgs>();
         for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
             // Per-frame active LOD pick. Objects with no alternates fall
@@ -184,7 +184,10 @@ impl VkContext {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
+                // The record's shader bucket rides the upper flag bits so the
+                // cull kernel can route its command into that bucket's region.
+                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
+                    | draw_args_bucket_bits(obj.shader_bucket),
             };
             // SAFETY: the buffer was sized for `n_objects + n_instances + n_skinned`
             // records (the instance tail is written once at init) and the loop is

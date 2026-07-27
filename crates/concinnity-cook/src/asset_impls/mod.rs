@@ -10,5 +10,5 @@ mod file;
 mod procedural_mesh;
 mod room;
 mod sdf_volume;
-mod shader_stage;
+mod shader;
 mod voxel_chunk;

@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 
 use crate::resolver::{
     resolve_audio_clip_handle, resolve_font_handle, resolve_material_handle, resolve_mesh_handle,
-    resolve_name, resolve_skinned_mesh_handle, resolve_texture_handle,
+    resolve_name, resolve_shader_handle, resolve_skinned_mesh_handle, resolve_texture_handle,
 };
 
 macro_rules! resource_handles {
@@ -55,6 +55,7 @@ resource_handles! {
     EnvironmentMapHandle,
     ColorLutHandle,
     SkinnedMeshHandle,
+    ShaderHandle,
 }
 
 // Resolve a texture reference name to its handle value. A real build has the
@@ -209,6 +210,72 @@ fn resolve_material_ref(name: &str) -> Option<u32> {
 // authored references bake to its dense handle instead of an interned id.
 fn resolve_skinned_mesh_ref(name: &str) -> Option<u32> {
     resolve_skinned_mesh_handle(name).or_else(|| resolve_name(name))
+}
+
+// Resolve a shader reference name to its handle, with the same build / fallback
+// behaviour as [`resolve_texture_ref`]. A Shader stays an ECS component, but a
+// Material's `shader` reference bakes to its dense handle so the renderer can
+// index its pipeline table directly.
+fn resolve_shader_ref(name: &str) -> Option<u32> {
+    resolve_shader_handle(name).or_else(|| resolve_name(name))
+}
+
+/// `serde` `deserialize_with` helper for an optional shader reference field.
+///
+/// The shader analogue of [`de_opt_texture_handle`]: an integer is an
+/// already-resolved [`ShaderHandle`]; a name string is resolved through the
+/// installed shader-handle resolver; an empty string or null is `None`. Apply
+/// with `#[serde(default, deserialize_with = "concinnity_asset::de_opt_shader_handle")]`.
+pub fn de_opt_shader_handle<'de, D>(d: D) -> Result<Option<ShaderHandle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    if !d.is_human_readable() {
+        return Option::<ShaderHandle>::deserialize(d);
+    }
+
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<ShaderHandle>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a shader handle integer, reference name string, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<ShaderHandle>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<ShaderHandle>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<ShaderHandle>, E> {
+            Ok(Some(ShaderHandle(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<ShaderHandle>, E> {
+            Ok(Some(ShaderHandle(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<ShaderHandle>, E> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            resolve_shader_ref(v)
+                .map(|h| Some(ShaderHandle(h)))
+                .ok_or_else(|| {
+                    E::custom(format!(
+                        "no shader-handle resolver installed to resolve reference {v:?}"
+                    ))
+                })
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<ShaderHandle>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
 }
 
 /// `serde` `deserialize_with` helper for an optional material reference field.

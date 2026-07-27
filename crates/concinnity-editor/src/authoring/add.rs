@@ -523,30 +523,22 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     }
 
     match ext.as_str() {
-        // Dedicated-extension GLSL shaders: stage is unambiguous from the extension
-        "vert" => Ok(vec![validated_entry(
-            &base_name,
-            "ShaderStage",
-            serde_json::json!({ "kind": "vertex", "source": path_str }),
-        )?]),
-        "frag" => Ok(vec![validated_entry(
-            &base_name,
-            "ShaderStage",
-            serde_json::json!({ "kind": "fragment", "source": path_str }),
-        )?]),
+        // Dedicated-extension GLSL shaders: a Shader needs both stages, so
+        // the file is paired with its sibling stage file.
+        "vert" => {
+            let frag = sibling_path(path, "frag")?;
+            shader_pair_entry(&stem, path_str, &frag)
+        }
+        "frag" => {
+            let vert = sibling_path(path, "vert")?;
+            shader_pair_entry(&stem, &vert, path_str)
+        }
 
-        // GLSL: infer stage from filename stem
+        // GLSL: infer the stage from the filename stem and pair with the
+        // counterpart file (foo_vert.glsl <-> foo_frag.glsl).
         "glsl" => {
-            let kind = if stem.contains("frag") || stem.contains("fragment") {
-                "fragment"
-            } else {
-                "vertex"
-            };
-            Ok(vec![validated_entry(
-                &base_name,
-                "ShaderStage",
-                serde_json::json!({ "kind": kind, "source": path_str }),
-            )?])
+            let (vert, frag, pair_stem) = glsl_pair(path, path_str, &stem)?;
+            shader_pair_entry(&pair_stem, &vert, &frag)
         }
 
         // Metal: parse source to detect which stages are present
@@ -652,33 +644,122 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     }
 }
 
-// Build ShaderStage entries for each detected stage of a multi-stage source file.
-// Names follow the pattern {stem}_{ext}_{stage_abbrev}, e.g. "default_metal_vert".
+// Build one Shader entry from a source file that must carry both stages.
+// Named "{stem}_shader", with both stages reading the same source file.
 fn shader_entries_from_stages(
     path_str: &str,
     stem: &str,
     ext: &str,
     stages: &[&str],
 ) -> std::io::Result<Vec<serde_json::Value>> {
-    stages
-        .iter()
-        .map(|&stage| {
-            let name = format!("{}_{}_{}", stem, ext, stage_abbrev(stage));
-            validated_entry(
-                &name,
-                "ShaderStage",
-                serde_json::json!({ "kind": stage, "source": path_str }),
-            )
-        })
-        .collect()
+    if !(stages.contains(&"vertex") && stages.contains(&"fragment")) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "a Shader needs both a vertex and a fragment stage, but the .{ext} \
+                 source declares only {stages:?}. Add the missing stage function, or \
+                 declare a Shader entry in world.jsonl with per-stage sources"
+            ),
+        ));
+    }
+    shader_pair_entry(stem, path_str, path_str)
 }
 
-fn stage_abbrev(stage: &str) -> &str {
-    match stage {
-        "vertex" => "vert",
-        "fragment" => "frag",
-        other => other,
+// One Shader entry named "{stem}_shader" from a vertex + fragment source pair
+// (the two paths are the same file for multi-stage sources).
+fn shader_pair_entry(
+    stem: &str,
+    vert_path: &str,
+    frag_path: &str,
+) -> std::io::Result<Vec<serde_json::Value>> {
+    Ok(vec![validated_entry(
+        &format!("{stem}_shader"),
+        "Shader",
+        serde_json::json!({
+            "vertex": { "source": vert_path },
+            "fragment": { "source": frag_path },
+        }),
+    )?])
+}
+
+// The sibling stage file next to a dedicated-extension GLSL shader
+// (x.vert <-> x.frag). Errors when the counterpart is missing: half a shader
+// program cannot render.
+fn sibling_path(path: &std::path::Path, sibling_ext: &str) -> std::io::Result<String> {
+    let sibling = path.with_extension(sibling_ext);
+    if !sibling.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "a Shader needs both stages: expected the {} stage next to {} \
+                 (looked for {})",
+                if sibling_ext == "vert" {
+                    "vertex"
+                } else {
+                    "fragment"
+                },
+                path.display(),
+                sibling.display(),
+            ),
+        ));
     }
+    Ok(sibling.to_string_lossy().into_owned())
+}
+
+// Pair a .glsl file with its counterpart stage by swapping the stage marker in
+// the filename stem (foo_vert.glsl <-> foo_frag.glsl). Returns (vertex,
+// fragment) source paths plus the marker-stripped stem, so adding either file
+// of the pair produces the same Shader entry name.
+fn glsl_pair(
+    path: &std::path::Path,
+    path_str: &str,
+    stem: &str,
+) -> std::io::Result<(String, String, String)> {
+    let (this_marker, other_marker) = if stem.contains("fragment") {
+        ("fragment", "vertex")
+    } else if stem.contains("frag") {
+        ("frag", "vert")
+    } else if stem.contains("vertex") {
+        ("vertex", "fragment")
+    } else if stem.contains("vert") {
+        ("vert", "frag")
+    } else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "cannot infer the shader stage of {path_str}: name the files with \
+                 vert/frag markers (foo_vert.glsl + foo_frag.glsl), or declare a \
+                 Shader entry in world.jsonl with per-stage sources"
+            ),
+        ));
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path_str);
+    let counterpart = path.with_file_name(file_name.replace(this_marker, other_marker));
+    if !counterpart.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "a Shader needs both stages: expected the {other_marker} counterpart \
+                 of {path_str} (looked for {})",
+                counterpart.display()
+            ),
+        ));
+    }
+    let counterpart = counterpart.to_string_lossy().into_owned();
+    let this = path_str.to_string();
+    let pair_stem = stem
+        .replace(this_marker, "")
+        .trim_matches('_')
+        .replace("__", "_");
+    let (vert, frag) = if this_marker.starts_with('v') {
+        (this, counterpart)
+    } else {
+        (counterpart, this)
+    };
+    Ok((vert, frag, pair_stem))
 }
 
 // Detect Metal pipeline stages from source text.
@@ -1021,41 +1102,44 @@ mod tests {
         assert_eq!(detect_wgsl_stages(src), vec!["vertex"]);
     }
 
-    // stage_abbrev + name format
-
     #[test]
-    fn stage_abbrev_vertex() {
-        assert_eq!(stage_abbrev("vertex"), "vert");
+    fn a_two_stage_source_becomes_one_shader_entry() {
+        let entries =
+            shader_entries_from_stages("s.metal", "s", "metal", &["vertex", "fragment"]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "s_shader");
+        assert_eq!(entries[0]["type"], "Shader");
+        assert_eq!(entries[0]["args"]["vertex"]["source"], "s.metal");
+        assert_eq!(entries[0]["args"]["fragment"]["source"], "s.metal");
     }
 
     #[test]
-    fn stage_abbrev_fragment() {
-        assert_eq!(stage_abbrev("fragment"), "frag");
+    fn a_single_stage_source_is_rejected_with_guidance() {
+        let err = shader_entries_from_stages("s.metal", "s", "metal", &["vertex"]).unwrap_err();
+        assert!(err.to_string().contains("both a vertex and a fragment"));
     }
 
     #[test]
-    fn stage_abbrev_passthrough() {
-        assert_eq!(stage_abbrev("shadow"), "shadow");
-    }
+    fn glsl_pair_swaps_the_stage_marker_and_shares_a_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let vert = dir.path().join("foo_vert.glsl");
+        let frag = dir.path().join("foo_frag.glsl");
+        std::fs::write(&vert, "").unwrap();
+        std::fs::write(&frag, "").unwrap();
 
-    #[test]
-    fn shader_entry_names_metal_both_stages() {
-        let stages = detect_metal_stages("vertex VertexOut v() {}\nfragment float4 f() {}");
-        let names: Vec<String> = stages
-            .iter()
-            .map(|&s| format!("{}_{}_{}", "default", "metal", stage_abbrev(s)))
-            .collect();
-        assert_eq!(names, vec!["default_metal_vert", "default_metal_frag"]);
-    }
+        // Adding either file of the pair resolves the same (vert, frag, stem).
+        let from_vert = glsl_pair(&vert, vert.to_str().unwrap(), "foo_vert").unwrap();
+        let from_frag = glsl_pair(&frag, frag.to_str().unwrap(), "foo_frag").unwrap();
+        assert_eq!(from_vert.0, vert.to_str().unwrap());
+        assert_eq!(from_vert.1, frag.to_str().unwrap());
+        assert_eq!(from_vert.0, from_frag.0);
+        assert_eq!(from_vert.1, from_frag.1);
+        assert_eq!(from_vert.2, "foo");
+        assert_eq!(from_frag.2, "foo");
 
-    #[test]
-    fn shader_entry_names_wgsl_both_stages() {
-        let stages = detect_wgsl_stages("@vertex fn v() {}\n@fragment fn f() {}");
-        let names: Vec<String> = stages
-            .iter()
-            .map(|&s| format!("{}_{}_{}", "scene", "wgsl", stage_abbrev(s)))
-            .collect();
-        assert_eq!(names, vec!["scene_wgsl_vert", "scene_wgsl_frag"]);
+        // A missing counterpart is an error, not half a Shader.
+        std::fs::remove_file(&frag).unwrap();
+        assert!(glsl_pair(&vert, vert.to_str().unwrap(), "foo_vert").is_err());
     }
 
     // font stem naming

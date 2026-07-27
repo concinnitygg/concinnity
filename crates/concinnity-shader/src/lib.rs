@@ -1,7 +1,7 @@
 // src/lib.rs
 //
 // The build-time shader toolchain: the platform compilers that turn a
-// ShaderStage's authored source into the bytecode one backend loads -- Metal
+// Shader stage's authored source into the bytecode one backend loads -- Metal
 // (`xcrun metal` + `xcrun metallib`), DirectX (the Direct3D `Fxc` compiler),
 // Vulkan (`shaderc`). Exactly one compiles per build, resolved by build.rs into
 // a single backend_* cfg.
@@ -27,7 +27,7 @@ mod vulkan;
 // first-wins, so every build entry point can call it unconditionally.
 //
 // A binary that compiles worlds MUST call this before any build: without it the
-// cook has no compiler and every ShaderStage fails with an "no shader toolchain
+// cook has no compiler and every Shader stage fails with an "no shader toolchain
 // is registered" error.
 pub fn install() {
     #[cfg(backend_metal)]

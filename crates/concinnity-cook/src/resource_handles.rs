@@ -207,6 +207,12 @@ pub struct ResourceHandles {
     next: HashMap<ResourceKind, u32>,
     // The handle each resource asset received.
     map: HashMap<(ResourceKind, AssetId), u32>,
+    // Shader handles, a space of their own: a Shader is a component (its
+    // payload rides the def stream, not the resource stream), so it has no
+    // ResourceKind, but a Material's `shader` reference still bakes to a
+    // dense declaration-order index the renderer uses directly.
+    shader_map: HashMap<AssetId, u32>,
+    shader_next: u32,
 }
 
 impl ResourceHandles {
@@ -239,6 +245,41 @@ impl ResourceHandles {
             handles.assign(kind, id);
         }
         handles
+    }
+
+    // Give one Shader the next handle in the shader space and record it.
+    pub fn assign_shader(&mut self, id: AssetId) -> u32 {
+        let handle = self.shader_next;
+        self.shader_next += 1;
+        self.shader_map.insert(id, handle);
+        handle
+    }
+
+    // The handle a Shader received, if it was assigned one.
+    pub fn shader(&self, id: AssetId) -> Option<u32> {
+        self.shader_map.get(&id).copied()
+    }
+
+    // How many shader handles were assigned.
+    pub fn shader_count(&self) -> u32 {
+        self.shader_next
+    }
+}
+
+// Assign the shader handle space over the expanded world, in declaration
+// order. Walks the same expanded + injected `assets` list the blob defs are
+// emitted from, so a shader's handle equals the position the runtime
+// encounters it when draining the Shader column. Call alongside
+// `assign_mesh_source_handles`, before installing the map.
+pub fn assign_shader_handles(
+    handles: &mut ResourceHandles,
+    assets: &[crate::world::WorldJsonlAsset],
+) {
+    for asset in assets
+        .iter()
+        .filter(|a| a.asset_type.to_lowercase().replace('_', "") == "shader")
+    {
+        handles.assign_shader(crate::ecs::asset_id::intern(&asset.name));
     }
 }
 
@@ -310,6 +351,10 @@ pub fn ensure_resource_handle_resolvers() {
         crate::ecs::set_skinned_mesh_handle_resolver(|name| {
             let id = crate::ecs::asset_id::intern(name);
             RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::SkinnedMesh, id))
+        });
+        crate::ecs::set_shader_handle_resolver(|name| {
+            let id = crate::ecs::asset_id::intern(name);
+            RESOURCE_HANDLES.with(|h| h.borrow().shader(id))
         });
     });
 }
@@ -470,6 +515,52 @@ mod tests {
 
         // An unassigned id has no handle.
         assert_eq!(handles.get(ResourceKind::Texture, AssetId(99)), None);
+    }
+
+    // A Material's `shader` reference bakes to the Shader's declaration-order
+    // handle -- the same order the blob emits Shader defs and the runtime
+    // drains the Shader column, so the handle indexes the pipeline table
+    // directly. Shaders are components, so their space is assigned by
+    // `assign_shader_handles` over the asset list, not by kind classification.
+    #[test]
+    fn a_shader_reference_name_bakes_to_its_declaration_order_handle() {
+        use crate::ecs::ShaderHandle;
+        use crate::ecs::asset_id;
+        use crate::world::WorldJsonlAsset;
+
+        asset_id::reset_interner();
+        let world_asset = |name: &str, ty: &str| WorldJsonlAsset {
+            name: name.to_string(),
+            asset_type: ty.to_string(),
+            args: serde_json::json!({}),
+        };
+        let assets = vec![
+            world_asset("mat", "Material"),
+            world_asset("shader_a", "Shader"),
+            world_asset("tex", "Texture"),
+            world_asset("shader_b", "Shader"),
+        ];
+
+        reset_resource_handles();
+        let mut handles = ResourceHandles::default();
+        assign_shader_handles(&mut handles, &assets);
+        assert_eq!(handles.shader_count(), 2);
+        assert_eq!(handles.shader(asset_id::intern("shader_a")), Some(0));
+        assert_eq!(handles.shader(asset_id::intern("shader_b")), Some(1));
+        install_resource_handles(handles);
+
+        let bytes = ResourceAssetType::Material
+            .compile_payload(&serde_json::json!({"shader": "shader_b"}))
+            .unwrap();
+        let mat: crate::assets::Material = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(mat.shader, Some(ShaderHandle(1)));
+
+        // An unreferenced shader field stays None.
+        let bytes = ResourceAssetType::Material
+            .compile_payload(&serde_json::json!({}))
+            .unwrap();
+        let mat: crate::assets::Material = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(mat.shader, None);
     }
 
     #[test]

@@ -203,6 +203,25 @@ pub(crate) fn resolve_skinned_mesh_handle(name: &str) -> Option<u32> {
     SKINNED_MESH_HANDLE_RESOLVER.resolve(name)
 }
 
+static SHADER_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
+
+/// Install the name -> shader-handle resolver. Called by concinnity-cook,
+/// backed by the current build's declaration-ordered Shader handle map.
+/// Idempotent; the last writer wins. Mirrors [`set_texture_handle_resolver`].
+/// A Shader stays an ECS component, but a Material's authored `shader`
+/// reference resolves to its dense handle so the runtime never scans by name.
+pub fn set_shader_handle_resolver(f: HandleResolveFn) {
+    SHADER_HANDLE_RESOLVER.set(f);
+}
+
+/// Resolve a shader reference name to its dense `ShaderHandle` value via the
+/// installed resolver. `None` means either no resolver is installed or the name
+/// is not a declared Shader; the caller decides whether to fall back (a
+/// validation context) or to fail (a real build).
+pub(crate) fn resolve_shader_handle(name: &str) -> Option<u32> {
+    SHADER_HANDLE_RESOLVER.resolve(name)
+}
+
 #[cfg(test)]
 mod tests {
     // These tests own the process-global resolver: each installs the same

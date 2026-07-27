@@ -10,7 +10,7 @@ use ash::{Device, vk};
 use crate::gfx::render_types::PostProcessParams;
 
 use super::super::context::*;
-use super::super::pipeline::{COMPOSITE_VERT_GLSL, compile_glsl, spv_module};
+use super::super::pipeline::spv_module;
 use super::super::resources::alloc_descriptor_sets;
 use super::super::texture::*;
 
@@ -20,10 +20,6 @@ use super::super::texture::*;
 pub(in crate::vulkan) const MAX_BLOOM_MIPS: u32 = 6;
 
 //  Bloom shaders
-
-const BLOOM_PREFILTER_GLSL: &str = include_str!("../shaders/bloom_prefilter.frag");
-const BLOOM_DOWNSAMPLE_GLSL: &str = include_str!("../shaders/bloom_downsample.frag");
-const BLOOM_UPSAMPLE_GLSL: &str = include_str!("../shaders/bloom_upsample.frag");
 
 // SPIR-V for the bloom chain: the shared fullscreen-triangle vertex shader
 // plus the prefilter / downsample / upsample fragment shaders.
@@ -35,28 +31,13 @@ pub(in crate::vulkan) struct BloomShaders {
 }
 
 pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(BloomShaders {
-        vert: compile_glsl(
-            &shader_source(hot_reload, "composite.vert", COMPOSITE_VERT_GLSL),
-            shaderc::ShaderKind::Vertex,
-            "bloom_vert.glsl",
-        )?,
-        prefilter: compile_glsl(
-            &shader_source(hot_reload, "bloom_prefilter.frag", BLOOM_PREFILTER_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "bloom_prefilter.glsl",
-        )?,
-        downsample: compile_glsl(
-            &shader_source(hot_reload, "bloom_downsample.frag", BLOOM_DOWNSAMPLE_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "bloom_downsample.glsl",
-        )?,
-        upsample: compile_glsl(
-            &shader_source(hot_reload, "bloom_upsample.frag", BLOOM_UPSAMPLE_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "bloom_upsample.glsl",
-        )?,
+        vert: builtins::COMPOSITE_VERT.compile(&ctx)?,
+        prefilter: builtins::BLOOM_PREFILTER.compile(&ctx)?,
+        downsample: builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
+        upsample: builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
     })
 }
 

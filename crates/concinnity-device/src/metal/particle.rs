@@ -21,7 +21,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
     MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice as _, MTLLibrary as _,
@@ -35,7 +34,7 @@ use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
@@ -338,11 +337,7 @@ pub(super) fn build_particle_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<ParticlePipelines, String> {
-    let msl = shader_source(hot_reload, "particle.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("particle shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "particle.metal")?;
 
     // Compute kernel.
     let sim_fn = library

@@ -12,14 +12,13 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePassDescriptor,
     MTLComputePipelineState, MTLDevice as _, MTLLibrary as _, MTLSize, MTLTexture as _,
 };
 
 use super::context::*;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
@@ -220,11 +219,7 @@ pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<AutoExposurePipelines, String> {
-    let msl = shader_source(hot_reload, "auto_exposure.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("auto-exposure shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "auto_exposure.metal")?;
     let build_fn = library
         .newFunctionWithName(&ns_str("histogram_build"))
         .ok_or("histogram_build not found in auto_exposure library")?;

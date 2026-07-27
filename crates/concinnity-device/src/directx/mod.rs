@@ -4,6 +4,7 @@
 mod auto_exposure;
 mod backend;
 mod barrier_translate;
+pub(crate) mod builtins;
 mod context;
 mod cull;
 mod decal;
@@ -34,6 +35,7 @@ mod resources;
 mod screenshot;
 mod texture;
 mod transient_pool;
+mod world_shaders;
 
 pub use context::DxContext;
 pub(crate) use gpu_profile::probe_gpu_profile;

@@ -28,11 +28,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources
-const SSGI_FULLSCREEN_VERT_GLSL: &str = include_str!("../shaders/ssgi_fullscreen.vert");
-const SSGI_GATHER_FRAG_GLSL: &str = include_str!("../shaders/ssgi_gather.frag");
-const SSGI_COMPOSITE_FRAG_GLSL: &str = include_str!("../shaders/ssgi_composite.frag");
-
 // SPIR-V blobs for the SSGI pipelines. Produced by [`compile_ssgi_shaders`];
 // consumed by `SsgiResources::new` at init and by `rebuild_ssgi_pipelines`
 // during shader hot-reload. Mirrors the matching SSR struct.
@@ -43,29 +38,14 @@ pub(in crate::vulkan) struct SsgiShaders {
 }
 
 // Compile every SSGI GLSL source. `hot_reload` routes each source resolve
-// through [`crate::vulkan::pipeline::shader_source`].
+// through the builtins' disk-first path.
 pub(in crate::vulkan) fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(SsgiShaders {
-        vs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "ssgi_fullscreen.vert",
-                SSGI_FULLSCREEN_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "ssgi_fullscreen.vert",
-        )?,
-        gather_fs: compile_glsl(
-            &shader_source(hot_reload, "ssgi_gather.frag", SSGI_GATHER_FRAG_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "ssgi_gather.frag",
-        )?,
-        composite_fs: compile_glsl(
-            &shader_source(hot_reload, "ssgi_composite.frag", SSGI_COMPOSITE_FRAG_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "ssgi_composite.frag",
-        )?,
+        vs: builtins::SSGI_FULLSCREEN_VERT.compile(&ctx)?,
+        gather_fs: builtins::SSGI_GATHER_FRAG.compile(&ctx)?,
+        composite_fs: builtins::SSGI_COMPOSITE_FRAG.compile(&ctx)?,
     })
 }
 

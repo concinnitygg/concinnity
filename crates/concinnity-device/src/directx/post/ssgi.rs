@@ -22,15 +22,12 @@ use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{compile_hlsl, serialize_desc_and_create, shader_source};
+use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };
-
-// HLSL source
-
-pub const SSGI_HLSL: &str = include_str!("../shaders/ssgi.hlsl");
 
 // Size of the SSGI gather + composite fragment-shader uniform block. 32 bytes;
 // see `gfx::render_types::SsgiParams`.
@@ -46,11 +43,11 @@ struct SsgiShaders {
 
 // Compile the SSGI fullscreen vertex shader and both fragment entry points.
 fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    let src = shader_source(hot_reload, "ssgi.hlsl", SSGI_HLSL);
+    let ctx = Ctx::plain(hot_reload);
     Ok(SsgiShaders {
-        vs: compile_hlsl(&src, "ssgi_fullscreen_vert", "vs_5_1")?,
-        gather_ps: compile_hlsl(&src, "ssgi_gather_frag", "ps_5_1")?,
-        composite_ps: compile_hlsl(&src, "ssgi_composite_frag", "ps_5_1")?,
+        vs: builtins::SSGI_FULLSCREEN_VERT.compile(&ctx)?,
+        gather_ps: builtins::SSGI_GATHER_FRAG.compile(&ctx)?,
+        composite_ps: builtins::SSGI_COMPOSITE_FRAG.compile(&ctx)?,
     })
 }
 

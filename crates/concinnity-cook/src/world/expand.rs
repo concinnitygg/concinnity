@@ -14,7 +14,6 @@ use super::panel::expand_panels;
 use super::prefab::expand_prefabs;
 use super::room::expand_room_textures;
 use super::scene_import::expand_scene_imports;
-use super::shader::normalize_shader_types;
 use super::slider::expand_sliders;
 use super::story::expand_stories;
 
@@ -124,7 +123,6 @@ impl ExpandReport {
 // failure occurs (e.g. prefab cycle or missing prefab reference).
 pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
     let mut report = ExpandReport::default();
-    normalize_shader_types(assets);
     // Imports expand first so the assets they generate (materials, meshes,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
@@ -139,7 +137,7 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     expand_prefabs(assets)?;
     expand_room_textures(assets);
     // First companion round: materialize the GraphicsConfig render marker (and
-    // its Window / ShaderStage stack) implied by everything authored or
+    // its Window / Shader stack) implied by everything authored or
     // expanded above, so the defaults pass can key off "this world renders".
     inject_companions(assets, &mut report);
     // The Application asset (at most one) names the world for distribution and,

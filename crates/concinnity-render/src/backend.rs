@@ -20,7 +20,7 @@
 // no-op impls so DX/VK don't need to override them.
 
 use crate::auto_exposure::AutoExposureSettings;
-use crate::backend_init::{BackendInit, SwapchainConfig};
+use crate::backend_init::{BackendInit, ShaderBytes, SwapchainConfig};
 use crate::input::RenderInput;
 use crate::keymap::KeyMap;
 use crate::mesh_payload::{SkinnedVertex, Vertex};
@@ -918,7 +918,7 @@ pub trait RenderBackend: SceneControl + Send {
 
     // Rebuild the live main / instanced / shadow render pipelines from
     // freshly compiled world-loaded shader stage bytes. Driven by asset
-    // hot-reload (`cn debug` only) when one of the captured `ShaderStage`
+    // hot-reload (`cn debug` only) when one of the captured `Shader`
     // source files is saved or a debug-WS `reload-assets` command fires.
     // Each `Some(bytes)` replaces the matching live pipeline (and any
     // dependent state: bindless-texture argument encoder, cull pipeline,
@@ -944,6 +944,29 @@ pub trait RenderBackend: SceneControl + Send {
     ) -> Result<(), String> {
         let _ = (vert_bytes, frag_bytes, shadow_bytes, vert_instanced_bytes);
         Err("update_world_shader_pipelines: not implemented on this backend".to_string())
+    }
+
+    // Build the render pipeline for one shader bucket from its compiled stage
+    // bytes, making draws that carry that bucket renderable. Called by the
+    // streaming pump when a scene that exclusively owns the bucket's `Shader`
+    // pins: init skipped the build, so this is where the cost lands (behind
+    // the loading screen, since the bucket counts as scene-resident content).
+    // Bucket 0 is the world default program and is never installed this way.
+    //
+    // Default no-op-with-Ok: a backend that renders every draw with the world
+    // default program has no per-bucket pipeline to build, and the bucket is
+    // resident as far as scene loading is concerned.
+    fn install_world_shader(&mut self, bucket: u32, shader: ShaderBytes<'_>) -> Result<(), String> {
+        let _ = (bucket, shader);
+        Ok(())
+    }
+
+    // Release one shader bucket's render pipeline, undoing
+    // [`Self::install_world_shader`]. Called when the owning scene unpins;
+    // draws carrying the bucket stop rendering until it is installed again.
+    // Default no-op, for the same reason as above.
+    fn evict_world_shader(&mut self, bucket: u32) {
+        let _ = bucket;
     }
 
     // The swapchain-level configuration this live backend can hot-swap a world
@@ -1310,13 +1333,14 @@ mod tests {
                 n_skinned: 0,
                 n_chunk_max: 0,
             },
-            shaders: ShaderBytes {
+            shaders: vec![ShaderBytes {
                 vert: &[],
                 frag: &[],
                 main_is_engine_default: false,
                 shadow: &[],
                 vert_instanced: &[],
-            },
+                deferred: false,
+            }],
             media: MediaPayloads {
                 textures: &[],
                 text_atlases: Vec::new(),

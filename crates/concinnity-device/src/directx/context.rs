@@ -242,6 +242,16 @@ pub(super) struct CullState {
     // keep the legacy pipeline.
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
+    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
+    // (bucket 0 is `main_bindless_pso`). Each renders its bucket's slice of the
+    // GPU-culled command buffer through the bindless root signature. `None`
+    // marks a bucket whose Shader is not resident yet: its scene has not pinned,
+    // so the pass skips those draws (see `world_shaders.rs`).
+    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
+    // Commands reserved per shader-bucket region in the indirect buffers, fixed
+    // at init to the record capacity the buffers were sized for. Bucket `b`'s
+    // region starts at command `b * bucket_stride`.
+    pub bucket_stride: usize,
     // Per-frame `StructuredBuffer<GpuObjectData>` upload buffers, one per
     // frame-in-flight, persistently mapped. Rebuilt each frame.
     pub object_buffer_resources: Vec<ID3D12Resource>,
@@ -1106,6 +1116,11 @@ pub struct DxContext {
 
     // D3D12 validation message sink (Some only when validation=true).
     pub(super) info_queue: Option<ID3D12InfoQueue>,
+
+    // The engine's compiled bindless main-pass stages, retained so a shader
+    // bucket warmed mid-session can build its pipeline without recompiling the
+    // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
+    pub(super) bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
 
     // IDXGIAdapter3 captured at init for `QueryVideoMemoryInfo`, the VRAM
     // chip's source. `None` when the adapter does not expose the v3

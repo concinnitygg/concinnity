@@ -53,6 +53,21 @@ pub fn metal_device_available() -> bool {
     MTLCreateSystemDefaultDevice().is_some()
 }
 
+// Whether a user `.metal` source defines `entry`, by compiling it and reading
+// the library's function names. Lets the build reject a shader that is missing
+// an entry point its role requires, instead of failing when the pipeline is
+// built (which, for a scene-owned shader, is mid-session).
+pub fn metal_source_defines(source: &str, entry: &str) -> Result<bool, ShaderLayoutIssue> {
+    objc2::rc::autoreleasepool(|_| {
+        let device = MTLCreateSystemDefaultDevice()
+            .ok_or_else(|| ShaderLayoutIssue::Infra("no Metal device".into()))?;
+        let lib = compile_library(&device, source).map_err(|e| {
+            ShaderLayoutIssue::Infra(format!("source did not compile for reflection: {e}"))
+        })?;
+        Ok(function_names(&lib).iter().any(|n| n == entry))
+    })
+}
+
 // Reflect a compiled user `.metal` source and validate every engine-provided
 // buffer struct it binds. `kind` is the compile kind (`"vertex"` | `"fragment"`);
 // a `"vertex"` source may carry a main vertex shader, a shadow caster, or both,

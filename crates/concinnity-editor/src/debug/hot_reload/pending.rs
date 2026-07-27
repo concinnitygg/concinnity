@@ -1,6 +1,6 @@
 // src/debug/hot_reload/pending.rs
 //
-// Process-wide "world.jsonl changed" / "world-loaded ShaderStage changed"
+// Process-wide "world.jsonl changed" / "world-loaded Shader stage changed"
 // signals (`cn debug` only). Set by the asset hot-reload watcher and the WS
 // `reload-assets` command; consumed by the per-frame reload poll in
 // `super::state::run_frame`. They live in the binary-only debug tree because
@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // non-transform arg changes are detected and logged but not applied.
 static PENDING_WORLD: AtomicBool = AtomicBool::new(false);
 
-// "world-loaded ShaderStage source changed" signal. Consumed by the
-// shader-stage reload poll to re-compile each captured `ShaderStage` source
+// "world-loaded Shader stage source changed" signal. Consumed by the
+// shader-stage reload poll to re-compile each captured Shader stage source
 // and rebuild the affected backend pipelines (main / instanced / shadow) into
 // temporaries before swapping them in. Kept separate from `PENDING_WORLD` so a
 // shader save does not also kick the Prop-diff and procedural-mesh passes.
@@ -45,14 +45,14 @@ pub(crate) fn take_pending_world() -> bool {
 // and fog passes.
 static PENDING_STORIES: AtomicBool = AtomicBool::new(false);
 
-// Raise the "world-loaded ShaderStage source changed" flag. Called by the
+// Raise the "world-loaded Shader stage source changed" flag. Called by the
 // asset hot-reload watcher when a captured `.metal` / `.hlsl` / `.glsl` source
 // is saved and by the debug WS `reload-assets` handler.
 pub(crate) fn set_pending_shader_stages() {
     PENDING_SHADER_STAGES.store(true, Ordering::SeqCst);
 }
 
-// Swap the "world-loaded ShaderStage source changed" flag to `false`,
+// Swap the "world-loaded Shader stage source changed" flag to `false`,
 // returning whether it was set. The reload poll calls this at frame start; a
 // `true` result kicks the per-stage recompile + pipeline rebuild pass.
 pub(crate) fn take_pending_shader_stages() -> bool {

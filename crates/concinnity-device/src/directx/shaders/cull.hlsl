@@ -60,6 +60,12 @@ cbuffer CullParams : register(b0)
     float2 hiz_size;
     uint hiz_mip_count;
     uint hiz_enabled;
+    // Shader-bucket command regions: region `b` starts at command
+    // `b * bucket_stride`. Every record's slot is written in all regions so a
+    // recycled draw slot can never leave a stale command behind in the bucket
+    // it used to belong to. `bucket_count = 1` degenerates to one region.
+    uint bucket_count;
+    uint bucket_stride;
 }
 
 StructuredBuffer<GpuObjectData> objects   : register(t0);
@@ -75,6 +81,11 @@ RWStructuredBuffer<uint>            cull_status : register(u1);
 
 #define DRAW_ENABLED  1u
 #define DRAW_CULLABLE 2u
+
+// The record's shader bucket rides the upper flag bits; values and layout are
+// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_SHADER_BUCKETS}.
+#define DRAW_BUCKET_SHIFT 8u
+#define DRAW_BUCKET_MASK  0xFFu
 
 // `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome phase 2
 // re-tests; the others are settled by phase 1.
@@ -198,6 +209,30 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     return aabb_min_depth > occluder_depth;
 }
 
+// Write one record's command into its own shader bucket's region and a no-op
+// into every other region. `cmd` already carries instance_count 0 when the
+// record was culled, so a culled record resets every region. The reset sweep
+// matters because a freed draw slot can be reused by a record of a DIFFERENT
+// bucket, which would otherwise leave the old bucket's command stale and still
+// executing. Mirrors the bucket loop in metal/shaders/cull.metal.
+void write_bucket_commands(uint i, IndirectCommand cmd, uint flags)
+{
+    uint bucket = min((flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK, bucket_count - 1u);
+    IndirectCommand noop = cmd;
+    noop.instance_count = 0u;
+    for (uint b = 0u; b < bucket_count; ++b)
+    {
+        if (b == bucket)
+        {
+            commands[b * bucket_stride + i] = cmd;
+        }
+        else
+        {
+            commands[b * bucket_stride + i] = noop;
+        }
+    }
+}
+
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
 {
@@ -246,7 +281,7 @@ void main(uint3 tid : SV_DispatchThreadID)
             status = STATUS_HIZ_CANDIDATE;
         }
     }
-    commands[i] = cmd;
+    write_bucket_commands(i, cmd, a.flags);
     cull_status[i] = status;
 }
 
@@ -333,5 +368,5 @@ void main_phase2(uint3 tid : SV_DispatchThreadID)
             cmd.instance_count = 0u;
         }
     }
-    commands[i] = cmd;
+    write_bucket_commands(i, cmd, a.flags);
 }

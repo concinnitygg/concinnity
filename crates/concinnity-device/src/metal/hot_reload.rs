@@ -213,7 +213,7 @@ impl MtlContext {
     // `ssr.metal` sources as their static + instanced siblings, just with a
     // different vertex entry point. The skinned main + skinned shadow
     // pipelines are not built here: their entry points live in the world's
-    // vertex / fragment / shadow `ShaderStage` library bytes, so they
+    // vertex / fragment / shadow `Shader` library bytes, so they
     // reload through [`Self::update_world_shader_pipelines`] alongside the
     // static main pipeline.
     pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
@@ -395,10 +395,10 @@ impl MtlContext {
             // re-binds to the new arg encoders the new cull kernels produced.
             // The status buffer + phase-2 ICB are rebuilt by the same
             // `ensure_icb_capacity` pass that rebuilds the phase-1 ICB.
-            self.cull.icb = None;
+            self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icb_2 = None;
+            self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
         }
@@ -479,7 +479,7 @@ impl MtlContext {
 
     // Rebuild the world-loaded shader pipelines (main, optional instanced,
     // optional shadow) from freshly compiled metallib bytes. Driven by
-    // asset hot-reload (`cn debug` only) when a captured `ShaderStage`
+    // asset hot-reload (`cn debug` only) when a captured `Shader`
     // source file is saved or `reload-assets` is fired. Mirrors the
     // rebuild-then-swap safety pattern of [`Self::reload_shaders`]: every
     // replacement is constructed into a temporary first, and the atomic
@@ -607,10 +607,10 @@ impl MtlContext {
             // Force a fresh ICB on the next frame so its argument-buffer encoding
             // re-binds to the new encoder. Matches the `cull` swap in
             // `reload_shaders`; the phase-2 ICB + status buffer rebuild alongside.
-            self.cull.icb = None;
+            self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icb_2 = None;
+            self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
         }

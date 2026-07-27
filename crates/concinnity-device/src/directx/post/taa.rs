@@ -14,25 +14,16 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::pipeline::{
-    COMPOSITE_VERT_HLSL, compile_hlsl, create_composite_pso, serialize_desc_and_create,
-    shader_source,
-};
+use crate::directx::pipeline::{create_composite_pso, serialize_desc_and_create};
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::texture::{HDR_FORMAT, create_rt_target, write_format_rtv, write_hdr_srv};
-
-// HLSL sources
-
-// TAA resolve fragment: reproject the accumulated history through the motion
-// buffer, clip it to the current 3x3 neighbourhood in YCoCg, and blend.
-// Mirrors TAA_FRAG_GLSL in vulkan/pipeline.rs.
-pub const TAA_FRAG_HLSL: &str = include_str!("../shaders/taa_frag.hlsl");
 
 // Shader compilation
 
 // Compiled TAA resolve shader bytecode. The resolve pass reuses the
-// fullscreen-triangle `COMPOSITE_VERT_HLSL`; the motion it reprojects through
+// fullscreen-triangle composite VS; the motion it reprojects through
 // comes from the unified G-buffer pre-pass.
 struct TaaShaders {
     resolve_vs: Vec<u8>,
@@ -41,17 +32,10 @@ struct TaaShaders {
 
 // Compile the TAA resolve shaders.
 fn compile_taa_shaders(hot_reload: bool) -> Result<TaaShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     Ok(TaaShaders {
-        resolve_vs: compile_hlsl(
-            &shader_source(hot_reload, "composite_vert.hlsl", COMPOSITE_VERT_HLSL),
-            "main",
-            "vs_5_1",
-        )?,
-        resolve_ps: compile_hlsl(
-            &shader_source(hot_reload, "taa_frag.hlsl", TAA_FRAG_HLSL),
-            "main",
-            "ps_5_1",
-        )?,
+        resolve_vs: builtins::COMPOSITE_VERT.compile(&ctx)?,
+        resolve_ps: builtins::TAA_FRAG.compile(&ctx)?,
     })
 }
 

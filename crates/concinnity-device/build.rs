@@ -11,10 +11,28 @@
 //    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
 //    to whichever package owns the final artifact): SdkOptions { bundle_dlls: false }.
 
-use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::{
+    Backend, SdkOptions, emit_backend_cfg, emit_check_cfgs, precompile_metal_shaders,
+    setup_graphics_sdks,
+};
+
+// The raymarch SDF fragments are not standalone shaders: they are text
+// templates assembled with the user's SdfVolume source at runtime (see
+// src/metal/raymarch.rs), so they can only ever compile from source.
+const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[
+    "raymarch_helpers.metal",
+    "raymarch_shadow.metal",
+    "raymarch_template.metal",
+    "raymarch_volumetric_template.metal",
+];
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
     setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    if backend == Backend::Metal {
+        let shaders_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/metal/shaders");
+        precompile_metal_shaders(&shaders_dir, SOURCE_ONLY_METAL_SHADERS);
+    }
 }

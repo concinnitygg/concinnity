@@ -19,11 +19,17 @@
 
 use concinnity_core::build::shader::builtin_shader_source;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ShaderCompileArgs {
     pub source_path: String,
     pub asset_name: String,
     pub kind: String,
+    // An entry point this stage must define, when its role in the world forces
+    // one. A world declaring more than one Shader routes every draw through the
+    // GPU-driven bindless main pass, so each fragment stage has to expose
+    // `fragment_main_bindless`; checking it here fails `cn build` instead of the
+    // pipeline build, which for a scene-owned shader happens mid-session.
+    pub required_entry: Option<String>,
 }
 
 // The platform shader compilers for the backend this build targets, installed
@@ -113,6 +119,20 @@ pub trait ShaderBuildValidator: Send + Sync {
     // compiles as `"vertex"` and is told apart by its entry-point name),
     // `asset_name` the declaring asset. Return `Err(msg)` to fail the build.
     fn validate_metal(&self, source: &str, kind: &str, asset_name: &str) -> Result<(), String>;
+
+    // Confirm the source defines `entry`. Called only when the world's shader
+    // set forces an entry point (see `ShaderCompileArgs::required_entry`).
+    // Default `Ok`: a backend without reflection cannot check, and a missing
+    // entry point still fails when the pipeline is built.
+    fn validate_metal_entry(
+        &self,
+        source: &str,
+        entry: &str,
+        asset_name: &str,
+    ) -> Result<(), String> {
+        let _ = (source, entry, asset_name);
+        Ok(())
+    }
 }
 
 static SHADER_BUILD_VALIDATOR: std::sync::OnceLock<Box<dyn ShaderBuildValidator>> =
@@ -137,9 +157,16 @@ fn validate_compiled_metal(source: &str, args: &ShaderCompileArgs) -> Result<(),
     let Some(validator) = SHADER_BUILD_VALIDATOR.get() else {
         return Ok(());
     };
+    let invalid = |msg| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
     validator
         .validate_metal(source, &args.kind, &args.asset_name)
-        .map_err(|msg| std::io::Error::new(std::io::ErrorKind::InvalidData, msg))
+        .map_err(invalid)?;
+    if let Some(entry) = &args.required_entry {
+        validator
+            .validate_metal_entry(source, entry, &args.asset_name)
+            .map_err(invalid)?;
+    }
+    Ok(())
 }
 
 pub fn compile_shader(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
@@ -195,7 +222,7 @@ fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     }
 }
 
-// A toolchain for tests whose worlds pull in a ShaderStage but assert on the
+// A toolchain for tests whose worlds pull in a Shader but assert on the
 // surrounding build rather than on bytecode. Registering it keeps the cook's own
 // tests off the platform compilers, so they behave identically on every host.
 #[cfg(test)]
@@ -233,6 +260,7 @@ fn args_for(asset_name: &str, source_path: &str) -> ShaderCompileArgs {
         source_path: source_path.to_string(),
         asset_name: asset_name.to_string(),
         kind: "fragment".to_string(),
+        ..Default::default()
     }
 }
 

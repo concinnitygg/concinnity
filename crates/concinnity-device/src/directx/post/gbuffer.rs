@@ -22,34 +22,16 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::math::IDENTITY4;
 use crate::directx::pipeline::{
-    compile_hlsl, main_input_layout, serialize_and_create_root_sig, shader_source,
-    skinned_input_layout,
+    main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
 };
 use crate::directx::texture::{
     create_buffer, create_main_depth_texture, create_rt_target, create_rt_target_with_clear,
     transition_barrier, write_format_rtv, write_format_srv,
 };
-
-// HLSL sources
-
-pub const GBUFFER_PREPASS_VERT_HLSL: &str = include_str!("../shaders/gbuffer_prepass_vert.hlsl");
-pub const GBUFFER_PREPASS_VERT_INSTANCED_HLSL: &str =
-    include_str!("../shaders/gbuffer_prepass_vert_instanced.hlsl");
-pub const GBUFFER_PREPASS_VERT_SKINNED_HLSL: &str =
-    include_str!("../shaders/gbuffer_prepass_vert_skinned.hlsl");
-pub const GBUFFER_PREPASS_FRAG_HLSL: &str = include_str!("../shaders/gbuffer_prepass_frag.hlsl");
-
-// GPU-driven (bindless) G-buffer pre-pass shaders. The VS reads model +
-// roughness from the per-frame `GpuObjectData` buffer by the per-command b0
-// object-id root constant and the previous-frame model from a parallel buffer;
-// the FS mirrors gbuffer_prepass_frag but sources roughness from a flat VS
-// varying. Drive the same MRT the legacy pre-pass writes, but reuse the main
-// pass's GPU-culled indirect command buffer (one `ExecuteIndirect` per region).
-pub const GBUFFER_BINDLESS_VERT_HLSL: &str = include_str!("../shaders/gbuffer_bindless_vert.hlsl");
-pub const GBUFFER_BINDLESS_FRAG_HLSL: &str = include_str!("../shaders/gbuffer_bindless_frag.hlsl");
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
@@ -94,51 +76,20 @@ fn compile_gbuffer_shaders(
     need_skinned: bool,
     hot_reload: bool,
 ) -> Result<GbufferShaders, String> {
+    let ctx = Ctx::plain(hot_reload);
     Ok(GbufferShaders {
-        vs_static: compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_vert.hlsl",
-                GBUFFER_PREPASS_VERT_HLSL,
-            ),
-            "main",
-            "vs_5_1",
-        )?,
+        vs_static: builtins::GBUFFER_PREPASS_VERT.compile(&ctx)?,
         vs_instanced: if need_instanced {
-            compile_hlsl(
-                &shader_source(
-                    hot_reload,
-                    "gbuffer_prepass_vert_instanced.hlsl",
-                    GBUFFER_PREPASS_VERT_INSTANCED_HLSL,
-                ),
-                "main",
-                "vs_5_1",
-            )?
+            builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(&ctx)?
         } else {
             Vec::new()
         },
         vs_skinned: if need_skinned {
-            compile_hlsl(
-                &shader_source(
-                    hot_reload,
-                    "gbuffer_prepass_vert_skinned.hlsl",
-                    GBUFFER_PREPASS_VERT_SKINNED_HLSL,
-                ),
-                "main",
-                "vs_5_1",
-            )?
+            builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?
         } else {
             Vec::new()
         },
-        ps: compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_frag.hlsl",
-                GBUFFER_PREPASS_FRAG_HLSL,
-            ),
-            "main",
-            "ps_5_1",
-        )?,
+        ps: builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?,
     })
 }
 
@@ -495,24 +446,9 @@ pub(in crate::directx) fn build_gbuffer_bindless(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> Result<GbufferBindlessPipeline, String> {
-    let vs = compile_hlsl(
-        &shader_source(
-            hot_reload,
-            "gbuffer_bindless_vert.hlsl",
-            GBUFFER_BINDLESS_VERT_HLSL,
-        ),
-        "main",
-        "vs_5_1",
-    )?;
-    let ps = compile_hlsl(
-        &shader_source(
-            hot_reload,
-            "gbuffer_bindless_frag.hlsl",
-            GBUFFER_BINDLESS_FRAG_HLSL,
-        ),
-        "main",
-        "ps_5_1",
-    )?;
+    let ctx = Ctx::plain(hot_reload);
+    let vs = builtins::GBUFFER_BINDLESS_VERT.compile(&ctx)?;
+    let ps = builtins::GBUFFER_BINDLESS_FRAG.compile(&ctx)?;
     let root_sig = dump_on_err(info_queue, create_gbuffer_bindless_root_signature(device))?;
     let layout = gbuffer_bindless_input_layout();
     let pso = dump_on_err(
@@ -760,24 +696,9 @@ impl GbufferResources {
         hot_reload: bool,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> Result<(), String> {
-        let vs = compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_vert_skinned.hlsl",
-                GBUFFER_PREPASS_VERT_SKINNED_HLSL,
-            ),
-            "main",
-            "vs_5_1",
-        )?;
-        let ps = compile_hlsl(
-            &shader_source(
-                hot_reload,
-                "gbuffer_prepass_frag.hlsl",
-                GBUFFER_PREPASS_FRAG_HLSL,
-            ),
-            "main",
-            "ps_5_1",
-        )?;
+        let ctx = Ctx::plain(hot_reload);
+        let vs = builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?;
+        let ps = builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?;
         let root_sig = match self.skinned_root_sig.as_ref() {
             Some(rs) => rs.clone(),
             None => dump_on_err(info_queue, create_gbuffer_skinned_root_signature(device))?,
@@ -1335,6 +1256,16 @@ impl DxContext {
             );
         }
         self.inc_draw_calls(1);
+        // The material-referenced shader buckets write their own regions of the
+        // command buffer. The pre-pass shades nothing, so every bucket runs under
+        // this single pipeline; a bucket whose Shader is not resident is skipped,
+        // matching what the colour pass will draw.
+        self.inc_draw_calls(self.execute_bucket_regions_shared_pso(
+            cmd,
+            cmd_sig,
+            indirect,
+            prefix as u32,
+        ));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
         // deformed VB (slot 1) + the skinned u16 IB, then one `ExecuteIndirect`

@@ -38,6 +38,11 @@ struct GpuDrawArgs {
 
 constant uint DRAW_ENABLED  = 1u;
 constant uint DRAW_CULLABLE = 2u;
+// The record's shader bucket rides the upper flag bits; values and layout are
+// locked to gfx::render_types::{DRAW_ARGS_BUCKET_SHIFT, MAX_SHADER_BUCKETS}.
+constant uint DRAW_BUCKET_SHIFT = 8u;
+constant uint DRAW_BUCKET_MASK  = 0xffu;
+constant uint MAX_SHADER_BUCKETS = 8u;
 
 // Per-object outcome of phase-1 cull, written into the `cull_status` buffer
 // for two-pass occlusion. `cull_encode_phase2` reads it to decide which
@@ -79,11 +84,19 @@ struct CullUniforms {
     // c * object_count). The main cull (cull_encode / cull_encode_phase2)
     // leaves it 0 and writes at `tid`, so the shared layout is untouched there.
     uint          cascade_base;
+    // How many shader-bucket ICBs the container carries for this dispatch.
+    // The main cull writes every record's slot in all of them (draw in the
+    // record's bucket, reset elsewhere); dispatches with one command stream
+    // (shadow, mirror) pass 1 and only icbs[0] is touched.
+    uint          bucket_count;
+    uint          _pad0;
 };
 
-// The kernel reaches the indirect command buffer through an argument buffer.
+// The kernel reaches the per-bucket indirect command buffers through an
+// argument buffer. Only the first `bucket_count` entries are encoded; the
+// kernel never constructs a command against an entry past that.
 struct ICBContainer {
-    command_buffer icb [[id(0)]];
+    array<command_buffer, MAX_SHADER_BUCKETS> icbs [[id(0)]];
 };
 
 // AABB entirely behind any plane -> outside the frustum. Negation of
@@ -217,59 +230,64 @@ kernel void cull_encode(
     if (tid >= cull.object_count) {
         return;
     }
-    render_command cmd(icb_c->icb, tid);
     GpuDrawArgs a = draw_args[tid];
 
+    uint status = STATUS_DRAWN;
     if ((a.flags & DRAW_ENABLED) == 0u) {
-        cmd.reset();
-        cull_status[tid] = STATUS_CULLED;
-        return;
-    }
-    if (a.flags & DRAW_CULLABLE) {
+        status = STATUS_CULLED;
+    } else if (a.flags & DRAW_CULLABLE) {
         GpuObjectData obj = objects[tid];
         if (frustum_culled(obj.bb_min, obj.bb_max, cull.planes)) {
-            cmd.reset();
-            cull_status[tid] = STATUS_CULLED;
-            return;
-        }
-        if (obj.cull_distance > 0.0) {
-            float dsq = aabb_distance_sq(cull.cam_pos, obj.bb_min, obj.bb_max);
-            if (dsq > obj.cull_distance * obj.cull_distance) {
-                cmd.reset();
-                cull_status[tid] = STATUS_CULLED;
-                return;
-            }
-        }
+            status = STATUS_CULLED;
+        } else if (obj.cull_distance > 0.0 &&
+                   aabb_distance_sq(cull.cam_pos, obj.bb_min, obj.bb_max) >
+                       obj.cull_distance * obj.cull_distance) {
+            status = STATUS_CULLED;
         // Hi-Z occlusion: cull when the AABB is fully behind the previous
         // frame's depth pyramid. Skipped on the first frame / after a resize
         // (`hiz_enabled = 0`), where no valid pyramid exists yet. A Hi-Z cull
         // here is the only outcome two-pass phase 2 reconsiders.
-        if (cull.hiz_enabled != 0u && hiz_occluded(obj.bb_min, obj.bb_max, cull, hiz_tex)) {
-            cmd.reset();
-            cull_status[tid] = STATUS_HIZ_CANDIDATE;
-            return;
+        } else if (cull.hiz_enabled != 0u &&
+                   hiz_occluded(obj.bb_min, obj.bb_max, cull, hiz_tex)) {
+            status = STATUS_HIZ_CANDIDATE;
         }
     }
-    // Skinned records (tid >= skinned_base) draw the compute-deformed geometry
-    // through the u16 skinned index buffer; everything else uses the static u32
-    // index buffer. The index buffer is part of the indirect command on Metal,
-    // so it is selected here rather than bound per draw range like DX/VK.
-    if (tid >= cull.skinned_base) {
-        cmd.draw_indexed_primitives(primitive_type::triangle,
-                                    a.index_count,
-                                    skinned_index_buf + a.index_offset,
-                                    1u,
-                                    a.base_vertex,
-                                    tid);
-    } else {
-        cmd.draw_indexed_primitives(primitive_type::triangle,
-                                    a.index_count,
-                                    index_buf + a.index_offset,
-                                    1u,
-                                    a.base_vertex,
-                                    tid);
+
+    // Every bucket's slot for this record is written each frame: the draw
+    // lands in the record's own bucket, every other bucket resets. The reset
+    // sweep matters because a freed draw slot can be reused by a record of a
+    // DIFFERENT bucket, which would otherwise leave the old bucket's command
+    // stale and still executing.
+    uint bucket = min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK,
+                      cull.bucket_count - 1u);
+    for (uint b = 0u; b < cull.bucket_count; ++b) {
+        render_command cmd(icb_c->icbs[b], tid);
+        if (b != bucket || status != STATUS_DRAWN) {
+            cmd.reset();
+            continue;
+        }
+        // Skinned records (tid >= skinned_base) draw the compute-deformed
+        // geometry through the u16 skinned index buffer; everything else uses
+        // the static u32 index buffer. The index buffer is part of the
+        // indirect command on Metal, so it is selected here rather than bound
+        // per draw range like DX/VK.
+        if (tid >= cull.skinned_base) {
+            cmd.draw_indexed_primitives(primitive_type::triangle,
+                                        a.index_count,
+                                        skinned_index_buf + a.index_offset,
+                                        1u,
+                                        a.base_vertex,
+                                        tid);
+        } else {
+            cmd.draw_indexed_primitives(primitive_type::triangle,
+                                        a.index_count,
+                                        index_buf + a.index_offset,
+                                        1u,
+                                        a.base_vertex,
+                                        tid);
+        }
     }
-    cull_status[tid] = STATUS_DRAWN;
+    cull_status[tid] = status;
 }
 
 // Phase-2 cull for two-pass occlusion. Runs after the Hi-Z pyramid has been
@@ -297,33 +315,40 @@ kernel void cull_encode_phase2(
     if (tid >= cull.object_count) {
         return;
     }
-    render_command cmd(icb_c->icb, tid);
-    if (cull_status[tid] != STATUS_HIZ_CANDIDATE) {
-        cmd.reset();
-        return;
-    }
-    GpuObjectData obj = objects[tid];
-    // Re-test against the rebuilt pyramid. A candidate still occluded by this
-    // frame's actual depth stays culled; one that is now visible is redrawn.
-    if (cull.hiz_enabled != 0u && hiz_occluded(obj.bb_min, obj.bb_max, cull, hiz_tex)) {
-        cmd.reset();
-        return;
-    }
     GpuDrawArgs a = draw_args[tid];
-    if (tid >= cull.skinned_base) {
-        cmd.draw_indexed_primitives(primitive_type::triangle,
-                                    a.index_count,
-                                    skinned_index_buf + a.index_offset,
-                                    1u,
-                                    a.base_vertex,
-                                    tid);
-    } else {
-        cmd.draw_indexed_primitives(primitive_type::triangle,
-                                    a.index_count,
-                                    index_buf + a.index_offset,
-                                    1u,
-                                    a.base_vertex,
-                                    tid);
+    bool redraw = cull_status[tid] == STATUS_HIZ_CANDIDATE;
+    if (redraw) {
+        GpuObjectData obj = objects[tid];
+        // Re-test against the rebuilt pyramid. A candidate still occluded by
+        // this frame's actual depth stays culled; one that is now visible is
+        // redrawn.
+        if (cull.hiz_enabled != 0u && hiz_occluded(obj.bb_min, obj.bb_max, cull, hiz_tex)) {
+            redraw = false;
+        }
+    }
+    uint bucket = min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK,
+                      cull.bucket_count - 1u);
+    for (uint b = 0u; b < cull.bucket_count; ++b) {
+        render_command cmd(icb_c->icbs[b], tid);
+        if (b != bucket || !redraw) {
+            cmd.reset();
+            continue;
+        }
+        if (tid >= cull.skinned_base) {
+            cmd.draw_indexed_primitives(primitive_type::triangle,
+                                        a.index_count,
+                                        skinned_index_buf + a.index_offset,
+                                        1u,
+                                        a.base_vertex,
+                                        tid);
+        } else {
+            cmd.draw_indexed_primitives(primitive_type::triangle,
+                                        a.index_count,
+                                        index_buf + a.index_offset,
+                                        1u,
+                                        a.base_vertex,
+                                        tid);
+        }
     }
 }
 
@@ -355,7 +380,9 @@ kernel void cull_encode_shadow(
     if (tid >= cull.object_count) {
         return;
     }
-    render_command cmd(icb_c->icb, cull.cascade_base + tid);
+    // Shadows are depth-only under one pipeline, so the shadow dispatch always
+    // passes bucket_count = 1 and only icbs[0] (the shadow ICB) is written.
+    render_command cmd(icb_c->icbs[0], cull.cascade_base + tid);
     GpuDrawArgs a = draw_args[tid];
 
     if ((a.flags & DRAW_ENABLED) == 0u) {

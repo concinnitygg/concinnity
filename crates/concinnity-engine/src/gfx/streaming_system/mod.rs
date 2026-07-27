@@ -21,7 +21,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::{ChunkMesh, RenderBackend};
 use crate::gfx::overlay::OverlayFrame;
-use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE, SceneResidency};
+use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency};
 
 pub(crate) mod pressure;
 pub(crate) mod stats_log;
@@ -118,6 +118,9 @@ pub(crate) struct StreamingState {
     // Infinite voxel-world chunk streaming. `Some` only when a `VoxelWorld` was
     // declared.
     pub(crate) chunk_stream: Option<ChunkStreamState>,
+    // Deferred shader-bucket pipelines, warmed one per frame as their scene
+    // pins. `Some` only when init deferred at least one bucket.
+    pub(crate) shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
     // Scene-pinned residency over the texture/mesh pools. `Some` only when the
     // world declares scenes and at least one pool streams; unpinned scenes'
     // members are blocked on the planners (never load, evict if resident).
@@ -264,6 +267,72 @@ impl System for StreamingSystem {
 }
 
 impl StreamingState {
+    // Apply this frame's pending shader-bucket work: build the pipeline for
+    // one bucket whose scene just pinned, or release one whose scene unpinned.
+    //
+    // A bucket that cannot be installed (unreadable payload, a shader missing
+    // the bindless entry points) is recorded resident anyway after the error:
+    // its draws stay skipped, but the owning scene finishes loading instead of
+    // holding its loading screen open forever on work that will never succeed.
+    fn drive_shader_warmup(&mut self, backend: &mut dyn RenderBackend) {
+        let Some((bucket, want_resident)) =
+            self.shader_warmup.as_ref().and_then(|w| w.next_pending())
+        else {
+            return;
+        };
+        let resident = if want_resident {
+            match self.shader_warmup.as_ref().map(|w| w.load(bucket)) {
+                Some(Ok(stages)) => {
+                    let shader = crate::gfx::backend_init::ShaderBytes {
+                        vert: &stages.vert,
+                        frag: &stages.frag,
+                        main_is_engine_default: stages.is_engine_default,
+                        shadow: &[],
+                        vert_instanced: &stages.vert_instanced,
+                        // The payload is in hand; this install is what ends the
+                        // deferral.
+                        deferred: false,
+                    };
+                    let started = std::time::Instant::now();
+                    match backend.install_world_shader(bucket, shader) {
+                        // The elapsed time is the frame cost this warmup keeps
+                        // out of gameplay.
+                        Ok(()) => tracing::info!(
+                            "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
+                            bucket,
+                            started.elapsed().as_secs_f32() * 1000.0
+                        ),
+                        Err(e) => tracing::error!(
+                            "StreamingSystem: shader bucket {} pipeline build failed: {}",
+                            bucket,
+                            e
+                        ),
+                    }
+                }
+                Some(Err(e)) => tracing::error!(
+                    "StreamingSystem: shader bucket {} payload unreadable: {}",
+                    bucket,
+                    e
+                ),
+                None => {}
+            }
+            true
+        } else {
+            backend.evict_world_shader(bucket);
+            tracing::info!(
+                "StreamingSystem: shader bucket {} pipeline released",
+                bucket
+            );
+            false
+        };
+        if let Some(w) = self.shader_warmup.as_mut() {
+            w.note_resident(bucket, resident);
+        }
+        if let Some(residency) = self.scene_residency.as_mut() {
+            residency.note_resident((CHANNEL_SHADER, bucket), resident);
+        }
+    }
+
     // Score, dispatch, and apply this frame's streaming for every active pool,
     // then return the camera-relative view + position the draw should use
     // (absolute unless a `VoxelWorld` rebases them). Advances the frame clock.
@@ -298,11 +367,22 @@ impl StreamingState {
                                 s.set_blocked(id as usize, blocked);
                             }
                         }
+                        CHANNEL_SHADER => {
+                            if let Some(w) = &mut self.shader_warmup {
+                                w.set_blocked(id, blocked);
+                            }
+                        }
                         _ => {}
                     }
                 }
             }
         }
+
+        // Warm (or release) one shader bucket's pipeline per frame. Pipeline
+        // creation is device work on this thread, so a scene owning several
+        // shaders spreads it over the frames its loading screen is already up
+        // rather than stalling one of them.
+        self.drive_shader_warmup(backend);
 
         // A pinned scene mid-load keeps the pools dispatching even while the
         // world is hidden, so a loading screen's opaque backdrop does not
@@ -722,6 +802,7 @@ mod tests {
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,
+            shader_warmup: None,
             scene_residency: None,
             frame_count: 0,
             frames_in_flight: 2,

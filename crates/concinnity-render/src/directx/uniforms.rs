@@ -35,10 +35,11 @@ pub struct ViewUniforms {
     pub _ep1: f32,
 }
 
-// The GPU-cull `CullParams` cbuffer (b0, 192 bytes): six already-normalised
+// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
 // frustum planes, the camera position sharing its row with the object count, the
-// previous frame's view-projection, then the Hi-Z metadata (dims, mip count,
-// enable flag). DirectX fuses the cull + Hi-Z uniforms into one cbuffer.
+// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
+// flag), then the shader-bucket routing. DirectX fuses the cull + Hi-Z uniforms
+// into one cbuffer.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullParams {
@@ -49,6 +50,13 @@ pub struct CullParams {
     pub hiz_size: [f32; 2],
     pub hiz_mip_count: u32,
     pub hiz_enabled: u32,
+    // Shader-bucket command regions in the indirect buffer. The kernel writes
+    // every record's slot in all `bucket_count` regions (a draw in the record's
+    // own bucket, a no-op everywhere else); region `b` starts at command
+    // `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    pub bucket_count: u32,
+    pub bucket_stride: u32,
+    pub _pad: [u32; 2],
 }
 
 // The decal pass per-frame `DecalView` cbuffer (b0, 144 bytes): two column-major
@@ -220,10 +228,11 @@ mod tests {
 
     // CullParams must match the `CullParams` cbuffer (b0) in cull.hlsl: six
     // frustum planes, cam_pos sharing its row with object_count, the previous
-    // view-projection, then the Hi-Z metadata (192 B total).
+    // view-projection, the Hi-Z metadata, then the bucket routing pair opening
+    // a fresh 16-byte row (208 B total).
     #[test]
     fn cull_params_layout_matches_hlsl() {
-        assert_eq!(size_of::<CullParams>(), 192);
+        assert_eq!(size_of::<CullParams>(), 208);
         assert_eq!(offset_of!(CullParams, planes), 0);
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
         assert_eq!(offset_of!(CullParams, object_count), 108);
@@ -231,6 +240,8 @@ mod tests {
         assert_eq!(offset_of!(CullParams, hiz_size), 176);
         assert_eq!(offset_of!(CullParams, hiz_mip_count), 184);
         assert_eq!(offset_of!(CullParams, hiz_enabled), 188);
+        assert_eq!(offset_of!(CullParams, bucket_count), 192);
+        assert_eq!(offset_of!(CullParams, bucket_stride), 196);
     }
 
     // DecalView must match the `DecalView` cbuffer (b0) in the decal shaders:

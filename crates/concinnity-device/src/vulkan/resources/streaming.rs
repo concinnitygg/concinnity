@@ -215,6 +215,8 @@ impl VkContext {
             bb_max: [f32::NAN; 3],
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
+            // Streamed chunks render through the world default program.
+            shader_bucket: 0,
         };
 
         // Reuse a vacated draw slot when one is free, else append. A slot

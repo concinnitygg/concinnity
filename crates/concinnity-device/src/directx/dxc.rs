@@ -30,12 +30,38 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// Compile `source` (UTF-8 HLSL) to a signed DXIL blob via DXC. `entry` is the
-// entry-point name; `target` is a shader-model profile string such as `"ps_6_5"`
-// or `"vs_6_5"`. Returns the DXIL container bytes ready for a D3D12
+// Cache key for a DXC compile. The argument list is fixed (`-E/-T/-Zpc`), so
+// the entry + target fields already discriminate everything the compiler sees.
+// Shared by the runtime compile path and the export-time precompile.
+pub(super) fn dxc_cache_key<'a>(
+    source: &'a str,
+    entry: &'a str,
+    target: &'a str,
+) -> crate::shader_cache::Key<'a> {
+    crate::shader_cache::Key {
+        compiler: "dxc",
+        source,
+        entry,
+        target,
+        options: 0,
+    }
+}
+
+// Compile `source` (UTF-8 HLSL) to a signed DXIL blob via DXC, reusing a cached
+// artifact when these exact inputs have compiled before (per-compile DLL load +
+// DXIL validation made the RT shaders a fixed cost on every launch). `entry` is
+// the entry-point name; `target` is a shader-model profile string such as
+// `"ps_6_5"` or `"vs_6_5"`. Returns the DXIL container bytes ready for a D3D12
 // `D3D12_SHADER_BYTECODE`, or an `Err` carrying the DXC diagnostic text (or the
 // reason the compiler could not be loaded).
 pub(super) fn compile_hlsl_dxc(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
+    let key = dxc_cache_key(source, entry, target);
+    crate::shader_cache::cached(&key, target, || {
+        compile_hlsl_dxc_uncached(source, entry, target)
+    })
+}
+
+fn compile_hlsl_dxc_uncached(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
     // SAFETY: `dxcompiler.dll` is a normal Win32 DLL; loading it and resolving
     // `DxcCreateInstance` is the documented usage. The library is held in `_lib`
     // until the end of the function so every COM `Release` (compiler / result /

@@ -957,6 +957,11 @@ pub struct DrawObject {
     // Per-draw material scalars pushed to the fragment shader at buffer(3).
     pub material: MaterialUniforms,
     // When false the object is skipped in both the shadow and main passes.
+    // Which world shader renders this object: the dense ShaderHandle value of
+    // the material's `shader` reference, or 0 (the world default) when the
+    // material names none. The backend binds the matching pipeline for each
+    // bucket; the value never changes after the draw is built.
+    pub shader_bucket: u32,
     // Controlled by scene switches to hide props belonging to inactive scenes.
     pub visible: bool,
     // When false the object's geometry is not yet uploaded to the GPU buffers
@@ -1308,7 +1313,17 @@ impl DrawArgsFlags {
     // The object has a finite AABB and should be frustum/distance-culled.
     // When clear the object always draws (subject to `ENABLED`).
     pub const CULLABLE: u32 = 2;
+    // The record's shader bucket rides bits 8..16: the cull kernel routes the
+    // record's indirect command into that bucket's ICB. Values and layout are
+    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.metal).
+    pub const BUCKET_SHIFT: u32 = 8;
 }
+
+// Upper bound on world shader buckets a cull dispatch can route between (the
+// ICB argument-buffer array length in the cull shaders). Mirrored by
+// MAX_SHADER_BUCKETS in cull.metal, enforced by the world-shape check, and
+// quoted as a number in the Shader asset docs.
+pub const MAX_SHADER_BUCKETS: usize = 8;
 
 // Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
 // CPU `visible = BVH(cullable) + always_draw` partition: an object draws when
@@ -1323,6 +1338,16 @@ pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
         flags |= DrawArgsFlags::CULLABLE;
     }
     flags
+}
+
+// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
+// clamped to the routing budget the cull kernels implement. A bucket past the
+// budget renders with the world default program rather than reading a command
+// region that does not exist; the world-shape check fails such a world at build
+// time, so the clamp is a backstop.
+pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
+    let bucket = (shader_bucket as usize).min(MAX_SHADER_BUCKETS - 1) as u32;
+    bucket << DrawArgsFlags::BUCKET_SHIFT
 }
 
 // One GPU-instanced draw: a shared mesh slice + material rendered at many
@@ -1925,6 +1950,7 @@ mod tests {
             index_offset: 12,
             index_count: 36,
             base_vertex: 4,
+            shader_bucket: 0,
             model: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 2.0, 0.0, 0.0],
@@ -2428,5 +2454,24 @@ mod tests {
         assert_eq!(draw_args_flags(false, true, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(true, false, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(false, false, false), 0);
+    }
+
+    // The bucket rides bits 8..16 and never collides with the cull-decision bits,
+    // so the two ORed together survive a round trip through the cull kernels'
+    // shift + mask.
+    #[test]
+    fn bucket_bits_ride_above_the_cull_decision_bits() {
+        assert_eq!(draw_args_bucket_bits(0), 0);
+        assert_eq!(draw_args_bucket_bits(1), 1 << 8);
+        assert_eq!(draw_args_bucket_bits(3), 3 << 8);
+        // A bucket past the routing budget clamps to the last routable one.
+        let last = (MAX_SHADER_BUCKETS - 1) as u32;
+        assert_eq!(draw_args_bucket_bits(MAX_SHADER_BUCKETS as u32), last << 8);
+        assert_eq!(draw_args_bucket_bits(u32::MAX), last << 8);
+        // Packed alongside the decision bits, each half reads back unchanged.
+        let flags = draw_args_flags(true, true, true) | draw_args_bucket_bits(2);
+        assert_eq!(flags & DrawArgsFlags::ENABLED, DrawArgsFlags::ENABLED);
+        assert_eq!(flags & DrawArgsFlags::CULLABLE, DrawArgsFlags::CULLABLE);
+        assert_eq!((flags >> DrawArgsFlags::BUCKET_SHIFT) & 0xFF, 2);
     }
 }

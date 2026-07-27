@@ -27,17 +27,11 @@ use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 
 use super::context::VkContext;
-use super::pipeline::{compile_glsl, inject_define, spv_module};
+use super::pipeline::spv_module;
 use super::texture::{
     LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
     transition_image_layout_range,
 };
-
-// GLSL sources, shared with the host so the hot-reload pass can pick them up
-// the same way the existing built-in shaders do.
-pub(in crate::vulkan) const FOG_VERT_GLSL: &str = include_str!("shaders/fog.vert");
-pub(in crate::vulkan) const FOG_FRAG_GLSL: &str = include_str!("shaders/fog.frag");
-pub(in crate::vulkan) const FOG_FROXEL_GLSL: &str = include_str!("shaders/fog_froxel.comp");
 
 // Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
 // matching the DirectX `[numthreads(8, 8, 1)]` and the Metal dispatch.
@@ -806,31 +800,20 @@ fn create_volume_sampler(device: &Device) -> Result<vk::Sampler, String> {
 }
 
 fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    use super::pipeline::shader_source;
-    let define = if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
+    let ctx = super::builtins::Ctx {
+        hot_reload,
+        msaa,
+        pool_size: 0,
     };
-    let vert_src = inject_define(
-        &shader_source(hot_reload, "fog.vert", FOG_VERT_GLSL),
-        define,
-    );
-    let frag_src = inject_define(
-        &shader_source(hot_reload, "fog.frag", FOG_FRAG_GLSL),
-        define,
-    );
-    let vert = compile_glsl(&vert_src, shaderc::ShaderKind::Vertex, "fog.vert")?;
-    let frag = compile_glsl(&frag_src, shaderc::ShaderKind::Fragment, "fog.frag")?;
+    let vert = super::builtins::FOG_VERT.compile(&ctx)?;
+    let frag = super::builtins::FOG_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
 fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    use super::pipeline::shader_source;
-    let src = shader_source(hot_reload, "fog_froxel.comp", FOG_FROXEL_GLSL);
-    compile_glsl(&src, shaderc::ShaderKind::Compute, "fog_froxel.comp")
+    super::builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +

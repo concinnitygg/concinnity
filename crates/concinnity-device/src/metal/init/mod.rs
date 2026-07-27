@@ -81,7 +81,7 @@ impl MtlContext {
         reuse: Option<ReuseHandles>,
     ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
+            BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx,
         };
         let BackendInit {
             window,
@@ -106,17 +106,7 @@ impl MtlContext {
                     n_skinned: _,
                     n_chunk_max: _,
                 },
-            shaders:
-                ShaderBytes {
-                    vert: vert_lib_bytes,
-                    frag: frag_lib_bytes,
-                    // `default.metal` drives Metal's own bindless pass, so the
-                    // built-in and an authored override load identically.
-                    main_is_engine_default: _,
-                    // The Metal shadow shader is engine-internal.
-                    shadow: _,
-                    vert_instanced: vert_instanced_lib_bytes,
-                },
+            shaders: world_shaders,
             media:
                 MediaPayloads {
                     textures,
@@ -219,8 +209,8 @@ impl MtlContext {
             } = pipelines::build_main_pipeline(
                 &device,
                 &vert_desc,
-                vert_lib_bytes,
-                frag_lib_bytes,
+                world_shaders[0].vert,
+                world_shaders[0].frag,
                 hot_reload,
             )?;
             (
@@ -244,10 +234,33 @@ impl MtlContext {
         let instanced_pipeline_state = pipelines::build_instanced_pipeline(
             &device,
             &vert_desc,
-            vert_instanced_lib_bytes,
-            frag_lib_bytes,
+            world_shaders[0].vert_instanced,
+            world_shaders[0].frag,
             !instanced_clusters.is_empty(),
         )?;
+
+        // Material-referenced shaders (ShaderHandle 1..) each get a bindless
+        // pipeline; the cull kernel routes their draws into per-bucket ICBs.
+        let world_pipelines = if requirements.scene && world_shaders.len() > 1 {
+            let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+            if world_shaders.len() > max {
+                return Err(format!(
+                    "world declares {} Shaders but at most {max} are supported",
+                    world_shaders.len()
+                ));
+            }
+            if !bindless {
+                return Err(
+                    "material-referenced Shaders require the bindless main pass, but the \
+                     default Shader has no fragment_main_bindless entry point"
+                        .to_string(),
+                );
+            }
+            pipelines::build_world_pipeline_table(&device, &vert_desc, &world_shaders[1..])?
+        } else {
+            Vec::new()
+        };
+        let shader_bucket_count = 1 + world_pipelines.len();
 
         let depth_state = pipelines::make_depth_state(&device)?;
         let depth_state_read_only = pipelines::make_depth_state_read_only(&device)?;
@@ -1167,15 +1180,17 @@ impl MtlContext {
             hdr_pq_requested,
             last_present_texture: None,
             pipeline_state,
+            world_pipelines,
             bindless,
             cull: super::cull::CullState {
                 pipeline: cull_pipeline,
-                icb: None,
+                bucket_count: shader_bucket_count,
+                icbs: Vec::new(),
                 icb_arg_encoder: cull_icb_arg_encoder,
                 icb_arg_buffer: None,
                 icb_capacity: 0,
                 pipeline_phase2: cull_pipeline_phase2,
-                icb_2: None,
+                icbs_2: Vec::new(),
                 icb_2_arg_encoder: cull_icb2_arg_encoder,
                 icb_2_arg_buffer: None,
                 status_buffer: None,

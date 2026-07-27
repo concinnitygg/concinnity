@@ -17,7 +17,7 @@ use objc2_metal::{
     MTLRenderPipelineState,
 };
 
-use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline, compile_library};
+use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
 
 pub(super) fn ns_str(s: &str) -> Retained<NSString> {
     NSString::from_str(s)
@@ -77,7 +77,7 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
              metal/pipeline.rs -- every shipped shader must be registered."
         ),
     };
-    let base: std::borrow::Cow<'static, str> = if hot_reload {
+    if hot_reload {
         let path = format!("{}/src/metal/shaders/{}", env!("CARGO_MANIFEST_DIR"), name);
         match std::fs::read_to_string(&path) {
             Ok(s) => std::borrow::Cow::Owned(s),
@@ -92,38 +92,27 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         }
     } else {
         std::borrow::Cow::Borrowed(embedded)
-    };
-    // Single-source the reflection roughness cut: the SSR resolve, the
-    // RT-reflection resolve, and the roughness-blur composite all gate on the
-    // same value, so it is injected here as one MSL `constant` from its Rust
-    // definition rather than declared as three drifting literals. Still
-    // compile-folded by the shader compiler, so zero runtime cost. See
-    // `concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT`.
-    if shader_uses_reflection_cut(name) {
-        std::borrow::Cow::Owned(format!("{}{base}", reflection_constants_prelude()))
-    } else {
-        base
     }
 }
 
-// The reflection-resolve shaders that reference the shared
-// `REFLECTION_ROUGHNESS_CUT` constant injected by `reflection_constants_prelude`.
-fn shader_uses_reflection_cut(name: &str) -> bool {
-    matches!(
-        name,
-        "ssr.metal" | "rt_reflections.metal" | "reflection_composite.metal"
-    )
-}
-
-// MSL prelude defining the shared reflection constants, generated from their
-// Rust source of truth so the GPU value can never drift from the CPU one. A
-// file-scope `constant` is header-independent, so it is valid prepended ahead of
-// the shader's own `#include`s.
-fn reflection_constants_prelude() -> String {
-    format!(
-        "constant float REFLECTION_ROUGHNESS_CUT = {:?};\n",
-        crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
-    )
+// Produce the MTLLibrary for a built-in renderer shader. The fast path loads
+// the metallib precompiled by the build script; source compilation remains for
+// hot-reload (disk edits must win) and for binaries built without the Metal
+// toolchain, whose embedded lookup is empty.
+pub(super) fn shader_library(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    hot_reload: bool,
+    name: &str,
+) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
+    if !hot_reload && let Some(bytes) = crate::metal::metallib::embedded_metallib(name) {
+        return load_library(device, bytes)
+            .map_err(|e| format!("{name}: failed to load precompiled metallib: {e}"));
+    }
+    let msl = shader_source(hot_reload, name);
+    let options = objc2_metal::MTLCompileOptions::new();
+    device
+        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
+        .map_err(|e| format!("{name}: shader compile error: {e:?}"))
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
@@ -148,12 +137,7 @@ pub(super) fn build_text_pipeline(
         MTLBlendFactor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
     };
 
-    let msl = shader_source(hot_reload, "text.metal");
-
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("text shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "text.metal")?;
 
     let vert_fn = library
         .newFunctionWithName(&ns_str("text_vertex_main"))
@@ -222,8 +206,7 @@ pub(super) fn build_post_pipeline(
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "post.metal");
-    let library = compile_library(device, msl.as_ref(), "post")?;
+    let library = shader_library(device, hot_reload, "post.metal")?;
     // Single colour attachment matches the swapchain format chosen by
     // `configure_mtk_view` (`BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR).
     build_fullscreen_pipeline(
@@ -248,11 +231,11 @@ mod shader_source_tests {
     }
 
     #[test]
-    fn reflection_shaders_receive_shared_roughness_cut() {
-        // The SSR / RT / composite shaders single-source their roughness cut
-        // through the injected prelude. Verify the prelude carries the canonical
-        // value, that each shader references it, and that no stale local cut
-        // literal lingers (which would silently shadow the shared constant).
+    fn reflection_shaders_lock_shared_roughness_cut() {
+        // The SSR / RT / composite shaders each declare the roughness cut as a
+        // literal (they are precompiled at build, so no runtime injection is
+        // possible); this lock pins every declaration to the Rust source of
+        // truth, same as the existing default.metal REFL_RESOLVE_CUT lock.
         let expected = format!(
             "constant float REFLECTION_ROUGHNESS_CUT = {:?};",
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
@@ -265,11 +248,8 @@ mod shader_source_tests {
             let src = shader_source(false, name);
             assert!(
                 src.contains(&expected),
-                "{name}: injected prelude missing the canonical REFLECTION_ROUGHNESS_CUT"
-            );
-            assert!(
-                src.contains("REFLECTION_ROUGHNESS_CUT"),
-                "{name}: does not reference the shared REFLECTION_ROUGHNESS_CUT"
+                "{name}: REFLECTION_ROUGHNESS_CUT declaration drifted from \
+                 concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
             );
             // The old per-shader literals were `*_ROUGH_CUT = 0.<n>`; the shared
             // name is `*_ROUGHNESS_CUT`, which does not contain that substring.
@@ -278,11 +258,6 @@ mod shader_source_tests {
                 "{name}: still declares a local roughness-cut literal"
             );
         }
-        // A non-reflection shader must not receive the prelude.
-        assert!(
-            !shader_source(false, "bloom.metal").contains("REFLECTION_ROUGHNESS_CUT"),
-            "bloom.metal should not receive the reflection prelude"
-        );
     }
 
     #[test]

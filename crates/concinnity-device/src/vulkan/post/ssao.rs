@@ -20,11 +20,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources
-const SSAO_FULLSCREEN_VERT_GLSL: &str = include_str!("../shaders/ssao_fullscreen.vert");
-const SSAO_KERNEL_FRAG_GLSL: &str = include_str!("../shaders/ssao_kernel.frag");
-const SSAO_BLUR_FRAG_GLSL: &str = include_str!("../shaders/ssao_blur.frag");
-
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value.
 pub(in crate::vulkan) const SSAO_OCCLUSION_FORMAT: vk::Format = vk::Format::R8_UNORM;
@@ -95,31 +90,16 @@ pub(in crate::vulkan) struct SsaoShaders {
 }
 
 // Compile every SSAO GLSL source. `hot_reload` routes each source resolve
-// through [`crate::vulkan::pipeline::shader_source`] so dev-loop edits take
-// effect on the next pipeline build. Called from `SsaoResources::new` at
-// init and by the Vulkan shader hot-reload path.
+// through the builtins' disk-first path so dev-loop edits take effect on the
+// next pipeline build. Called from `SsaoResources::new` at init and by the
+// Vulkan shader hot-reload path.
 pub(in crate::vulkan) fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
-    use super::super::pipeline::shader_source;
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(SsaoShaders {
-        fullscreen_vs: compile_glsl(
-            &shader_source(
-                hot_reload,
-                "ssao_fullscreen.vert",
-                SSAO_FULLSCREEN_VERT_GLSL,
-            ),
-            shaderc::ShaderKind::Vertex,
-            "ssao_fullscreen.vert",
-        )?,
-        kernel_fs: compile_glsl(
-            &shader_source(hot_reload, "ssao_kernel.frag", SSAO_KERNEL_FRAG_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "ssao_kernel.frag",
-        )?,
-        blur_fs: compile_glsl(
-            &shader_source(hot_reload, "ssao_blur.frag", SSAO_BLUR_FRAG_GLSL),
-            shaderc::ShaderKind::Fragment,
-            "ssao_blur.frag",
-        )?,
+        fullscreen_vs: builtins::SSAO_FULLSCREEN_VERT.compile(&ctx)?,
+        kernel_fs: builtins::SSAO_KERNEL_FRAG.compile(&ctx)?,
+        blur_fs: builtins::SSAO_BLUR_FRAG.compile(&ctx)?,
     })
 }
 

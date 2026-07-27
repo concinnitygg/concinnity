@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::assets::{
     Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
-    ReparentRequest, Scene, SceneCommand, ShaderKind, ShaderStage, SpawnRequest, Sprite,
+    ReparentRequest, Scene, SceneCommand, Shader, ShaderKind, SpawnRequest, Sprite,
     StreamingConfig, TextLabel, Transform, Window,
 };
 use crate::blob::BlobData;
@@ -104,21 +104,25 @@ impl WorldBuilder {
         self.components.push_typed(c);
     }
 
-    // The vertex + fragment ShaderStage pair every renderable world needs.
-    // The payload bytes are opaque to the mock, so any bytes serve.
+    // One Shader whose payload container carries the given compiled stages.
+    // The stage bytes are opaque to the mock, so any bytes serve.
+    fn push_shader(&mut self, stages: &[(ShaderKind, &[u8])]) {
+        let container = crate::assets::ShaderPayload {
+            stages: stages.iter().map(|(k, b)| (*k, b.to_vec())).collect(),
+        };
+        let locator = self.payload(&container.encode().expect("encode shader payload"));
+        self.push(Shader {
+            locator: Some(locator),
+            ..Default::default()
+        });
+    }
+
+    // The vertex + fragment Shader every renderable world needs.
     fn push_shaders(&mut self) {
-        let vert = self.payload(b"vertex-shader-bytes");
-        self.push(ShaderStage {
-            kind: ShaderKind::Vertex,
-            locator: Some(vert),
-            ..Default::default()
-        });
-        let frag = self.payload(b"fragment-shader-bytes");
-        self.push(ShaderStage {
-            kind: ShaderKind::Fragment,
-            locator: Some(frag),
-            ..Default::default()
-        });
+        self.push_shader(&[
+            (ShaderKind::Vertex, b"vertex-shader-bytes"),
+            (ShaderKind::Fragment, b"fragment-shader-bytes"),
+        ]);
     }
 
     // One quad Mesh + a Texture-backed Material + a Prop placing it.
@@ -693,7 +697,7 @@ fn auto_preset_resolves_ceiling_from_gpu_tier() {
 }
 
 #[test]
-fn missing_shader_stage_fails_init() {
+fn missing_shader_fails_init() {
     let (state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
@@ -702,7 +706,7 @@ fn missing_shader_stage_fails_init() {
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
-    assert!(gs.failed, "no vertex ShaderStage: init must fail");
+    assert!(gs.failed, "no Shader: init must fail");
     assert!(!backend_parked(&world));
     assert!(lock(&state).init.is_none(), "backend never constructed");
 }
@@ -1016,8 +1020,11 @@ fn draw_frame_error_stops_the_loop() {
     assert!(lock(&state).saw(&Call::WaitIdle));
 }
 
+// Reaching the cap must Stop rather than report Done: `World::step` treats Done
+// as "retire this system and carry on with the others", which would leave a real
+// world running headlessly forever once the renderer removed itself.
 #[test]
-fn max_frames_finishes_the_system() {
+fn max_frames_stops_the_run() {
     let (_state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
@@ -1032,7 +1039,27 @@ fn max_frames_finishes_the_system() {
     let mut gs = init_graphics(&mut world, hooks);
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    assert_eq!(step(&mut gs, &mut world), StepResult::Done);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
+}
+
+// A launch-imposed cap overrides whatever the world asked for, including a world
+// that set no cap at all and would otherwise run until its window closed.
+#[test]
+fn a_launch_frame_cap_overrides_the_world() {
+    let (_state, hooks) = recording_hooks();
+    let mut b = WorldBuilder::new();
+    b.push(Window::default());
+    b.push(GraphicsConfig::default());
+    b.push_shaders();
+    b.push(Camera3D::bake(Default::default()));
+    b.push_textured_quad(MESH, TEX, MAT, PROP);
+    let mut world = b.build();
+
+    crate::app::dev_flags::set_max_frames(Some(1));
+    let mut gs = init_graphics(&mut world, hooks);
+    let result = step(&mut gs, &mut world);
+    crate::app::dev_flags::set_max_frames(None);
+    assert_eq!(result, StepResult::Stop);
 }
 
 #[test]
@@ -3444,21 +3471,37 @@ fn an_undecodable_material_record_fails_init() {
     assert!(!backend_parked(&world));
 }
 
-// The instanced vertex shader is optional -- it is only needed once a world
-// declares an InstancedProp -- so its payload is read and passed through when
-// the stage is present.
+// The instanced vertex stage is optional -- it is only needed once a world
+// declares an InstancedProp -- so its bytes are read and passed through when
+// the shader's container carries the stage.
 #[test]
 fn an_instanced_vertex_shader_payload_reaches_the_backend() {
     use crate::assets::{InstanceTransform, InstancedProp};
 
     let (state, hooks) = recording_hooks();
-    let mut b = scene_builder();
-    let loc = b.payload(b"instanced-vertex-shader-bytes");
-    b.push(ShaderStage {
-        kind: ShaderKind::VertexInstanced,
-        locator: Some(loc),
+    // scene_builder()'s shader carries no instanced stage, so build the same
+    // world with a three-stage shader instead.
+    let mut b = WorldBuilder::new();
+    b.push(Window {
+        title: "mock world".to_string(),
+        width: 640,
+        height: 360,
         ..Default::default()
     });
+    b.push(GraphicsConfig {
+        clear_color: [0.1, 0.2, 0.3, 1.0],
+        ..Default::default()
+    });
+    b.push_shader(&[
+        (ShaderKind::Vertex, b"vertex-shader-bytes"),
+        (ShaderKind::Fragment, b"fragment-shader-bytes"),
+        (
+            ShaderKind::VertexInstanced,
+            b"instanced-vertex-shader-bytes",
+        ),
+    ]);
+    b.push(Camera3D::bake(Default::default()));
+    b.push_textured_quad(MESH, TEX, MAT, PROP);
     b.push(InstancedProp {
         asset_id: AssetId(851),
         mesh: Some(crate::ecs::MeshHandle(0)),
@@ -3480,30 +3523,23 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
     );
 }
 
-// A shader stage that never compiled (no payload locator) fails the world build
-// rather than starting with a pipeline that cannot draw. Both the vertex and the
-// fragment stage guard independently.
+// A Shader that never compiled (no payload locator) fails the world build
+// rather than starting with a pipeline that cannot draw.
 #[test]
-fn a_shader_stage_without_a_payload_fails_init() {
-    for missing in [ShaderKind::Vertex, ShaderKind::Fragment] {
-        let (_state, hooks) = recording_hooks();
-        let mut b = WorldBuilder::new();
-        b.push(Window::default());
-        b.push(GraphicsConfig::default());
-        for kind in [ShaderKind::Vertex, ShaderKind::Fragment] {
-            let locator = (kind != missing).then(|| b.payload(b"shader-bytes"));
-            b.push(ShaderStage {
-                kind,
-                locator,
-                ..Default::default()
-            });
-        }
-        let mut world = b.build();
-        assert!(
-            init_graphics(&mut world, hooks).failed,
-            "a {missing:?} stage with no compiled payload must fail the build"
-        );
-    }
+fn a_shader_without_a_payload_fails_init() {
+    let (_state, hooks) = recording_hooks();
+    let mut b = WorldBuilder::new();
+    b.push(Window::default());
+    b.push(GraphicsConfig::default());
+    b.push(Shader {
+        locator: None,
+        ..Default::default()
+    });
+    let mut world = b.build();
+    assert!(
+        init_graphics(&mut world, hooks).failed,
+        "a Shader with no compiled payload must fail the build"
+    );
 }
 
 // A skinned mesh's LOD alternates share its vertex region: the runtime skinned

@@ -137,6 +137,47 @@ pub(super) fn deferred_mesh_sources(
     out
 }
 
+// Shader buckets whose payload decode and pipeline build init skips, each
+// paired with the scene that exclusively owns it: owned by a scene other than
+// the start scene, gated behind streaming like the texture and mesh paths.
+// `shader_ids` is the world's Shaders in bucket order (drain order == the
+// baked ShaderHandle space). Bucket 0 is the world default program and is
+// never deferred.
+pub(super) fn deferred_shader_buckets(
+    ctx: &crate::ecs::PipelineContext,
+    streaming: bool,
+    shader_ids: &[AssetId],
+) -> Vec<(usize, AssetId)> {
+    let mut deferred = Vec::new();
+    if !streaming {
+        return deferred;
+    }
+    let Some(start) = ctx
+        .query::<crate::assets::Scene>()
+        .next()
+        .map(|s| s.asset_id)
+    else {
+        return deferred;
+    };
+    let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
+        return deferred;
+    };
+    for group in &groups.0 {
+        if group.scene == start {
+            continue;
+        }
+        for &def in &group.defs {
+            if let Some(bucket) = shader_ids.iter().position(|&id| id == def)
+                && bucket > 0
+            {
+                deferred.push((bucket, group.scene));
+            }
+        }
+    }
+    deferred.sort_unstable();
+    deferred
+}
+
 // The mesh-streaming inputs init assembles: per-stream geometry copies,
 // scoring centers, draw mapping, the seed headroom, and the deferred payload
 // refs the worker decodes on demand.
@@ -154,19 +195,27 @@ impl GraphicsSystem {
     // Build scene residency over the streaming pools: texture members come
     // from the blob's baked per-scene groups (a streamed texture's slot is its
     // resource handle), mesh members from each streamed draw's SceneMember
-    // entity. Every owned member starts blocked; pinning the start scene
-    // unblocks its set, so only it and the global set stream.
+    // entity, and shader members from the deferred buckets (a bucket's
+    // pipeline is built when its scene pins). Every owned member starts
+    // blocked; pinning the start scene unblocks its set, so only it and the
+    // global set stream.
     pub(super) fn build_scene_residency(
         &mut self,
         ctx: &crate::ecs::PipelineContext,
     ) -> Option<crate::gfx::scene_residency::SceneResidency> {
-        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE, SceneResidency};
+        use crate::gfx::scene_residency::{
+            CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
+        };
 
         let (scenes, current) = {
             let flow = self.scene_flow.as_ref()?;
             (flow.scenes.clone(), flow.current)
         };
-        if self.texture_streamer.is_none() && self.mesh_streamer.is_none() {
+        let no_shaders = self
+            .shader_warmup
+            .as_ref()
+            .is_none_or(crate::gfx::streaming::shader::ShaderWarmup::is_empty);
+        if self.texture_streamer.is_none() && self.mesh_streamer.is_none() && no_shaders {
             return None;
         }
         let scene_idx: std::collections::HashMap<AssetId, usize> =
@@ -207,6 +256,12 @@ impl GraphicsSystem {
             }
         }
 
+        for &(bucket, scene) in &self.deferred_shader_scenes {
+            if let Some(&idx) = scene_idx.get(&scene) {
+                members[idx].push((CHANNEL_SHADER, bucket));
+            }
+        }
+
         let mut residency = SceneResidency::new(scenes.iter().copied().zip(members).collect());
         let blocked: Vec<(u8, u32)> = residency.all_members().collect();
         let unblocked = residency.sync_pins(&[current]).unblocked;
@@ -226,7 +281,7 @@ impl GraphicsSystem {
     }
 
     fn set_stream_blocked(&mut self, channel: u8, id: u32, blocked: bool) {
-        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_TEXTURE};
+        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE};
         match channel {
             CHANNEL_TEXTURE => {
                 if let Some(s) = &mut self.texture_streamer {
@@ -236,6 +291,11 @@ impl GraphicsSystem {
             CHANNEL_MESH => {
                 if let Some(s) = &mut self.mesh_streamer {
                     s.set_blocked(id as usize, blocked);
+                }
+            }
+            CHANNEL_SHADER => {
+                if let Some(w) = &mut self.shader_warmup {
+                    w.set_blocked(id, blocked);
                 }
             }
             _ => {}
@@ -457,14 +517,15 @@ impl GraphicsSystem {
             .collect();
 
         // Resolve the shared material to texture-pool slots + scalars.
-        let (texture_slot, normal_map_slot, material) = vw
-            .material
-            .and_then(|id| material_map.get(&id).copied())
-            .unwrap_or((
+        let mat_entry = vw.material.and_then(|id| material_map.get(&id).copied());
+        let (texture_slot, normal_map_slot, material) = match mat_entry {
+            Some(entry) => (entry.albedo_slot, entry.normal_map_slot, entry.uniforms),
+            None => (
                 0,
                 crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
                 crate::gfx::render_types::MaterialUniforms::DEFAULT,
-            ));
+            ),
+        };
 
         let chunk_blocks = vw.chunk_blocks();
         let block_size = vw.block_size();
@@ -786,6 +847,53 @@ mod tests {
         assert!(sources.counts.is_empty());
     }
 
+    // A Shader owned by a later scene is deferred with the scene that claims
+    // it, so residency can make its pipeline a member of that scene's load.
+    // Bucket 0 is the world default program: even were it scene-owned, the
+    // world cannot render its first frame without it.
+    #[test]
+    fn shader_deferral_names_the_owning_scene_and_spares_bucket_zero() {
+        const DEFAULT_SHADER: AssetId = AssetId(20);
+        const SCENE_SHADER: AssetId = AssetId(21);
+        const OTHER_DEF: AssetId = AssetId(22);
+        let shaders = [DEFAULT_SHADER, SCENE_SHADER];
+
+        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![
+            group(START, Vec::new(), vec![DEFAULT_SHADER]),
+            group(LATER, Vec::new(), vec![SCENE_SHADER, OTHER_DEF]),
+        ]);
+        assert_eq!(
+            deferred_shader_buckets(&world.ctx(), true, &shaders),
+            vec![(1, LATER)]
+        );
+
+        // A world default the start scene happens to own stays eager.
+        let mut owned_default = ResidencyWorld::new(&[START, LATER]).with_groups(vec![group(
+            LATER,
+            Vec::new(),
+            vec![DEFAULT_SHADER],
+        )]);
+        assert!(deferred_shader_buckets(&owned_default.ctx(), true, &shaders).is_empty());
+    }
+
+    // Same gates as the texture and mesh paths: without streaming there is no
+    // runtime load path to warm the pipeline, and without scenes or baked
+    // groups nothing is scene-owned.
+    #[test]
+    fn shader_deferral_is_empty_without_streaming_scenes_or_groups() {
+        let shaders = [AssetId(20), AssetId(21)];
+        let groups = vec![group(LATER, Vec::new(), vec![AssetId(21)])];
+
+        let mut unstreamed = ResidencyWorld::new(&[START, LATER]).with_groups(groups.clone());
+        assert!(deferred_shader_buckets(&unstreamed.ctx(), false, &shaders).is_empty());
+
+        let mut sceneless = ResidencyWorld::new(&[]).with_groups(groups);
+        assert!(deferred_shader_buckets(&sceneless.ctx(), true, &shaders).is_empty());
+
+        let mut ungrouped = ResidencyWorld::new(&[START, LATER]);
+        assert!(deferred_shader_buckets(&ungrouped.ctx(), true, &shaders).is_empty());
+    }
+
     // A GraphicsSystem carrying the recording backend, as init has it while the
     // setup routines wire the pools onto it. The mock reports the UNKNOWN GPU
     // profile (0 bytes of memory), so a pool with no explicit override lands on
@@ -1084,7 +1192,15 @@ mod tests {
             ),
             (ground, solid_block()),
         ]);
-        let material_map = std::collections::HashMap::from([(handle, (5usize, 6usize, material))]);
+        let material_map = std::collections::HashMap::from([(
+            handle,
+            crate::gfx::draw_list::MaterialEntry {
+                albedo_slot: 5,
+                normal_map_slot: 6,
+                uniforms: material,
+                shader_bucket: 0,
+            },
+        )]);
 
         gs.setup_voxel_world_streaming(
             Some(VoxelWorld {

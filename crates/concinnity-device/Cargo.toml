@@ -37,6 +37,12 @@ tracing = "0.1.44"
 # Backend shader hot-reload watches each backend's shader dir for edits.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
+# Keys the built-in shader binary cache (src/shader_cache.rs), which the DirectX
+# and Vulkan backends use to skip recompiling their embedded shaders every launch.
+# Metal reaches the same end at build time, so macOS never compiles the module.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sha2 = "0.10.9"
+
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
 ash = "0.38"
 glfw = "0.61.0"

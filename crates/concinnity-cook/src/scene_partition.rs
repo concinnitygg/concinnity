@@ -59,7 +59,7 @@ fn is_reference_target(type_norm: &str) -> bool {
         .any(|t| t.as_str().to_lowercase() == type_norm)
         || matches!(
             type_norm,
-            "proceduralmesh" | "voxelchunk" | "file" | "model"
+            "proceduralmesh" | "voxelchunk" | "file" | "model" | "shader"
         )
 }
 
@@ -193,6 +193,40 @@ mod tests {
         assert_eq!(p.owner("wall_mesh"), Owner::Scene(0));
         assert_eq!(p.owner("wall_mat"), Owner::Scene(0));
         assert_eq!(p.owner("wall_tex"), Owner::Scene(0));
+    }
+
+    #[test]
+    fn a_shader_referenced_only_by_a_scene_material_is_scene_owned() {
+        // day prop -> material -> shader: the shader's lifetime follows the
+        // material's, so it loads and unloads with the scene. The world's own
+        // shader (a root nothing references) stays global.
+        let assets = vec![
+            scene("day"),
+            prop(
+                "day_wall",
+                Some("day"),
+                serde_json::json!({"mesh":"wall_mesh","material":"wall_mat"}),
+            ),
+            asset("wall_mesh", "ProceduralMesh", serde_json::json!({})),
+            asset(
+                "wall_mat",
+                "Material",
+                serde_json::json!({"shader":"wall_shader"}),
+            ),
+            asset(
+                "wall_shader",
+                "Shader",
+                serde_json::json!({"vertex":{"source":"w.metal"},"fragment":{"source":"w.metal"}}),
+            ),
+            asset(
+                "scene_shader",
+                "Shader",
+                serde_json::json!({"vertex":{"source":"s.metal"},"fragment":{"source":"s.metal"}}),
+            ),
+        ];
+        let p = partition_scenes(&assets);
+        assert_eq!(p.owner("wall_shader"), Owner::Scene(0));
+        assert_eq!(p.owner("scene_shader"), Owner::Global);
     }
 
     #[test]

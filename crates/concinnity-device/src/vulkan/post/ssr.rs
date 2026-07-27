@@ -21,10 +21,6 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 
-// GLSL sources
-const SSR_FULLSCREEN_VERT_GLSL: &str = include_str!("../shaders/ssr_fullscreen.vert");
-const SSR_RESOLVE_FRAG_GLSL: &str = include_str!("../shaders/ssr_resolve.frag");
-
 // HDR-format SSR resolve output. Replaces the raw HDR resolve as the scene
 // input the TAA / bloom / composite passes consume when SSR is on.
 pub(in crate::vulkan) const SSR_OUTPUT_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -68,36 +64,16 @@ pub(in crate::vulkan) struct SsrShaders {
 }
 
 // Compile every SSR GLSL source. `hot_reload` routes each source resolve
-// through [`crate::vulkan::pipeline::shader_source`].
+// through the builtins' disk-first path. The resolve fragment's shared
+// reflection-probe sampling ({PROBE_COMMON} / {MAX_PROBES} / {PROBE_DESC_SET}
+// = 1, the global set carrying the probe set/cubes here) is substituted by
+// the builtins assembly. Mirrors `compile_rt_shaders`.
 pub(in crate::vulkan) fn compile_ssr_shaders(hot_reload: bool) -> Result<SsrShaders, String> {
-    use super::super::pipeline::shader_source;
-    // Inject the shared reflection-probe sampling at the resolve's PROBE_COMMON
-    // marker; its {MAX_PROBES} + the global-set index {PROBE_DESC_SET} = 1 (the
-    // global set carrying the probe set/cubes is bound as set 1 here) are
-    // substituted in the same pass. Mirrors `compile_rt_shaders`.
-    let probe_common = shader_source(
-        hot_reload,
-        "probe_common.glsl",
-        super::super::pipeline::PROBE_COMMON_GLSL,
-    );
-    let resolve_src = shader_source(hot_reload, "ssr_resolve.frag", SSR_RESOLVE_FRAG_GLSL)
-        .replace("{PROBE_COMMON}", &probe_common)
-        .replace(
-            "{MAX_PROBES}",
-            &crate::vulkan::probe_uniforms::MAX_PROBES.to_string(),
-        )
-        .replace("{PROBE_DESC_SET}", "1");
+    use super::super::builtins;
+    let ctx = builtins::Ctx::plain(hot_reload);
     Ok(SsrShaders {
-        fullscreen_vs: compile_glsl(
-            &shader_source(hot_reload, "ssr_fullscreen.vert", SSR_FULLSCREEN_VERT_GLSL),
-            shaderc::ShaderKind::Vertex,
-            "ssr_fullscreen.vert",
-        )?,
-        resolve_fs: compile_glsl(
-            &resolve_src,
-            shaderc::ShaderKind::Fragment,
-            "ssr_resolve.frag",
-        )?,
+        fullscreen_vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
+        resolve_fs: builtins::SSR_RESOLVE_FRAG.compile(&ctx)?,
     })
 }
 

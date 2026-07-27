@@ -39,9 +39,9 @@ use super::texture::{
     create_image, create_image_view, one_shot_submit, transition_image_layout_range,
 };
 
-// Engine-shipped GLSL: the proxy vertex shader (standalone) and the helpers +
-// opaque template the per-volume user fragment shader is sandwiched between.
-const RAYMARCH_PROXY_VERT: &str = include_str!("shaders/raymarch_proxy.vert");
+// Engine-shipped GLSL: the helpers + opaque template the per-volume user
+// fragment shader is sandwiched between. The standalone proxy vertex shaders
+// are declared in `super::builtins`.
 const RAYMARCH_HELPERS_GLSL: &str = include_str!("shaders/raymarch_helpers.glsl");
 const RAYMARCH_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_template.glsl");
 
@@ -51,10 +51,8 @@ const RAYMARCH_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_template.gls
 const RAYMARCH_VOLUMETRIC_TEMPLATE_GLSL: &str =
     include_str!("shaders/raymarch_volumetric_template.glsl");
 
-// Depth-only shadow-caster shaders: a proxy vertex that projects through the
-// active cascade's light VP, and the depth-only fragment template appended after
-// the helpers + the user's `map` / `shade`.
-const RAYMARCH_SHADOW_PROXY_VERT: &str = include_str!("shaders/raymarch_shadow_proxy.vert");
+// Depth-only shadow fragment template appended after the helpers + the user's
+// `map` / `shade`.
 const RAYMARCH_SHADOW_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_shadow_template.glsl");
 
 // 36 indices for the unit-cube proxy: front faces are culled so each pixel
@@ -181,12 +179,8 @@ fn compile_raymarch_shaders(
     user_source: &str,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(hot_reload, "raymarch_proxy.vert", RAYMARCH_PROXY_VERT);
-    let vert = compile_glsl(
-        &vert_src,
-        shaderc::ShaderKind::Vertex,
-        "raymarch_proxy.vert",
-    )?;
+    let vert =
+        super::builtins::RAYMARCH_PROXY_VERT.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let frag_src = wrap_user_fragment(user_source, hot_reload);
     let frag = compile_glsl(
         &frag_src,
@@ -219,12 +213,8 @@ fn compile_raymarch_volumetric_shaders(
     user_source: &str,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(hot_reload, "raymarch_proxy.vert", RAYMARCH_PROXY_VERT);
-    let vert = compile_glsl(
-        &vert_src,
-        shaderc::ShaderKind::Vertex,
-        "raymarch_proxy.vert",
-    )?;
+    let vert =
+        super::builtins::RAYMARCH_PROXY_VERT.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let frag_src = wrap_user_fragment_volumetric(user_source, hot_reload);
     let frag = compile_glsl(
         &frag_src,
@@ -242,16 +232,8 @@ fn compile_raymarch_shadow_shaders(
     user_source: &str,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert_src = shader_source(
-        hot_reload,
-        "raymarch_shadow_proxy.vert",
-        RAYMARCH_SHADOW_PROXY_VERT,
-    );
-    let vert = compile_glsl(
-        &vert_src,
-        shaderc::ShaderKind::Vertex,
-        "raymarch_shadow_proxy.vert",
-    )?;
+    let vert = super::builtins::RAYMARCH_SHADOW_PROXY_VERT
+        .compile(&super::builtins::Ctx::plain(hot_reload))?;
     let helpers = shader_source(hot_reload, "raymarch_helpers.glsl", RAYMARCH_HELPERS_GLSL);
     let template = shader_source(
         hot_reload,

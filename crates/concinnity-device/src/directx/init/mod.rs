@@ -98,14 +98,7 @@ impl DxContext {
                     // Sets the live `self.n_chunk`.
                     n_chunk_max,
                 },
-            shaders:
-                ShaderBytes {
-                    vert: vert_bytes,
-                    frag: frag_bytes,
-                    main_is_engine_default,
-                    shadow: shadow_bytes,
-                    vert_instanced: vert_instanced_bytes,
-                },
+            shaders: world_shaders,
             media:
                 MediaPayloads {
                     textures,
@@ -157,6 +150,20 @@ impl DxContext {
                 },
             requirements: _,
         } = init;
+        // Entry 0 is the world default program; entries 1.. are the
+        // material-referenced shader buckets (see `world_shaders.rs`).
+        let &ShaderBytes {
+            vert: vert_bytes,
+            frag: frag_bytes,
+            main_is_engine_default,
+            shadow: shadow_bytes,
+            vert_instanced: vert_instanced_bytes,
+            // The world default program is never deferred (bucket 0 always
+            // decodes at init); only the material-referenced buckets can be.
+            deferred: _,
+        } = world_shaders
+            .first()
+            .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
         // The bindless main pass engages only when the main-shader override is
         // empty (it then uses the embedded bindless pipeline plus the embedded
         // default for any legacy / streamed fallback). The engine's built-in
@@ -595,7 +602,7 @@ impl DxContext {
         // binding type stays identical between disabled and enabled cases.
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
         // shadows). The shadow vertex shader is engine-internal (the baked
-        // SHADOW_VERT_HLSL), so an empty `shadow_bytes` override no longer means
+        // `builtins::SHADOW_VERT`), so an empty `shadow_bytes` override no longer means
         // "no shadows": it just selects the built-in shader. Mirrors the Metal
         // internal-shadow path.
         let effective_shadow_size = shadow_map_size;
@@ -1278,6 +1285,7 @@ impl DxContext {
                 shaders: &shaders,
                 vert_bytes,
                 frag_bytes,
+                bucket_shaders: world_shaders.get(1..).unwrap_or(&[]),
             },
             pipelines::MainPipelineConfig {
                 n_objects,
@@ -1298,6 +1306,9 @@ impl DxContext {
             main_pso,
             main_bindless_root_sig,
             main_bindless_pso,
+            world_pipelines,
+            bucket_stride,
+            bindless_main_shaders,
             object_buffer_resources,
             object_buffer_ptrs,
             cull_root_sig,
@@ -2144,6 +2155,8 @@ impl DxContext {
             None
         };
 
+        crate::shader_cache::report_init_and_prune();
+
         Ok(Self {
             win_state: Some(win_state),
             fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode::new(),
@@ -2290,6 +2303,8 @@ impl DxContext {
             cull: CullState {
                 main_bindless_root_sig,
                 main_bindless_pso,
+                world_pipelines,
+                bucket_stride,
                 object_buffer_resources,
                 object_buffer_ptrs,
                 bindless_pool_gpu,
@@ -2423,6 +2438,7 @@ impl DxContext {
             view_matrix: IDENTITY4,
             text_upload: super::draw::TextUploadRing::new(FRAMES),
             info_queue,
+            bindless_main_shaders,
             adapter,
             frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
             timestamps: TimestampState {

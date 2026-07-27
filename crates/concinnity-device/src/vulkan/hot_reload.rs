@@ -527,7 +527,7 @@ impl VkContext {
     // Rebuild the world-loaded shader pipelines (legacy main, optional
     // instanced, optional skinned main) from freshly compiled SPIR-V bytes.
     // Driven by asset hot-reload (`cn debug` only) when a captured
-    // `ShaderStage` source file is saved or the debug-WS `reload-assets`
+    // Shader stage source file is saved or the debug-WS `reload-assets`
     // command fires. Mirrors the rebuild-then-swap safety pattern of
     // `reload_shaders`: every replacement is constructed into a temporary
     // first and the swap (destroy displaced + store fresh) only runs when

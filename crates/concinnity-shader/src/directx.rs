@@ -118,6 +118,7 @@ mod tests {
             source_path: "user_frag.hlsl".to_string(),
             asset_name: asset_name.to_string(),
             kind: kind.to_string(),
+            ..Default::default()
         }
     }
 

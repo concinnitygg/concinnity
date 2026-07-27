@@ -1,17 +1,17 @@
 // JSON-args source selection for the shader-backed asset types.
 //
-// A ShaderStage / SdfVolume declares its shader source as a single path plus
+// A Shader stage / SdfVolume declares its shader source as a single path plus
 // an optional per-platform map; the build pipeline and the world checks pick
 // the building backend's entry straight from the raw args JSON. The runtime
-// selects from the typed struct instead (`ShaderStageExt` and the SdfVolume
+// selects from the typed struct instead (`StageSourceExt` and the SdfVolume
 // clamp in concinnity-core), so the runtime tier carries no JSON parsing.
 
 use concinnity_core::build::Platform;
 
-/// Resolve a ShaderStage's source filename for `platform` from its raw args:
+/// Resolve a shader stage source filename for `platform` from its raw stage args:
 /// the `sources` map entry for the platform wins, then the single `source`
 /// path when its file extension matches the platform.
-pub fn shader_stage_source_path(args: &serde_json::Value, platform: Platform) -> Option<String> {
+pub fn stage_source_path(args: &serde_json::Value, platform: Platform) -> Option<String> {
     if let Some(obj) = args.get("sources").and_then(|v| v.as_object())
         && let Some(src) = obj.get(platform.key()).and_then(|v| v.as_str())
     {
@@ -33,9 +33,9 @@ pub fn shader_stage_source_path(args: &serde_json::Value, platform: Platform) ->
 }
 
 /// Resolves the shader source filename for the current platform from raw
-/// ShaderStage args.
+/// stage args (a `Shader` stage sub-object or an SdfVolume).
 pub fn resolve_source_from_args(args: &serde_json::Value) -> Option<String> {
-    shader_stage_source_path(args, Platform::current())
+    stage_source_path(args, Platform::current())
 }
 
 // True when this stage declares at least one source and every declared source
@@ -115,15 +115,15 @@ mod tests {
         // A sources-map entry for the requested platform wins.
         let args = json!({"sources": {"metal": "a.metal", "hlsl": "a.hlsl", "glsl": "a.glsl"}});
         assert_eq!(
-            shader_stage_source_path(&args, Platform::Metal),
+            stage_source_path(&args, Platform::Metal),
             Some("a.metal".to_string())
         );
         assert_eq!(
-            shader_stage_source_path(&args, Platform::Hlsl),
+            stage_source_path(&args, Platform::Hlsl),
             Some("a.hlsl".to_string())
         );
         assert_eq!(
-            shader_stage_source_path(&args, Platform::Glsl),
+            stage_source_path(&args, Platform::Glsl),
             Some("a.glsl".to_string())
         );
 
@@ -131,14 +131,14 @@ mod tests {
         // platform, rejected when it is another backend's shader extension.
         let metal_only = json!({"source": "s.metal"});
         assert_eq!(
-            shader_stage_source_path(&metal_only, Platform::Metal),
+            stage_source_path(&metal_only, Platform::Metal),
             Some("s.metal".to_string())
         );
-        assert_eq!(shader_stage_source_path(&metal_only, Platform::Hlsl), None);
+        assert_eq!(stage_source_path(&metal_only, Platform::Hlsl), None);
 
         // No source at all -> None.
         assert_eq!(
-            shader_stage_source_path(&json!({"kind": "vertex"}), Platform::Metal),
+            stage_source_path(&json!({"kind": "vertex"}), Platform::Metal),
             None
         );
     }

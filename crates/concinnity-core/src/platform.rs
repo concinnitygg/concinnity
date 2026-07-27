@@ -1,6 +1,6 @@
 // The shader `Platform` selector: which shader source language the running
 // backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
-// foundation rather than the build module -- the engine picks a `ShaderStage`'s
+// foundation rather than the build module -- the engine picks a `Shader` stage's
 // current-platform source at runtime, and the build pipeline reuses the same
 // selection at compile time. Re-exported as `crate::build::Platform` for the
 // build-side callers.
@@ -38,7 +38,7 @@ impl Platform {
         }
     }
 
-    // String key used in the `sources` map of `ShaderStage`.
+    // String key used in the `sources` map of a `Shader` stage.
     pub fn key(self) -> &'static str {
         match self {
             Platform::Metal => "metal",
@@ -54,7 +54,7 @@ impl Platform {
     // extension is accepted by default (the build step surfaces a real compile
     // error later if the file truly can't be built).
     //
-    // Shared by the per-platform source selection of `ShaderStage` and
+    // Shared by the per-platform source selection of `Shader` stages and
     // `SdfVolume` so both apply identical fallback rules.
     pub fn accepts_ext(self, ext: &str) -> bool {
         match (ext, self) {

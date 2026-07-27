@@ -66,6 +66,8 @@ pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
     check_initial_screens(assets, errors);
     check_focus_ownership(assets, errors);
     check_renderable_contract(assets, errors);
+    check_shader_budget(assets, errors);
+    check_material_shader_consumers(assets, errors);
 }
 
 // At most one instance of every `singleton`-flagged type. No filler: companion
@@ -139,11 +141,11 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// A rendering world (one with a GraphicsConfig) needs a Window and a vertex
-// ShaderStage. Filled by companion injection: any `renders`-flagged type pulls
-// in the GraphicsConfig marker, which pulls in a Window and, when the world
-// declares no ShaderStage at all, the bundled default shader set. This fires
-// only when the world declares an incomplete render stack of its own.
+// A rendering world (one with a GraphicsConfig) needs a Window and a Shader.
+// Filled by companion injection: any `renders`-flagged type pulls in the
+// GraphicsConfig marker, which pulls in a Window and, when the world declares
+// no Shader at all, the bundled default shader. This fires only when the
+// world declares an incomplete render stack of its own.
 fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let has_graphics = assets
         .iter()
@@ -159,16 +161,71 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
                 .to_string(),
         );
     }
-    let has_vertex_stage = assets.iter().any(|a| {
-        norm(&a.asset_type) == "shaderstage"
-            && a.args.get("kind").and_then(|v| v.as_str()) == Some("vertex")
-    });
-    if !has_vertex_stage {
+    let has_shader = assets.iter().any(|a| norm(&a.asset_type) == "shader");
+    if !has_shader {
         errors.push(
-            "world renders (has a GraphicsConfig) but has no vertex ShaderStage, \
-             add a ShaderStage with kind \"vertex\" and a `source` path"
+            "world renders (has a GraphicsConfig) but has no Shader, add a \
+             Shader with `vertex` and `fragment` stage sources"
                 .to_string(),
         );
+    }
+}
+
+// The renderer gives every Shader its own pipeline and its own indirect
+// command buffer per draw pass, sized at init from a fixed bucket count. No
+// filler: the count is exactly what the world declares.
+fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    let shaders = names_of_type(assets, "shader");
+    let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+    if shaders.len() > max {
+        let mut names: Vec<&str> = shaders.into_iter().collect();
+        names.sort_unstable();
+        errors.push(format!(
+            "world declares {} Shaders but at most {max} are supported ({}); \
+             share one Shader between more materials",
+            names.len(),
+            names.join(", ")
+        ));
+    }
+}
+
+// A Material naming a Shader may only be used where the renderer can honour it.
+// Instanced, skinned, and voxel-chunk draws render under the world's default
+// Shader, so a custom Shader on their material would silently shade them as if
+// it were not there. No filler: this is a pure authoring constraint.
+fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    // (consumer type, what renders it) for the draw paths with no bucket.
+    const UNSUPPORTED: &[(&str, &str)] = &[
+        ("instancedprop", "instanced draws"),
+        ("skinnedmesh", "skinned draws"),
+        ("voxelworld", "voxel chunk draws"),
+    ];
+    let shaded: HashSet<&str> = assets
+        .iter()
+        .filter(|a| norm(&a.asset_type) == "material" && str_arg(a, "shader").is_some())
+        .map(|a| a.name.as_str())
+        .collect();
+    if shaded.is_empty() {
+        return;
+    }
+    for (consumer_type, draws) in UNSUPPORTED {
+        for consumer in assets
+            .iter()
+            .filter(|a| norm(&a.asset_type) == *consumer_type)
+        {
+            let Some(material) = str_arg(consumer, "material") else {
+                continue;
+            };
+            if !shaded.contains(material) {
+                continue;
+            }
+            errors.push(format!(
+                "{} '{}' uses material '{}', which names a Shader, but {} always render with the \
+                 world's default Shader; drop the Shader from that material or give '{}' a \
+                 material without one",
+                consumer.asset_type, consumer.name, material, draws, consumer.name
+            ));
+        }
     }
 }
 
@@ -195,9 +252,12 @@ mod tests {
             asset("gfx", "GraphicsConfig", serde_json::json!({})),
             asset("win", "Window", serde_json::json!({})),
             asset(
-                "vert",
-                "ShaderStage",
-                serde_json::json!({"kind": "vertex", "sources": {"metal": "x.metal"}}),
+                "scene_shader",
+                "Shader",
+                serde_json::json!({
+                    "vertex": {"sources": {"metal": "x.metal"}},
+                    "fragment": {"sources": {"metal": "x.metal"}}
+                }),
             ),
         ]
     }
@@ -316,14 +376,11 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_window_or_vertex_stage_reports_both() {
+    fn graphics_config_without_window_or_shader_reports_both() {
         let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
-        assert!(
-            errs.iter().any(|e| e.contains("vertex ShaderStage")),
-            "{errs:?}"
-        );
+        assert!(errs.iter().any(|e| e.contains("no Shader")), "{errs:?}");
     }
 
     #[test]
@@ -334,6 +391,90 @@ mod tests {
     #[test]
     fn a_non_rendering_world_needs_no_render_stack() {
         let assets = vec![asset("clip", "AudioClip", serde_json::json!({}))];
+        assert!(errors_for(&assets).is_empty());
+    }
+
+    fn shader(name: &str) -> WorldJsonlAsset {
+        asset(
+            name,
+            "Shader",
+            serde_json::json!({
+                "vertex": {"sources": {"metal": "x.metal"}},
+                "fragment": {"sources": {"metal": "x.metal"}}
+            }),
+        )
+    }
+
+    #[test]
+    fn more_shaders_than_buckets_is_an_error() {
+        let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+        let mut assets = render_stack();
+        for i in 0..max {
+            assets.push(shader(&format!("extra_{i}")));
+        }
+        let errs = errors_for(&assets);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].contains(&format!("at most {max}")), "{errs:?}");
+
+        // Exactly the cap passes.
+        assets.pop();
+        assert!(errors_for(&assets).is_empty());
+    }
+
+    // The draw paths that carry no shader bucket must not silently drop a
+    // material's Shader: authoring one is an error, not a fallback.
+    #[test]
+    fn a_shaded_material_on_an_unbucketed_consumer_is_an_error() {
+        let shaded = asset(
+            "hero_mat",
+            "Material",
+            serde_json::json!({"shader": "custom_shader"}),
+        );
+        for (consumer_type, name) in [
+            ("InstancedProp", "grass"),
+            ("SkinnedMesh", "hero"),
+            ("VoxelWorld", "terrain"),
+        ] {
+            let mut assets = render_stack();
+            assets.push(shader("custom_shader"));
+            assets.push(shaded.clone());
+            assets.push(asset(
+                name,
+                consumer_type,
+                serde_json::json!({"material": "hero_mat"}),
+            ));
+            let errs = errors_for(&assets);
+            assert_eq!(errs.len(), 1, "{consumer_type}: {errs:?}");
+            assert!(errs[0].contains("hero_mat"), "{errs:?}");
+            assert!(errs[0].contains(name), "{errs:?}");
+        }
+    }
+
+    #[test]
+    fn an_unshaded_material_is_fine_on_every_consumer() {
+        let mut assets = render_stack();
+        assets.push(asset(
+            "plain_mat",
+            "Material",
+            serde_json::json!({"roughness": 0.5}),
+        ));
+        assets.push(asset(
+            "grass",
+            "InstancedProp",
+            serde_json::json!({"material": "plain_mat"}),
+        ));
+        // A Prop renders through the bucketed path, so a Shader is fine there.
+        assets.push(shader("custom_shader"));
+        assets.push(asset(
+            "wall_mat",
+            "Material",
+            serde_json::json!({"shader": "custom_shader"}),
+        ));
+        assets.push(asset(
+            "wall",
+            "Prop",
+            serde_json::json!({"material": "wall_mat"}),
+        ));
         assert!(errors_for(&assets).is_empty());
     }
 }

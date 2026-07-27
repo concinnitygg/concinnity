@@ -47,7 +47,7 @@ pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
 pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     match type_norm {
         "animgraph" => anim_graph::check(name, args),
-        "shaderstage" => shader::check(name, args),
+        "shader" => shader::check(name, args),
         "prop" => prop::check(name, args),
         "sdfvolume" | "sdf" => sdf_volume::check(name, args),
         "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
@@ -123,10 +123,10 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_vertex_stage_is_an_error() {
+    fn graphics_config_without_shader_is_an_error() {
         let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
         let errs = check_world(&assets).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("vertex ShaderStage")));
+        assert!(errs.iter().any(|e| e.contains("no Shader")));
     }
 
     #[test]
@@ -135,11 +135,11 @@ mod tests {
             asset("gfx", "GraphicsConfig", serde_json::json!({})),
             asset("win", "Window", serde_json::json!({})),
             asset(
-                "vert",
-                "ShaderStage",
+                "scene_shader",
+                "Shader",
                 serde_json::json!({
-                    "kind": "vertex",
-                    "sources": {"metal": "x.metal", "hlsl": "x.hlsl", "glsl": "x.glsl"}
+                    "vertex": {"sources": {"metal": "x.metal", "hlsl": "x.hlsl", "glsl": "x.glsl"}},
+                    "fragment": {"sources": {"metal": "x.metal", "hlsl": "x.hlsl", "glsl": "x.glsl"}}
                 }),
             ),
         ];

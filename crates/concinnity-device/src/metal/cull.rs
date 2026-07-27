@@ -7,7 +7,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
 use objc2_metal::{
     MTLArgumentEncoder, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
     MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderCommandEncoder as _,
@@ -15,7 +14,7 @@ use objc2_metal::{
 };
 
 use super::context::*;
-use super::pipeline::{ns_str, shader_source};
+use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
 
@@ -34,22 +33,26 @@ use crate::gfx::lod::camera_distance as lod_camera_distance;
 pub(crate) struct CullState {
     // GPU-driven cull pipeline. `Some` only when `bindless` is set.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // Indirect command buffer the cull kernel encodes draws into; rebuilt by
-    // `ensure_icb_capacity` when the draw list outgrows it.
-    pub icb: Option<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
-    // Encoder that writes `icb` into the kernel's argument buffer.
+    // How many shader buckets this world routes between: the world Shader
+    // count, clamped to MAX_SHADER_BUCKETS. Fixed at init.
+    pub bucket_count: usize,
+    // One indirect command buffer per shader bucket (index = bucket); the
+    // cull kernel encodes each record's draw into its bucket's ICB and resets
+    // its slot everywhere else. Empty until `ensure_icb_capacity` builds them.
+    pub icbs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
+    // Encoder that writes the `icbs` array into the kernel's argument buffer.
     pub icb_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Argument buffer holding the encoded reference to `icb`.
+    // Argument buffer holding the encoded references to `icbs`.
     pub icb_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // Command capacity of `icb`; 0 until first built. `icb_2` + `status_buffer`
-    // grow in lockstep with it.
+    // Command capacity of each of `icbs`; 0 until first built. `icbs_2` +
+    // `status_buffer` grow in lockstep with it.
     pub icb_capacity: usize,
     // Second-pass cull pipeline for two-pass occlusion. `Some` whenever
     // `pipeline` is; used only when `two_pass_occlusion` is on.
     pub pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // Second indirect command buffer holding the phase-2 (disocclusion) draws.
-    pub icb_2: Option<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
-    // Argument encoder + buffer wiring `icb_2` into the phase-2 kernel.
+    // Per-bucket phase-2 (disocclusion) indirect command buffers.
+    pub icbs_2: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
+    // Argument encoder + buffer wiring `icbs_2` into the phase-2 kernel.
     pub icb_2_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub icb_2_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Per-object status buffer (one `u32` each): phase-1 cull writes it,
@@ -263,7 +266,10 @@ struct CullView<'a> {
 // argument buffer, and the per-object status scratch it writes each record's
 // cull outcome to.
 struct CullOutputTarget<'a> {
-    icb: &'a Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
+    // One ICB per shader bucket, encoded at matching indices in `arg_buf`;
+    // the dispatch's `bucket_count` is this slice's length. Single-stream
+    // dispatches (the mirror cull) pass one.
+    icbs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
     arg_buf: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     status: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
 }
@@ -420,7 +426,10 @@ impl MtlContext {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable()),
+                // The record's shader bucket rides the upper flag bits so the
+                // cull kernel can route its command into that bucket's ICB.
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
+                    | crate::gfx::render_types::draw_args_bucket_bits(obj.shader_bucket),
             });
         }
         // Append the instances' draw args in the SAME cluster-then-instance
@@ -473,13 +482,13 @@ impl MtlContext {
         frustum: &crate::gfx::frustum::Frustum,
         cam_pos: [f32; 3],
     ) -> Result<(), String> {
-        let (Some(icb), Some(arg_buf), Some(status)) = (
-            &self.cull.icb,
-            &self.cull.icb_arg_buffer,
-            &self.cull.status_buffer,
-        ) else {
+        let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
+        else {
             return Ok(());
         };
+        if self.cull.icbs.is_empty() {
+            return Ok(());
+        }
         self.encode_cull_into(
             cmd_buf,
             CullSceneBuffers {
@@ -488,7 +497,7 @@ impl MtlContext {
             },
             CullView { frustum, cam_pos },
             CullOutputTarget {
-                icb,
+                icbs: &self.cull.icbs,
                 arg_buf,
                 status,
             },
@@ -531,7 +540,7 @@ impl MtlContext {
             },
             CullView { frustum, cam_pos },
             CullOutputTarget {
-                icb: &mirror.icb,
+                icbs: std::slice::from_ref(&mirror.icb),
                 arg_buf: &mirror.arg_buffer,
                 status,
             },
@@ -564,7 +573,7 @@ impl MtlContext {
         } = scene;
         let CullView { frustum, cam_pos } = view;
         let CullOutputTarget {
-            icb,
+            icbs,
             arg_buf,
             status,
         } = target;
@@ -622,7 +631,8 @@ impl MtlContext {
             // Main + mirror cull write at `tid` (cascade_base 0); the shadow cull
             // is the only path that offsets by cascade.
             cascade_base: 0,
-            _pad_skin: [0; 2],
+            bucket_count: icbs.len() as u32,
+            _pad_skin: 0,
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -664,9 +674,11 @@ impl MtlContext {
                 enc.setTexture_atIndex(Some(tex), 0);
             }
         }
-        // The kernel writes draw commands into the ICB through the argument
-        // buffer, so the ICB must be declared resident for the compute pass.
-        enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
+        // The kernel writes draw commands into the ICBs through the argument
+        // buffer, so each must be declared resident for the compute pass.
+        for icb in icbs {
+            enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
+        }
 
         // One thread per draw object, non-uniform grid: no remainder branch
         // needed beyond the kernel's own bounds guard.
@@ -705,15 +717,17 @@ impl MtlContext {
         use objc2_metal::{
             MTLComputeCommandEncoder as _, MTLComputePipelineState as _, MTLResourceUsage, MTLSize,
         };
-        let (Some(pipeline), Some(icb), Some(arg_buf), Some(status), Some(hiz)) = (
+        let (Some(pipeline), Some(arg_buf), Some(status), Some(hiz)) = (
             &self.cull.pipeline_phase2,
-            &self.cull.icb_2,
             &self.cull.icb_2_arg_buffer,
             &self.cull.status_buffer,
             self.cull.hiz.as_ref(),
         ) else {
             return Ok(0);
         };
+        if self.cull.icbs_2.is_empty() {
+            return Ok(0);
+        }
         // Static objects + folded instances re-tested against the fresh Hi-Z
         // pyramid; same record count as phase 1.
         let object_count = self.cull_count();
@@ -742,7 +756,8 @@ impl MtlContext {
             hiz_enabled: 1,
             skinned_base: self.skinned_record_base() as u32,
             cascade_base: 0,
-            _pad_skin: [0; 2],
+            bucket_count: self.cull.icbs_2.len() as u32,
+            _pad_skin: 0,
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -773,9 +788,11 @@ impl MtlContext {
             enc.setBuffer_offset_atIndex(Some(self.skinned_index_or_placeholder()), 0, 6);
             enc.setTexture_atIndex(Some(hiz.texture.as_ref()), 0);
         }
-        // The kernel writes draw commands into the phase-2 ICB through the
-        // argument buffer, so that ICB must be declared resident here too.
-        enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
+        // The kernel writes draw commands into the phase-2 ICBs through the
+        // argument buffer, so each must be declared resident here too.
+        for icb in &self.cull.icbs_2 {
+            enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
+        }
 
         let tg = pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
         enc.dispatchThreads_threadsPerThreadgroup(
@@ -888,7 +905,9 @@ impl MtlContext {
                 hiz_enabled: 0,
                 skinned_base,
                 cascade_base: (c * object_count) as u32,
-                _pad_skin: [0; 2],
+                // The shadow kernel writes one depth-only stream: icbs[0].
+                bucket_count: 1,
+                _pad_skin: 0,
             };
             unsafe {
                 enc.setBytes_length_atIndex(
@@ -1071,12 +1090,7 @@ pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<CullPipeline, String> {
-    let msl = shader_source(hot_reload, "cull.metal");
-
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("cull shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "cull.metal")?;
 
     let cull_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
@@ -1131,11 +1145,7 @@ pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<ShadowCullPipeline, String> {
-    let msl = shader_source(hot_reload, "cull.metal");
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("shadow cull shader compile error: {:?}", e))?;
+    let library = shader_library(device, hot_reload, "cull.metal")?;
     let shadow_fn = library
         .newFunctionWithName(&ns_str("cull_encode_shadow"))
         .ok_or("cull_encode_shadow not found in cull library")?;

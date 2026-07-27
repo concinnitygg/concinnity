@@ -17,9 +17,8 @@ use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::SkinnedDrawObject;
 use crate::metal::context::{HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region};
 use crate::metal::math::IDENTITY4;
-use crate::metal::pipeline::{load_library, ns_str, shader_source};
+use crate::metal::pipeline::{load_library, ns_str, shader_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
-use crate::metal::post::fullscreen::compile_library;
 
 // All skinned-mesh rendering state grouped into one feature unit: the main +
 // shadow pipelines, the shared skinned vertex / index buffers, the per-mesh
@@ -167,8 +166,7 @@ pub(crate) fn build_skinned_shadow_pipeline(
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "shadow_map.metal");
-    let shadow_library = compile_library(device, msl.as_ref(), "shadow_map")?;
+    let shadow_library = shader_library(device, hot_reload, "shadow_map.metal")?;
     let shadow_fn = shadow_library
         .newFunctionWithName(&ns_str("shadow_vertex_main_skinned"))
         .ok_or("shadow_vertex_main_skinned not found in shadow library")?;

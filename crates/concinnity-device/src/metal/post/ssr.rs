@@ -15,9 +15,9 @@ use objc2_metal::{
 
 use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_source;
+use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, compile_library,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
 
 // All screen-space-reflection feature state grouped into one unit: the
@@ -51,8 +51,7 @@ pub(crate) fn build_ssr_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "ssr.metal");
-    let library = compile_library(device, msl.as_ref(), "SSR")?;
+    let library = shader_library(device, hot_reload, "ssr.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,
@@ -71,8 +70,7 @@ pub(crate) fn build_reflection_composite_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "reflection_composite.metal");
-    let library = compile_library(device, msl.as_ref(), "reflection composite")?;
+    let library = shader_library(device, hot_reload, "reflection_composite.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,
@@ -90,8 +88,7 @@ pub(crate) fn build_reflection_blur_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let msl = shader_source(hot_reload, "reflection_composite.metal");
-    let library = compile_library(device, msl.as_ref(), "reflection blur")?;
+    let library = shader_library(device, hot_reload, "reflection_composite.metal")?;
     build_fullscreen_pipeline(
         device,
         &library,

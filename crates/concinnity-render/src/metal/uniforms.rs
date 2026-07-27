@@ -147,10 +147,14 @@ pub struct CullUniforms {
     // Command-slot base offset for the GPU-driven shadow cull: the
     // shadow ICB holds NUM_SHADOW_CASCADES * object_count slots and cascade `c`
     // writes its survivors at `cascade_base + tid` (= c * object_count). The
-    // main cull leaves it 0 (writes at `tid`). Trailing `_pad_skin` rounds the
-    // struct to 208 bytes so it matches the 16-aligned MSL `CullUniforms`.
+    // main cull leaves it 0 (writes at `tid`).
     pub cascade_base: u32,
-    pub _pad_skin: [u32; 2],
+    // How many shader-bucket ICBs this dispatch's argument buffer carries.
+    // The main cull passes the world's bucket count; single-stream dispatches
+    // (shadow, mirror) pass 1. Trailing `_pad_skin` rounds the struct to 208
+    // bytes so it matches the 16-aligned MSL `CullUniforms`.
+    pub bucket_count: u32,
+    pub _pad_skin: u32,
 }
 
 // Uniforms pushed to the TAA resolve fragment shader at buffer(0). Layout
@@ -565,8 +569,8 @@ mod tests {
     fn cull_uniforms_layout_matches_msl() {
         // MSL `CullUniforms` in cull.metal: float4 planes[6], packed_float3
         // cam_pos + object_count, then a float4x4 at the 16-aligned offset 112,
-        // a float2 + two uints, then skinned_base + cascade_base + 8B pad
-        // rounding to 208.
+        // a float2 + two uints, then skinned_base + cascade_base +
+        // bucket_count + 4B pad rounding to 208.
         assert_eq!(size_of::<CullUniforms>(), 208);
         assert_eq!(offset_of!(CullUniforms, planes), 0);
         assert_eq!(offset_of!(CullUniforms, cam_pos), 96);
@@ -577,6 +581,7 @@ mod tests {
         assert_eq!(offset_of!(CullUniforms, hiz_enabled), 188);
         assert_eq!(offset_of!(CullUniforms, skinned_base), 192);
         assert_eq!(offset_of!(CullUniforms, cascade_base), 196);
+        assert_eq!(offset_of!(CullUniforms, bucket_count), 200);
         assert_eq!(size_of::<CullUniforms>() % 16, 0);
     }
 

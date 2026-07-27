@@ -30,6 +30,10 @@ use super::hiz::CullHizParams;
 // is unchanged. Size pinned by `pipeline::CULL_PUSH_CONSTANT_BYTES`.
 pub(in crate::vulkan) use crate::vulkan::uniforms::CullParams;
 
+// Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
+pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
+    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+
 impl VkContext {
     // Total records the GPU-driven cull + bindless main pass processes: the
     // build-time static objects, the instanced-cluster instances folded in after
@@ -58,6 +62,20 @@ impl VkContext {
     // chunk reserve sits inside the prefix, so the skinned base is past it.
     pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
         self.n_objects + self.n_instances + self.n_chunk
+    }
+
+    // Shader-bucket regions the cull kernel routes between: the world default
+    // program plus one per material-referenced world shader. 1 when the world
+    // declares no extra shaders, which collapses the indirect buffer to the
+    // single region every pass used before buckets existed.
+    pub(in crate::vulkan) fn shader_bucket_count(&self) -> usize {
+        1 + self.cull.world_pipelines.len()
+    }
+
+    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
+    pub(in crate::vulkan) fn bucket_region_offset(&self, bucket: usize) -> vk::DeviceSize {
+        (bucket * self.cull.bucket_stride) as vk::DeviceSize
+            * INDIRECT_COMMAND_STRIDE as vk::DeviceSize
     }
 
     // Walk the resident streamed-chunk draw objects -- the build-time-geometry tail
@@ -145,6 +163,8 @@ impl VkContext {
             planes: [[0.0; 4]; 6],
             cam_pos,
             object_count: self.cull_count() as u32,
+            bucket_count: self.shader_bucket_count() as u32,
+            bucket_stride: self.cull.bucket_stride as u32,
         };
         for (i, p) in frustum.planes.iter().enumerate() {
             params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -258,6 +278,11 @@ impl VkContext {
                     planes: [[0.0; 4]; 6],
                     cam_pos,
                     object_count,
+                    // The shadow kernel writes one depth-only stream per cascade
+                    // into that cascade's own indirect buffer, so it never strides
+                    // by bucket.
+                    bucket_count: 1,
+                    bucket_stride: object_count,
                 };
                 for (i, p) in frustum.planes.iter().enumerate() {
                     params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -335,6 +360,8 @@ impl VkContext {
             planes: [[0.0; 4]; 6],
             cam_pos,
             object_count: self.cull_count() as u32,
+            bucket_count: self.shader_bucket_count() as u32,
+            bucket_stride: self.cull.bucket_stride as u32,
         };
         for (i, p) in frustum.planes.iter().enumerate() {
             params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];

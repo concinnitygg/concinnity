@@ -38,7 +38,7 @@ macro_rules! for_each_component {
         $cb! {
             Window            => $crate::assets::Window { gen, external, singleton },
             GraphicsConfig    => $crate::assets::GraphicsConfig { gen, external, singleton, renders },
-            ShaderStage       => $crate::assets::ShaderStage { manual, external, compiled },
+            Shader            => $crate::assets::Shader { manual, external, compiled },
             Camera3D          => $crate::assets::Camera3D { manual, external, useful_blank, args: Camera3DArgs },
             FrameInput        => $crate::assets::FrameInput { gen, runtime },
             Prop              => $crate::assets::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop")] },

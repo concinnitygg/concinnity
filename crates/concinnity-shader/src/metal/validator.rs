@@ -11,7 +11,9 @@
 use std::sync::Once;
 
 use concinnity_cook::shader::{ShaderBuildValidator, set_shader_build_validator};
-use concinnity_device::metal::{ShaderLayoutIssue, validate_metal_shader_layout};
+use concinnity_device::metal::{
+    ShaderLayoutIssue, metal_source_defines, validate_metal_shader_layout,
+};
 
 // Register the Metal shader-layout validator with the core build pipeline. Safe
 // to call from every build entry point; only the first call installs it (the
@@ -33,13 +35,35 @@ impl ShaderBuildValidator for MetalShaderValidator {
                 "shader asset '{asset_name}': {msg}\nThe shader declares an engine-provided buffer \
                  struct with a different memory layout than the engine's, so the GPU would read the \
                  engine's data through the wrong offsets. Match the documented layout (see the \
-                 ShaderStage asset reference)."
+                 Shader asset reference)."
             )),
             Err(ShaderLayoutIssue::Infra(reason)) => {
                 // Fail open: never break a build over a reflection-infrastructure
                 // problem. A missed check is recoverable; a spurious build break
                 // erodes trust in the build.
                 tracing::warn!("shader asset '{asset_name}': skipped layout validation ({reason})");
+                Ok(())
+            }
+        }
+    }
+
+    fn validate_metal_entry(
+        &self,
+        source: &str,
+        entry: &str,
+        asset_name: &str,
+    ) -> Result<(), String> {
+        match metal_source_defines(source, entry) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "shader asset '{asset_name}': fragment stage does not define `{entry}`.\nA world \
+                 declaring more than one Shader renders through the bindless main pass, so every \
+                 Shader's fragment stage must define this entry point (see the Shader asset \
+                 reference). Declare one Shader, or add the entry point."
+            )),
+            // Same fail-open rule as the layout check above.
+            Err(ShaderLayoutIssue::Mismatch(msg)) | Err(ShaderLayoutIssue::Infra(msg)) => {
+                tracing::warn!("shader asset '{asset_name}': skipped entry-point check ({msg})");
                 Ok(())
             }
         }
@@ -119,5 +143,59 @@ mod tests {
         MetalShaderValidator
             .validate_metal(GOOD_VERTEX, "vertex", "ok_vert")
             .expect("a faithful shader must pass the build");
+    }
+
+    // Only the entry point's presence is checked here, so a stub with the right
+    // name is enough; its bindings are the layout validator's business.
+    const BINDLESS_FRAGMENT: &str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+        fragment float4 fragment_main_bindless() { return float4(1.0); }
+    "#;
+
+    const PER_DRAW_FRAGMENT: &str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+        fragment float4 fragment_main() { return float4(1.0); }
+    "#;
+
+    // A multi-Shader world needs the bindless entry point in every fragment
+    // stage; missing it fails `cn build` rather than the pipeline build (which
+    // for a scene-owned shader would land mid-session).
+    #[test]
+    fn a_missing_required_entry_point_fails_the_build() {
+        if !metal_device_available() {
+            return;
+        }
+        let err = MetalShaderValidator
+            .validate_metal_entry(PER_DRAW_FRAGMENT, "fragment_main_bindless", "wall_shader")
+            .expect_err("a fragment stage without the entry point must fail the build");
+        assert!(err.contains("wall_shader"), "names the asset: {err}");
+        assert!(
+            err.contains("fragment_main_bindless"),
+            "names the entry point: {err}"
+        );
+    }
+
+    #[test]
+    fn a_declared_entry_point_passes() {
+        if !metal_device_available() {
+            return;
+        }
+        MetalShaderValidator
+            .validate_metal_entry(BINDLESS_FRAGMENT, "fragment_main_bindless", "wall_shader")
+            .expect("a fragment stage declaring the entry point must pass");
+    }
+
+    // Reflection infrastructure problems (here: a source that will not compile)
+    // never break a build; the pipeline build stays the backstop.
+    #[test]
+    fn an_uncompilable_source_fails_open() {
+        if !metal_device_available() {
+            return;
+        }
+        MetalShaderValidator
+            .validate_metal_entry("not metal source", "fragment_main_bindless", "broken")
+            .expect("an infrastructure problem must not fail the build");
     }
 }

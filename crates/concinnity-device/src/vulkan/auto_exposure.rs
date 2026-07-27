@@ -18,39 +18,17 @@ use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::vulkan::uniforms::{AUTO_EXPOSURE_PUSH_BYTES, AutoExposureParams};
 
 use super::context::VkContext;
-use super::pipeline::{compile_glsl, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::texture::create_buffer;
-
-pub(in crate::vulkan) const AUTO_EXPOSURE_BUILD_GLSL: &str =
-    include_str!("shaders/auto_exposure_build.comp");
-pub(in crate::vulkan) const AUTO_EXPOSURE_AVERAGE_GLSL: &str =
-    include_str!("shaders/auto_exposure_average.comp");
 
 // Compile the auto-exposure build + average compute kernels. Used at init
 // and by shader hot-reload to rebuild the two compute pipelines.
 pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let build_src = shader_source(
-        hot_reload,
-        "auto_exposure_build.comp",
-        AUTO_EXPOSURE_BUILD_GLSL,
-    );
-    let average_src = shader_source(
-        hot_reload,
-        "auto_exposure_average.comp",
-        AUTO_EXPOSURE_AVERAGE_GLSL,
-    );
-    let build_cs = compile_glsl(
-        &build_src,
-        shaderc::ShaderKind::Compute,
-        "auto_exposure_build.comp",
-    )?;
-    let average_cs = compile_glsl(
-        &average_src,
-        shaderc::ShaderKind::Compute,
-        "auto_exposure_average.comp",
-    )?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let build_cs = super::builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
+    let average_cs = super::builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
     Ok((build_cs, average_cs))
 }
 

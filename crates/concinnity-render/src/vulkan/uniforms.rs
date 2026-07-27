@@ -64,14 +64,20 @@ pub struct TaaPush {
 }
 
 // The GPU-cull push constant (cull.comp, std430): six already-normalised frustum
-// planes (xyz = normal, w = d), then the camera position sharing its 16-byte slot
-// with the build-time object count (112 B total).
+// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
+// the build-time object count, then the shader-bucket routing (120 B total).
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullParams {
     pub planes: [[f32; 4]; 6],
     pub cam_pos: [f32; 3],
     pub object_count: u32,
+    // Shader-bucket command regions in the indirect buffer. The kernel writes
+    // every record's slot in all `bucket_count` regions (a draw in the record's
+    // own bucket, a no-op everywhere else); region `b` starts at command
+    // `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    pub bucket_count: u32,
+    pub bucket_stride: u32,
 }
 
 // The main-pass std140 `ViewBlock` UBO: two mat4 (VP + view) then elapsed/pad and
@@ -318,10 +324,12 @@ mod tests {
     // object_count (112 B total).
     #[test]
     fn cull_params_layout_matches_glsl() {
-        assert_eq!(size_of::<CullParams>(), 112);
+        assert_eq!(size_of::<CullParams>(), 120);
         assert_eq!(offset_of!(CullParams, planes), 0);
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
         assert_eq!(offset_of!(CullParams, object_count), 108);
+        assert_eq!(offset_of!(CullParams, bucket_count), 112);
+        assert_eq!(offset_of!(CullParams, bucket_stride), 116);
     }
 
     // ViewUniforms must match the std140 `ViewBlock` UBO in the main-pass

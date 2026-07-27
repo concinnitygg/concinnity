@@ -75,16 +75,7 @@ impl VkContext {
                     // Sets the live `self.n_chunk`.
                     n_chunk_max,
                 },
-            shaders:
-                ShaderBytes {
-                    vert: vert_bytes,
-                    frag: frag_bytes,
-                    // The built-in default's SPIR-V payload is already empty, so
-                    // the bindless path is selected by the bytes alone.
-                    main_is_engine_default: _,
-                    shadow: shadow_bytes,
-                    vert_instanced: vert_instanced_bytes,
-                },
+            shaders: world_shaders,
             media:
                 MediaPayloads {
                     textures,
@@ -140,6 +131,22 @@ impl VkContext {
                 },
             requirements: _,
         } = init;
+        // Entry 0 is the world default program; entries 1.. are the
+        // material-referenced shader buckets (see `world_shaders.rs`).
+        let &ShaderBytes {
+            vert: vert_bytes,
+            frag: frag_bytes,
+            // The built-in default's SPIR-V payload is already empty, so
+            // the bindless path is selected by the bytes alone.
+            main_is_engine_default: _,
+            shadow: shadow_bytes,
+            vert_instanced: vert_instanced_bytes,
+            // The world default program is never deferred (bucket 0 always
+            // decodes at init); only the material-referenced buckets can be.
+            deferred: _,
+        } = world_shaders
+            .first()
+            .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
         let (title, width, height, title_bar) = (
             window.title.as_str(),
             window.width,
@@ -643,7 +650,7 @@ impl VkContext {
         //  Shadow map (4-layer D32_SFLOAT array image, one slice per cascade)
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
         // shadows). The shadow vertex shader is engine-internal (the baked
-        // SHADOW_VERT_GLSL), so an empty `shadow_bytes` override no longer means
+        // shadow.vert), so an empty `shadow_bytes` override no longer means
         // "no shadows": it just selects the built-in shader. Mirrors the Metal
         // internal-shadow path.
         let effective_shadow_size = shadow_map_size;
@@ -1694,10 +1701,12 @@ impl VkContext {
         // there is ANYTHING to GPU-drive -- build-time static geometry, instances,
         // streamed chunks, or skinned meshes (`n_cull > 0`). A pure-voxel world has
         // no build-time geometry but folds its chunks here. Its texture pool is the
-        // deduplicated [albedo..] ++ [normal-map..] image set.
+        // deduplicated [albedo..] ++ [normal-map..] image set
+        // (`gpu_textures.len() + gpu_normal_maps.len()`); the helper derives the
+        // same value from the texture table so the export-time precompile matches.
         let bindless_active = !is_spirv(vert_bytes) && !is_spirv(frag_bytes) && n_cull > 0;
         let bindless_pool_size = if bindless_active {
-            gpu_textures.len() + gpu_normal_maps.len()
+            super::builtins::bindless_pool_size(textures.len())
         } else {
             0
         };
@@ -2071,6 +2080,7 @@ impl VkContext {
             object_buffers,
             object_buffer_memories,
             object_buffer_ptrs,
+            bindless_main_spv,
         ) = if bindless_active {
             let set_bindings = [
                 vk::DescriptorSetLayoutBinding::default()
@@ -2185,6 +2195,7 @@ impl VkContext {
                 buffers,
                 memories,
                 ptrs,
+                (bvs, bfs),
             )
         } else {
             (
@@ -2195,8 +2206,46 @@ impl VkContext {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                (Vec::new(), Vec::new()),
             )
         };
+
+        // Material-referenced shaders (ShaderHandle 1..) each get their own
+        // bindless main-pass pipeline, so their draws route into their own region
+        // of the GPU-culled command buffer. They exist only on the bindless path:
+        // a world with a legacy per-draw main shader carries no bucket routing.
+        let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
+        let world_pipelines = match (bindless_pipeline_layout, bucket_shaders.is_empty()) {
+            (Some(layout), false) => {
+                let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+                if bucket_shaders.len() + 1 > max {
+                    return Err(format!(
+                        "world declares {} Shaders but at most {max} can be routed",
+                        bucket_shaders.len() + 1
+                    ));
+                }
+                build_world_pipeline_table(
+                    &device,
+                    BucketPipelineTargets {
+                        render_pass: main_render_pass,
+                        layout,
+                        msaa_samples,
+                        swapchain_format,
+                    },
+                    bucket_shaders,
+                    &bindless_main_spv,
+                )?
+            }
+            (_, false) => {
+                return Err(
+                    "material-referenced world shaders need the bindless main pass, which a \
+                     world-authored main shader disables"
+                        .to_string(),
+                );
+            }
+            _ => Vec::new(),
+        };
+        let shader_bucket_count = 1 + world_pipelines.len();
 
         // Hardware ray-traced reflections: the scene acceleration structure +
         // the inline-`rayQueryEXT` reflection pass. Built only when the world
@@ -2471,7 +2520,12 @@ impl VkContext {
                 n * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>() as u64;
             let draw_args_size =
                 n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
-            let indirect_size = n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            // One `n_cull`-command region per shader bucket: the cull kernel writes
+            // every record's slot in each region and the main pass issues one
+            // indirect draw per region under that bucket's pipeline.
+            let indirect_size = shader_bucket_count as u64
+                * n
+                * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
             let mut da_buffers = Vec::with_capacity(frames);
             let mut da_memories = Vec::with_capacity(frames);
             let mut da_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -2918,7 +2972,11 @@ impl VkContext {
                 n * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>() as u64;
             let draw_args_size =
                 n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
-            let indirect_size = n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            // Bucket-expanded exactly like the phase-1 buffers: `Main2` issues the
+            // same per-bucket regions over this buffer.
+            let indirect_size = shader_bucket_count as u64
+                * n
+                * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
             let status_size = n * std::mem::size_of::<u32>() as u64;
 
             // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
@@ -3763,6 +3821,9 @@ impl VkContext {
                 bindless_pipeline,
                 bindless_pipeline_layout,
                 bindless_set_layout,
+                world_pipelines,
+                bucket_stride: n_cull,
+                bindless_main_spv,
                 bindless_sets,
                 object_buffers,
                 object_buffer_memories,
@@ -4039,6 +4100,7 @@ impl VkContext {
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         me.upload_initial_particles(particles)?;
+        crate::shader_cache::report_init_and_prune();
         Ok(me)
     }
 

@@ -70,14 +70,15 @@ pub(in crate::directx) fn reflection_cut_prelude() -> String {
     )
 }
 
-pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
-    let src_c = std::ffi::CString::new(source).map_err(|e| format!("hlsl src cstr: {e}"))?;
-    let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("hlsl entry cstr: {e}"))?;
-    let target_c = std::ffi::CString::new(target).map_err(|e| format!("hlsl target cstr: {e}"))?;
+// A stable pseudo-filename for the in-memory source. Without one FXC names the
+// module after the source buffer's address, so compile errors read
+// `Shader@0x00007ff...` instead of something a developer recognises.
+const HLSL_SOURCE_NAME: &std::ffi::CStr = c"concinnity.hlsl";
 
-    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-
+// FXC flag set for this build. Debug trades code quality for compile speed;
+// release asks for full optimisation. Folded into the shader cache key, so the
+// two builds never replay one another's bytes.
+fn fxc_flags() -> u32 {
     // Force column-major matrix storage globally. Every built-in HLSL shader
     // already sets `#pragma pack_matrix(column_major)` at the top of its
     // source; this flag is defensive belt-and-suspenders against any future
@@ -86,22 +87,65 @@ pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Ve
     // The bindless main fragment shader declares an unbounded
     // `Texture2D tex_pool[] : register(t0, space1)` array; FXC refuses
     // unbounded descriptor tables without this opt-in flag.
-    let flags = if cfg!(debug_assertions) {
-        windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_DEBUG
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_SKIP_OPTIMIZATION
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES
-    } else {
-        windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_OPTIMIZATION_LEVEL3
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
-            | windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES
+    use windows::Win32::Graphics::Direct3D::Fxc::{
+        D3DCOMPILE_DEBUG, D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES,
+        D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR,
+        D3DCOMPILE_SKIP_OPTIMIZATION,
     };
+    let common =
+        D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES;
+    if cfg!(debug_assertions) {
+        common | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION
+    } else {
+        common | D3DCOMPILE_OPTIMIZATION_LEVEL3
+    }
+}
+
+// Cache key for an FXC compile. Shared by the runtime compile path and the
+// export-time precompile so the two can never key the same inputs differently.
+pub(super) fn fxc_cache_key<'a>(
+    source: &'a str,
+    entry: &'a str,
+    target: &'a str,
+) -> crate::shader_cache::Key<'a> {
+    crate::shader_cache::Key {
+        compiler: "fxc",
+        source,
+        entry,
+        target,
+        options: u64::from(fxc_flags()),
+    }
+}
+
+// Compile HLSL to DXBC, reusing a cached artifact when this exact source has
+// been compiled with the same entry, target, and flags before. FXC dominates
+// renderer init (measured 993 ms of a 1.58 s release init across 45 built-in
+// shaders), and none of those inputs change between runs of an unedited build.
+pub(super) fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<Vec<u8>, String> {
+    let key = fxc_cache_key(source, entry, target);
+    crate::shader_cache::cached(&key, target, || {
+        compile_hlsl_uncached(source, entry, target, fxc_flags())
+    })
+}
+
+fn compile_hlsl_uncached(
+    source: &str,
+    entry: &str,
+    target: &str,
+    flags: u32,
+) -> Result<Vec<u8>, String> {
+    let src_c = std::ffi::CString::new(source).map_err(|e| format!("hlsl src cstr: {e}"))?;
+    let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("hlsl entry cstr: {e}"))?;
+    let target_c = std::ffi::CString::new(target).map_err(|e| format!("hlsl target cstr: {e}"))?;
+
+    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
+    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
 
     let result = unsafe {
         D3DCompile(
             src_c.as_ptr() as *const std::ffi::c_void,
             source.len(),
-            None,
+            windows::core::PCSTR(HLSL_SOURCE_NAME.as_ptr() as *const u8),
             None,
             None,
             windows::core::PCSTR(entry_c.as_ptr() as *const u8),
@@ -313,24 +357,14 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT colour grade, and a radial vignette, then writes the
 // swapchain backbuffer. Mirrors the Vulkan COMPOSITE_*_GLSL and the Metal post
-// pipeline. `COMPOSITE_VERT_HLSL` is also reused by the bloom + TAA resolve
-// passes (each as their fullscreen-triangle VS).
-
-pub(super) const COMPOSITE_VERT_HLSL: &str = include_str!("shaders/composite_vert.hlsl");
-pub(super) const COMPOSITE_FRAG_HLSL: &str = include_str!("shaders/composite_frag.hlsl");
+// pipeline. `builtins::COMPOSITE_VERT` is also reused by the bloom + TAA
+// resolve passes (each as their fullscreen-triangle VS).
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vs = compile_hlsl(
-        &shader_source(hot_reload, "composite_vert.hlsl", COMPOSITE_VERT_HLSL),
-        "main",
-        "vs_5_1",
-    )?;
-    let ps = compile_hlsl(
-        &shader_source(hot_reload, "composite_frag.hlsl", COMPOSITE_FRAG_HLSL),
-        "main",
-        "ps_5_1",
-    )?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let vs = super::builtins::COMPOSITE_VERT.compile(&ctx)?;
+    let ps = super::builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 
@@ -526,21 +560,11 @@ pub(super) fn create_composite_pso(
 // straight alpha-blending. Per-call vertex + index buffers are uploaded
 // dynamically by `encode_composite_and_text`.
 
-pub(super) const TEXT_VERT_HLSL: &str = include_str!("shaders/text_vert.hlsl");
-pub(super) const TEXT_FRAG_HLSL: &str = include_str!("shaders/text_frag.hlsl");
-
 // Compile the text overlay shaders.
 pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let text_vs = compile_hlsl(
-        &shader_source(hot_reload, "text_vert.hlsl", TEXT_VERT_HLSL),
-        "main",
-        "vs_5_1",
-    )?;
-    let text_ps = compile_hlsl(
-        &shader_source(hot_reload, "text_frag.hlsl", TEXT_FRAG_HLSL),
-        "main",
-        "ps_5_1",
-    )?;
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let text_vs = super::builtins::TEXT_VERT.compile(&ctx)?;
+    let text_ps = super::builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((text_vs, text_ps))
 }
 
