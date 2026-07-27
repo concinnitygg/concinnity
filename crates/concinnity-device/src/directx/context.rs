@@ -1001,6 +1001,15 @@ pub struct DxContext {
     // Projected decals. See [`DecalState`].
     pub(super) decal: DecalState,
 
+    // World-space line pass state: the resources, built on the first frame
+    // that publishes lines. See [`super::line::LineState`].
+    pub(super) lines: super::line::LineState,
+
+    // GPU handle of the main-depth SRV. Written at init (and rewritten on
+    // resize) into a single reserved heap slot every depth-sampling decoration
+    // pass binds; the lazily-built line pass needs it past init.
+    pub(super) main_depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+
     // Raymarched SDF volumes. `Some` when at least one `SdfVolume` whose
     // `fragment_shader` resolves to `.hlsl` survived the init filter, i.e.
     // the world declares SDF volumes authored for DirectX. Metal-first
@@ -1111,8 +1120,8 @@ pub struct DxContext {
     // Per-frame-slot persistent upload buffers for transient HUD text geometry.
     // Each slot's cursor resets and its buffer (re)maps inside the ring's
     // `reserve`, which the composite pass calls once the frame fence confirms
-    // the GPU is done with slot i. See [`TextUploadRing`].
-    pub(super) text_upload: super::draw::TextUploadRing,
+    // the GPU is done with slot i. See [`super::upload_ring::UploadRing`].
+    pub(super) text_upload: super::upload_ring::UploadRing,
 
     // D3D12 validation message sink (Some only when validation=true).
     pub(super) info_queue: Option<ID3D12InfoQueue>,
@@ -1283,6 +1292,7 @@ impl DxContext {
             far,
             cam_pos,
             text_calls,
+            lines,
             world_hidden,
         } = params;
         // Shader hot-reload: if either the filesystem watcher or the debug
@@ -1559,6 +1569,11 @@ impl DxContext {
 
         unsafe { start_cmd.Close() }.map_err(|e| format!("start cmd close: {e}"))?;
 
+        // Line resources: built on the first frame that publishes lines, so
+        // the graph gate inside `record_frame` can see them live this same
+        // frame and a world that never draws a line never compiles them.
+        self.ensure_line_pipeline(!lines.is_empty());
+
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The
         //    executor's main-thread Composite arm encodes onto this
@@ -1641,6 +1656,7 @@ impl DxContext {
                 far,
                 cam_pos,
                 text_calls,
+                lines,
             },
             crate::directx::draw::RecordFrameResolution {
                 width: self.render_width.max(1),

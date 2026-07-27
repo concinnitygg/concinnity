@@ -20,6 +20,7 @@ mod hiz;
 mod hot_reload;
 mod init;
 mod light_cull;
+mod line;
 mod math;
 mod parallel_encoder;
 mod particle;
@@ -35,6 +36,7 @@ mod resources;
 mod screenshot;
 mod texture;
 mod transient_pool;
+mod upload_ring;
 mod world_shaders;
 
 pub use context::DxContext;

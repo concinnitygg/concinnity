@@ -37,7 +37,7 @@ use ash::vk;
 
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_graph::{CompiledGraph, CompiledPass, GraphResourceClass, PassId};
-use crate::gfx::render_types::TextDrawCall;
+use crate::gfx::render_types::{LineVertex, TextDrawCall};
 
 use super::barrier_translate::vk_transition;
 use super::context::VkContext;
@@ -180,6 +180,10 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     pub image_index: u32,
     pub frame_idx: usize,
     pub text_calls: &'a [TextDrawCall],
+    // This frame's expanded line ribbons, consumed by the Lines pass. Empty
+    // whenever nothing published lines, in which case the graph carries no
+    // Lines node either.
+    pub lines: &'a [LineVertex],
     // An opaque menu backdrop hides the scene: the Main pass clears its target
     // and skips every draw (the masked graph drops all other world passes), so
     // nothing of the world renders behind the menu.
@@ -673,6 +677,9 @@ impl VkContext {
             }
             PassId::Decals => {
                 self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
+            }
+            PassId::Lines => {
+                self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines);
             }
             PassId::FogFroxel => {
                 // Populate the screen-aligned 3D scatter/transmittance volume

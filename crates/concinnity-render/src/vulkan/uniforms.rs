@@ -162,6 +162,17 @@ pub struct GbModelPush {
 // prev_model 64 + roughness 4 + 12 pad). Pins the struct size.
 pub const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
 
+// The line pass per-frame view UBO (line.{vert,frag} `LineViewBlock`, std140,
+// 80 bytes): the column-major view-projection then the occluded-alpha
+// multiplier and three pads. Mirrors the DirectX / Metal `LineView`.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct LineView {
+    pub vp: [[f32; 4]; 4],
+    pub occluded_alpha: f32,
+    pub _pad: [f32; 3],
+}
+
 // The transparent (glass) per-frame view UBO (glass.{vert,frag}
 // `TransparentViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
 // `TransparentView`.
@@ -393,6 +404,16 @@ mod tests {
         assert_eq!(offset_of!(GbModelPush, prev_model), 64);
         assert_eq!(offset_of!(GbModelPush, roughness), 128);
         assert_eq!(size_of::<GbModelPush>() as u32, GBUFFER_PREPASS_PUSH_BYTES);
+    }
+
+    // The GLSL `LineViewBlock` std140 layout is 80 bytes: a mat4 then the
+    // occluded-alpha scalar and three pads.
+    #[test]
+    fn line_view_layout_matches_glsl() {
+        assert_eq!(size_of::<LineView>(), 80);
+        assert_eq!(offset_of!(LineView, vp), 0);
+        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
+        assert_eq!(offset_of!(LineView, _pad), 68);
     }
 
     // The GLSL `TransparentViewBlock` std140 layout is 160 bytes.

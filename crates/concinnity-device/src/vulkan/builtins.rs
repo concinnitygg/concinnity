@@ -537,6 +537,22 @@ pub(super) static DECAL_FRAG: GlslProgram = GlslProgram {
     )
 };
 
+pub(super) static LINE_VERT: GlslProgram = glsl(
+    "line.vert",
+    include_str!("shaders/line.vert"),
+    Vertex,
+    "line.vert",
+);
+pub(super) static LINE_FRAG: GlslProgram = GlslProgram {
+    assembly: MSAA,
+    ..glsl(
+        "line.frag",
+        include_str!("shaders/line.frag"),
+        Fragment,
+        "line.frag",
+    )
+};
+
 pub(super) static LIGHT_CULL: GlslProgram = glsl(
     "light_cull.comp",
     include_str!("shaders/light_cull.comp"),
@@ -711,6 +727,8 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &FOG_FROXEL,
     &DECAL_VERT,
     &DECAL_FRAG,
+    &LINE_VERT,
+    &LINE_FRAG,
     &LIGHT_CULL,
     &GLASS_VERT,
     &GLASS_FRAG,

@@ -1169,6 +1169,10 @@ pub struct VkContext {
     pub(super) decals: Vec<Option<crate::gfx::decal::DecalRecord>>,
     pub(super) decal_free_slots: Vec<usize>,
 
+    // World-space line pass state: the resources, built on the first frame
+    // that publishes lines. See [`crate::vulkan::line::LineState`].
+    pub(super) lines: crate::vulkan::line::LineState,
+
     // Volumetric fog. `Some` only when the world declared a `VolumetricFog`
     // asset; with none, both fields stay `None` and the fog pass is skipped
     // entirely. The settings are cached so the per-frame encoder can build
@@ -1576,6 +1580,7 @@ impl VkContext {
             far,
             cam_pos,
             text_calls,
+            lines,
             world_hidden,
         } = params;
         // Shader hot-reload: if either the filesystem watcher or the debug
@@ -1811,6 +1816,7 @@ impl VkContext {
                 far,
                 cam_pos,
                 text_calls,
+                lines,
             },
             world_hidden,
         )?;
@@ -2395,6 +2401,12 @@ impl Drop for VkContext {
         // Decal resources (pipeline + per-frame uniforms + per-decal sets).
         if let Some(decals) = &mut self.decals_state {
             decals.destroy(device);
+        }
+
+        // Line resources (pipeline + per-frame uniforms + vertex buffers +
+        // framebuffers). Only present once a frame published lines.
+        if let Some(lines) = &mut self.lines.resources {
+            lines.destroy(device);
         }
 
         // Volumetric-fog resources (pipeline + per-frame uniforms).

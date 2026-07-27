@@ -340,6 +340,17 @@ impl VkContext {
             )
         );
 
+        // Lines (only once a frame published some and the lazy build ran).
+        let line_pipeline = rebuild_if_live!(
+            self.lines.resources.is_some(),
+            super::line::rebuild_line_pipeline(
+                device,
+                self.lines.resources.as_ref().unwrap(),
+                self.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                hr,
+            )
+        );
+
         // Fog (only when the world declared a VolumetricFog). Rebuilds both the
         // fullscreen render pipeline and the froxel-volume compute kernel; the
         // trailing `.map` tuples them into one Result for the macro.
@@ -485,6 +496,10 @@ impl VkContext {
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decals_state.as_mut()) {
             unsafe { device.destroy_pipeline(decals.pipeline, None) };
             decals.pipeline = new_pipeline;
+        }
+        if let (Some(new_pipeline), Some(lines)) = (line_pipeline, self.lines.resources.as_mut()) {
+            unsafe { device.destroy_pipeline(lines.pipeline, None) };
+            lines.pipeline = new_pipeline;
         }
         if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog_resources.as_mut()) {
             unsafe {

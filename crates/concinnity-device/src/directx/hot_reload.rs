@@ -383,6 +383,18 @@ impl DxContext {
             )
         );
 
+        // Lines (only once a frame published some and the lazy build ran).
+        let line_pso = rebuild_if_live!(
+            self.lines.resources.is_some(),
+            super::line::rebuild_line_pso(
+                device,
+                self.lines.resources.as_ref().unwrap(),
+                self.hdr.msaa_samples,
+                hr,
+                info_queue,
+            )
+        );
+
         // Glass (only when the world declared any GlassPanel).
         let glass_pso = rebuild_if_live!(
             self.glass.is_some(),
@@ -528,6 +540,9 @@ impl DxContext {
         }
         if let (Some(pso), Some(decals)) = (decal_pso, self.decal.state.as_mut()) {
             decals.pso = pso;
+        }
+        if let (Some(pso), Some(lines)) = (line_pso, self.lines.resources.as_mut()) {
+            lines.pso = pso;
         }
         if let (Some(pso), Some(glass)) = (glass_pso, self.glass.as_mut()) {
             glass.pso = pso;

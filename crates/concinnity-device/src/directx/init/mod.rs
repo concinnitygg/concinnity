@@ -1082,8 +1082,9 @@ impl DxContext {
         );
         let hdr_srv_gpu = slot_gpu(hdr_srv_slot);
 
-        // Projected-decal main-depth SRV: bind point t0 in the decal pass.
-        // The DSV-only flag was dropped above so this is valid.
+        // Main-depth SRV, shared by every depth-sampling decoration pass (decal,
+        // glass, lines) at their own t0. The DSV-only flag was dropped above so
+        // this is valid.
         crate::directx::decal::write_main_depth_srv(
             &device,
             &depth_resource,
@@ -2370,6 +2371,8 @@ impl DxContext {
                 records: decals_init,
                 free_slots: Vec::new(),
             },
+            lines: super::line::LineState::empty(),
+            main_depth_srv_gpu: decal_depth_srv_gpu,
             raymarch,
             glass,
             planar_reflection,
@@ -2436,7 +2439,7 @@ impl DxContext {
             clear_color,
             scene_fade: 0.0,
             view_matrix: IDENTITY4,
-            text_upload: super::draw::TextUploadRing::new(FRAMES),
+            text_upload: super::upload_ring::UploadRing::new(FRAMES),
             info_queue,
             bindless_main_shaders,
             adapter,

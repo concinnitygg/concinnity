@@ -7,7 +7,7 @@
 use ash::vk;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
-use crate::gfx::render_types::{LightUniforms, ShadowUniforms, TextDrawCall};
+use crate::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
@@ -51,6 +51,9 @@ pub(super) struct RecordFrameView<'a> {
     pub far: f32,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
+    // This frame's expanded line ribbons. Empty whenever nothing published
+    // lines, which also drops the pass from the graph.
+    pub lines: &'a [LineVertex],
 }
 
 impl VkContext {
@@ -300,6 +303,7 @@ impl VkContext {
             far,
             cam_pos,
             text_calls,
+            lines,
         } = view;
         let device = self.device.clone();
         let device = &device;
@@ -435,6 +439,13 @@ impl VkContext {
         // committed. No-op when auto-exposure is disabled.
         self.update_auto_exposure(elapsed, frame_idx);
 
+        // Line resources: built on the first frame that publishes lines (and
+        // this slot's vertex buffer grown to fit them), so the graph gate below
+        // can see them live this same frame and a world that never draws a line
+        // never compiles them. Safe here: the frame fence at the top of
+        // `draw_frame` retired everything that read this slot last trip.
+        self.ensure_line_pipeline(frame_idx, lines);
+
         //  Per-frame seed inputs for the shared backend-agnostic frame
         //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
         //  Decals landed 2026-05-24; Fog followed; AutoExposure landed
@@ -528,6 +539,10 @@ impl VkContext {
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),
             spot_shadow_slice_size: self.spot_shadow.slice_size,
+            // Lines run only on the frames a system published them (the
+            // `cn editor` axes), and only once their resources are live: the
+            // build is lazy, so a shipped runtime never compiles them.
+            lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
         };
 
         //  Camera projection + per-frame view state. Computed before the main
@@ -708,6 +723,7 @@ impl VkContext {
             image_index,
             frame_idx,
             text_calls,
+            lines,
             world_hidden,
             visible: &visible,
             frustum: &frustum,

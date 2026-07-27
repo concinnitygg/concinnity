@@ -3920,6 +3920,7 @@ impl VkContext {
             decals_state,
             decals: Vec::new(),
             decal_free_slots: Vec::new(),
+            lines: crate::vulkan::line::LineState::empty(),
             hdr_mode,
             vsync,
             particle_resources: None,

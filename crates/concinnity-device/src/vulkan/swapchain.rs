@@ -527,6 +527,18 @@ impl VkContext {
             self.decals_state = Some(decals);
         }
 
+        // Rebuild the line framebuffers + re-point the per-frame depth
+        // descriptor. Mirrors the decal rebuild; only present once a frame
+        // published lines and the lazy build ran.
+        if let Some(mut lines) = self.lines.resources.take() {
+            let hdr_views: Vec<vk::ImageView> =
+                self.hdr_resolve_images.iter().map(|img| img.view).collect();
+            let depth_views: Vec<vk::ImageView> =
+                self.depth_images.iter().map(|img| img.view).collect();
+            lines.rebuild(&self.device, &hdr_views, &depth_views, render_ext)?;
+            self.lines.resources = Some(lines);
+        }
+
         // Rebuild the fog framebuffers + re-point the per-frame depth
         // descriptor at the rebuilt depth view. Mirrors the decal rebuild;
         // the pipeline, layouts, UBOs, and sampler all survive.

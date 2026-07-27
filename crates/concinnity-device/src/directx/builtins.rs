@@ -370,6 +370,20 @@ pub(super) static DECAL_FRAG: HlslProgram = HlslProgram {
     )
 };
 
+pub(super) static LINE_VERT: HlslProgram = fxc_main(
+    "line_vert.hlsl",
+    include_str!("shaders/line_vert.hlsl"),
+    "vs_5_1",
+);
+pub(super) static LINE_FRAG: HlslProgram = HlslProgram {
+    assembly: Assembly::Msaa,
+    ..fxc_main(
+        "line_frag.hlsl",
+        include_str!("shaders/line_frag.hlsl"),
+        "ps_5_1",
+    )
+};
+
 pub(super) static PARTICLE_SIMULATE: HlslProgram = fxc_main(
     "particle_simulate.hlsl",
     include_str!("shaders/particle_simulate.hlsl"),
@@ -600,6 +614,8 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &FOG_FROXEL,
     &DECAL_VERT,
     &DECAL_FRAG,
+    &LINE_VERT,
+    &LINE_FRAG,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,

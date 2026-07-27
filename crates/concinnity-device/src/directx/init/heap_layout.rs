@@ -24,7 +24,7 @@
 //   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
 //   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
 //   [ssr_srv_base_slot..]          (SSR) resolve output
-//   [decal_depth_srv_slot]         main-depth SRV (decal + glass passes)
+//   [decal_depth_srv_slot]         main-depth SRV (decal + glass + line passes)
 //   [decal_srv_base_slot..]        MAX_DECALS per-decal albedo SRVs
 //   [chunk_srv_base_slot..+2]      VoxelWorld chunk material (albedo, normal)
 //   [skinned_srv_base_slot..]      MAX_SKINNED_OBJECTS (albedo, normal) pairs

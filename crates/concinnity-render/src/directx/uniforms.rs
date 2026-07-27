@@ -84,6 +84,17 @@ pub struct DecalParams {
     pub _p2: f32,
 }
 
+// The line pass per-frame `LineView` cbuffer (b0, 80 bytes): the column-major
+// float4x4 view-projection then the occluded-alpha multiplier and three pads.
+// Mirrors `metal::uniforms::LineView`.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct LineView {
+    pub vp: [[f32; 4]; 4],
+    pub occluded_alpha: f32,
+    pub _pad: [f32; 3],
+}
+
 // The transparent (glass) per-frame `TransparentView` cbuffer (160 bytes).
 // Mirrors `metal::uniforms::TransparentView`.
 #[derive(Copy, Clone)]
@@ -267,6 +278,17 @@ mod tests {
         assert_eq!(offset_of!(DecalParams, _p0), 148);
         assert_eq!(offset_of!(DecalParams, _p1), 152);
         assert_eq!(offset_of!(DecalParams, _p2), 156);
+    }
+
+    // LineView must match the `LineView` cbuffer (b0) in the line shaders: a
+    // column-major float4x4 then the occluded-alpha scalar and three pads
+    // (80 B total).
+    #[test]
+    fn line_view_layout_matches_hlsl() {
+        assert_eq!(size_of::<LineView>(), 80);
+        assert_eq!(offset_of!(LineView, vp), 0);
+        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
+        assert_eq!(offset_of!(LineView, _pad), 68);
     }
 
     // The HLSL `TransparentView` cbuffer std layout is 160 bytes.

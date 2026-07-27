@@ -616,7 +616,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             .write_texture(h);
     }
     if inputs.lines_enabled {
-        // Last of the hdr_resolve decorations: debug geometry draws over the
+        // Last of the hdr_resolve decorations: line geometry draws over the
         // lit + decorated scene, and SSR / TAA then treat it like any other
         // scene content. Depth is not declared (same rationale as Decals /
         // Fog / Transparent); the executor binds the live depth at encode.

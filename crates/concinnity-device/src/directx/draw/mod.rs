@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
 use crate::gfx::render_types::{
-    CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, ShadowUniforms,
-    TextDrawCall,
+    CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, LineVertex,
+    ShadowUniforms, TextDrawCall,
 };
 
 use super::context::DxContext;
@@ -28,8 +28,6 @@ mod main;
 mod shadow;
 mod spot_shadow;
 mod text_upload;
-
-pub(super) use text_upload::TextUploadRing;
 
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
 // that lives in concinnity-render; re-export it so
@@ -72,6 +70,9 @@ pub(super) struct RecordFrameView<'a> {
     pub far: f32,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
+    // This frame's expanded line ribbons. Empty whenever nothing published
+    // lines, which also drops the pass from the graph.
+    pub lines: &'a [LineVertex],
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -115,6 +116,7 @@ impl DxContext {
             far,
             cam_pos,
             text_calls,
+            lines,
         } = view;
         let RecordFrameResolution {
             width,
@@ -283,6 +285,10 @@ impl DxContext {
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),
             spot_shadow_slice_size: self.spot_shadow.slice_size,
+            // Lines run only on the frames a system published them (the
+            // `cn editor` axes), and only once their resources are live: the
+            // build is lazy, so a shipped runtime never compiles them.
+            lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
         };
 
         // Compute the camera VPs the main + velocity passes consume.
@@ -462,6 +468,7 @@ impl DxContext {
             back_buffer,
             back_buffer_rtv,
             text_calls,
+            lines,
             world_hidden,
             scene_srv,
             width,
