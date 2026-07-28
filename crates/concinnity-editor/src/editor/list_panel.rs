@@ -12,7 +12,6 @@
 
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
-use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -172,14 +171,19 @@ pub(crate) fn apply(
             }
             None => r[0] + PAD,
         };
-        if let Some(l) = widget::label_mut(world, row_label(base, i)) {
-            l.x = label_x;
-            l.y = r[1] + LABEL_TOP;
-            l.align = TextAlign::Left;
-            l.color = theme::LABEL;
-            l.visible = true;
-            l.content = row.caption.clone();
-        }
+        widget::place_message(
+            world,
+            row_label(base, i),
+            [
+                label_x,
+                r[1] + LABEL_TOP,
+                (r[0] + r[2] - label_x - PAD).max(0.0),
+                widget::LINE_H,
+            ],
+            &row.caption,
+            theme::LABEL,
+            true,
+        );
     }
 }
 

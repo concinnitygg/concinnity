@@ -469,17 +469,13 @@ pub(crate) fn apply(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
     layout_toolbar(world, view, o, w);
     layout_status(world, view, o, w);
     if view.mode == ViewMode::Chart && view.total > 0 {
-        layout_rows(world, view, o, w, 0, None);
+        layout_rows(world, view, o, w, 0);
         widget::set_sprite_visible(world, LIST_TRACK, false);
         widget::set_sprite_visible(world, LIST_THUMB, false);
         behavior_chart::apply(world, &chart_view(view), chart_band(o, s));
     } else {
         behavior_chart::hide_all(world);
-        // The overlay draws a panel's elements in injection order, so the
-        // palette's backing cannot occlude the outline rows it floats over: the
-        // rows it covers are blanked instead.
-        let covered = palette_open(view).then(|| palette_backing(o, w, view.picks_shown()));
-        layout_rows(world, view, o, w, visible_rows(s[1]), covered);
+        layout_rows(world, view, o, w, visible_rows(s[1]));
         layout_scrollbar(world, view, o, w, visible_rows(s[1]));
     }
     layout_palette(world, view, o, w);
@@ -509,11 +505,6 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
 
 fn palette_open(view: &BehaviorView) -> bool {
     view.picking && !view.picks.is_empty()
-}
-
-// Whether two rects share any area (both top-left origin).
-fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
-    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
 fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
@@ -644,21 +635,12 @@ fn status_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     ]
 }
 
-fn layout_rows(
-    world: &mut World,
-    view: &BehaviorView,
-    o: [f32; 2],
-    w: f32,
-    shown: usize,
-    covered: Option<[f32; 4]>,
-) {
+fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32, shown: usize) {
     let value_x = value_column(w);
     let label_budget = ((value_x - PAD * 2.0) / CHAR_W) as usize;
     for slot in 0..ROW_POOL_MAX {
         let i = view.scroll + slot;
-        let drawn = slot < shown
-            && view.total > 0
-            && !covered.is_some_and(|c| overlaps(row_rect(o, w, slot), c));
+        let drawn = slot < shown && view.total > 0;
         let Some(row) = view.rows.get(i).filter(|_| drawn) else {
             widget::set_sprite_visible(world, row_bg(slot), false);
             widget::set_label_visible(world, row_label(slot), false);
@@ -923,6 +905,16 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..ROW_POOL_MAX).map(row_label));
     ids.extend((0..ROW_POOL_MAX).map(row_value));
     ids.extend(behavior_chart::all_label_ids());
+    ids.extend((0..PICK_POOL).map(pick_label));
+    ids.extend((0..PICK_POOL).map(pick_hint));
+    ids
+}
+
+// The palette's own elements, which draw above the rest of the panel while it
+// is open so its backing occludes whatever it floats over.
+pub(crate) fn palette_ids() -> Vec<AssetId> {
+    let mut ids = vec![DROP_BG, DROP_TRACK, DROP_THUMB];
+    ids.extend((0..PICK_POOL).map(pick_bg));
     ids.extend((0..PICK_POOL).map(pick_label));
     ids.extend((0..PICK_POOL).map(pick_hint));
     ids
@@ -1209,8 +1201,12 @@ mod tests {
     // A panel's elements draw in injection order, so the palette's backing
     // cannot occlude what it floats over: the rows it covers are blanked, and
     // the ones below it keep drawing as context.
+    // The palette floats over the outline on its own draw layer (see
+    // `overlay_ids`), so the rows it covers keep drawing and its opaque backing
+    // hides them. They must NOT be blanked: blanking is what the layer band
+    // replaced, and it left the chart's cards showing through.
     #[test]
-    fn the_palette_blanks_the_outline_rows_it_covers() {
+    fn the_palette_leaves_the_rows_it_covers_drawn() {
         let mut world = injected_world();
         let args = serde_json::json!({"do": (0..12).map(|_| serde_json::json!({"save": null}))
             .collect::<Vec<_>>()});
@@ -1224,25 +1220,24 @@ mod tests {
             ..view(&rows, &picks)
         };
         apply(&mut world, Some(&open), o, s);
-        let backing = sprite(&world, DROP_BG);
-        let bottom = backing.y + backing.height;
-        for slot in 0..visible_rows(s[1]) {
-            let r = row_rect(o, BEHAVIOR_W, slot);
-            let under = r[1] < bottom;
-            assert_eq!(
+        assert!(sprite(&world, DROP_BG).visible, "the palette backing draws");
+        for slot in 0..visible_rows(s[1]).min(rows.len()) {
+            assert!(
                 label(&world, row_label(slot)).visible,
-                !under && slot < rows.len(),
-                "row {slot} at y {} vs palette bottom {bottom}",
-                r[1]
-            );
-            assert_eq!(
-                label(&world, row_value(slot)).visible,
-                !under && slot < rows.len()
+                "row {slot} was blanked instead of being drawn under the palette"
             );
         }
-        // Closing the palette brings the covered rows straight back.
-        apply(&mut world, Some(&view(&rows, &picks)), o, s);
-        assert!(label(&world, row_label(0)).visible);
+        // Every element the palette draws is declared as an overlay, or the
+        // layer bump would miss it and it would sink back into the panel.
+        let declared = palette_ids();
+        for id in [DROP_BG, DROP_TRACK, DROP_THUMB] {
+            assert!(declared.contains(&id), "{id:?} is not declared an overlay");
+        }
+        for slot in 0..PICK_POOL {
+            for id in [pick_bg(slot), pick_label(slot), pick_hint(slot)] {
+                assert!(declared.contains(&id), "{id:?} is not declared an overlay");
+            }
+        }
     }
 
     #[test]

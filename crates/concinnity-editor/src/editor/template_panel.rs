@@ -222,6 +222,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2],
         l.color = DESC_COLOR;
         l.scale = DESC_SCALE;
         l.visible = true;
+        // Bounded in place rather than through `place_message`: this label
+        // draws at its own scale, which the line budget there does not know.
+        l.wrap_width = desc[2].max(0.0);
+        l.max_lines = 1;
         l.content = view.description.to_string();
     }
     let apply_btn = apply_rect(o, w);

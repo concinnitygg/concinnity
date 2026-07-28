@@ -136,6 +136,13 @@ pub(crate) trait Panel: Sync {
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
         Vec::new()
     }
+    // The elements of a floating overlay the panel currently has open (a
+    // palette, a dropdown): they draw above the rest of the panel, so an opaque
+    // backing occludes what it covers instead of the covered text showing
+    // through it. Empty while no overlay is open.
+    fn overlay_ids(&self, _hook: &EditorHook) -> Vec<AssetId> {
+        Vec::new()
+    }
     // Resolve + apply a body press at `(mx, my)` for the panel at origin `o`;
     // the title bar and close button never reach this. `false` lets the press
     // fall through to the panel behind.

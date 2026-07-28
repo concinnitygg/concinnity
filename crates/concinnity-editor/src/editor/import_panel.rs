@@ -331,16 +331,19 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
         l.visible = true;
         l.content = "Add".to_string();
     }
-    if let Some(l) = widget::label_mut(world, HINT_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H;
-        l.align = TextAlign::Left;
-        l.color = HINT_COLOR;
-        l.visible = true;
-        l.content =
-            "scenes (glb, fbx) - stories (md) - images - hdr - audio - fonts - shaders - text"
-                .to_string();
-    }
+    widget::place_message(
+        world,
+        HINT_LABEL,
+        [
+            o[0] + PAD,
+            o[1] + widget::TITLE_H + HEADER_H,
+            (w - 2.0 * PAD).max(0.0),
+            HINT_H,
+        ],
+        "scenes (glb, fbx) - stories (md) - images - hdr - audio - fonts - shaders - text",
+        HINT_COLOR,
+        true,
+    );
     widget::place_message(
         world,
         STATUS_LABEL,

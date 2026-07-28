@@ -248,11 +248,6 @@ fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f3
     [c[0], c[1] + c[3], c[2], shown as f32 * DROP_ROW_H + 4.0]
 }
 
-// Whether two rects overlap (touching edges do not count).
-fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
-    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
-}
-
 // How many field slots are on screen at effective size `s`: the field count
 // capped at the height-derived window.
 fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
@@ -528,20 +523,6 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
         );
     }
 
-    // An open value dropdown floats over the slots below its field. Those rows
-    // are left fully hidden this frame (both the control and its caption): a
-    // covered VISIBLE `TextInput` would synth an opaque background box over the
-    // dropdown (it is synthesised only for visible inputs, see
-    // graphics_system/frame.rs), and a long caption could overflow across it.
-    let drop_backing = view.field_dropdown.and_then(|open| {
-        let field = view.form_fields.get(open)?;
-        let slot = field_slot(view, window, open)?;
-        let total = field.variants.len();
-        let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
-        let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-        Some(field_dropdown_backing(o, w, slot, shown))
-    });
-
     // The arg fields over the visible window, drawn into the slot-indexed pool.
     let scroll = view.form_scroll;
     for r in 0..visible_field_count(view, s) {
@@ -550,9 +531,6 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
             break;
         };
         let row = field_row_rect(o, w, r);
-        if drop_backing.is_some_and(|d| rects_intersect(form_control_rect(o, w, r), d)) {
-            continue;
-        }
         // A nested (dotted-path) field shows its indented caption; a disclosed
         // vector element reads as its axis (x / y / z / w).
         let depth = field.key.matches('.').count();
@@ -899,6 +877,15 @@ pub(crate) fn hide_all(world: &mut World) {
 // inserts in this sequence; the overlay draws in insertion order): background,
 // title, buttons, per-slot chrome, then the floating overlays (scrollbar, value
 // dropdown) which must sit above the slot chrome.
+// The value dropdown's own elements, which draw above the rest of the panel
+// while it is open so its backing occludes the field rows it covers.
+pub(crate) fn dropdown_ids() -> Vec<AssetId> {
+    let mut ids = vec![DROP_BG, DROP_TRACK, DROP_THUMB];
+    ids.extend((0..MAX_DROP_ROWS).map(drop_row_bg));
+    ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
+    ids
+}
+
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG];
     ids.extend((0..form::FIELD_POOL_MAX).map(form_toggle_bg));
@@ -1458,7 +1445,7 @@ mod tests {
     // Laying out an open dropdown shows its backing + option rows and hides the
     // slots it floats over (their opaque TextInput boxes would paint over it).
     #[test]
-    fn open_dropdown_hides_covered_slots_and_shows_options() {
+    fn open_dropdown_draws_over_the_slots_it_covers() {
         let mut world = injected_world();
         let fields = [
             ref_field(CYCLE_MAX + 2),
@@ -1480,14 +1467,16 @@ mod tests {
             sprite_visible(&world, form_toggle_bg(0)),
             "the open field's button stays"
         );
+        // The covered rows keep drawing: the dropdown is on its own layer (see
+        // `overlay_ids`) and its opaque backing hides them.
         assert!(
-            !input(&world, form_input(1)).visible,
-            "the covered text field is hidden while the dropdown is open"
+            label(&world, form_row_label(1)).visible,
+            "the covered slot was blanked instead of being drawn under the dropdown"
         );
-        assert!(
-            !label(&world, form_row_label(1)).visible,
-            "the covered slot's caption is hidden too"
-        );
+        let declared = dropdown_ids();
+        for id in [DROP_BG, drop_row_bg(0), drop_row_label(0)] {
+            assert!(declared.contains(&id), "{id:?} is not declared an overlay");
+        }
     }
 
     // An array header renders its element count + red remove / green add buttons,

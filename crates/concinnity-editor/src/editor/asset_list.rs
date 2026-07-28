@@ -8,7 +8,6 @@
 // in their extra chrome (the Assets panel adds hover / selection tints, a
 // triple-dot menu, and delete); that stays in `panel.rs`, layered over this base.
 
-use crate::assets::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -140,14 +139,19 @@ pub(crate) fn place_row(
     } else {
         (PAD + INDENT, LABEL)
     };
-    if let Some(l) = widget::label_mut(world, label_id) {
-        l.x = rect[0] + x_off;
-        l.y = rect[1] + ROW_LABEL_TOP;
-        l.align = TextAlign::Left;
-        l.color = color;
-        l.visible = true;
-        l.content = row.text.clone();
-    }
+    widget::place_message(
+        world,
+        label_id,
+        [
+            rect[0] + x_off,
+            rect[1] + ROW_LABEL_TOP,
+            (rect[2] - x_off - PAD).max(0.0),
+            widget::LINE_H,
+        ],
+        &row.text,
+        color,
+        true,
+    );
 }
 
 // A simple non-interactive scrollbar sizing the visible `window` against

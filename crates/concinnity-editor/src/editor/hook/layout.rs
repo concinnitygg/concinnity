@@ -5,6 +5,12 @@
 
 use super::*;
 
+// Layers each panel's rank claims, so an overlay can draw above its own panel
+// without reaching the one in front of it.
+const PANEL_LAYER_SPAN: i32 = 10;
+// Where an open overlay sits inside its panel's band.
+const OVERLAY_LAYER: i32 = 5;
+
 impl EditorHook {
     // Bring a panel to the front of the focus stack (drawn on top, first to be
     // clicked). A no-op if it is already frontmost.
@@ -24,13 +30,20 @@ impl EditorHook {
     }
 
     // The per-frame HUD draw layers: each panel at its focus-stack rank (higher
-    // = more front), the top bar pinned above them all.
+    // = more front), the top bar pinned above them all. A panel's rank is a band
+    // rather than a single layer so its overlays can sit above it.
     pub(super) fn compute_layers(&self) -> std::collections::BTreeMap<AssetId, i32> {
         let mut layers = std::collections::BTreeMap::new();
         for (rank, &key) in self.panel_order.iter().enumerate() {
-            let layer = rank as i32 + 1;
+            // Ranks are spaced so each panel owns a band of layers: its own
+            // elements at the bottom of the band and any open overlay above
+            // them, while the panel in front still clears the whole band.
+            let layer = (rank as i32 + 1) * PANEL_LAYER_SPAN;
             for id in Self::panel_ids(key) {
                 layers.insert(id, layer);
+            }
+            for id in registry::panel(key).overlay_ids(self) {
+                layers.insert(id, layer + OVERLAY_LAYER);
             }
         }
         for id in hud::all_ids() {

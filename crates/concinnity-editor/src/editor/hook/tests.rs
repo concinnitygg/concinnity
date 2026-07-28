@@ -4565,3 +4565,39 @@ fn behavior_selection_pans_an_off_canvas_card_into_view() {
     assert!(rect[0] >= band[0], "{rect:?} left of {band:?}");
     assert!(rect[0] + rect[2] <= band[0] + band[2] + 0.01, "{rect:?}");
 }
+
+// An open overlay draws above its own panel but still below the panel in front
+// of it. This is what lets an opaque backing occlude what it covers, instead of
+// each panel blanking the elements it happens to sit over.
+#[test]
+fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
+    )]);
+    // Nothing open: the palette sits at its panel's own layer.
+    let flat = h.compute_layers();
+    let panel_layer = flat[&behavior_panel::PANEL_BG];
+    assert_eq!(flat[&behavior_panel::DROP_BG], panel_layer);
+
+    select_behavior(&mut h, &mut world, "do");
+    h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
+    let open = h.compute_layers();
+    for id in behavior_panel::palette_ids() {
+        assert!(
+            open[&id] > open[&behavior_panel::PANEL_BG],
+            "{id:?} does not draw above its own panel",
+        );
+        assert!(
+            open[&id] > open[&behavior_panel::row_label(0)],
+            "{id:?} does not draw above the rows it covers",
+        );
+    }
+    // A panel focused in front still clears the whole band, overlay included.
+    h.focus_panel(PanelKey::Preview);
+    let stacked = h.compute_layers();
+    let front = stacked[&preview::PANEL_BG];
+    for id in behavior_panel::palette_ids() {
+        assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
+    }
+}

@@ -142,6 +142,12 @@ impl Panel for EditPanel {
         ids.extend((0..form::FIELD_POOL_MAX).map(|j| (form_panel::form_input(j), "")));
         ids
     }
+    fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
+        match hook.field_dropdown.is_some() {
+            true => form_panel::dropdown_ids(),
+            false => Vec::new(),
+        }
+    }
     fn press(
         &self,
         hook: &mut EditorHook,
@@ -826,6 +832,12 @@ impl Panel for BehaviorPanel {
             .into_iter()
             .map(|id| (id, "value"))
             .collect()
+    }
+    fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
+        match hook.behavior_picking {
+            true => behavior_panel::palette_ids(),
+            false => Vec::new(),
+        }
     }
     fn press(
         &self,

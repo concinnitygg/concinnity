@@ -606,22 +606,23 @@ pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s:
 
 // The status line: the asset count, or a cook failure in its place.
 fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
-    if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = widget::header_y(o, 0.0) + HEADER_H;
-        l.align = TextAlign::Left;
-        l.visible = true;
-        match view.status {
-            Some(e) => {
-                l.color = ERROR_LABEL;
-                l.content = e.to_string();
-            }
-            None => {
-                l.color = LABEL_DIM;
-                l.content = format!("Assets ({})", view.total);
-            }
-        }
-    }
+    let (color, text) = match view.status {
+        Some(e) => (ERROR_LABEL, e.to_string()),
+        None => (LABEL_DIM, format!("Assets ({})", view.total)),
+    };
+    widget::place_message(
+        world,
+        STATUS_LABEL,
+        [
+            o[0] + PAD,
+            widget::header_y(o, 0.0) + HEADER_H,
+            (PANEL_W - 2.0 * PAD).max(0.0),
+            widget::LINE_H,
+        ],
+        &text,
+        color,
+        true,
+    );
 }
 
 fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
