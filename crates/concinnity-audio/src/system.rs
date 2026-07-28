@@ -175,7 +175,7 @@ impl System for AudioSystem {
             });
         }
 
-        // Stories and reactions play clips by direct PlayCue request rather
+        // Stories and behaviors play clips by direct PlayCue request rather
         // than through screen-keyed cues, so cache every clip payload up
         // front, keyed by handle.
         if ctx.query::<Story>().next().is_some()

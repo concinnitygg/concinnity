@@ -88,5 +88,11 @@ VsOut main(VsIn v)
 
     o.view_depth = -mul(view_mat, world).z;
     o.sv_pos     = mul(vp, world);
+    // Skybox sentinel: pin to the far plane so the sky shell, whose corners sit
+    // beyond a typical `far`, is never clipped and always renders behind scene.
+    if (v.color.b > 1.5)
+    {
+        o.sv_pos.z = o.sv_pos.w * (1.0 - 1e-6);
+    }
     return o;
 }

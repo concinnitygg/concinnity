@@ -721,4 +721,37 @@ mod tests {
             );
         }
     }
+
+    // The sky shell's half-extent tracks the camera far plane, so its corners
+    // always fall outside it. Every vertex path that rasterises scene geometry
+    // must pin sky verts to the far plane or those corners clip and the clear
+    // colour shows through. Skinned and instanced paths are excluded: neither
+    // ever carries skybox geometry.
+    #[test]
+    fn scene_vertex_shaders_pin_sky_to_the_far_plane() {
+        const MUST_PIN: &[(&str, &str)] = &[
+            (
+                "main_bindless_vert.hlsl",
+                include_str!("shaders/main_bindless_vert.hlsl"),
+            ),
+            (
+                "gbuffer_prepass_vert.hlsl",
+                include_str!("shaders/gbuffer_prepass_vert.hlsl"),
+            ),
+            (
+                "gbuffer_bindless_vert.hlsl",
+                include_str!("shaders/gbuffer_bindless_vert.hlsl"),
+            ),
+        ];
+        for (name, src) in MUST_PIN {
+            assert!(
+                src.contains("v.color.b > 1.5"),
+                "{name} lost the skybox sentinel test"
+            );
+            assert!(
+                src.contains("o.sv_pos.z = o.sv_pos.w"),
+                "{name} lost the far-plane pin"
+            );
+        }
+    }
 }

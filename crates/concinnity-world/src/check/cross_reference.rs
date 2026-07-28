@@ -1223,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn reaction_action_refs_are_validated() {
+    fn behavior_node_refs_are_validated() {
         let mesh = asset(
             "box_mesh",
             "ProceduralMesh",

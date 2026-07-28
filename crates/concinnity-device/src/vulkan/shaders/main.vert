@@ -61,8 +61,8 @@ void main() {
 
     // Skybox sentinel: vertices tagged with blue > 1.5 are pinned to the far
     // plane (z = w) so the skybox is never clipped by the camera far plane -
-    // the sky shell sits well beyond a typical `far` - and always renders
-    // behind the scene. Matches default.metal / default_vert.hlsl.
+    // the sky shell's corners sit beyond a typical `far` - and always renders
+    // behind the scene. Every forward vertex path needs this.
     if (in_color.b > 1.5) {
         gl_Position.z = gl_Position.w * (1.0 - 1e-6);
     }
