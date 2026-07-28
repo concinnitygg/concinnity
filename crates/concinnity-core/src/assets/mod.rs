@@ -164,7 +164,9 @@ pub use concinnity_asset::RigidBody;
 pub use concinnity_asset::RoomArgs;
 pub use concinnity_asset::Scene;
 pub use concinnity_asset::SceneImport;
-pub use concinnity_asset::{Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl};
+pub use concinnity_asset::{
+    Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl, VarDecl, Variables,
+};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use concinnity_asset::{TriggerFilter, TriggerVolume};
 pub use reparent_request::ReparentRequest;

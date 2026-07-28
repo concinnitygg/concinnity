@@ -4,9 +4,10 @@
 // expression types. Cross-asset name lookups (spawn templates, clips, scenes,
 // trigger volumes) are handled by the Behavior `CrossReferenced` impl.
 //
-// World variables are integers, matching the persisted logic state. Per-entity
-// locals carry the full type set, which is why only they are declared with a
-// typed starting value.
+// World variables take their type from the world's `Variables` asset. A world
+// that declares none keeps them implicit and integer-typed, so `check` is given
+// the declared table (empty when there is none) and `check_world` enforces that
+// a declared table accounts for every name a behavior uses.
 
 use serde_json::Value;
 
@@ -45,6 +46,40 @@ impl Ty {
     }
 }
 
+// The world's declared variables, by name. Empty when the world declares no
+// `Variables` asset, which leaves every variable implicit and integer-typed.
+#[derive(Default)]
+pub struct DeclaredVars {
+    declared: bool,
+    types: Vec<(String, Ty)>,
+}
+
+impl DeclaredVars {
+    // Read the world's `Variables` asset args. Malformed entries are skipped;
+    // the asset's own check reports them.
+    pub(crate) fn from_args(args: &Value) -> DeclaredVars {
+        DeclaredVars {
+            declared: true,
+            types: array(args, "vars")
+                .iter()
+                .filter_map(|d| {
+                    let name = d.get("name")?.as_str()?;
+                    Some((name.to_string(), d.get("value").and_then(literal_ty)?))
+                })
+                .collect(),
+        }
+    }
+
+    fn ty(&self, name: &str) -> Option<Ty> {
+        self.types
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| *t)
+            // Undeclared variables are integers unless a table is authoritative.
+            .or(if self.declared { None } else { Some(Ty::Int) })
+    }
+}
+
 // Names visible while checking one behavior body.
 struct Scope<'a> {
     entity_scoped: bool,
@@ -52,6 +87,7 @@ struct Scope<'a> {
     queries: Vec<&'a str>,
     // `let`, `for_each`, and `spawn` bindings, innermost last.
     bindings: Vec<(&'a str, Ty)>,
+    vars: &'a DeclaredVars,
 }
 
 impl<'a> Scope<'a> {
@@ -76,6 +112,33 @@ impl<'a> Scope<'a> {
 }
 
 pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
+    check_with_vars(name, args, &DeclaredVars::default())
+}
+
+// The world's `Variables` asset: every declaration needs a name and a typed
+// starting value, and no name may repeat.
+pub(crate) fn check_variables(name: &str, args: &Value) -> Result<(), String> {
+    let err = |detail: String| format!("Variables '{name}': {detail}");
+    let mut seen: Vec<&str> = Vec::new();
+    for (i, decl) in array(args, "vars").iter().enumerate() {
+        let var = decl.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if var.is_empty() {
+            return Err(err(format!("variable #{i} has no `name`")));
+        }
+        if seen.contains(&var) {
+            return Err(err(format!("duplicate variable '{var}'")));
+        }
+        seen.push(var);
+        if decl.get("value").and_then(literal_ty).is_none() {
+            return Err(err(format!(
+                "variable '{var}' needs a typed `value` (bool, int, float, or vec3)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), String> {
     let err = |detail: String| format!("Behavior '{name}': {detail}");
 
     let scope_names = str_array(args, "scope");
@@ -135,6 +198,17 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
         queries.push(query_name);
     }
 
+    // A variable source must name a variable that exists.
+    if let Some(watched) = args.get("on").and_then(|v| v.get("variable")) {
+        let watched = watched.as_str().unwrap_or("");
+        if scope_ty(vars, watched).is_none() {
+            return Err(err(format!(
+                "`variable` source watches undeclared variable '{watched}'; add it to the \
+                 world's Variables"
+            )));
+        }
+    }
+
     if source_is(args, "spawned") && !entity_scoped {
         return Err(err(
             "`spawned` source needs a `scope`: it fires on the entity that spawned".into(),
@@ -146,6 +220,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
         locals,
         queries,
         bindings: Vec::new(),
+        vars,
     };
     check_nodes(args.get("do"), &mut scope).map_err(err)
 }
@@ -198,7 +273,12 @@ fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), String> 
             if var.is_empty() {
                 return Err("`set` requires a variable `var`".into());
             }
-            expect(body.get("value"), Ty::Int, "`set` value", scope)?;
+            let Some(ty) = scope.vars.ty(var) else {
+                return Err(format!(
+                    "`set` writes undeclared variable '{var}'; add it to the world's Variables"
+                ));
+            };
+            expect(body.get("value"), ty, "`set` value", scope)?;
         }
         "set_local" => {
             let local = body.get("local").and_then(|v| v.as_str()).unwrap_or("");
@@ -253,6 +333,14 @@ fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), String> 
     Ok(())
 }
 
+// A variable's declared type, for checks made before the scope exists.
+fn scope_ty(vars: &DeclaredVars, name: &str) -> Option<Ty> {
+    if name.is_empty() {
+        return None;
+    }
+    vars.ty(name)
+}
+
 // Check an expression against an expected type.
 fn expect(expr: Option<&Value>, want: Ty, what: &str, scope: &Scope<'_>) -> Result<(), String> {
     let got = expr_ty(expr, scope).map_err(|e| format!("{what} {e}"))?;
@@ -289,7 +377,9 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
         "vec3" => Ok(Ty::Vec3),
         "var" => match body.as_str().unwrap_or("") {
             "" => Err("`var` requires a variable name".into()),
-            _ => Ok(Ty::Int),
+            var => scope.vars.ty(var).ok_or_else(|| {
+                format!("reads undeclared variable '{var}'; add it to the world's Variables")
+            }),
         },
         "local" => {
             let local = body.as_str().unwrap_or("");
@@ -581,11 +671,92 @@ mod tests {
     }
 
     #[test]
-    fn world_variables_are_integers() {
+    fn undeclared_world_variables_are_integers() {
         expect_err(
             r#"{"do":[{"set":{"var":"v","value":{"float":1.0}}}]}"#,
             "must be int, found float",
         );
+    }
+
+    fn declared(json: &str) -> DeclaredVars {
+        DeclaredVars::from_args(&serde_json::from_str(json).expect("vars parse"))
+    }
+
+    #[test]
+    fn a_declared_variable_carries_its_type() {
+        let vars = declared(r#"{"vars":[{"name":"health","value":{"float":100.0}}]}"#);
+        check_with_vars(
+            "b",
+            &serde_json::from_str(r#"{"do":[{"set":{"var":"health","value":{"float":50.0}}}]}"#)
+                .unwrap(),
+            &vars,
+        )
+        .expect("a float variable takes a float");
+
+        let e = check_with_vars(
+            "b",
+            &serde_json::from_str(r#"{"do":[{"set":{"var":"health","value":{"int":50}}}]}"#)
+                .unwrap(),
+            &vars,
+        )
+        .expect_err("an int does not fit a float variable");
+        assert!(e.contains("must be float, found int"), "{e}");
+    }
+
+    #[test]
+    fn a_declared_table_rejects_undeclared_names() {
+        let vars = declared(r#"{"vars":[{"name":"health","value":{"float":1.0}}]}"#);
+        let e = check_with_vars(
+            "b",
+            &serde_json::from_str(r#"{"do":[{"set":{"var":"helth","value":{"float":1.0}}}]}"#)
+                .unwrap(),
+            &vars,
+        )
+        .expect_err("a misspelled name is caught");
+        assert!(e.contains("undeclared variable 'helth'"), "{e}");
+    }
+
+    #[test]
+    fn a_declared_vec3_variable_reads_as_a_vector() {
+        let vars = declared(r#"{"vars":[{"name":"spawn","value":{"vec3":[0,1,0]}}]}"#);
+        check_with_vars(
+            "b",
+            &serde_json::from_str(
+                r#"{"scope":["Prop"],"do":[{"set_transform":{"entity":"self","position":{"var":"spawn"}}}]}"#,
+            )
+            .unwrap(),
+            &vars,
+        )
+        .expect("a vec3 variable feeds a transform");
+    }
+
+    #[test]
+    fn a_variable_source_must_name_a_declared_variable() {
+        let vars = declared(r#"{"vars":[{"name":"health","value":{"int":0}}]}"#);
+        let e = check_with_vars(
+            "b",
+            &serde_json::from_str(r#"{"on":{"variable":"ghost"}}"#).unwrap(),
+            &vars,
+        )
+        .expect_err("an unknown watched variable is caught");
+        assert!(e.contains("undeclared variable 'ghost'"), "{e}");
+    }
+
+    #[test]
+    fn duplicate_declarations_are_rejected() {
+        let args = serde_json::from_str(
+            r#"{"vars":[{"name":"a","value":{"int":0}},{"name":"a","value":{"int":1}}]}"#,
+        )
+        .unwrap();
+        let e = check_variables("v", &args).expect_err("duplicates are caught");
+        assert!(e.contains("duplicate variable 'a'"), "{e}");
+    }
+
+    #[test]
+    fn an_untyped_declaration_is_rejected() {
+        let args = serde_json::from_str(r#"{"vars":[{"name":"a"}]}"#).unwrap();
+        let e = check_variables("v", &args).expect_err("an untyped declaration is caught");
+        assert!(e.contains("needs a typed `value`"), "{e}");
     }
 
     #[test]

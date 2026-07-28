@@ -15,7 +15,7 @@ use super::program::{Arith, CExpr, CNode, Cmp, Val};
 pub(super) struct View<'a> {
     pub(super) dt: f32,
     pub(super) elapsed: f32,
-    pub(super) vars: &'a [i32],
+    pub(super) vars: &'a [Val],
     pub(super) locals: &'a [Val],
     pub(super) bindings: &'a mut Vec<Option<Val>>,
     pub(super) queries: &'a [Vec<Entity>],
@@ -30,7 +30,7 @@ pub(super) struct View<'a> {
 pub(super) enum Effect {
     SetVar {
         slot: u16,
-        value: i32,
+        value: Val,
         add: bool,
     },
     SetLocal {
@@ -69,7 +69,7 @@ pub(super) struct SpawnEffect {
 pub(super) fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
     match expr {
         CExpr::Lit(v) => Some(*v),
-        CExpr::Var(slot) => view.vars.get(*slot as usize).copied().map(Val::Int),
+        CExpr::Var(slot) => view.vars.get(*slot as usize).copied(),
         CExpr::Local(slot) => view.locals.get(*slot as usize).copied(),
         CExpr::Bind(slot) => view.bindings.get(*slot as usize).copied().flatten(),
         CExpr::Named(id) => view.by_name.get(id).copied().map(Val::Entity),
@@ -224,11 +224,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             set_binding(view, *bind, value);
         }
         CNode::SetVar { slot, value, add } => {
-            // World variables are integers; a float expression truncates.
-            let Some(value) = eval(value, view).and_then(|v| match v {
-                Val::Int(i) => Some(i),
-                other => other.as_f32().map(|f| f as i32),
-            }) else {
+            let Some(value) = eval(value, view) else {
                 return;
             };
             out.push(Effect::SetVar {

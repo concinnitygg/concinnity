@@ -49,6 +49,7 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
     match type_norm {
         "animgraph" => anim_graph::check(name, args),
         "behavior" => behavior::check(name, args),
+        "variables" => behavior::check_variables(name, args),
         "shader" => shader::check(name, args),
         "prop" => prop::check(name, args),
         "sdfvolume" | "sdf" => sdf_volume::check(name, args),
@@ -83,9 +84,23 @@ pub fn check_world_with(
         }
     }
 
+    // The world's declared variable table, if it declares one. Behaviors are
+    // checked against it rather than in isolation, so a `set` resolves to the
+    // variable's declared type and a misspelled name is caught here.
+    let declared_vars = assets
+        .iter()
+        .find(|a| a.asset_type.to_lowercase().replace('_', "") == "variables")
+        .map(|a| behavior::DeclaredVars::from_args(&a.args))
+        .unwrap_or_default();
+
     for asset in assets {
         let type_norm = asset.asset_type.to_lowercase().replace('_', "");
-        if let Err(e) = check_asset(&type_norm, &asset.name, &asset.args) {
+        let checked = if type_norm == "behavior" {
+            behavior::check_with_vars(&asset.name, &asset.args, &declared_vars)
+        } else {
+            check_asset(&type_norm, &asset.name, &asset.args)
+        };
+        if let Err(e) = checked {
             errors.push(e);
         }
         if let Err(e) = extra(&type_norm, &asset.name, &asset.args) {

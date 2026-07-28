@@ -3,7 +3,9 @@
 // are deterministic.
 
 use super::*;
-use crate::assets::{Behavior, Expr, Literal, LocalDecl, Node, Prop, QueryDecl, Target, Transform};
+use crate::assets::{
+    Behavior, Expr, Literal, LocalDecl, Node, Prop, QueryDecl, Target, Transform, VarDecl,
+};
 use crate::blob::BlobData;
 use crate::ecs::{ComponentStorage, EventCursor, Resources};
 use crate::gfx::profile::FrameProfile;
@@ -73,12 +75,20 @@ fn set_var(var: &str, value: i32, add: bool) -> Node {
     }
 }
 
+// The integer reading of a world variable, for the many tests that count.
 fn var(sys: &BehaviorSystem, name: &str) -> i32 {
+    match var_val(sys, name) {
+        Val::Int(i) => i,
+        other => panic!("variable '{name}' is {other:?}, not an int"),
+    }
+}
+
+fn var_val(sys: &BehaviorSystem, name: &str) -> Val {
     sys.var_table
         .slot_of(name)
         .and_then(|s| sys.vars.get(s as usize))
         .copied()
-        .unwrap_or(0)
+        .unwrap_or(Val::Int(0))
 }
 
 fn count<E: 'static>(world: &mut TestWorld, cursor: &mut EventCursor) -> usize {
@@ -866,4 +876,168 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
         .read(&mut cursor)
         .len();
     assert_eq!(fired, 1);
+}
+
+// Typed world variables, declared by the world's Variables asset.
+
+fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, Literal)>) -> TestWorld {
+    let mut world = world_with(behaviors);
+    world.components.push_typed(Variables {
+        vars: vars
+            .into_iter()
+            .map(|(name, value)| VarDecl {
+                name: name.to_string(),
+                value,
+            })
+            .collect(),
+        ..Default::default()
+    });
+    world
+}
+
+#[test]
+fn a_declared_variable_starts_at_its_declared_value() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            on: BehaviorSource::Start,
+            body: vec![],
+            ..Default::default()
+        }],
+        vec![("health", Literal::Float(100.0))],
+    );
+    let sys = system(&mut world);
+    assert_eq!(var_val(&sys, "health"), Val::Float(100.0));
+}
+
+#[test]
+fn a_float_variable_holds_a_float() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            on: BehaviorSource::Start,
+            body: vec![Node::Set {
+                var: "health".into(),
+                value: Expr::Float(-2.5),
+                add: true,
+            }],
+            ..Default::default()
+        }],
+        vec![("health", Literal::Float(100.0))],
+    );
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(
+        var_val(&sys, "health"),
+        Val::Float(97.5),
+        "a float variable does not truncate"
+    );
+}
+
+#[test]
+fn a_vec3_variable_feeds_a_transform() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            body: vec![Node::SetTransform {
+                entity: Expr::SelfEntity,
+                position: Some(Expr::Var("spawn".into())),
+                rotation_deg: None,
+                scale: None,
+            }],
+            ..Default::default()
+        }],
+        vec![("spawn", Literal::Vec3([1.0, 2.0, 3.0]))],
+    );
+    let entity = spawn_prop(&mut world, [0.0; 3]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(
+        world.ctx().get::<Transform>(entity).unwrap().position,
+        [1.0, 2.0, 3.0]
+    );
+}
+
+#[test]
+fn an_undeclared_variable_is_still_an_integer() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            on: BehaviorSource::Start,
+            body: vec![set_var("loose", 3, true)],
+            ..Default::default()
+        }],
+        vec![("health", Literal::Float(1.0))],
+    );
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var_val(&sys, "loose"), Val::Int(3));
+}
+
+#[test]
+fn a_typed_variable_survives_a_save_and_restore() {
+    let dir = save_dir("typed");
+    let author = || Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Start,
+        body: vec![
+            Node::Set {
+                var: "health".into(),
+                value: Expr::Float(-25.0),
+                add: true,
+            },
+            Node::Save,
+        ],
+        ..Default::default()
+    };
+
+    let mut world = world_with_vars(vec![author()], vec![("health", Literal::Float(100.0))]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var_val(&sys, "health"), Val::Float(75.0));
+
+    let mut world2 = world_with_vars(vec![author()], vec![("health", Literal::Float(100.0))]);
+    let sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(
+        var_val(&sys2, "health"),
+        Val::Float(75.0),
+        "the float restores as a float"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_retyped_variable_ignores_its_stale_save() {
+    let dir = save_dir("retyped");
+    let saver = Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Start,
+        body: vec![
+            Node::Set {
+                var: "v".into(),
+                value: Expr::Float(7.5),
+                add: false,
+            },
+            Node::Save,
+        ],
+        ..Default::default()
+    };
+    let mut world = world_with_vars(vec![saver], vec![("v", Literal::Float(0.0))]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+
+    // The world now declares `v` an int: the saved float no longer applies, so
+    // the declared starting value stands.
+    let mut world2 = world_with_vars(
+        vec![Behavior {
+            asset_id: AssetId(1),
+            body: vec![Node::Save],
+            ..Default::default()
+        }],
+        vec![("v", Literal::Int(3))],
+    );
+    let sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(var_val(&sys2, "v"), Val::Int(3));
+    std::fs::remove_dir_all(&dir).ok();
 }

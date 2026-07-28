@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use crate::assets::{
     Behavior, BehaviorSource, DespawnRequest, InteractSignal, PlayCue, ReparentRequest,
-    SceneCommand, ScreenCommand, SpawnRequest, StoryCommand, StoryPlayback, Transform,
+    SceneCommand, ScreenCommand, SpawnRequest, StoryCommand, StoryPlayback, Transform, Variables,
     VisibilityRequest, VolumeEvent,
 };
 use crate::ecs::{Entity, EventCursor, PipelineContext, StepResult, System, asset_id::AssetId};
@@ -49,7 +49,7 @@ struct Instance {
     cooldown_left: f32,
     timer_accum: f32,
     timer_done: bool,
-    last_value: i32,
+    last_value: Val,
 }
 
 impl Instance {
@@ -63,7 +63,7 @@ impl Instance {
             cooldown_left: 0.0,
             timer_accum: 0.0,
             timer_done: false,
-            last_value: 0,
+            last_value: Val::Int(0),
         }
     }
 
@@ -71,7 +71,7 @@ impl Instance {
     fn due(
         &mut self,
         def: &Behavior,
-        vars: &[i32],
+        vars: &[Val],
         var_slot: Option<u16>,
         dt: f32,
         crossings: &[VolumeEvent],
@@ -87,7 +87,7 @@ impl Instance {
                 let current = var_slot
                     .and_then(|s| vars.get(s as usize))
                     .copied()
-                    .unwrap_or(0);
+                    .unwrap_or(Val::Int(0));
                 let changed = current != self.last_value;
                 self.last_value = current;
                 changed
@@ -137,7 +137,7 @@ pub struct BehaviorSystem {
     programs: Vec<Program>,
     // Parallel to `programs`.
     instances: Vec<Vec<Instance>>,
-    vars: Vec<i32>,
+    vars: Vec<Val>,
     var_table: VarTable,
     // Delayed runs: (program, the instance's entity, seconds left).
     pending: Vec<(usize, Option<Entity>, f32)>,
@@ -181,14 +181,22 @@ impl BehaviorSystem {
 
 impl System for BehaviorSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        let defs: Vec<Behavior> = ctx.query::<Behavior>().cloned().collect();
+        // The world's declared variables get their slots first, so each carries
+        // its authored type and starting value; anything a behavior mentions
+        // without a declaration follows as an integer starting at zero.
         let mut var_table = VarTable::default();
+        for declared in ctx.query::<Variables>() {
+            for decl in &declared.vars {
+                var_table.declare(&decl.name, Val::from_literal(&decl.value));
+            }
+        }
+        let defs: Vec<Behavior> = ctx.query::<Behavior>().cloned().collect();
         self.programs = defs
             .into_iter()
             .map(|def| program::compile(def, &mut var_table))
             .collect();
         self.instances = self.programs.iter().map(|_| Vec::new()).collect();
-        self.vars = vec![0; var_table.len()];
+        self.vars = var_table.initial();
         self.var_table = var_table;
 
         // Restore persisted state, but only in a world that saves: any other
@@ -198,8 +206,14 @@ impl System for BehaviorSystem {
             && let Some(state) = save::read_save(&save::state_file(&self.save_dir))
         {
             for (name, value) in &state.vars {
-                if let Some(slot) = self.var_table.slot_of(name) {
-                    self.vars[slot as usize] = *value;
+                let Some(slot) = self.var_table.slot_of(name) else {
+                    continue;
+                };
+                // A save written before the world retyped a variable no longer
+                // applies to it; the declared starting value stands.
+                let value = Val::from_literal(value);
+                if self.vars[slot as usize].same_type(value) {
+                    self.vars[slot as usize] = value;
                     restored += 1;
                 }
             }
@@ -353,7 +367,7 @@ impl BehaviorSystem {
         // A variable source starts baselined at the variable's current value,
         // so a restored save does not read as a change on the instance's first
         // tick. Read before the loop, which borrows `self.instances` mutably.
-        let baselines: Vec<i32> = self
+        let baselines: Vec<Val> = self
             .programs
             .iter()
             .map(|p| match &p.def.on {
@@ -362,8 +376,8 @@ impl BehaviorSystem {
                     .slot_of(name)
                     .and_then(|s| self.vars.get(s as usize))
                     .copied()
-                    .unwrap_or(0),
-                _ => 0,
+                    .unwrap_or(Val::Int(0)),
+                _ => Val::Int(0),
             })
             .collect();
         for (i, program) in self.programs.iter().enumerate() {
@@ -510,8 +524,12 @@ impl BehaviorSystem {
         for effect in effects {
             match effect {
                 Effect::SetVar { slot, value, add } => {
-                    if let Some(v) = self.vars.get_mut(slot as usize) {
-                        *v = if add { v.saturating_add(value) } else { value };
+                    if let Some(current) = self.vars.get_mut(slot as usize) {
+                        *current = if add {
+                            add_vals(*current, value)
+                        } else {
+                            value
+                        };
                     }
                 }
                 Effect::SetLocal { slot, value, add } => {
@@ -592,7 +610,7 @@ impl BehaviorSystem {
                 .names()
                 .iter()
                 .zip(&self.vars)
-                .map(|(name, value)| (name.clone(), *value))
+                .map(|(name, value)| (name.clone(), value.to_literal()))
                 .collect(),
             fired: self
                 .programs

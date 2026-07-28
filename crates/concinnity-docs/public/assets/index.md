@@ -69,6 +69,7 @@
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
 - [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
+- [Variables](Variables.md) - The world's shared variables: the state [Behavior](Behavior.md)s read with `var` and write with `set`, and the state a `save` node persists.
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
 - [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
@@ -131,5 +132,6 @@
 - [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler backend selector for `PostProcessConfig.temporal_upscaling`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific backend and fall back when it is unavailable. DLSS (NVIDIA NGX) and XeSS (Intel) are DirectX-only; Metal uses MetalFX and Vulkan has no upscaler yet, so both treat any value as their native path.
+- [VarDecl](VarDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
 - [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to [`MAX_WATER_WAVES`] of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` metres per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).

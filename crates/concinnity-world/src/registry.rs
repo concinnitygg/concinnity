@@ -662,6 +662,7 @@ mod tests {
                 "StreamingConfig",
                 "PhysicsConfig",
                 "Application",
+                "Variables",
                 "LoadingOverlay",
             ]
         );

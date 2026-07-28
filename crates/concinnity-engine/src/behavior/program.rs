@@ -59,6 +59,24 @@ impl Val {
             Literal::Vec3(v) => Val::Vec3(v),
         }
     }
+
+    // The authored form, for persistence. Entities have no authored form and
+    // are never persisted, so they save as their declared-away default.
+    pub(super) fn to_literal(self) -> Literal {
+        match self {
+            Val::Bool(b) => Literal::Bool(b),
+            Val::Int(i) => Literal::Int(i),
+            Val::Float(f) => Literal::Float(f),
+            Val::Vec3(v) => Literal::Vec3(v),
+            Val::Entity(_) => Literal::Int(0),
+        }
+    }
+
+    // Whether two values are the same shape, so a restored save can be
+    // rejected when the world's declaration changed type under it.
+    pub(super) fn same_type(self, other: Val) -> bool {
+        core::mem::discriminant(&self) == core::mem::discriminant(&other)
+    }
 }
 
 // How two numbers combine.
@@ -192,25 +210,35 @@ impl Program {
     }
 }
 
-// The world's variable names, in slot order. World variables are shared across
-// behaviors, so slots are assigned once across the whole set.
+// The world's variables, in slot order: shared across behaviors, so slots are
+// assigned once across the whole set. A name the world's `Variables` asset
+// declares carries that declaration's type and starting value; any other name a
+// behavior mentions is an integer starting at zero.
 #[derive(Debug, Default)]
 pub(super) struct VarTable {
     names: Vec<String>,
+    inits: Vec<Val>,
 }
 
 impl VarTable {
-    // The slot for a name, assigning one if this is its first mention.
-    fn intern(&mut self, name: &str) -> u16 {
-        if let Some(i) = self.names.iter().position(|n| n == name) {
-            return i as u16;
+    // Declare a variable with its authored type and starting value. A repeated
+    // name keeps its first declaration; the world checker rejects duplicates.
+    pub(super) fn declare(&mut self, name: &str, init: Val) {
+        if self.slot_of(name).is_some() {
+            return;
         }
         self.names.push(name.to_string());
-        (self.names.len() - 1) as u16
+        self.inits.push(init);
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.names.len()
+    // The slot for a name, assigning an undeclared integer if this is its first
+    // mention.
+    fn intern(&mut self, name: &str) -> u16 {
+        if let Some(i) = self.slot_of(name) {
+            return i;
+        }
+        self.declare(name, Val::Int(0));
+        (self.names.len() - 1) as u16
     }
 
     pub(super) fn slot_of(&self, name: &str) -> Option<u16> {
@@ -219,6 +247,11 @@ impl VarTable {
 
     pub(super) fn names(&self) -> &[String] {
         &self.names
+    }
+
+    // The starting values, in slot order.
+    pub(super) fn initial(&self) -> Vec<Val> {
+        self.inits.clone()
     }
 }
 

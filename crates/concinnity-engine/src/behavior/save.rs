@@ -13,12 +13,12 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::assets::Behavior;
+use crate::assets::{Behavior, Literal};
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct BehaviorSave {
     #[serde(default)]
-    pub(super) vars: BTreeMap<String, i32>,
+    pub(super) vars: BTreeMap<String, Literal>,
     #[serde(default)]
     pub(super) fired: Vec<(u32, u64)>,
 }
@@ -89,12 +89,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cn-behavior-save-{}", std::process::id()));
         let path = state_file(&dir);
         let mut save = BehaviorSave::default();
-        save.vars.insert("score".into(), 12);
+        save.vars.insert("score".into(), Literal::Int(12));
         save.fired.push((3, 0xfeed));
         write_save(&path, &save).unwrap();
 
         let back = read_save(&path).expect("state readable");
-        assert_eq!(back.vars.get("score"), Some(&12));
+        assert_eq!(back.vars.get("score"), Some(&Literal::Int(12)));
         assert_eq!(back.fired, vec![(3, 0xfeed)]);
         std::fs::remove_dir_all(&dir).ok();
     }
