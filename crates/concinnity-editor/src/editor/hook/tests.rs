@@ -1027,6 +1027,40 @@ fn a_hidden_panel_is_not_interactive() {
     assert!(h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
 }
 
+// An open Behavior panel claims only presses that land on it. Its chart views
+// used to answer for the whole screen, which left every other panel unable to
+// be moved, closed, or brought forward while one of them was showing.
+#[test]
+fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
+    )]);
+    let vp = [1280.0, 720.0];
+    h.view_open = true;
+    // Behavior sits in front of the panels the press has to reach.
+    h.focus_panel(PanelKey::Behavior);
+
+    for mode in [ViewMode::Outline, ViewMode::Chart, ViewMode::Overview] {
+        h.behavior_mode = mode;
+        for key in [PanelKey::Preview, PanelKey::View] {
+            let title = title_rect_of(&h, key, vp);
+            let (mx, my) = (title[0] + 5.0, title[1] + 5.0);
+            assert!(
+                !h.try_panel_press(PanelKey::Behavior, mx, my, vp, &mut world),
+                "{mode:?}: Behavior swallowed a press meant for {key:?}"
+            );
+            h.drag = None;
+            assert!(
+                h.try_panel_press(key, mx, my, vp, &mut world),
+                "{mode:?}: {key:?} never saw the press"
+            );
+            h.drag = None;
+            h.focus_panel(PanelKey::Behavior);
+        }
+    }
+}
+
 // The Templates panel drags by its own title bar and comes to the front on a
 // press, like the other floating panels.
 #[test]

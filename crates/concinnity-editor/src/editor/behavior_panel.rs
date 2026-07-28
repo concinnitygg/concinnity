@@ -553,21 +553,26 @@ pub(crate) fn hit_test(
                 });
             }
         }
+        // Only the canvas answers here. A press that lands nowhere falls through
+        // to the panel-wide check below, which is what lets a press that missed
+        // the panel entirely reach the panels behind it.
         if view.mode.drawn_as_chart() {
             let band = chart_band(o, s, view.mode);
             let cv = chart_view(view);
-            let card = behavior_chart::hit_card(&cv, mx, my, band);
-            return Some(match (card, view.mode) {
-                // An overview card opens the behavior it stands for; a card
-                // standing for a trigger or a variable has none to open.
-                (Some(i), ViewMode::Overview) => match view.overview.cards[i].behavior {
-                    Some(_) => BehaviorAction::OpenCard(i),
-                    None => BehaviorAction::Consume,
-                },
-                (Some(i), _) => BehaviorAction::SelectCard(i),
-                (None, _) if point_in(mx, my, band) => BehaviorAction::PanStart,
-                (None, _) => BehaviorAction::Consume,
-            });
+            if let Some(i) = behavior_chart::hit_card(&cv, mx, my, band) {
+                return Some(match view.mode {
+                    // An overview card opens the behavior it stands for; a card
+                    // standing for a trigger or a variable has none to open.
+                    ViewMode::Overview => match view.overview.cards[i].behavior {
+                        Some(_) => BehaviorAction::OpenCard(i),
+                        None => BehaviorAction::Consume,
+                    },
+                    _ => BehaviorAction::SelectCard(i),
+                });
+            }
+            if point_in(mx, my, band) {
+                return Some(BehaviorAction::PanStart);
+            }
         }
     }
     point_in(mx, my, widget::outer_rect(o, s)).then_some(BehaviorAction::Consume)
@@ -1568,6 +1573,43 @@ mod tests {
             !label(&world, row_label(fields.len())).visible,
             "and nothing past them"
         );
+    }
+
+    // A press that misses the panel has to miss in every view. `hit_test`
+    // answering `Some` is what tells the router the press was swallowed, so a
+    // chart that answered for points outside its own panel locked out every
+    // panel behind it.
+    #[test]
+    fn a_press_outside_the_panel_misses_in_every_view() {
+        let rows = sample_rows();
+        let fields = node_fields(&rows);
+        let o = [200.0, 150.0];
+        for (mode, s) in [
+            (ViewMode::Outline, size()),
+            (ViewMode::Chart, chart_size()),
+            (ViewMode::Overview, overview_size()),
+        ] {
+            let v = BehaviorView {
+                mode,
+                card: Some(1),
+                fields: &fields,
+                ..view(&rows, &[])
+            };
+            for at in [
+                [o[0] - 40.0, o[1] + 60.0],
+                [o[0] + s[0] + 40.0, o[1] + 60.0],
+                [o[0] + 60.0, o[1] + s[1] + 40.0],
+                [8.0, 8.0],
+            ] {
+                assert_eq!(
+                    hit_test(&v, at[0], at[1], o, s),
+                    None,
+                    "{mode:?} swallowed a press at {at:?}"
+                );
+            }
+            // A press on the panel is still the panel's, whatever it lands on.
+            assert!(hit_test(&v, o[0] + 20.0, o[1] + s[1] - 20.0, o, s).is_some());
+        }
     }
 
     // A click in the pane picks the field it lands on rather than falling
