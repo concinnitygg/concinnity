@@ -4274,7 +4274,7 @@ fn behavior_new_appends_a_blank_behavior_and_opens_it() {
     assert!(h.dirty && h.rebuild_preview, "adding one is a world edit");
     assert_eq!(open_args(&h), serde_json::json!({"on": "start", "do": []}));
     // A blank behavior still checks out, so the panel opens on a clean slate.
-    assert!(matches!(h.behavior_status, Some(Status::Ok(_))));
+    assert!(matches!(h.behavior_status, Some(Status::Ok)));
 }
 
 // The status line is the world checker's own message, not a second opinion.
@@ -4340,17 +4340,41 @@ fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
     assert!(e.contains("`self` needs a `scope`"), "{e}");
 }
 
-// The rows that are their own control act on the click that selects them.
+// Selecting a row never changes it, however small the field: the source and a
+// flag both stand still until something is picked for them.
 #[test]
-fn behavior_source_and_flag_rows_step_on_selection() {
+fn selecting_a_behavior_row_leaves_its_value_alone() {
+    let before = serde_json::json!({"on": "start", "once": false});
+    let (mut h, mut world) = behavior_session(vec![behavior("b", before.clone())]);
+    for label in ["on", "once"] {
+        select_behavior(&mut h, &mut world, label);
+        assert_eq!(open_args(&h), before, "selecting `{label}` edited it");
+    }
+    assert!(!h.rebuild_preview, "and nothing was committed");
+}
+
+// The same fields reach their options through the palette instead.
+#[test]
+fn behavior_fixed_fields_are_set_from_the_palette() {
     let (mut h, mut world) = behavior_session(vec![behavior(
         "b",
         serde_json::json!({"on": "start", "once": false}),
     )]);
-    select_behavior(&mut h, &mut world, "on");
-    assert_eq!(open_args(&h)["on"], serde_json::json!("tick"));
-    select_behavior(&mut h, &mut world, "once");
-    assert_eq!(open_args(&h)["once"], serde_json::json!(true));
+    for (label, verb, want) in [
+        ("on", "tick", serde_json::json!("tick")),
+        ("once", "true", serde_json::json!(true)),
+    ] {
+        select_behavior(&mut h, &mut world, label);
+        h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
+        let at = h
+            .behavior_data()
+            .picks
+            .iter()
+            .position(|p| p.verb == verb)
+            .unwrap_or_else(|| panic!("`{label}` offers `{verb}`"));
+        h.apply_behavior_action(BehaviorAction::Choose(at), &mut world, [0.0, 0.0]);
+        assert_eq!(open_args(&h)[label], want);
+    }
 }
 
 #[test]
@@ -4427,7 +4451,7 @@ fn behavior_value_field_is_carried_across_a_preview_rebuild() {
 // The chart is a second view over the same rows, so switching to it keeps the
 // selection and the toolbar keeps acting on the same node.
 #[test]
-fn behavior_view_toggles_between_the_chart_and_the_outline() {
+fn behavior_view_cycles_through_the_three_views() {
     let (mut h, mut world) = behavior_session(vec![behavior(
         "chase",
         serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
@@ -4436,15 +4460,14 @@ fn behavior_view_toggles_between_the_chart_and_the_outline() {
     select_behavior(&mut h, &mut world, "hide");
     let selected = h.behavior_row;
 
-    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
-    assert_eq!(h.behavior_mode, ViewMode::Chart);
-    assert_eq!(
-        h.behavior_row, selected,
-        "the selection survives the switch"
-    );
-
-    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
-    assert_eq!(h.behavior_mode, ViewMode::Outline);
+    for want in [ViewMode::Chart, ViewMode::Overview, ViewMode::Outline] {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+        assert_eq!(h.behavior_mode, want);
+        assert_eq!(
+            h.behavior_row, selected,
+            "the selection survives every switch"
+        );
+    }
 }
 
 // Clicking a card is clicking its row: the palette a card opens is the one its
@@ -4478,6 +4501,129 @@ fn behavior_card_selects_the_row_it_stands_for() {
             .iter()
             .any(|p| p.verb == "set_transform"),
     );
+}
+
+// The overview maps the whole world, and clicking a behavior on it opens that
+// behavior -- which is what makes the map an index rather than a picture.
+#[test]
+fn behavior_overview_opens_the_behavior_a_card_stands_for() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior(
+            "award",
+            serde_json::json!({"on": "start",
+                "do": [{"set": {"var": "score", "value": {"int": 1}}}]}),
+        ),
+        behavior(
+            "react",
+            serde_json::json!({"on": {"variable": "score"}, "do": []}),
+        ),
+    ]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    assert_eq!(h.behavior_mode, ViewMode::Overview);
+
+    let overview = h.behavior_data().overview;
+    let card = overview
+        .cards
+        .iter()
+        .position(|c| c.title == "react")
+        .expect("react is on the map");
+    assert!(
+        overview.cards.iter().any(|c| c.title == "score"),
+        "the variable joining them is a card of its own"
+    );
+
+    h.apply_behavior_action(BehaviorAction::OpenCard(card), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_index, 1);
+    assert_eq!(h.behavior_data().name, "react");
+    assert_eq!(
+        h.behavior_mode,
+        ViewMode::Chart,
+        "and lands on the body it named"
+    );
+}
+
+// The map is only built while it is showing: it walks every behavior in the
+// world, which the other two views have no use for.
+#[test]
+fn behavior_overview_is_built_only_while_it_shows() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "a",
+        serde_json::json!({"on": "start", "do": []}),
+    )]);
+    assert!(h.behavior_data().overview.cards.is_empty());
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    assert!(!h.behavior_data().overview.cards.is_empty());
+}
+
+// Selecting a card lists that node's own settings, and picking one of them
+// keeps the same node in the inspector rather than emptying it.
+#[test]
+fn behavior_inspector_holds_the_node_while_its_fields_are_selected() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "drip",
+        serde_json::json!({"on": "start", "do": [
+            {"spawn": {"template": "drop", "lifetime": 4.0}},
+        ]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let card = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.title == "spawn")
+        .unwrap();
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+
+    let data = h.behavior_data();
+    assert_eq!(data.card, Some(card));
+    let listed: Vec<&str> = data
+        .fields
+        .iter()
+        .map(|&i| data.rows[i].label.as_str())
+        .collect();
+    assert!(listed.contains(&"lifetime"), "{listed:?}");
+
+    // Selecting one of those settings holds the node it belongs to.
+    let lifetime = data.fields[listed.iter().position(|l| *l == "lifetime").unwrap()];
+    h.apply_behavior_action(BehaviorAction::Select(lifetime), &mut world, [0.0, 0.0]);
+    let after = h.behavior_data();
+    assert_eq!(after.card, Some(card), "the inspector holds the node");
+    assert_eq!(after.fields, data.fields, "and lists the same settings");
+    assert!(h.behavior_focus, "a typed setting is ready to type into");
+}
+
+// A node's own field is its own; the nodes nested inside it are cards of their
+// own, so the inspector never doubles as a second way into the body.
+#[test]
+fn behavior_inspector_stops_at_the_nodes_a_branch_holds() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "gate",
+        serde_json::json!({"on": "start", "do": [
+            {"if": {"cond": {"bool": true}, "then": [{"save": null}], "else": []}},
+        ]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let card = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.title == "if")
+        .unwrap();
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    let data = h.behavior_data();
+    let listed: Vec<&str> = data
+        .fields
+        .iter()
+        .map(|&i| data.rows[i].label.as_str())
+        .collect();
+    assert!(listed.contains(&"cond"), "{listed:?}");
+    assert!(!listed.contains(&"save"), "{listed:?}");
 }
 
 // An empty branch is a card too, and picking from it appends the branch's first
@@ -4535,7 +4681,8 @@ fn behavior_wheel_pans_the_chart_within_its_extent() {
         h.scroll_behavior(1.0);
     }
     let chart = h.behavior_data().chart;
-    let canvas = behavior_panel::chart_canvas(h.effective_size(PanelKey::Behavior));
+    let canvas =
+        behavior_panel::chart_canvas(h.effective_size(PanelKey::Behavior), ViewMode::Chart);
     assert_eq!(
         h.behavior_pan,
         crate::editor::behavior_chart::clamp_pan(h.behavior_pan, &chart, canvas)
@@ -4560,7 +4707,11 @@ fn behavior_selection_pans_an_off_canvas_card_into_view() {
     let data = h.behavior_data();
     let path = &data.rows[h.behavior_row.unwrap()].path;
     let card = data.chart.cards.iter().find(|c| &c.path == path).unwrap();
-    let band = behavior_panel::chart_band([0.0, 0.0], h.effective_size(PanelKey::Behavior));
+    let band = behavior_panel::chart_band(
+        [0.0, 0.0],
+        h.effective_size(PanelKey::Behavior),
+        ViewMode::Chart,
+    );
     let rect = crate::editor::behavior_chart::card_rect(card, band, h.behavior_pan);
     assert!(rect[0] >= band[0], "{rect:?} left of {band:?}");
     assert!(rect[0] + rect[2] <= band[0] + band[2] + 0.01, "{rect:?}");

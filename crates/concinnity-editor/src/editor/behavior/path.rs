@@ -28,6 +28,11 @@ pub(crate) fn child(base: &[Step], step: Step) -> Path {
     p
 }
 
+// Whether `path` addresses `prefix` or something inside it.
+pub(crate) fn starts_with(path: &[Step], prefix: &[Step]) -> bool {
+    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
+}
+
 pub(crate) fn get<'a>(root: &'a Value, path: &[Step]) -> Option<&'a Value> {
     let mut cur = root;
     for step in path {
@@ -191,6 +196,15 @@ mod tests {
         assert_eq!(shift(&mut v, &[field("do"), Step::Index(0)], -1), None);
         assert_eq!(shift(&mut v, &[field("do"), Step::Index(1)], 1), None);
         assert_eq!(v["do"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn starts_with_matches_a_path_and_what_is_inside_it() {
+        let node = vec![field("do"), Step::Index(0)];
+        assert!(starts_with(&node, &node), "a path is inside itself");
+        assert!(starts_with(&child(&node, field("cond")), &node));
+        assert!(!starts_with(&node, &child(&node, field("cond"))));
+        assert!(!starts_with(&[field("do"), Step::Index(1)], &node));
     }
 
     #[test]

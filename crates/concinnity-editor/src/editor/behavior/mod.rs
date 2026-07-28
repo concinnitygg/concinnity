@@ -13,7 +13,9 @@
 // reports on the same value the build will.
 
 pub(crate) mod edit;
+pub(crate) mod fields;
 pub(crate) mod graph;
 pub(crate) mod outline;
 pub(crate) mod palette;
 pub(crate) mod path;
+pub(crate) mod relations;

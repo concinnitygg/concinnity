@@ -3,12 +3,16 @@
 // The Behavior panel's layout half: a floating node-graph editor over one
 // `Behavior` asset. The header cycles through the world's behaviors and adds
 // new ones; the toolbar acts on the selected row (open its palette, delete it,
-// move it, or type its value); the body is the whole asset as one indented
-// outline of nodes and their expression trees (`behavior/outline.rs`), and the
-// status line carries the world checker's message for the behavior as it
-// stands. The palette opens as a floating list over the body, so picking a node
-// or an expression never leaves the panel. `hook/behavior_edit.rs` owns the
-// actions.
+// move it, or type its value). The body is the asset either way: the outline
+// lists every field of every node (`behavior/outline.rs`), while the chart
+// draws the control flow as cards with the selected node's own settings in the
+// inspector column beside it (`behavior/fields.rs`).
+//
+// The palette opens as a floating list over the body, so picking a node or an
+// expression never leaves the panel, and the checker's complaint floats over
+// the body's foot rather than sitting in the chrome -- a behavior that checks
+// out says nothing, and the body never moves under the user either way.
+// `hook/behavior_edit.rs` owns the actions.
 
 use super::behavior::edit::{self, Pick};
 use super::behavior::graph::Chart;
@@ -50,6 +54,9 @@ pub(crate) const DROP_THUMB: AssetId = AssetId(BASE + 24);
 pub(crate) const VALUE_INPUT: AssetId = AssetId(BASE + 25);
 pub(crate) const VIEW_BG: AssetId = AssetId(BASE + 26);
 pub(crate) const VIEW_LABEL: AssetId = AssetId(BASE + 27);
+pub(crate) const STATUS_BG: AssetId = AssetId(BASE + 28);
+pub(crate) const INSPECT_BG: AssetId = AssetId(BASE + 29);
+pub(crate) const INSPECT_LABEL: AssetId = AssetId(BASE + 30);
 
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(BASE + 0x40 + i as u32)
@@ -78,8 +85,9 @@ const PAD: f32 = 10.0;
 const GAP: f32 = 6.0;
 const HEADER_H: f32 = 32.0;
 const TOOL_H: f32 = 30.0;
-// Two lines: a checker message is a sentence and often needs the second, and a
-// fixed band keeps the body from shifting as messages come and go.
+// The error banner floats over the foot of the body rather than sitting in the
+// chrome, so the body keeps the same geometry whether or not the open behavior
+// checks out. Two lines, because a checker message is a sentence.
 const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const ROW_H: f32 = 22.0;
 const SCROLLBAR_W: f32 = 5.0;
@@ -103,8 +111,16 @@ pub(crate) const CHAR_W: f32 = 8.5;
 // How far each outline level insets its caption.
 const INDENT: f32 = 14.0;
 
+// The inspector: the column beside the chart listing the selected node's own
+// settings, so a card is edited where it sits rather than by leaving for the
+// outline. Its rows are narrow, so its value column is its own.
+const INSPECT_W: f32 = 240.0;
+const INSPECT_HEAD_H: f32 = 22.0;
+const INSPECT_VALUE_X: f32 = 106.0;
+const INSPECT_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
+
 // The chrome height above the outline (everything but the row band and pad).
-const CHROME_H: f32 = widget::TITLE_H + HEADER_H + TOOL_H + STATUS_H;
+const CHROME_H: f32 = widget::TITLE_H + HEADER_H + TOOL_H;
 
 pub(crate) fn visible_rows(h: f32) -> usize {
     (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
@@ -127,24 +143,35 @@ const DEL_TINT: [f32; 4] = [0.44, 0.22, 0.24, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const DROP_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
-const OK_LABEL: [f32; 3] = [0.55, 0.85, 0.65];
+const ERROR_TINT: [f32; 4] = [0.20, 0.09, 0.11, 1.0];
+const ERROR_BORDER: [f32; 4] = [0.52, 0.24, 0.27, 1.0];
 const HINT_LABEL: [f32; 3] = theme::LABEL_DIM;
 
-// Which way the body is shown. Both views read the same rows: the chart draws
-// the control flow as cards, the outline every field of every node.
+// Which way the panel shows its work. The outline and the chart are two views
+// of the open behavior -- every field of every node, or the control flow as
+// cards -- and the overview is the world's behaviors and how they reach each
+// other (`behavior/relations.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ViewMode {
     #[default]
     Outline,
     Chart,
+    Overview,
 }
 
 impl ViewMode {
+    // The views cycle, so one button reaches all three.
     pub(crate) fn other(self) -> ViewMode {
         match self {
             Self::Outline => Self::Chart,
-            Self::Chart => Self::Outline,
+            Self::Chart => Self::Overview,
+            Self::Overview => Self::Outline,
         }
+    }
+
+    // Whether this view draws a chart rather than a list of rows.
+    pub(crate) fn drawn_as_chart(self) -> bool {
+        !matches!(self, Self::Outline)
     }
 
     // The toggle is captioned with the view it switches to, so the button says
@@ -153,28 +180,25 @@ impl ViewMode {
         match self.other() {
             Self::Outline => "Outline",
             Self::Chart => "Chart",
+            Self::Overview => "Overview",
         }
     }
 }
 
-// The world checker's verdict on the open behavior, as the status line shows it.
+// The world checker's verdict on the open behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Status {
-    Ok(String),
+    Ok,
     Error(String),
 }
 
 impl Status {
-    pub(crate) fn text(&self) -> &str {
+    // What the panel shows. A behavior that checks out says nothing, so the
+    // banner appears only when something is wrong with it.
+    pub(crate) fn error(&self) -> Option<&str> {
         match self {
-            Self::Ok(s) | Self::Error(s) => s,
-        }
-    }
-
-    fn color(&self) -> [f32; 3] {
-        match self {
-            Self::Ok(_) => OK_LABEL,
-            Self::Error(_) => theme::LOG_ERROR,
+            Self::Ok => None,
+            Self::Error(e) => Some(e),
         }
     }
 }
@@ -190,10 +214,16 @@ pub(crate) struct BehaviorView<'a> {
     pub rows: &'a [Row],
     pub scroll: usize,
     pub selected: Option<usize>,
-    // The same behavior laid out as a chart, and which view is showing.
+    // The same behavior laid out as a chart, the world's behaviors laid out as
+    // one map, and which view is showing.
     pub chart: &'a Chart,
+    pub overview: &'a Chart,
     pub mode: ViewMode,
     pub pan: [f32; 2],
+    // The card the selection belongs to, and the rows the inspector lists for
+    // it. Empty until something on the chart is selected.
+    pub card: Option<usize>,
+    pub fields: &'a [usize],
     // The palette for the selected row, shown while `picking`.
     pub picks: &'a [Pick],
     pub picking: bool,
@@ -213,6 +243,37 @@ impl BehaviorView<'_> {
             .len()
             .saturating_sub(self.pick_scroll)
             .clamp(1, PICK_POOL)
+    }
+
+    // The chart this view draws.
+    pub(crate) fn shown_chart(&self) -> &Chart {
+        match self.mode {
+            ViewMode::Overview => self.overview,
+            _ => self.chart,
+        }
+    }
+
+    // The row body slot `slot` draws: the outline windowed by its scroll, or the
+    // inspector's list of the selected node's fields.
+    fn row_at(&self, slot: usize) -> Option<usize> {
+        match self.mode {
+            ViewMode::Chart => self.fields.get(slot).copied(),
+            ViewMode::Overview => None,
+            ViewMode::Outline => Some(self.scroll + slot),
+        }
+    }
+
+    // The depth body rows indent from: the outline's own root, or the selected
+    // node in the inspector.
+    fn base_depth(&self) -> usize {
+        match self.mode {
+            ViewMode::Chart => self
+                .fields
+                .first()
+                .and_then(|&i| self.rows.get(i))
+                .map_or(0, |r| r.depth),
+            _ => 0,
+        }
     }
 }
 
@@ -241,6 +302,8 @@ pub(crate) enum BehaviorAction {
     ToggleView,
     // Select the chart card at `i` (an index into the chart's cards).
     SelectCard(usize),
+    // Open the behavior the overview card at `i` stands for.
+    OpenCard(usize),
     // Press on empty canvas: start panning the chart.
     PanStart,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
@@ -261,9 +324,15 @@ pub(crate) fn size() -> [f32; 2] {
 }
 
 // The chart wants width where the outline wants rows: cards run left to right,
-// so the panel opens wide enough to hold a few columns before any panning.
+// so the panel opens wide enough to hold a trigger and the body's first nodes
+// beside the inspector before any panning.
 pub(crate) fn chart_size() -> [f32; 2] {
-    [behavior_chart::default_width(), size()[1]]
+    [behavior_chart::width_for(3) + INSPECT_W, size()[1]]
+}
+
+// The overview has no inspector, so its columns take the whole width.
+pub(crate) fn overview_size() -> [f32; 2] {
+    [behavior_chart::width_for(4), size()[1]]
 }
 
 // The tallest the panel resizes to: the injected row pool shown in full. Width
@@ -347,6 +416,43 @@ pub(crate) fn row_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
     ]
 }
 
+// The inspector column, pinned to the panel's right edge so the chart keeps the
+// rest of the body.
+pub(crate) fn inspect_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
+    let top = body_top(o);
+    [
+        o[0] + s[0] - INSPECT_W - 1.0,
+        top,
+        INSPECT_W,
+        (o[1] + s[1] - top - 2.0).max(0.0),
+    ]
+}
+
+fn inspect_row_rect(o: [f32; 2], s: [f32; 2], slot: usize) -> [f32; 4] {
+    let b = inspect_rect(o, s);
+    [
+        b[0] + 3.0,
+        b[1] + INSPECT_HEAD_H + slot as f32 * ROW_H,
+        b[2] - 6.0,
+        ROW_H,
+    ]
+}
+
+// Where body row `slot` sits: across the panel in outline view, in the
+// inspector column beside the chart otherwise.
+pub(crate) fn body_row_rect(o: [f32; 2], s: [f32; 2], mode: ViewMode, slot: usize) -> [f32; 4] {
+    match mode {
+        ViewMode::Outline => row_rect(o, s[0], slot),
+        _ => inspect_row_rect(o, s, slot),
+    }
+}
+
+// How many field rows the inspector has room for at panel size `s`.
+pub(crate) fn inspect_rows(s: [f32; 2]) -> usize {
+    let h = inspect_rect([0.0, 0.0], s)[3] - INSPECT_HEAD_H;
+    ((h / ROW_H).floor().max(0.0) as usize).min(ROW_POOL_MAX)
+}
+
 // The palette floats over the outline, anchored under the toolbar so it always
 // stays inside the panel however far the body is scrolled.
 fn palette_backing(o: [f32; 2], w: f32, shown: usize) -> [f32; 4] {
@@ -417,37 +523,50 @@ pub(crate) fn hit_test(
         if point_in(mx, my, next_rect(o)) {
             return Some(BehaviorAction::Step(1));
         }
-        for (rect, action) in [
-            (palette_rect(o), BehaviorAction::Palette),
-            (delete_rect(o), BehaviorAction::Delete),
-            (up_rect(o), BehaviorAction::Move(-1)),
-            (down_rect(o), BehaviorAction::Move(1)),
-        ] {
-            if point_in(mx, my, rect) {
-                return Some(action);
+        // The toolbar and the body rows act on the open behavior, which the
+        // overview is not showing.
+        if view.mode != ViewMode::Overview {
+            for (rect, action) in [
+                (palette_rect(o), BehaviorAction::Palette),
+                (delete_rect(o), BehaviorAction::Delete),
+                (up_rect(o), BehaviorAction::Move(-1)),
+                (down_rect(o), BehaviorAction::Move(1)),
+            ] {
+                if point_in(mx, my, rect) {
+                    return Some(action);
+                }
+            }
+            if view.editable && point_in(mx, my, value_rect(o, w)) {
+                return Some(BehaviorAction::FocusValue);
+            }
+            let shown = match view.mode {
+                ViewMode::Chart => view.fields.len().min(inspect_rows(s)),
+                _ => visible_rows(s[1]),
+            };
+            for slot in 0..shown {
+                if !point_in(mx, my, body_row_rect(o, s, view.mode, slot)) {
+                    continue;
+                }
+                return Some(match view.row_at(slot) {
+                    Some(i) if i < view.rows.len() => BehaviorAction::Select(i),
+                    _ => BehaviorAction::Consume,
+                });
             }
         }
-        if view.editable && point_in(mx, my, value_rect(o, w)) {
-            return Some(BehaviorAction::FocusValue);
-        }
-        if view.mode == ViewMode::Chart {
-            let band = chart_band(o, s);
+        if view.mode.drawn_as_chart() {
+            let band = chart_band(o, s, view.mode);
             let cv = chart_view(view);
-            return Some(match behavior_chart::hit_card(&cv, mx, my, band) {
-                Some(card) => BehaviorAction::SelectCard(card),
-                None if point_in(mx, my, band) => BehaviorAction::PanStart,
-                None => BehaviorAction::Consume,
-            });
-        }
-        for slot in 0..visible_rows(s[1]) {
-            if !point_in(mx, my, row_rect(o, w, slot)) {
-                continue;
-            }
-            let i = view.scroll + slot;
-            return Some(if i < view.rows.len() {
-                BehaviorAction::Select(i)
-            } else {
-                BehaviorAction::Consume
+            let card = behavior_chart::hit_card(&cv, mx, my, band);
+            return Some(match (card, view.mode) {
+                // An overview card opens the behavior it stands for; a card
+                // standing for a trigger or a variable has none to open.
+                (Some(i), ViewMode::Overview) => match view.overview.cards[i].behavior {
+                    Some(_) => BehaviorAction::OpenCard(i),
+                    None => BehaviorAction::Consume,
+                },
+                (Some(i), _) => BehaviorAction::SelectCard(i),
+                (None, _) if point_in(mx, my, band) => BehaviorAction::PanStart,
+                (None, _) => BehaviorAction::Consume,
             });
         }
     }
@@ -470,39 +589,68 @@ pub(crate) fn apply(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
 
     layout_header(world, view, o, w);
     layout_toolbar(world, view, o, w);
-    layout_status(world, view, o, w);
-    if view.mode == ViewMode::Chart && view.total > 0 {
-        layout_rows(world, view, o, w, 0);
+    layout_status(world, view, o, s);
+    if view.mode.drawn_as_chart() && view.total > 0 {
+        match view.mode {
+            ViewMode::Chart => layout_inspector(world, view, o, s),
+            _ => hide_inspector(world, view),
+        }
         widget::set_sprite_visible(world, LIST_TRACK, false);
         widget::set_sprite_visible(world, LIST_THUMB, false);
-        behavior_chart::apply(world, &chart_view(view), chart_band(o, s));
+        behavior_chart::apply(world, &chart_view(view), chart_band(o, s, view.mode));
     } else {
         behavior_chart::hide_all(world);
-        layout_rows(world, view, o, w, visible_rows(s[1]));
+        hide_inspector(world, view);
+        layout_rows(world, view, o, s, visible_rows(s[1]));
         layout_scrollbar(world, view, o, w, visible_rows(s[1]));
     }
     layout_palette(world, view, o, w);
 }
 
-pub(crate) fn chart_band(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    behavior_chart::band(o, s, body_top(o))
+fn hide_inspector(world: &mut World, view: &BehaviorView) {
+    widget::set_sprite_visible(world, INSPECT_BG, false);
+    widget::set_label_visible(world, INSPECT_LABEL, false);
+    if view.mode != ViewMode::Outline {
+        layout_rows(world, view, [0.0, 0.0], [0.0, 0.0], 0);
+    }
+}
+
+// The chart gets the body, less the inspector column beside it. The overview
+// has no inspector -- its cards are whole behaviors, not nodes -- so it takes
+// the whole body.
+pub(crate) fn chart_band(o: [f32; 2], s: [f32; 2], mode: ViewMode) -> [f32; 4] {
+    let w = match mode {
+        ViewMode::Chart => (s[0] - INSPECT_W).max(0.0),
+        _ => s[0],
+    };
+    behavior_chart::band(o, [w, s[1]], body_top(o))
 }
 
 // The chart canvas's size at panel size `s`, which is all the pan maths needs.
-pub(crate) fn chart_canvas(s: [f32; 2]) -> [f32; 2] {
-    let b = chart_band([0.0, 0.0], s);
+pub(crate) fn chart_canvas(s: [f32; 2], mode: ViewMode) -> [f32; 2] {
+    let b = chart_band([0.0, 0.0], s, mode);
     [b[2], b[3]]
 }
 
 fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
     behavior_chart::ChartView {
-        chart: view.chart,
-        selected: view
-            .selected
-            .and_then(|i| view.rows.get(i))
-            .map(|r| &r.path),
+        chart: view.shown_chart(),
+        // The card the selection belongs to, so a node stays lit while its own
+        // fields are picked through in the inspector. The overview's cards are
+        // whole behaviors, which the panel selects by opening.
+        selected: match view.mode {
+            ViewMode::Overview => None,
+            _ => view
+                .card
+                .and_then(|i| view.chart.cards.get(i))
+                .map(|c| &c.path),
+        },
         pan: view.pan,
         mouse: view.mouse,
+        overflow: match view.mode {
+            ViewMode::Overview => "behaviors -- step through them with < and >",
+            _ => "nodes -- open the outline to reach them",
+        },
     }
 }
 
@@ -568,7 +716,9 @@ fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
 }
 
 fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
-    let on = view.total > 0;
+    // The toolbar acts on a row of the open behavior, so the overview leaves it
+    // with nothing to act on.
+    let on = view.total > 0 && view.mode != ViewMode::Overview;
     let selected = on && view.selected.is_some();
     let member = selected
         && view
@@ -618,39 +768,101 @@ fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     }
 }
 
-fn layout_status(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+// The checker's complaint, floating over the foot of the body. Nothing is drawn
+// while the open behavior checks out, so a working panel is all body.
+fn layout_status(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2]) {
+    let Some(error) = view
+        .status
+        .and_then(Status::error)
+        .filter(|_| view.total > 0)
+    else {
+        widget::set_sprite_visible(world, STATUS_BG, false);
+        widget::set_label_visible(world, STATUS_LABEL, false);
+        return;
+    };
+    let b = status_rect(o, s);
+    widget::place_bordered(world, STATUS_BG, b, ERROR_TINT, ERROR_BORDER, 1.0);
     widget::place_message(
         world,
         STATUS_LABEL,
-        status_rect(o, w),
-        view.status.map(Status::text).unwrap_or(""),
-        view.status.map_or(HINT_LABEL, Status::color),
-        view.status.is_some(),
+        [b[0] + PAD, b[1] + 3.0, b[2] - 2.0 * PAD, b[3] - 6.0],
+        error,
+        theme::LOG_ERROR,
+        true,
     );
 }
 
-fn status_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + PAD,
-        o[1] + widget::TITLE_H + HEADER_H + TOOL_H + 2.0,
-        (w - 2.0 * PAD).max(0.0),
-        STATUS_H - 4.0,
-    ]
+pub(crate) fn status_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
+    let bottom = o[1] + s[1] - PAD;
+    // Grown up to an outline-row boundary, so the banner's edge never bisects
+    // the row it floats over and leaves it half drawn.
+    let rows = ((bottom - STATUS_H - body_top(o)) / ROW_H).floor().max(0.0);
+    let top = body_top(o) + rows * ROW_H;
+    [o[0] + PAD, top, (s[0] - 2.0 * PAD).max(0.0), bottom - top]
 }
 
-fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32, shown: usize) {
-    let value_x = value_column(w);
+// The inspector: the selected node's own settings beside the chart. Every row
+// is an ordinary body row, so the toolbar and the palette act on it exactly as
+// they do in the outline.
+fn layout_inspector(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2]) {
+    let b = inspect_rect(o, s);
+    place_rounded(
+        world,
+        INSPECT_BG,
+        b,
+        INSPECT_TINT,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    let room = inspect_rows(s);
+    let caption = match (view.card.and_then(|i| view.chart.cards.get(i)), room) {
+        (None, _) => "select a card".to_string(),
+        // A node with more settings than the column has room for says so, the
+        // way the chart does when a body outgrows it.
+        (Some(c), room) if view.fields.len() > room => format!("{} (see outline)", c.title),
+        (Some(c), _) => c.title.clone(),
+    };
+    widget::place_left_label(
+        world,
+        INSPECT_LABEL,
+        [b[0] + PAD, b[1] + INSPECT_HEAD_H * 0.5 - theme::TEXT_HALF],
+        &widget::clip_text(&caption, ((b[2] - 2.0 * PAD) / CHAR_W) as usize),
+        if view.card.is_some() {
+            theme::HEADING
+        } else {
+            HINT_LABEL
+        },
+        true,
+    );
+    layout_rows(world, view, o, s, view.fields.len().min(room));
+}
+
+fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2], shown: usize) {
+    let (value_x, value_budget) = match view.mode {
+        ViewMode::Outline => (value_column(s[0]), max_value_chars(s[0])),
+        _ => (
+            INSPECT_VALUE_X,
+            ((INSPECT_W - INSPECT_VALUE_X - PAD) / CHAR_W) as usize,
+        ),
+    };
     let label_budget = ((value_x - PAD * 2.0) / CHAR_W) as usize;
+    // The inspector starts at the selected node, so its rows indent from there
+    // rather than from however deep in the body that node sits.
+    let base_depth = view.base_depth();
     for slot in 0..ROW_POOL_MAX {
-        let i = view.scroll + slot;
         let drawn = slot < shown && view.total > 0;
-        let Some(row) = view.rows.get(i).filter(|_| drawn) else {
+        let Some((i, row)) = view
+            .row_at(slot)
+            .and_then(|i| view.rows.get(i).map(|r| (i, r)))
+            .filter(|_| drawn)
+        else {
             widget::set_sprite_visible(world, row_bg(slot), false);
             widget::set_label_visible(world, row_label(slot), false);
             widget::set_label_visible(world, row_value(slot), false);
             continue;
         };
-        let r = row_rect(o, w, slot);
+        let depth = row.depth.saturating_sub(base_depth);
+        let r = body_row_rect(o, s, view.mode, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
         let tint = if view.selected == Some(i) {
             theme::SELECTED_TINT
@@ -671,7 +883,7 @@ fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32, show
         widget::place_left_label(
             world,
             row_label(slot),
-            [r[0] + PAD + row.depth as f32 * INDENT, text_y],
+            [r[0] + PAD + depth as f32 * INDENT, text_y],
             &widget::clip_text(&row.label, label_budget.max(6)),
             label_color(&row.kind),
             true,
@@ -680,7 +892,7 @@ fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32, show
             world,
             row_value(slot),
             [r[0] + value_x, text_y],
-            &widget::clip_text(&row.value, max_value_chars(w)),
+            &widget::clip_text(&row.value, value_budget),
             theme::LABEL,
             true,
         );
@@ -882,9 +1094,10 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![
         PANEL_BG, CLOSE_BG, PREV_BG, NEXT_BG, VIEW_BG, NEW_BG, PICK_BG, DEL_BG, UP_BG, DOWN_BG,
     ];
+    ids.push(INSPECT_BG);
     ids.extend((0..ROW_POOL_MAX).map(row_bg));
     ids.extend(behavior_chart::all_sprite_ids());
-    ids.extend([LIST_TRACK, LIST_THUMB, DROP_BG]);
+    ids.extend([STATUS_BG, LIST_TRACK, LIST_THUMB, DROP_BG]);
     ids.extend((0..PICK_POOL).map(pick_bg));
     ids.extend([DROP_TRACK, DROP_THUMB]);
     ids
@@ -904,6 +1117,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         UP_LABEL,
         DOWN_LABEL,
         STATUS_LABEL,
+        INSPECT_LABEL,
     ];
     ids.extend((0..ROW_POOL_MAX).map(row_label));
     ids.extend((0..ROW_POOL_MAX).map(row_value));
@@ -911,6 +1125,12 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..PICK_POOL).map(pick_label));
     ids.extend((0..PICK_POOL).map(pick_hint));
     ids
+}
+
+// The error banner's elements. They float over the body, so they draw above it
+// and its backing occludes the rows or cards beneath.
+pub(crate) fn status_ids() -> Vec<AssetId> {
+    vec![STATUS_BG, STATUS_LABEL]
 }
 
 // The palette's own elements, which draw above the rest of the panel while it
@@ -961,6 +1181,11 @@ mod tests {
         CHART.get_or_init(|| crate::editor::behavior::graph::chart(&sample_args()))
     }
 
+    fn empty_chart() -> &'static Chart {
+        static CHART: std::sync::OnceLock<Chart> = std::sync::OnceLock::new();
+        CHART.get_or_init(Chart::default)
+    }
+
     fn sample_args() -> serde_json::Value {
         serde_json::json!({"on": "tick", "scope": ["Prop"],
             "do": [{"hide": {"target": "self"}}]})
@@ -979,8 +1204,11 @@ mod tests {
             scroll: 0,
             selected: None,
             chart: sample_chart(),
+            overview: empty_chart(),
             mode: ViewMode::Outline,
             pan: [0.0, 0.0],
+            card: None,
+            fields: &[],
             picks,
             picking: false,
             pick_scroll: 0,
@@ -1260,8 +1488,10 @@ mod tests {
         }
     }
 
+    // A behavior that checks out says nothing at all; only a complaint draws,
+    // and it draws on an opaque backing because it floats over the body.
     #[test]
-    fn status_colors_the_checker_verdict() {
+    fn only_a_failing_check_draws_a_banner() {
         let mut world = injected_world();
         let rows = sample_rows();
         let error = Status::Error("Behavior 'x': reads unbound name 'q'".to_string());
@@ -1272,13 +1502,118 @@ mod tests {
         apply(&mut world, Some(&v), [20.0, 20.0], size());
         let status = label(&world, STATUS_LABEL);
         assert!(status.visible && status.color == theme::LOG_ERROR);
-        let ok = Status::Ok("checks out".to_string());
+        let backing = sprite(&world, STATUS_BG);
+        assert!(backing.visible && backing.tint[3] >= 1.0, "opaque backing");
+
         let v = BehaviorView {
-            status: Some(&ok),
+            status: Some(&Status::Ok),
             ..view(&rows, &[])
         };
         apply(&mut world, Some(&v), [20.0, 20.0], size());
-        assert_eq!(label(&world, STATUS_LABEL).color, OK_LABEL);
+        assert!(!label(&world, STATUS_LABEL).visible);
+        assert!(!sprite(&world, STATUS_BG).visible);
+    }
+
+    // A chart-view helper: the sample body's one node, selected, with the rows
+    // the inspector would list for it.
+    fn chart_view_of<'a>(rows: &'a [Row], fields: &'a [usize]) -> BehaviorView<'a> {
+        BehaviorView {
+            mode: ViewMode::Chart,
+            card: Some(1),
+            fields,
+            selected: fields.first().copied(),
+            ..view(rows, &[])
+        }
+    }
+
+    fn node_fields(rows: &[Row]) -> Vec<usize> {
+        let chart = sample_chart();
+        crate::editor::behavior::fields::own_rows(rows, &chart.cards, &chart.cards[1].path)
+    }
+
+    // The inspector column is beside the chart, not over it, so selecting a card
+    // never hides the body it belongs to.
+    #[test]
+    fn the_inspector_sits_clear_of_the_chart() {
+        let (o, s) = ([20.0, 20.0], chart_size());
+        let (band, pane) = (chart_band(o, s, ViewMode::Chart), inspect_rect(o, s));
+        assert!(band[0] + band[2] <= pane[0], "the chart stops at the pane");
+        assert!(
+            pane[0] + pane[2] <= o[0] + s[0],
+            "and the pane is on screen"
+        );
+        assert!(inspect_rows(s) >= 8, "with room for a node's settings");
+        // The default width still leaves the chart its columns beside the pane.
+        assert!(band[2] >= behavior_chart::width_for(3) - 2.0);
+    }
+
+    #[test]
+    fn chart_view_lists_the_selected_nodes_settings() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let fields = node_fields(&rows);
+        assert!(fields.len() > 1, "the sample node has settings");
+        let (o, s) = ([20.0, 20.0], chart_size());
+        apply(&mut world, Some(&chart_view_of(&rows, &fields)), o, s);
+
+        let head = label(&world, INSPECT_LABEL);
+        assert!(head.visible && head.content == sample_chart().cards[1].title);
+        let pane = inspect_rect(o, s);
+        for slot in 0..fields.len() {
+            let l = label(&world, row_label(slot));
+            assert!(l.visible, "field {slot} is listed");
+            assert!(l.x >= pane[0] && l.x < pane[0] + pane[2], "inside the pane");
+        }
+        assert!(
+            !label(&world, row_label(fields.len())).visible,
+            "and nothing past them"
+        );
+    }
+
+    // A click in the pane picks the field it lands on rather than falling
+    // through to the canvas behind and starting a pan.
+    #[test]
+    fn clicking_an_inspector_row_selects_that_field() {
+        let rows = sample_rows();
+        let fields = node_fields(&rows);
+        let (o, s) = ([20.0, 20.0], chart_size());
+        let v = chart_view_of(&rows, &fields);
+        let r = body_row_rect(o, s, ViewMode::Chart, 1);
+        assert_eq!(
+            hit_test(&v, r[0] + 4.0, r[1] + 4.0, o, s),
+            Some(BehaviorAction::Select(fields[1]))
+        );
+    }
+
+    // With nothing selected the pane says so instead of standing empty.
+    #[test]
+    fn an_empty_inspector_prompts_for_a_card() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let v = BehaviorView {
+            mode: ViewMode::Chart,
+            ..view(&rows, &[])
+        };
+        apply(&mut world, Some(&v), [20.0, 20.0], chart_size());
+        assert_eq!(label(&world, INSPECT_LABEL).content, "select a card");
+        assert!(!label(&world, row_label(0)).visible);
+    }
+
+    // The banner floats over the foot of the body instead of sitting in the
+    // chrome, so the rows are in the same place whether or not it is showing.
+    #[test]
+    fn the_banner_does_not_move_the_body() {
+        let o = [20.0, 20.0];
+        let s = size();
+        let first = row_rect(o, s[0], 0);
+        let b = status_rect(o, s);
+        assert!(b[1] > first[1], "the banner sits below the first row");
+        assert!(b[1] + b[3] <= o[1] + s[1], "and inside the panel");
+        assert_eq!(body_top(o), o[1] + widget::TITLE_H + HEADER_H + TOOL_H);
+        // Its top lands on a row boundary, so no row is left half drawn, and it
+        // is still tall enough for a two-line message.
+        assert_eq!((b[1] - body_top(o)) % ROW_H, 0.0, "on a row boundary");
+        assert!(b[3] >= STATUS_H, "and no shorter than the message needs");
     }
 
     #[test]

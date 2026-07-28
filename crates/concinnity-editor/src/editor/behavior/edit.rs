@@ -1,9 +1,13 @@
 // src/editor/behavior/edit.rs
 //
-// The edits an outline row answers: stepping a source or a fixed word, flipping
-// a flag, typing a value, picking a verb from the palette, and removing or
-// reordering a list member. Every one rewrites the authored args in place, so
-// what the checker reads afterwards is exactly what the panel shows.
+// The edits an outline row answers: picking a verb from the palette, typing a
+// value, and removing or reordering a list member. Every one rewrites the
+// authored args in place, so what the checker reads afterwards is exactly what
+// the panel shows.
+//
+// Selecting a row never changes it. Every field, down to a boolean, offers its
+// options through the palette instead, so a value only ever moves when the user
+// picks one or types one.
 
 use serde_json::{Map, Value, json};
 
@@ -20,12 +24,18 @@ pub(crate) struct Pick {
     pub hint: String,
 }
 
+// The two options a boolean field offers, worded as the outline draws its value.
+const FLAG_PICKS: [&str; 2] = ["true", "false"];
+
 // What the selected row's Pick button offers. An empty list means the row has
-// no palette (a flag, a fixed word, or a plain text field). `components` is the
+// no palette (a plain text field, whose value is typed). `components` is the
 // registered component vocabulary, supplied by the caller so this module stays
 // clear of the registry.
 pub(crate) fn picks(kind: &Kind, components: &[&'static str]) -> Vec<Pick> {
     match kind {
+        Kind::Source => from(palette::SOURCES),
+        Kind::Flag => words(&FLAG_PICKS),
+        Kind::Choice(options) => words(options),
         Kind::Node | Kind::List(List::Nodes) => from(palette::NODES),
         Kind::List(List::Operands) => from(palette::EXPRS),
         Kind::Expr { optional } => {
@@ -53,7 +63,7 @@ pub(crate) fn picks(kind: &Kind, components: &[&'static str]) -> Vec<Pick> {
             verb: "query",
             hint: "a new world read".to_string(),
         }],
-        Kind::Source | Kind::Flag | Kind::Choice(_) | Kind::Text(_) => Vec::new(),
+        Kind::Text(_) => Vec::new(),
     }
 }
 
@@ -76,38 +86,25 @@ fn from(entries: &'static [Entry]) -> Vec<Pick> {
         .collect()
 }
 
-// Step `on` to the next source, replacing its parameters with that source's
-// defaults (the shapes do not overlap, so nothing carries across).
-pub(crate) fn cycle_source(args: &mut Value) -> bool {
-    let verb = args.get("on").map_or("start", palette::verb_of);
-    let next = palette::next_source(verb);
-    path::set(args, &[path::field("on")], palette::source_default(next))
-}
-
-pub(crate) fn toggle_flag(args: &mut Value, row: &Row) -> bool {
-    let now = path::get(args, &row.path)
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    path::set(args, &row.path, Value::Bool(!now))
-}
-
-// Step a fixed-word field to its next option. A word the field does not
-// recognize reads as the first option, so stepping lands on the second.
-pub(crate) fn step_choice(args: &mut Value, row: &Row, options: &[&str]) -> bool {
-    if options.is_empty() {
-        return false;
-    }
-    let current = path::get(args, &row.path)
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let at = options.iter().position(|o| *o == current).unwrap_or(0);
-    let next = options[(at + 1) % options.len()];
-    path::set(args, &row.path, Value::String(next.to_string()))
+// A fixed word set offered as itself: the word is both the option and the value.
+fn words(options: &[&'static str]) -> Vec<Pick> {
+    options
+        .iter()
+        .map(|w| Pick {
+            verb: w,
+            hint: String::new(),
+        })
+        .collect()
 }
 
 // Insert (or replace with) the palette verb the user picked.
 pub(crate) fn apply_pick(args: &mut Value, row: &Row, verb: &str) -> bool {
     match &row.kind {
+        // Replacing a source drops the old one's parameters for the new one's
+        // defaults, because no two source shapes share a field.
+        Kind::Source => path::set(args, &row.path, palette::source_default(verb)),
+        Kind::Flag => path::set(args, &row.path, Value::Bool(verb == FLAG_PICKS[0])),
+        Kind::Choice(_) => path::set(args, &row.path, Value::String(verb.to_string())),
         Kind::Node => path::set(args, &row.path, palette::node_default(verb)),
         Kind::Expr { .. } if verb == UNSET => path::set(args, &row.path, Value::Null),
         Kind::Expr { .. } => {
@@ -134,7 +131,7 @@ pub(crate) fn apply_pick(args: &mut Value, row: &Row, verb: &str) -> bool {
             let name = unique_decl_name(args, "queries", "query");
             path::push(args, &row.path, json!({"name": name, "has": []}))
         }
-        Kind::Source | Kind::Flag | Kind::Choice(_) | Kind::Text(_) => false,
+        Kind::Text(_) => false,
     }
 }
 
@@ -293,37 +290,61 @@ mod tests {
         args
     }
 
+    // The fields that used to change on the click that selected them: each now
+    // offers its options, and only a pick moves the value.
     #[test]
-    fn cycling_the_source_walks_the_whole_vocabulary_and_wraps() {
-        let mut args = json!({});
-        let mut seen = Vec::new();
-        for _ in 0..palette::SOURCES.len() {
-            cycle_source(&mut args);
-            seen.push(palette::verb_of(args.get("on").unwrap()).to_string());
-        }
-        assert_eq!(seen.len(), palette::SOURCES.len());
-        assert_eq!(seen.last().map(String::as_str), Some("start"), "it wraps");
-        // A parameterized source arrives with its parameters, not bare.
-        let timer: Vec<&str> = palette::SOURCES.iter().map(|e| e.verb).collect();
-        assert!(timer.contains(&"timer"));
+    fn every_fixed_field_offers_its_options() {
+        let offered = |kind| -> Vec<&'static str> {
+            picks(&kind, &["Prop"]).iter().map(|p| p.verb).collect()
+        };
+        let sources: Vec<&str> = palette::SOURCES.iter().map(|e| e.verb).collect();
         assert_eq!(
-            palette::source_default("timer"),
+            offered(Kind::Source),
+            sources,
+            "the whole source vocabulary"
+        );
+        assert_eq!(offered(Kind::Flag), ["true", "false"]);
+        assert_eq!(
+            offered(Kind::Choice(outline::CUE_KINDS)),
+            ["sound", "music"]
+        );
+        assert!(
+            offered(Kind::Text(Text::Str)).is_empty(),
+            "a typed field has no palette"
+        );
+    }
+
+    #[test]
+    fn picking_a_source_brings_its_parameters() {
+        let picked = edited(json!({"on": "start"}), "on", |a, r| {
+            apply_pick(a, r, "timer");
+        });
+        assert_eq!(
+            picked["on"],
             json!({"timer": {"interval": 1.0, "repeat": false}})
         );
     }
 
     #[test]
-    fn flags_flip_and_choices_step() {
-        let flipped = edited(json!({"once": false}), "once", |a, r| {
-            toggle_flag(a, r);
+    fn picking_sets_a_flag_and_a_fixed_word() {
+        let set = edited(json!({"once": false}), "once", |a, r| {
+            apply_pick(a, r, "true");
         });
-        assert_eq!(flipped["once"], json!(true));
+        assert_eq!(set["once"], json!(true));
+        let cleared = edited(set, "once", |a, r| {
+            apply_pick(a, r, "false");
+        });
+        assert_eq!(
+            cleared["once"],
+            json!(false),
+            "picking again is not a toggle"
+        );
 
         let args = json!({"do": [{"sound": {"clip": "c", "kind": "sound", "volume": 1.0}}]});
-        let stepped = edited(args, "kind", |a, r| {
-            step_choice(a, r, outline::CUE_KINDS);
+        let picked = edited(args, "kind", |a, r| {
+            apply_pick(a, r, "music");
         });
-        assert_eq!(stepped["do"][0]["sound"]["kind"], json!("music"));
+        assert_eq!(picked["do"][0]["sound"]["kind"], json!("music"));
     }
 
     // Picking from a list appends; picking on a slot replaces in place.

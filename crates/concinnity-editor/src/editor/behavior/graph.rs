@@ -28,6 +28,10 @@ pub(crate) enum CardKind {
     // A branch holding no nodes yet. Its path is the branch's list, so picking
     // from it appends the branch's first node.
     Empty,
+    // A whole behavior, in the overview (`relations.rs`).
+    Behavior,
+    // A world variable behaviors write and fire on, in the overview.
+    Variable,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,16 +41,20 @@ pub(crate) struct Card {
     pub title: String,
     pub detail: String,
     pub kind: CardKind,
+    // Where the card points inside the open behavior. The overview's cards
+    // stand for whole behaviors rather than places inside one, so theirs is
+    // empty and `behavior` says which.
     pub path: Path,
+    pub behavior: Option<usize>,
 }
 
-// A parent-to-child link, labelled with the branch it leaves the parent by when
-// the parent has more than one way out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// A card-to-card link, labelled when the pair needs saying which way out of the
+// parent it leaves by (a branch) or what carries it (a variable).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Wire {
     pub from: usize,
     pub to: usize,
-    pub label: Option<&'static str>,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -72,6 +80,7 @@ pub(crate) fn chart(args: &Value) -> Chart {
         detail: trigger_detail(args),
         kind: CardKind::Trigger,
         path: vec![field("on")],
+        behavior: None,
     });
     let base = vec![field("do")];
     let (columns, rows) = build.chain(array(args.get("do")), &base, 1, 0, 0, None);
@@ -124,11 +133,12 @@ impl Build {
                 detail: String::new(),
                 kind: CardKind::Empty,
                 path: base.clone(),
+                behavior: None,
             });
             self.wires.push(Wire {
                 from: parent,
                 to,
-                label: pin,
+                label: pin.map(str::to_string),
             });
             return (1, 1);
         }
@@ -152,11 +162,12 @@ impl Build {
                 },
                 kind: CardKind::Node,
                 path: path.clone(),
+                behavior: None,
             });
             self.wires.push(Wire {
                 from: prev,
                 to,
-                label: prev_pin,
+                label: prev_pin.map(str::to_string),
             });
             prev = to;
             prev_pin = None;
@@ -370,7 +381,7 @@ mod tests {
 
     fn wire_to(chart: &Chart, title: &str) -> Wire {
         let to = chart.cards.iter().position(|c| c.title == title).unwrap();
-        *chart.wires.iter().find(|w| w.to == to).unwrap()
+        chart.wires.iter().find(|w| w.to == to).unwrap().clone()
     }
 
     #[test]
@@ -414,8 +425,8 @@ mod tests {
         // The node after the branch clears the whole subtree.
         assert_eq!((at(&chart, "save").column, at(&chart, "save").row), (3, 0));
         assert_eq!(chart.rows, 2);
-        assert_eq!(wire_to(&chart, "show").label, Some("then"));
-        assert_eq!(wire_to(&chart, "hide").label, Some("else"));
+        assert_eq!(wire_to(&chart, "show").label.as_deref(), Some("then"));
+        assert_eq!(wire_to(&chart, "hide").label.as_deref(), Some("else"));
         assert_eq!(wire_to(&chart, "save").label, None);
     }
 
@@ -427,7 +438,7 @@ mod tests {
         }));
         let empty = at(&chart, "empty");
         assert_eq!(empty.kind, CardKind::Empty);
-        assert_eq!(wire_to(&chart, "empty").label, Some("else"));
+        assert_eq!(wire_to(&chart, "empty").label.as_deref(), Some("else"));
         assert_eq!(
             empty.path,
             vec![field("do"), Step::Index(0), field("if"), field("else"),],

@@ -785,12 +785,12 @@ impl Panel for BehaviorPanel {
     fn resizable(&self) -> bool {
         true
     }
-    // The outline's row pool caps how tall it is worth growing the panel; the
+    // The outline's row pool caps how tall it is worth growing the panel; a
     // chart has no such pool, so there it grows to the screen.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
         match hook.behavior_mode {
-            ViewMode::Chart => [f32::INFINITY, f32::INFINITY],
             ViewMode::Outline => behavior_panel::max_size(),
+            _ => [f32::INFINITY, f32::INFINITY],
         }
     }
     fn view_row(&self) -> Option<&'static str> {
@@ -815,6 +815,7 @@ impl Panel for BehaviorPanel {
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         match hook.behavior_mode {
             ViewMode::Chart => behavior_panel::chart_size(),
+            ViewMode::Overview => behavior_panel::overview_size(),
             ViewMode::Outline => behavior_panel::size(),
         }
     }
@@ -834,10 +835,11 @@ impl Panel for BehaviorPanel {
             .collect()
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        match hook.behavior_picking {
-            true => behavior_panel::palette_ids(),
-            false => Vec::new(),
+        let mut ids = behavior_panel::status_ids();
+        if hook.behavior_picking {
+            ids.extend(behavior_panel::palette_ids());
         }
+        ids
     }
     fn press(
         &self,

@@ -289,12 +289,6 @@ pub(crate) fn known(entries: &[Entry], verb: &str) -> bool {
     entries.iter().any(|e| e.verb == verb)
 }
 
-// The source after `verb` in the cycle order, wrapping at the end.
-pub(crate) fn next_source(verb: &str) -> &'static str {
-    let at = SOURCES.iter().position(|e| e.verb == verb).unwrap_or(0);
-    SOURCES[(at + 1) % SOURCES.len()].verb
-}
-
 // The single key of a node / expression object, or the whole word when the
 // value is a bare string (`"self"`, `"tick"`).
 pub(crate) fn verb_of(value: &Value) -> &str {

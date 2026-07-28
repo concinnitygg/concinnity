@@ -23,8 +23,10 @@ use serde_json::Value;
 use super::*;
 use crate::assets::Key;
 use crate::editor::behavior::edit::{self, Pick};
+use crate::editor::behavior::fields;
 use crate::editor::behavior::graph::{self, Chart};
-use crate::editor::behavior::outline::{self, Kind, Row};
+use crate::editor::behavior::outline::{self, Row};
+use crate::editor::behavior::relations;
 use crate::editor::behavior_chart;
 
 // Owned per-tick data backing a `BehaviorView`: the open behavior's outline and
@@ -35,6 +37,13 @@ pub(super) struct BehaviorData {
     pub total: usize,
     pub rows: Vec<Row>,
     pub chart: Chart,
+    // The world's behaviors and how they reach each other. Built only while the
+    // overview is showing, since it walks every behavior in the world.
+    pub overview: Chart,
+    // The card the selection belongs to, and that node's own rows: what the
+    // chart lights up and what the inspector lists.
+    pub card: Option<usize>,
+    pub fields: Vec<usize>,
     pub picks: Vec<Pick>,
     pub editable: bool,
 }
@@ -103,6 +112,12 @@ impl EditorHook {
         let all = self.behavior_entries();
         let rows = self.behavior_rows();
         let selected = self.behavior_row.and_then(|i| rows.get(i));
+        let chart = match self.behavior_entry() {
+            Some(_) => graph::chart(&self.behavior_args()),
+            None => Chart::default(),
+        };
+        let card = selected.and_then(|r| fields::owning_card(&chart.cards, &r.path));
+        let inspected = card.map(|i| chart.cards[i].path.clone());
         BehaviorData {
             name: self
                 .behavior_entry()
@@ -114,12 +129,32 @@ impl EditorHook {
             picks: selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names())),
             editable: selected
                 .is_some_and(|r| edit::text_value(&self.behavior_args(), r).is_some()),
-            chart: match self.behavior_entry() {
-                Some(_) => graph::chart(&self.behavior_args()),
-                None => Chart::default(),
+            fields: inspected
+                .map(|p| fields::own_rows(&rows, &chart.cards, &p))
+                .unwrap_or_default(),
+            overview: match self.behavior_mode {
+                ViewMode::Overview => relations::map(&self.behavior_pairs()),
+                _ => Chart::default(),
             },
+            card,
+            chart,
             rows,
         }
+    }
+
+    // Every behavior's name and authored args, in the order the panel steps
+    // through them, for the overview to map.
+    fn behavior_pairs(&self) -> Vec<(String, Value)> {
+        self.behavior_entries()
+            .into_iter()
+            .map(|i| {
+                let e = &self.entries[i];
+                (
+                    entry_name(e).unwrap_or("").to_string(),
+                    e.get("args").cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn make_behavior_view<'a>(
@@ -135,8 +170,11 @@ impl EditorHook {
             scroll: self.behavior_scroll,
             selected: self.behavior_row,
             chart: &data.chart,
+            overview: &data.overview,
             mode: self.behavior_mode,
             pan: self.behavior_pan,
+            card: data.card,
+            fields: &data.fields,
             picks: &data.picks,
             picking: self.behavior_picking && !data.picks.is_empty(),
             pick_scroll: self.behavior_pick_scroll,
@@ -181,7 +219,7 @@ impl EditorHook {
                 &args,
                 vars.as_ref(),
             ) {
-                Ok(()) => Status::Ok(format!("{name}: checks out")),
+                Ok(()) => Status::Ok,
                 Err(e) => Status::Error(e.lines().next().unwrap_or(&e).to_string()),
             },
         );
@@ -238,6 +276,7 @@ impl EditorHook {
             BehaviorAction::FocusValue => self.behavior_focus = true,
             BehaviorAction::ToggleView => self.toggle_behavior_view(),
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
+            BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
             BehaviorAction::Consume => self.behavior_focus = false,
         }
@@ -267,27 +306,16 @@ impl EditorHook {
         self.open_behavior(world);
     }
 
-    // Select a row. The rows that are their own control -- the source, a flag,
-    // a fixed word -- also step on the click that selects them.
+    // Select a row. Selecting never edits: a row that offers options lights the
+    // Pick button, and a row that takes typed text is ready to type into
+    // straight away.
     fn select_behavior_row(&mut self, i: usize, world: &mut World) {
         self.behavior_row = Some(i);
         self.behavior_picking = false;
         let Some(row) = self.behavior_rows().get(i).cloned() else {
             return;
         };
-        let mut args = self.behavior_args();
-        let stepped = match &row.kind {
-            Kind::Source => edit::cycle_source(&mut args),
-            Kind::Flag => edit::toggle_flag(&mut args, &row),
-            Kind::Choice(options) => edit::step_choice(&mut args, &row, options),
-            _ => false,
-        };
-        if stepped {
-            self.commit_behavior(args, world);
-        } else {
-            self.seed_behavior_value(world);
-        }
-        // A row that takes typed text is ready to type into straight away.
+        self.seed_behavior_value(world);
         self.behavior_focus = edit::text_value(&self.behavior_args(), &row).is_some();
     }
 
@@ -366,13 +394,33 @@ impl EditorHook {
         }
     }
 
-    // Switch views. The selection survives, because both views are over the same
-    // rows: a card selected in the chart is the row the outline opens on.
+    // Step to the next view. The selection survives, because the outline and the
+    // chart are over the same rows: a card selected in the chart is the row the
+    // outline opens on. The pan does not, because each chart is its own shape.
     fn toggle_behavior_view(&mut self) {
         self.behavior_mode = self.behavior_mode.other();
         self.behavior_picking = false;
         self.behavior_pan_drag = None;
+        self.behavior_pan = [0.0, 0.0];
         self.ensure_behavior_row_visible();
+    }
+
+    // Open the behavior an overview card stands for, in the chart view, so
+    // clicking through the map lands on the body it named.
+    fn open_behavior_card(&mut self, i: usize, world: &mut World) {
+        let Some(at) = self
+            .behavior_data()
+            .overview
+            .cards
+            .get(i)
+            .and_then(|c| c.behavior)
+        else {
+            return;
+        };
+        self.behavior_index = at;
+        self.behavior_mode = ViewMode::Chart;
+        self.behavior_pan = [0.0, 0.0];
+        self.open_behavior(world);
     }
 
     // Select the row the card at `i` stands for. Cards cover the body and the
@@ -409,12 +457,22 @@ impl EditorHook {
             return;
         }
         let want = [anchor[0] - input.mouse_x, anchor[1] - input.mouse_y];
-        let chart = self.behavior_data().chart;
+        let chart = self.behavior_shown_chart();
         self.behavior_pan = behavior_chart::clamp_pan(want, &chart, self.behavior_canvas());
     }
 
+    // The chart the panel is drawing: the open behavior's body, or the world's
+    // behaviors mapped. Panning acts on whichever is on screen.
+    fn behavior_shown_chart(&self) -> Chart {
+        let data = self.behavior_data();
+        match self.behavior_mode {
+            ViewMode::Overview => data.overview,
+            _ => data.chart,
+        }
+    }
+
     fn behavior_canvas(&self) -> [f32; 2] {
-        behavior_panel::chart_canvas(self.effective_size(PanelKey::Behavior))
+        behavior_panel::chart_canvas(self.effective_size(PanelKey::Behavior), self.behavior_mode)
     }
 
     fn behavior_rows_shown(&self) -> usize {
@@ -437,14 +495,17 @@ impl EditorHook {
         }
     }
 
-    // Bring the card standing for `row` into the canvas. A row with no card
-    // (a declaration, a node's individual field) leaves the pan alone.
+    // Bring the card `row` belongs to into the canvas, so selecting one of a
+    // node's fields brings the node itself into view. A row no card owns (a
+    // declaration) leaves the pan alone.
     fn pan_to_behavior_row(&mut self, row: usize) {
         let data = self.behavior_data();
-        let Some(path) = data.rows.get(row).map(|r| &r.path) else {
-            return;
-        };
-        let Some(card) = data.chart.cards.iter().find(|c| &c.path == path) else {
+        let Some(card) = data
+            .rows
+            .get(row)
+            .and_then(|r| fields::owning_card(&data.chart.cards, &r.path))
+            .and_then(|i| data.chart.cards.get(i))
+        else {
             return;
         };
         self.behavior_pan =
@@ -460,8 +521,8 @@ impl EditorHook {
             self.behavior_pick_scroll = scroll_step(self.behavior_pick_scroll, delta, max);
             return;
         }
-        if self.behavior_mode == ViewMode::Chart {
-            let chart = self.behavior_data().chart;
+        if self.behavior_mode.drawn_as_chart() {
+            let chart = self.behavior_shown_chart();
             let canvas = self.behavior_canvas();
             let step = if delta > 0.0 { WHEEL_PAN } else { -WHEEL_PAN };
             // The wheel moves along whichever axis has anywhere to go, so a

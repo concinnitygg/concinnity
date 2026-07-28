@@ -47,9 +47,10 @@ pub(crate) fn segment(i: usize) -> AssetId {
 
 const CARD_W: f32 = 200.0;
 const CARD_H: f32 = 46.0;
-// Wide enough for a branch's pin label to sit in the gap without reaching
-// either card it joins.
-const COL_GAP: f32 = 56.0;
+// Wide enough for a wire's label to sit in the gap without reaching either card
+// it joins. The overview's labels name what carries a relation ("spawns",
+// "reads"), so the gap is sized for a word rather than for a branch's "then".
+const COL_GAP: f32 = 72.0;
 const ROW_GAP: f32 = 14.0;
 const PITCH_X: f32 = CARD_W + COL_GAP;
 const PITCH_Y: f32 = CARD_H + ROW_GAP;
@@ -57,13 +58,22 @@ const MARGIN: f32 = 12.0;
 const CARD_PAD: f32 = 8.0;
 const WIRE_W: f32 = 2.0;
 // How far past the parent a wire turns. Turning early leaves the rest of the
-// gap as a clear horizontal run for the branch's pin label.
+// gap as a clear horizontal run for the wire's label.
 const ELBOW_IN: f32 = 12.0;
+// That run, measured from where the label starts to the card it points at. A
+// label is clipped to it, so a long one can never reach that card however far
+// apart the two are.
+const LABEL_IN: f32 = ELBOW_IN + 6.0;
+const LABEL_RUN: f32 = COL_GAP - LABEL_IN;
+// Wider than `CHAR_W`, because here the estimate has to come out long: a label
+// measured short is a label drawn over the card it points at.
+const LABEL_CHAR_W: f32 = 10.0;
 const INDICATOR_H: f32 = 4.0;
 
 const NODE_TINT: [f32; 4] = [0.17, 0.18, 0.23, 1.0];
 const TRIGGER_TINT: [f32; 4] = [0.16, 0.30, 0.34, 1.0];
 const EMPTY_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.85];
+const VARIABLE_TINT: [f32; 4] = [0.28, 0.24, 0.16, 1.0];
 const BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
 const SELECTED_BORDER: [f32; 4] = [0.55, 0.70, 0.98, 1.0];
 const HOVER_BORDER: [f32; 4] = [0.44, 0.48, 0.60, 1.0];
@@ -77,6 +87,9 @@ pub(crate) struct ChartView<'a> {
     pub selected: Option<&'a Path>,
     pub pan: [f32; 2],
     pub mouse: [f32; 2],
+    // What to do about the cards that did not fit, which depends on what the
+    // chart is of.
+    pub overflow: &'static str,
 }
 
 // How far the chart reaches, so panning stops at its edge rather than running
@@ -122,10 +135,10 @@ pub(crate) fn pan_to(card: &Card, canvas: [f32; 2], pan: [f32; 2], chart: &Chart
     clamp_pan(want, chart, canvas)
 }
 
-// How wide the panel opens in chart view: four columns of cards, so a short
-// body and its first branch are both on screen before any panning.
-pub(crate) fn default_width() -> f32 {
-    4.0 * PITCH_X - COL_GAP + MARGIN * 2.0 + 2.0
+// How wide a canvas showing `columns` columns of cards is, which is how the
+// panel picks the width it opens at.
+pub(crate) fn width_for(columns: usize) -> f32 {
+    columns as f32 * PITCH_X - COL_GAP + MARGIN * 2.0 + 2.0
 }
 
 // The canvas: the panel's body band, inset off the border.
@@ -226,8 +239,9 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
 fn fill(kind: CardKind) -> [f32; 4] {
     match kind {
         CardKind::Trigger => TRIGGER_TINT,
-        CardKind::Node => NODE_TINT,
+        CardKind::Node | CardKind::Behavior => NODE_TINT,
         CardKind::Empty => EMPTY_TINT,
+        CardKind::Variable => VARIABLE_TINT,
     }
 }
 
@@ -277,17 +291,17 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
                 seg += 1;
             }
         }
-        if let Some(text) = wire.label.filter(|_| label < WIRE_LABEL_POOL) {
+        if let Some(text) = wire.label.as_deref().filter(|_| label < WIRE_LABEL_POOL) {
             // Just past the turn and above the run that enters the child, so it
             // crosses neither the wire nor either card. Two branches off one
             // card enter on different rows, so their labels sit apart.
-            let at = [mid + 6.0, by - theme::TEXT_HALF - 9.0];
+            let at = [ax + LABEL_IN, by - theme::TEXT_HALF - 9.0];
             if point_in(at[0], at[1], band) {
                 widget::place_left_label(
                     world,
                     wire_label(label),
                     at,
-                    text,
+                    &widget::clip_text(text, (LABEL_RUN / LABEL_CHAR_W) as usize),
                     theme::LABEL_DIM,
                     true,
                 );
@@ -334,7 +348,7 @@ fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4]) {
             (band[2] - MARGIN * 2.0).max(0.0),
             widget::LINE_H,
         ],
-        &format!("{hidden} more nodes -- open the outline to reach them"),
+        &format!("{hidden} more {}", view.overflow),
         theme::LOG_WARN,
         hidden > 0,
     );
@@ -435,6 +449,7 @@ mod tests {
 
     fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> ChartView<'a> {
         ChartView {
+            overflow: "nodes -- open the outline to reach them",
             chart,
             selected: None,
             pan,
@@ -513,12 +528,26 @@ mod tests {
         assert!(!sprite(&world, card_bg(0)).visible);
     }
 
-    // A pin label drawn over the card it points at or over its own wire is
+    // A wire label drawn over the card it points at or over its own wire is
     // unreadable, which is exactly what a wide card and a narrow gap produce if
-    // the elbow turns at the midpoint.
+    // the elbow turns at the midpoint. `long` relabels every wire with the
+    // longest word the overview puts on one, so the gap is checked against what
+    // it actually has to hold rather than against the shorter "then".
     #[test]
     fn a_pin_label_clears_both_the_cards_and_its_own_wire() {
-        let chart = branching();
+        check_wire_labels(branching());
+    }
+
+    #[test]
+    fn a_long_wire_label_is_kept_inside_the_gap() {
+        let mut chart = branching();
+        for wire in &mut chart.wires {
+            wire.label = Some("reads".to_string());
+        }
+        check_wire_labels(chart);
+    }
+
+    fn check_wire_labels(chart: Chart) {
         let mut world = injected_world();
         let band = [100.0, 200.0, 2_000.0, 600.0];
         apply(&mut world, &view(&chart, [0.0, 0.0]), band);
@@ -555,7 +584,7 @@ mod tests {
                 assert!(!hits(rect, *run), "'{}' over a wire {run:?}", l.content);
             }
         }
-        assert_eq!(checked, 2, "both branches are labelled");
+        assert!(checked >= 2, "both branches are labelled");
     }
 
     fn hits(a: [f32; 4], b: [f32; 4]) -> bool {
