@@ -9,6 +9,9 @@
 mod asset_list;
 mod asset_tree;
 mod axes;
+mod behavior;
+mod behavior_chart;
+mod behavior_panel;
 mod billboards;
 mod console;
 mod console_panel;

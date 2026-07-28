@@ -770,6 +770,106 @@ impl Panel for ConsolePanel {
     }
 }
 
+pub(crate) struct BehaviorPanel;
+
+impl Panel for BehaviorPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Behavior
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    // The outline's row pool caps how tall it is worth growing the panel; the
+    // chart has no such pool, so there it grows to the screen.
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        match hook.behavior_mode {
+            ViewMode::Chart => [f32::INFINITY, f32::INFINITY],
+            ViewMode::Outline => behavior_panel::max_size(),
+        }
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Behavior")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.behavior_open
+    }
+    // Opening re-reads the world's behaviors, so the panel always starts from
+    // the current entry list rather than a stale selection.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.behavior_open = !hook.behavior_open;
+        if hook.behavior_open {
+            hook.open_behavior(world);
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.behavior_open = false;
+        hook.behavior_focus = false;
+        hook.behavior_picking = false;
+    }
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        match hook.behavior_mode {
+            ViewMode::Chart => behavior_panel::chart_size(),
+            ViewMode::Outline => behavior_panel::size(),
+        }
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        behavior_panel::default_origin(vp[0])
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        behavior_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        behavior_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        behavior_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, "value"))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::Behavior);
+        let action = {
+            let data = hook.behavior_data();
+            let view = hook.make_behavior_view(&data, [mx, my]);
+            behavior_panel::hit_test(&view, mx, my, o, s)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_behavior_action(a, world, [mx, my]);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Behavior);
+        behavior_panel::cursor_over_body(mx, my, o, s)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_behavior(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.behavior_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Behavior);
+        let data = hook.behavior_data();
+        let view = hook.make_behavior_view(&data, mouse);
+        behavior_panel::apply(world, Some(&view), o, s);
+    }
+    fn hide(&self, world: &mut World) {
+        behavior_panel::apply(world, None, [0.0, 0.0], behavior_panel::size());
+    }
+}
+
 pub(crate) struct ImportPanel;
 
 impl Panel for ImportPanel {

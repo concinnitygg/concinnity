@@ -57,7 +57,9 @@ use super::widget::{self, place_rounded, place_sprite, point_in};
 // world-config singletons want the edit-or-add flow below, engine-injected
 // HUDs (DebugHud / StatHud) are added by `cn build`, and types defined by a
 // nested array or a source file (Model, Scene, Story, ...) are inert until the
-// nested / source form controls exist. Types that cannot even cook blank --
+// nested / source form controls exist -- Behavior is flagged because it has
+// one: its body is authored in the Behavior panel. Types that cannot even cook
+// blank --
 // needing a source or a required cross-reference (Mesh / AudioClip / Joint) --
 // can never be flagged.
 pub(crate) fn add_types() -> impl Iterator<Item = &'static str> {
@@ -1914,7 +1916,6 @@ mod tests {
             // Defined by nested content / a source the scalar form can't supply, so
             // a blank instance is inert.
             "Animation",
-            "Behavior",
             "File",
             "LayoutContainer",
             "Model",

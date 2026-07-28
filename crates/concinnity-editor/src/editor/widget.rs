@@ -203,6 +203,23 @@ pub(crate) fn place_rounded(
     }
 }
 
+// `place_rounded` with a stroke around it, for an element that reads as its own
+// surface sitting on the panel rather than a tint over it.
+pub(crate) fn place_bordered(
+    world: &mut World,
+    id: AssetId,
+    rect: [f32; 4],
+    tint: [f32; 4],
+    border: [f32; 4],
+    width: f32,
+) {
+    place_rounded(world, id, rect, tint, theme::CONTROL_RADIUS, true);
+    if let Some(s) = sprite_mut(world, id) {
+        s.border_color = border;
+        s.border_width = width;
+    }
+}
+
 pub(crate) fn set_sprite_visible(world: &mut World, id: AssetId, visible: bool) {
     if let Some(s) = sprite_mut(world, id) {
         s.visible = visible;

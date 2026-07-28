@@ -188,6 +188,7 @@ impl EditorHook {
         panel::all_field_ids()
             .into_iter()
             .chain(form_panel::all_field_ids())
+            .chain(behavior_panel::all_field_ids())
             .map(|id| (id, widget::field_text(world, id)))
             .collect()
     }

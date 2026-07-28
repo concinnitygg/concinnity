@@ -4199,3 +4199,369 @@ fn tick_opens_the_console_blurred_then_focuses() {
         .unwrap();
     assert!(input.visible && input.focused);
 }
+
+// ---------------------------------------------------------------------------
+// Behavior panel
+
+// An open Behavior panel over `entries`, with its value field injected.
+fn behavior_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
+    let mut world = World::new_empty();
+    for id in behavior_panel::all_field_ids() {
+        world.add_component(TextInput {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    let mut h = hook(entries);
+    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    (h, world)
+}
+
+fn behavior(name: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"name": name, "type": "Behavior", "args": args})
+}
+
+// The outline row index of the first row with `label`.
+fn behavior_row(h: &EditorHook, label: &str) -> usize {
+    h.behavior_rows()
+        .iter()
+        .position(|r| r.label == label)
+        .unwrap_or_else(|| panic!("no `{label}` row"))
+}
+
+fn select_behavior(h: &mut EditorHook, world: &mut World, label: &str) {
+    let i = behavior_row(h, label);
+    h.apply_behavior_action(BehaviorAction::Select(i), world, [0.0, 0.0]);
+}
+
+// The args of the open behavior, for asserting on what an action wrote.
+fn open_args(h: &EditorHook) -> serde_json::Value {
+    h.behavior_args()
+}
+
+#[test]
+fn behavior_panel_opens_on_the_first_behavior_and_steps_between_them() {
+    let (mut h, mut world) = behavior_session(vec![
+        entry("gfx", "GraphicsConfig"),
+        behavior("greet", serde_json::json!({"on": "start"})),
+        behavior("chase", serde_json::json!({"on": "tick"})),
+    ]);
+    let data = h.behavior_data();
+    assert_eq!(
+        (data.name.as_str(), data.index, data.total),
+        ("greet", 0, 2)
+    );
+
+    h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "chase");
+    // Stepping past either end wraps rather than sticking.
+    h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "greet");
+    h.apply_behavior_action(BehaviorAction::Step(-1), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "chase");
+}
+
+// A world with no behaviors is not a dead end: New appends one and opens it.
+#[test]
+fn behavior_new_appends_a_blank_behavior_and_opens_it() {
+    let (mut h, mut world) = behavior_session(vec![entry("gfx", "GraphicsConfig")]);
+    assert_eq!(h.behavior_data().total, 0);
+
+    h.apply_behavior_action(BehaviorAction::New, &mut world, [0.0, 0.0]);
+    let data = h.behavior_data();
+    assert_eq!(data.total, 1);
+    assert_eq!(data.index, 0);
+    assert!(h.dirty && h.rebuild_preview, "adding one is a world edit");
+    assert_eq!(open_args(&h), serde_json::json!({"on": "start", "do": []}));
+    // A blank behavior still checks out, so the panel opens on a clean slate.
+    assert!(matches!(h.behavior_status, Some(Status::Ok(_))));
+}
+
+// The status line is the world checker's own message, not a second opinion.
+#[test]
+fn behavior_status_reports_the_checkers_message() {
+    let (h, _) = behavior_session(vec![behavior(
+        "broken",
+        serde_json::json!({"do": [{"despawn": {"target": {"bind": "nope"}}}]}),
+    )]);
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected an error status, got {:?}", h.behavior_status);
+    };
+    assert!(e.contains("unbound name 'nope'"), "{e}");
+    assert!(e.starts_with("Behavior 'broken'"), "{e}");
+}
+
+// The world-level checker is the one that runs, so a declared variable table is
+// authoritative and a misspelled name is caught in the panel.
+#[test]
+fn behavior_status_enforces_the_declared_variable_table() {
+    let vars = serde_json::json!({"name": "world_vars", "type": "Variables",
+        "args": {"vars": [{"name": "health", "value": {"float": 100.0}}]}});
+    let (h, _) = behavior_session(vec![
+        vars,
+        behavior(
+            "heal",
+            serde_json::json!({"do": [{"set": {"var": "helth", "value": {"float": 1.0}}}]}),
+        ),
+    ]);
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected an error status, got {:?}", h.behavior_status);
+    };
+    assert!(e.contains("undeclared variable 'helth'"), "{e}");
+}
+
+#[test]
+fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
+    let (mut h, mut world) = behavior_session(vec![behavior("b", serde_json::json!({}))]);
+    select_behavior(&mut h, &mut world, "do");
+    h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
+    assert!(h.behavior_picking);
+
+    let at = h
+        .behavior_data()
+        .picks
+        .iter()
+        .position(|p| p.verb == "hide")
+        .expect("hide is offered");
+    h.apply_behavior_action(BehaviorAction::Choose(at), &mut world, [0.0, 0.0]);
+    assert!(!h.behavior_picking, "picking closes the palette");
+    assert_eq!(
+        open_args(&h)["do"],
+        serde_json::json!([{"hide": {"target": "self"}}])
+    );
+    assert!(
+        h.rebuild_preview,
+        "the edited body runs in the live world straight away"
+    );
+    // A world-scoped `self` is exactly what the checker objects to, and it says so.
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected the scope error");
+    };
+    assert!(e.contains("`self` needs a `scope`"), "{e}");
+}
+
+// The rows that are their own control act on the click that selects them.
+#[test]
+fn behavior_source_and_flag_rows_step_on_selection() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "b",
+        serde_json::json!({"on": "start", "once": false}),
+    )]);
+    select_behavior(&mut h, &mut world, "on");
+    assert_eq!(open_args(&h)["on"], serde_json::json!("tick"));
+    select_behavior(&mut h, &mut world, "once");
+    assert_eq!(open_args(&h)["once"], serde_json::json!(true));
+}
+
+#[test]
+fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "b",
+        serde_json::json!({"delay": 0.0, "do": []}),
+    )]);
+    select_behavior(&mut h, &mut world, "delay");
+    assert!(h.behavior_focus, "a typed row is ready to type into");
+
+    widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "2.5");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(open_args(&h)["delay"], serde_json::json!(2.5));
+
+    widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "soon");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(
+        open_args(&h)["delay"],
+        serde_json::json!(2.5),
+        "a rejected value leaves the old one standing"
+    );
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected a parse error");
+    };
+    assert!(e.contains("'soon' is not a number"), "{e}");
+}
+
+#[test]
+fn behavior_delete_and_move_act_on_the_selected_member() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "b",
+        serde_json::json!({"scope": ["Prop"], "do": [
+            {"save": null}, {"hide": {"target": "self"}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "hide");
+    h.apply_behavior_action(BehaviorAction::Move(-1), &mut world, [0.0, 0.0]);
+    assert!(open_args(&h)["do"][0].get("hide").is_some());
+    assert_eq!(
+        h.behavior_row,
+        Some(behavior_row(&h, "hide")),
+        "the selection follows the node it moved"
+    );
+
+    h.apply_behavior_action(BehaviorAction::Delete, &mut world, [0.0, 0.0]);
+    assert_eq!(open_args(&h)["do"].as_array().unwrap().len(), 1);
+    assert!(
+        h.behavior_row.is_none(),
+        "the removed row's selection is dropped, not retargeted"
+    );
+}
+
+// The value field's contents survive the live-preview rebuild an edit triggers,
+// so a half-typed value is not blanked out from under the user.
+#[test]
+fn behavior_value_field_is_carried_across_a_preview_rebuild() {
+    let (_, mut world) = behavior_session(vec![behavior("b", serde_json::json!({}))]);
+    widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "half typed");
+    let snapshot = EditorHook::field_snapshot(&world);
+    let mut fresh = World::new_empty();
+    for id in behavior_panel::all_field_ids() {
+        fresh.add_component(TextInput {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    EditorHook::restore_fields(&mut fresh, &snapshot);
+    assert_eq!(
+        widget::field_text(&fresh, behavior_panel::VALUE_INPUT),
+        "half typed"
+    );
+}
+
+// The chart is a second view over the same rows, so switching to it keeps the
+// selection and the toolbar keeps acting on the same node.
+#[test]
+fn behavior_view_toggles_between_the_chart_and_the_outline() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
+    )]);
+    assert_eq!(h.behavior_mode, ViewMode::Outline);
+    select_behavior(&mut h, &mut world, "hide");
+    let selected = h.behavior_row;
+
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_mode, ViewMode::Chart);
+    assert_eq!(
+        h.behavior_row, selected,
+        "the selection survives the switch"
+    );
+
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_mode, ViewMode::Outline);
+}
+
+// Clicking a card is clicking its row: the palette a card opens is the one its
+// outline row offers, so there is no second editing path to keep in step.
+#[test]
+fn behavior_card_selects_the_row_it_stands_for() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [
+            {"let": {"name": "t", "value": {"first": "q"}}},
+            {"hide": {"target": "self"}},
+        ]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let card = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.title == "hide")
+        .unwrap();
+
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    let rows = h.behavior_rows();
+    assert_eq!(rows[h.behavior_row.unwrap()].label, "hide");
+    // And the palette that selection offers is the node palette, so picking
+    // from a card replaces the node the card draws.
+    assert!(
+        h.behavior_data()
+            .picks
+            .iter()
+            .any(|p| p.verb == "set_transform"),
+    );
+}
+
+// An empty branch is a card too, and picking from it appends the branch's first
+// node -- the reason an empty `else` is drawn at all.
+#[test]
+fn behavior_empty_branch_card_appends_into_that_branch() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "gate",
+        serde_json::json!({"on": "start", "do": [
+            {"if": {"cond": {"bool": true}, "then": [{"save": {}}]}},
+        ]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let card = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.title == "empty")
+        .unwrap();
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    let pick = h
+        .behavior_data()
+        .picks
+        .iter()
+        .position(|p| p.verb == "hide")
+        .unwrap();
+    h.apply_behavior_action(BehaviorAction::Choose(pick), &mut world, [0.0, 0.0]);
+
+    let body = open_args(&h);
+    assert_eq!(
+        body["do"][0]["if"]["else"][0]["hide"],
+        serde_json::json!({"target": "self"}),
+        "{body}",
+    );
+}
+
+// In chart view the wheel pans the canvas instead of scrolling the outline, and
+// stops at the chart's edge rather than running into empty space.
+#[test]
+fn behavior_wheel_pans_the_chart_within_its_extent() {
+    let body: Vec<serde_json::Value> = (0..8).map(|_| serde_json::json!({"save": {}})).collect();
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "long",
+        serde_json::json!({"on": "start", "do": body}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    h.scroll_behavior(1.0);
+    // This body is one row tall and wider than the canvas, so the wheel moves
+    // along the axis that has room.
+    assert!(h.behavior_pan[0] > 0.0, "{:?}", h.behavior_pan);
+    assert_eq!(h.behavior_scroll, 0, "the outline's scroll is untouched");
+
+    for _ in 0..200 {
+        h.scroll_behavior(1.0);
+    }
+    let chart = h.behavior_data().chart;
+    let canvas = behavior_panel::chart_canvas(h.effective_size(PanelKey::Behavior));
+    assert_eq!(
+        h.behavior_pan,
+        crate::editor::behavior_chart::clamp_pan(h.behavior_pan, &chart, canvas)
+    );
+}
+
+// Selecting a node off the right of the canvas brings its card into view, so
+// stepping through a long body never leaves the selection off screen.
+#[test]
+fn behavior_selection_pans_an_off_canvas_card_into_view() {
+    let body: Vec<serde_json::Value> = (0..12).map(|_| serde_json::json!({"save": {}})).collect();
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "long",
+        serde_json::json!({"on": "start", "do": body}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let last = h.behavior_data().chart.cards.len() - 1;
+    h.apply_behavior_action(BehaviorAction::SelectCard(last), &mut world, [0.0, 0.0]);
+    // Moving it earlier follows the node, which is what re-pans the canvas.
+    h.apply_behavior_action(BehaviorAction::Move(-1), &mut world, [0.0, 0.0]);
+
+    let data = h.behavior_data();
+    let path = &data.rows[h.behavior_row.unwrap()].path;
+    let card = data.chart.cards.iter().find(|c| &c.path == path).unwrap();
+    let band = behavior_panel::chart_band([0.0, 0.0], h.effective_size(PanelKey::Behavior));
+    let rect = crate::editor::behavior_chart::card_rect(card, band, h.behavior_pan);
+    assert!(rect[0] >= band[0], "{rect:?} left of {band:?}");
+    assert!(rect[0] + rect[2] <= band[0] + band[2] + 0.01, "{rect:?}");
+}

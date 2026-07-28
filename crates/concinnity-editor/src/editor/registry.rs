@@ -35,12 +35,13 @@ pub(crate) enum PanelKey {
     Import,
     Health,
     Console,
+    Behavior,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 11;
+pub(crate) const PANEL_COUNT: usize = 12;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -54,6 +55,7 @@ impl PanelKey {
         PanelKey::Import,
         PanelKey::Health,
         PanelKey::Console,
+        PanelKey::Behavior,
         PanelKey::TemplateDetail,
     ];
 
@@ -85,6 +87,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // ends well short of 0x2000 today (`id_families_are_disjoint`
             // holds the line).
             PanelKey::Console => 0x2000,
+            // The outline, its value column, and the palette give this panel
+            // the widest family of any, so it takes a whole block of its own.
+            PanelKey::Behavior => 0x3000,
         }
 }
 
@@ -176,6 +181,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::ImportPanel,
     &panels::HealthPanel,
     &panels::ConsolePanel,
+    &panels::BehaviorPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -270,7 +276,8 @@ mod tests {
                 "Story",
                 "Import",
                 "Health",
-                "Console"
+                "Console",
+                "Behavior"
             ]
         );
     }

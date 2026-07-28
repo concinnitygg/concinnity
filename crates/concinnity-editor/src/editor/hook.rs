@@ -33,6 +33,7 @@
 
 use super::asset_tree::{self, TreeGroup, TreeRow};
 use super::axes;
+use super::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
 use super::console::{self, ConsoleSink};
 use super::console_panel::{self, ConsoleAction, ConsoleView};
 use super::form::{self, FormField};
@@ -158,6 +159,23 @@ pub(crate) struct EditorHook {
     console_pinned: bool,
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // The Behavior panel: shown state, which of the world's Behavior entries is
+    // open (an ordinal into them, so an unrelated add / delete cannot retarget
+    // it), the selected outline row, the outline and palette scrolls, whether
+    // the palette is up, whether the value field holds keyboard focus, and the
+    // world checker's verdict on the open behavior.
+    behavior_open: bool,
+    behavior_index: usize,
+    behavior_row: Option<usize>,
+    behavior_scroll: usize,
+    behavior_picking: bool,
+    behavior_pick_scroll: usize,
+    behavior_focus: bool,
+    behavior_status: Option<Status>,
+    behavior_mode: ViewMode,
+    // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
+    behavior_pan: [f32; 2],
+    behavior_pan_drag: Option<[f32; 2]>,
     // Editor-session hide / lock sets, by NAME (ids drift across preview
     // rebuilds). Hidden assets skip rendering (via the published
     // `EditorHidden` resource); locked ones are skipped by viewport picking.
@@ -367,6 +385,8 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 // Named to avoid colliding with the `use super::asset_tree` module import.
 mod asset_tree_edit;
 mod axes_drive;
+// Named to avoid colliding with the `use super::behavior_panel` import.
+mod behavior_edit;
 mod billboard_drive;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
@@ -427,6 +447,17 @@ impl EditorHook {
             console_pinned: true,
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            behavior_open: false,
+            behavior_index: 0,
+            behavior_row: None,
+            behavior_scroll: 0,
+            behavior_picking: false,
+            behavior_pick_scroll: 0,
+            behavior_focus: false,
+            behavior_status: None,
+            behavior_mode: ViewMode::default(),
+            behavior_pan: [0.0, 0.0],
+            behavior_pan_drag: None,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
             shift_held: false,
@@ -500,6 +531,7 @@ impl EditorHook {
             || self.lighting_focus.is_some()
             || self.story_focus
             || self.import_focus
+            || self.behavior_focus
     }
 }
 
@@ -543,6 +575,8 @@ impl DebugHook for EditorHook {
                 self.drive_drag(input, vp);
                 // An active edge / corner resize follows the cursor the same way.
                 self.drive_resize(input, vp);
+                // A chart pan does too, so the canvas tracks the cursor.
+                self.drive_behavior_pan(input);
                 // An in-flight gizmo drag follows the cursor, cancels on
                 // Escape, and commits on release, before any new press routes.
                 if self.gizmo_drag.is_some() {

@@ -115,6 +115,21 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     check_with_vars(name, args, &DeclaredVars::default())
 }
 
+/// Validate one behavior's args against the world's declared variables, for
+/// callers holding a single asset rather than an expanded world (the editor's
+/// Behavior panel). `variables` is the world `Variables` asset's args, or
+/// `None` when the world declares none, which leaves every variable implicit
+/// and integer-typed. Cross-asset name resolution is not covered here; that is
+/// the `CrossReferenced` pass over the whole world.
+pub fn check_with_variables(
+    name: &str,
+    args: &Value,
+    variables: Option<&Value>,
+) -> Result<(), String> {
+    let declared = variables.map(DeclaredVars::from_args).unwrap_or_default();
+    check_with_vars(name, args, &declared)
+}
+
 // The world's `Variables` asset: every declaration needs a name and a typed
 // starting value, and no name may repeat.
 pub(crate) fn check_variables(name: &str, args: &Value) -> Result<(), String> {
