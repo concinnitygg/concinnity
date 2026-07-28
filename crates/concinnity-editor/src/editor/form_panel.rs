@@ -243,9 +243,21 @@ fn field_option_rect(o: [f32; 2], w: f32, slot: usize, r: usize) -> [f32; 4] {
     let c = form_control_rect(o, w, slot);
     [c[0], c[1] + c[3] + r as f32 * DROP_ROW_H, c[2], DROP_ROW_H]
 }
+// The dropdown's opaque backing. Its height is rounded out to a field-row
+// boundary: an overlay whose edge lands mid-row leaves that row's control half
+// drawn, which reads as the two clashing rather than as one sitting over the
+// other.
 fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f32; 4] {
     let c = form_control_rect(o, w, slot);
-    [c[0], c[1] + c[3], c[2], shown as f32 * DROP_ROW_H + 4.0]
+    let top = c[1] + c[3];
+    let h = shown as f32 * DROP_ROW_H + 4.0;
+    let rows = ((top + h - fields_top(o)) / FIELD_H).ceil();
+    [
+        c[0],
+        top,
+        c[2],
+        (fields_top(o) + rows * FIELD_H - top).max(h),
+    ]
 }
 
 // How many field slots are on screen at effective size `s`: the field count
@@ -1476,6 +1488,27 @@ mod tests {
         let declared = dropdown_ids();
         for id in [DROP_BG, drop_row_bg(0), drop_row_label(0)] {
             assert!(declared.contains(&id), "{id:?} is not declared an overlay");
+        }
+    }
+
+    // An overlay that stops mid-row leaves the row under it half drawn, which
+    // reads as clashing text rather than as one thing sitting over another.
+    #[test]
+    fn the_dropdown_backing_ends_on_a_field_row_boundary() {
+        let o = test_origin();
+        let w = EDIT_W;
+        for slot in 0..4 {
+            for shown in 1..=MAX_DROP_ROWS {
+                let b = field_dropdown_backing(o, w, slot, shown);
+                let bottom = b[1] + b[3];
+                let rows = (bottom - fields_top(o)) / FIELD_H;
+                assert!(
+                    (rows - rows.round()).abs() < 0.01,
+                    "slot {slot} shown {shown}: bottom {bottom} is {rows} rows down",
+                );
+                // Still tall enough for every option it draws.
+                assert!(b[3] >= shown as f32 * DROP_ROW_H, "{b:?}");
+            }
         }
     }
 

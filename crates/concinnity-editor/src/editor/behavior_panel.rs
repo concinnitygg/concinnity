@@ -350,11 +350,14 @@ pub(crate) fn row_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
 // The palette floats over the outline, anchored under the toolbar so it always
 // stays inside the panel however far the body is scrolled.
 fn palette_backing(o: [f32; 2], w: f32, shown: usize) -> [f32; 4] {
+    // Rounded out to an outline-row boundary, so the palette's edge never
+    // bisects the row beneath it and leaves it half drawn.
+    let h = shown as f32 * PICK_ROW_H + 4.0;
     [
         o[0] + PAD,
         body_top(o),
         (w - 2.0 * PAD - SCROLLBAR_W).max(0.0),
-        shown as f32 * PICK_ROW_H + 4.0,
+        (h / ROW_H).ceil() * ROW_H,
     ]
 }
 
@@ -1237,6 +1240,23 @@ mod tests {
             for id in [pick_bg(slot), pick_label(slot), pick_hint(slot)] {
                 assert!(declared.contains(&id), "{id:?} is not declared an overlay");
             }
+        }
+    }
+
+    // Same contract as the form's dropdown: the palette's edge lands between
+    // outline rows, never through one.
+    #[test]
+    fn the_palette_backing_ends_on_an_outline_row_boundary() {
+        let o = [20.0, 20.0];
+        for shown in 1..=PICK_POOL {
+            let b = palette_backing(o, BEHAVIOR_W, shown);
+            let rows = b[3] / ROW_H;
+            assert!(
+                (rows - rows.round()).abs() < 0.01,
+                "shown {shown}: height {} is {rows} rows",
+                b[3],
+            );
+            assert!(b[3] >= shown as f32 * PICK_ROW_H, "{b:?}");
         }
     }
 
