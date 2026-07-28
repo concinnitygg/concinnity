@@ -236,14 +236,22 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2],
         l.visible = true;
         l.content = "Apply".to_string();
     }
-    if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Left;
-        l.color = ERROR_LABEL;
-        l.visible = view.status.is_some();
-        l.content = view.status.unwrap_or("").to_string();
-    }
+    // The status shares the header row with Apply, so it is one line into
+    // whatever the button leaves it.
+    let left = o[0] + PAD;
+    widget::place_message(
+        world,
+        STATUS_LABEL,
+        [
+            left,
+            o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF,
+            (apply[0] - PAD - left).max(0.0),
+            widget::LINE_H,
+        ],
+        view.status.unwrap_or(""),
+        ERROR_LABEL,
+        view.status.is_some(),
+    );
 
     // Every pooled control starts hidden; the row pass below shows what this
     // frame's rows actually use (sections toggle between fields and an add row).

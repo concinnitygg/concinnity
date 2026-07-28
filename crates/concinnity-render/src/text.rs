@@ -81,6 +81,89 @@ fn measure_text_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
         .sum()
 }
 
+// The content a label actually draws: its text broken to `wrap_width` and
+// capped at `max_lines`. Wrapping measures in the label's own pixel space with
+// `label.scale`, which gives the same breaks as measuring in window pixels: a
+// screen-owned label scales its advances and its wrap width by the same overlay
+// factor. A centered label has no container (it is fitted to the viewport), so
+// it is left alone.
+fn laid_out(label: &TextLabel, font: &LoadedFont) -> String {
+    if label.centered || (label.wrap_width <= 0.0 && label.max_lines == 0) {
+        return label.content.clone();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for authored in label.content.split('\n') {
+        if label.wrap_width > 0.0 {
+            wrap_line(authored, font, label.scale, label.wrap_width, &mut lines);
+        } else {
+            lines.push(authored.to_string());
+        }
+    }
+    let max = label.max_lines as usize;
+    if max > 0 && lines.len() > max {
+        lines.truncate(max);
+        if let Some(last) = lines.last_mut() {
+            *last = with_ellipsis(last, font, label.scale, label.wrap_width);
+        }
+    }
+    lines.join("\n")
+}
+
+// Greedily pack `line`'s words into `out`, breaking at spaces. A word too wide
+// to fit a line of its own is split mid-word, since leaving it whole would put
+// it back outside the container wrapping exists to respect.
+fn wrap_line(line: &str, font: &LoadedFont, scale: f32, width: f32, out: &mut Vec<String>) {
+    let mut current = String::new();
+    for word in line.split(' ') {
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        if measure_text_width(&candidate, font, scale) <= width {
+            current = candidate;
+            continue;
+        }
+        if !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+        }
+        // The word now starts a line of its own; split it if even that overflows.
+        current = word.to_string();
+        while measure_text_width(&current, font, scale) > width && current.chars().count() > 1 {
+            let mut head = String::new();
+            for ch in current.chars() {
+                let mut next = head.clone();
+                next.push(ch);
+                if !head.is_empty() && measure_text_width(&next, font, scale) > width {
+                    break;
+                }
+                head = next;
+            }
+            let rest: String = current.chars().skip(head.chars().count()).collect();
+            out.push(head);
+            current = rest;
+        }
+    }
+    out.push(current);
+}
+
+// `line` shortened until it and a trailing ellipsis fit `width`. A zero width
+// (capping lines without wrapping them) leaves the line as it is.
+fn with_ellipsis(line: &str, font: &LoadedFont, scale: f32, width: f32) -> String {
+    const ELLIPSIS: &str = "...";
+    if width <= 0.0 {
+        return format!("{line}{ELLIPSIS}");
+    }
+    let mut kept: Vec<char> = line.chars().collect();
+    loop {
+        let candidate: String = kept.iter().collect::<String>() + ELLIPSIS;
+        if kept.is_empty() || measure_text_width(&candidate, font, scale) <= width {
+            return candidate;
+        }
+        kept.pop();
+    }
+}
+
 // Baseline position relative to a label's top-left `y`, so the cap-height band
 // is vertically centered within the line box `[y, y + line_height]`. Pinning the
 // baseline to the box bottom (the old behaviour) left a large gap above the
@@ -130,14 +213,14 @@ pub fn measure_label_box(
     let font = label.font.and_then(|fid| loaded_fonts.get(&fid))?;
     let scale = label.scale;
     let line_height = font.size_px * scale;
-    let lines = label.content.split('\n').count().max(1) as f32;
-    let text_w = label
-        .content
+    let content = laid_out(label, font);
+    let lines = content.split('\n').count().max(1) as f32;
+    let text_w = content
         .split('\n')
         .map(|line| measure_text_width(line, font, scale))
         .fold(0.0_f32, f32::max);
     let pad = label.padding;
-    let (top_above, bot_below) = content_v_extent(&label.content, font, scale);
+    let (top_above, bot_below) = content_v_extent(&content, font, scale);
     let base_off = baseline_offset(font, scale);
     Some(LabelBox {
         w: text_w + 2.0 * pad,
@@ -181,12 +264,16 @@ pub fn build_text_calls(
         };
         let mut vertices: Vec<TextVertex> = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
+        // Everything below reads the laid-out content, not the authored string,
+        // so alignment, the background box, and the glyph run agree on the lines
+        // that are actually drawn.
+        let content = laid_out(label, font);
 
         // For centered labels, auto-scale to fill ~85% of the viewport while
         // preserving the text's aspect ratio. The label's scale field is used
         // for non-centered labels only.
         let (x0, y0, scale) = if label.centered && win_w > 0.0 && win_h > 0.0 {
-            let w1 = measure_text_width(&label.content, font, 1.0);
+            let w1 = measure_text_width(&content, font, 1.0);
             let h1 = font.size_px;
             let scale = if w1 > 0.0 && h1 > 0.0 {
                 let sw = win_w * 0.85 / w1;
@@ -195,7 +282,7 @@ pub fn build_text_calls(
             } else {
                 label.scale
             };
-            let tw = measure_text_width(&label.content, font, scale);
+            let tw = measure_text_width(&content, font, scale);
             let th = h1 * scale;
             ((win_w - tw) / 2.0, (win_h - th) / 2.0, scale)
         } else {
@@ -218,8 +305,7 @@ pub fn build_text_calls(
             let x0 = match label.align {
                 TextAlign::Left => ax,
                 TextAlign::Center | TextAlign::Right => {
-                    let w = label
-                        .content
+                    let w = content
                         .split('\n')
                         .map(|line| measure_text_width(line, font, scale))
                         .fold(0.0_f32, f32::max);
@@ -250,15 +336,14 @@ pub fn build_text_calls(
         // the text shader reads as "solid fill", with the box alpha passed
         // through in v. Empty content draws nothing at all (so a blanked label
         // fully disappears).
-        if label.background[3] > 0.0 && !label.content.is_empty() {
-            let lines = label.content.split('\n').count().max(1) as f32;
-            let text_w = label
-                .content
+        if label.background[3] > 0.0 && !content.is_empty() {
+            let lines = content.split('\n').count().max(1) as f32;
+            let text_w = content
                 .split('\n')
                 .map(|line| measure_text_width(line, font, scale))
                 .fold(0.0_f32, f32::max);
             let pad = label.padding;
-            let (top_above, bot_below) = content_v_extent(&label.content, font, scale);
+            let (top_above, bot_below) = content_v_extent(&content, font, scale);
             let last_baseline = baseline + (lines - 1.0) * line_height;
             let (x0b, y0b) = (x0 - pad, baseline - top_above - pad);
             let (x1b, y1b) = (x0 + text_w + pad, last_baseline + bot_below + pad);
@@ -283,7 +368,7 @@ pub fn build_text_calls(
             indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
         }
 
-        for ch in label.content.chars() {
+        for ch in content.chars() {
             if ch == '\n' {
                 x_cursor = x0;
                 baseline += line_height;
@@ -422,9 +507,106 @@ mod tests {
             fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
+            wrap_width: 0.0,
+            max_lines: 0,
             visible: true,
             screen: None,
         }
+    }
+
+    // A font whose every glyph advances 10px, so a wrap width in pixels reads
+    // directly as a character count.
+    fn even_font() -> LoadedFont {
+        let glyphs: Vec<(char, GlyphMetrics)> = ('a'..='z')
+            .chain(['A', ' ', '-', '.', '\''])
+            .map(|c| (c, make_glyph(8, 8, 10.0)))
+            .collect();
+        make_font(&glyphs)
+    }
+
+    fn wrapped(content: &str, width: f32, max_lines: u32) -> Vec<String> {
+        let font = even_font();
+        let mut label = make_label(FontHandle(0), content, 0.0);
+        label.wrap_width = width;
+        label.max_lines = max_lines;
+        laid_out(&label, &font)
+            .split('\n')
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn text_wraps_at_word_boundaries_within_its_width() {
+        // 5 glyphs per line: "aaa bbb" is 7 wide, so the words split.
+        assert_eq!(wrapped("aaa bbb", 50.0, 0), ["aaa", "bbb"]);
+        // Exactly filling a line does not spill onto the next one.
+        assert_eq!(wrapped("aa bb", 50.0, 0), ["aa bb"]);
+        assert_eq!(wrapped("aa bb cc", 50.0, 0), ["aa bb", "cc"]);
+    }
+
+    #[test]
+    fn authored_newlines_stay_breaks_and_wrap_within_themselves() {
+        assert_eq!(wrapped("aa\nbb cc dd", 50.0, 0), ["aa", "bb cc", "dd"]);
+    }
+
+    #[test]
+    fn a_word_too_long_for_a_line_splits_rather_than_overflowing() {
+        assert_eq!(wrapped("aaaaaaaa", 50.0, 0), ["aaaaa", "aaa"]);
+        // Every produced line is inside the width, which is the whole point.
+        let font = even_font();
+        for line in wrapped("aaaaaaaaaaaaaa bb", 50.0, 0) {
+            assert!(measure_text_width(&line, &font, 1.0) <= 50.0, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn max_lines_cuts_the_overflow_with_an_ellipsis_that_still_fits() {
+        // Three lines' worth of text into a two-line box.
+        assert_eq!(wrapped("aa bb cc dd ee ff", 50.0, 0).len(), 3);
+        let lines = wrapped("aa bb cc dd ee ff", 50.0, 2);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].ends_with("..."), "{lines:?}");
+        let font = even_font();
+        for line in &lines {
+            assert!(measure_text_width(line, &font, 1.0) <= 50.0, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn text_that_fits_is_left_exactly_as_it_was() {
+        assert_eq!(wrapped("aa bb", 500.0, 4), ["aa bb"]);
+        assert_eq!(wrapped("", 50.0, 2), [""]);
+    }
+
+    // Wrapping has to reach the glyph run, the alignment measure, and the
+    // background box together, or a wrapped label draws its box around the
+    // unwrapped text.
+    #[test]
+    fn a_wrapped_label_draws_and_measures_the_lines_it_wrapped_to() {
+        let font_id = FontHandle(0);
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert(font_id, even_font());
+        let mut label = make_label(font_id, "aa bb cc", 0.0);
+        label.wrap_width = 50.0;
+        label.background = [0.0, 0.0, 0.0, 1.0];
+
+        let boxed = measure_label_box(&label, &fonts).unwrap();
+        // Two lines of five glyphs, not one line of eight.
+        assert!(boxed.w <= 50.0, "{boxed:?}");
+        let calls = build_text_calls(
+            std::slice::from_ref(&&label),
+            &fonts,
+            200.0,
+            200.0,
+            &no_clips(),
+            &no_layers(),
+        );
+        let right = calls[0]
+            .vertices
+            .iter()
+            .map(|v| v.pos[0])
+            .fold(f32::MIN, f32::max);
+        assert!(right <= 50.0, "glyphs ran past the wrap width: {right}");
     }
 
     #[test]

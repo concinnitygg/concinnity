@@ -43,7 +43,8 @@ pub(crate) fn row_label(i: usize) -> AssetId {
 pub(crate) const STORY_W: f32 = 560.0;
 const PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
-const STATUS_H: f32 = 22.0;
+// Two lines: a parse or IO message carries a path and rarely fits one.
+const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const BTN_W: f32 = 70.0;
 const LINE_H: f32 = 24.0;
 const SCROLLBAR_W: f32 = 5.0;
@@ -245,14 +246,19 @@ pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2], s:
         l.visible = !view.create;
         l.content = "Apply".to_string();
     }
-    if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H + 1.0;
-        l.align = TextAlign::Left;
-        l.color = ERROR_LABEL;
-        l.visible = view.status.is_some();
-        l.content = view.status.unwrap_or("").to_string();
-    }
+    widget::place_message(
+        world,
+        STATUS_LABEL,
+        [
+            o[0] + PAD,
+            o[1] + widget::TITLE_H + HEADER_H + 1.0,
+            (w - 2.0 * PAD).max(0.0),
+            STATUS_H - 4.0,
+        ],
+        view.status.unwrap_or(""),
+        ERROR_LABEL,
+        view.status.is_some(),
+    );
 
     widget::hide_field(world, LINE_INPUT);
     for slot in 0..LINE_POOL_MAX {

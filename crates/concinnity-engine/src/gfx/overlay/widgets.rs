@@ -114,6 +114,10 @@ pub(super) fn build_dropdown_overlay(
             fit: crate::assets::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
+            // An option longer than the list is cut with an ellipsis rather
+            // than drawn out past the dropdown's edge.
+            wrap_width: (rect[2] - 2.0 * TEXT_PAD).max(0.0),
+            max_lines: 1,
             visible: true,
             screen: screen.screen,
         })
@@ -262,6 +266,9 @@ pub(super) fn build_text_input_overlay(
         fit: ti.fit,
         background: [0.0, 0.0, 0.0, 0.0],
         padding: 0.0,
+        // A field's text is scrolled horizontally by `x_offset`, not wrapped.
+        wrap_width: 0.0,
+        max_lines: 0,
         visible: true,
         screen: ti.screen,
     };

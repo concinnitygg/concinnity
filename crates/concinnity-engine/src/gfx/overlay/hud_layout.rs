@@ -201,6 +201,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: None,
+            wrap_width: 0.0,
+            max_lines: 0,
         }
     }
 

@@ -81,6 +81,19 @@ pub struct TextLabel {
     /// Pixels the background box extends past the text on every side. Only
     /// meaningful when `background` is visible.
     pub padding: f32,
+    /// Width in the label's own pixels that text wraps within. `0` (the
+    /// default) never wraps, so the text runs as far as it needs to. Any
+    /// greater value breaks the content into lines at word boundaries, using
+    /// the real font metrics, splitting a word only when it cannot fit a line
+    /// on its own. Authored newlines are kept as breaks either way. Ignored
+    /// when `centered` is set, since a centered label is sized to the viewport
+    /// rather than to a container.
+    pub wrap_width: f32,
+    /// Most lines the label draws. `0` (the default) draws every line. When the
+    /// text needs more than this, the last drawn line ends in an ellipsis, so
+    /// text bounded by `wrap_width` is bounded in both directions and can never
+    /// spill out of the box that holds it.
+    pub max_lines: u32,
     /// When false, the label is hidden.
     pub visible: bool,
     /// [Screen](#screen) this label belongs to. Resolved automatically from
@@ -105,6 +118,8 @@ impl Default for TextLabel {
             fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
+            wrap_width: 0.0,
+            max_lines: 0,
             visible: true,
             screen: None,
         }

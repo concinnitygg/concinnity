@@ -91,6 +91,41 @@ pub(crate) fn place_left_label(
     }
 }
 
+// One line of the HUD font at the editor's text scale. The renderer does the
+// real measuring; the editor needs this only to say how many lines a box holds.
+pub(crate) const LINE_H: f32 = theme::TEXT_HALF * 2.0;
+
+// How many lines of text fit in a box `h` pixels tall.
+pub(crate) fn lines_in(h: f32) -> u32 {
+    ((h / LINE_H).floor() as u32).max(1)
+}
+
+// A message bounded by the box that holds it: it wraps to `rect`'s width and
+// stops after as many lines as `rect` is tall, ending in an ellipsis if there
+// was more. Use this for text whose length is not known in advance -- a status
+// line, an error, anything quoting a message from elsewhere -- so it can never
+// draw outside its panel.
+pub(crate) fn place_message(
+    world: &mut World,
+    id: AssetId,
+    rect: [f32; 4],
+    content: &str,
+    color: [f32; 3],
+    visible: bool,
+) {
+    let lines = lines_in(rect[3]);
+    if let Some(l) = label_mut(world, id) {
+        l.x = rect[0];
+        l.y = rect[1];
+        l.align = TextAlign::Left;
+        l.color = color;
+        l.visible = visible;
+        l.wrap_width = rect[2].max(0.0);
+        l.max_lines = lines;
+        l.content = content.to_string();
+    }
+}
+
 // The square close-button rect at the right end of a `title` bar rect.
 pub(crate) fn close_rect(title: [f32; 4]) -> [f32; 4] {
     [title[0] + title[2] - TITLE_H, title[1], TITLE_H, TITLE_H]
@@ -321,6 +356,39 @@ mod tests {
             });
         }
         world
+    }
+
+    #[test]
+    fn place_message_bounds_text_to_the_box_that_holds_it() {
+        let mut world = World::new_empty();
+        let id = AssetId(1);
+        world.add_component(TextLabel {
+            asset_id: id,
+            ..Default::default()
+        });
+        // Two lines tall, so a long message wraps once and then stops.
+        place_message(
+            &mut world,
+            id,
+            [10.0, 20.0, 300.0, 2.0 * LINE_H],
+            "a long message",
+            [1.0; 3],
+            true,
+        );
+        let l = world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == id)
+            .unwrap();
+        assert_eq!((l.x, l.y), (10.0, 20.0));
+        assert_eq!(l.wrap_width, 300.0);
+        assert_eq!(l.max_lines, 2);
+    }
+
+    #[test]
+    fn a_box_always_holds_at_least_one_line() {
+        assert_eq!(lines_in(0.0), 1);
+        assert_eq!(lines_in(LINE_H), 1);
+        assert_eq!(lines_in(3.0 * LINE_H), 3);
     }
 
     #[test]

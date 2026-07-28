@@ -325,10 +325,15 @@ fn elbow(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> Vec<[f32; 4]> {
 fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4]) {
     let total = view.chart.cards.len();
     let hidden = total.saturating_sub(CARD_POOL);
-    widget::place_left_label(
+    widget::place_message(
         world,
         HINT_LABEL,
-        [band[0] + MARGIN, band[1] + band[3] - 18.0],
+        [
+            band[0] + MARGIN,
+            band[1] + band[3] - 18.0,
+            (band[2] - MARGIN * 2.0).max(0.0),
+            widget::LINE_H,
+        ],
         &format!("{hidden} more nodes -- open the outline to reach them"),
         theme::LOG_WARN,
         hidden > 0,

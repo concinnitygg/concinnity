@@ -78,7 +78,9 @@ const PAD: f32 = 10.0;
 const GAP: f32 = 6.0;
 const HEADER_H: f32 = 32.0;
 const TOOL_H: f32 = 30.0;
-const STATUS_H: f32 = 22.0;
+// Two lines: a checker message is a sentence and often needs the second, and a
+// fixed band keeps the body from shifting as messages come and go.
+const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const ROW_H: f32 = 22.0;
 const SCROLLBAR_W: f32 = 5.0;
 const STEP_W: f32 = 26.0;
@@ -465,7 +467,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
 
     layout_header(world, view, o, w);
     layout_toolbar(world, view, o, w);
-    layout_status(world, view, o);
+    layout_status(world, view, o, w);
     if view.mode == ViewMode::Chart && view.total > 0 {
         layout_rows(world, view, o, w, 0, None);
         widget::set_sprite_visible(world, LIST_TRACK, false);
@@ -622,16 +624,24 @@ fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     }
 }
 
-fn layout_status(world: &mut World, view: &BehaviorView, o: [f32; 2]) {
-    let y = o[1] + widget::TITLE_H + HEADER_H + TOOL_H + 2.0;
-    widget::place_left_label(
+fn layout_status(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+    widget::place_message(
         world,
         STATUS_LABEL,
-        [o[0] + PAD, y],
+        status_rect(o, w),
         view.status.map(Status::text).unwrap_or(""),
         view.status.map_or(HINT_LABEL, Status::color),
         view.status.is_some(),
     );
+}
+
+fn status_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [
+        o[0] + PAD,
+        o[1] + widget::TITLE_H + HEADER_H + TOOL_H + 2.0,
+        (w - 2.0 * PAD).max(0.0),
+        STATUS_H - 4.0,
+    ]
 }
 
 fn layout_rows(

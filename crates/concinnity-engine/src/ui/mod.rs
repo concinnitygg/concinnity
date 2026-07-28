@@ -1853,6 +1853,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: Some(screen),
+            wrap_width: 0.0,
+            max_lines: 0,
         }
     }
 
@@ -1883,6 +1885,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: None,
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -1962,6 +1966,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: Some(menu),
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -2034,6 +2040,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: Some(screen),
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         // The control button whose click opens the list.
         world.add_component(HitRegion {
@@ -2123,6 +2131,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: Some(screen),
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         world.add_component(HitRegion {
             x: 400.0,
@@ -2366,6 +2376,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: None,
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         world.add_component(HitRegion {
             x: 10.0,
@@ -3227,6 +3239,8 @@ mod tests {
             padding: 0.0,
             visible: true,
             screen: None,
+            wrap_width: 0.0,
+            max_lines: 0,
         });
         world.add_component(HitRegion {
             x: 0.0,

@@ -71,7 +71,8 @@ pub(crate) const IMPORT_W: f32 = 520.0;
 const PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
 const HINT_H: f32 = 20.0;
-const STATUS_H: f32 = 22.0;
+// Two lines: an import message carries a path and rarely fits one.
+const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const LIST_HEADER_H: f32 = 24.0;
 const BTN_W: f32 = 70.0;
 const BROWSE_W: f32 = 84.0;
@@ -340,18 +341,19 @@ pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
             "scenes (glb, fbx) - stories (md) - images - hdr - audio - fonts - shaders - text"
                 .to_string();
     }
-    if let Some(l) = widget::label_mut(world, STATUS_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H + HINT_H;
-        l.align = TextAlign::Left;
-        l.color = view.status.map_or(ERROR_LABEL, ImportStatus::color);
-        l.visible = view.status.is_some();
-        l.content = view
-            .status
-            .map(ImportStatus::text)
-            .unwrap_or("")
-            .to_string();
-    }
+    widget::place_message(
+        world,
+        STATUS_LABEL,
+        [
+            o[0] + PAD,
+            o[1] + widget::TITLE_H + HEADER_H + HINT_H,
+            (w - 2.0 * PAD).max(0.0),
+            STATUS_H - 4.0,
+        ],
+        view.status.map(ImportStatus::text).unwrap_or(""),
+        view.status.map_or(ERROR_LABEL, ImportStatus::color),
+        view.status.is_some(),
+    );
     if let Some(l) = widget::label_mut(world, LIST_HEADER) {
         l.x = o[0] + PAD;
         l.y = o[1] + widget::TITLE_H + HEADER_H + HINT_H + STATUS_H + 2.0;
