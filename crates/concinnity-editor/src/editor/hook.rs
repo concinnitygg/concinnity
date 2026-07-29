@@ -163,7 +163,9 @@ pub(crate) struct EditorHook {
     // open (an ordinal into them, so an unrelated add / delete cannot retarget
     // it), the selected outline row, the outline and palette scrolls, whether
     // the palette is up, whether the value field holds keyboard focus, and the
-    // world checker's verdict on the open behavior.
+    // world checker's verdict on the open behavior. The name field carries its
+    // own focus, and `behavior_remove_armed` is the removal chip waiting on the
+    // press that carries it out.
     behavior_open: bool,
     behavior_index: usize,
     behavior_row: Option<usize>,
@@ -171,6 +173,8 @@ pub(crate) struct EditorHook {
     behavior_picking: bool,
     behavior_pick_scroll: usize,
     behavior_focus: bool,
+    behavior_name_focus: bool,
+    behavior_remove_armed: bool,
     behavior_status: Option<Status>,
     behavior_mode: ViewMode,
     // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
@@ -385,6 +389,7 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
 // Named to avoid colliding with the `use super::asset_tree` module import.
 mod asset_tree_edit;
 mod axes_drive;
+mod behavior_asset;
 // Named to avoid colliding with the `use super::behavior_panel` import.
 mod behavior_edit;
 mod billboard_drive;
@@ -454,6 +459,8 @@ impl EditorHook {
             behavior_picking: false,
             behavior_pick_scroll: 0,
             behavior_focus: false,
+            behavior_name_focus: false,
+            behavior_remove_armed: false,
             behavior_status: None,
             behavior_mode: ViewMode::default(),
             behavior_pan: [0.0, 0.0],
@@ -532,6 +539,7 @@ impl EditorHook {
             || self.story_focus
             || self.import_focus
             || self.behavior_focus
+            || self.behavior_name_focus
     }
 }
 

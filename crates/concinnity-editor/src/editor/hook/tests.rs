@@ -4275,6 +4275,17 @@ fn open_args(h: &EditorHook) -> serde_json::Value {
     h.behavior_args()
 }
 
+// One press of the header's removal chip: the first arms it, the second carries
+// it out.
+fn press_remove(h: &mut EditorHook, world: &mut World) {
+    h.apply_behavior_action(BehaviorAction::Remove, world, [0.0, 0.0]);
+}
+
+// Type into the name field, as the engine's text-input system would.
+fn type_name(world: &mut World, text: &str) {
+    widget::seed_field(world, behavior_panel::NAME_INPUT, text);
+}
+
 #[test]
 fn behavior_panel_opens_on_the_first_behavior_and_steps_between_them() {
     let (mut h, mut world) = behavior_session(vec![
@@ -4461,6 +4472,216 @@ fn behavior_delete_and_move_act_on_the_selected_member() {
         h.behavior_row.is_none(),
         "the removed row's selection is dropped, not retargeted"
     );
+}
+
+// The toolbar's Del takes out a node; the header's Remove takes out the whole
+// behavior. Removing one leaves the body of the others alone.
+#[test]
+fn behavior_remove_takes_the_open_behavior_not_a_node() {
+    let body = serde_json::json!({"scope": ["Prop"], "do": [{"hide": {"target": "self"}}]});
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("greet", body.clone()),
+        behavior("chase", body.clone()),
+    ]);
+    select_behavior(&mut h, &mut world, "hide");
+
+    press_remove(&mut h, &mut world);
+    press_remove(&mut h, &mut world);
+    assert_eq!(h.behavior_data().total, 1);
+    assert_eq!(h.behavior_data().name, "chase");
+    assert_eq!(open_args(&h), body, "the survivor's body is untouched");
+    assert!(h.dirty && h.rebuild_preview, "removing one is a world edit");
+    assert!(
+        h.entries.iter().all(|e| entry_name(e) != Some("greet")),
+        "the authored line is gone"
+    );
+}
+
+// Destroying an authored asset takes two presses, and anything else the user
+// does on the panel in between calls it off.
+#[test]
+fn behavior_remove_arms_first_and_any_other_press_cancels() {
+    let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
+    press_remove(&mut h, &mut world);
+    assert!(h.behavior_remove_armed, "the first press only arms");
+    assert_eq!(h.behavior_data().total, 1, "and destroys nothing");
+
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    assert!(!h.behavior_remove_armed, "another press disarms it");
+    press_remove(&mut h, &mut world);
+    assert_eq!(
+        h.behavior_data().total,
+        1,
+        "so the next press arms again rather than committing"
+    );
+    press_remove(&mut h, &mut world);
+    assert_eq!(h.behavior_data().total, 0);
+}
+
+// The ordinal is clamped to what is left, so the panel always opens on a real
+// behavior -- and on the empty-world prompt once the last one goes.
+#[test]
+fn behavior_remove_reopens_whatever_holds_that_ordinal() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("a", serde_json::json!({})),
+        behavior("b", serde_json::json!({})),
+        behavior("c", serde_json::json!({})),
+    ]);
+    h.apply_behavior_action(BehaviorAction::Step(2), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "c");
+
+    // The last of the three: the ordinal has to come back a place.
+    press_remove(&mut h, &mut world);
+    press_remove(&mut h, &mut world);
+    let data = h.behavior_data();
+    assert_eq!((data.name.as_str(), data.index, data.total), ("b", 1, 2));
+
+    // Emptying the world leaves the prompt, not a dangling open behavior.
+    for _ in 0..2 {
+        press_remove(&mut h, &mut world);
+        press_remove(&mut h, &mut world);
+    }
+    let data = h.behavior_data();
+    assert_eq!((data.name.as_str(), data.total), ("", 0));
+    assert!(h.behavior_status.is_none(), "and nothing to check");
+}
+
+// Removal is an ordinary entry edit, so the history covers it: the two-press
+// arm guards the click, and Undo is still there behind it.
+#[test]
+fn behavior_remove_is_undoable() {
+    let args = serde_json::json!({"on": "tick", "do": []});
+    let (mut h, mut world) = behavior_session(vec![behavior("greet", args.clone())]);
+    press_remove(&mut h, &mut world);
+    press_remove(&mut h, &mut world);
+    assert_eq!(h.behavior_data().total, 0);
+
+    h.undo(&mut world);
+    assert_eq!(h.behavior_data().total, 1);
+    assert_eq!(h.behavior_data().name, "greet");
+    assert_eq!(open_args(&h), args, "body and all");
+}
+
+#[test]
+fn behavior_rename_commits_on_enter() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("greet", serde_json::json!({})),
+        behavior("chase", serde_json::json!({})),
+    ]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    assert!(h.behavior_name_focus);
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::NAME_INPUT),
+        "greet",
+        "the field opens on the name it is about to replace"
+    );
+
+    type_name(&mut world, "  welcome  ");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(h.behavior_data().name, "welcome", "trimmed on the way in");
+    assert!(!h.behavior_name_focus, "committing gives up the keyboard");
+    assert!(h.dirty && h.rebuild_preview, "renaming is a world edit");
+    // The ordinal is untouched: renaming does not reorder the world.
+    assert_eq!(h.behavior_data().index, 0);
+}
+
+// Two assets cannot share a name, so a taken one is suffixed until it is free
+// and the field is put back in step with what actually landed.
+#[test]
+fn behavior_rename_keeps_the_name_unique() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("greet", serde_json::json!({})),
+        behavior("chase", serde_json::json!({})),
+    ]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "chase");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(h.behavior_data().name, "chase_1");
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::NAME_INPUT),
+        "chase_1",
+        "the field shows what the world holds, not what was typed"
+    );
+
+    // Committing a name unchanged is not a collision with itself.
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(h.behavior_data().name, "chase_1");
+}
+
+#[test]
+fn behavior_rename_refuses_a_blank_name() {
+    let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "   ");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+
+    assert_eq!(h.behavior_data().name, "greet", "nothing was written");
+    assert!(!h.dirty, "and no edit was recorded");
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected the panel to say why, got {:?}", h.behavior_status);
+    };
+    assert!(e.contains("needs a name"), "{e}");
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::NAME_INPUT),
+        "greet",
+        "the refused text is dropped rather than left to be committed later"
+    );
+}
+
+// The checker quotes the behavior by name, so its verdict is re-read under the
+// new one rather than left complaining about an asset the world no longer has.
+#[test]
+fn behavior_rename_reruns_the_checker_under_the_new_name() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "broken",
+        serde_json::json!({"do": [{"despawn": {"target": {"bind": "nope"}}}]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "still_broken");
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+
+    let Some(Status::Error(e)) = &h.behavior_status else {
+        panic!("expected the error to survive the rename");
+    };
+    assert!(e.starts_with("Behavior 'still_broken'"), "{e}");
+}
+
+// Clicking away from a half-typed name throws it away rather than leaving it in
+// the field for the next Enter to commit by surprise.
+#[test]
+fn behavior_name_reverts_when_it_loses_focus() {
+    let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "half typed");
+
+    h.apply_behavior_action(BehaviorAction::Consume, &mut world, [0.0, 0.0]);
+    assert!(!h.behavior_name_focus);
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::NAME_INPUT),
+        "greet"
+    );
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    assert_eq!(h.behavior_data().name, "greet");
+    assert!(!h.dirty);
+}
+
+// The two fields never hold the keyboard at once: whichever was pressed last
+// owns it, so Enter always commits the field the user is looking at.
+#[test]
+fn behavior_name_and_value_fields_do_not_share_the_keyboard() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "b",
+        serde_json::json!({"delay": 0.0, "do": []}),
+    )]);
+    select_behavior(&mut h, &mut world, "delay");
+    assert!(h.behavior_focus && !h.behavior_name_focus);
+
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    assert!(h.behavior_name_focus && !h.behavior_focus);
+
+    h.apply_behavior_action(BehaviorAction::FocusValue, &mut world, [0.0, 0.0]);
+    assert!(h.behavior_focus && !h.behavior_name_focus);
 }
 
 // The value field's contents survive the live-preview rebuild an edit triggers,

@@ -183,6 +183,9 @@ impl EditorHook {
             focus: self.behavior_focus
                 && data.editable
                 && self.panel_order.last() == Some(&PanelKey::Behavior),
+            name_focus: self.behavior_name_focus
+                && self.panel_order.last() == Some(&PanelKey::Behavior),
+            remove_armed: self.behavior_remove_armed,
             status: self.behavior_status.as_ref(),
             mouse,
         }
@@ -198,8 +201,11 @@ impl EditorHook {
         self.behavior_picking = false;
         self.behavior_pick_scroll = 0;
         self.behavior_focus = false;
+        self.behavior_name_focus = false;
+        self.behavior_remove_armed = false;
         self.refresh_behavior_status();
         self.seed_behavior_value(world);
+        self.seed_behavior_name(world);
     }
 
     // Run the world checker over the open behavior as it now stands. The
@@ -259,9 +265,20 @@ impl EditorHook {
         world: &mut World,
         mouse: [f32; 2],
     ) {
+        // An armed removal and a focused name field both last only until the
+        // next press: the chip cannot sit armed behind whatever the user does
+        // next, and the keyboard cannot stay in a field they have clicked away
+        // from. Both are taken before the action runs, so the press that arms
+        // the chip is not also the press that disarms it.
+        let armed = std::mem::take(&mut self.behavior_remove_armed);
+        if action != BehaviorAction::FocusName {
+            self.blur_behavior_name(world);
+        }
         match action {
             BehaviorAction::Step(delta) => self.step_behavior(delta, world),
             BehaviorAction::New => self.add_behavior(world),
+            BehaviorAction::Remove => self.remove_behavior(armed, world),
+            BehaviorAction::FocusName => self.focus_behavior_name(world),
             BehaviorAction::Select(i) => self.select_behavior_row(i, world),
             BehaviorAction::Palette => {
                 self.behavior_picking = !self.behavior_picking;
@@ -374,9 +391,21 @@ impl EditorHook {
     }
 
     // The per-frame editing key, while the panel is frontmost: Enter commits
-    // the value field into the selected row.
+    // whichever field holds the keyboard -- the name onto the open behavior, or
+    // the value into the selected row.
     pub(super) fn behavior_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if !self.behavior_focus || input.captured_key != Some(Key::Enter) {
+        if input.captured_key != Some(Key::Enter) {
+            return;
+        }
+        if self.behavior_name_focus {
+            self.rename_behavior(world);
+            return;
+        }
+        self.commit_behavior_value(world);
+    }
+
+    fn commit_behavior_value(&mut self, world: &mut World) {
+        if !self.behavior_focus {
             return;
         }
         let Some(row) = self

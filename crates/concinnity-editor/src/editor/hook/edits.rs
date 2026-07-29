@@ -74,6 +74,22 @@ impl EditorHook {
         }
     }
 
+    // Drop the authored line at `idx` and record the edit. The open form indexes
+    // into `entries`, so removing the edited entry closes it and removing an
+    // earlier one shifts it.
+    pub(super) fn remove_entry_at(&mut self, idx: usize) {
+        if idx >= self.entries.len() {
+            return;
+        }
+        self.entries.remove(idx);
+        self.mark_changed();
+        match self.form_target {
+            FormTarget::Entry(e) if e == idx => self.close_form(),
+            FormTarget::Entry(e) if e > idx => self.form_target = FormTarget::Entry(e - 1),
+            _ => {}
+        }
+    }
+
     // Record an authored-entry change: the live preview needs a rebuild this frame
     // (`apply_world_swap` reloads the running world from the in-memory entries), and
     // the change is not yet on disk (SAVE clears `dirty`). The pre-edit list still

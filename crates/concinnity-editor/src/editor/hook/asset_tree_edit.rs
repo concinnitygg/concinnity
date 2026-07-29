@@ -272,21 +272,12 @@ impl EditorHook {
     // assets have no line to delete: they are removed by editing whatever
     // produced them.
     fn delete_entry_named(&mut self, name: &str) {
-        let Some(idx) = self
+        if let Some(idx) = self
             .entries
             .iter()
             .position(|e| entry_name(e) == Some(name))
-        else {
-            return;
-        };
-        self.entries.remove(idx);
-        self.mark_changed();
-        // The open form indexes into `entries`: deleting the edited entry closes
-        // it, and deleting an earlier one shifts it.
-        match self.form_target {
-            FormTarget::Entry(e) if e == idx => self.close_form(),
-            FormTarget::Entry(e) if e > idx => self.form_target = FormTarget::Entry(e - 1),
-            _ => {}
+        {
+            self.remove_entry_at(idx);
         }
     }
 

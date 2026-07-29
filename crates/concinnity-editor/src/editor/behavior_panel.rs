@@ -57,6 +57,9 @@ pub(crate) const VIEW_LABEL: AssetId = AssetId(BASE + 27);
 pub(crate) const STATUS_BG: AssetId = AssetId(BASE + 28);
 pub(crate) const INSPECT_BG: AssetId = AssetId(BASE + 29);
 pub(crate) const INSPECT_LABEL: AssetId = AssetId(BASE + 30);
+pub(crate) const REMOVE_BG: AssetId = AssetId(BASE + 31);
+pub(crate) const REMOVE_LABEL: AssetId = AssetId(BASE + 32);
+pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 33);
 
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(BASE + 0x40 + i as u32)
@@ -94,6 +97,12 @@ const SCROLLBAR_W: f32 = 5.0;
 const STEP_W: f32 = 26.0;
 const NEW_W: f32 = 58.0;
 const VIEW_W: f32 = 62.0;
+const REMOVE_W: f32 = 70.0;
+// The name field, and the ordinal caption that follows it. The field is capped
+// rather than filling, so the chart view's much wider header does not stretch a
+// name across half the panel.
+const NAME_W: f32 = 220.0;
+const ORDINAL_W: f32 = 62.0;
 const TOOL_BTN_W: f32 = 52.0;
 const ARROW_W: f32 = 30.0;
 // Visible outline rows at the default height; a longer outline scrolls.
@@ -140,6 +149,9 @@ const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 const BTN_TINT: [f32; 4] = theme::BUTTON_TINT;
 const NEW_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
 const DEL_TINT: [f32; 4] = [0.44, 0.22, 0.24, 1.0];
+// The removal chip once it is armed: hotter than its idle tint, so a chip
+// waiting on a second press does not read like one that has done nothing.
+const CONFIRM_TINT: [f32; 4] = [0.68, 0.26, 0.28, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const DROP_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
@@ -232,6 +244,10 @@ pub(crate) struct BehaviorView<'a> {
     // asserts keyboard focus this frame.
     pub editable: bool,
     pub focus: bool,
+    // Whether the name field asserts keyboard focus this frame, and whether the
+    // removal chip is waiting on the press that carries it out.
+    pub name_focus: bool,
+    pub remove_armed: bool,
     pub status: Option<&'a Status>,
     pub mouse: [f32; 2],
 }
@@ -284,6 +300,10 @@ pub(crate) enum BehaviorAction {
     Step(i32),
     // Append a blank Behavior entry and open it.
     New,
+    // Arm the open behavior's removal, or carry out an armed one.
+    Remove,
+    // Give the name field keyboard focus.
+    FocusName,
     // Select outline row `i` (an absolute index).
     Select(usize),
     // Open (or close) the selected row's palette.
@@ -364,9 +384,30 @@ pub(crate) fn new_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     [o[0] + w - PAD - NEW_W, header_y(o), NEW_W, CTRL_H]
 }
 
-pub(crate) fn view_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+// Removing the open behavior sits beside adding one, since both act on the
+// world's list rather than on anything inside a body. The toolbar's Del is a
+// different action on a different subject: it takes out one node.
+pub(crate) fn remove_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     let n = new_rect(o, w);
-    [n[0] - GAP - VIEW_W, n[1], VIEW_W, CTRL_H]
+    [n[0] - GAP - REMOVE_W, n[1], REMOVE_W, CTRL_H]
+}
+
+pub(crate) fn view_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    let r = remove_rect(o, w);
+    [r[0] - GAP - VIEW_W, r[1], VIEW_W, CTRL_H]
+}
+
+// Where the header's captions start: clear of the step buttons to their left.
+fn caption_x(o: [f32; 2]) -> f32 {
+    next_rect(o)[0] + STEP_W + GAP + 4.0
+}
+
+// The open behavior's name, typed in place. It gives up whatever the header
+// cannot spare, so a narrow panel keeps the chips rather than overrunning them.
+pub(crate) fn name_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    let left = caption_x(o);
+    let room = (view_rect(o, w)[0] - GAP - ORDINAL_W - left).max(0.0);
+    [left, header_y(o), room.min(NAME_W), CTRL_H]
 }
 
 fn tool_y(o: [f32; 2]) -> f32 {
@@ -516,6 +557,12 @@ pub(crate) fn hit_test(
         return Some(BehaviorAction::New);
     }
     if view.total > 0 {
+        if point_in(mx, my, remove_rect(o, w)) {
+            return Some(BehaviorAction::Remove);
+        }
+        if point_in(mx, my, name_rect(o, w)) {
+            return Some(BehaviorAction::FocusName);
+        }
         if point_in(mx, my, view_rect(o, w)) {
             return Some(BehaviorAction::ToggleView);
         }
@@ -667,7 +714,12 @@ fn palette_open(view: &BehaviorView) -> bool {
 
 fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     let has_any = view.total > 0;
-    let new = new_rect(o, w);
+    // The armed chip says what the next press does, so nothing is destroyed by
+    // a press that only meant to reach for it.
+    let (remove_caption, remove_tint) = match view.remove_armed && has_any {
+        true => ("Confirm", CONFIRM_TINT),
+        false => ("Remove", DEL_TINT),
+    };
     for chip in [
         Chip {
             bg: PREV_BG,
@@ -694,9 +746,17 @@ fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
             live: has_any,
         },
         Chip {
+            bg: REMOVE_BG,
+            label: REMOVE_LABEL,
+            rect: remove_rect(o, w),
+            caption: remove_caption,
+            tint: remove_tint,
+            live: has_any,
+        },
+        Chip {
             bg: NEW_BG,
             label: NEW_LABEL,
-            rect: new,
+            rect: new_rect(o, w),
             caption: "New",
             tint: NEW_TINT,
             live: true,
@@ -704,20 +764,42 @@ fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     ] {
         place_chip(world, &chip, view.mouse);
     }
-    let left = next_rect(o)[0] + STEP_W + GAP + 4.0;
-    let right = view_rect(o, w)[0];
-    let caption = if has_any {
-        format!("{} ({}/{})", view.name, view.index + 1, view.total)
-    } else {
-        "no behaviors yet -- press New".to_string()
-    };
-    let color = if has_any { theme::LABEL } else { HINT_LABEL };
+    layout_name(world, view, o, w);
+}
+
+// The open behavior's name, typed in place, with its place in the world's
+// behaviors beside it. An empty world has no name to type, so the field gives
+// way to the prompt that says what to press.
+fn layout_name(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+    let text_y = header_y(o) + CTRL_H * 0.5 - theme::TEXT_HALF;
+    if view.total == 0 {
+        widget::hide_field(world, NAME_INPUT);
+        let left = caption_x(o);
+        let budget = ((view_rect(o, w)[0] - left) / CHAR_W) as usize;
+        widget::place_left_label(
+            world,
+            NAME_LABEL,
+            [left, text_y],
+            &widget::clip_text("no behaviors yet -- press New", budget),
+            HINT_LABEL,
+            true,
+        );
+        return;
+    }
+    let field = name_rect(o, w);
+    // An idle field mirrors the entry, so a rename from anywhere else (the
+    // Assets form, an undo) shows here without the panel being reopened. While
+    // it holds the keyboard what is typed stands, or it could never be edited.
+    if !view.name_focus {
+        widget::seed_field(world, NAME_INPUT, view.name);
+    }
+    widget::show_field(world, NAME_INPUT, field, view.name_focus);
     widget::place_left_label(
         world,
         NAME_LABEL,
-        [left, header_y(o) + CTRL_H * 0.5 - theme::TEXT_HALF],
-        &widget::clip_text(&caption, ((right - left) / CHAR_W) as usize),
-        color,
+        [field[0] + field[2] + GAP, text_y],
+        &format!("{}/{}", view.index + 1, view.total),
+        HINT_LABEL,
         true,
     );
 }
@@ -1092,14 +1174,17 @@ pub(crate) fn hide_all(world: &mut World) {
     for id in all_label_ids() {
         widget::set_label_visible(world, id, false);
     }
-    widget::hide_field(world, VALUE_INPUT);
+    for id in all_field_ids() {
+        widget::hide_field(world, id);
+    }
 }
 
 // Every panel sprite id, in draw (insertion) order: chrome, then the outline
 // rows, then the scrollbar and the palette floating above them.
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![
-        PANEL_BG, CLOSE_BG, PREV_BG, NEXT_BG, VIEW_BG, NEW_BG, PICK_BG, DEL_BG, UP_BG, DOWN_BG,
+        PANEL_BG, CLOSE_BG, PREV_BG, NEXT_BG, VIEW_BG, REMOVE_BG, NEW_BG, PICK_BG, DEL_BG, UP_BG,
+        DOWN_BG,
     ];
     ids.push(INSPECT_BG);
     ids.extend((0..ROW_POOL_MAX).map(row_bg));
@@ -1118,6 +1203,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         NEXT_LABEL,
         NAME_LABEL,
         VIEW_LABEL,
+        REMOVE_LABEL,
         NEW_LABEL,
         PICK_LABEL,
         DEL_LABEL,
@@ -1151,7 +1237,7 @@ pub(crate) fn palette_ids() -> Vec<AssetId> {
 }
 
 pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![VALUE_INPUT]
+    vec![VALUE_INPUT, NAME_INPUT]
 }
 
 #[cfg(test)]
@@ -1221,6 +1307,8 @@ mod tests {
             pick_scroll: 0,
             editable: false,
             focus: false,
+            name_focus: false,
+            remove_armed: false,
             status: None,
             mouse: [0.0, 0.0],
         }
@@ -1238,6 +1326,14 @@ mod tests {
         world
             .query::<Sprite>()
             .find(|s| s.asset_id == id)
+            .cloned()
+            .unwrap()
+    }
+
+    fn field(world: &World, id: AssetId) -> TextInput {
+        world
+            .query::<TextInput>()
+            .find(|t| t.asset_id == id)
             .cloned()
             .unwrap()
     }
@@ -1270,6 +1366,33 @@ mod tests {
         assert!(pick[1] + pick[3] < row_rect(o, BEHAVIOR_W, 0)[1]);
     }
 
+    // The header packs left to right without a gap that lands on two controls
+    // at once, at the default width and at the much wider chart view alike.
+    #[test]
+    fn the_header_packs_the_name_field_and_both_asset_chips() {
+        let o = [40.0, 40.0];
+        for w in [BEHAVIOR_W, chart_size()[0], overview_size()[0]] {
+            let (name, view, remove, new) = (
+                name_rect(o, w),
+                view_rect(o, w),
+                remove_rect(o, w),
+                new_rect(o, w),
+            );
+            let mut x = next_rect(o)[0] + STEP_W;
+            for r in [name, view, remove, new] {
+                assert!(x <= r[0], "w {w}: the header packs left to right");
+                x = r[0] + r[2];
+            }
+            assert_eq!(x, o[0] + w - PAD, "w {w}: New is still pinned right");
+            assert!(
+                name[2] >= 150.0,
+                "w {w}: the name stays typable: {}",
+                name[2]
+            );
+            assert!(name[2] <= NAME_W, "w {w}: and does not sprawl");
+        }
+    }
+
     #[test]
     fn hit_test_resolves_the_header_toolbar_and_rows() {
         let rows = sample_rows();
@@ -1280,6 +1403,14 @@ mod tests {
         assert_eq!(hit(prev_rect(o)), Some(BehaviorAction::Step(-1)));
         assert_eq!(hit(next_rect(o)), Some(BehaviorAction::Step(1)));
         assert_eq!(hit(new_rect(o, BEHAVIOR_W)), Some(BehaviorAction::New));
+        assert_eq!(
+            hit(remove_rect(o, BEHAVIOR_W)),
+            Some(BehaviorAction::Remove)
+        );
+        assert_eq!(
+            hit(name_rect(o, BEHAVIOR_W)),
+            Some(BehaviorAction::FocusName)
+        );
         assert_eq!(hit(palette_rect(o)), Some(BehaviorAction::Palette));
         assert_eq!(hit(delete_rect(o)), Some(BehaviorAction::Delete));
         assert_eq!(hit(up_rect(o)), Some(BehaviorAction::Move(-1)));
@@ -1365,6 +1496,13 @@ mod tests {
             Some(BehaviorAction::Consume),
             "with nothing open the step buttons do nothing"
         );
+        // Removing and renaming need something open, so both stand down too.
+        for r in [remove_rect(o, BEHAVIOR_W), name_rect(o, BEHAVIOR_W)] {
+            assert_eq!(
+                hit_test(&v, r[0] + 3.0, r[1] + 3.0, o, s),
+                Some(BehaviorAction::Consume)
+            );
+        }
         let n = new_rect(o, BEHAVIOR_W);
         assert_eq!(
             hit_test(&v, n[0] + 3.0, n[1] + 3.0, o, s),
@@ -1376,7 +1514,63 @@ mod tests {
             label(&world, NAME_LABEL).content,
             "no behaviors yet -- press New"
         );
+        assert!(!field(&world, NAME_INPUT).visible, "and no name to type");
         assert!(!sprite(&world, row_bg(0)).visible, "no outline to draw");
+    }
+
+    // The name is a field, not a caption: it shows what the world holds while it
+    // is idle, and stands still while it is being typed into.
+    #[test]
+    fn the_name_field_mirrors_the_open_behavior_unless_it_is_focused() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let (o, s) = ([20.0, 20.0], size());
+        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        let f = field(&world, NAME_INPUT);
+        assert!(f.visible && !f.focused);
+        assert_eq!(f.content, "chase");
+        assert_eq!(label(&world, NAME_LABEL).content, "1/1");
+
+        widget::seed_field(&mut world, NAME_INPUT, "half typed");
+        let typing = BehaviorView {
+            name_focus: true,
+            ..view(&rows, &[])
+        };
+        apply(&mut world, Some(&typing), o, s);
+        let f = field(&world, NAME_INPUT);
+        assert!(
+            f.focused,
+            "the field keeps the keyboard while it is typed into"
+        );
+        assert_eq!(f.content, "half typed", "and what is typed stands");
+
+        // Losing focus puts the world's own name back in front of the user.
+        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        assert_eq!(field(&world, NAME_INPUT).content, "chase");
+    }
+
+    // Removing a behavior destroys an authored asset, so the chip says what the
+    // next press does before it does it.
+    #[test]
+    fn the_removal_chip_arms_before_it_commits() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let (o, s) = ([20.0, 20.0], size());
+        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        assert_eq!(label(&world, REMOVE_LABEL).content, "Remove");
+        let idle = sprite(&world, REMOVE_BG).tint;
+
+        let armed = BehaviorView {
+            remove_armed: true,
+            ..view(&rows, &[])
+        };
+        apply(&mut world, Some(&armed), o, s);
+        assert_eq!(label(&world, REMOVE_LABEL).content, "Confirm");
+        assert_ne!(
+            sprite(&world, REMOVE_BG).tint,
+            idle,
+            "an armed chip does not read like an idle one"
+        );
     }
 
     #[test]
@@ -1390,7 +1584,7 @@ mod tests {
         let o = [20.0, 20.0];
         apply(&mut world, Some(&v), o, size());
         assert_eq!(label(&world, TITLE_LABEL).content, "Behavior");
-        assert_eq!(label(&world, NAME_LABEL).content, "chase (1/1)");
+        assert_eq!(label(&world, NAME_LABEL).content, "1/1");
         let first = label(&world, row_label(0));
         assert!(first.visible && first.content == "on");
         assert_eq!(label(&world, row_value(0)).content, "tick");

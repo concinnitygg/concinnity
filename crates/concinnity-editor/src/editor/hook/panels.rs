@@ -810,6 +810,8 @@ impl Panel for BehaviorPanel {
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.behavior_open = false;
         hook.behavior_focus = false;
+        hook.behavior_name_focus = false;
+        hook.behavior_remove_armed = false;
         hook.behavior_picking = false;
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -829,10 +831,10 @@ impl Panel for BehaviorPanel {
         behavior_panel::all_label_ids()
     }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        behavior_panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, "value"))
-            .collect()
+        vec![
+            (behavior_panel::VALUE_INPUT, "value"),
+            (behavior_panel::NAME_INPUT, "name"),
+        ]
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
         let mut ids = behavior_panel::status_ids();
