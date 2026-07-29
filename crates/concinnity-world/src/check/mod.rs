@@ -13,6 +13,7 @@ pub mod anim_graph;
 pub(crate) mod asset_refs;
 pub mod behavior;
 pub mod cross_reference;
+pub mod fault;
 pub mod instanced_prop;
 pub mod prop;
 pub mod sdf_volume;

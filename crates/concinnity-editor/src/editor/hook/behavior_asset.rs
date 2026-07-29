@@ -74,7 +74,7 @@ impl EditorHook {
         };
         let typed = widget::field_text(world, behavior_panel::NAME_INPUT);
         if typed.trim().is_empty() {
-            self.behavior_status = Some(Status::Error("a behavior needs a name".to_string()));
+            self.behavior_status = Some(Status::message("a behavior needs a name"));
             self.blur_behavior_name(world);
             return;
         }

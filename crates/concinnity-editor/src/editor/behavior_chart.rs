@@ -86,6 +86,7 @@ const ASSET_TINT: [f32; 4] = [0.22, 0.19, 0.36, 1.0];
 const MISSING_TINT: [f32; 4] = [0.32, 0.14, 0.17, 1.0];
 const BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
 const SELECTED_BORDER: [f32; 4] = [0.55, 0.70, 0.98, 1.0];
+const FAULT_BORDER: [f32; 4] = [0.85, 0.42, 0.45, 1.0];
 const HOVER_BORDER: [f32; 4] = [0.44, 0.48, 0.60, 1.0];
 const WIRE_TINT: [f32; 4] = [0.38, 0.41, 0.52, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
@@ -95,6 +96,8 @@ pub(crate) struct ChartView<'a> {
     pub chart: &'a Chart,
     // The card the panel's selection lights up, if any.
     pub selected: Option<usize>,
+    // The card the checker's complaint is about, if any.
+    pub faulted: Option<usize>,
     pub pan: [f32; 2],
     pub mouse: [f32; 2],
     // What to do about the cards that did not fit, which depends on what the
@@ -205,8 +208,13 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
             continue;
         };
         let selected = view.selected == Some(slot);
+        let faulted = view.faulted == Some(slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        let border = if selected {
+        // What is wrong outranks what is selected: the selection is legible from
+        // the inspector beside the chart, a complaint is only legible here.
+        let border = if faulted {
+            FAULT_BORDER
+        } else if selected {
             SELECTED_BORDER
         } else if hovered {
             HOVER_BORDER
@@ -219,7 +227,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
             part,
             fill(card.kind),
             border,
-            if selected { 2.0 } else { 1.0 },
+            if selected || faulted { 2.0 } else { 1.0 },
         );
         // Text is placed only in a card still showing its left edge and its full
         // height, so a half-scrolled card truncates cleanly instead of drawing
@@ -485,6 +493,7 @@ mod tests {
             overflow: "nodes -- open the outline to reach them",
             chart,
             selected: None,
+            faulted: None,
             pan,
             mouse: [-1.0, -1.0],
         }

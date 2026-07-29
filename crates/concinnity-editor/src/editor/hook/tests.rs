@@ -4331,7 +4331,7 @@ fn behavior_status_reports_the_checkers_message() {
         "broken",
         serde_json::json!({"do": [{"despawn": {"target": {"bind": "nope"}}}]}),
     )]);
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected an error status, got {:?}", h.behavior_status);
     };
     assert!(e.contains("unbound name 'nope'"), "{e}");
@@ -4351,7 +4351,7 @@ fn behavior_status_enforces_the_declared_variable_table() {
             serde_json::json!({"do": [{"set": {"var": "helth", "value": {"float": 1.0}}}]}),
         ),
     ]);
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected an error status, got {:?}", h.behavior_status);
     };
     assert!(e.contains("undeclared variable 'helth'"), "{e}");
@@ -4381,7 +4381,7 @@ fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
         "the edited body runs in the live world straight away"
     );
     // A world-scoped `self` is exactly what the checker objects to, and it says so.
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected the scope error");
     };
     assert!(e.contains("`self` needs a `scope`"), "{e}");
@@ -4444,7 +4444,7 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
         serde_json::json!(2.5),
         "a rejected value leaves the old one standing"
     );
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected a parse error");
     };
     assert!(e.contains("'soon' is not a number"), "{e}");
@@ -4618,7 +4618,7 @@ fn behavior_rename_refuses_a_blank_name() {
 
     assert_eq!(h.behavior_data().name, "greet", "nothing was written");
     assert!(!h.dirty, "and no edit was recorded");
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected the panel to say why, got {:?}", h.behavior_status);
     };
     assert!(e.contains("needs a name"), "{e}");
@@ -4641,7 +4641,7 @@ fn behavior_rename_reruns_the_checker_under_the_new_name() {
     type_name(&mut world, "still_broken");
     h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
 
-    let Some(Status::Error(e)) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected the error to survive the rename");
     };
     assert!(e.starts_with("Behavior 'still_broken'"), "{e}");
@@ -5445,4 +5445,141 @@ fn behavior_tab_does_nothing_while_the_palette_is_open() {
     assert_eq!(h.behavior_mode, ViewMode::Outline);
     assert!(h.behavior_picking, "the palette is still up");
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
+}
+
+// The checker says where, so the panel can point at it. A complaint about a
+// field lands on that field's row rather than leaving the author to find it.
+#[test]
+fn behavior_status_points_at_the_row_the_checker_named() {
+    let (h, _world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [
+            {"save": {}},
+            {"hide": {"target": {"int": 1}}},
+        ]}),
+    )]);
+    let data = h.behavior_data();
+    let view = h.make_behavior_view(&data, [0.0, 0.0]);
+    assert!(
+        view.status
+            .and_then(behavior_panel::Status::error)
+            .is_some(),
+        "an entity field holding an int does not check out"
+    );
+    let row = view.fault_row.expect("the checker located it");
+    assert_eq!(data.rows[row].label, "target");
+    assert_eq!(
+        data.rows[row].path,
+        vec![
+            crate::editor::behavior::path::field("do"),
+            crate::editor::behavior::path::Step::Index(1),
+            crate::editor::behavior::path::field("hide"),
+            crate::editor::behavior::path::field("target"),
+        ],
+    );
+}
+
+// A rule about the asset as a whole has no one row to blame, so the banner says
+// so and stays unclickable rather than sending the author somewhere arbitrary.
+#[test]
+fn behavior_status_with_nothing_to_blame_points_nowhere() {
+    let (h, _world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}]}),
+    )]);
+    let data = h.behavior_data();
+    assert!(h.make_behavior_view(&data, [0.0, 0.0]).status == Some(&behavior_panel::Status::Ok));
+
+    let (h, _world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "spawned", "do": []}),
+    )]);
+    let data = h.behavior_data();
+    let view = h.make_behavior_view(&data, [0.0, 0.0]);
+    assert!(
+        view.status
+            .and_then(behavior_panel::Status::error)
+            .is_some()
+    );
+    // `on` is what the complaint blames, and the outline has a row for it.
+    let row = view.fault_row.expect("the source row");
+    assert_eq!(data.rows[row].label, "on");
+}
+
+// Going to the fault selects its row, which is what brings an off-screen one
+// into view through the existing scroll and pan.
+#[test]
+fn behavior_go_to_fault_selects_the_faulting_row() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [
+            {"save": {}},
+            {"hide": {"target": {"int": 1}}},
+        ]}),
+    )]);
+    assert_eq!(h.behavior_row, None);
+    h.apply_behavior_action(BehaviorAction::GoToFault, &mut world, [0.0, 0.0]);
+    let row = h.behavior_row.expect("the fault was selected");
+    assert_eq!(h.behavior_rows()[row].label, "target");
+}
+
+// The overview maps the world rather than one body, so going to a fault steps to
+// the view that can show it.
+#[test]
+fn behavior_go_to_fault_leaves_the_overview_for_the_body() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"hide": {"target": {"int": 1}}}]}),
+    )]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    assert_eq!(h.behavior_mode, ViewMode::Overview);
+
+    h.apply_behavior_action(BehaviorAction::GoToFault, &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_mode, ViewMode::Chart);
+    let row = h.behavior_row.expect("the fault was selected");
+    assert_eq!(h.behavior_rows()[row].label, "target");
+}
+
+// The location is kept as a path rather than a row index, so a verdict left
+// standing while the args change under it (the one path that does not re-check --
+// a history jump) degrades to an ancestor of the fault instead of confidently
+// marking whatever row has taken that index.
+#[test]
+fn a_stale_behavior_fault_never_points_off_its_own_path() {
+    let (mut h, _world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"hide": {"target": {"int": 1}}}]}),
+    )]);
+    let located = {
+        let data = h.behavior_data();
+        let row = h.make_behavior_view(&data, [0.0, 0.0]).fault_row.unwrap();
+        data.rows[row].path.clone()
+    };
+
+    // Grow the body ahead of the bad node without re-running the checker, so the
+    // stored location now addresses a place the args no longer hold.
+    let mut args = open_args(&h);
+    args["do"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, serde_json::json!({"save": {}}));
+    let idx = h.behavior_entry().unwrap();
+    h.entries[idx]
+        .as_object_mut()
+        .unwrap()
+        .insert("args".to_string(), args);
+
+    let data = h.behavior_data();
+    let row = h.make_behavior_view(&data, [0.0, 0.0]).fault_row;
+    let path = row.map(|i| data.rows[i].path.clone()).unwrap_or_default();
+    assert!(
+        crate::editor::behavior::path::starts_with(&located, &path),
+        "pointed at {path:?}, which is not on the way to {located:?}",
+    );
+    assert_ne!(
+        path, located,
+        "the exact spot is gone, so it settled for less"
+    );
 }

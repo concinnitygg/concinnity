@@ -9,7 +9,7 @@ pub(crate) mod environment_map;
 pub(crate) mod mesh;
 pub(crate) mod texture;
 
-pub use concinnity_world::check::{behavior, cross_reference, report_validation_errors};
+pub use concinnity_world::check::{behavior, cross_reference, fault, report_validation_errors};
 
 use crate::world::WorldJsonlAsset;
 

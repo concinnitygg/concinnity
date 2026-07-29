@@ -23,6 +23,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::editor::behavior::edit::{self, Pick};
+use crate::editor::behavior::fault;
 use crate::editor::behavior::fields;
 use crate::editor::behavior::graph::{self, Chart};
 use crate::editor::behavior::navigate;
@@ -201,6 +202,10 @@ impl EditorHook {
             name_focus: self.behavior_name_focus
                 && self.panel_order.last() == Some(&PanelKey::Behavior),
             remove_armed: self.behavior_remove_armed,
+            fault_row: self
+                .behavior_status
+                .as_ref()
+                .and_then(|s| fault::row_of(&data.rows, s.at())),
             status: self.behavior_status.as_ref(),
             mouse,
         }
@@ -241,7 +246,12 @@ impl EditorHook {
                 vars.as_ref(),
             ) {
                 Ok(()) => Status::Ok,
-                Err(e) => Status::Error(e.lines().next().unwrap_or(&e).to_string()),
+                // The banner is two lines, so it carries the checker's first
+                // one; where the complaint is about survives whole.
+                Err(e) => Status::Error {
+                    message: e.message.lines().next().unwrap_or(&e.message).to_string(),
+                    at: fault::to_path(&e.at),
+                },
             },
         );
     }
@@ -311,6 +321,7 @@ impl EditorHook {
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
+            BehaviorAction::GoToFault => self.select_behavior_fault(world),
             BehaviorAction::Consume => self.behavior_focus = false,
         }
     }
@@ -421,7 +432,7 @@ impl EditorHook {
         let mut args = self.behavior_args();
         match edit::apply_text(&mut args, &row, &text) {
             Ok(()) => self.commit_behavior(args, world),
-            Err(e) => self.behavior_status = Some(Status::Error(e)),
+            Err(e) => self.behavior_status = Some(Status::message(e)),
         }
     }
 
@@ -462,6 +473,27 @@ impl EditorHook {
         self.behavior_mode = ViewMode::Chart;
         self.behavior_pan = [0.0, 0.0];
         self.open_behavior(world);
+    }
+
+    // Go to what the checker is complaining about. The overview maps the world
+    // rather than the open behavior's body, so it steps to the chart on the way:
+    // a complaint is about a place inside one behavior, and the chart is the view
+    // that shows one.
+    fn select_behavior_fault(&mut self, world: &mut World) {
+        let data = self.behavior_data();
+        let Some(row) = self
+            .behavior_status
+            .as_ref()
+            .and_then(|s| fault::row_of(&data.rows, s.at()))
+        else {
+            return;
+        };
+        if self.behavior_mode == ViewMode::Overview {
+            self.behavior_mode = ViewMode::Chart;
+            self.behavior_pan = [0.0, 0.0];
+        }
+        self.select_behavior_row(row, world);
+        self.ensure_behavior_visible();
     }
 
     // Select the row the card at `i` stands for. Cards cover the body and the

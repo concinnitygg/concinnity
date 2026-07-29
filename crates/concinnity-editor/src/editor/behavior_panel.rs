@@ -15,8 +15,10 @@
 // `hook/behavior_edit.rs` owns the actions.
 
 use super::behavior::edit::{self, Pick};
+use super::behavior::fields;
 use super::behavior::graph::Chart;
 use super::behavior::outline::{Kind, Row};
+use super::behavior::path::{Path, Step};
 use super::behavior_chart;
 use super::registry::{self, PanelKey};
 use super::theme;
@@ -201,16 +203,38 @@ impl ViewMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Status {
     Ok,
-    Error(String),
+    Error {
+        message: String,
+        // Where in the args the complaint is about, as the checker addressed it.
+        // Empty when nothing narrower than the asset is to blame. Kept as the
+        // path rather than a row, so it still resolves after an edit moves rows
+        // around under it.
+        at: Path,
+    },
 }
 
 impl Status {
+    // A complaint with nowhere in particular to point.
+    pub(crate) fn message(text: impl Into<String>) -> Status {
+        Status::Error {
+            message: text.into(),
+            at: Path::new(),
+        }
+    }
+
     // What the panel shows. A behavior that checks out says nothing, so the
     // banner appears only when something is wrong with it.
     pub(crate) fn error(&self) -> Option<&str> {
         match self {
             Self::Ok => None,
-            Self::Error(e) => Some(e),
+            Self::Error { message, .. } => Some(message),
+        }
+    }
+
+    pub(crate) fn at(&self) -> &[Step] {
+        match self {
+            Self::Ok => &[],
+            Self::Error { at, .. } => at,
         }
     }
 }
@@ -254,6 +278,10 @@ pub(crate) struct BehaviorView<'a> {
     pub name_focus: bool,
     pub remove_armed: bool,
     pub status: Option<&'a Status>,
+    // The row the checker's complaint is about, resolved against the rows on
+    // screen. Marked wherever it shows rather than jumped to, so a check running
+    // after every edit never moves the body under the author.
+    pub fault_row: Option<usize>,
     pub mouse: [f32; 2],
 }
 
@@ -331,6 +359,8 @@ pub(crate) enum BehaviorAction {
     OpenCard(usize),
     // Press on empty canvas: start panning the chart.
     PanStart,
+    // Select whatever the checker is complaining about.
+    GoToFault,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -562,6 +592,15 @@ pub(crate) fn hit_test(
         return Some(BehaviorAction::New);
     }
     if view.total > 0 {
+        // The banner floats over the foot of the body, so it answers before
+        // whatever it covers. Pressing it goes to what it is complaining about,
+        // which is the only way to reach a fault that is off screen.
+        if view.fault_row.is_some()
+            && view.status.and_then(Status::error).is_some()
+            && point_in(mx, my, status_rect(o, s))
+        {
+            return Some(BehaviorAction::GoToFault);
+        }
         if point_in(mx, my, remove_rect(o, w)) {
             return Some(BehaviorAction::Remove);
         }
@@ -700,6 +739,16 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
         selected: match view.mode {
             ViewMode::Overview => view.overview_card,
             _ => view.card,
+        },
+        // The card that settles the faulting row, so a complaint about a field
+        // lights the node carrying it. The overview draws whole behaviors, not
+        // places inside one, so it has nothing to point at.
+        faulted: match view.mode {
+            ViewMode::Overview => None,
+            _ => view
+                .fault_row
+                .and_then(|i| view.rows.get(i))
+                .and_then(|r| fields::owning_card(&view.chart.cards, &r.path)),
         },
         pan: view.pan,
         mouse: view.mouse,
@@ -964,13 +1013,16 @@ fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2],
         } else {
             ROW_TINT
         };
-        place_rounded(
+        // The fault is a border rather than a tint, so it says nothing about
+        // whether the row is also the selected one.
+        let faulted = view.fault_row == Some(i);
+        widget::place_bordered(
             world,
             row_bg(slot),
             theme::highlight_rect(r),
             tint,
-            theme::CONTROL_RADIUS,
-            true,
+            ERROR_BORDER,
+            if faulted { 1.0 } else { 0.0 },
         );
         let text_y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
         widget::place_left_label(
@@ -1316,6 +1368,7 @@ mod tests {
             name_focus: false,
             remove_armed: false,
             status: None,
+            fault_row: None,
             mouse: [0.0, 0.0],
         }
     }
@@ -1636,6 +1689,96 @@ mod tests {
         assert!(!label(&world, pick_label(0)).visible);
     }
 
+    // A complaint the checker located is drawn where it is about: the outline row
+    // takes a border (a border, so it says nothing about the selection) and the
+    // chart lights the card that settles that row.
+    #[test]
+    fn a_located_fault_marks_the_row_and_the_card_it_is_about() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let target = rows
+            .iter()
+            .position(|r| r.label == "target")
+            .expect("the hide node's target row");
+
+        apply(
+            &mut world,
+            Some(&BehaviorView {
+                fault_row: Some(target),
+                ..view(&rows, &[])
+            }),
+            [20.0, 20.0],
+            size(),
+        );
+        assert_eq!(sprite(&world, row_bg(target)).border_width, 1.0);
+        assert_eq!(
+            sprite(&world, row_bg(target)).border_color,
+            ERROR_BORDER,
+            "the faulting row is bordered, not tinted"
+        );
+        let other = (0..rows.len()).find(|i| *i != target).expect("another row");
+        assert_eq!(
+            sprite(&world, row_bg(other)).border_width,
+            0.0,
+            "a row with nothing wrong carries no border"
+        );
+
+        // In the chart the same fault lights the node that carries the field.
+        apply(
+            &mut world,
+            Some(&BehaviorView {
+                mode: ViewMode::Chart,
+                fault_row: Some(target),
+                ..view(&rows, &[])
+            }),
+            [20.0, 20.0],
+            chart_size(),
+        );
+        let card =
+            crate::editor::behavior::fields::owning_card(&sample_chart().cards, &rows[target].path)
+                .expect("a card settles the target row");
+        assert_eq!(
+            sprite(&world, behavior_chart::card_bg(card)).border_width,
+            2.0,
+            "nothing is selected, so only the fault can have widened it"
+        );
+    }
+
+    // The banner covers the foot of the body, so it has to answer before the rows
+    // under it -- and only when there is somewhere to go.
+    #[test]
+    fn pressing_the_banner_goes_to_what_it_is_complaining_about() {
+        let rows = sample_rows();
+        let o = [20.0, 20.0];
+        let s = size();
+        let b = status_rect(o, s);
+        let (mx, my) = (b[0] + 4.0, b[1] + 4.0);
+
+        let complaining = BehaviorView {
+            status: Some(&Status::message("Behavior 'x': reads unbound name 'q'")),
+            fault_row: Some(2),
+            ..view(&rows, &[])
+        };
+        assert_eq!(
+            hit_test(&complaining, mx, my, o, s),
+            Some(BehaviorAction::GoToFault),
+        );
+        // A complaint with nowhere to point leaves the press to the body.
+        let unplaced = BehaviorView {
+            status: Some(&Status::message("a behavior needs a name")),
+            ..view(&rows, &[])
+        };
+        assert_ne!(
+            hit_test(&unplaced, mx, my, o, s),
+            Some(BehaviorAction::GoToFault),
+        );
+        // And so does a behavior that checks out.
+        assert_ne!(
+            hit_test(&view(&rows, &[]), mx, my, o, s),
+            Some(BehaviorAction::GoToFault),
+        );
+    }
+
     // The map keeps a selection of its own, because its cards stand for whole
     // behaviors rather than for rows of the open one. Without it a step through
     // the map would move nothing anyone can see.
@@ -1750,7 +1893,7 @@ mod tests {
     fn only_a_failing_check_draws_a_banner() {
         let mut world = injected_world();
         let rows = sample_rows();
-        let error = Status::Error("Behavior 'x': reads unbound name 'q'".to_string());
+        let error = Status::message("Behavior 'x': reads unbound name 'q'");
         let v = BehaviorView {
             status: Some(&error),
             ..view(&rows, &[])

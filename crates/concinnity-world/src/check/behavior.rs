@@ -8,9 +8,15 @@
 // that declares none keeps them implicit and integer-typed, so `check` is given
 // the declared table (empty when there is none) and `check_world` enforces that
 // a declared table accounts for every name a behavior uses.
+//
+// Every complaint carries where it was found (`check::fault`): the walk attaches
+// the hop it descended through as the error unwinds, so a caller holding the
+// authored JSON can address the value at fault. A build reports the message
+// alone, which is why the string-returning entry points are unchanged.
 
 use serde_json::Value;
 
+use crate::check::fault::{Fault, Locate, Step, field};
 use crate::registry::ComponentType;
 
 // What an expression produces. Entity values are opaque handles: they compare
@@ -121,13 +127,17 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
 /// `None` when the world declares none, which leaves every variable implicit
 /// and integer-typed. Cross-asset name resolution is not covered here; that is
 /// the `CrossReferenced` pass over the whole world.
+///
+/// The [Fault](crate::check::fault::Fault) says where in `args` the problem is,
+/// for callers that can show the author the spot; its `message` is the same text
+/// a build reports.
 pub fn check_with_variables(
     name: &str,
     args: &Value,
     variables: Option<&Value>,
-) -> Result<(), String> {
+) -> Result<(), Fault> {
     let declared = variables.map(DeclaredVars::from_args).unwrap_or_default();
-    check_with_vars(name, args, &declared)
+    locate(name, args, &declared)
 }
 
 // The world's `Variables` asset: every declaration needs a name and a typed
@@ -154,60 +164,75 @@ pub(crate) fn check_variables(name: &str, args: &Value) -> Result<(), String> {
 }
 
 pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), String> {
-    let err = |detail: String| format!("Behavior '{name}': {detail}");
+    locate(name, args, vars).map_err(|f| f.message)
+}
 
+// Every complaint reads "Behavior '<name>': ..." whoever asked, so the asset's
+// own label is attached once here rather than at each of the returns below.
+fn locate(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
+    body(args, vars).map_err(|f| f.about(&format!("Behavior '{name}':")))
+}
+
+fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
     let scope_names = str_array(args, "scope");
     for component in &scope_names {
         if ComponentType::parse(component).is_none() {
-            return Err(err(format!(
-                "`scope` names unknown component '{component}'"
-            )));
+            return Err(
+                Fault::new(format!("`scope` names unknown component '{component}'"))
+                    .within(field("scope")),
+            );
         }
     }
     let entity_scoped = !scope_names.is_empty();
 
     let mut locals: Vec<(&str, Ty)> = Vec::new();
     for (i, decl) in array(args, "locals").iter().enumerate() {
+        let at = |f: Fault| f.within(Step::Index(i)).within(field("locals"));
         let local_name = decl.get("name").and_then(|v| v.as_str()).unwrap_or("");
         if local_name.is_empty() {
-            return Err(err(format!("local #{i} has no `name`")));
+            return Err(at(Fault::new(format!("local #{i} has no `name`"))));
         }
         if locals.iter().any(|(n, _)| *n == local_name) {
-            return Err(err(format!("duplicate local '{local_name}'")));
+            return Err(at(Fault::new(format!("duplicate local '{local_name}'"))));
         }
         let Some(ty) = decl.get("value").and_then(literal_ty) else {
-            return Err(err(format!(
+            return Err(at(Fault::new(format!(
                 "local '{local_name}' needs a typed `value` (bool, int, float, or vec3)"
-            )));
+            ))
+            .within(field("value"))));
         };
         locals.push((local_name, ty));
     }
     if !entity_scoped && !locals.is_empty() {
-        return Err(err(
-            "`locals` need a `scope`: a world-scoped behavior has no entity to hold them".into(),
-        ));
+        return Err(Fault::new(
+            "`locals` need a `scope`: a world-scoped behavior has no entity to hold them",
+        )
+        .within(field("locals")));
     }
 
     let mut queries: Vec<&str> = Vec::new();
     for (i, decl) in array(args, "queries").iter().enumerate() {
+        let at = |f: Fault| f.within(Step::Index(i)).within(field("queries"));
         let query_name = decl.get("name").and_then(|v| v.as_str()).unwrap_or("");
         if query_name.is_empty() {
-            return Err(err(format!("query #{i} has no `name`")));
+            return Err(at(Fault::new(format!("query #{i} has no `name`"))));
         }
         if queries.contains(&query_name) {
-            return Err(err(format!("duplicate query '{query_name}'")));
+            return Err(at(Fault::new(format!("duplicate query '{query_name}'"))));
         }
         let has = str_array(decl, "has");
         if has.is_empty() {
-            return Err(err(format!(
+            return Err(at(Fault::new(format!(
                 "query '{query_name}' needs at least one component in `has`"
-            )));
+            ))
+            .within(field("has"))));
         }
         for component in &has {
             if ComponentType::parse(component).is_none() {
-                return Err(err(format!(
+                return Err(at(Fault::new(format!(
                     "query '{query_name}' names unknown component '{component}'"
-                )));
+                ))
+                .within(field("has"))));
             }
         }
         queries.push(query_name);
@@ -217,17 +242,20 @@ pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> 
     if let Some(watched) = args.get("on").and_then(|v| v.get("variable")) {
         let watched = watched.as_str().unwrap_or("");
         if scope_ty(vars, watched).is_none() {
-            return Err(err(format!(
+            return Err(Fault::new(format!(
                 "`variable` source watches undeclared variable '{watched}'; add it to the \
                  world's Variables"
-            )));
+            ))
+            .within(field("variable"))
+            .within(field("on")));
         }
     }
 
     if source_is(args, "spawned") && !entity_scoped {
-        return Err(err(
-            "`spawned` source needs a `scope`: it fires on the entity that spawned".into(),
-        ));
+        return Err(Fault::new(
+            "`spawned` source needs a `scope`: it fires on the entity that spawned",
+        )
+        .within(field("on")));
     }
 
     let mut scope = Scope {
@@ -237,70 +265,87 @@ pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> 
         bindings: Vec::new(),
         vars,
     };
-    check_nodes(args.get("do"), &mut scope).map_err(err)
+    check_nodes(args.get("do"), &mut scope).at_field("do")
 }
 
-fn check_nodes<'a>(nodes: Option<&'a Value>, scope: &mut Scope<'a>) -> Result<(), String> {
+fn check_nodes<'a>(nodes: Option<&'a Value>, scope: &mut Scope<'a>) -> Result<(), Fault> {
     let nodes = nodes.and_then(|v| v.as_array()).map(|a| a.as_slice());
     let depth = scope.bindings.len();
-    for node in nodes.unwrap_or(&[]) {
-        check_node(node, scope)?;
+    for (i, node) in nodes.unwrap_or(&[]).iter().enumerate() {
+        check_node(node, scope).at_index(i)?;
     }
     // Bindings introduced by this list fall out of scope with it.
     scope.bindings.truncate(depth);
     Ok(())
 }
 
-fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), String> {
+fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), Fault> {
     let Some((verb, body)) = single_key(node) else {
-        return Err("a node must be a single-key object".into());
+        return Err(Fault::new("a node must be a single-key object"));
     };
+    // A node's settings live under its verb, so that key is the hop into it.
+    // An unrecognized verb is located under itself too, which addresses nothing
+    // in particular -- resolving a location falls back to the nearest place that
+    // does, which is the node.
+    check_verb(verb, body, scope).at_field(verb)
+}
+
+fn check_verb<'a>(verb: &str, body: &'a Value, scope: &mut Scope<'a>) -> Result<(), Fault> {
     match verb {
         "if" => {
-            expect(body.get("cond"), Ty::Bool, "`if` condition", scope)?;
-            check_nodes(body.get("then"), scope)?;
-            check_nodes(body.get("else"), scope)?;
+            expect(body.get("cond"), Ty::Bool, "`if` condition", scope).at_field("cond")?;
+            check_nodes(body.get("then"), scope).at_field("then")?;
+            check_nodes(body.get("else"), scope).at_field("else")?;
         }
         "for_each" => {
             let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("");
             if !scope.has_query(query) {
-                return Err(format!("`for_each` names undeclared query '{query}'"));
+                return Err(
+                    Fault::new(format!("`for_each` names undeclared query '{query}'"))
+                        .within(field("query")),
+                );
             }
             let bind = body.get("bind").and_then(|v| v.as_str()).unwrap_or("");
             if bind.is_empty() {
-                return Err("`for_each` requires a `bind` name".into());
+                return Err(Fault::new("`for_each` requires a `bind` name").within(field("bind")));
             }
             let depth = scope.bindings.len();
             scope.bindings.push((bind, Ty::Entity));
-            check_nodes(body.get("do"), scope)?;
+            check_nodes(body.get("do"), scope).at_field("do")?;
             scope.bindings.truncate(depth);
         }
         "let" => {
             let bind = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if bind.is_empty() {
-                return Err("`let` requires a `name`".into());
+                return Err(Fault::new("`let` requires a `name`").within(field("name")));
             }
-            let ty = expr_ty(body.get("value"), scope).map_err(|e| format!("`let` {e}"))?;
+            let ty = expr_ty(body.get("value"), scope)
+                .map_err(|f| f.about("`let`"))
+                .at_field("value")?;
             scope.bindings.push((bind, ty));
         }
         "set" => {
             let var = body.get("var").and_then(|v| v.as_str()).unwrap_or("");
             if var.is_empty() {
-                return Err("`set` requires a variable `var`".into());
+                return Err(Fault::new("`set` requires a variable `var`").within(field("var")));
             }
             let Some(ty) = scope.vars.ty(var) else {
-                return Err(format!(
+                return Err(Fault::new(format!(
                     "`set` writes undeclared variable '{var}'; add it to the world's Variables"
-                ));
+                ))
+                .within(field("var")));
             };
-            expect(body.get("value"), ty, "`set` value", scope)?;
+            expect(body.get("value"), ty, "`set` value", scope).at_field("value")?;
         }
         "set_local" => {
             let local = body.get("local").and_then(|v| v.as_str()).unwrap_or("");
             let Some(ty) = scope.local(local) else {
-                return Err(format!("`set_local` names undeclared local '{local}'"));
+                return Err(
+                    Fault::new(format!("`set_local` names undeclared local '{local}'"))
+                        .within(field("local")),
+                );
             };
-            expect(body.get("value"), ty, "`set_local` value", scope)?;
+            expect(body.get("value"), ty, "`set_local` value", scope).at_field("value")?;
         }
         "set_transform" => {
             expect(
@@ -308,22 +353,24 @@ fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), String> 
                 Ty::Entity,
                 "`set_transform` entity",
                 scope,
-            )?;
-            for field in ["position", "rotation_deg", "scale"] {
-                if body.get(field).is_some_and(|v| !v.is_null()) {
+            )
+            .at_field("entity")?;
+            for part in ["position", "rotation_deg", "scale"] {
+                if body.get(part).is_some_and(|v| !v.is_null()) {
                     expect(
-                        body.get(field),
+                        body.get(part),
                         Ty::Vec3,
-                        &format!("`set_transform` {field}"),
+                        &format!("`set_transform` {part}"),
                         scope,
-                    )?;
+                    )
+                    .at_field(part)?;
                 }
             }
         }
         "spawn" => {
             if let Some(bind) = body.get("bind").and_then(|v| v.as_str()) {
                 if bind.is_empty() {
-                    return Err("`spawn` `bind` cannot be empty".into());
+                    return Err(Fault::new("`spawn` `bind` cannot be empty").within(field("bind")));
                 }
                 scope.bindings.push((bind, Ty::Entity));
             }
@@ -334,16 +381,18 @@ fn check_node<'a>(node: &'a Value, scope: &mut Scope<'a>) -> Result<(), String> 
                 Ty::Entity,
                 &format!("`{verb}` target"),
                 scope,
-            )?;
+            )
+            .at_field("target")?;
         }
         "reparent" => {
-            expect(body.get("child"), Ty::Entity, "`reparent` child", scope)?;
+            expect(body.get("child"), Ty::Entity, "`reparent` child", scope).at_field("child")?;
             if body.get("parent").is_some_and(|v| !v.is_null()) {
-                expect(body.get("parent"), Ty::Entity, "`reparent` parent", scope)?;
+                expect(body.get("parent"), Ty::Entity, "`reparent` parent", scope)
+                    .at_field("parent")?;
             }
         }
         "sound" | "scene" | "screen" | "story" | "save" => {}
-        other => return Err(format!("unknown node `{other}`")),
+        other => return Err(Fault::new(format!("unknown node `{other}`"))),
     }
     Ok(())
 }
@@ -357,33 +406,37 @@ fn scope_ty(vars: &DeclaredVars, name: &str) -> Option<Ty> {
 }
 
 // Check an expression against an expected type.
-fn expect(expr: Option<&Value>, want: Ty, what: &str, scope: &Scope<'_>) -> Result<(), String> {
-    let got = expr_ty(expr, scope).map_err(|e| format!("{what} {e}"))?;
+fn expect(expr: Option<&Value>, want: Ty, what: &str, scope: &Scope<'_>) -> Result<(), Fault> {
+    let got = expr_ty(expr, scope).map_err(|f| f.about(what))?;
     if got != want {
-        return Err(format!(
+        return Err(Fault::new(format!(
             "{what} must be {}, found {}",
             want.name(),
             got.name()
-        ));
+        )));
     }
     Ok(())
 }
 
-fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
+fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, Fault> {
     let Some(expr) = expr else {
-        return Err("is missing".into());
+        return Err(Fault::new("is missing"));
     };
     // Unit variants serialize as bare strings.
     if let Some(word) = expr.as_str() {
         return match word {
             "self" if scope.entity_scoped => Ok(Ty::Entity),
-            "self" => Err("`self` needs a `scope`: a world-scoped behavior has no entity".into()),
+            "self" => Err(Fault::new(
+                "`self` needs a `scope`: a world-scoped behavior has no entity",
+            )),
             "dt" | "elapsed" => Ok(Ty::Float),
-            other => Err(format!("names unknown expression `{other}`")),
+            other => Err(Fault::new(format!("names unknown expression `{other}`"))),
         };
     }
     let Some((verb, body)) = single_key(expr) else {
-        return Err("must be a single-key object or one of `self`, `dt`, `elapsed`".into());
+        return Err(Fault::new(
+            "must be a single-key object or one of `self`, `dt`, `elapsed`",
+        ));
     };
     match verb {
         "bool" => Ok(Ty::Bool),
@@ -391,22 +444,24 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
         "float" => Ok(Ty::Float),
         "vec3" => Ok(Ty::Vec3),
         "var" => match body.as_str().unwrap_or("") {
-            "" => Err("`var` requires a variable name".into()),
+            "" => Err(Fault::new("`var` requires a variable name")),
             var => scope.vars.ty(var).ok_or_else(|| {
-                format!("reads undeclared variable '{var}'; add it to the world's Variables")
+                Fault::new(format!(
+                    "reads undeclared variable '{var}'; add it to the world's Variables"
+                ))
             }),
         },
         "local" => {
             let local = body.as_str().unwrap_or("");
             scope
                 .local(local)
-                .ok_or_else(|| format!("reads undeclared local '{local}'"))
+                .ok_or_else(|| Fault::new(format!("reads undeclared local '{local}'")))
         }
         "bind" => {
             let bind = body.as_str().unwrap_or("");
             scope
                 .binding(bind)
-                .ok_or_else(|| format!("reads unbound name '{bind}'"))
+                .ok_or_else(|| Fault::new(format!("reads unbound name '{bind}'")))
         }
         // Resolution of the asset name itself is a cross-reference check.
         "named" => Ok(Ty::Entity),
@@ -427,7 +482,9 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
         "first" | "count" => {
             let query = body.as_str().unwrap_or("");
             if !scope.has_query(query) {
-                return Err(format!("`{verb}` names undeclared query '{query}'"));
+                return Err(Fault::new(format!(
+                    "`{verb}` names undeclared query '{query}'"
+                )));
             }
             Ok(if verb == "first" { Ty::Entity } else { Ty::Int })
         }
@@ -442,7 +499,7 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
         "all" | "any" => {
             let items = body
                 .as_array()
-                .ok_or_else(|| format!("`{verb}` takes a list of conditions"))?;
+                .ok_or_else(|| Fault::new(format!("`{verb}` takes a list of conditions")))?;
             for item in items {
                 expect(Some(item), Ty::Bool, &format!("`{verb}` operand"), scope)?;
             }
@@ -453,11 +510,11 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
             let lhs = expr_ty(Some(a), scope)?;
             let rhs = expr_ty(Some(b), scope)?;
             if !lhs.is_numeric() || !rhs.is_numeric() {
-                return Err(format!(
+                return Err(Fault::new(format!(
                     "`{verb}` needs numbers, found {} and {}",
                     lhs.name(),
                     rhs.name()
-                ));
+                )));
             }
             // Scaling a vector by a scalar is the one mixed form allowed, and
             // only for the operators where it means something.
@@ -465,11 +522,11 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
                 (a, b) if a == b => Ok(a),
                 (Ty::Vec3, Ty::Float) if verb == "mul" || verb == "div" => Ok(Ty::Vec3),
                 (Ty::Float, Ty::Vec3) if verb == "mul" => Ok(Ty::Vec3),
-                _ => Err(format!(
+                _ => Err(Fault::new(format!(
                     "`{verb}` cannot mix {} and {}",
                     lhs.name(),
                     rhs.name()
-                )),
+                ))),
             }
         }
         "eq" | "ne" => {
@@ -477,11 +534,11 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
             let lhs = expr_ty(Some(a), scope)?;
             let rhs = expr_ty(Some(b), scope)?;
             if lhs != rhs {
-                return Err(format!(
+                return Err(Fault::new(format!(
                     "`{verb}` cannot compare {} with {}",
                     lhs.name(),
                     rhs.name()
-                ));
+                )));
             }
             Ok(Ty::Bool)
         }
@@ -490,15 +547,15 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, String> {
             let lhs = expr_ty(Some(a), scope)?;
             let rhs = expr_ty(Some(b), scope)?;
             if lhs != rhs || !lhs.is_ordered() {
-                return Err(format!(
+                return Err(Fault::new(format!(
                     "`{verb}` needs two ints or two floats, found {} and {}",
                     lhs.name(),
                     rhs.name()
-                ));
+                )));
             }
             Ok(Ty::Bool)
         }
-        other => Err(format!("names unknown expression `{other}`")),
+        other => Err(Fault::new(format!("names unknown expression `{other}`"))),
     }
 }
 
@@ -512,10 +569,10 @@ fn literal_ty(value: &Value) -> Option<Ty> {
     }
 }
 
-fn pair<'a>(body: &'a Value, verb: &str) -> Result<(&'a Value, &'a Value), String> {
+fn pair<'a>(body: &'a Value, verb: &str) -> Result<(&'a Value, &'a Value), Fault> {
     match body.as_array() {
         Some(items) if items.len() == 2 => Ok((&items[0], &items[1])),
-        _ => Err(format!("`{verb}` takes exactly two operands")),
+        _ => Err(Fault::new(format!("`{verb}` takes exactly two operands"))),
     }
 }
 
@@ -557,6 +614,24 @@ mod tests {
             e.contains(needle),
             "error {e:?} does not mention {needle:?}"
         );
+    }
+
+    // Where a complaint points, for the callers that can show the author the
+    // spot rather than only the sentence.
+    fn fault_at(json: &str) -> Vec<Step> {
+        check_with_variables("b", &serde_json::from_str(json).expect("args parse"), None)
+            .expect_err("expected a validation error")
+            .at
+    }
+
+    fn at(steps: &[&str]) -> Vec<Step> {
+        steps
+            .iter()
+            .map(|s| match s.parse::<usize>() {
+                Ok(i) => Step::Index(i),
+                Err(_) => field(s),
+            })
+            .collect()
     }
 
     #[test]
@@ -795,5 +870,99 @@ mod tests {
                                            {"mul":[{"local":"speed"},"dt"]}]}]}}}]}}]}"#,
         )
         .expect("the chase example type checks");
+    }
+
+    // A node's complaint addresses the node, through however many branch lists
+    // it took to reach it: the walk attaches each hop as the error unwinds.
+    #[test]
+    fn a_node_fault_addresses_the_node_that_carries_it() {
+        assert_eq!(
+            fault_at(r#"{"on":"start","do":[{"save":{}},{"teleport":{}}]}"#),
+            at(&["do", "1", "teleport"]),
+        );
+        assert_eq!(
+            fault_at(
+                r#"{"on":"start","do":[{"if":{"cond":{"bool":true},
+                     "then":[{"save":{}}],"else":[{"save":{}},{"teleport":{}}]}}]}"#
+            ),
+            at(&["do", "0", "if", "else", "1", "teleport"]),
+        );
+    }
+
+    // A field's complaint addresses the field, which is the same path the
+    // authored JSON reaches it by.
+    #[test]
+    fn a_field_fault_addresses_the_field_at_fault() {
+        assert_eq!(
+            fault_at(r#"{"on":"start","do":[{"if":{"cond":{"int":1}}}]}"#),
+            at(&["do", "0", "if", "cond"]),
+        );
+        assert_eq!(
+            fault_at(r#"{"on":"start","do":[{"hide":{"target":{"int":1}}}]}"#),
+            at(&["do", "0", "hide", "target"]),
+        );
+        assert_eq!(
+            fault_at(r#"{"on":"start","do":[{"for_each":{"query":"nope","bind":"e"}}]}"#),
+            at(&["do", "0", "for_each", "query"]),
+        );
+    }
+
+    // A declaration's complaint addresses that declaration, not the whole list,
+    // so a table with one bad row says which row.
+    #[test]
+    fn a_declaration_fault_addresses_the_entry_at_fault() {
+        assert_eq!(
+            fault_at(
+                r#"{"scope":["Prop"],"locals":[{"name":"a","value":{"int":0}},{"name":"b"}]}"#
+            ),
+            at(&["locals", "1", "value"]),
+        );
+        assert_eq!(
+            fault_at(r#"{"queries":[{"name":"q","has":["Nonesuch"]}]}"#),
+            at(&["queries", "0", "has"]),
+        );
+        assert_eq!(fault_at(r#"{"scope":["Nonesuch"]}"#), at(&["scope"]));
+        // A watched name is only wrong once a declared table makes it so, so
+        // this one needs a world that declares its variables.
+        let declared = serde_json::json!({"vars": [{"name": "score", "value": {"int": 0}}]});
+        let f = check_with_variables(
+            "b",
+            &serde_json::from_str(r#"{"on":{"variable":"ghost"},"do":[]}"#).expect("args parse"),
+            Some(&declared),
+        )
+        .expect_err("a watched variable must be declared");
+        assert_eq!(f.at, at(&["on", "variable"]));
+    }
+
+    // A rule about the asset as a whole has nothing narrower to blame.
+    #[test]
+    fn a_whole_asset_rule_carries_no_location() {
+        assert_eq!(
+            fault_at(r#"{"locals":[{"name":"speed","value":{"float":1.0}}]}"#),
+            at(&["locals"]),
+        );
+        let f = check_with_variables(
+            "b",
+            &serde_json::from_str(r#"{"on":"spawned"}"#).expect("args parse"),
+            None,
+        )
+        .expect_err("a spawned source needs a scope");
+        assert_eq!(f.at, at(&["on"]));
+    }
+
+    // A build reports the message and nothing else, so locating a fault must not
+    // have changed a single character of it.
+    #[test]
+    fn the_message_reads_the_same_whichever_entry_point_asked() {
+        let json = r#"{"on":"start","do":[{"teleport":{}}]}"#;
+        let args: Value = serde_json::from_str(json).expect("args parse");
+        let text = check("chase", &args).expect_err("expected a validation error");
+        assert_eq!(text, "Behavior 'chase': unknown node `teleport`");
+        assert_eq!(
+            check_with_variables("chase", &args, None)
+                .expect_err("expected a validation error")
+                .to_string(),
+            text,
+        );
     }
 }
