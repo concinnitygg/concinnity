@@ -45,7 +45,11 @@ pub(crate) fn segment(i: usize) -> AssetId {
     AssetId(BASE + 0x300 + i as u32)
 }
 
-const CARD_W: f32 = 200.0;
+// Narrow enough that a trigger, a node, and the card that appends after it all
+// fit the default width beside the inspector on a small window: adding a node
+// is the reason the chart is editable at all, so its card should not start off
+// screen.
+const CARD_W: f32 = 184.0;
 const CARD_H: f32 = 46.0;
 // Wide enough for a wire's label to sit in the gap without reaching either card
 // it joins. The overview's labels name what carries a relation ("spawns",
@@ -72,7 +76,7 @@ const INDICATOR_H: f32 = 4.0;
 
 const NODE_TINT: [f32; 4] = [0.17, 0.18, 0.23, 1.0];
 const TRIGGER_TINT: [f32; 4] = [0.16, 0.30, 0.34, 1.0];
-const EMPTY_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.85];
+const ADD_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.85];
 const VARIABLE_TINT: [f32; 4] = [0.28, 0.24, 0.16, 1.0];
 const BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
 const SELECTED_BORDER: [f32; 4] = [0.55, 0.70, 0.98, 1.0];
@@ -240,14 +244,14 @@ fn fill(kind: CardKind) -> [f32; 4] {
     match kind {
         CardKind::Trigger => TRIGGER_TINT,
         CardKind::Node | CardKind::Behavior => NODE_TINT,
-        CardKind::Empty => EMPTY_TINT,
+        CardKind::Add => ADD_TINT,
         CardKind::Variable => VARIABLE_TINT,
     }
 }
 
 fn title_color(kind: CardKind) -> [f32; 3] {
     match kind {
-        CardKind::Empty => theme::LABEL_DIM,
+        CardKind::Add => theme::LABEL_DIM,
         _ => theme::HEADING,
     }
 }
@@ -609,8 +613,9 @@ mod tests {
             .map(|i| sprite(&world, segment(i)))
             .filter(|s| s.visible)
             .collect();
+        // A wire between rows turns, and a turn means a vertical run.
         assert!(
-            drawn.len() > chart.wires.len(),
+            drawn.iter().any(|s| (s.width - WIRE_W).abs() < 0.01),
             "an elbow is more than one run"
         );
         for s in &drawn {
@@ -666,6 +671,6 @@ mod tests {
         apply(&mut world, &view(&chart, [0.0, 0.0]), BAND);
         let hint = label(&world, HINT_LABEL);
         assert!(hint.visible);
-        assert!(hint.content.starts_with("6 more nodes"), "{}", hint.content);
+        assert!(hint.content.starts_with("7 more nodes"), "{}", hint.content);
     }
 }

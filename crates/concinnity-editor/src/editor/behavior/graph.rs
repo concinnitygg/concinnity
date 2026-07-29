@@ -25,9 +25,10 @@ pub(crate) enum CardKind {
     Trigger,
     // One node of the body.
     Node,
-    // A branch holding no nodes yet. Its path is the branch's list, so picking
-    // from it appends the branch's first node.
-    Empty,
+    // The tail of a chain, standing for the list itself: picking from it appends
+    // a node there. Every chain ends in one, so any list -- the body, either
+    // branch of an `if` -- can be grown without leaving the chart.
+    Add,
     // A whole behavior, in the overview (`relations.rs`).
     Behavior,
     // A world variable behaviors write and fire on, in the overview.
@@ -45,6 +46,12 @@ pub(crate) struct Card {
     // stand for whole behaviors rather than places inside one, so theirs is
     // empty and `behavior` says which.
     pub path: Path,
+    // The subtree whose rows this card settles, which is not always what it
+    // points at: the trigger points at `on` but settles the behavior's own
+    // declarations too, so every setting has exactly one card that reaches it
+    // (`fields.rs`). A row goes to the card with the longest `settles`
+    // containing it.
+    pub settles: Path,
     pub behavior: Option<usize>,
 }
 
@@ -80,6 +87,11 @@ pub(crate) fn chart(args: &Value) -> Chart {
         detail: trigger_detail(args),
         kind: CardKind::Trigger,
         path: vec![field("on")],
+        // The whole asset, so the settings a behavior declares once -- `once`,
+        // `delay`, `cooldown`, `scope`, `locals`, `queries` -- settle on the
+        // card that stands for the behavior firing. Its body is claimed back by
+        // the cards below, which settle deeper.
+        settles: Vec::new(),
         behavior: None,
     });
     let base = vec![field("do")];
@@ -113,9 +125,10 @@ impl Build {
     }
 
     // Place `items` as a chain starting at (`column`, `row`), its first card
-    // hanging off `parent` by `pin`. Returns the columns and rows the chain and
-    // everything branching off it consumed, which is what lets the node after a
-    // branch resume clear of it.
+    // hanging off `parent` by `pin`, and end it with the card that appends to
+    // the list. Returns the columns and rows the chain and everything branching
+    // off it consumed, which is what lets the node after a branch resume clear
+    // of it. A list with nothing in it is just a chain that is only its tail.
     fn chain(
         &mut self,
         items: &[Value],
@@ -125,23 +138,6 @@ impl Build {
         parent: usize,
         pin: Option<&'static str>,
     ) -> (usize, usize) {
-        if items.is_empty() {
-            let to = self.push(Card {
-                column,
-                row,
-                title: "empty".to_string(),
-                detail: String::new(),
-                kind: CardKind::Empty,
-                path: base.clone(),
-                behavior: None,
-            });
-            self.wires.push(Wire {
-                from: parent,
-                to,
-                label: pin.map(str::to_string),
-            });
-            return (1, 1);
-        }
         let mut columns = 0;
         let mut rows = 1;
         let mut prev = parent;
@@ -162,6 +158,7 @@ impl Build {
                 },
                 kind: CardKind::Node,
                 path: path.clone(),
+                settles: path.clone(),
                 behavior: None,
             });
             self.wires.push(Wire {
@@ -190,7 +187,22 @@ impl Build {
             columns += 1 + branch_columns;
             rows = rows.max(branch_rows.max(1));
         }
-        (columns, rows)
+        let to = self.push(Card {
+            column: column + columns,
+            row,
+            title: "add".to_string(),
+            detail: String::new(),
+            kind: CardKind::Add,
+            path: base.clone(),
+            settles: base.clone(),
+            behavior: None,
+        });
+        self.wires.push(Wire {
+            from: prev,
+            to,
+            label: prev_pin.map(str::to_string),
+        });
+        (columns + 1, rows)
     }
 }
 
@@ -396,7 +408,8 @@ mod tests {
         assert_eq!(trigger.title, "on start");
         assert_eq!((at(&chart, "save").column, at(&chart, "save").row), (1, 0));
         assert_eq!((at(&chart, "hide").column, at(&chart, "hide").row), (2, 0));
-        assert_eq!(chart.columns, 3);
+        // Plus the column the chain's own tail card takes.
+        assert_eq!(chart.columns, 4);
         assert_eq!(chart.rows, 1);
         // Every card past the trigger hangs off the one before it.
         assert_eq!(wire_to(&chart, "save").from, 0);
@@ -422,34 +435,46 @@ mod tests {
         // The first branch keeps the parent's row, the second drops below it.
         assert_eq!((at(&chart, "show").column, at(&chart, "show").row), (2, 0));
         assert_eq!((at(&chart, "hide").column, at(&chart, "hide").row), (2, 1));
-        // The node after the branch clears the whole subtree.
-        assert_eq!((at(&chart, "save").column, at(&chart, "save").row), (3, 0));
+        // The node after the branch clears the whole subtree, each branch of
+        // which now ends in its own tail card.
+        assert_eq!((at(&chart, "save").column, at(&chart, "save").row), (4, 0));
         assert_eq!(chart.rows, 2);
         assert_eq!(wire_to(&chart, "show").label.as_deref(), Some("then"));
         assert_eq!(wire_to(&chart, "hide").label.as_deref(), Some("else"));
         assert_eq!(wire_to(&chart, "save").label, None);
     }
 
+    // Every chain ends in a card standing for its list, so any list can be
+    // appended to from the chart -- an empty branch and a filled body alike.
     #[test]
-    fn an_empty_branch_becomes_a_card_addressing_the_branch_list() {
+    fn every_chain_ends_in_a_card_addressing_its_list() {
         let chart = chart(&json!({
             "on": "start",
             "do": [{"if": {"cond": {"bool": true}, "then": [{"save": {}}]}}],
         }));
-        let empty = at(&chart, "empty");
-        assert_eq!(empty.kind, CardKind::Empty);
-        assert_eq!(wire_to(&chart, "empty").label.as_deref(), Some("else"));
-        assert_eq!(
-            empty.path,
-            vec![field("do"), Step::Index(0), field("if"), field("else"),],
-        );
+        let branch = |name: &str| vec![field("do"), Step::Index(0), field("if"), field(name)];
+        for (path, pin) in [
+            (branch("else"), Some("else")),
+            (branch("then"), None),
+            (vec![field("do")], None),
+        ] {
+            let card = chart
+                .cards
+                .iter()
+                .find(|c| c.path == path)
+                .unwrap_or_else(|| panic!("no card for {path:?}: {:?}", chart.cards));
+            assert_eq!(card.kind, CardKind::Add, "{path:?}");
+            let to = chart.cards.iter().position(|c| c.path == path).unwrap();
+            let wire = chart.wires.iter().find(|w| w.to == to).unwrap();
+            assert_eq!(wire.label.as_deref(), pin, "{path:?}");
+        }
     }
 
     #[test]
     fn an_empty_body_still_offers_somewhere_to_start() {
         let chart = chart(&json!({"on": "start"}));
         assert_eq!(chart.cards.len(), 2);
-        assert_eq!(chart.cards[1].kind, CardKind::Empty);
+        assert_eq!(chart.cards[1].kind, CardKind::Add);
         assert_eq!(chart.cards[1].path, vec![field("do")]);
     }
 
@@ -486,9 +511,12 @@ mod tests {
     #[test]
     fn an_unknown_verb_gets_a_card_but_no_invented_branches() {
         let chart = chart(&json!({"on": "start", "do": [{"teleport": {"then": [{"save": {}}]}}]}));
-        assert_eq!(chart.cards.len(), 2);
         assert_eq!(chart.cards[1].title, "(unknown)");
         assert_eq!(chart.cards[1].detail, "");
+        // The trigger, the unknown node, and the body's tail: the `then` it
+        // carries is not a branch of any node the palette knows.
+        assert_eq!(chart.cards.len(), 3);
+        assert_eq!(chart.cards[2].kind, CardKind::Add);
     }
 
     #[test]

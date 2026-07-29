@@ -117,7 +117,6 @@ impl EditorHook {
             None => Chart::default(),
         };
         let card = selected.and_then(|r| fields::owning_card(&chart.cards, &r.path));
-        let inspected = card.map(|i| chart.cards[i].path.clone());
         BehaviorData {
             name: self
                 .behavior_entry()
@@ -129,8 +128,8 @@ impl EditorHook {
             picks: selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names())),
             editable: selected
                 .is_some_and(|r| edit::text_value(&self.behavior_args(), r).is_some()),
-            fields: inspected
-                .map(|p| fields::own_rows(&rows, &chart.cards, &p))
+            fields: card
+                .map(|i| fields::own_rows(&rows, &chart.cards, i))
                 .unwrap_or_default(),
             overview: match self.behavior_mode {
                 ViewMode::Overview => relations::map(&self.behavior_pairs()),

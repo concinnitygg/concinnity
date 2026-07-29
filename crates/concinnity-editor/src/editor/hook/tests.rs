@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::editor::behavior::graph::CardKind;
+use crate::editor::behavior::path;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -4593,6 +4595,76 @@ fn behavior_overview_is_built_only_while_it_shows() {
     assert!(!h.behavior_data().overview.cards.is_empty());
 }
 
+// The chart can grow a body it did not start empty. Appending goes through the
+// card at the end of the chain, so a second node can be added without leaving
+// for the outline -- which is what the chart could not do at all before.
+#[test]
+fn behavior_chart_appends_to_a_body_that_already_has_nodes() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    let tail = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.kind == CardKind::Add && c.path == [path::field("do")])
+        .expect("the body's chain ends in a card that appends to it");
+
+    h.apply_behavior_action(BehaviorAction::SelectCard(tail), &mut world, [0.0, 0.0]);
+    let pick = h
+        .behavior_data()
+        .picks
+        .iter()
+        .position(|p| p.verb == "hide")
+        .expect("it offers the node palette");
+    h.apply_behavior_action(BehaviorAction::Choose(pick), &mut world, [0.0, 0.0]);
+
+    assert_eq!(
+        open_args(&h)["do"],
+        serde_json::json!([{"save": {}}, {"hide": {"target": "self"}}]),
+        "the node was appended after the one already there"
+    );
+    assert!(h.rebuild_preview, "and the live world has it");
+}
+
+// The settings a behavior declares once hang off no node, so nothing in the
+// chart reached them: the trigger card settles them instead.
+#[test]
+fn behavior_chart_reaches_the_settings_the_behavior_declares() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "scope": ["Prop"], "do": [{"save": {}}]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::SelectCard(0), &mut world, [0.0, 0.0]);
+
+    let data = h.behavior_data();
+    let listed: Vec<&str> = data
+        .fields
+        .iter()
+        .map(|&i| data.rows[i].label.as_str())
+        .collect();
+    for want in ["on", "once", "delay", "cooldown", "scope"] {
+        assert!(listed.contains(&want), "{want} in {listed:?}");
+    }
+
+    // And they are editable there, not just visible.
+    let once = data.fields[listed.iter().position(|l| *l == "once").unwrap()];
+    h.apply_behavior_action(BehaviorAction::Select(once), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
+    let pick = h
+        .behavior_data()
+        .picks
+        .iter()
+        .position(|p| p.verb == "true")
+        .expect("a flag offers its two options");
+    h.apply_behavior_action(BehaviorAction::Choose(pick), &mut world, [0.0, 0.0]);
+    assert_eq!(open_args(&h)["once"], serde_json::json!(true));
+}
+
 // Selecting a card lists that node's own settings, and picking one of them
 // keeps the same node in the inspector rather than emptying it.
 #[test]
@@ -4671,12 +4743,13 @@ fn behavior_empty_branch_card_appends_into_that_branch() {
         ]}),
     )]);
     h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    // The card that appends into the (empty) `else`.
     let card = h
         .behavior_data()
         .chart
         .cards
         .iter()
-        .position(|c| c.title == "empty")
+        .position(|c| c.kind == CardKind::Add && c.path.last() == Some(&path::field("else")))
         .unwrap();
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
     let pick = h
@@ -4733,7 +4806,14 @@ fn behavior_selection_pans_an_off_canvas_card_into_view() {
         serde_json::json!({"on": "start", "do": body}),
     )]);
     h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
-    let last = h.behavior_data().chart.cards.len() - 1;
+    // The last node, not the tail card past it: only a list member moves.
+    let last = h
+        .behavior_data()
+        .chart
+        .cards
+        .iter()
+        .rposition(|c| c.kind == CardKind::Node)
+        .unwrap();
     h.apply_behavior_action(BehaviorAction::SelectCard(last), &mut world, [0.0, 0.0]);
     // Moving it earlier follows the node, which is what re-pans the canvas.
     h.apply_behavior_action(BehaviorAction::Move(-1), &mut world, [0.0, 0.0]);

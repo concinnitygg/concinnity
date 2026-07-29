@@ -5,41 +5,32 @@
 // the node's own fields without the nodes nested inside it, which the outline
 // lists inline.
 //
-// The answer comes from the cards themselves: a row belongs to the node it sits
-// under unless some other card already owns it. That keeps the two views from
-// disagreeing, because a node reachable as a card is never also a field.
+// One rule answers both questions: a row belongs to the card with the longest
+// `settles` containing it. The trigger settles the whole asset, each node its
+// own subtree, and each chain's tail its list -- so every row of the outline
+// has exactly one card that reaches it, and no row is reachable twice.
 
 use super::graph::Card;
 use super::outline::Row;
 use super::path::{self, Path};
 
-// The card the row at `path` belongs to: the innermost one containing it. A
-// node's own field answers with the node, so selecting a field keeps the same
-// node in the inspector rather than emptying it.
+// The card the row at `path` belongs to. A node's own field answers with the
+// node, so selecting a field keeps the same node in the inspector rather than
+// emptying it.
 pub(crate) fn owning_card(cards: &[Card], path: &Path) -> Option<usize> {
     cards
         .iter()
         .enumerate()
-        .filter(|(_, c)| path::starts_with(path, &c.path))
-        .max_by_key(|(_, c)| c.path.len())
+        .filter(|(_, c)| path::starts_with(path, &c.settles))
+        .max_by_key(|(_, c)| c.settles.len())
         .map(|(i, _)| i)
 }
 
-// The rows the node at `path` settles: its own row first, then everything under
-// it that no other card owns. An `if` keeps its condition and its two branch
-// lists; the nodes stacked in those branches are cards of their own.
-pub(crate) fn own_rows(rows: &[Row], cards: &[Card], path: &Path) -> Vec<usize> {
-    let others: Vec<&Path> = cards
-        .iter()
-        .map(|c| &c.path)
-        .filter(|p| *p != path)
-        .collect();
+// The rows the card at `card` settles, in outline order.
+pub(crate) fn own_rows(rows: &[Row], cards: &[Card], card: usize) -> Vec<usize> {
     rows.iter()
         .enumerate()
-        .filter(|(_, r)| {
-            path::starts_with(&r.path, path)
-                && !others.iter().any(|o| path::starts_with(&r.path, o))
-        })
+        .filter(|(_, r)| owning_card(cards, &r.path) == Some(card))
         .map(|(i, _)| i)
         .collect()
 }
@@ -56,7 +47,7 @@ mod tests {
     fn listed(args: &Value, card: usize) -> Vec<String> {
         let rows = outline::rows(args);
         let chart = graph::chart(args);
-        own_rows(&rows, &chart.cards, &chart.cards[card].path)
+        own_rows(&rows, &chart.cards, card)
             .into_iter()
             .map(|i| rows[i].label.clone())
             .collect()
@@ -72,10 +63,11 @@ mod tests {
         }
     }
 
-    // The condition is the `if`'s own; the nodes in its branches are not, because
-    // each of those is a card the user selects directly.
+    // The condition is the `if`'s own. Neither the nodes in its branches nor the
+    // branch lists themselves are: each branch ends in a tail card, and that is
+    // what appending to the branch goes through.
     #[test]
-    fn a_branch_keeps_its_condition_and_not_its_children() {
+    fn a_branch_keeps_its_condition_and_nothing_below_it() {
         let args = json!({"do": [{"if": {
             "cond": {"bool": true},
             "then": [{"save": null}],
@@ -83,26 +75,59 @@ mod tests {
         }}]});
         let listed = listed(&args, 1);
         assert!(listed.iter().any(|l| l == "cond"));
-        assert!(listed.iter().any(|l| l == "then"), "the branch list itself");
-        assert!(
-            !listed.iter().any(|l| l == "save"),
-            "the node inside the branch is its own card: {listed:?}"
-        );
+        for below in ["then", "else", "save"] {
+            assert!(
+                !listed.iter().any(|l| l == below),
+                "`{below}` has a card of its own: {listed:?}"
+            );
+        }
     }
 
-    // An empty branch draws an `empty` card whose path is the branch list, so
-    // the list row belongs to that card rather than to the node above it.
+    // The trigger card stands for the behavior firing, so it settles what the
+    // behavior declares once -- which is otherwise unreachable from the chart,
+    // since none of it hangs off a node.
     #[test]
-    fn an_empty_branch_belongs_to_its_own_card() {
-        let args = json!({"do": [{"if": {"cond": {"bool": true}, "then": [], "else": []}}]});
-        assert!(!listed(&args, 1).iter().any(|l| l == "then"));
-    }
-
-    #[test]
-    fn the_trigger_settles_the_source_and_its_parameters() {
-        let args = json!({"on": {"timer": {"interval": 5.0, "repeat": true}}, "do": []});
+    fn the_trigger_settles_the_source_and_what_the_behavior_declares() {
+        let args = json!({
+            "on": {"timer": {"interval": 5.0, "repeat": true}},
+            "scope": ["Prop"],
+            "do": [{"save": null}],
+        });
         let listed = listed(&args, 0);
-        assert_eq!(listed, ["on", "interval", "repeat"]);
+        for want in [
+            "on", "interval", "repeat", "once", "delay", "cooldown", "scope",
+        ] {
+            assert!(listed.iter().any(|l| l == want), "{want} in {listed:?}");
+        }
+        assert!(!listed.iter().any(|l| l == "do"), "the body is not its own");
+    }
+
+    // The point of the whole rule: no row of the outline is stranded, so every
+    // setting is reachable from the chart, and none is reachable from two cards.
+    #[test]
+    fn every_outline_row_belongs_to_exactly_one_card() {
+        let args = json!({
+            "on": "tick",
+            "scope": ["Prop"],
+            "locals": [{"name": "speed", "value": {"float": 3.0}}],
+            "queries": [{"name": "player", "has": ["Camera3D"]}],
+            "do": [
+                {"if": {"cond": {"bool": true}, "then": [{"save": null}], "else": []}},
+                {"spawn": {"template": "drop"}},
+            ],
+        });
+        let rows = outline::rows(&args);
+        let chart = graph::chart(&args);
+        let stranded: Vec<&str> = rows
+            .iter()
+            .filter(|r| owning_card(&chart.cards, &r.path).is_none())
+            .map(|r| r.label.as_str())
+            .collect();
+        assert!(stranded.is_empty(), "no card reaches {stranded:?}");
+        let listed: usize = (0..chart.cards.len())
+            .map(|i| own_rows(&rows, &chart.cards, i).len())
+            .sum();
+        assert_eq!(listed, rows.len(), "a row is listed twice");
     }
 
     #[test]
@@ -129,14 +154,28 @@ mod tests {
         }
     }
 
-    // A declaration is nowhere in the chart, so it answers with no card at all
-    // rather than with whichever one happens to sit nearest it.
+    // A declaration hangs off no node, so it answers with the trigger -- the
+    // card that stands for the behavior itself.
     #[test]
-    fn a_declaration_belongs_to_no_card() {
+    fn a_declaration_belongs_to_the_trigger() {
         let args = json!({"scope": ["Prop"], "do": [{"save": null}]});
         let rows = outline::rows(&args);
         let chart = graph::chart(&args);
         let scope = rows.iter().find(|r| r.label == "scope").expect("scope");
-        assert_eq!(owning_card(&chart.cards, &scope.path), None);
+        assert_eq!(owning_card(&chart.cards, &scope.path), Some(0));
+        assert_eq!(chart.cards[0].kind, graph::CardKind::Trigger);
+    }
+
+    // A list's rows belong to the card that appends to it, so picking on that
+    // card is what grows the list.
+    #[test]
+    fn a_list_belongs_to_the_card_that_appends_to_it() {
+        let args = json!({"do": [{"save": null}]});
+        let rows = outline::rows(&args);
+        let chart = graph::chart(&args);
+        let body = rows.iter().find(|r| r.label == "do").expect("do");
+        let card = owning_card(&chart.cards, &body.path).expect("a card reaches it");
+        assert_eq!(chart.cards[card].kind, graph::CardKind::Add);
+        assert_eq!(chart.cards[card].path, body.path);
     }
 }

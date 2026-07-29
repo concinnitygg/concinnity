@@ -324,8 +324,10 @@ pub(crate) fn size() -> [f32; 2] {
 }
 
 // The chart wants width where the outline wants rows: cards run left to right,
-// so the panel opens wide enough to hold a trigger and the body's first nodes
-// beside the inspector before any panning.
+// so the panel opens wide enough to hold a trigger, a node, and the card that
+// appends after it beside the inspector. A panel cannot size itself against the
+// viewport (`Panel::size` never sees one, unlike `default_origin`), so the
+// default has to fit a small window outright rather than be trimmed to it.
 pub(crate) fn chart_size() -> [f32; 2] {
     [behavior_chart::width_for(3) + INSPECT_W, size()[1]]
 }
@@ -1533,7 +1535,7 @@ mod tests {
 
     fn node_fields(rows: &[Row]) -> Vec<usize> {
         let chart = sample_chart();
-        crate::editor::behavior::fields::own_rows(rows, &chart.cards, &chart.cards[1].path)
+        crate::editor::behavior::fields::own_rows(rows, &chart.cards, 1)
     }
 
     // The inspector column is beside the chart, not over it, so selecting a card
@@ -1550,6 +1552,10 @@ mod tests {
         assert!(inspect_rows(s) >= 8, "with room for a node's settings");
         // The default width still leaves the chart its columns beside the pane.
         assert!(band[2] >= behavior_chart::width_for(3) - 2.0);
+        // And the whole panel fits a small window, since it cannot trim itself
+        // to one: a trigger, a node, and the card that appends after it.
+        assert!(s[0] <= 1024.0, "chart view opens {} wide", s[0]);
+        assert!(overview_size()[0] <= 1024.0);
     }
 
     #[test]

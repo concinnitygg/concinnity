@@ -77,6 +77,7 @@ impl Build {
             detail: scope_summary(args),
             kind: CardKind::Behavior,
             path: Vec::new(),
+            settles: Vec::new(),
             behavior: Some(at),
         });
         self.behaviors.push(card);
@@ -145,6 +146,7 @@ impl Build {
             detail: "trigger".to_string(),
             kind: CardKind::Trigger,
             path: Vec::new(),
+            settles: Vec::new(),
             behavior: None,
         });
         self.triggers.push((caption.to_string(), card));
@@ -162,6 +164,7 @@ impl Build {
             detail: "variable".to_string(),
             kind: CardKind::Variable,
             path: Vec::new(),
+            settles: Vec::new(),
             behavior: None,
         });
         self.variables.push((name.to_string(), card));
