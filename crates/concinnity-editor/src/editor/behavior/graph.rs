@@ -33,6 +33,11 @@ pub(crate) enum CardKind {
     Behavior,
     // A world variable behaviors write and fire on, in the overview.
     Variable,
+    // A world asset behaviors reach each other through, in the overview: what
+    // fires one, or where one sends the world.
+    Asset,
+    // A name the world does not declare, in the overview.
+    Missing,
 }
 
 #[derive(Debug, Clone, PartialEq)]

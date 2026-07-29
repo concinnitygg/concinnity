@@ -702,7 +702,9 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
         pan: view.pan,
         mouse: view.mouse,
         overflow: match view.mode {
-            ViewMode::Overview => "behaviors -- step through them with < and >",
+            // The map keeps its middlemen, so what it runs out of room for is
+            // behaviors -- and each of those is still its own chart.
+            ViewMode::Overview => "cards -- open a behavior with < and > to see its own",
             _ => "nodes -- open the outline to reach them",
         },
     }

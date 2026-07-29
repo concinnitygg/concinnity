@@ -72,12 +72,19 @@ const LABEL_RUN: f32 = COL_GAP - LABEL_IN;
 // Wider than `CHAR_W`, because here the estimate has to come out long: a label
 // measured short is a label drawn over the card it points at.
 const LABEL_CHAR_W: f32 = 10.0;
+// The longest label the gap holds. A longer one is drawn clipped, so what the
+// overview puts on a wire is checked against this (`behavior/relations.rs`)
+// rather than guessed.
+pub(crate) const LABEL_CHARS: usize = (LABEL_RUN / LABEL_CHAR_W) as usize;
 const INDICATOR_H: f32 = 4.0;
 
 const NODE_TINT: [f32; 4] = [0.17, 0.18, 0.23, 1.0];
 const TRIGGER_TINT: [f32; 4] = [0.16, 0.30, 0.34, 1.0];
 const ADD_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.85];
 const VARIABLE_TINT: [f32; 4] = [0.28, 0.24, 0.16, 1.0];
+const ASSET_TINT: [f32; 4] = [0.22, 0.19, 0.36, 1.0];
+// A name the world does not answer, tinted like the checker's own banner.
+const MISSING_TINT: [f32; 4] = [0.32, 0.14, 0.17, 1.0];
 const BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
 const SELECTED_BORDER: [f32; 4] = [0.55, 0.70, 0.98, 1.0];
 const HOVER_BORDER: [f32; 4] = [0.44, 0.48, 0.60, 1.0];
@@ -164,6 +171,10 @@ fn visible_part(rect: [f32; 4], band: [f32; 4]) -> Option<[f32; 4]> {
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }
 
+fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
 // The card under the cursor, if the cursor is over the canvas at all.
 pub(crate) fn hit_card(view: &ChartView, mx: f32, my: f32, band: [f32; 4]) -> Option<usize> {
     if !point_in(mx, my, band) {
@@ -246,12 +257,15 @@ fn fill(kind: CardKind) -> [f32; 4] {
         CardKind::Node | CardKind::Behavior => NODE_TINT,
         CardKind::Add => ADD_TINT,
         CardKind::Variable => VARIABLE_TINT,
+        CardKind::Asset => ASSET_TINT,
+        CardKind::Missing => MISSING_TINT,
     }
 }
 
 fn title_color(kind: CardKind) -> [f32; 3] {
     match kind {
         CardKind::Add => theme::LABEL_DIM,
+        CardKind::Missing => theme::LOG_ERROR,
         _ => theme::HEADING,
     }
 }
@@ -268,6 +282,10 @@ fn hide_card(world: &mut World, slot: usize) {
 fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
     let mut seg = 0;
     let mut label = 0;
+    // What the labels drawn so far cover, so two wires cannot stack their words
+    // in one place: a card in the overview reaches several others, and the ones
+    // it reaches on the same row would otherwise share a label position.
+    let mut taken: Vec<[f32; 4]> = Vec::new();
     for wire in &view.chart.wires {
         let (Some(from), Some(to)) = (
             view.chart
@@ -296,19 +314,31 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
             }
         }
         if let Some(text) = wire.label.as_deref().filter(|_| label < WIRE_LABEL_POOL) {
-            // Just past the turn and above the run that enters the child, so it
-            // crosses neither the wire nor either card. Two branches off one
-            // card enter on different rows, so their labels sit apart.
-            let at = [ax + LABEL_IN, by - theme::TEXT_HALF - 9.0];
-            if point_in(at[0], at[1], band) {
+            // Above the run that enters the card it points at, in the gap just
+            // before it: past the turn for a card one column along, and along
+            // the run for one further off, which is what keeps two words leaving
+            // the same card apart. Either way it crosses neither the wire nor
+            // either card.
+            let text = widget::clip_text(text, LABEL_CHARS);
+            let x = (ax + LABEL_IN).max(bx - LABEL_RUN);
+            let w = text.chars().count() as f32 * LABEL_CHAR_W;
+            // Above the run, or below it when something is there already: two
+            // behaviors reaching the same card enter it along the same run, so
+            // one side of it is not room enough for both their words.
+            let free = [by - theme::TEXT_HALF - 9.0, by + 9.0]
+                .into_iter()
+                .map(|y| [x, y, w, theme::TEXT_HALF * 2.0])
+                .find(|over| !taken.iter().any(|r| overlaps(*r, *over)));
+            if let Some(over) = free.filter(|over| point_in(over[0], over[1], band)) {
                 widget::place_left_label(
                     world,
                     wire_label(label),
-                    at,
-                    &widget::clip_text(text, (LABEL_RUN / LABEL_CHAR_W) as usize),
+                    [over[0], over[1]],
+                    &text,
                     theme::LABEL_DIM,
                     true,
                 );
+                taken.push(over);
                 label += 1;
             }
         }
@@ -582,17 +612,110 @@ mod tests {
                 theme::TEXT_HALF * 2.0,
             ];
             for card in &cards {
-                assert!(!hits(rect, *card), "'{}' over a card {card:?}", l.content);
+                assert!(
+                    !overlaps(rect, *card),
+                    "'{}' over a card {card:?}",
+                    l.content
+                );
             }
             for run in &verticals {
-                assert!(!hits(rect, *run), "'{}' over a wire {run:?}", l.content);
+                assert!(!overlaps(rect, *run), "'{}' over a wire {run:?}", l.content);
             }
         }
         assert!(checked >= 2, "both branches are labelled");
     }
 
-    fn hits(a: [f32; 4], b: [f32; 4]) -> bool {
-        a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    // A map of cards at the given places, wired `from -> to` and labelled: the
+    // shapes the overview makes that a body never does.
+    fn wired(places: &[(usize, usize)], wires: &[(usize, usize, &str)]) -> Chart {
+        Chart {
+            cards: places
+                .iter()
+                .map(|&(column, row)| Card {
+                    column,
+                    row,
+                    title: "card".to_string(),
+                    detail: String::new(),
+                    kind: CardKind::Behavior,
+                    path: Vec::new(),
+                    settles: Vec::new(),
+                    behavior: None,
+                })
+                .collect(),
+            wires: wires
+                .iter()
+                .map(|&(from, to, label)| graph::Wire {
+                    from,
+                    to,
+                    label: Some(label.to_string()),
+                })
+                .collect(),
+            columns: places.iter().map(|p| p.0 + 1).max().unwrap_or(0),
+            rows: places.iter().map(|p| p.1 + 1).max().unwrap_or(0),
+        }
+    }
+
+    const WIDE: [f32; 4] = [100.0, 200.0, 2_000.0, 600.0];
+
+    // Every wire label drawn, and the space each takes at the width one is
+    // measured at.
+    fn label_rects(world: &World) -> Vec<[f32; 4]> {
+        (0..WIRE_LABEL_POOL)
+            .map(|i| label(world, wire_label(i)))
+            .filter(|l| l.visible)
+            .map(|l| {
+                [
+                    l.x,
+                    l.y,
+                    l.content.chars().count() as f32 * LABEL_CHAR_W,
+                    theme::TEXT_HALF * 2.0,
+                ]
+            })
+            .collect()
+    }
+
+    // A card in the overview reaches several others at once, and two of them on
+    // the same row put their labels in the same place if a label only ever sits
+    // beside the card it leaves: what is drawn then is one pile of overprinted
+    // words rather than two labels.
+    #[test]
+    fn two_labels_leaving_one_card_land_apart() {
+        let chart = wired(
+            &[(0, 0), (1, 0), (3, 0)],
+            &[(0, 1, "sets"), (0, 2, "hides")],
+        );
+        let mut world = injected_world();
+        apply(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
+
+        let drawn = label_rects(&world);
+        assert_eq!(drawn.len(), 2, "both wires are labelled");
+        assert!(!overlaps(drawn[0], drawn[1]), "{drawn:?} share a place");
+        // And each still sits in the gap before the card it points at.
+        for (r, card) in drawn.iter().zip([&chart.cards[1], &chart.cards[2]]) {
+            let card = card_rect(card, WIDE, [0.0, 0.0]);
+            assert!(r[0] + r[2] <= card[0], "{r:?} reaches {card:?}");
+        }
+    }
+
+    // Two behaviors reaching the same asset enter its card along the one run,
+    // so their labels take opposite sides of it rather than one being dropped:
+    // which of the two does what is the relation the map is drawn for.
+    #[test]
+    fn two_labels_reaching_one_card_take_both_sides_of_its_run() {
+        let chart = wired(
+            &[(0, 0), (0, 1), (1, 0)],
+            &[(0, 2, "hides"), (1, 2, "shows")],
+        );
+        let mut world = injected_world();
+        apply(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
+
+        let drawn = label_rects(&world);
+        assert_eq!(drawn.len(), 2, "neither wire loses its word");
+        assert!(!overlaps(drawn[0], drawn[1]), "{drawn:?} share a place");
+        // The run they both enter by sits between them.
+        let run = card_rect(&chart.cards[2], WIDE, [0.0, 0.0])[1] + CARD_H * 0.5;
+        assert!(drawn[0][1] + drawn[0][3] <= run, "{drawn:?}");
+        assert!(drawn[1][1] >= run, "{drawn:?}");
     }
 
     #[test]

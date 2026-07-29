@@ -132,7 +132,9 @@ impl EditorHook {
                 .map(|i| fields::own_rows(&rows, &chart.cards, i))
                 .unwrap_or_default(),
             overview: match self.behavior_mode {
-                ViewMode::Overview => relations::map(&self.behavior_pairs()),
+                ViewMode::Overview => {
+                    relations::map(&self.behavior_pairs(), &self.declared_assets())
+                }
                 _ => Chart::default(),
             },
             card,
@@ -153,6 +155,16 @@ impl EditorHook {
                     e.get("args").cloned().unwrap_or(Value::Null),
                 )
             })
+            .collect()
+    }
+
+    // Every entry's name and type, so the overview can tell an asset a behavior
+    // reaches from a name the world never declares. Mapping the entry shape is
+    // the hook's job; the map itself only ever sees names and types.
+    fn declared_assets(&self) -> Vec<(&str, &str)> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some((entry_name(e)?, entry_type(e)?)))
             .collect()
     }
 
