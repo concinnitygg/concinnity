@@ -20,14 +20,17 @@
 // in the overview opening the behavior a card stands for (a trigger, variable,
 // or asset card has none).
 //
+// Tab steps to the next view, the same cycle the header's own button walks.
+//
 // The arrows move the selection through whichever view is showing:
 //   Outline      Up / Down step one row
 //   Chart        Left / Right follow the chain, Up / Down cross between a
 //                branching node's stacked branches
 //   Overview     the same, over the map's cards
 // The name field is the asset's rather than the selection's, so it holds the
-// arrows until Enter or Escape gives it up. The value field is the selection's
-// and holds only Left and Right, which are the caret's (`text_input_system`).
+// keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
+// value field is the selection's and follows it from view to view, so it holds
+// only Left and Right, which are the caret's (`text_input_system`).
 
 use super::*;
 use crate::assets::Key;
@@ -67,6 +70,7 @@ impl EditorHook {
         match key {
             Key::Enter => self.commit_behavior_key(world),
             _ if self.behavior_name_focus => {}
+            Key::Tab => self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0]),
             // Left and Right belong to the caret while the value field holds
             // the keyboard.
             _ => {

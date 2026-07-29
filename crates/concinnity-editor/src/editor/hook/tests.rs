@@ -5387,3 +5387,62 @@ fn behavior_name_field_holds_the_arrows_until_it_is_given_up() {
     press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
     assert_eq!(h.behavior_row, Some(0));
 }
+
+// Tab walks the same three-view cycle the header's button does, and the
+// selection survives it, because all three views are over the one asset.
+#[test]
+fn behavior_tab_cycles_through_the_three_views() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "hide");
+    let selected = h.behavior_row;
+    assert_eq!(h.behavior_mode, ViewMode::Outline);
+
+    for want in [ViewMode::Chart, ViewMode::Overview, ViewMode::Outline] {
+        press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+        assert_eq!(h.behavior_mode, want);
+        assert_eq!(
+            h.behavior_row, selected,
+            "the selection survives the switch"
+        );
+    }
+}
+
+// A half-typed rename is not a view switch: the name field holds Tab the same
+// way it holds the arrows, until Enter or Escape gives the keyboard up.
+#[test]
+fn behavior_tab_leaves_the_view_alone_while_the_name_field_is_focused() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "half typed");
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    assert_eq!(h.behavior_mode, ViewMode::Outline);
+    assert!(h.behavior_name_focus, "the field kept the keyboard");
+
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    assert_eq!(h.behavior_mode, ViewMode::Chart);
+}
+
+// The open palette is modal, so Tab neither switches the view out from under it
+// nor picks anything.
+#[test]
+fn behavior_tab_does_nothing_while_the_palette_is_open() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    select_behavior(&mut h, &mut world, "do");
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(h.behavior_picking);
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    assert_eq!(h.behavior_mode, ViewMode::Outline);
+    assert!(h.behavior_picking, "the palette is still up");
+    assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
+}
