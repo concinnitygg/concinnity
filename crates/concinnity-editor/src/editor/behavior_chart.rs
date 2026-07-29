@@ -11,7 +11,6 @@
 // the part still inside it and drops its text once too little is left to read.
 
 use super::behavior::graph::{Card, CardKind, Chart};
-use super::behavior::path::Path;
 use super::behavior_panel::{CHAR_W, LIST_THUMB, LIST_TRACK};
 use super::registry::{self, PanelKey};
 use super::theme;
@@ -94,8 +93,8 @@ const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 
 pub(crate) struct ChartView<'a> {
     pub chart: &'a Chart,
-    // The open behavior's selected outline row, when it is one a card stands for.
-    pub selected: Option<&'a Path>,
+    // The card the panel's selection lights up, if any.
+    pub selected: Option<usize>,
     pub pan: [f32; 2],
     pub mouse: [f32; 2],
     // What to do about the cards that did not fit, which depends on what the
@@ -205,7 +204,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
             hide_card(world, slot);
             continue;
         };
-        let selected = view.selected == Some(&card.path);
+        let selected = view.selected == Some(slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         let border = if selected {
             SELECTED_BORDER

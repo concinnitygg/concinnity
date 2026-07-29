@@ -162,16 +162,18 @@ pub(crate) struct EditorHook {
     // The Behavior panel: shown state, which of the world's Behavior entries is
     // open (an ordinal into them, so an unrelated add / delete cannot retarget
     // it), the selected outline row, the outline and palette scrolls, whether
-    // the palette is up, whether the value field holds keyboard focus, and the
-    // world checker's verdict on the open behavior. The name field carries its
-    // own focus, and `behavior_remove_armed` is the removal chip waiting on the
-    // press that carries it out.
+    // the palette is up and which of its options the keyboard is on, whether the
+    // value field holds keyboard focus, and the world checker's verdict on the
+    // open behavior. The name field carries its own focus, and
+    // `behavior_remove_armed` is the removal chip waiting on the press that
+    // carries it out.
     behavior_open: bool,
     behavior_index: usize,
     behavior_row: Option<usize>,
     behavior_scroll: usize,
     behavior_picking: bool,
     behavior_pick_scroll: usize,
+    behavior_pick: usize,
     behavior_focus: bool,
     behavior_name_focus: bool,
     behavior_remove_armed: bool,
@@ -180,6 +182,10 @@ pub(crate) struct EditorHook {
     // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
     behavior_pan: [f32; 2],
     behavior_pan_drag: Option<[f32; 2]>,
+    // The overview's selected card. The map's cards stand for whole behaviors
+    // and the things they reach rather than for places inside one, so the
+    // outline row the other two views share cannot address them.
+    behavior_overview_card: Option<usize>,
     // Editor-session hide / lock sets, by NAME (ids drift across preview
     // rebuilds). Hidden assets skip rendering (via the published
     // `EditorHidden` resource); locked ones are skipped by viewport picking.
@@ -392,6 +398,7 @@ mod axes_drive;
 mod behavior_asset;
 // Named to avoid colliding with the `use super::behavior_panel` import.
 mod behavior_edit;
+mod behavior_keys;
 mod billboard_drive;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
@@ -458,6 +465,7 @@ impl EditorHook {
             behavior_scroll: 0,
             behavior_picking: false,
             behavior_pick_scroll: 0,
+            behavior_pick: 0,
             behavior_focus: false,
             behavior_name_focus: false,
             behavior_remove_armed: false,
@@ -465,6 +473,7 @@ impl EditorHook {
             behavior_mode: ViewMode::default(),
             behavior_pan: [0.0, 0.0],
             behavior_pan_drag: None,
+            behavior_overview_card: None,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
             shift_held: false,

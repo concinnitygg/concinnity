@@ -5087,3 +5087,303 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
         assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
     }
 }
+
+// Escape arrives as its own one-frame pulse rather than as a `Key`.
+fn behavior_escape_input() -> FrameInput {
+    FrameInput {
+        escape: true,
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    }
+}
+
+fn press_behavior_key(h: &mut EditorHook, world: &mut World, key: crate::assets::Key) {
+    h.behavior_keys(world, &story_key_input(key));
+}
+
+// The title of the card the chart's selection belongs to.
+fn selected_card_title(h: &EditorHook) -> Option<String> {
+    let data = h.behavior_data();
+    data.card
+        .and_then(|i| data.chart.cards.get(i))
+        .map(|c| c.title.clone())
+}
+
+fn selected_overview_title(h: &EditorHook) -> Option<String> {
+    let data = h.behavior_data();
+    h.behavior_overview_card
+        .and_then(|i| data.overview.cards.get(i))
+        .map(|c| c.title.clone())
+}
+
+// The outline is a list, so a step is one row. With nothing selected the first
+// press starts from the end it comes from, and neither end wraps.
+#[test]
+fn behavior_arrows_step_the_outline_one_row_at_a_time() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
+    )]);
+    assert_eq!(h.behavior_row, None);
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(h.behavior_row, Some(0));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(h.behavior_row, Some(1));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    assert_eq!(h.behavior_row, Some(0));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    assert_eq!(h.behavior_row, Some(0), "the top of the list does not wrap");
+
+    // Left and Right have nothing to follow in a list.
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(h.behavior_row, Some(0));
+}
+
+// Stepping past the window scrolls it, so the selection is never off screen.
+#[test]
+fn behavior_arrows_scroll_the_outline_to_keep_the_selection_showing() {
+    let body: Vec<serde_json::Value> = (0..30).map(|_| serde_json::json!({"save": {}})).collect();
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "long",
+        serde_json::json!({"on": "start", "do": body}),
+    )]);
+    for _ in 0..25 {
+        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    }
+    let row = h.behavior_row.expect("a row is selected");
+    assert_eq!(row, 24);
+    assert!(h.behavior_scroll > 0, "the window followed the selection");
+    assert!(row >= h.behavior_scroll, "row {row} is above the window");
+}
+
+// The chart is spatial: a sideways step follows the chain into a branch, and a
+// vertical one crosses between the branches stacked under a branching node.
+#[test]
+fn behavior_arrows_follow_the_chart_chain_and_cross_its_branches() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [
+            {"if": {
+                "cond": {"bool": true},
+                "then": [{"show": {"target": "self"}}],
+                "else": [{"hide": {"target": "self"}}],
+            }},
+            {"save": {}},
+        ]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_mode, ViewMode::Chart);
+
+    // With nothing selected the chart starts at its first card, the trigger.
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("on tick"));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("hide"));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Left);
+    assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
+}
+
+// The map opens on the behavior that was showing, steps between its cards, and
+// Enter opens the behavior the card it lands on stands for.
+#[test]
+fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior(
+            "award",
+            serde_json::json!({"on": "start",
+                "do": [{"set": {"var": "score", "value": {"int": 1}}}]}),
+        ),
+        behavior(
+            "react",
+            serde_json::json!({"on": {"variable": "score"}, "do": []}),
+        ),
+    ]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    assert_eq!(h.behavior_mode, ViewMode::Overview);
+    assert_eq!(
+        selected_overview_title(&h).as_deref(),
+        Some("award"),
+        "the map opens on the behavior that was showing"
+    );
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(selected_overview_title(&h).as_deref(), Some("score"));
+    // A variable card stands for no behavior, so Enter leaves the map alone.
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert_eq!(h.behavior_mode, ViewMode::Overview);
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    assert_eq!(selected_overview_title(&h).as_deref(), Some("react"));
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert_eq!(h.behavior_index, 1);
+    assert_eq!(h.behavior_data().name, "react");
+    assert_eq!(h.behavior_mode, ViewMode::Chart);
+}
+
+// With no field focused, Enter opens the selected row's palette; the palette
+// then takes the arrows, and Enter inserts what it is highlighting.
+#[test]
+fn behavior_enter_opens_the_palette_and_its_arrows_pick_from_it() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    select_behavior(&mut h, &mut world, "do");
+    assert!(!h.behavior_focus, "a list row takes no typed value");
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(h.behavior_picking, "Enter opened the palette");
+    assert_eq!(h.behavior_pick, 0);
+
+    let second = h.behavior_data().picks[1].verb;
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(h.behavior_pick, 1);
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+
+    assert!(!h.behavior_picking, "picking closed the palette");
+    let body = open_args(&h)["do"].clone();
+    assert!(
+        body[0].get(second).is_some(),
+        "the highlighted option is the one that landed: {body:?}"
+    );
+}
+
+// A row offering nothing has no palette, so Enter is left alone rather than
+// arming one that never shows.
+#[test]
+fn behavior_enter_on_a_row_with_no_options_opens_nothing() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "name");
+    assert!(h.behavior_data().picks.is_empty());
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(!h.behavior_picking);
+}
+
+// The highlight brings itself into the window, so a vocabulary longer than the
+// palette shows is still reachable a press at a time.
+#[test]
+fn behavior_palette_highlight_scrolls_itself_into_the_window() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    select_behavior(&mut h, &mut world, "do");
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    let total = h.behavior_data().picks.len();
+    assert!(
+        total > behavior_panel::PICK_POOL,
+        "the node vocabulary overflows the palette"
+    );
+
+    for _ in 0..behavior_panel::PICK_POOL {
+        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    }
+    assert_eq!(h.behavior_pick, behavior_panel::PICK_POOL);
+    assert!(h.behavior_pick_scroll > 0, "the window followed it down");
+    assert!(h.behavior_pick >= h.behavior_pick_scroll);
+    assert!(h.behavior_pick < h.behavior_pick_scroll + behavior_panel::PICK_POOL);
+
+    // And back up again, dragging the window with it.
+    for _ in 0..behavior_panel::PICK_POOL {
+        press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    }
+    assert_eq!(h.behavior_pick, 0);
+    assert_eq!(h.behavior_pick_scroll, 0);
+}
+
+// Escape answers whichever state is waiting on a press, most consequential
+// first: the open palette, then an armed removal, then the focused field.
+#[test]
+fn behavior_escape_clears_one_waiting_state_at_a_time() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "do");
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(h.behavior_picking);
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    assert!(!h.behavior_picking, "the palette closed without picking");
+    assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(1));
+
+    press_remove(&mut h, &mut world);
+    assert!(h.behavior_remove_armed);
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    assert!(!h.behavior_remove_armed, "the armed removal was cancelled");
+    assert_eq!(h.behavior_entries().len(), 1);
+
+    select_behavior(&mut h, &mut world, "name");
+    assert!(h.behavior_focus, "a text row takes the value field");
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    assert!(!h.behavior_focus, "the value field gave the keyboard up");
+}
+
+// Escape gives the name field up without committing, reverting what was typed
+// rather than leaving it to be committed by a later Enter.
+#[test]
+fn behavior_escape_reverts_an_abandoned_rename() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "half typed");
+    h.behavior_keys(&mut world, &behavior_escape_input());
+
+    assert!(!h.behavior_name_focus);
+    assert_eq!(h.behavior_data().name, "chase");
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::NAME_INPUT),
+        "chase",
+    );
+}
+
+// Left and Right are the caret's while the value field holds the keyboard, so
+// they never also move the selection; Up and Down are free to.
+#[test]
+fn behavior_horizontal_keys_stay_with_the_caret_while_a_value_is_focused() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "name");
+    assert!(h.behavior_focus);
+    let row = h.behavior_row;
+
+    for key in [crate::assets::Key::Left, crate::assets::Key::Right] {
+        press_behavior_key(&mut h, &mut world, key);
+        assert_eq!(h.behavior_row, row, "{key:?} moved the selection");
+    }
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_ne!(h.behavior_row, row, "Down still steps the outline");
+}
+
+// The name field is the asset's rather than the selection's, so it holds the
+// arrows until Enter or Escape gives it up.
+#[test]
+fn behavior_name_field_holds_the_arrows_until_it_is_given_up() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
+    )]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(h.behavior_row, None, "the arrows did not reach the outline");
+
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    assert_eq!(h.behavior_row, Some(0));
+}

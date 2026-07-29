@@ -3,7 +3,8 @@
 // EditorHook: the Behavior panel's actions. The panel opens one `Behavior`
 // entry at a time and edits its authored args directly, so every change is an
 // ordinary world edit -- the live preview rebuilds from the in-memory entries
-// and SAVE persists them, like any other panel.
+// and SAVE persists them, like any other panel. What the keyboard does with
+// these actions is `behavior_keys.rs`.
 //
 // A behavior body has no unbounded loop and no recursion, so it always
 // terminates; that is what makes running an edited body in the live world safe
@@ -21,10 +22,10 @@ use concinnity_cook::ComponentType;
 use serde_json::Value;
 
 use super::*;
-use crate::assets::Key;
 use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fields;
 use crate::editor::behavior::graph::{self, Chart};
+use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::relations;
 use crate::editor::behavior_chart;
@@ -189,6 +190,8 @@ impl EditorHook {
             picks: &data.picks,
             picking: self.behavior_picking && !data.picks.is_empty(),
             pick_scroll: self.behavior_pick_scroll,
+            pick: self.behavior_pick,
+            overview_card: self.behavior_overview_card,
             editable: data.editable,
             // Focus is asserted only while frontmost, so a buried panel's field
             // cannot steal the keyboard.
@@ -212,6 +215,7 @@ impl EditorHook {
         self.behavior_scroll = 0;
         self.behavior_picking = false;
         self.behavior_pick_scroll = 0;
+        self.behavior_pick = 0;
         self.behavior_focus = false;
         self.behavior_name_focus = false;
         self.behavior_remove_armed = false;
@@ -295,6 +299,7 @@ impl EditorHook {
             BehaviorAction::Palette => {
                 self.behavior_picking = !self.behavior_picking;
                 self.behavior_pick_scroll = 0;
+                self.behavior_pick = 0;
                 self.behavior_focus = false;
             }
             BehaviorAction::Choose(i) => self.choose_behavior_pick(i, world),
@@ -399,24 +404,10 @@ impl EditorHook {
             .behavior_rows()
             .iter()
             .position(|r| r.element.as_ref() == Some(&moved));
-        self.ensure_behavior_row_visible();
+        self.ensure_behavior_visible();
     }
 
-    // The per-frame editing key, while the panel is frontmost: Enter commits
-    // whichever field holds the keyboard -- the name onto the open behavior, or
-    // the value into the selected row.
-    pub(super) fn behavior_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if input.captured_key != Some(Key::Enter) {
-            return;
-        }
-        if self.behavior_name_focus {
-            self.rename_behavior(world);
-            return;
-        }
-        self.commit_behavior_value(world);
-    }
-
-    fn commit_behavior_value(&mut self, world: &mut World) {
+    pub(super) fn commit_behavior_value(&mut self, world: &mut World) {
         if !self.behavior_focus {
             return;
         }
@@ -442,7 +433,17 @@ impl EditorHook {
         self.behavior_picking = false;
         self.behavior_pan_drag = None;
         self.behavior_pan = [0.0, 0.0];
-        self.ensure_behavior_row_visible();
+        if self.behavior_mode == ViewMode::Overview {
+            // The map opens on the behavior that was showing, so it says where
+            // the panel already is rather than starting from nothing.
+            let data = self.behavior_data();
+            self.behavior_overview_card = data
+                .overview
+                .cards
+                .iter()
+                .position(|c| c.behavior == Some(data.index));
+        }
+        self.ensure_behavior_visible();
     }
 
     // Open the behavior an overview card stands for, in the chart view, so
@@ -519,20 +520,40 @@ impl EditorHook {
         behavior_panel::visible_rows(self.effective_size(PanelKey::Behavior)[1])
     }
 
-    fn ensure_behavior_row_visible(&mut self) {
-        let Some(row) = self.behavior_row else {
+    // Bring what is selected into view, whichever view is showing it: the
+    // outline scrolls to its row, and either chart pans to its card.
+    pub(super) fn ensure_behavior_visible(&mut self) {
+        match self.behavior_mode {
+            ViewMode::Overview => self.pan_to_overview_card(),
+            ViewMode::Chart => {
+                if let Some(row) = self.behavior_row {
+                    self.pan_to_behavior_row(row);
+                }
+            }
+            ViewMode::Outline => {
+                let Some(row) = self.behavior_row else {
+                    return;
+                };
+                let shown = self.behavior_rows_shown();
+                self.behavior_scroll = navigate::scroll_to(row, self.behavior_scroll, shown);
+            }
+        }
+    }
+
+    fn pan_to_overview_card(&mut self) {
+        let data = self.behavior_data();
+        let Some(card) = self
+            .behavior_overview_card
+            .and_then(|i| data.overview.cards.get(i))
+        else {
             return;
         };
-        if self.behavior_mode == ViewMode::Chart {
-            self.pan_to_behavior_row(row);
-            return;
-        }
-        let shown = self.behavior_rows_shown();
-        if row < self.behavior_scroll {
-            self.behavior_scroll = row;
-        } else if row >= self.behavior_scroll + shown {
-            self.behavior_scroll = row + 1 - shown;
-        }
+        self.behavior_pan = behavior_chart::pan_to(
+            card,
+            self.behavior_canvas(),
+            self.behavior_pan,
+            &data.overview,
+        );
     }
 
     // Bring the card `row` belongs to into the canvas, so selecting one of a

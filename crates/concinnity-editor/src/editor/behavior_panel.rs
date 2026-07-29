@@ -236,10 +236,15 @@ pub(crate) struct BehaviorView<'a> {
     // it. Empty until something on the chart is selected.
     pub card: Option<usize>,
     pub fields: &'a [usize],
-    // The palette for the selected row, shown while `picking`.
+    // The palette for the selected row, shown while `picking`, windowed by
+    // `pick_scroll` with `pick` the option the keyboard is on.
     pub picks: &'a [Pick],
     pub picking: bool,
     pub pick_scroll: usize,
+    pub pick: usize,
+    // The overview's selected card, which is its own: the map's cards stand for
+    // whole behaviors rather than for rows of the open one.
+    pub overview_card: Option<usize>,
     // Whether the selected row takes a typed value, and whether that field
     // asserts keyboard focus this frame.
     pub editable: bool,
@@ -690,14 +695,11 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
     behavior_chart::ChartView {
         chart: view.shown_chart(),
         // The card the selection belongs to, so a node stays lit while its own
-        // fields are picked through in the inspector. The overview's cards are
-        // whole behaviors, which the panel selects by opening.
+        // fields are picked through in the inspector. The overview keeps its
+        // own, because its cards stand for behaviors rather than for rows.
         selected: match view.mode {
-            ViewMode::Overview => None,
-            _ => view
-                .card
-                .and_then(|i| view.chart.cards.get(i))
-                .map(|c| &c.path),
+            ViewMode::Overview => view.overview_card,
+            _ => view.card,
         },
         pan: view.pan,
         mouse: view.mouse,
@@ -1063,14 +1065,14 @@ fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
         };
         let r = pick_rect(o, w, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
-        place_rounded(
-            world,
-            pick_bg(slot),
-            r,
-            if hovered { theme::HOVER_TINT } else { ROW_TINT },
-            theme::CONTROL_RADIUS,
-            true,
-        );
+        let tint = if i == view.pick {
+            theme::SELECTED_TINT
+        } else if hovered {
+            theme::HOVER_TINT
+        } else {
+            ROW_TINT
+        };
+        place_rounded(world, pick_bg(slot), r, tint, theme::CONTROL_RADIUS, true);
         let text_y = r[1] + PICK_ROW_H * 0.5 - theme::TEXT_HALF;
         widget::place_left_label(
             world,
@@ -1307,6 +1309,8 @@ mod tests {
             picks,
             picking: false,
             pick_scroll: 0,
+            pick: 0,
+            overview_card: None,
             editable: false,
             focus: false,
             name_focus: false,
@@ -1630,6 +1634,55 @@ mod tests {
         apply(&mut world, Some(&view(&rows, &picks)), o, s);
         assert!(!sprite(&world, DROP_BG).visible);
         assert!(!label(&world, pick_label(0)).visible);
+    }
+
+    // The map keeps a selection of its own, because its cards stand for whole
+    // behaviors rather than for rows of the open one. Without it a step through
+    // the map would move nothing anyone can see.
+    #[test]
+    fn the_overview_lights_the_card_its_own_selection_is_on() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let v = BehaviorView {
+            mode: ViewMode::Overview,
+            overview: sample_chart(),
+            overview_card: Some(1),
+            // The outline selection the other views share reaches no card here.
+            card: Some(0),
+            ..view(&rows, &[])
+        };
+        apply(&mut world, Some(&v), [20.0, 20.0], overview_size());
+        assert_eq!(sprite(&world, behavior_chart::card_bg(1)).border_width, 2.0);
+        assert_eq!(sprite(&world, behavior_chart::card_bg(0)).border_width, 1.0);
+    }
+
+    // Where the keyboard is in the palette is drawn the way a selected outline
+    // row is, so the highlight reads as the selection it is rather than as a
+    // second kind of hover. It follows the scroll, because a slot stands for a
+    // different option once the window has moved.
+    #[test]
+    fn the_palette_draws_the_option_the_keyboard_is_on_as_selected() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let v = BehaviorView {
+            picking: true,
+            pick: 2,
+            ..view(&rows, &picks)
+        };
+        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        assert_eq!(sprite(&world, pick_bg(2)).tint, theme::SELECTED_TINT);
+        assert_ne!(sprite(&world, pick_bg(1)).tint, theme::SELECTED_TINT);
+
+        let scrolled = BehaviorView {
+            picking: true,
+            pick: 2,
+            pick_scroll: 2,
+            ..view(&rows, &picks)
+        };
+        apply(&mut world, Some(&scrolled), [20.0, 20.0], size());
+        assert_eq!(sprite(&world, pick_bg(0)).tint, theme::SELECTED_TINT);
+        assert_ne!(sprite(&world, pick_bg(2)).tint, theme::SELECTED_TINT);
     }
 
     // A panel's elements draw in injection order, so the palette's backing
