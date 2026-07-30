@@ -71,6 +71,9 @@ impl EditorHook {
             HudAction::Undo => self.undo(world),
             HudAction::Redo => self.redo(world),
             HudAction::ToggleView => self.view_open = !self.view_open,
+            HudAction::PlayPause => self.sim_toggle_play(),
+            HudAction::Step => self.sim.step(),
+            HudAction::Stop => self.sim_stop(),
             // A bar click that hit no chip: swallowed (the caller already
             // dismisses any open overlays).
             HudAction::Consume => {}

@@ -28,6 +28,9 @@ pub(super) struct VariablesData {
     pub rows: Vec<Row>,
     pub authoritative: bool,
     pub status: Option<String>,
+    // Whether a live session's values are showing in place of the declared
+    // starting values (see `hook/trace_drive.rs`).
+    pub live: bool,
 }
 
 // The type words a variable steps through, in the order the palette lists them.
@@ -46,11 +49,46 @@ impl EditorHook {
     pub(super) fn variables_data(&self) -> VariablesData {
         let args = self.variables_args();
         let used = relations::variables_used(&self.behavior_pairs());
-        let rows = variables::rows(args.as_ref(), &used);
+        let mut rows = variables::rows(args.as_ref(), &used);
+        // While a session runs, the value column carries the runtime's current
+        // values, and the selected entity's behavior locals join the list for
+        // inspection. Both revert to the declarations on Stop (the trace drive
+        // clears them).
+        let live = !self.live_vars.is_empty();
+        if live {
+            for row in &mut rows {
+                if let Some((_, ty, value)) = self.live_vars.iter().find(|(n, _, _)| *n == row.name)
+                {
+                    row.ty = ty.clone();
+                    row.value = value.clone();
+                }
+            }
+            // A runtime variable no authored row covers still shows: it holds
+            // state right now, whatever the table says.
+            for (name, ty, value) in &self.live_vars {
+                if rows.iter().all(|r| &r.name != name) {
+                    rows.push(Row {
+                        name: name.clone(),
+                        at: None,
+                        ty: ty.clone(),
+                        value: value.clone(),
+                        local: false,
+                    });
+                }
+            }
+            rows.extend(self.live_locals.iter().map(|(name, ty, value)| Row {
+                name: name.clone(),
+                at: None,
+                ty: ty.clone(),
+                value: value.clone(),
+                local: true,
+            }));
+        }
         VariablesData {
             authoritative: variables::authoritative(args.as_ref()),
             status: self.variables_status(&rows),
             rows,
+            live,
         }
     }
 
@@ -68,7 +106,7 @@ impl EditorHook {
         }
         let missing: Vec<&str> = rows
             .iter()
-            .filter(|r| !r.declared())
+            .filter(|r| !r.declared() && !r.local)
             .map(|r| r.name.as_str())
             .collect();
         if missing.is_empty() || !variables::authoritative(self.variables_args().as_ref()) {
@@ -100,6 +138,7 @@ impl EditorHook {
             name_focus: self.variables_name_focus && on_declared && frontmost,
             value_focus: self.variables_value_focus && on_declared && frontmost,
             status: data.status.as_deref(),
+            live: data.live,
             mouse,
         }
     }

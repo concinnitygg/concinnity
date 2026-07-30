@@ -412,7 +412,7 @@ impl EditorHook {
 
     // Show or hide the gizmo sprites for this frame.
     pub(super) fn drive_gizmo_draw(&self, world: &mut World, vp: [f32; 2], shown: bool) {
-        let layout = if shown && !self.world_capture {
+        let layout = if shown && !self.sim.playing() {
             self.gizmo_layout(world, vp)
         } else {
             None

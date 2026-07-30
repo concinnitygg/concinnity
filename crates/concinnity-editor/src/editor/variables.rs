@@ -23,6 +23,10 @@ pub(crate) struct Row {
     // The declared type and starting value; both empty when undeclared.
     pub ty: String,
     pub value: String,
+    // A live session's per-entity behavior local, shown for inspection only:
+    // never part of the table, so the toolbar's declare / retype / remove and
+    // the text fields all stand down on it.
+    pub local: bool,
 }
 
 impl Row {
@@ -45,6 +49,7 @@ pub(crate) fn rows(args: Option<&Value>, used: &[String]) -> Vec<Row> {
                 at: Some(i),
                 ty: value.map(palette::verb_of).unwrap_or_default().to_string(),
                 value: outline::literal_text(value.and_then(palette::body_of)),
+                local: false,
             }
         })
         .collect();
@@ -59,6 +64,7 @@ pub(crate) fn rows(args: Option<&Value>, used: &[String]) -> Vec<Row> {
             at: None,
             ty: String::new(),
             value: String::new(),
+            local: false,
         }))
         .collect()
 }

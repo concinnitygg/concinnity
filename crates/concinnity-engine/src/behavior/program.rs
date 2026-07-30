@@ -7,7 +7,7 @@
 // nothing and skips its node rather than panicking.
 
 use crate::assets::{Behavior, BehaviorSource, CueKind, Expr, Literal, Node, StoryPlayback};
-use crate::ecs::{AudioClipHandle, Entity, asset_id::AssetId};
+use crate::ecs::{AudioClipHandle, Entity, TracePath, TraceStep, asset_id::AssetId};
 use concinnity_core::ecs::ComponentTag;
 
 // A value flowing through a behavior body.
@@ -72,6 +72,18 @@ impl Val {
         }
     }
 
+    // The cross-boundary form execution tracing publishes (`Val` is private to
+    // this system).
+    pub(super) fn to_trace(self) -> crate::ecs::TraceVal {
+        match self {
+            Val::Bool(b) => crate::ecs::TraceVal::Bool(b),
+            Val::Int(i) => crate::ecs::TraceVal::Int(i),
+            Val::Float(f) => crate::ecs::TraceVal::Float(f),
+            Val::Vec3(v) => crate::ecs::TraceVal::Vec3(v),
+            Val::Entity(e) => crate::ecs::TraceVal::Entity(e.to_bits()),
+        }
+    }
+
     // Whether two values are the same shape, so a restored save can be
     // rejected when the world's declaration changed type under it.
     pub(super) fn same_type(self, other: Val) -> bool {
@@ -125,9 +137,19 @@ pub(super) enum CExpr {
     Never,
 }
 
-// A slot-resolved node.
+// A slot-resolved node with its compile-assigned identity: `id` is the node's
+// pre-order position across the whole body, indexing the program's `paths`
+// table so execution tracing can address the node the way the world checker's
+// faults do.
 #[derive(Debug)]
-pub(super) enum CNode {
+pub(super) struct CNode {
+    pub(super) id: u32,
+    pub(super) op: COp,
+}
+
+// A slot-resolved node operation.
+#[derive(Debug)]
+pub(super) enum COp {
     If {
         cond: CExpr,
         then: Vec<CNode>,
@@ -200,6 +222,8 @@ pub(super) struct Program {
     // Component tags each declared query selects on, indexed by slot.
     pub(super) queries: Vec<Vec<u8>>,
     pub(super) body: Vec<CNode>,
+    // Each node's authored-tree path, indexed by `CNode::id`.
+    pub(super) paths: Vec<TracePath>,
     // How many binding slots a run of this body needs.
     pub(super) bindings: usize,
 }
@@ -328,7 +352,14 @@ pub(super) fn compile(def: Behavior, vars: &mut VarTable) -> Program {
         bindings: Vec::new(),
         peak: 0,
     };
-    let body = compile_nodes(&def.body, &mut names, vars);
+    let mut paths = Vec::new();
+    let body = compile_nodes(
+        &def.body,
+        &mut names,
+        vars,
+        &[TraceStep::Field("do")],
+        &mut paths,
+    );
     let bindings = names.peak;
 
     Program {
@@ -337,64 +368,100 @@ pub(super) fn compile(def: Behavior, vars: &mut VarTable) -> Program {
         local_inits,
         queries,
         body,
+        paths,
         bindings,
     }
 }
 
-fn compile_nodes(nodes: &[Node], names: &mut Names<'_>, vars: &mut VarTable) -> Vec<CNode> {
+// A branch list's path base: the parent node's path plus the verb and branch
+// keys the authored JSON nests it under (matching the world checker's fault
+// paths, so a traced node lands on the same row / card a fault would).
+fn branch(path: &[TraceStep], verb: &'static str, list: &'static str) -> Vec<TraceStep> {
+    let mut base = path.to_vec();
+    base.push(TraceStep::Field(verb));
+    base.push(TraceStep::Field(list));
+    base
+}
+
+fn compile_nodes(
+    nodes: &[Node],
+    names: &mut Names<'_>,
+    vars: &mut VarTable,
+    base: &[TraceStep],
+    paths: &mut Vec<TracePath>,
+) -> Vec<CNode> {
     let depth = names.bindings.len();
-    let out = nodes.iter().map(|n| compile_node(n, names, vars)).collect();
+    let out = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let mut path = base.to_vec();
+            path.push(TraceStep::Index(i as u32));
+            // Pre-order: the node claims its id (and path slot) before its
+            // branches compile, so ids read top-down.
+            let id = paths.len() as u32;
+            paths.push(path.clone());
+            let op = compile_node(n, names, vars, &path, paths);
+            CNode { id, op }
+        })
+        .collect();
     names.bindings.truncate(depth);
     out
 }
 
-fn compile_node(node: &Node, names: &mut Names<'_>, vars: &mut VarTable) -> CNode {
+fn compile_node(
+    node: &Node,
+    names: &mut Names<'_>,
+    vars: &mut VarTable,
+    path: &[TraceStep],
+    paths: &mut Vec<TracePath>,
+) -> COp {
     match node {
         Node::If {
             cond,
             then,
             otherwise,
-        } => CNode::If {
+        } => COp::If {
             cond: compile_expr(cond, names, vars),
-            then: compile_nodes(then, names, vars),
-            otherwise: compile_nodes(otherwise, names, vars),
+            then: compile_nodes(then, names, vars, &branch(path, "if", "then"), paths),
+            otherwise: compile_nodes(otherwise, names, vars, &branch(path, "if", "else"), paths),
         },
         Node::ForEach { query, bind, body } => {
             let Some(query) = names.query(query) else {
-                return CNode::Never;
+                return COp::Never;
             };
             let depth = names.bindings.len();
             let bind = names.bind(bind);
-            let body = compile_nodes(body, names, vars);
+            let body = compile_nodes(body, names, vars, &branch(path, "for_each", "do"), paths);
             names.bindings.truncate(depth);
-            CNode::ForEach { query, bind, body }
+            COp::ForEach { query, bind, body }
         }
         Node::Let { name, value } => {
             let value = compile_expr(value, names, vars);
-            CNode::Let {
+            COp::Let {
                 bind: names.bind(name),
                 value,
             }
         }
-        Node::Set { var, value, add } => CNode::SetVar {
+        Node::Set { var, value, add } => COp::SetVar {
             slot: vars.intern(var),
             value: compile_expr(value, names, vars),
             add: *add,
         },
         Node::SetLocal { local, value, add } => match names.local(local) {
-            Some(slot) => CNode::SetLocal {
+            Some(slot) => COp::SetLocal {
                 slot,
                 value: compile_expr(value, names, vars),
                 add: *add,
             },
-            None => CNode::Never,
+            None => COp::Never,
         },
         Node::SetTransform {
             entity,
             position,
             rotation_deg,
             scale,
-        } => CNode::SetTransform {
+        } => COp::SetTransform {
             entity: compile_expr(entity, names, vars),
             position: position.as_ref().map(|e| compile_expr(e, names, vars)),
             rotation_deg: rotation_deg.as_ref().map(|e| compile_expr(e, names, vars)),
@@ -408,7 +475,7 @@ fn compile_node(node: &Node, names: &mut Names<'_>, vars: &mut VarTable) -> CNod
             lifetime,
             bind,
         } => match template {
-            Some(template) => CNode::Spawn {
+            Some(template) => COp::Spawn {
                 template: *template,
                 position: *position,
                 rotation_deg: *rotation_deg,
@@ -418,36 +485,36 @@ fn compile_node(node: &Node, names: &mut Names<'_>, vars: &mut VarTable) -> CNod
                 lifetime: *lifetime,
                 bind: bind.as_ref().map(|b| names.bind(b)),
             },
-            None => CNode::Never,
+            None => COp::Never,
         },
-        Node::Despawn { target } => CNode::Despawn(compile_expr(target, names, vars)),
-        Node::Reparent { child, parent } => CNode::Reparent {
+        Node::Despawn { target } => COp::Despawn(compile_expr(target, names, vars)),
+        Node::Reparent { child, parent } => COp::Reparent {
             child: compile_expr(child, names, vars),
             parent: parent.as_ref().map(|e| compile_expr(e, names, vars)),
         },
-        Node::Show { target } => CNode::Visible(compile_expr(target, names, vars), true),
-        Node::Hide { target } => CNode::Visible(compile_expr(target, names, vars), false),
+        Node::Show { target } => COp::Visible(compile_expr(target, names, vars), true),
+        Node::Hide { target } => COp::Visible(compile_expr(target, names, vars), false),
         Node::Sound { clip, kind, volume } => match clip {
-            Some(clip) => CNode::Sound {
+            Some(clip) => COp::Sound {
                 clip: *clip,
                 kind: *kind,
                 volume: *volume,
             },
-            None => CNode::Never,
+            None => COp::Never,
         },
         Node::Scene { scene, transition } => match scene {
-            Some(scene) => CNode::Scene {
+            Some(scene) => COp::Scene {
                 scene: *scene,
                 transition: transition.clone(),
             },
-            None => CNode::Never,
+            None => COp::Never,
         },
         Node::Screen { screen } => match screen {
-            Some(screen) => CNode::Screen(*screen),
-            None => CNode::Never,
+            Some(screen) => COp::Screen(*screen),
+            None => COp::Never,
         },
-        Node::Story(playback) => CNode::Story(*playback),
-        Node::Save => CNode::Save,
+        Node::Story(playback) => COp::Story(*playback),
+        Node::Save => COp::Save,
     }
 }
 

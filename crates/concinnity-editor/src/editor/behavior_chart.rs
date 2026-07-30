@@ -11,6 +11,7 @@
 // the part still inside it and drops its text once too little is left to read.
 
 use super::behavior::graph::{Card, CardKind, Chart};
+use super::behavior::pulse;
 use super::behavior_panel::{CHAR_W, LIST_THUMB, LIST_TRACK};
 use super::registry::{self, PanelKey};
 use super::theme;
@@ -42,6 +43,9 @@ pub(crate) fn wire_label(i: usize) -> AssetId {
 }
 pub(crate) fn segment(i: usize) -> AssetId {
     AssetId(BASE + 0x300 + i as u32)
+}
+pub(crate) fn card_break(i: usize) -> AssetId {
+    AssetId(BASE + 0x360 + i as u32)
 }
 
 // Narrow enough that a trigger, a node, and the card that appends after it all
@@ -91,6 +95,9 @@ const HOVER_BORDER: [f32; 4] = [0.44, 0.48, 0.60, 1.0];
 const WIRE_TINT: [f32; 4] = [0.38, 0.41, 0.52, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
+// The breakpoint dot in a card's corner.
+const BREAK_TINT: [f32; 4] = [0.85, 0.30, 0.32, 1.0];
+const BREAK_R: f32 = 3.5;
 
 pub(crate) struct ChartView<'a> {
     pub chart: &'a Chart,
@@ -98,6 +105,10 @@ pub(crate) struct ChartView<'a> {
     pub selected: Option<usize>,
     // The card the checker's complaint is about, if any.
     pub faulted: Option<usize>,
+    // Cards whose node just executed, with each pulse's remaining strength;
+    // and cards holding a breakpoint. Both empty outside a live-debug session.
+    pub pulses: &'a [(usize, f32)],
+    pub breakpoints: &'a [usize],
     pub pan: [f32; 2],
     pub mouse: [f32; 2],
     // What to do about the cards that did not fit, which depends on what the
@@ -221,13 +232,33 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
         } else {
             BORDER_TINT
         };
+        let pulse_alpha = view
+            .pulses
+            .iter()
+            .find(|(s, _)| *s == slot)
+            .map(|(_, a)| *a)
+            .unwrap_or(0.0);
         widget::place_bordered(
             world,
             card_bg(slot),
             part,
-            fill(card.kind),
+            pulse::blend(fill(card.kind), pulse_alpha),
             border,
             if selected || faulted { 2.0 } else { 1.0 },
+        );
+        // The breakpoint dot sits inside the card's top-right corner.
+        place_rounded(
+            world,
+            card_break(slot),
+            [
+                part[0] + part[2] - BREAK_R * 2.0 - 5.0,
+                part[1] + 5.0,
+                BREAK_R * 2.0,
+                BREAK_R * 2.0,
+            ],
+            BREAK_TINT,
+            BREAK_R,
+            view.breakpoints.contains(&slot),
         );
         // Text is placed only in a card still showing its left edge and its full
         // height, so a half-scrolled card truncates cleanly instead of drawing
@@ -279,6 +310,7 @@ fn title_color(kind: CardKind) -> [f32; 3] {
 
 fn hide_card(world: &mut World, slot: usize) {
     widget::set_sprite_visible(world, card_bg(slot), false);
+    widget::set_sprite_visible(world, card_break(slot), false);
     widget::set_label_visible(world, card_title(slot), false);
     widget::set_label_visible(world, card_detail(slot), false);
 }
@@ -439,6 +471,7 @@ pub(crate) fn hide_all(world: &mut World) {
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids: Vec<AssetId> = (0..SEG_POOL).map(segment).collect();
     ids.extend((0..CARD_POOL).map(card_bg));
+    ids.extend((0..CARD_POOL).map(card_break));
     ids
 }
 
@@ -494,6 +527,8 @@ mod tests {
             chart,
             selected: None,
             faulted: None,
+            pulses: &[],
+            breakpoints: &[],
             pan,
             mouse: [-1.0, -1.0],
         }

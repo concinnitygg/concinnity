@@ -45,6 +45,7 @@ impl EditorHook {
             undo: self.can_undo(),
             redo: self.can_redo(),
             view_open: self.view_open,
+            sim: self.sim.state,
             visible: self.hud_visible,
         }
     }

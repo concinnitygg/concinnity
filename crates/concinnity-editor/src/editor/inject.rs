@@ -71,6 +71,10 @@ pub(crate) fn editor_hud(world: &mut World) {
     // frame with world-space AABBs. Runs on every injection, so a live-preview
     // rebuild keeps the index alive.
     world.insert_resource(crate::ecs::PickIndex::default());
+    // An editor session never touches the user's real save files: the systems
+    // that persist play state sample this at init and sandbox their saves, so
+    // every preview run starts fresh (see the protocol type).
+    world.insert_resource(crate::ecs::TransientSaves(true));
     // The editor HUD replaces the baked-in debug HUD (both would answer F1):
     // resolve the HUD font from its chips above, then drop the DebugHud so
     // build_internal_systems never constructs its system.
@@ -174,6 +178,9 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
         (hud::VIEW_BUTTON, bar.view),
         (hud::UNDO_BUTTON, bar.undo),
         (hud::REDO_BUTTON, bar.redo),
+        (hud::PLAY_BUTTON, bar.play),
+        (hud::STEP_BUTTON, bar.step),
+        (hud::STOP_BUTTON, bar.stop),
     ] {
         world.add_component(button_sprite(id, rect, theme::BUTTON_TINT, true));
     }
@@ -181,6 +188,9 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     world.add_component(centered_label(hud::VIEW_LABEL, "View", bar.view, font));
     world.add_component(centered_label(hud::UNDO_LABEL, "Undo", bar.undo, font));
     world.add_component(centered_label(hud::REDO_LABEL, "Redo", bar.redo, font));
+    world.add_component(centered_label(hud::PLAY_LABEL, "Play", bar.play, font));
+    world.add_component(centered_label(hud::STEP_LABEL, "Step", bar.step, font));
+    world.add_component(centered_label(hud::STOP_LABEL, "Stop", bar.stop, font));
 }
 
 // Materialize a templates asset spec into a live component through the engine's

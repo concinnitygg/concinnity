@@ -102,6 +102,9 @@ impl EditorHook {
         }
         self.dirty = true;
         self.rebuild_preview = true;
+        // The rebuild discards a running simulation's state, so the transport
+        // honestly drops to Stopped.
+        self.sim.on_edit();
         // The expansion follows the entries, so the Assets tree is now out of
         // date. Recomputed by the frame drive while the panel shows, so a burst
         // of edits costs one expansion rather than one per edit.
@@ -139,6 +142,7 @@ impl EditorHook {
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
         self.rebuild_preview = true;
+        self.sim.on_edit();
         self.tree_stale = true;
         self.close_form();
         self.row_menu = None;

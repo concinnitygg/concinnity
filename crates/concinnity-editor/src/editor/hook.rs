@@ -20,10 +20,12 @@
 // (Assets, edit form, Preview) are floating: holding their title bars drags them
 // (the hook owns each origin, clamped so a panel can never leave the screen).
 //
-// Cursor control: the editor holds the cursor by default (edit mode -- cursor
-// free, world frozen), publishing `MenuOverride(Some(true))`. Ticking the
-// Preview panel's capture checkbox hands the cursor to the world (`Some(false)`);
-// Escape takes it back. F1 hides / shows the whole HUD.
+// Cursor control follows the simulation transport (`editor/sim.rs`): while
+// Stopped or Paused the editor holds the cursor and the world sits frozen
+// (`MenuOverride(Some(true))`); Play hands the cursor to the running world
+// (`Some(false)`); Escape pauses and takes it back. Stop restores the authored
+// state through the same preview rebuild every committed edit takes. F1 hides /
+// shows the whole HUD.
 //
 // SAVE re-serializes the authored entry list to world.jsonl and recompiles the
 // blobs through the validated cook tail (`build_world_to_disk`). A successful
@@ -70,6 +72,7 @@ use super::marquee;
 use super::resize;
 use super::seeded_content;
 use super::selection::Selection;
+use super::sim;
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
@@ -103,9 +106,9 @@ pub(crate) struct EditorHook {
     saved: Vec<serde_json::Value>,
     // Whether `entries` has changes not yet written to disk.
     dirty: bool,
-    // Whether the world currently holds the cursor (play mode). Starts false:
+    // The simulation transport (Play / Pause / Step / Stop). Starts Stopped:
     // the editor owns the cursor at launch so the HUD is immediately usable.
-    world_capture: bool,
+    sim: sim::SimControl,
     // Whether the whole HUD is shown (F1 toggle). Starts shown.
     hud_visible: bool,
     // Whether the world-origin axes draw in the viewport (Preview panel row).
@@ -203,6 +206,20 @@ pub(crate) struct EditorHook {
     // and the things they reach rather than for places inside one, so the
     // outline row the other two views share cannot address them.
     behavior_overview_card: Option<usize>,
+    // Live-debug state fed by the runtime's execution trace while a play
+    // session runs with the Behavior or Variables panel open
+    // (`hook/trace_drive.rs`). Pulses cover the OPEN behavior only (paths are
+    // per-body); breakpoints are held by behavior NAME + node path so they
+    // survive preview rebuilds and body edits shifting node ids.
+    behavior_pulses: Vec<crate::editor::behavior::pulse::NodePulse>,
+    behavior_breakpoints: Vec<(String, crate::editor::behavior::path::Path)>,
+    trace_seen: u64,
+    live_vars: Vec<(String, String, String)>,
+    live_locals: Vec<(String, String, String)>,
+    // Ctrl state sampled from this frame's input, for the panel presses that
+    // resolve without direct input access (a Ctrl+click on a chart card
+    // toggles its breakpoint).
+    ctrl_held: bool,
     // Editor-session hide / lock sets, by NAME (ids drift across preview
     // rebuilds). Hidden assets skip rendering (via the published
     // `EditorHidden` resource); locked ones are skipped by viewport picking.
@@ -433,6 +450,8 @@ mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
+mod sim_control;
+mod trace_drive;
 // Named to avoid colliding with the `use super::story` module import.
 mod story_edit;
 // Named to avoid colliding with the `use super::variables_panel` import.
@@ -449,7 +468,7 @@ impl EditorHook {
             saved: entries.clone(),
             entries,
             dirty: false,
-            world_capture: false,
+            sim: sim::SimControl::default(),
             hud_visible: true,
             axes_visible: true,
             rebuild_preview: false,
@@ -500,6 +519,12 @@ impl EditorHook {
             variables_value_focus: false,
             behavior_clip: None,
             behavior_overview_card: None,
+            behavior_pulses: Vec::new(),
+            behavior_breakpoints: Vec::new(),
+            trace_seen: 0,
+            live_vars: Vec::new(),
+            live_locals: Vec::new(),
+            ctrl_held: false,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
             shift_held: false,
@@ -617,12 +642,14 @@ impl DebugHook for EditorHook {
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
-            // access (the Assets tree's additive select).
+            // access (the Assets tree's additive select, the chart's
+            // Ctrl+click breakpoint toggle).
             self.shift_held = input.shift;
-            // Escape hands the cursor back to the editor (leaves play mode
-            // and the fly camera alike).
+            self.ctrl_held = input.ctrl;
+            // Escape hands the cursor back to the editor: a running world
+            // pauses mid-state, and the fly camera exits.
             if input.escape {
-                self.world_capture = false;
+                self.sim.pause();
                 self.fly = false;
                 self.fly_clock = None;
             }
@@ -663,7 +690,7 @@ impl DebugHook for EditorHook {
                 // T / R / S pick the gizmo's mode (translate / rotate /
                 // scale), under the same guards as the history shortcuts.
                 if !input.ctrl
-                    && !self.world_capture
+                    && !self.sim.playing()
                     && !self.text_focus_active()
                     && self.gizmo_drag.is_none()
                 {
@@ -687,7 +714,7 @@ impl DebugHook for EditorHook {
                 // field does (its own editing keys must win), or a gizmo drag
                 // is mid-flight (its commit has not landed yet).
                 if input.ctrl
-                    && !self.world_capture
+                    && !self.sim.playing()
                     && !self.text_focus_active()
                     && self.gizmo_drag.is_none()
                 {
@@ -697,6 +724,9 @@ impl DebugHook for EditorHook {
                         _ => {}
                     }
                 }
+                // The transport shortcuts, live in every state (pausing a
+                // running world is their whole point).
+                self.sim_keys(input);
                 // Per-frame editing keys go to the frontmost open panel.
                 let front = self
                     .panel_order
@@ -735,12 +765,17 @@ impl DebugHook for EditorHook {
             }
         }
 
-        // Drive the world's cursor / freeze state: edit mode (`Some(true)`) frees
-        // the cursor and freezes the world; play mode (`Some(false)`) runs it.
+        // Drive the world's cursor / freeze state from the transport: Stopped /
+        // Paused (`Some(true)`) free the cursor and freeze the world; Playing
+        // (`Some(false)`) runs it -- as does the one frame a queued Step takes.
         // The fly flag layers on top: navigation input + cursor capture stay
         // live while the frozen world is flown through.
-        world.insert_resource(MenuOverride(Some(!self.world_capture)));
-        world.insert_resource(crate::ecs::FlyCam(self.fly && !self.world_capture));
+        self.drive_sim(world);
+        // Exchange execution-trace state with the behavior system: publish the
+        // request while a live-debug panel is open, ingest what last frame's
+        // simulated tick reported (pulses, live values, breakpoint hits).
+        self.drive_trace(world);
+        world.insert_resource(crate::ecs::FlyCam(self.fly && !self.sim.playing()));
         // Publish the world-origin axes for the renderer's line pass.
         // Republished every frame (the renderer expands whatever it finds), and
         // emptied while they are toggled off or the HUD is hidden, which drops
@@ -764,7 +799,7 @@ impl DebugHook for EditorHook {
         // pointer (edit mode); a captured camera (play / fly) owns the pointer
         // instead, so the sprite hides and no stray arrow lingers over the frozen
         // pointer. Its shape becomes a resize cursor over a resizable panel edge.
-        let owns_cursor = vp[0] > 0.0 && !self.world_capture && !self.fly;
+        let owns_cursor = vp[0] > 0.0 && !self.sim.playing() && !self.fly;
         cursor::set_visible(world, owns_cursor);
         let shape = if !owns_cursor || !shown {
             CursorShape::Default
@@ -837,7 +872,7 @@ impl DebugHook for EditorHook {
         Self::restore_fields(staged.world_mut(), &fields);
         staged
             .world_mut()
-            .insert_resource(MenuOverride(Some(!self.world_capture)));
+            .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
         let Some(backend) = app.world_mut().take_render_backend() else {
             return;

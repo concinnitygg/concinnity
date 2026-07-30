@@ -279,13 +279,8 @@ impl Panel for PreviewPanel {
     ) -> bool {
         let _ = world;
         match preview::hit_test(mx, my, o) {
-            Some(PreviewAction::ToggleCapture) => {
-                hook.world_capture = !hook.world_capture;
-                // Play mode and the fly camera are exclusive cursor owners.
-                if hook.world_capture {
-                    hook.fly = false;
-                    hook.fly_clock = None;
-                }
+            Some(PreviewAction::TogglePlay) => {
+                hook.sim_toggle_play();
                 true
             }
             Some(PreviewAction::ToggleFly) => {
@@ -305,7 +300,7 @@ impl Panel for PreviewPanel {
             world,
             o,
             preview::PreviewState {
-                capture: hook.world_capture,
+                playing: hook.sim.playing(),
                 fly: hook.fly,
                 axes: hook.axes_visible,
             },

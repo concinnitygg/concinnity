@@ -11,11 +11,14 @@
 // reserved ids). Each frame the hook re-anchors the bar to the window width
 // from the live viewport and hit-tests clicks. Save persists + live-swaps the
 // world; View opens / closes the View panel (`view.rs`), which in turn toggles
-// the Assets, Preview, and Templates panels. Running in the tick (before the
-// world step) means the layout applies the same frame GraphicsSystem draws it.
-// The whole HUD toggles with F1 (see `hook.rs`).
+// the Assets, Preview, and Templates panels. The simulation transport
+// (Play / Pause, Step, Stop -- `editor/sim.rs`) sits centered in the bar.
+// Running in the tick (before the world step) means the layout applies the
+// same frame GraphicsSystem draws it. The whole HUD toggles with F1 (see
+// `hook.rs`).
 
 use super::registry::ID_BASE;
+use super::sim::SimState;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};
 use crate::assets::{FrameInput, TextAlign};
@@ -30,6 +33,12 @@ pub(crate) const UNDO_BUTTON: AssetId = AssetId(ID_BASE + 5);
 pub(crate) const UNDO_LABEL: AssetId = AssetId(ID_BASE + 6);
 pub(crate) const REDO_BUTTON: AssetId = AssetId(ID_BASE + 7);
 pub(crate) const REDO_LABEL: AssetId = AssetId(ID_BASE + 8);
+pub(crate) const PLAY_BUTTON: AssetId = AssetId(ID_BASE + 9);
+pub(crate) const PLAY_LABEL: AssetId = AssetId(ID_BASE + 10);
+pub(crate) const STEP_BUTTON: AssetId = AssetId(ID_BASE + 11);
+pub(crate) const STEP_LABEL: AssetId = AssetId(ID_BASE + 12);
+pub(crate) const STOP_BUTTON: AssetId = AssetId(ID_BASE + 13);
+pub(crate) const STOP_LABEL: AssetId = AssetId(ID_BASE + 14);
 
 // Bar + button geometry, in window pixels. The bar spans the window top edge;
 // the chips sit vertically centered at its right end. On macOS the window's
@@ -39,7 +48,8 @@ pub(crate) const BAR_H: f32 = 30.0;
 pub(crate) const BTN_H: f32 = 22.0;
 const SAVE_W: f32 = 64.0;
 const VIEW_W: f32 = 72.0;
-const STEP_W: f32 = 56.0;
+const HISTORY_W: f32 = 56.0;
+const SIM_W: f32 = 56.0;
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 8.0;
 
@@ -50,6 +60,8 @@ pub(crate) const LABEL_TOP: f32 = BTN_H * 0.5 - theme::TEXT_HALF;
 
 const SAVE_TINT_ACTIVE: [f32; 4] = [0.72, 0.18, 0.22, 1.0];
 const LABEL_ACTIVE: [f32; 3] = [1.0, 1.0, 1.0];
+// The armed Stop chip: a run's state is there to discard.
+const STOP_TINT_ARMED: [f32; 4] = [0.44, 0.22, 0.24, 1.0];
 
 // Per-frame top-bar state the hook hands to `apply_layout` and `hit_test`.
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +73,8 @@ pub(crate) struct HudState {
     pub redo: bool,
     // Is the View panel open (accents the View chip)?
     pub view_open: bool,
+    // Where the simulation transport stands (drives the Play / Stop chips).
+    pub sim: SimState,
     // Is the whole HUD shown (F1 toggle)?
     pub visible: bool,
 }
@@ -75,32 +89,47 @@ pub(crate) enum HudAction {
     Redo,
     // The View button: open / close the View panel.
     ToggleView,
+    // The transport: Play / Pause, advance one frame, and (while a run's
+    // state is there to discard) restore the authored state.
+    PlayPause,
+    Step,
+    Stop,
     // A click on the bar that hits no chip: swallowed so it cannot reach the
     // world behind the bar.
     Consume,
 }
 
-// The chip rects (`[x, y, w, h]`, window pixels) for a `vw`-wide window,
-// packed right-to-left from the bar's right end. Pure: the layout pass and the
-// hit test both derive from it.
+// The chip rects (`[x, y, w, h]`, window pixels) for a `vw`-wide window: the
+// document chips packed right-to-left from the bar's right end, the transport
+// centered (clear of the macOS traffic lights at the left end). Pure: the
+// layout pass and the hit test both derive from it.
 pub(crate) struct BarLayout {
     pub save: [f32; 4],
     pub view: [f32; 4],
     pub redo: [f32; 4],
     pub undo: [f32; 4],
+    pub play: [f32; 4],
+    pub step: [f32; 4],
+    pub stop: [f32; 4],
 }
 
 pub(crate) fn layout(vw: f32) -> BarLayout {
     let y = (BAR_H - BTN_H) * 0.5;
     let save = [vw - MARGIN - SAVE_W, y, SAVE_W, BTN_H];
     let view = [save[0] - GAP - VIEW_W, y, VIEW_W, BTN_H];
-    let redo = [view[0] - GAP * 2.0 - STEP_W, y, STEP_W, BTN_H];
-    let undo = [redo[0] - GAP - STEP_W, y, STEP_W, BTN_H];
+    let redo = [view[0] - GAP * 2.0 - HISTORY_W, y, HISTORY_W, BTN_H];
+    let undo = [redo[0] - GAP - HISTORY_W, y, HISTORY_W, BTN_H];
+    let play = [(vw - SIM_W * 3.0 - GAP * 2.0) * 0.5, y, SIM_W, BTN_H];
+    let step = [play[0] + SIM_W + GAP, y, SIM_W, BTN_H];
+    let stop = [step[0] + SIM_W + GAP, y, SIM_W, BTN_H];
     BarLayout {
         save,
         view,
         redo,
         undo,
+        play,
+        step,
+        stop,
     }
 }
 
@@ -133,6 +162,12 @@ pub(crate) fn hit_test(
         Some(HudAction::Redo)
     } else if point_in(mx, my, bar.view) {
         Some(HudAction::ToggleView)
+    } else if point_in(mx, my, bar.play) {
+        Some(HudAction::PlayPause)
+    } else if point_in(mx, my, bar.step) {
+        Some(HudAction::Step)
+    } else if state.sim != SimState::Stopped && point_in(mx, my, bar.stop) {
+        Some(HudAction::Stop)
     } else if my < BAR_H && mx >= 0.0 && mx < vw {
         // The bar itself: swallow the click so it cannot fall through to the
         // world (and the hook dismisses any open overlays).
@@ -181,6 +216,22 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
             theme::LABEL_DIM
         }
     };
+    // The transport: the Play chip carries the accent (and reads "Pause")
+    // while the world runs; the Stop chip arms red while a run's state is
+    // there to discard, dimmed-not-hidden otherwise so the bar keeps its
+    // shape.
+    let playing = state.sim == SimState::Playing;
+    let stop_armed = state.sim != SimState::Stopped;
+    let play_tint = if playing {
+        theme::ACCENT_TINT
+    } else {
+        theme::BUTTON_TINT
+    };
+    let stop_tint = if stop_armed {
+        STOP_TINT_ARMED
+    } else {
+        theme::BUTTON_TINT
+    };
 
     place_sprite(
         world,
@@ -221,6 +272,45 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
         theme::CONTROL_RADIUS,
         true,
     );
+    place_rounded(
+        world,
+        PLAY_BUTTON,
+        bar.play,
+        play_tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_rounded(
+        world,
+        STEP_BUTTON,
+        bar.step,
+        theme::BUTTON_TINT,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_rounded(
+        world,
+        STOP_BUTTON,
+        bar.stop,
+        stop_tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_caption(
+        world,
+        PLAY_LABEL,
+        centered(bar.play),
+        if playing { "Pause" } else { "Play" },
+        LABEL_ACTIVE,
+    );
+    place_caption(world, STEP_LABEL, centered(bar.step), "Step", LABEL_ACTIVE);
+    place_caption(
+        world,
+        STOP_LABEL,
+        centered(bar.stop),
+        "Stop",
+        step_color(stop_armed),
+    );
     place_label(
         world,
         SAVE_LABEL,
@@ -257,10 +347,21 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
 
 // Every injected top-bar sprite / label id, so the F1-hidden pass can blank it.
 fn all_sprite_ids() -> Vec<AssetId> {
-    vec![BAR_BG, SAVE_BUTTON, VIEW_BUTTON, UNDO_BUTTON, REDO_BUTTON]
+    vec![
+        BAR_BG,
+        SAVE_BUTTON,
+        VIEW_BUTTON,
+        UNDO_BUTTON,
+        REDO_BUTTON,
+        PLAY_BUTTON,
+        STEP_BUTTON,
+        STOP_BUTTON,
+    ]
 }
 fn all_label_ids() -> Vec<AssetId> {
-    vec![SAVE_LABEL, VIEW_LABEL, UNDO_LABEL, REDO_LABEL]
+    vec![
+        SAVE_LABEL, VIEW_LABEL, UNDO_LABEL, REDO_LABEL, PLAY_LABEL, STEP_LABEL, STOP_LABEL,
+    ]
 }
 
 // Every top-bar element id (sprites + labels), so the hook can pin the whole bar
@@ -283,6 +384,21 @@ fn hide_all(world: &mut World) {
 
 fn centered(rect: [f32; 4]) -> [f32; 2] {
     [rect[0] + rect[2] * 0.5, rect[1] + LABEL_TOP]
+}
+
+// Position + colour + retitle a transport chip's label (the Play chip reads
+// "Pause" while the world runs).
+fn place_caption(world: &mut World, id: AssetId, pos: [f32; 2], content: &str, color: [f32; 3]) {
+    if let Some(l) = widget::label_mut(world, id) {
+        if l.content != content {
+            l.content = content.to_string();
+        }
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = TextAlign::Center;
+        l.color = color;
+        l.visible = true;
+    }
 }
 
 // Position + colour + show/hide a fixed-content label (a top-bar chip).
@@ -314,6 +430,7 @@ mod tests {
             undo: false,
             redo: false,
             view_open: view,
+            sim: SimState::Stopped,
             visible,
         }
     }
@@ -441,6 +558,79 @@ mod tests {
             hit_test(rx, ry, true, inert, 1280.0),
             Some(HudAction::Consume)
         );
+    }
+
+    // The transport packs centered in the bar without touching the
+    // right-packed document chips.
+    #[test]
+    fn layout_centers_the_transport() {
+        let bar = layout(1280.0);
+        let cluster = [bar.play[0], bar.stop[0] + bar.stop[2]];
+        let mid = (cluster[0] + cluster[1]) * 0.5;
+        assert!((mid - 640.0).abs() < 0.5, "centered: {cluster:?}");
+        assert_eq!(bar.step[0], bar.play[0] + bar.play[2] + GAP);
+        assert_eq!(bar.stop[0], bar.step[0] + bar.step[2] + GAP);
+        assert!(
+            bar.stop[0] + bar.stop[2] < bar.undo[0],
+            "clear of the history chips"
+        );
+    }
+
+    #[test]
+    fn hit_test_resolves_the_transport() {
+        let bar = layout(1280.0);
+        let (px, py) = mid(bar.play);
+        let (tx, ty) = mid(bar.step);
+        let (sx, sy) = mid(bar.stop);
+        let stopped = state(false, false, true);
+        assert_eq!(
+            hit_test(px, py, true, stopped, 1280.0),
+            Some(HudAction::PlayPause)
+        );
+        assert_eq!(
+            hit_test(tx, ty, true, stopped, 1280.0),
+            Some(HudAction::Step)
+        );
+        assert_eq!(
+            hit_test(sx, sy, true, stopped, 1280.0),
+            Some(HudAction::Consume),
+            "Stop is inert with nothing to discard"
+        );
+        let paused = HudState {
+            sim: SimState::Paused,
+            ..stopped
+        };
+        assert_eq!(
+            hit_test(sx, sy, true, paused, 1280.0),
+            Some(HudAction::Stop)
+        );
+    }
+
+    // The Play chip reads Pause and takes the accent while the world runs;
+    // the Stop chip arms red.
+    #[test]
+    fn apply_layout_marks_a_running_transport() {
+        let mut world = hud_world(1280.0, (0.0, 0.0));
+        apply_layout(&mut world, state(false, false, true));
+        let label = |world: &World, id: AssetId| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == id)
+                .cloned()
+                .expect("label present")
+        };
+        assert_eq!(label(&world, PLAY_LABEL).content, "Play");
+        assert_eq!(sprite(&world, PLAY_BUTTON).tint, theme::BUTTON_TINT);
+        assert_eq!(sprite(&world, STOP_BUTTON).tint, theme::BUTTON_TINT);
+
+        let playing = HudState {
+            sim: SimState::Playing,
+            ..state(false, false, true)
+        };
+        apply_layout(&mut world, playing);
+        assert_eq!(label(&world, PLAY_LABEL).content, "Pause");
+        assert_eq!(sprite(&world, PLAY_BUTTON).tint, theme::ACCENT_TINT);
+        assert_eq!(sprite(&world, STOP_BUTTON).tint, STOP_TINT_ARMED);
     }
 
     #[test]

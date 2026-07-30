@@ -72,12 +72,13 @@ pub(super) fn fly_step(
 }
 
 impl EditorHook {
-    // Flip the fly camera. Entering leaves play mode (the two capture states
-    // are exclusive); exiting drops the frame clock so re-entry starts fresh.
+    // Flip the fly camera. Entering pauses a running world (the two capture
+    // states are exclusive); exiting drops the frame clock so re-entry starts
+    // fresh.
     pub(super) fn toggle_fly(&mut self) {
         self.fly = !self.fly;
         if self.fly {
-            self.world_capture = false;
+            self.sim.pause();
         }
         self.fly_clock = None;
     }

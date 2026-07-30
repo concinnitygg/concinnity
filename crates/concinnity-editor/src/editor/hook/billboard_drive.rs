@@ -105,7 +105,7 @@ impl EditorHook {
     // this frame, or hide them while the HUD is down or the world holds the
     // cursor (play mode).
     pub(super) fn drive_billboards(&self, world: &mut World, vp: [f32; 2], shown: bool) {
-        if !shown || self.world_capture {
+        if !shown || self.sim.playing() {
             billboards::hide(world);
             return;
         }

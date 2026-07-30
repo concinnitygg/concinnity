@@ -295,6 +295,11 @@ pub(crate) struct BehaviorView<'a> {
     // screen. Marked wherever it shows rather than jumped to, so a check running
     // after every edit never moves the body under the author.
     pub fault_row: Option<usize>,
+    // Live-debug marks: executed cards / rows with each pulse's remaining
+    // strength, and the cards holding a breakpoint. Empty outside a session.
+    pub pulse_cards: &'a [(usize, f32)],
+    pub pulse_rows: &'a [(usize, f32)],
+    pub break_cards: &'a [usize],
     pub mouse: [f32; 2],
 }
 
@@ -793,6 +798,16 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> behavior_chart::ChartView<'a> {
                 .and_then(|i| view.rows.get(i))
                 .and_then(|r| fields::owning_card(&view.chart.cards, &r.path)),
         },
+        // Pulses and breakpoints address nodes of the open body, so the
+        // overview (whole behaviors) draws none.
+        pulses: match view.mode {
+            ViewMode::Overview => &[],
+            _ => view.pulse_cards,
+        },
+        breakpoints: match view.mode {
+            ViewMode::Overview => &[],
+            _ => view.break_cards,
+        },
         pan: view.pan,
         mouse: view.mouse,
         overflow: match view.mode {
@@ -1063,6 +1078,12 @@ fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2],
             theme::HOVER_TINT
         } else {
             ROW_TINT
+        };
+        // A row whose node just executed leans toward the pulse accent, the
+        // same mark its chart card carries.
+        let tint = match view.pulse_rows.iter().find(|(idx, _)| *idx == i) {
+            Some((_, alpha)) => super::behavior::pulse::blend(tint, *alpha),
+            None => tint,
         };
         // The fault is a border rather than a tint, so it says nothing about
         // whether the row is also the selected one.
@@ -1490,6 +1511,9 @@ mod tests {
             remove_armed: false,
             status: None,
             fault_row: None,
+            pulse_cards: &[],
+            pulse_rows: &[],
+            break_cards: &[],
             mouse: [0.0, 0.0],
         }
     }

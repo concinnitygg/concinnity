@@ -795,6 +795,168 @@ fn an_edited_behavior_loses_its_persisted_fired_flag() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// Execution tracing: on only while a request stands, with checker-shaped
+// node paths.
+
+fn branching_behavior() -> Behavior {
+    Behavior {
+        asset_id: AssetId(7),
+        body: vec![Node::If {
+            cond: Expr::Bool(true),
+            then: vec![set_var("n", 1, true)],
+            otherwise: vec![set_var("n", 5, true)],
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn without_a_request_no_trace_is_published() {
+    let mut world = world_with(vec![branching_behavior()]);
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+    assert!(
+        world
+            .resources
+            .get::<crate::ecs::ExecutionTrace>()
+            .is_none()
+    );
+}
+
+#[test]
+fn tracing_publishes_events_paths_and_values() {
+    use crate::ecs::{TraceEvent, TraceStep};
+
+    let mut world = world_with(vec![branching_behavior()]);
+    world.resources.insert(crate::ecs::TraceRequest::default());
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+
+    let trace = world
+        .resources
+        .get::<crate::ecs::ExecutionTrace>()
+        .expect("published while requested");
+    assert_eq!(trace.frame, 1);
+    let ran = |node| {
+        trace.events.contains(&TraceEvent {
+            behavior: AssetId(7),
+            node,
+        })
+    };
+    assert!(ran(0), "the if node ran");
+    assert!(ran(1), "the taken then arm ran");
+    assert!(!ran(2), "the else arm did not");
+    assert!(
+        trace
+            .vars
+            .contains(&("n".to_string(), crate::ecs::TraceVal::Int(1))),
+        "world variables carry this tick's values: {:?}",
+        trace.vars
+    );
+
+    // The path table addresses nodes the way the world checker's faults do.
+    let paths = world
+        .resources
+        .get::<crate::ecs::TracePaths>()
+        .expect("published with the first trace");
+    let of = |id: usize| &paths.0[0].1[id];
+    assert_eq!(of(0), &vec![TraceStep::Field("do"), TraceStep::Index(0)]);
+    assert_eq!(
+        of(1),
+        &vec![
+            TraceStep::Field("do"),
+            TraceStep::Index(0),
+            TraceStep::Field("if"),
+            TraceStep::Field("then"),
+            TraceStep::Index(0),
+        ]
+    );
+    assert_eq!(of(2)[3], TraceStep::Field("else"));
+}
+
+#[test]
+fn a_breakpoint_reports_a_hit() {
+    use crate::ecs::TraceEvent;
+
+    let mut world = world_with(vec![branching_behavior()]);
+    world.resources.insert(crate::ecs::TraceRequest {
+        entity: None,
+        breakpoints: vec![TraceEvent {
+            behavior: AssetId(7),
+            node: 1,
+        }],
+    });
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+    let trace = world.resources.get::<crate::ecs::ExecutionTrace>().unwrap();
+    assert_eq!(
+        trace.hit,
+        Some(TraceEvent {
+            behavior: AssetId(7),
+            node: 1,
+        })
+    );
+}
+
+#[test]
+fn tracing_surfaces_the_requested_entitys_locals() {
+    let scoped = Behavior {
+        asset_id: AssetId(9),
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".into()],
+        locals: vec![LocalDecl {
+            name: "count".into(),
+            value: Literal::Int(0),
+        }],
+        body: vec![Node::SetLocal {
+            local: "count".into(),
+            value: Expr::Int(1),
+            add: true,
+        }],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![scoped]);
+    let entity = spawn_prop(&mut world, [0.0; 3]);
+    world.resources.insert(crate::ecs::TraceRequest {
+        entity: Some(entity.to_bits()),
+        breakpoints: Vec::new(),
+    });
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+    tick(&mut sys, &mut world, 0.016);
+    let trace = world.resources.get::<crate::ecs::ExecutionTrace>().unwrap();
+    assert_eq!(
+        trace.locals,
+        vec![(
+            AssetId(9),
+            "count".to_string(),
+            crate::ecs::TraceVal::Int(2)
+        )]
+    );
+}
+
+#[test]
+fn transient_saves_neither_read_nor_write_state() {
+    let dir = save_dir("transient");
+
+    // A real run leaves a save behind.
+    let mut world = world_with(vec![counter_behavior()]);
+    let mut sys = persisting_system(&mut world, &dir);
+    tick(&mut sys, &mut world, 0.016);
+    assert!(save::state_file(&dir).exists());
+
+    // A transient session over the same directory: the save is not restored,
+    // and the session's own `save` node writes nothing.
+    let mut world2 = world_with(vec![counter_behavior()]);
+    world2.resources.insert(crate::ecs::TransientSaves(true));
+    let mut sys2 = persisting_system(&mut world2, &dir);
+    assert_eq!(var(&sys2, "visits"), 0, "nothing restored at init");
+    std::fs::remove_dir_all(&dir).ok();
+    tick(&mut sys2, &mut world2, 0.016);
+    assert_eq!(var(&sys2, "visits"), 1, "the once behavior fired fresh");
+    assert!(!save::state_file(&dir).exists(), "nothing written");
+}
+
 #[test]
 fn worlds_without_a_save_node_never_read_state() {
     let dir = save_dir("optin");

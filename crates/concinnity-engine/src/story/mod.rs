@@ -325,7 +325,17 @@ impl StorySystem {
 }
 
 impl System for StorySystem {
-    fn init(&mut self, _ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext) {
+        // A preview session's saves land in a sandbox wiped here, so the save
+        // UI works without touching the user's real files and every session
+        // starts fresh.
+        if ctx
+            .resource::<crate::ecs::TransientSaves>()
+            .is_some_and(|t| t.0)
+        {
+            self.save_dir = concinnity_core::paths::preview_saves_dir();
+            let _ = std::fs::remove_dir_all(&self.save_dir);
+        }
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.

@@ -9,7 +9,7 @@
 use crate::assets::Transform;
 use crate::ecs::{Entity, asset_id::AssetId};
 
-use super::program::{Arith, CExpr, CNode, Cmp, Val};
+use super::program::{Arith, CExpr, CNode, COp, Cmp, Val};
 
 // What a behavior may read this tick.
 pub(super) struct View<'a> {
@@ -23,6 +23,9 @@ pub(super) struct View<'a> {
     pub(super) transforms: &'a dyn Fn(Entity) -> Option<Transform>,
     pub(super) alive: &'a dyn Fn(Entity) -> bool,
     pub(super) self_entity: Option<Entity>,
+    // Node ids executed this run, recorded only while tracing is requested
+    // (`None` costs one branch per node).
+    pub(super) trace: &'a mut Option<Vec<u32>>,
 }
 
 // One world change a behavior asked for, in body order.
@@ -197,8 +200,11 @@ pub(super) fn exec(nodes: &[CNode], view: &mut View<'_>, out: &mut Vec<Effect>) 
 }
 
 fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
-    match node {
-        CNode::If {
+    if let Some(t) = view.trace.as_mut() {
+        t.push(node.id);
+    }
+    match &node.op {
+        COp::If {
             cond,
             then,
             otherwise,
@@ -208,7 +214,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             };
             exec(if pass { then } else { otherwise }, view, out);
         }
-        CNode::ForEach { query, bind, body } => {
+        COp::ForEach { query, bind, body } => {
             let Some(entities) = view.queries.get(*query as usize) else {
                 return;
             };
@@ -219,11 +225,11 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 exec(body, view, out);
             }
         }
-        CNode::Let { bind, value } => {
+        COp::Let { bind, value } => {
             let value = eval(value, view);
             set_binding(view, *bind, value);
         }
-        CNode::SetVar { slot, value, add } => {
+        COp::SetVar { slot, value, add } => {
             let Some(value) = eval(value, view) else {
                 return;
             };
@@ -233,7 +239,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 add: *add,
             });
         }
-        CNode::SetLocal { slot, value, add } => {
+        COp::SetLocal { slot, value, add } => {
             let Some(value) = eval(value, view) else {
                 return;
             };
@@ -243,7 +249,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 add: *add,
             });
         }
-        CNode::SetTransform {
+        COp::SetTransform {
             entity,
             position,
             rotation_deg,
@@ -267,7 +273,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             field(scale, &mut transform.scale);
             out.push(Effect::SetTransform { entity, transform });
         }
-        CNode::Spawn {
+        COp::Spawn {
             template,
             position,
             rotation_deg,
@@ -290,12 +296,12 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 set_binding(view, *bind, None);
             }
         }
-        CNode::Despawn(target) => {
+        COp::Despawn(target) => {
             if let Some(entity) = eval(target, view).and_then(Val::as_entity) {
                 out.push(Effect::Despawn(entity));
             }
         }
-        CNode::Reparent { child, parent } => {
+        COp::Reparent { child, parent } => {
             let Some(child) = eval(child, view).and_then(Val::as_entity) else {
                 return;
             };
@@ -310,24 +316,24 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             };
             out.push(Effect::Reparent { child, parent });
         }
-        CNode::Visible(target, visible) => {
+        COp::Visible(target, visible) => {
             if let Some(entity) = eval(target, view).and_then(Val::as_entity) {
                 out.push(Effect::Visible(entity, *visible));
             }
         }
-        CNode::Sound { clip, kind, volume } => out.push(Effect::Sound(crate::assets::PlayCue {
+        COp::Sound { clip, kind, volume } => out.push(Effect::Sound(crate::assets::PlayCue {
             clip: *clip,
             kind: *kind,
             volume: *volume,
         })),
-        CNode::Scene { scene, transition } => out.push(Effect::Scene {
+        COp::Scene { scene, transition } => out.push(Effect::Scene {
             scene: *scene,
             transition: transition.clone(),
         }),
-        CNode::Screen(screen) => out.push(Effect::Screen(*screen)),
-        CNode::Story(playback) => out.push(Effect::Story(*playback)),
-        CNode::Save => out.push(Effect::Save),
-        CNode::Never => {}
+        COp::Screen(screen) => out.push(Effect::Screen(*screen)),
+        COp::Story(playback) => out.push(Effect::Story(*playback)),
+        COp::Save => out.push(Effect::Save),
+        COp::Never => {}
     }
 }
 

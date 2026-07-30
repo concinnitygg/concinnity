@@ -138,7 +138,11 @@ fn click_row(h: &mut EditorHook, name: &str, world: &mut World) {
 #[test]
 fn starts_in_edit_mode_with_hud_shown() {
     let h = hook(Vec::new());
-    assert!(!h.world_capture, "editor holds the cursor at launch");
+    assert_eq!(
+        h.sim.state,
+        sim::SimState::Stopped,
+        "editor holds the cursor at launch"
+    );
     assert!(h.hud_visible, "HUD shown at launch");
     // Assets / View / Templates start closed; Preview starts shown.
     assert!(!h.panel_open && !h.view_open && !h.templates_open);
@@ -548,14 +552,18 @@ fn close_overlays_dismisses_the_picker_and_row_menu() {
 #[test]
 fn tick_escape_returns_cursor_to_editor() {
     let mut h = hook(Vec::new());
-    h.world_capture = true;
+    h.sim.state = sim::SimState::Playing;
     let mut world = world_with_input(FrameInput {
         escape: true,
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
     h.tick(&mut world);
-    assert!(!h.world_capture, "Escape leaves play mode");
+    assert_eq!(
+        h.sim.state,
+        sim::SimState::Paused,
+        "Escape pauses play mode"
+    );
 }
 
 #[test]
@@ -611,16 +619,16 @@ fn preview_rows_toggle_play_mode_and_fly() {
     let mut world = world_with_input(FrameInput::default());
 
     click(&mut h, &mut world, row_mid(0));
-    assert!(h.world_capture, "the checkbox click enters play mode");
+    assert!(h.sim.playing(), "the checkbox click enters play mode");
     click(&mut h, &mut world, row_mid(0));
-    assert!(!h.world_capture, "a second click leaves it");
+    assert!(!h.sim.playing(), "a second click leaves it");
 
     click(&mut h, &mut world, row_mid(1));
     assert!(h.fly, "the fly row starts the fly camera");
-    assert!(!h.world_capture);
+    assert!(!h.sim.playing());
     click(&mut h, &mut world, row_mid(0));
     assert!(
-        h.world_capture && !h.fly,
+        h.sim.playing() && !h.fly,
         "entering play mode ends the fly camera"
     );
 }
@@ -761,7 +769,7 @@ fn dragging_does_not_trigger_controls_it_crosses() {
         },
     );
     h.tick(&mut world);
-    assert!(!h.world_capture, "the drag swallowed the click");
+    assert!(!h.sim.playing(), "the drag swallowed the click");
     assert!(h.drag.is_some(), "still dragging");
 }
 
@@ -2994,10 +3002,10 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
     h.story_focus = false;
 
     // Play mode: the world owns the keyboard.
-    h.world_capture = true;
+    h.sim.state = sim::SimState::Playing;
     step(&mut h, Key::Z);
     assert_eq!(h.entries.len(), 1, "suppressed in play mode");
-    h.world_capture = false;
+    h.sim.state = sim::SimState::Stopped;
 
     step(&mut h, Key::Z);
     assert!(h.entries.is_empty(), "Ctrl+Z undoes the edit");
@@ -3272,7 +3280,7 @@ fn selection_ring_tracks_the_picked_asset() {
     assert!(s.border_width > 0.0 && s.tint[3] == 0.0, "border-only ring");
 
     // Play mode hides the ring; returning to edit mode restores it.
-    h.world_capture = true;
+    h.sim.state = sim::SimState::Playing;
     set_input(
         &mut world,
         FrameInput {
@@ -3282,7 +3290,7 @@ fn selection_ring_tracks_the_picked_asset() {
     );
     h.tick(&mut world);
     assert!(!ring(&world).visible, "hidden in play mode");
-    h.world_capture = false;
+    h.sim.state = sim::SimState::Stopped;
     h.tick(&mut world);
     assert!(ring(&world).visible, "back in edit mode it returns");
 }
@@ -6266,4 +6274,259 @@ fn an_overview_variable_card_opens_the_table_on_it() {
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Variables));
     let row = h.variables_row.expect("selected on the card's variable");
     assert_eq!(h.variables_data().rows[row].name, "score");
+}
+
+// The simulation transport: keys, chips, edit policy, and the trace exchange.
+
+fn playing_hook(entries: Vec<serde_json::Value>) -> EditorHook {
+    let mut h = hook(entries);
+    h.sim.toggle_play();
+    h
+}
+
+#[test]
+fn transport_keys_play_pause_stop_and_step() {
+    let mut h = hook(Vec::new());
+    let key = |k, shift| FrameInput {
+        ctrl: true,
+        shift,
+        captured_key: Some(k),
+        ..Default::default()
+    };
+    h.sim_keys(&key(crate::assets::Key::P, false));
+    assert!(h.sim.playing(), "Ctrl+P plays");
+    h.sim_keys(&key(crate::assets::Key::P, false));
+    assert_eq!(h.sim.state, sim::SimState::Paused, "Ctrl+P again pauses");
+    h.sim_keys(&key(crate::assets::Key::Period, false));
+    assert!(h.sim.take_run_frame(), "Ctrl+Period queues one step");
+    h.sim_keys(&key(crate::assets::Key::P, true));
+    assert_eq!(h.sim.state, sim::SimState::Stopped, "Ctrl+Shift+P stops");
+    assert!(
+        h.rebuild_preview,
+        "Stop restores through the preview rebuild"
+    );
+
+    // A focused text field owns the keyboard.
+    h.story_focus = true;
+    h.sim_keys(&key(crate::assets::Key::P, false));
+    assert_eq!(h.sim.state, sim::SimState::Stopped);
+}
+
+#[test]
+fn transport_chips_drive_the_transport() {
+    let mut h = hook(Vec::new());
+    let mut world = World::new_empty();
+    h.apply_top(HudAction::PlayPause, &mut world);
+    assert!(h.sim.playing());
+    h.apply_top(HudAction::Step, &mut world);
+    assert_eq!(
+        h.sim.state,
+        sim::SimState::Paused,
+        "Step while playing pauses"
+    );
+    h.apply_top(HudAction::Stop, &mut world);
+    assert_eq!(h.sim.state, sim::SimState::Stopped);
+    assert!(h.rebuild_preview);
+}
+
+#[test]
+fn a_committed_edit_stops_the_simulation() {
+    let mut h = playing_hook(vec![entry("box", "Prop")]);
+    h.entries.push(entry("box2", "Prop"));
+    h.mark_changed();
+    assert_eq!(
+        h.sim.state,
+        sim::SimState::Stopped,
+        "the rebuild discards the run, so the transport says so"
+    );
+}
+
+#[test]
+fn entering_play_ends_the_fly_camera_and_vice_versa() {
+    let mut h = hook(Vec::new());
+    h.toggle_fly();
+    assert!(h.fly);
+    h.sim_toggle_play();
+    assert!(h.sim.playing() && !h.fly, "play takes the cursor from fly");
+    h.toggle_fly();
+    assert!(h.fly);
+    assert_eq!(
+        h.sim.state,
+        sim::SimState::Paused,
+        "fly pauses a running world"
+    );
+}
+
+#[test]
+fn the_trace_request_follows_the_live_debug_panels() {
+    let mut h = hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    let mut world = World::new_empty();
+    h.drive_trace(&mut world);
+    assert!(
+        world.resource::<crate::ecs::TraceRequest>().is_none(),
+        "no panel open, no request"
+    );
+    h.behavior_open = true;
+    h.drive_trace(&mut world);
+    assert!(world.resource::<crate::ecs::TraceRequest>().is_some());
+    h.behavior_open = false;
+    h.drive_trace(&mut world);
+    assert!(
+        world.resource::<crate::ecs::TraceRequest>().is_none(),
+        "closing the panels withdraws it"
+    );
+}
+
+// A world carrying one published trace tick for behavior `b`'s first node.
+fn traced_world(id: crate::ecs::asset_id::AssetId, hit: bool) -> World {
+    use crate::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
+    let mut world = World::new_empty();
+    let event = TraceEvent {
+        behavior: id,
+        node: 0,
+    };
+    world.insert_resource(TracePaths(vec![(
+        id,
+        vec![vec![TraceStep::Field("do"), TraceStep::Index(0)]],
+    )]));
+    world.insert_resource(ExecutionTrace {
+        frame: 1,
+        events: vec![event],
+        vars: vec![("n".to_string(), TraceVal::Int(3))],
+        locals: Vec::new(),
+        hit: hit.then_some(event),
+    });
+    world
+}
+
+#[test]
+fn trace_events_become_pulses_and_live_values() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("b");
+    let mut h = playing_hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    h.behavior_open = true;
+    let mut world = traced_world(id, false);
+    h.drive_trace(&mut world);
+
+    assert_eq!(h.behavior_pulses.len(), 1);
+    assert_eq!(
+        h.behavior_pulses[0].path,
+        vec![path::field("do"), path::Step::Index(0)],
+        "the pulse addresses the node the way a checker fault would"
+    );
+    assert_eq!(
+        h.live_vars,
+        vec![("n".to_string(), "int".to_string(), "3".to_string())]
+    );
+    let data = h.behavior_data();
+    assert_eq!(
+        data.pulse_cards.len(),
+        1,
+        "the node's card carries the pulse"
+    );
+    assert_eq!(data.pulse_rows.len(), 1, "so does its outline row");
+    // The same frame again reports nothing new; the pulse just decays.
+    h.drive_trace(&mut world);
+    assert_eq!(h.behavior_pulses.len(), 1);
+
+    // Live values reach the Variables panel and retitle its value column.
+    let vdata = h.variables_data();
+    assert!(vdata.live);
+    assert!(
+        vdata.rows.iter().any(|r| r.name == "n" && r.value == "3"),
+        "{:?}",
+        vdata.rows
+    );
+}
+
+#[test]
+fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("b");
+    let mut h = playing_hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    h.behavior_open = true;
+    let mut world = traced_world(id, true);
+    h.drive_trace(&mut world);
+    assert_eq!(h.sim.state, sim::SimState::Paused, "the hit froze the run");
+    let row = h.behavior_row.expect("the panel landed on the node");
+    assert_eq!(
+        h.behavior_rows()[row].path,
+        vec![path::field("do"), path::Step::Index(0)]
+    );
+}
+
+#[test]
+fn stopping_clears_the_live_state() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("b");
+    let mut h = playing_hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    h.behavior_open = true;
+    let mut world = traced_world(id, false);
+    h.drive_trace(&mut world);
+    assert!(!h.behavior_pulses.is_empty() && !h.live_vars.is_empty());
+
+    assert!(h.sim.stop());
+    h.drive_trace(&mut world);
+    assert!(h.behavior_pulses.is_empty(), "Stop shows authored data");
+    assert!(h.live_vars.is_empty());
+    assert!(!h.variables_data().live);
+}
+
+#[test]
+fn ctrl_click_toggles_a_card_breakpoint() {
+    let mut h = hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    let mut world = World::new_empty();
+    h.behavior_open = true;
+    let data = h.behavior_data();
+    let card = data
+        .chart
+        .cards
+        .iter()
+        .position(|c| c.kind == CardKind::Node)
+        .expect("the body has a node card");
+
+    h.ctrl_held = true;
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_breakpoints.len(), 1);
+    assert_eq!(h.behavior_breakpoints[0].0, "b", "held by behavior name");
+    assert_eq!(
+        h.behavior_data().break_cards,
+        vec![card],
+        "the card shows its marker"
+    );
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    assert!(
+        h.behavior_breakpoints.is_empty(),
+        "a second toggle removes it"
+    );
+
+    // A plain click still selects.
+    h.ctrl_held = false;
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    assert!(h.behavior_row.is_some());
 }

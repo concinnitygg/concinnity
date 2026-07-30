@@ -190,6 +190,9 @@ pub(crate) struct VariablesView<'a> {
     pub value_focus: bool,
     // What the panel has to say about the table, if anything.
     pub status: Option<&'a str>,
+    // Whether the value column carries a live session's current values rather
+    // than the declared starting values (retitles the heading).
+    pub live: bool,
     pub mouse: [f32; 2],
 }
 
@@ -239,13 +242,15 @@ pub(crate) fn hit_test(
     if point_in(mx, my, new_rect(o, w)) {
         return Some(VariablesAction::New);
     }
-    if let Some(row) = view.selected_row() {
+    if let Some(row) = view.selected_row().filter(|r| !r.local) {
         if row.declared() && point_in(mx, my, name_rect(o, w)) {
             return Some(VariablesAction::FocusName);
         }
         // One chip declares an undeclared name and retypes a declared one: both
         // are "give this variable a type", which is the one thing a name the
-        // table is missing needs.
+        // table is missing needs. A live local is neither: it is not the
+        // table's to declare, so the toolbar stands down on it (the filter
+        // above).
         if point_in(mx, my, type_rect(o)) {
             return Some(match row.declared() {
                 true => VariablesAction::Retype,
@@ -286,7 +291,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&VariablesView>, o: [f32; 2]
 
     layout_header(world, view, o, w);
     layout_toolbar(world, view, o, w);
-    layout_columns(world, o, w);
+    layout_columns(world, view, o, w);
     layout_rows(world, view, o, s);
     layout_scrollbar(world, view, o, w, visible_rows(s[1]));
     layout_status(world, view, o, s);
@@ -406,14 +411,16 @@ fn layout_toolbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) 
 
 // The column headings. One label per column at the offset its rows use: the HUD
 // font is proportional, so padding a single string out to the column would not
-// line up with anything.
-fn layout_columns(world: &mut World, o: [f32; 2], _w: f32) {
+// line up with anything. While a session runs, the value column shows what
+// each variable holds now rather than what it starts at.
+fn layout_columns(world: &mut World, view: &VariablesView, o: [f32; 2], _w: f32) {
     let y = head_row_y(o) + HEAD_ROW_H * 0.5 - theme::TEXT_HALF;
     let left = o[0] + PAD;
+    let value_caption = if view.live { "now" } else { "starts at" };
     for (id, x, caption) in [
         (HEAD_NAME, PAD, "name"),
         (HEAD_TYPE, TYPE_X, "type"),
-        (HEAD_VALUE, VALUE_X, "starts at"),
+        (HEAD_VALUE, VALUE_X, value_caption),
     ] {
         widget::place_left_label(world, id, [left + x, y], caption, theme::LABEL_DIM, true);
     }
@@ -449,10 +456,15 @@ fn layout_rows(world: &mut World, view: &VariablesView, o: [f32; 2], s: [f32; 2]
         );
         let y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
         // An undeclared name reads in the warning colour and says so in the type
-        // column: the row is a prompt, not a declaration.
-        let (color, ty) = match row.declared() {
-            true => (theme::LABEL, row.ty.clone()),
-            false => (MISSING_LABEL, "undeclared".to_string()),
+        // column: the row is a prompt, not a declaration. A live session's
+        // behavior local reads in the command colour: inspectable, not part of
+        // the table.
+        let (color, ty) = if row.local {
+            (theme::LOG_COMMAND, format!("{} local", row.ty))
+        } else if row.declared() {
+            (theme::LABEL, row.ty.clone())
+        } else {
+            (MISSING_LABEL, "undeclared".to_string())
         };
         widget::place_left_label(
             world,
@@ -650,6 +662,7 @@ mod tests {
             at: Some(0),
             ty: ty.to_string(),
             value: value.to_string(),
+            local: false,
         }
     }
 
@@ -659,6 +672,7 @@ mod tests {
             at: None,
             ty: String::new(),
             value: String::new(),
+            local: false,
         }
     }
 
@@ -671,6 +685,7 @@ mod tests {
             name_focus: false,
             value_focus: false,
             status: None,
+            live: false,
             mouse: [-1.0, -1.0],
         }
     }

@@ -30,6 +30,7 @@ use crate::ecs::{Entity, EventCursor, PipelineContext, StepResult, System, asset
 mod program;
 mod run;
 mod save;
+mod trace;
 
 #[cfg(test)]
 mod tests;
@@ -146,6 +147,14 @@ pub struct BehaviorSystem {
     crossings: Vec<VolumeEvent>,
     presses: Vec<InteractSignal>,
     save_dir: PathBuf,
+    // Sampled from the `TransientSaves` resource at init: while true, the
+    // state file is neither read nor written, so a preview session starts
+    // fresh and leaves the user's saves untouched.
+    transient_saves: bool,
+    // Execution tracing (see `trace.rs`): the published tick counter, and
+    // whether the node-path table has been published this world.
+    trace_frame: u64,
+    trace_paths_published: bool,
     start_time: Option<Instant>,
     prev_elapsed: f32,
     // Instances present before the first tick are the world's initial
@@ -166,6 +175,9 @@ impl Default for BehaviorSystem {
             crossings: Vec::new(),
             presses: Vec::new(),
             save_dir: concinnity_core::paths::saves_dir(),
+            transient_saves: false,
+            trace_frame: 0,
+            trace_paths_published: false,
             start_time: None,
             prev_elapsed: 0.0,
             populated: false,
@@ -199,10 +211,17 @@ impl System for BehaviorSystem {
         self.vars = var_table.initial();
         self.var_table = var_table;
 
+        self.transient_saves = ctx
+            .resource::<crate::ecs::TransientSaves>()
+            .is_some_and(|t| t.0);
+        self.trace_frame = 0;
+        self.trace_paths_published = false;
+
         // Restore persisted state, but only in a world that saves: any other
         // world starts fresh and never touches the state file.
         let mut restored = 0usize;
-        if self.programs.iter().any(|p| p.def.saves_state())
+        if !self.transient_saves
+            && self.programs.iter().any(|p| p.def.saves_state())
             && let Some(state) = save::read_save(&save::state_file(&self.save_dir))
         {
             for (name, value) in &state.vars {
@@ -414,6 +433,12 @@ impl BehaviorSystem {
     }
 
     fn tick(&mut self, ctx: &mut PipelineContext, dt: f32, elapsed: f32) {
+        // Execution tracing is on only while an observer's request stands
+        // (the editor's Behavior panel); its absence costs this one lookup.
+        let request = ctx.resource::<crate::ecs::TraceRequest>().cloned();
+        let tracing = request.is_some();
+        let mut fired: Vec<(usize, Vec<u32>)> = Vec::new();
+
         let snapshot = self.gather(ctx);
         self.resync_instances(&snapshot);
         self.populated = true;
@@ -453,8 +478,13 @@ impl BehaviorSystem {
             self.pending[idx].2 -= dt;
             if self.pending[idx].2 <= 0.0 {
                 let (i, entity, _) = self.pending.swap_remove(idx);
-                if let Some(produced) = self.run_body(i, entity, &snapshot, dt, elapsed) {
+                if let Some((produced, nodes)) =
+                    self.run_body(i, entity, &snapshot, dt, elapsed, tracing)
+                {
                     effects.push((i, entity, produced));
+                    if tracing {
+                        fired.push((i, nodes));
+                    }
                 }
             } else {
                 idx += 1;
@@ -465,8 +495,13 @@ impl BehaviorSystem {
             let delay = self.programs[i].def.delay;
             if delay > 0.0 {
                 self.pending.push((i, entity, delay));
-            } else if let Some(produced) = self.run_body(i, entity, &snapshot, dt, elapsed) {
+            } else if let Some((produced, nodes)) =
+                self.run_body(i, entity, &snapshot, dt, elapsed, tracing)
+            {
                 effects.push((i, entity, produced));
+                if tracing {
+                    fired.push((i, nodes));
+                }
             }
         }
 
@@ -480,6 +515,10 @@ impl BehaviorSystem {
         if save_requested {
             self.write_state();
         }
+
+        if let Some(request) = request {
+            self.publish_trace(ctx, &request, &fired);
+        }
     }
 
     fn run_body(
@@ -489,13 +528,15 @@ impl BehaviorSystem {
         snapshot: &Snapshot,
         dt: f32,
         elapsed: f32,
-    ) -> Option<Vec<Effect>> {
+        tracing: bool,
+    ) -> Option<(Vec<Effect>, Vec<u32>)> {
         let locals = self.instances[i]
             .iter()
             .find(|inst| inst.entity == entity)
             .map(|inst| inst.locals.clone())?;
         let mut bindings: Vec<Option<Val>> = vec![None; self.programs[i].bindings];
         let mut out = Vec::new();
+        let mut nodes: Option<Vec<u32>> = tracing.then(Vec::new);
         let mut view = View {
             dt,
             elapsed,
@@ -507,9 +548,10 @@ impl BehaviorSystem {
             transforms: &|e| snapshot.transforms.get(&e).copied(),
             alive: &|e| snapshot.alive.contains(&e),
             self_entity: entity,
+            trace: &mut nodes,
         };
         run::exec(&self.programs[i].body, &mut view, &mut out);
-        Some(out)
+        Some((out, nodes.unwrap_or_default()))
     }
 
     // Land one body's effects. Returns whether a `save` was requested.
@@ -604,6 +646,9 @@ impl BehaviorSystem {
     }
 
     fn write_state(&self) {
+        if self.transient_saves {
+            return;
+        }
         let state = save::BehaviorSave {
             vars: self
                 .var_table

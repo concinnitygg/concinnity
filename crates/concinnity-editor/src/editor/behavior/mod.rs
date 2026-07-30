@@ -6,10 +6,11 @@
 // as, `outline` flattens the whole asset into the panel's indented rows, `edit`
 // applies what a row's controls do, `clip` carries a list member from one place
 // to another, `filter` narrows a palette to what was typed into it, `navigate`
-// says where a step of the selection lands, and `fault` resolves the checker's
-// complaint to the row it is about. Nothing here touches the world or the HUD:
-// the layout half is `editor/behavior_panel.rs` and the actions live in
-// `hook/behavior_edit.rs`.
+// says where a step of the selection lands, `fault` resolves the checker's
+// complaint to the row it is about, and `trace` / `pulse` turn the runtime's
+// execution reports into the paths and fading highlights live debugging draws.
+// Nothing here touches the world or the HUD: the layout half is
+// `editor/behavior_panel.rs` and the actions live in `hook/behavior_edit.rs`.
 //
 // The panel edits the authored JSON directly rather than a typed twin, because
 // that JSON is exactly what `check_with_variables` reads -- so the status line
@@ -25,4 +26,6 @@ pub(crate) mod navigate;
 pub(crate) mod outline;
 pub(crate) mod palette;
 pub(crate) mod path;
+pub(crate) mod pulse;
 pub(crate) mod relations;
+pub(crate) mod trace;

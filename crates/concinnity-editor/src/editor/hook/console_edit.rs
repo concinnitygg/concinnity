@@ -41,7 +41,7 @@ impl EditorHook {
         if input.captured_key != Some(Key::Backtick) || input.ctrl {
             return;
         }
-        if self.world_capture || self.non_console_text_focus() {
+        if self.sim.playing() || self.non_console_text_focus() {
             return;
         }
         self.toggle_console(world);

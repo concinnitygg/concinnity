@@ -1,10 +1,11 @@
 // src/editor/preview.rs
 //
 // The editor "Preview" panel: a small floating panel holding the controls that
-// affect how the running world is previewed: the capture-mouse checkbox (hand
-// the cursor to the world / play mode), the fly-camera checkbox (navigate the
-// frozen world; also the F key), and the world-axes checkbox (the origin axis
-// lines drawn in the viewport). Escape leaves either camera mode. Like the rest of
+// affect how the running world is previewed: the play checkbox (the simulation
+// transport's Play / Pause, mirroring the top-bar chip), the fly-camera
+// checkbox (navigate the frozen world; also the F key), and the world-axes
+// checkbox (the origin axis lines drawn in the viewport). Escape leaves either
+// camera mode. Like the rest of
 // the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
 // (injected by `inject.rs`), driven each frame by the editor hook. The title
 // bar, close button, and row draw come from the shared `list_panel`; this
@@ -49,8 +50,8 @@ pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
 // A resolved Preview-panel click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewAction {
-    // The capture checkbox: hand the cursor to / take it from the world.
-    ToggleCapture,
+    // The play checkbox: run / pause the world (and the cursor follows).
+    TogglePlay,
     // The fly checkbox: toggle the edit-mode fly camera.
     ToggleFly,
     // The world-axes checkbox: show / hide the origin axis lines.
@@ -64,7 +65,7 @@ pub(crate) enum PreviewAction {
 // them first to start a drag (the shared routing owns the title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
     match list_panel::hit_row(mx, my, o, PREVIEW_W, ROWS) {
-        Some(0) => return Some(PreviewAction::ToggleCapture),
+        Some(0) => return Some(PreviewAction::TogglePlay),
         Some(1) => return Some(PreviewAction::ToggleFly),
         Some(_) => return Some(PreviewAction::ToggleAxes),
         None => {}
@@ -75,7 +76,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 // The panel's checkbox states, in row order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PreviewState {
-    pub capture: bool,
+    pub playing: bool,
     pub fly: bool,
     pub axes: bool,
 }
@@ -83,7 +84,7 @@ pub(crate) struct PreviewState {
 // Position + show the panel at origin `o`, colouring each checkbox by state.
 pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
     let rows = [
-        Row::checkbox("Capture input", state.capture),
+        Row::checkbox("Play (Ctrl+P)", state.playing),
         Row::checkbox("Fly camera (F)", state.fly),
         Row::checkbox("World axes", state.axes),
     ];
@@ -128,12 +129,12 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_resolves_the_capture_row_and_swallows_the_rest() {
+    fn hit_test_resolves_the_play_row_and_swallows_the_rest() {
         let o = default_origin();
         let row = list_panel::row_rect(o, PREVIEW_W, 0);
         assert_eq!(
             hit_test(row[0] + 10.0, row[1] + 10.0, o),
-            Some(PreviewAction::ToggleCapture)
+            Some(PreviewAction::TogglePlay)
         );
         let fly_row = list_panel::row_rect(o, PREVIEW_W, 1);
         assert_eq!(
@@ -155,11 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_heading_and_capture_state() {
+    fn apply_shows_heading_and_play_state() {
         let mut world = injected_world();
         let o = default_origin();
         let off_state = PreviewState {
-            capture: false,
+            playing: false,
             fly: false,
             axes: false,
         };
@@ -178,7 +179,7 @@ mod tests {
             &mut world,
             o,
             PreviewState {
-                capture: true,
+                playing: true,
                 ..off_state
             },
             [0.0, 0.0],
@@ -187,7 +188,7 @@ mod tests {
             .query::<Sprite>()
             .find(|s| s.asset_id == CHECK_BOX)
             .unwrap();
-        assert_ne!(off.tint, on.tint, "the checkbox greens while capturing");
+        assert_ne!(off.tint, on.tint, "the checkbox greens while playing");
     }
 
     #[test]
@@ -197,7 +198,7 @@ mod tests {
             &mut world,
             default_origin(),
             PreviewState {
-                capture: true,
+                playing: true,
                 fly: true,
                 axes: true,
             },

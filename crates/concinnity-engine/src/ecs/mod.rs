@@ -32,9 +32,10 @@ pub use concinnity_core::ecs::{
 // Re-exported here to keep the historical `crate::ecs::*` paths for every reader
 // (engine systems and the editor's hook drive).
 pub use concinnity_core::ecs::{
-    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, FlyCam, FrameRateCap,
-    HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
-    WorldLines,
+    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
+    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry,
+    PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal,
+    TransientSaves, WorldLines,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
@@ -505,6 +506,14 @@ impl World {
     // assertions (e.g. the `OpenDropdown` UiInputSystem publishes each step).
     pub fn resource<T: std::any::Any>(&self) -> Option<&T> {
         self.resources.get::<T>()
+    }
+
+    // Withdraw a published singleton resource. Presence-keyed protocols (the
+    // `cn editor` drive's `TraceRequest`) turn off by removing their resource,
+    // so the reading system pays nothing beyond noticing the absence.
+    #[allow(dead_code)]
+    pub fn remove_resource<T: std::any::Any>(&mut self) -> Option<T> {
+        self.resources.remove::<T>()
     }
 
     // Mutable view of the active systems. Mirror of `systems()`; lets the

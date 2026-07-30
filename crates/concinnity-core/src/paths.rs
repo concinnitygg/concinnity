@@ -165,6 +165,14 @@ pub fn saves_dir() -> PathBuf {
     writable_state_dir().join("saves")
 }
 
+// Sandboxed sibling of [saves_dir] for preview sessions (see the
+// `TransientSaves` protocol resource): the save UI keeps working against this
+// directory, but the real saves are never touched and the sandbox is wiped at
+// each session start.
+pub fn preview_saves_dir() -> PathBuf {
+    writable_state_dir().join("preview-saves")
+}
+
 // The mutable settings file (CBOR). Written by the in-engine settings menu,
 // never by a build. A sibling of `data/` in the common case, or under the
 // writable-state dir when a read-only install redirected it.

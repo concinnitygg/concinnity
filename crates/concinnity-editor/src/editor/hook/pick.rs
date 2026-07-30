@@ -128,7 +128,7 @@ impl EditorHook {
     // in the full accent. Anything unresolvable -- a renamed or deleted asset,
     // the camera inside the box -- goes ringless.
     pub(super) fn drive_highlight(&self, world: &mut World, vp: [f32; 2], shown: bool) {
-        if !shown || self.world_capture {
+        if !shown || self.sim.playing() {
             highlight::hide(world);
             return;
         }

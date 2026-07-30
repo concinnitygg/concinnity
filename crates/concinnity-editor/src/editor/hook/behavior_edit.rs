@@ -27,9 +27,10 @@ use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fault;
 use crate::editor::behavior::fields;
 use crate::editor::behavior::filter;
-use crate::editor::behavior::graph::{self, Chart};
+use crate::editor::behavior::graph::{self, CardKind, Chart};
 use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
+use crate::editor::behavior::pulse;
 use crate::editor::behavior::relations;
 use crate::editor::behavior_chart;
 
@@ -54,6 +55,12 @@ pub(super) struct BehaviorData {
     // different question from what the query answers.
     pub matches: Vec<usize>,
     pub editable: bool,
+    // Live-debug marks over the body: cards / rows whose node just executed
+    // (with each pulse's remaining strength), and the cards holding a
+    // breakpoint. All empty outside a live session.
+    pub pulse_cards: Vec<(usize, f32)>,
+    pub pulse_rows: Vec<(usize, f32)>,
+    pub break_cards: Vec<usize>,
 }
 
 // How far one wheel notch pans the chart.
@@ -126,12 +133,33 @@ impl EditorHook {
         };
         let card = selected.and_then(|r| fields::owning_card(&chart.cards, &r.path));
         let picks = selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names()));
+        let name = self
+            .behavior_entry()
+            .and_then(|i| entry_name(&self.entries[i]))
+            .unwrap_or("")
+            .to_string();
+        let mut pulse_cards = Vec::new();
+        let mut pulse_rows = Vec::new();
+        for p in &self.behavior_pulses {
+            let alpha = pulse::alpha(p.at.elapsed().as_secs_f32());
+            if alpha <= 0.0 {
+                continue;
+            }
+            if let Some(c) = fields::owning_card(&chart.cards, &p.path) {
+                pulse_cards.push((c, alpha));
+            }
+            if let Some(r) = rows.iter().position(|r| r.path == p.path) {
+                pulse_rows.push((r, alpha));
+            }
+        }
+        let break_cards = self
+            .behavior_breakpoints
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .filter_map(|(_, path)| chart.cards.iter().position(|c| &c.path == path))
+            .collect();
         BehaviorData {
-            name: self
-                .behavior_entry()
-                .and_then(|i| entry_name(&self.entries[i]))
-                .unwrap_or("")
-                .to_string(),
+            name,
             index: self.behavior_index.min(all.len().saturating_sub(1)),
             total: all.len(),
             matches: filter::matching(&picks, &self.behavior_filter),
@@ -150,6 +178,9 @@ impl EditorHook {
             card,
             chart,
             rows,
+            pulse_cards,
+            pulse_rows,
+            break_cards,
         }
     }
 
@@ -219,6 +250,9 @@ impl EditorHook {
                 .as_ref()
                 .and_then(|s| fault::row_of(&data.rows, s.at())),
             status: self.behavior_status.as_ref(),
+            pulse_cards: &data.pulse_cards,
+            pulse_rows: &data.pulse_rows,
+            break_cards: &data.break_cards,
             mouse,
         }
     }
@@ -370,7 +404,7 @@ impl EditorHook {
     // Select a row. Selecting never edits: a row that offers options lights the
     // Pick button, and a row that takes typed text is ready to type into
     // straight away.
-    fn select_behavior_row(&mut self, i: usize, world: &mut World) {
+    pub(super) fn select_behavior_row(&mut self, i: usize, world: &mut World) {
         self.behavior_row = Some(i);
         self.behavior_picking = false;
         let Some(row) = self.behavior_rows().get(i).cloned() else {
@@ -592,12 +626,20 @@ impl EditorHook {
     }
 
     // Select the row the card at `i` stands for. Cards cover the body and the
-    // source; the declarations are reached from the outline.
+    // source; the declarations are reached from the outline. A Ctrl+click on
+    // a node card toggles its breakpoint instead: the run pauses when that
+    // node next executes.
     fn select_behavior_card(&mut self, i: usize, world: &mut World) {
         let data = self.behavior_data();
-        let Some(path) = data.chart.cards.get(i).map(|c| c.path.clone()) else {
+        let Some(card) = data.chart.cards.get(i) else {
             return;
         };
+        if self.ctrl_held && card.kind == CardKind::Node {
+            let path = card.path.clone();
+            self.toggle_behavior_breakpoint(&path);
+            return;
+        }
+        let path = card.path.clone();
         let Some(row) = data.rows.iter().position(|r| r.path == path) else {
             return;
         };

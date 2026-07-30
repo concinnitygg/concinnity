@@ -25,9 +25,10 @@ mod system;
 // physics / audio subsystem crates can reach them; the client `ecs` module
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
-    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, FlyCam, FrameRateCap,
-    HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry, PickIndex, ScreenStack,
-    WorldLines,
+    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
+    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry,
+    PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal,
+    TransientSaves, WorldLines,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

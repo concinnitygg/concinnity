@@ -36,6 +36,85 @@ pub struct FrameRateCap(pub u32);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuOverride(pub Option<bool>);
 
+// Keeps a preview session out of the user's real save files: while present and
+// true, the systems that persist play state (behavior variables / once flags,
+// story position) neither read nor write their disk saves -- every session
+// starts fresh and leaves no trace. In-memory state is unaffected, so a `save`
+// node still works within the session. Published by the `cn editor` HUD
+// injection (sampled at each system's init); a shipped runtime never
+// publishes it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransientSaves(pub bool);
+
+// One hop of a behavior-node address, mirroring the world checker's fault
+// paths: object fields by key, list members by position. A node's path walks
+// from the behavior's args to the node (e.g. `do[1].if.then[0]` is
+// `[Field("do"), Index(1), Field("if"), Field("then"), Index(0)]` minus the
+// node's own trailing verb), so the editor can resolve a traced node to the
+// same outline row / chart card its checker faults land on. Field names are
+// the fixed authoring keys, so they borrow statically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceStep {
+    Field(&'static str),
+    Index(u32),
+}
+
+pub type TracePath = alloc::vec::Vec<TraceStep>;
+
+// A behavior-body value in its cross-boundary form (the runtime's value type
+// is private to the behavior system). Entities travel as their id bits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TraceVal {
+    Bool(bool),
+    Int(i32),
+    Float(f32),
+    Vec3([f32; 3]),
+    Entity(u64),
+}
+
+// One node execution: which behavior, and the node's compile-assigned
+// pre-order id (an index into that behavior's [TracePaths] entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceEvent {
+    pub behavior: AssetId,
+    pub node: u32,
+}
+
+// An external observer's request for execution tracing, published per frame by
+// the `cn editor` HUD while its Behavior panel is open and removed when it
+// closes. While present, the behavior system records which nodes ran each
+// simulated tick and publishes [ExecutionTrace]; absent (the shipped runtime,
+// or the panel closed), the system does no recording work beyond noticing the
+// absence. `entity` selects whose per-entity locals to surface; `breakpoints`
+// are nodes whose execution should be reported as a [ExecutionTrace::hit] so
+// the observer can pause the simulation.
+#[derive(Debug, Clone, Default)]
+pub struct TraceRequest {
+    pub entity: Option<u64>,
+    pub breakpoints: alloc::vec::Vec<TraceEvent>,
+}
+
+// What the behavior system observed over one simulated tick, published while a
+// [TraceRequest] stands. `frame` increments per published tick so the observer
+// can tell fresh data from the stale resource a paused world leaves behind.
+// `events` are the nodes that ran (deduplicated); `vars` the world variables
+// with their current values in slot order; `locals` the requested entity's
+// per-behavior locals; `hit` the first executed breakpoint, if any.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionTrace {
+    pub frame: u64,
+    pub events: alloc::vec::Vec<TraceEvent>,
+    pub vars: alloc::vec::Vec<(String, TraceVal)>,
+    pub locals: alloc::vec::Vec<(AssetId, String, TraceVal)>,
+    pub hit: Option<TraceEvent>,
+}
+
+// Each behavior's node paths, indexed by the node ids [ExecutionTrace] events
+// carry. Published once when tracing is first requested (the compile that
+// derives it runs at init either way; the publish just exposes it).
+#[derive(Debug, Clone, Default)]
+pub struct TracePaths(pub alloc::vec::Vec<(AssetId, alloc::vec::Vec<TracePath>)>);
+
 // The silhouette the in-engine cursor sprite should draw this frame. Published
 // by the `cn editor` HUD when the pointer is over a resizable panel's edge or
 // corner (or while a resize drag is in flight) and read by the overlay build,
