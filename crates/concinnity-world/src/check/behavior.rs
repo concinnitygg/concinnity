@@ -140,9 +140,10 @@ pub fn check_with_variables(
     locate(name, args, &declared)
 }
 
-// The world's `Variables` asset: every declaration needs a name and a typed
-// starting value, and no name may repeat.
-pub(crate) fn check_variables(name: &str, args: &Value) -> Result<(), String> {
+/// Validate the world's `Variables` asset: every declaration needs a name and a
+/// typed starting value, and no name may repeat. For callers holding the asset
+/// alone rather than an expanded world (the editor's Variables panel).
+pub fn check_variables(name: &str, args: &Value) -> Result<(), String> {
     let err = |detail: String| format!("Variables '{name}': {detail}");
     let mut seen: Vec<&str> = Vec::new();
     for (i, decl) in array(args, "vars").iter().enumerate() {

@@ -887,6 +887,101 @@ impl Panel for BehaviorPanel {
     }
 }
 
+pub(crate) struct VariablesPanel;
+
+impl Panel for VariablesPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Variables
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        variables_panel::max_size()
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Variables")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.variables_open
+    }
+    // Opening re-reads the world, so the panel always starts from the current
+    // table and the names its behaviors use.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.variables_open = !hook.variables_open;
+        if hook.variables_open {
+            hook.open_variables(world);
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.variables_open = false;
+        hook.variables_name_focus = false;
+        hook.variables_value_focus = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        variables_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        variables_panel::default_origin(vp[0])
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        variables_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        variables_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        vec![
+            (variables_panel::NAME_INPUT, "name"),
+            (variables_panel::VALUE_INPUT, "value"),
+        ]
+    }
+    fn overlay_ids(&self, _hook: &EditorHook) -> Vec<AssetId> {
+        variables_panel::status_ids()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::Variables);
+        let action = {
+            let data = hook.variables_data();
+            let view = hook.make_variables_view(&data, [mx, my]);
+            variables_panel::hit_test(&view, mx, my, o, s)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_variables_action(a, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Variables);
+        variables_panel::cursor_over_body(mx, my, o, s)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_variables(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.variables_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Variables);
+        let data = hook.variables_data();
+        let view = hook.make_variables_view(&data, mouse);
+        variables_panel::apply(world, Some(&view), o, s);
+    }
+    fn hide(&self, world: &mut World) {
+        variables_panel::apply(world, None, [0.0, 0.0], variables_panel::size());
+    }
+}
+
 pub(crate) struct ImportPanel;
 
 impl Panel for ImportPanel {

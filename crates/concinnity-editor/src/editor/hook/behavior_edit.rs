@@ -108,7 +108,7 @@ impl EditorHook {
     }
 
     // The args of the world's `Variables` singleton, when it declares one.
-    fn variables_args(&self) -> Option<Value> {
+    pub(super) fn variables_args(&self) -> Option<Value> {
         self.entries
             .iter()
             .find(|e| entry_type(e) == Some("Variables"))
@@ -155,7 +155,7 @@ impl EditorHook {
 
     // Every behavior's name and authored args, in the order the panel steps
     // through them, for the overview to map.
-    fn behavior_pairs(&self) -> Vec<(String, Value)> {
+    pub(super) fn behavior_pairs(&self) -> Vec<(String, Value)> {
         self.behavior_entries()
             .into_iter()
             .map(|i| {
@@ -333,6 +333,7 @@ impl EditorHook {
             BehaviorAction::ToggleView => self.toggle_behavior_view(),
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
+            BehaviorAction::OpenVariable(i) => self.open_overview_variable(i, world),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
             BehaviorAction::GoToFault => self.select_behavior_fault(world),
             BehaviorAction::Copy => self.copy_behavior_row(),
@@ -572,6 +573,22 @@ impl EditorHook {
         }
         self.select_behavior_row(row, world);
         self.ensure_behavior_visible();
+    }
+
+    // Open the world's variable table on the variable an overview card stands
+    // for. Behaviors reach each other through world state, so the map's variable
+    // cards are the natural way into the table that declares it.
+    fn open_overview_variable(&mut self, i: usize, world: &mut World) {
+        let Some(name) = self
+            .behavior_data()
+            .overview
+            .cards
+            .get(i)
+            .map(|c| c.title.clone())
+        else {
+            return;
+        };
+        self.open_variable_named(&name, world);
     }
 
     // Select the row the card at `i` stands for. Cards cover the body and the

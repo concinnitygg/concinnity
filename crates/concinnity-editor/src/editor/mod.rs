@@ -43,6 +43,8 @@ mod story_panel;
 mod template_panel;
 mod templates;
 mod theme;
+mod variables;
+mod variables_panel;
 mod view;
 mod widget;
 

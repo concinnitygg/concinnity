@@ -52,6 +52,8 @@ use super::story;
 use super::story_panel::{self, StoryAction, StoryView};
 use super::template_panel::{self, TemplateAction, TemplateView};
 use super::templates::{self, TemplatesAction};
+use super::variables;
+use super::variables_panel::{self, VariablesAction, VariablesView};
 use super::view::{self, ViewAction};
 use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
@@ -185,6 +187,13 @@ pub(crate) struct EditorHook {
     // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
     behavior_pan: [f32; 2],
     behavior_pan_drag: Option<[f32; 2]>,
+    // The Variables panel: shown state, the selected row of the table, the row
+    // window's scroll, and which of its two fields holds the keyboard.
+    variables_open: bool,
+    variables_row: Option<usize>,
+    variables_scroll: usize,
+    variables_name_focus: bool,
+    variables_value_focus: bool,
     // The list member held for a paste, with the kind of list it came out of so
     // it can only land in one of the same kind. Session state, not an edit, and
     // deliberately not cleared by opening another behavior: carrying a node
@@ -426,8 +435,10 @@ pub(super) mod panels;
 mod routing;
 // Named to avoid colliding with the `use super::story` module import.
 mod story_edit;
+// Named to avoid colliding with the `use super::variables_panel` import.
 #[cfg(test)]
 mod tests;
+mod variables_edit;
 
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
@@ -482,6 +493,11 @@ impl EditorHook {
             behavior_mode: ViewMode::default(),
             behavior_pan: [0.0, 0.0],
             behavior_pan_drag: None,
+            variables_open: false,
+            variables_row: None,
+            variables_scroll: 0,
+            variables_name_focus: false,
+            variables_value_focus: false,
             behavior_clip: None,
             behavior_overview_card: None,
             hidden_assets: std::collections::BTreeSet::new(),
@@ -577,6 +593,8 @@ impl EditorHook {
             || self.behavior_focus
             || self.behavior_name_focus
             || self.behavior_picking
+            || self.variables_name_focus
+            || self.variables_value_focus
     }
 }
 

@@ -36,12 +36,13 @@ pub(crate) enum PanelKey {
     Health,
     Console,
     Behavior,
+    Variables,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 12;
+pub(crate) const PANEL_COUNT: usize = 13;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -56,6 +57,7 @@ impl PanelKey {
         PanelKey::Health,
         PanelKey::Console,
         PanelKey::Behavior,
+        PanelKey::Variables,
         PanelKey::TemplateDetail,
     ];
 
@@ -90,6 +92,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // The outline, its value column, and the palette give this panel
             // the widest family of any, so it takes a whole block of its own.
             PanelKey::Behavior => 0x3000,
+            // Clear of the Behavior panel's whole block, whose chart segments
+            // and card pools run well past 0x3300.
+            PanelKey::Variables => 0x4000,
         }
 }
 
@@ -189,6 +194,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::HealthPanel,
     &panels::ConsolePanel,
     &panels::BehaviorPanel,
+    &panels::VariablesPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -284,7 +290,8 @@ mod tests {
                 "Import",
                 "Health",
                 "Console",
-                "Behavior"
+                "Behavior",
+                "Variables"
             ]
         );
     }

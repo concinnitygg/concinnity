@@ -182,6 +182,13 @@ pub(crate) fn apply_text(args: &mut Value, row: &Row, text: &str) -> Result<(), 
     }
 }
 
+// A typed constant built from what was typed for it: the same parse the value
+// field does for a `Literal` row, for callers editing a literal that is not part
+// of a behavior body (the world's variable table).
+pub(crate) fn literal(verb: &str, text: &str) -> Result<Value, String> {
+    Ok(palette::single(verb, literal_payload(verb, text.trim())?))
+}
+
 pub(crate) fn remove(args: &mut Value, row: &Row) -> bool {
     row.element
         .as_ref()

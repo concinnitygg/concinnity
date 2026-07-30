@@ -351,10 +351,16 @@ pub(crate) fn node_default(verb: &str) -> Value {
     }
 }
 
+// A typed constant of `verb` holding that type's zero, for a slot that has to
+// start somewhere.
+pub(crate) fn literal_default(verb: &str) -> Value {
+    single(verb, literal_body(&Value::Null, verb))
+}
+
 pub(crate) fn expr_default(verb: &str) -> Value {
     match shape(verb) {
         Shape::Unit => json!(verb),
-        Shape::Literal => single(verb, literal_body(&Value::Null, verb)),
+        Shape::Literal => literal_default(verb),
         Shape::Name => single(verb, json!("")),
         Shape::Unary => single(verb, unary_operand(verb)),
         Shape::List => single(verb, json!([])),

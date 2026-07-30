@@ -16,7 +16,7 @@
 
 use super::behavior::edit::{self, Pick};
 use super::behavior::fields;
-use super::behavior::graph::Chart;
+use super::behavior::graph::{CardKind, Chart};
 use super::behavior::outline::{Kind, Row};
 use super::behavior::path::{Path, Step};
 use super::behavior_chart;
@@ -375,6 +375,8 @@ pub(crate) enum BehaviorAction {
     SelectCard(usize),
     // Open the behavior the overview card at `i` stands for.
     OpenCard(usize),
+    // Open the world's variable table on the variable card at `i`.
+    OpenVariable(usize),
     // Press on empty canvas: start panning the chart.
     PanStart,
     // Select whatever the checker is complaining about.
@@ -693,11 +695,13 @@ pub(crate) fn hit_test(
             let cv = chart_view(view);
             if let Some(i) = behavior_chart::hit_card(&cv, mx, my, band) {
                 return Some(match view.mode {
-                    // An overview card opens the behavior it stands for; a card
-                    // standing for a trigger or a variable has none to open.
-                    ViewMode::Overview => match view.overview.cards[i].behavior {
-                        Some(_) => BehaviorAction::OpenCard(i),
-                        None => BehaviorAction::Consume,
+                    // An overview card opens what it stands for: a behavior's
+                    // body, or the table declaring a variable. A trigger or an
+                    // asset card has neither.
+                    ViewMode::Overview => match &view.overview.cards[i] {
+                        c if c.behavior.is_some() => BehaviorAction::OpenCard(i),
+                        c if c.kind == CardKind::Variable => BehaviorAction::OpenVariable(i),
+                        _ => BehaviorAction::Consume,
                     },
                     _ => BehaviorAction::SelectCard(i),
                 });

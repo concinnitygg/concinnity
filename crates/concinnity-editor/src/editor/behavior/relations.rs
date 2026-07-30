@@ -444,6 +444,34 @@ fn scope_summary(args: &Value) -> String {
     }
 }
 
+// Every variable name the given behaviors read or write, sorted and without
+// repeats. What the world's table has to account for, which is how the panel
+// editing that table can say what is missing from it.
+pub(crate) fn variables_used(behaviors: &[(String, Value)]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (_, args) in behaviors {
+        let body = scan(args);
+        let watched = args
+            .get("on")
+            .and_then(|v| v.get("variable"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let touched = body
+            .writes
+            .into_iter()
+            .map(|(name, _)| name)
+            .chain(body.reads)
+            .chain(watched);
+        for name in touched.filter(|n| !n.is_empty()) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
 fn scan(args: &Value) -> Body {
     let mut body = Body::default();
     scan_nodes(array(args.get("do")), &mut body);
