@@ -270,7 +270,18 @@ fn titled_scene(title: &str) -> WorldBuilder {
 // Run the same pre-init pass World::start performs (Prop decomposition),
 // then GraphicsSystem init with the injected hooks. A successful init parks
 // the built backend in the world's `ActiveRenderBackend` slot.
+//
+// Init reads the process-global launch flags, so this holds shared access for
+// the whole pass: concurrent inits still overlap, and only a test writing a
+// flag is excluded.
 fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
+    let _flags = crate::app::dev_flags::read_access();
+    init_graphics_with_flags_held(world, hooks)
+}
+
+// Init without taking flag access, for the test that already holds it
+// exclusively while driving a launch flag.
+fn init_graphics_with_flags_held(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new();
     gs.test_hooks = Some(hooks);
     let mut ctx = world.ctx();
@@ -1055,11 +1066,12 @@ fn a_launch_frame_cap_overrides_the_world() {
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
 
+    // The cap is process-global and every init reads it, so exclude the tests
+    // that would otherwise pick it up; the guard restores it on the way out.
+    let _flags = crate::app::dev_flags::write_access();
     crate::app::dev_flags::set_max_frames(Some(1));
-    let mut gs = init_graphics(&mut world, hooks);
-    let result = step(&mut gs, &mut world);
-    crate::app::dev_flags::set_max_frames(None);
-    assert_eq!(result, StepResult::Stop);
+    let mut gs = init_graphics_with_flags_held(&mut world, hooks);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
 }
 
 #[test]

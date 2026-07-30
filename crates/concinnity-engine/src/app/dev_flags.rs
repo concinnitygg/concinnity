@@ -64,6 +64,13 @@ static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 // Launch-imposed frame cap overriding the world's own, or None.
 static MAX_FRAMES: Mutex<Option<u64>> = Mutex::new(None);
 
+// The harness runs a binary's tests on parallel threads, so a test that writes
+// a flag races every test whose code reads one -- graphics init reads four.
+// Writers take this exclusively, readers share it, so only the writers
+// serialise.
+#[cfg(test)]
+static FLAG_ACCESS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
 // Mark this process as running under `cn debug` (or another dev-loop entry
 // point that opts in). Call once before world build.
 //
@@ -157,31 +164,69 @@ pub(crate) fn world_jsonl_path() -> Option<String> {
     WORLD_JSONL_PATH.lock().unwrap().clone()
 }
 
+// Shared flag access for a test whose code path reads a flag. Held for as long
+// as the read matters: for graphics init, across the whole `run_init`.
+#[cfg(test)]
+pub(crate) fn read_access() -> std::sync::RwLockReadGuard<'static, ()> {
+    FLAG_ACCESS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+// Exclusive flag access for a test that writes one. Restores every flag graphics
+// init reads when it drops, so a panicking test cannot leak one into the rest of
+// the binary. Poison is ignored: the test holding it has already failed, and
+// erroring every later lock buries that failure under a cascade. Not reentrant,
+// so a test holding this must not also take `read_access`.
+#[cfg(test)]
+pub(crate) struct WriteAccess {
+    _guard: std::sync::RwLockWriteGuard<'static, ()>,
+    enabled: bool,
+    validation: Option<bool>,
+    max_frames: Option<u64>,
+    world_jsonl_path: Option<String>,
+}
+
+#[cfg(test)]
+pub(crate) fn write_access() -> WriteAccess {
+    WriteAccess {
+        _guard: FLAG_ACCESS.write().unwrap_or_else(|e| e.into_inner()),
+        enabled: enabled(),
+        validation: validation(),
+        max_frames: max_frames(),
+        world_jsonl_path: world_jsonl_path(),
+    }
+}
+
+#[cfg(test)]
+impl Drop for WriteAccess {
+    fn drop(&mut self) {
+        set_enabled(self.enabled);
+        set_validation(self.validation);
+        set_max_frames(self.max_frames);
+        set_world_jsonl_path(self.world_jsonl_path.take());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn defaults_off_and_round_trips() {
-        // Capture and restore so this test does not leak state into others.
-        let prior = enabled();
+        let _flags = write_access();
         set_enabled(false);
         assert!(!enabled());
         set_enabled(true);
         assert!(enabled());
-        set_enabled(prior);
     }
 
     #[test]
     fn validation_tristate_round_trips() {
-        // Capture and restore so this test does not leak state into others.
-        let prior = validation();
+        let _flags = write_access();
         set_validation(None);
         assert_eq!(validation(), None);
         set_validation(Some(true));
         assert_eq!(validation(), Some(true));
         set_validation(Some(false));
         assert_eq!(validation(), Some(false));
-        set_validation(prior);
     }
 }
