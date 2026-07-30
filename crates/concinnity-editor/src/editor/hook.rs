@@ -174,6 +174,9 @@ pub(crate) struct EditorHook {
     behavior_picking: bool,
     behavior_pick_scroll: usize,
     behavior_pick: usize,
+    // The palette's filter text, mirrored off its field once a frame so the
+    // presses and draws that follow all narrow by the same query.
+    behavior_filter: String,
     behavior_focus: bool,
     behavior_name_focus: bool,
     behavior_remove_armed: bool,
@@ -466,6 +469,7 @@ impl EditorHook {
             behavior_picking: false,
             behavior_pick_scroll: 0,
             behavior_pick: 0,
+            behavior_filter: String::new(),
             behavior_focus: false,
             behavior_name_focus: false,
             behavior_remove_armed: false,
@@ -533,6 +537,23 @@ impl EditorHook {
     // edit form (its name / arg inputs always own focus while it shows), or a
     // focused Lighting / Story / Import / Console field. Undo/redo shortcuts
     // stand down while typing.
+    // Read the palette's filter off its field. Mirrored onto the hook because
+    // the data a press and a draw resolve against is built without world access.
+    fn sample_behavior_filter(&mut self, world: &World) {
+        let typed = match self.behavior_picking {
+            true => widget::field_text(world, behavior_panel::FILTER_INPUT),
+            false => String::new(),
+        };
+        if typed != self.behavior_filter {
+            // A narrowed palette is a different list, so the highlight starts
+            // again at its best answer rather than keeping a place that may no
+            // longer be in it.
+            self.behavior_pick = 0;
+            self.behavior_pick_scroll = 0;
+            self.behavior_filter = typed;
+        }
+    }
+
     fn text_focus_active(&self) -> bool {
         self.non_console_text_focus() || self.console_focus
     }
@@ -549,6 +570,7 @@ impl EditorHook {
             || self.import_focus
             || self.behavior_focus
             || self.behavior_name_focus
+            || self.behavior_picking
     }
 }
 
@@ -565,6 +587,9 @@ impl DebugHook for EditorHook {
         // Seed Transforms onto the billboard-backed entities before any of
         // this frame's picking or gizmo work resolves them.
         self.seed_billboard_transforms(world);
+        // Sampled before anything routes, so this frame's hit tests and draw
+        // narrow the palette by the same query.
+        self.sample_behavior_filter(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input

@@ -25,6 +25,7 @@ use super::*;
 use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fault;
 use crate::editor::behavior::fields;
+use crate::editor::behavior::filter;
 use crate::editor::behavior::graph::{self, Chart};
 use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
@@ -47,6 +48,10 @@ pub(super) struct BehaviorData {
     pub card: Option<usize>,
     pub fields: Vec<usize>,
     pub picks: Vec<Pick>,
+    // The options the palette's filter keeps, best first, as indices into
+    // `picks`. `picks` stays whole: whether the row offers anything at all is a
+    // different question from what the query answers.
+    pub matches: Vec<usize>,
     pub editable: bool,
 }
 
@@ -119,6 +124,7 @@ impl EditorHook {
             None => Chart::default(),
         };
         let card = selected.and_then(|r| fields::owning_card(&chart.cards, &r.path));
+        let picks = selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names()));
         BehaviorData {
             name: self
                 .behavior_entry()
@@ -127,7 +133,8 @@ impl EditorHook {
                 .to_string(),
             index: self.behavior_index.min(all.len().saturating_sub(1)),
             total: all.len(),
-            picks: selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names())),
+            matches: filter::matching(&picks, &self.behavior_filter),
+            picks,
             editable: selected
                 .is_some_and(|r| edit::text_value(&self.behavior_args(), r).is_some()),
             fields: card
@@ -189,9 +196,13 @@ impl EditorHook {
             card: data.card,
             fields: &data.fields,
             picks: &data.picks,
+            matches: &data.matches,
             picking: self.behavior_picking && !data.picks.is_empty(),
             pick_scroll: self.behavior_pick_scroll,
             pick: self.behavior_pick,
+            filter_focus: self.behavior_picking
+                && !data.picks.is_empty()
+                && self.panel_order.last() == Some(&PanelKey::Behavior),
             overview_card: self.behavior_overview_card,
             editable: data.editable,
             // Focus is asserted only while frontmost, so a buried panel's field
@@ -219,8 +230,7 @@ impl EditorHook {
         self.behavior_row = None;
         self.behavior_scroll = 0;
         self.behavior_picking = false;
-        self.behavior_pick_scroll = 0;
-        self.behavior_pick = 0;
+        self.clear_behavior_filter(world);
         self.behavior_focus = false;
         self.behavior_name_focus = false;
         self.behavior_remove_armed = false;
@@ -308,12 +318,14 @@ impl EditorHook {
             BehaviorAction::Select(i) => self.select_behavior_row(i, world),
             BehaviorAction::Palette => {
                 self.behavior_picking = !self.behavior_picking;
-                self.behavior_pick_scroll = 0;
-                self.behavior_pick = 0;
+                self.clear_behavior_filter(world);
                 self.behavior_focus = false;
             }
             BehaviorAction::Choose(i) => self.choose_behavior_pick(i, world),
-            BehaviorAction::Dismiss => self.behavior_picking = false,
+            BehaviorAction::Dismiss => {
+                self.behavior_picking = false;
+                self.clear_behavior_filter(world);
+            }
             BehaviorAction::Delete => self.delete_behavior_row(world),
             BehaviorAction::Move(delta) => self.move_behavior_row(delta as isize, world),
             BehaviorAction::FocusValue => self.behavior_focus = true,
@@ -363,8 +375,18 @@ impl EditorHook {
         self.behavior_focus = edit::text_value(&self.behavior_args(), &row).is_some();
     }
 
+    // A palette opens on the whole vocabulary: a query is about the pick being
+    // made, so it never outlives it.
+    fn clear_behavior_filter(&mut self, world: &mut World) {
+        self.behavior_filter.clear();
+        self.behavior_pick = 0;
+        self.behavior_pick_scroll = 0;
+        widget::seed_field(world, behavior_panel::FILTER_INPUT, "");
+    }
+
     fn choose_behavior_pick(&mut self, i: usize, world: &mut World) {
         self.behavior_picking = false;
+        self.clear_behavior_filter(world);
         let data = self.behavior_data();
         let (Some(row), Some(pick)) = (
             self.behavior_row.and_then(|r| data.rows.get(r)),
@@ -609,7 +631,7 @@ impl EditorHook {
     // view, and scrolls the outline otherwise.
     pub(super) fn scroll_behavior(&mut self, delta: f32) {
         if self.behavior_picking {
-            let total = self.behavior_data().picks.len();
+            let total = self.behavior_data().matches.len();
             let max = total.saturating_sub(behavior_panel::PICK_POOL);
             self.behavior_pick_scroll = scroll_step(self.behavior_pick_scroll, delta, max);
             return;

@@ -5,9 +5,15 @@
 // key is one press rather than a held state -- one press is one step.
 //
 // The palette, while it is open, is modal over everything below it:
+//   typing       narrows it to what the query answers, best match first
 //   Up / Down    move the highlighted option, bringing it into the window
 //   Enter        insert the highlighted option
 //   Escape       close the palette without picking
+// Characters reach the palette's own field, so the keys below act on the options
+// the query keeps rather than on the whole vocabulary. Narrowing puts the
+// highlight back at the top, which is what makes typing and then committing land
+// on the best answer. Escape closes outright rather than first clearing the
+// query: one press, one meaning, and Backspace already clears.
 //
 // Escape (its own `FrameInput` pulse rather than a `Key`) otherwise answers
 // whichever state is waiting on a press, most consequential first: an armed
@@ -91,11 +97,15 @@ impl EditorHook {
     fn behavior_palette_key(&mut self, key: Key, world: &mut World) {
         match key {
             Key::Enter => {
-                let at = self.behavior_pick;
+                // The highlight counts kept options, so it resolves through the
+                // filter before it can name one.
+                let Some(&at) = self.behavior_data().matches.get(self.behavior_pick) else {
+                    return;
+                };
                 self.apply_behavior_action(BehaviorAction::Choose(at), world, [0.0, 0.0]);
             }
             Key::Up | Key::Down => {
-                let total = self.behavior_data().picks.len();
+                let total = self.behavior_data().matches.len();
                 let delta = if key == Key::Up { -1 } else { 1 };
                 let Some(at) = navigate::step(Some(self.behavior_pick), delta, total) else {
                     return;

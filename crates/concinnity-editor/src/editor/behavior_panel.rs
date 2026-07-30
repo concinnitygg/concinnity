@@ -62,6 +62,8 @@ pub(crate) const INSPECT_LABEL: AssetId = AssetId(BASE + 30);
 pub(crate) const REMOVE_BG: AssetId = AssetId(BASE + 31);
 pub(crate) const REMOVE_LABEL: AssetId = AssetId(BASE + 32);
 pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 33);
+pub(crate) const FILTER_INPUT: AssetId = AssetId(BASE + 34);
+pub(crate) const DROP_FILTER_BG: AssetId = AssetId(BASE + 35);
 
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(BASE + 0x40 + i as u32)
@@ -114,6 +116,8 @@ pub(crate) const ROW_POOL_MAX: usize = 34;
 // Visible palette options before the palette scrolls.
 pub(crate) const PICK_POOL: usize = 10;
 const PICK_ROW_H: f32 = 24.0;
+// The palette's own filter field, above its options.
+const FILTER_H: f32 = 26.0;
 // Value-column caption budget at the default width; widening the panel grows
 // it. A row's label is budgeted by the column it stops at instead.
 const MAX_VALUE_CHARS: usize = 34;
@@ -157,6 +161,7 @@ const CONFIRM_TINT: [f32; 4] = [0.68, 0.26, 0.28, 1.0];
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const DROP_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
+const FILTER_TINT: [f32; 4] = [0.14, 0.14, 0.18, 1.0];
 const ERROR_TINT: [f32; 4] = [0.20, 0.09, 0.11, 1.0];
 const ERROR_BORDER: [f32; 4] = [0.52, 0.24, 0.27, 1.0];
 const HINT_LABEL: [f32; 3] = theme::LABEL_DIM;
@@ -263,9 +268,15 @@ pub(crate) struct BehaviorView<'a> {
     // The palette for the selected row, shown while `picking`, windowed by
     // `pick_scroll` with `pick` the option the keyboard is on.
     pub picks: &'a [Pick],
+    // The options the typed filter keeps, best first, as indices into `picks`.
+    // Every slot the palette draws and hit-tests goes through these, so `pick`
+    // and the scroll count filtered places rather than absolute ones.
+    pub matches: &'a [usize],
     pub picking: bool,
     pub pick_scroll: usize,
     pub pick: usize,
+    // Whether the filter field asserts keyboard focus this frame.
+    pub filter_focus: bool,
     // The overview's selected card, which is its own: the map's cards stand for
     // whole behaviors rather than for rows of the open one.
     pub overview_card: Option<usize>,
@@ -288,10 +299,15 @@ pub(crate) struct BehaviorView<'a> {
 impl BehaviorView<'_> {
     // The palette rows shown this frame, after its scroll.
     fn picks_shown(&self) -> usize {
-        self.picks
+        self.matches
             .len()
             .saturating_sub(self.pick_scroll)
             .clamp(1, PICK_POOL)
+    }
+
+    // The option drawn in slot `slot`, as an index into `picks`.
+    fn pick_at(&self, slot: usize) -> Option<usize> {
+        self.matches.get(self.pick_scroll + slot).copied()
     }
 
     // The chart this view draws.
@@ -536,7 +552,7 @@ pub(crate) fn inspect_rows(s: [f32; 2]) -> usize {
 fn palette_backing(o: [f32; 2], w: f32, shown: usize) -> [f32; 4] {
     // Rounded out to an outline-row boundary, so the palette's edge never
     // bisects the row beneath it and leaves it half drawn.
-    let h = shown as f32 * PICK_ROW_H + 4.0;
+    let h = FILTER_H + shown as f32 * PICK_ROW_H + 4.0;
     [
         o[0] + PAD,
         body_top(o),
@@ -549,10 +565,16 @@ pub(crate) fn pick_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
     let b = palette_backing(o, w, 1);
     [
         b[0] + 2.0,
-        b[1] + 2.0 + slot as f32 * PICK_ROW_H,
+        b[1] + 2.0 + FILTER_H + slot as f32 * PICK_ROW_H,
         b[2] - 4.0,
         PICK_ROW_H,
     ]
+}
+
+// The field the palette is narrowed by, along its top edge.
+pub(crate) fn filter_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    let b = palette_backing(o, w, 1);
+    [b[0] + 2.0, b[1] + 2.0, b[2] - 4.0, FILTER_H - 4.0]
 }
 
 // Whether the cursor is over the scrollable region (for wheel routing): the
@@ -576,13 +598,16 @@ pub(crate) fn hit_test(
     // An open palette is modal over the panel: its options pick, and anything
     // else on the panel closes it.
     if view.picking {
+        // Pressing the field is aimed at typing into it, so it must not read as
+        // pressing away from the palette.
+        if point_in(mx, my, filter_rect(o, w)) {
+            return Some(BehaviorAction::Consume);
+        }
         for slot in 0..view.picks_shown() {
             if point_in(mx, my, pick_rect(o, w, slot)) {
-                let i = view.pick_scroll + slot;
-                return Some(if i < view.picks.len() {
-                    BehaviorAction::Choose(i)
-                } else {
-                    BehaviorAction::Dismiss
+                return Some(match view.pick_at(slot) {
+                    Some(i) => BehaviorAction::Choose(i),
+                    None => BehaviorAction::Dismiss,
                 });
             }
         }
@@ -1084,13 +1109,15 @@ fn layout_scrollbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32,
     );
 }
 
-// The floating palette: an opaque backing over the outline, one row per offered
-// verb with its hint, and its own scrollbar once the vocabulary overflows.
+// The floating palette: an opaque backing over the outline, a field narrowing
+// what it offers, one row per kept option with its hint, and its own scrollbar
+// once what is kept overflows.
 fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     if !palette_open(view) {
         widget::set_sprite_visible(world, DROP_BG, false);
         widget::set_sprite_visible(world, DROP_TRACK, false);
         widget::set_sprite_visible(world, DROP_THUMB, false);
+        widget::hide_field(world, FILTER_INPUT);
         for slot in 0..PICK_POOL {
             widget::set_sprite_visible(world, pick_bg(slot), false);
             widget::set_label_visible(world, pick_label(slot), false);
@@ -1107,9 +1134,21 @@ fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
         theme::CONTROL_RADIUS,
         true,
     );
+    layout_filter(world, view, o, w);
     for slot in 0..PICK_POOL {
-        let i = view.pick_scroll + slot;
-        let Some(pick) = view.picks.get(i).filter(|_| slot < shown) else {
+        let Some(i) = view.pick_at(slot).filter(|_| slot < shown) else {
+            // A query nothing answers keeps its one slot to say so, rather than
+            // collapsing the palette out from under the field being typed into.
+            if slot == 0 && view.matches.is_empty() {
+                empty_palette_row(world, o, w);
+                continue;
+            }
+            widget::set_sprite_visible(world, pick_bg(slot), false);
+            widget::set_label_visible(world, pick_label(slot), false);
+            widget::set_label_visible(world, pick_hint(slot), false);
+            continue;
+        };
+        let Some(pick) = view.picks.get(i) else {
             widget::set_sprite_visible(world, pick_bg(slot), false);
             widget::set_label_visible(world, pick_label(slot), false);
             widget::set_label_visible(world, pick_hint(slot), false);
@@ -1117,7 +1156,7 @@ fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
         };
         let r = pick_rect(o, w, slot);
         let hovered = point_in(view.mouse[0], view.mouse[1], r);
-        let tint = if i == view.pick {
+        let tint = if view.pick_scroll + slot == view.pick {
             theme::SELECTED_TINT
         } else if hovered {
             theme::HOVER_TINT
@@ -1146,6 +1185,45 @@ fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     layout_palette_scrollbar(world, view, o, w, shown);
 }
 
+// The field the palette is narrowed by. Its ghost says what typing does, so the
+// affordance does not need a label of its own taking a row.
+fn layout_filter(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+    let r = filter_rect(o, w);
+    place_rounded(
+        world,
+        DROP_FILTER_BG,
+        r,
+        FILTER_TINT,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    if let Some(t) = widget::input_mut(world, FILTER_INPUT) {
+        t.ghost = "filter".to_string();
+    }
+    widget::show_field(
+        world,
+        FILTER_INPUT,
+        [r[0] + 4.0, r[1] + 2.0, r[2] - 8.0, r[3] - 4.0],
+        view.filter_focus,
+    );
+}
+
+// What the palette says when the query answers nothing: the vocabulary is still
+// there, so this is about what was typed rather than about the row.
+fn empty_palette_row(world: &mut World, o: [f32; 2], w: f32) {
+    let r = pick_rect(o, w, 0);
+    widget::set_sprite_visible(world, pick_bg(0), false);
+    widget::set_label_visible(world, pick_hint(0), false);
+    widget::place_left_label(
+        world,
+        pick_label(0),
+        [r[0] + PAD, r[1] + PICK_ROW_H * 0.5 - theme::TEXT_HALF],
+        "no option matches",
+        HINT_LABEL,
+        true,
+    );
+}
+
 fn layout_palette_scrollbar(
     world: &mut World,
     view: &BehaviorView,
@@ -1161,11 +1239,12 @@ fn layout_palette_scrollbar(
     }
     let b = palette_backing(o, w, shown);
     let x = b[0] + b[2] - SCROLLBAR_W - 2.0;
+    let top = b[1] + FILTER_H;
     let h = shown as f32 * PICK_ROW_H;
     place_rounded(
         world,
         DROP_TRACK,
-        [x, b[1] + 2.0, SCROLLBAR_W, h],
+        [x, top + 2.0, SCROLLBAR_W, h],
         TRACK_TINT,
         SCROLLBAR_W * 0.5,
         true,
@@ -1176,7 +1255,7 @@ fn layout_palette_scrollbar(
     place_rounded(
         world,
         DROP_THUMB,
-        [x, b[1] + 2.0 + off, SCROLLBAR_W, thumb_h],
+        [x, top + 2.0 + off, SCROLLBAR_W, thumb_h],
         THUMB_TINT,
         SCROLLBAR_W * 0.5,
         true,
@@ -1245,7 +1324,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     ids.push(INSPECT_BG);
     ids.extend((0..ROW_POOL_MAX).map(row_bg));
     ids.extend(behavior_chart::all_sprite_ids());
-    ids.extend([STATUS_BG, LIST_TRACK, LIST_THUMB, DROP_BG]);
+    ids.extend([STATUS_BG, LIST_TRACK, LIST_THUMB, DROP_BG, DROP_FILTER_BG]);
     ids.extend((0..PICK_POOL).map(pick_bg));
     ids.extend([DROP_TRACK, DROP_THUMB]);
     ids
@@ -1285,7 +1364,15 @@ pub(crate) fn status_ids() -> Vec<AssetId> {
 // The palette's own elements, which draw above the rest of the panel while it
 // is open so its backing occludes whatever it floats over.
 pub(crate) fn palette_ids() -> Vec<AssetId> {
-    let mut ids = vec![DROP_BG, DROP_TRACK, DROP_THUMB];
+    // The filter field is one of these: a panel's fields otherwise draw at its
+    // base layer, which is under the palette's own opaque backing.
+    let mut ids = vec![
+        DROP_BG,
+        DROP_FILTER_BG,
+        DROP_TRACK,
+        DROP_THUMB,
+        FILTER_INPUT,
+    ];
     ids.extend((0..PICK_POOL).map(pick_bg));
     ids.extend((0..PICK_POOL).map(pick_label));
     ids.extend((0..PICK_POOL).map(pick_hint));
@@ -1293,7 +1380,7 @@ pub(crate) fn palette_ids() -> Vec<AssetId> {
 }
 
 pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![VALUE_INPUT, NAME_INPUT]
+    vec![VALUE_INPUT, NAME_INPUT, FILTER_INPUT]
 }
 
 #[cfg(test)]
@@ -1344,6 +1431,11 @@ mod tests {
         outline::rows(&sample_args())
     }
 
+    // Every option kept, which is what an unfiltered palette shows.
+    fn all(picks: &[Pick]) -> Vec<usize> {
+        (0..picks.len()).collect()
+    }
+
     fn view<'a>(rows: &'a [Row], picks: &'a [Pick]) -> BehaviorView<'a> {
         BehaviorView {
             name: "chase",
@@ -1359,9 +1451,11 @@ mod tests {
             card: None,
             fields: &[],
             picks,
+            matches: &[],
             picking: false,
             pick_scroll: 0,
             pick: 0,
+            filter_focus: false,
             overview_card: None,
             editable: false,
             focus: false,
@@ -1511,8 +1605,10 @@ mod tests {
     fn an_open_palette_is_modal_over_the_panel() {
         let rows = sample_rows();
         let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let kept = all(&picks);
         let v = BehaviorView {
             picking: true,
+            matches: &kept,
             selected: Some(0),
             ..view(&rows, &picks)
         };
@@ -1663,8 +1759,10 @@ mod tests {
         let mut world = injected_world();
         let rows = sample_rows();
         let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let kept = all(&picks);
         let v = BehaviorView {
             picking: true,
+            matches: &kept,
             selected: Some(0),
             ..view(&rows, &picks)
         };
@@ -1799,6 +1897,74 @@ mod tests {
         assert_eq!(sprite(&world, behavior_chart::card_bg(0)).border_width, 1.0);
     }
 
+    // The field narrowing the palette sits inside it, so what is typed and what
+    // it keeps are read in one place. Its slots address the kept options, which
+    // is what lets a filtered palette be picked from at all.
+    #[test]
+    fn the_palette_carries_the_field_it_is_narrowed_by() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let o = [20.0, 20.0];
+        let s = size();
+        // Two kept options, the second of which is option 5 of the vocabulary.
+        let kept = vec![1usize, 5];
+        let v = BehaviorView {
+            picking: true,
+            matches: &kept,
+            filter_focus: true,
+            ..view(&rows, &picks)
+        };
+        apply(&mut world, Some(&v), o, s);
+
+        let f = field(&world, FILTER_INPUT);
+        assert!(f.visible && f.focused, "the filter takes the keyboard");
+        assert!(sprite(&world, DROP_FILTER_BG).visible);
+        let first = pick_rect(o, BEHAVIOR_W, 0);
+        assert!(
+            f.y + f.height <= first[1] + 0.01,
+            "the field sits above the options it narrows"
+        );
+        assert_eq!(label(&world, pick_label(0)).content, picks[1].verb);
+        assert_eq!(label(&world, pick_label(1)).content, picks[5].verb);
+        assert!(
+            !label(&world, pick_label(2)).visible,
+            "only what the query keeps is drawn"
+        );
+        // A slot addresses the option it draws, not its place in the palette.
+        let r = pick_rect(o, BEHAVIOR_W, 1);
+        assert_eq!(
+            hit_test(&v, r[0] + 3.0, r[1] + 3.0, o, s),
+            Some(BehaviorAction::Choose(5)),
+        );
+        // And pressing the field is aimed at typing, not at closing.
+        let b = filter_rect(o, BEHAVIOR_W);
+        assert_eq!(
+            hit_test(&v, b[0] + 3.0, b[1] + 3.0, o, s),
+            Some(BehaviorAction::Consume),
+        );
+    }
+
+    // A query nothing answers keeps the palette open and says so: the field being
+    // typed into is inside it, so collapsing would take away the fix.
+    #[test]
+    fn a_query_nothing_answers_still_draws_the_palette() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let v = BehaviorView {
+            picking: true,
+            matches: &[],
+            filter_focus: true,
+            ..view(&rows, &picks)
+        };
+        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        assert!(sprite(&world, DROP_BG).visible, "the palette is still up");
+        assert!(field(&world, FILTER_INPUT).visible, "and still typeable");
+        assert_eq!(label(&world, pick_label(0)).content, "no option matches");
+        assert!(!sprite(&world, pick_bg(0)).visible, "nothing to press");
+    }
+
     // Where the keyboard is in the palette is drawn the way a selected outline
     // row is, so the highlight reads as the selection it is rather than as a
     // second kind of hover. It follows the scroll, because a slot stands for a
@@ -1808,8 +1974,10 @@ mod tests {
         let mut world = injected_world();
         let rows = sample_rows();
         let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
+        let kept = all(&picks);
         let v = BehaviorView {
             picking: true,
+            matches: &kept,
             pick: 2,
             ..view(&rows, &picks)
         };
@@ -1819,6 +1987,7 @@ mod tests {
 
         let scrolled = BehaviorView {
             picking: true,
+            matches: &kept,
             pick: 2,
             pick_scroll: 2,
             ..view(&rows, &picks)
@@ -1844,8 +2013,10 @@ mod tests {
         let picks = edit::picks(&Kind::List(outline::List::Nodes), &[]);
         let o = [20.0, 20.0];
         let s = size();
+        let kept = all(&picks);
         let open = BehaviorView {
             picking: true,
+            matches: &kept,
             selected: Some(0),
             ..view(&rows, &picks)
         };
@@ -1860,7 +2031,13 @@ mod tests {
         // Every element the palette draws is declared as an overlay, or the
         // layer bump would miss it and it would sink back into the panel.
         let declared = palette_ids();
-        for id in [DROP_BG, DROP_TRACK, DROP_THUMB] {
+        for id in [
+            DROP_BG,
+            DROP_FILTER_BG,
+            DROP_TRACK,
+            DROP_THUMB,
+            FILTER_INPUT,
+        ] {
             assert!(declared.contains(&id), "{id:?} is not declared an overlay");
         }
         for slot in 0..PICK_POOL {
@@ -2089,8 +2266,10 @@ mod tests {
         let mut world = injected_world();
         let rows = sample_rows();
         let picks = edit::picks(&Kind::Node, &[]);
+        let kept = all(&picks);
         let v = BehaviorView {
             picking: true,
+            matches: &kept,
             editable: true,
             focus: true,
             selected: Some(0),

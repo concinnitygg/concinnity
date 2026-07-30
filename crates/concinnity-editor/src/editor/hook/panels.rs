@@ -834,6 +834,7 @@ impl Panel for BehaviorPanel {
         vec![
             (behavior_panel::VALUE_INPUT, "value"),
             (behavior_panel::NAME_INPUT, "name"),
+            (behavior_panel::FILTER_INPUT, "filter"),
         ]
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {

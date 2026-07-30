@@ -5583,3 +5583,162 @@ fn a_stale_behavior_fault_never_points_off_its_own_path() {
         "the exact spot is gone, so it settled for less"
     );
 }
+
+// Type into the palette's filter, as the engine's text-input system would, then
+// let the hook sample it the way its tick does.
+fn type_filter(h: &mut EditorHook, world: &mut World, text: &str) {
+    widget::seed_field(world, behavior_panel::FILTER_INPUT, text);
+    h.sample_behavior_filter(world);
+}
+
+fn open_palette(h: &mut EditorHook, world: &mut World, row: &str) {
+    select_behavior(h, world, row);
+    h.apply_behavior_action(BehaviorAction::Palette, world, [0.0, 0.0]);
+    assert!(h.behavior_picking, "the palette is open");
+}
+
+// The point of typing is that the first answer is the one wanted, so Enter after
+// a query lands on the best match rather than on the vocabulary's first entry.
+#[test]
+fn behavior_palette_filter_narrows_and_enter_takes_the_best_match() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    open_palette(&mut h, &mut world, "do");
+    let unfiltered = h.behavior_data().matches.len();
+
+    type_filter(&mut h, &mut world, "foreach");
+    let data = h.behavior_data();
+    assert!(data.matches.len() < unfiltered, "the query narrowed it");
+    assert_eq!(data.picks[data.matches[0]].verb, "for_each");
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(
+        open_args(&h)["do"][0].get("for_each").is_some(),
+        "the best match is what landed: {:?}",
+        open_args(&h)["do"],
+    );
+}
+
+// A query is about the pick being made, so it never outlives it: the next palette
+// opens on the whole vocabulary.
+#[test]
+fn behavior_palette_filter_clears_when_the_palette_closes() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    open_palette(&mut h, &mut world, "do");
+    let unfiltered = h.behavior_data().matches.len();
+    type_filter(&mut h, &mut world, "spawn");
+    assert!(h.behavior_data().matches.len() < unfiltered);
+
+    // Picking closes it, and the filter goes with it.
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(h.behavior_filter.is_empty());
+    assert_eq!(
+        widget::field_text(&world, behavior_panel::FILTER_INPUT),
+        "",
+        "the field was cleared too, not just the mirror"
+    );
+
+    // And so does dismissing.
+    open_palette(&mut h, &mut world, "do");
+    type_filter(&mut h, &mut world, "spawn");
+    h.behavior_keys(&mut world, &behavior_escape_input());
+    assert!(!h.behavior_picking);
+    assert!(h.behavior_filter.is_empty());
+    open_palette(&mut h, &mut world, "do");
+    assert_eq!(h.behavior_data().matches.len(), unfiltered);
+}
+
+// Narrowing puts the highlight back at the top: a place in the old list may not
+// even be in the new one, and Enter must never go dead.
+#[test]
+fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    open_palette(&mut h, &mut world, "do");
+    for _ in 0..4 {
+        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    }
+    assert_eq!(h.behavior_pick, 4);
+
+    // A query keeping fewer options than that would have stranded the highlight.
+    type_filter(&mut h, &mut world, "spawn");
+    assert_eq!(h.behavior_pick, 0);
+    assert_eq!(h.behavior_pick_scroll, 0);
+    assert!(h.behavior_data().matches.len() <= 4);
+
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(
+        open_args(&h)["do"][0].get("spawn").is_some(),
+        "Enter still picked: {:?}",
+        open_args(&h)["do"],
+    );
+}
+
+// A query nothing answers keeps the palette up, because the field being typed
+// into is inside it: collapsing would take away the only way to fix the typo.
+#[test]
+fn behavior_palette_survives_a_query_nothing_answers() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    open_palette(&mut h, &mut world, "do");
+    type_filter(&mut h, &mut world, "zzzz");
+    assert!(h.behavior_data().matches.is_empty());
+    assert!(h.behavior_picking, "the palette is still up");
+
+    // Enter has nothing to insert, and nothing is written.
+    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    assert!(h.behavior_picking);
+    assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
+
+    // Correcting the query brings the options back.
+    type_filter(&mut h, &mut world, "save");
+    assert!(!h.behavior_data().matches.is_empty());
+}
+
+// While the palette is up its field holds the keyboard, so the editor's own
+// letter shortcuts stand down rather than moving a gizmo behind it.
+#[test]
+fn behavior_palette_filter_holds_the_keyboard_off_the_shortcuts() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    assert!(!h.text_focus_active());
+    open_palette(&mut h, &mut world, "do");
+    assert!(
+        h.text_focus_active(),
+        "typing `s` into the filter must not reach the scale gizmo"
+    );
+}
+
+// A panel's fields draw at its base layer, but the palette's backing is bumped
+// above that -- so the field inside the palette has to be bumped with it or its
+// text renders behind the box it sits in.
+#[test]
+fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "tick", "do": []}),
+    )]);
+    open_palette(&mut h, &mut world, "do");
+    let layers = h.compute_layers();
+    let field = layers[&behavior_panel::FILTER_INPUT];
+    assert!(
+        field > layers[&behavior_panel::PANEL_BG],
+        "the field sank into its own panel"
+    );
+    assert_eq!(
+        field,
+        layers[&behavior_panel::DROP_BG],
+        "the field and the backing it sits in share a layer"
+    );
+}
