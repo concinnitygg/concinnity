@@ -28,6 +28,15 @@
 //
 // Tab steps to the next view, the same cycle the header's own button walks.
 //
+// Ctrl carries a list member between places, whole subtree and all:
+//   Ctrl+C       hold the selected member
+//   Ctrl+V       put it into the list the selection addresses, after the
+//                selected member or at the end of the list itself
+//   Ctrl+D       duplicate the selected member in place, leaving what is held
+// What is held outlives the open behavior, so a node can be carried to another
+// one. These act only while no field holds the keyboard, since a copy is about
+// the selected node rather than the text being typed.
+//
 // The arrows move the selection through whichever view is showing:
 //   Outline      Up / Down step one row
 //   Chart        Left / Right follow the chain, Up / Down cross between a
@@ -73,6 +82,14 @@ impl EditorHook {
             self.behavior_palette_key(key, world);
             return;
         }
+        // Ctrl carries the clipboard, and only while no field holds the keyboard:
+        // a copy is about the selected node, not about the text being typed.
+        if input.ctrl {
+            if !self.behavior_focus && !self.behavior_name_focus {
+                self.clipboard_behavior_key(key, world);
+            }
+            return;
+        }
         match key {
             Key::Enter => self.commit_behavior_key(world),
             _ if self.behavior_name_focus => {}
@@ -86,6 +103,16 @@ impl EditorHook {
                 }
             }
         }
+    }
+
+    fn clipboard_behavior_key(&mut self, key: Key, world: &mut World) {
+        let action = match key {
+            Key::C => BehaviorAction::Copy,
+            Key::V => BehaviorAction::Paste,
+            Key::D => BehaviorAction::Duplicate,
+            _ => return,
+        };
+        self.apply_behavior_action(action, world, [0.0, 0.0]);
     }
 
     // Whether the palette is not just up but showing something to pick, which is

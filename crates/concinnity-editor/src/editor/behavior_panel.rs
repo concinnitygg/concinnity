@@ -64,6 +64,8 @@ pub(crate) const REMOVE_LABEL: AssetId = AssetId(BASE + 32);
 pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 33);
 pub(crate) const FILTER_INPUT: AssetId = AssetId(BASE + 34);
 pub(crate) const DROP_FILTER_BG: AssetId = AssetId(BASE + 35);
+pub(crate) const DUP_BG: AssetId = AssetId(BASE + 36);
+pub(crate) const DUP_LABEL: AssetId = AssetId(BASE + 37);
 
 pub(crate) fn row_bg(i: usize) -> AssetId {
     AssetId(BASE + 0x40 + i as u32)
@@ -377,6 +379,12 @@ pub(crate) enum BehaviorAction {
     PanStart,
     // Select whatever the checker is complaining about.
     GoToFault,
+    // Hold the selected list member for a later paste.
+    Copy,
+    // Put what is held into the list the selection addresses.
+    Paste,
+    // Put a copy of the selected member beside it, leaving what is held alone.
+    Duplicate,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -486,8 +494,13 @@ pub(crate) fn down_rect(o: [f32; 2]) -> [f32; 4] {
     [u[0] + ARROW_W + GAP, u[1], ARROW_W, TOOL_CTRL_H]
 }
 
+pub(crate) fn dup_rect(o: [f32; 2]) -> [f32; 4] {
+    let d = down_rect(o);
+    [d[0] + ARROW_W + GAP, d[1], TOOL_BTN_W, TOOL_CTRL_H]
+}
+
 pub(crate) fn value_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    let left = down_rect(o)[0] + ARROW_W + GAP;
+    let left = dup_rect(o)[0] + TOOL_BTN_W + GAP;
     [
         left,
         tool_y(o),
@@ -649,6 +662,7 @@ pub(crate) fn hit_test(
                 (delete_rect(o), BehaviorAction::Delete),
                 (up_rect(o), BehaviorAction::Move(-1)),
                 (down_rect(o), BehaviorAction::Move(1)),
+                (dup_rect(o), BehaviorAction::Duplicate),
             ] {
                 if point_in(mx, my, rect) {
                     return Some(action);
@@ -922,6 +936,14 @@ fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
             label: DOWN_LABEL,
             rect: down_rect(o),
             caption: "v",
+            tint: BTN_TINT,
+            live: member,
+        },
+        Chip {
+            bg: DUP_BG,
+            label: DUP_LABEL,
+            rect: dup_rect(o),
+            caption: "Dup",
             tint: BTN_TINT,
             live: member,
         },
@@ -1319,7 +1341,7 @@ pub(crate) fn hide_all(world: &mut World) {
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut ids = vec![
         PANEL_BG, CLOSE_BG, PREV_BG, NEXT_BG, VIEW_BG, REMOVE_BG, NEW_BG, PICK_BG, DEL_BG, UP_BG,
-        DOWN_BG,
+        DOWN_BG, DUP_BG,
     ];
     ids.push(INSPECT_BG);
     ids.extend((0..ROW_POOL_MAX).map(row_bg));
@@ -1344,6 +1366,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
         DEL_LABEL,
         UP_LABEL,
         DOWN_LABEL,
+        DUP_LABEL,
         STATUS_LABEL,
         INSPECT_LABEL,
     ];
@@ -1874,6 +1897,67 @@ mod tests {
         assert_ne!(
             hit_test(&view(&rows, &[]), mx, my, o, s),
             Some(BehaviorAction::GoToFault),
+        );
+    }
+
+    // Duplicating is the discoverable half of the clipboard: the keys carry a
+    // node between behaviors, but the common case is a copy beside the original,
+    // so that one has a chip. It acts on a list member, like Del and the arrows.
+    #[test]
+    fn the_duplicate_chip_answers_only_for_a_list_member() {
+        let mut world = injected_world();
+        let rows = sample_rows();
+        let o = [20.0, 20.0];
+        let s = size();
+        let member = rows
+            .iter()
+            .position(|r| r.element.is_some())
+            .expect("the sample body has a node");
+        let d = dup_rect(o);
+
+        let on_member = BehaviorView {
+            selected: Some(member),
+            ..view(&rows, &[])
+        };
+        assert_eq!(
+            hit_test(&on_member, d[0] + 3.0, d[1] + 3.0, o, s),
+            Some(BehaviorAction::Duplicate),
+        );
+        apply(&mut world, Some(&on_member), o, s);
+        let live = label(&world, DUP_LABEL).color;
+
+        // A row that is not a member leaves the chip dim, like Del beside it.
+        let not_member = rows
+            .iter()
+            .position(|r| r.element.is_none())
+            .expect("the source row is not a member");
+        apply(
+            &mut world,
+            Some(&BehaviorView {
+                selected: Some(not_member),
+                ..view(&rows, &[])
+            }),
+            o,
+            s,
+        );
+        assert_ne!(label(&world, DUP_LABEL).color, live, "the chip went dim");
+        assert_eq!(
+            label(&world, DEL_LABEL).color,
+            label(&world, DUP_LABEL).color,
+            "and it reads the same as the other member-only chips",
+        );
+    }
+
+    // The chip took width off the value field, which still has to hold a caption.
+    #[test]
+    fn the_toolbar_still_leaves_the_value_field_room() {
+        let o = [0.0, 0.0];
+        let v = value_rect(o, BEHAVIOR_W);
+        let d = dup_rect(o);
+        assert!(v[0] >= d[0] + d[2], "the field starts clear of the chip");
+        assert!(
+            v[2] >= MAX_VALUE_CHARS as f32 * CHAR_W,
+            "the value column no longer fits its own budget: {v:?}",
         );
     }
 

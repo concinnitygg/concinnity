@@ -5742,3 +5742,184 @@ fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
         "the field and the backing it sits in share a layer"
     );
 }
+
+fn ctrl_key_input(key: crate::assets::Key) -> FrameInput {
+    FrameInput {
+        captured_key: Some(key),
+        ctrl: true,
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    }
+}
+
+fn body_verbs(h: &EditorHook) -> Vec<String> {
+    open_args(h)["do"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n.as_object()?.keys().next().cloned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// Duplicating puts the copy beside the original, carrying its whole subtree, and
+// leaves the selection on what just landed so a follow-up acts on the copy.
+#[test]
+fn behavior_duplicate_copies_a_node_subtree_next_to_it() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [
+            {"if": {"cond": {"bool": true}, "then": [{"hide": {"target": "self"}}]}},
+            {"save": {}},
+        ]}),
+    )]);
+    select_behavior(&mut h, &mut world, "if");
+    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world, [0.0, 0.0]);
+
+    assert_eq!(body_verbs(&h), ["if", "if", "save"]);
+    assert_eq!(
+        open_args(&h)["do"][1]["if"]["then"][0]["hide"]["target"],
+        serde_json::json!("self"),
+        "the branch came with it"
+    );
+    let row = h.behavior_row.expect("the copy is selected");
+    assert_eq!(
+        h.behavior_rows()[row].element,
+        Some(vec![
+            crate::editor::behavior::path::field("do"),
+            crate::editor::behavior::path::Step::Index(1),
+        ]),
+    );
+}
+
+// Ctrl+C then Ctrl+V is the same move spelled out, and what is held survives to
+// be pasted again.
+#[test]
+fn behavior_ctrl_c_holds_a_node_and_ctrl_v_places_it() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "hide");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    assert!(h.behavior_clip.is_some(), "the node is held");
+    assert_eq!(body_verbs(&h), ["save", "hide"], "copying wrote nothing");
+
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
+    // Still held, so a second paste lands beside the first copy.
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    assert_eq!(body_verbs(&h), ["save", "hide", "hide", "hide"]);
+}
+
+// A duplicate is a paste of the selection, so it must not disturb what a Ctrl+C
+// earlier put aside.
+#[test]
+fn behavior_duplicate_leaves_what_is_held_alone() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "save");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+
+    select_behavior(&mut h, &mut world, "hide");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
+
+    // What was held is still the `save`, and pastes as one.
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    assert_eq!(body_verbs(&h), ["save", "hide", "hide", "save"]);
+}
+
+// Carrying a node between behaviors is most of why the clipboard outlives the one
+// it came from.
+#[test]
+fn behavior_clipboard_carries_a_node_to_another_behavior() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior(
+            "chase",
+            serde_json::json!({"on": "start", "do": [{"hide": {"target": "self"}}]}),
+        ),
+        behavior("greet", serde_json::json!({"on": "tick", "do": []})),
+    ]);
+    select_behavior(&mut h, &mut world, "hide");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+
+    h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "greet");
+    assert!(h.behavior_clip.is_some(), "opening another kept it");
+
+    // The empty body's own row is the list, so a paste there appends.
+    select_behavior(&mut h, &mut world, "do");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    assert_eq!(body_verbs(&h), ["hide"]);
+}
+
+// A node does not belong in a list of component names, so nothing is written and
+// the world is left as it was.
+#[test]
+fn behavior_paste_is_refused_by_a_list_of_another_kind() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "scope": ["Prop"], "do": [{"save": {}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "save");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+
+    select_behavior(&mut h, &mut world, "scope");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    assert_eq!(open_args(&h)["scope"], serde_json::json!(["Prop"]));
+    assert_eq!(body_verbs(&h), ["save"], "and the body is untouched too");
+}
+
+// A row that is not a member of any list has nothing to carry.
+#[test]
+fn behavior_copy_of_a_non_member_holds_nothing() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "on");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    assert!(h.behavior_clip.is_none());
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    assert_eq!(
+        body_verbs(&h),
+        ["save"],
+        "and there is nothing to duplicate"
+    );
+}
+
+// The clipboard keys are about the selected node, so a field holding the keyboard
+// keeps them: Ctrl+C while typing a value must not duplicate a node behind it.
+#[test]
+fn behavior_clipboard_keys_stand_down_while_a_field_is_focused() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "name");
+    assert!(h.behavior_focus, "a text row takes the value field");
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    assert_eq!(body_verbs(&h), ["let"], "nothing was duplicated");
+
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    assert_eq!(body_verbs(&h), ["let"]);
+}
+
+// The edit goes through the same commit every other one does, so it is undoable.
+#[test]
+fn behavior_duplicate_is_undoable() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "chase",
+        serde_json::json!({"on": "start", "do": [{"save": {}}]}),
+    )]);
+    select_behavior(&mut h, &mut world, "save");
+    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world, [0.0, 0.0]);
+    assert_eq!(body_verbs(&h), ["save", "save"]);
+    h.undo(&mut world);
+    assert_eq!(body_verbs(&h), ["save"]);
+}

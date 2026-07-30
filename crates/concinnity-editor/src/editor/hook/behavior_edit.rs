@@ -22,6 +22,7 @@ use concinnity_cook::ComponentType;
 use serde_json::Value;
 
 use super::*;
+use crate::editor::behavior::clip;
 use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fault;
 use crate::editor::behavior::fields;
@@ -334,6 +335,9 @@ impl EditorHook {
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
             BehaviorAction::GoToFault => self.select_behavior_fault(world),
+            BehaviorAction::Copy => self.copy_behavior_row(),
+            BehaviorAction::Paste => self.paste_behavior_row(world),
+            BehaviorAction::Duplicate => self.duplicate_behavior_row(world),
             BehaviorAction::Consume => self.behavior_focus = false,
         }
     }
@@ -495,6 +499,58 @@ impl EditorHook {
         self.behavior_mode = ViewMode::Chart;
         self.behavior_pan = [0.0, 0.0];
         self.open_behavior(world);
+    }
+
+    // Hold the selected member. Nothing is written, so this is not an edit and
+    // takes no history snapshot.
+    fn copy_behavior_row(&mut self) {
+        let data = self.behavior_data();
+        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+            return;
+        };
+        if let Some(held) = clip::of(&self.behavior_args(), &data.rows, row) {
+            self.behavior_clip = Some(held);
+        }
+    }
+
+    fn paste_behavior_row(&mut self, world: &mut World) {
+        let Some(held) = self.behavior_clip.clone() else {
+            return;
+        };
+        self.place_behavior_clip(&held, world);
+    }
+
+    // A duplicate is a paste of the selection itself, so it leaves whatever is
+    // held for a later paste alone.
+    fn duplicate_behavior_row(&mut self, world: &mut World) {
+        let data = self.behavior_data();
+        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+            return;
+        };
+        let Some(held) = clip::of(&self.behavior_args(), &data.rows, row) else {
+            return;
+        };
+        self.place_behavior_clip(&held, world);
+    }
+
+    // Put `held` where the selection says, then follow the copy: the next press
+    // acts on what just landed rather than on what it came from.
+    fn place_behavior_clip(&mut self, held: &clip::Clip, world: &mut World) {
+        let data = self.behavior_data();
+        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+            return;
+        };
+        let mut args = self.behavior_args();
+        let Some(landed) = clip::paste(&mut args, &data.rows, row, held) else {
+            return;
+        };
+        self.commit_behavior(args, world);
+        self.behavior_row = self
+            .behavior_rows()
+            .iter()
+            .position(|r| r.element.as_ref() == Some(&landed));
+        self.seed_behavior_value(world);
+        self.ensure_behavior_visible();
     }
 
     // Go to what the checker is complaining about. The overview maps the world

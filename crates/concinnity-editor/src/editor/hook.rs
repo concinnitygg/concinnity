@@ -185,6 +185,11 @@ pub(crate) struct EditorHook {
     // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
     behavior_pan: [f32; 2],
     behavior_pan_drag: Option<[f32; 2]>,
+    // The list member held for a paste, with the kind of list it came out of so
+    // it can only land in one of the same kind. Session state, not an edit, and
+    // deliberately not cleared by opening another behavior: carrying a node
+    // between two of them is most of the point.
+    behavior_clip: Option<crate::editor::behavior::clip::Clip>,
     // The overview's selected card. The map's cards stand for whole behaviors
     // and the things they reach rather than for places inside one, so the
     // outline row the other two views share cannot address them.
@@ -477,6 +482,7 @@ impl EditorHook {
             behavior_mode: ViewMode::default(),
             behavior_pan: [0.0, 0.0],
             behavior_pan_drag: None,
+            behavior_clip: None,
             behavior_overview_card: None,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),

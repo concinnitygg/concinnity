@@ -87,16 +87,19 @@ pub(crate) fn set(root: &mut Value, path: &[Step], value: Value) -> bool {
 // Append to the array at `path`, materializing it when the key is absent or
 // null (a list the authored JSON left out entirely).
 pub(crate) fn push(root: &mut Value, path: &[Step], value: Value) -> bool {
+    insert(root, path, usize::MAX, value).is_some()
+}
+
+// Insert into the array at `path` at `index`, clamped to its end, materializing
+// the array the same way `push` does. Returns where the value landed.
+pub(crate) fn insert(root: &mut Value, path: &[Step], index: usize, value: Value) -> Option<usize> {
     if get(root, path).is_none_or(Value::is_null) && !set(root, path, Value::Array(Vec::new())) {
-        return false;
+        return None;
     }
-    match get_mut(root, path).and_then(|v| v.as_array_mut()) {
-        Some(a) => {
-            a.push(value);
-            true
-        }
-        None => false,
-    }
+    let array = get_mut(root, path)?.as_array_mut()?;
+    let at = index.min(array.len());
+    array.insert(at, value);
+    Some(at)
 }
 
 // Drop the array element at `path`. Only array elements are removed: every
@@ -174,6 +177,31 @@ mod tests {
         let mut nulled = json!({"queries": null});
         assert!(push(&mut nulled, &[field("queries")], json!({"name": "q"})));
         assert_eq!(nulled["queries"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn insert_lands_where_asked_and_clamps_to_the_end() {
+        let mut v = sample();
+        assert_eq!(
+            insert(&mut v, &[field("do")], 0, json!({"show": null})),
+            Some(0)
+        );
+        assert!(v["do"][0].get("show").is_some());
+        // Past the end appends rather than refusing, which is what `push` is.
+        assert_eq!(
+            insert(&mut v, &[field("do")], 99, json!({"hide": null})),
+            Some(3)
+        );
+        assert!(v["do"][3].get("hide").is_some());
+        // A missing list is materialized, like `push`.
+        let mut bare = json!({});
+        assert_eq!(insert(&mut bare, &[field("do")], 4, json!(1)), Some(0));
+        assert_eq!(bare["do"], json!([1]));
+        // Something that is not a list is refused.
+        assert_eq!(
+            insert(&mut v, &[field("scope"), Step::Index(0)], 0, json!(1)),
+            None
+        );
     }
 
     #[test]
