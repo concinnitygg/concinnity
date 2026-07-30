@@ -347,8 +347,7 @@ impl GraphicsSystem {
             self.vsync = args.vsync;
             self.fps_cap = args.fps_cap;
             self.clear_color = args.clear_color;
-            // A launch-imposed cap wins over the world's own.
-            self.max_frames = crate::app::dev_flags::max_frames().or(args.max_frames);
+            self.max_frames = args.max_frames;
             self.shadow_map_size = args.shadow_map_size;
             self.shadow_update = args.shadow_update;
             self.shadow_distance = args.shadow_distance;

@@ -31,9 +31,6 @@ pub use app::run::run_from;
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.
 pub use concinnity_core::paths::set_writable_state_dir;
-// Cap the frame count before `run_from` (dev harnesses; worlds set the
-// equivalent through GraphicsConfig.max_frames).
-pub use app::dev_flags::set_max_frames;
 
 // Export-time compilation of the built-in shaders into a bundle's
 // shader-cache/, for backends that compile them at renderer init. Re-exported

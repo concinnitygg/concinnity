@@ -28,11 +28,6 @@
 //                        Metal's validation layer cannot be toggled from a
 //                        running process, so the CLI re-execs with the env var
 //                        instead; this flag does not drive Metal.
-//   MAX_FRAMES           "exit after this many frames, whatever the world says."
-//                        Read by `GraphicsSystem::init` in place of
-//                        `GraphicsConfig.max_frames`, for a host that needs a
-//                        world it does not own to render and exit. Unset for a
-//                        normal launch, leaving the world's own value in effect.
 //   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
 //                        editor's `cn debug` / `cn editor` entry once the world
 //                        path is resolved; read by `GraphicsSystem::init` (only
@@ -61,11 +56,8 @@ static VALIDATION: AtomicU8 = AtomicU8::new(0);
 // Path to the world.jsonl the dev host is running, or None outside a dev host.
 static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 
-// Launch-imposed frame cap overriding the world's own, or None.
-static MAX_FRAMES: Mutex<Option<u64>> = Mutex::new(None);
-
 // The harness runs a binary's tests on parallel threads, so a test that writes
-// a flag races every test whose code reads one -- graphics init reads four.
+// a flag races every test whose code reads one -- graphics init reads three.
 // Writers take this exclusively, readers share it, so only the writers
 // serialise.
 #[cfg(test)]
@@ -131,22 +123,6 @@ pub(crate) fn validation() -> Option<bool> {
     }
 }
 
-// Cap the frame count regardless of what the world's `GraphicsConfig` asked
-// for, so a host can render a world it does not author and exit.
-//
-// `dead_code` allow: nothing in the workspace sets this today, only reads it.
-// Remove the allow along with the seam if no host claims it.
-#[allow(dead_code)]
-pub fn set_max_frames(frames: Option<u64>) {
-    *MAX_FRAMES.lock().unwrap() = frames;
-}
-
-// The launch-imposed frame cap, or None when the world's own `max_frames`
-// governs. Read by `GraphicsSystem::init`.
-pub(crate) fn max_frames() -> Option<u64> {
-    *MAX_FRAMES.lock().unwrap()
-}
-
 // Record the world.jsonl path the dev host resolved, so the hot-reload watcher
 // can subscribe to it. Called by the editor's `cn debug` / `cn editor` entry
 // before world build.
@@ -181,7 +157,6 @@ pub(crate) struct WriteAccess {
     _guard: std::sync::RwLockWriteGuard<'static, ()>,
     enabled: bool,
     validation: Option<bool>,
-    max_frames: Option<u64>,
     world_jsonl_path: Option<String>,
 }
 
@@ -191,7 +166,6 @@ pub(crate) fn write_access() -> WriteAccess {
         _guard: FLAG_ACCESS.write().unwrap_or_else(|e| e.into_inner()),
         enabled: enabled(),
         validation: validation(),
-        max_frames: max_frames(),
         world_jsonl_path: world_jsonl_path(),
     }
 }
@@ -201,7 +175,6 @@ impl Drop for WriteAccess {
     fn drop(&mut self) {
         set_enabled(self.enabled);
         set_validation(self.validation);
-        set_max_frames(self.max_frames);
         set_world_jsonl_path(self.world_jsonl_path.take());
     }
 }
