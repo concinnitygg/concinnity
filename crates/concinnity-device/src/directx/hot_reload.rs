@@ -522,6 +522,9 @@ impl DxContext {
         if let Some(p) = bindless_main_pso {
             self.cull.main_bindless_pso = Some(p);
         }
+        // The wireframe twins were built from the pre-reload shaders; drop them
+        // so the next wireframe frame rebuilds against these.
+        self.invalidate_wireframe_pipelines();
         if let Some(p) = cull_pso {
             self.cull.cull_pso = Some(p);
         }

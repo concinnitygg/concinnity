@@ -199,7 +199,20 @@ pub(crate) enum Command {
     // Duplicate the selection / drop it onto the surface below.
     Dup,
     Floor,
+    // Grow the selection by relationship.
+    Select(SelectCmd),
     Help,
+}
+
+// A /select relationship.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SelectCmd {
+    // Everything in the active member's origin group (the outliner grouping).
+    Origin,
+    // Everything referencing the named asset.
+    Using(String),
+    // Everything of the named type.
+    Type(String),
 }
 
 // A /snap adjustment.
@@ -266,6 +279,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         usage: "/floor",
         blurb: "drop the selection onto the surface below it (Ctrl+Down)",
         parse: parse_floor,
+    },
+    CommandSpec {
+        name: "select",
+        usage: "/select origin | using <asset> | type <Type>",
+        blurb: "select by relationship: shared origin, references, or type",
+        parse: parse_select,
     },
     CommandSpec {
         name: "help",
@@ -366,6 +385,22 @@ fn parse_floor(rest: &str) -> Result<Command, String> {
     } else {
         Err("usage: /floor".to_string())
     }
+}
+
+const SELECT_USAGE: &str = "usage: /select origin | using <asset> | type <Type>";
+
+fn parse_select(rest: &str) -> Result<Command, String> {
+    let mut words = rest.split_whitespace();
+    let cmd = match (words.next(), words.next()) {
+        (Some("origin"), None) => SelectCmd::Origin,
+        (Some("using"), Some(name)) => SelectCmd::Using(name.to_string()),
+        (Some("type"), Some(ty)) => SelectCmd::Type(ty.to_string()),
+        _ => return Err(SELECT_USAGE.to_string()),
+    };
+    if words.next().is_some() {
+        return Err(SELECT_USAGE.to_string());
+    }
+    Ok(Command::Select(cmd))
 }
 
 fn parse_help(rest: &str) -> Result<Command, String> {

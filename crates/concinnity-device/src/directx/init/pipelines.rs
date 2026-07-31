@@ -1056,6 +1056,48 @@ pub(in crate::directx) fn create_main_pso(
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
 ) -> Result<ID3D12PipelineState, String> {
+    create_main_pso_filled(
+        device,
+        root_sig,
+        vs,
+        ps,
+        rtv_format,
+        sample_count,
+        D3D12_FILL_MODE_SOLID,
+    )
+}
+
+// The Wireframe view mode's variant of `create_main_pso`. D3D12 fill mode is
+// pipeline state (unlike Metal's encoder flag), so the mode needs its own PSO
+// per main-pass pipeline; see [`super::super::wireframe`].
+pub(in crate::directx) fn create_main_pso_wireframe(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    vs: &[u8],
+    ps: &[u8],
+    rtv_format: DXGI_FORMAT,
+    sample_count: u32,
+) -> Result<ID3D12PipelineState, String> {
+    create_main_pso_filled(
+        device,
+        root_sig,
+        vs,
+        ps,
+        rtv_format,
+        sample_count,
+        D3D12_FILL_MODE_WIREFRAME,
+    )
+}
+
+fn create_main_pso_filled(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    vs: &[u8],
+    ps: &[u8],
+    rtv_format: DXGI_FORMAT,
+    sample_count: u32,
+    fill_mode: D3D12_FILL_MODE,
+) -> Result<ID3D12PipelineState, String> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         // Borrow the root signature without an AddRef. `pRootSignature` is a
@@ -1089,7 +1131,7 @@ pub(in crate::directx) fn create_main_pso(
         },
         SampleMask: u32::MAX,
         RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
+            FillMode: fill_mode,
             // Match Metal's default (no culling) so meshes with mixed winding
             // (e.g. procedural floor/ceiling planes) render from both sides.
             CullMode: D3D12_CULL_MODE_NONE,

@@ -51,6 +51,12 @@ pub struct FrameParams<'a> {
     // frame that submits no lines, which also drops the pass from the graph.
     pub lines: &'a [LineVertex],
     pub world_hidden: bool,
+    // Viewport view mode + show flags for the frame (`ViewOverrides` when the
+    // editor publishes one, defaults otherwise). Backends run their seeded
+    // graph inputs through `render_graph::apply_view` and steer the composite
+    // by the mode.
+    pub view_mode: concinnity_core::gfx::view_modes::ViewMode,
+    pub show: concinnity_core::gfx::view_modes::ShowFlags,
 }
 
 // One streamed chunk's geometry plus placement, supplied to

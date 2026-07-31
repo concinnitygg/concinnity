@@ -17,7 +17,7 @@ pub use concinnity_core::{assets, build, ecs, gfx, paths, result};
 // lives in concinnity-world; re-exported so cook code and downstream consumers
 // keep resolving `crate::{registry,template_spec}` paths. cook composes its
 // compile-backed checks on top (crate::check) and owns expansion (crate::world).
-pub use concinnity_world::{registry, template_spec, validate};
+pub use concinnity_world::{refs, registry, template_spec, validate};
 
 pub mod asset;
 pub mod asset_api;

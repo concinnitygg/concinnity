@@ -68,6 +68,8 @@ pub(crate) enum Call {
         world_hidden: bool,
         text_calls: usize,
         cam_pos: [f32; 3],
+        view_mode: crate::gfx::view_modes::ViewMode,
+        show: crate::gfx::view_modes::ShowFlags,
     },
     UpdateView([[f32; 4]; 4]),
     UpdateModel(usize),
@@ -353,6 +355,8 @@ impl RenderBackend for MockBackend {
             world_hidden: params.world_hidden,
             text_calls: params.text_calls.len(),
             cam_pos: params.cam_pos,
+            view_mode: params.view_mode,
+            show: params.show,
         });
         match &s.fail_draw {
             Some(e) => Err(e.clone()),

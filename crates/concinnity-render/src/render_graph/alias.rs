@@ -196,6 +196,7 @@ mod tests {
         unified_gbuffer_prepass: false,
         world_hidden: false,
         clustered_lighting_enabled: false,
+        composite_reads_ao: false,
         shadowed_spot_count: 0,
         spot_shadow_slice_size: 512,
     };

@@ -7,7 +7,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::assets::WindowMode;
@@ -436,6 +436,21 @@ unsafe extern "system" fn wnd_proc(
                 state.key.on_key_up(vk_from_wparam(wparam.0));
                 LRESULT(0)
             }
+            WM_SYSKEYDOWN | WM_SYSKEYUP => {
+                // Alt arrives here rather than through WM_KEYDOWN/WM_KEYUP.
+                // Track the modifier, then swallow it: DefWindowProc treats a
+                // bare Alt press/release as window-menu activation and enters a
+                // modal loop that stalls the message pump (and so the render
+                // loop) until the next click. Every other system key still goes
+                // to DefWindowProc, so Alt+F4 and Alt+Enter are unaffected.
+                let vk = vk_from_wparam(wparam.0);
+                state.key.on_sys_key(vk, msg == WM_SYSKEYDOWN);
+                if vk == VK_MENU {
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
             WM_CHAR => {
                 // `TranslateMessage` (in `pump_messages`) synthesises WM_CHAR
                 // from WM_KEYDOWN with the layout / Shift / dead-key resolution
@@ -461,6 +476,9 @@ unsafe extern "system" fn wnd_proc(
                     let _ = ClipCursor(None);
                     ShowCursor(true);
                 }
+                // Alt+Tab consumes the Alt release, so drop the held modifiers
+                // rather than leaving them set for the rest of the session.
+                state.key.on_focus_lost();
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {

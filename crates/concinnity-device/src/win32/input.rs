@@ -40,6 +40,12 @@ pub(crate) struct KeyState {
     // separate modifier path (unlike macOS FlagsChanged); it drives no gameplay
     // binding. Not a one-shot, so `take` reads without resetting it.
     pub ctrl: bool,
+    // Held Alt modifier (the editor's Alt+drag orbit reads it each frame).
+    // Windows routes Alt through WM_SYSKEYDOWN / WM_SYSKEYUP carrying VK_MENU
+    // rather than the ordinary key messages, so it is tracked from those (see
+    // `on_sys_key`) and cleared on focus loss so Alt+Tab does not leave it
+    // stuck down. Not a one-shot, so `take` reads without resetting it.
+    pub alt: bool,
     // One-shot flags: set on down, cleared after take_input() reads them.
     pub interact_pending: bool,
     pub jump_pending: bool,
@@ -129,6 +135,23 @@ impl KeyState {
         self.escape_pending = true;
     }
 
+    // Track the held Alt modifier from a WM_SYSKEYDOWN / WM_SYSKEYUP message.
+    // Only VK_MENU is read: the other system-key presses (Alt+F4, Alt+Enter)
+    // stay with DefWindowProc.
+    pub(crate) fn on_sys_key(&mut self, vk: VIRTUAL_KEY, down: bool) {
+        if vk == VK_MENU {
+            self.alt = down;
+        }
+    }
+
+    // Drop the held modifiers when the window loses focus. Alt+Tab consumes the
+    // Alt release, so without this the flag would stay set for the rest of the
+    // session.
+    pub(crate) fn on_focus_lost(&mut self) {
+        self.ctrl = false;
+        self.alt = false;
+    }
+
     // Update held flags from a WM_KEYUP message.
     pub(crate) fn on_key_up(&mut self, vk: VIRTUAL_KEY) {
         if vk == VK_CONTROL {
@@ -186,6 +209,10 @@ impl KeyState {
             // story's Ctrl fast-forward reads it. Held state, not a one-shot, so
             // it is not reset below.
             ctrl: self.ctrl,
+            // Held Alt modifier (VK_MENU via the system-key messages), tracked
+            // across down/up; the editor's orbit drag reads it. Held state, not
+            // a one-shot, so it is not reset below.
+            alt: self.alt,
             captured_key: self.captured_key,
             // Printable text input from WM_CHAR (text-input fields read it). A
             // one-shot like `captured_key`, reset below.

@@ -45,7 +45,9 @@ cbuffer ViewBlock : register(b1)
     float cam_z;
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = IBL off.
     float prefilter_mip_count;
-    float _ep0;
+    // 1.0 while the unlit view mode is active: the surface returns its base
+    // color before lighting.
+    float shade_mode;
     float _ep1;
 }
 
@@ -474,6 +476,11 @@ float4 main(PsIn p) : SV_TARGET
 
     float4 albedo_samp = albedo_tex.Sample(linear_sampler, p.uv);
     float3 albedo = albedo_samp.rgb * p.color * tint;
+
+    // Unlit view mode: the surface's base color, no lighting.
+    if (shade_mode > 0.5) {
+        return float4(albedo, 1.0);
+    }
 
     float3 norm_samp = decode_normal_map(normal_tex.Sample(linear_sampler, p.uv).rg);
     float3x3 TBN = float3x3(

@@ -44,7 +44,8 @@ cbuffer ViewBlock : register(b1)
     float cam_y;
     float cam_z;
     float prefilter_mip_count;
-    float _ep0;
+    // 1.0 while the unlit view mode is active; read by the fragment stage.
+    float shade_mode;
     float _ep1;
 }
 

@@ -71,6 +71,7 @@ impl EditorHook {
             HudAction::Undo => self.undo(world),
             HudAction::Redo => self.redo(world),
             HudAction::ToggleView => self.view_open = !self.view_open,
+            HudAction::ToggleDisplay => self.toggle_display_menu(),
             HudAction::PlayPause => self.sim_toggle_play(),
             HudAction::Step => self.sim.step(),
             HudAction::Stop => self.sim_stop(),

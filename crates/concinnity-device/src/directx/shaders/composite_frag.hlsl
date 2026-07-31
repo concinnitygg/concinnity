@@ -5,10 +5,15 @@ Texture2D    bloom_tex      : register(t1);
 // 3D colour-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
 // world declares no ColorLut, so the grade is a no-op at any lut_strength.
 Texture3D    lut_tex        : register(t2);
+// G-buffer channel sources for the debug view modes. Referenced statically, so
+// they are bound every frame; a white 1x1 stands in when no G-buffer was built.
+Texture2D    gbuf_nd_tex    : register(t3);
+Texture2D    gbuf_rough_tex : register(t4);
+Texture2D    ao_tex         : register(t5);
 SamplerState linear_sampler : register(s0);
 
 // Composite tunables. Layout matches gfx::render_types::CompositeParams
-// (40 bytes - 10 floats). `hdr_output` is the runtime EDR toggle: `0.0` keeps
+// (48 bytes - 12 words). `hdr_output` is the runtime EDR toggle: `0.0` keeps
 // the SDR ACES + gamma + FXAA + LUT chain; `> 0.5` skips them and emits the
 // HDR scene with the matching encoding. Inside the HDR branch, `pq_output`
 // picks scRGB-linear passthrough (`0.0` - the compositor handles the panel
@@ -29,6 +34,11 @@ cbuffer PostBlock : register(b0)
     float fxaa;
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
+    // G-buffer channel view selector (ViewMode discriminant): 0 composites the
+    // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth.
+    uint view_mode;
+    // Camera far plane, normalizing the depth channel view.
+    float far_plane;
 };
 
 // Scene-transition fade as a multiplier: 1 = un-faded, 0 = fully black.
@@ -132,6 +142,34 @@ float3 grade(float3 c)
 
 float4 main(PsIn p) : SV_TARGET
 {
+    // Channel views replace the composited scene with one prepass channel;
+    // the text overlay still draws after in this same pass.
+    if (view_mode != 0u)
+    {
+        float4 nd = gbuf_nd_tex.SampleLevel(linear_sampler, p.uv, 0.0);
+        float3 cv = float3(0.0, 0.0, 0.0);
+        if (view_mode == 3u)
+        {
+            // View-space normal; cleared alpha 0 marks "no geometry".
+            cv = (nd.a > 0.0) ? nd.xyz * 0.5 + 0.5 : float3(0.0, 0.0, 0.0);
+        }
+        else if (view_mode == 4u)
+        {
+            cv = gbuf_rough_tex.SampleLevel(linear_sampler, p.uv, 0.0).rrr;
+        }
+        else if (view_mode == 5u)
+        {
+            cv = ao_tex.SampleLevel(linear_sampler, p.uv, 0.0).rrr;
+        }
+        else if (view_mode == 6u)
+        {
+            // Linear view depth over far; empty pixels read as the far plane.
+            cv = (nd.a > 0.0) ? saturate(nd.a / max(far_plane, 1e-3)).xxx
+                              : float3(1.0, 1.0, 1.0);
+        }
+        return float4(cv, 1.0);
+    }
+
     uint w, h;
     hdr_tex.GetDimensions(w, h);
     float2 inv_size = 1.0 / float2((float)w, (float)h);

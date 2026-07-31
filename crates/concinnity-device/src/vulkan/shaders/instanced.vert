@@ -13,7 +13,10 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
     float _pad0;
     float cam_x; float cam_y; float cam_z;
     // prefilter_mip_count = number of mip levels in the IBL prefilter cube. 0 = IBL off.
-    float prefilter_mip_count; float _ep0; float _ep1;
+    float prefilter_mip_count;
+    // 1.0 while the unlit view mode is active: the surface returns its base
+    // color before lighting.
+    float shade_mode; float _ep1;
 } view;
 
 layout(std140, set = 0, binding = 2) uniform ShadowBlock {

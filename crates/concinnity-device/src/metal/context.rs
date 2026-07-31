@@ -646,6 +646,13 @@ pub struct MtlContext {
         crate::gfx::render_graph::FrameGraphInputs,
         crate::gfx::render_graph::CompiledGraph,
     )>,
+    // The frame's viewport view mode, snapped from FrameParams at the top of
+    // draw_frame: the main passes read it for the wireframe fill mode and the
+    // unlit shade flag, the composite for its channel visualization.
+    pub(super) view_mode: concinnity_core::gfx::view_modes::ViewMode,
+    // The frame's camera far plane, snapped alongside `view_mode` for the
+    // composite's depth-channel normalization.
+    pub(super) view_far: f32,
     // Transparent water-surface pipeline. `Some` only when the world
     // declared ≥1 `WaterSurface`; the transparent pass executor short-
     // circuits otherwise.

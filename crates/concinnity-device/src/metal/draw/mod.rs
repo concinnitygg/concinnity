@@ -86,9 +86,15 @@ impl MtlContext {
             text_calls,
             lines,
             world_hidden,
+            view_mode,
+            show,
         } = params;
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("draw_frame must be called from the main thread")?;
+        // Snapped for the pass encoders (wireframe fill mode, unlit shading,
+        // the composite's channel visualization + depth normalization).
+        self.view_mode = view_mode;
+        self.view_far = far;
 
         // Reset this frame's render stats; the draw counters below accumulate
         // into `frame_stats`, and `render_stats()` reports them (plus the GPU
@@ -727,11 +733,17 @@ impl MtlContext {
             // cull pipeline is built iff so). The builder inserts LightCull
             // before Main and Main reads its per-cluster list buffer.
             clustered_lighting_enabled: clustered,
+            // Set by the view-mode mask below (occlusion view only).
+            composite_reads_ao: false,
             shadowed_spot_count: self.spot_shadow_count,
             spot_shadow_slice_size: crate::gfx::render_types::spot_shadow_slice_size(
                 self.shadow_map_size,
             ),
         };
+        // The viewport's view mode + show flags mask the seeded inputs (the
+        // per-frame counterpart of the init-time trims); Lit with every flag
+        // set is the identity, so a shipped runtime is unaffected.
+        let graph_inputs = crate::gfx::render_graph::apply_view(&graph_inputs, view_mode, show);
         // Reuse the cached compiled graph when this frame's inputs match the
         // ones it was built from (the common case: graph topology changes only
         // when a feature toggles or a target resizes). Taken out of the cache so

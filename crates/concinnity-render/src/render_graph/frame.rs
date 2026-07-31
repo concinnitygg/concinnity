@@ -218,6 +218,11 @@ pub struct FrameGraphInputs {
     // lists Main reads (RAW edge). Metal only today; the other backends keep this
     // false and iterate the local lights directly.
     pub clustered_lighting_enabled: bool,
+    // `true` when the composite samples the SSAO output directly (the
+    // occlusion view mode). Declares a Composite read of `ao_output`, so the
+    // pool-aliased transient stays live to the end of the frame instead of
+    // dying after Main. No effect while `ssao_enabled` is false.
+    pub composite_reads_ao: bool,
     // Number of spot shadow map slices to render, i.e. how many spot lights cast
     // shadows. Zero skips the SpotShadow pass and its imported array entirely.
     pub shadowed_spot_count: u32,
@@ -259,6 +264,7 @@ impl FrameGraphInputs {
             unified_gbuffer_prepass: false,
             world_hidden: false,
             clustered_lighting_enabled: false,
+            composite_reads_ao: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
         }
@@ -723,11 +729,17 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     };
 
     // Composite (the presenter) reads scene_color + optional bloom_top,
-    // and writes the swapchain via `presents()`.
+    // and writes the swapchain via `presents()`. The occlusion view mode adds
+    // an ao_output read so the pooled transient survives to the present.
     {
         let mut composite = b.add_pass(PassId::Composite, PassKind::Render);
         composite.read_texture(scene_color_cur);
         if let Some(h) = bloom_top_v1 {
+            composite.read_texture(h);
+        }
+        if inputs.composite_reads_ao
+            && let Some(h) = ao_output_v1
+        {
             composite.read_texture(h);
         }
         composite.presents();
@@ -976,6 +988,7 @@ mod tests {
             unified_gbuffer_prepass: false,
             world_hidden: false,
             clustered_lighting_enabled: false,
+            composite_reads_ao: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
         }

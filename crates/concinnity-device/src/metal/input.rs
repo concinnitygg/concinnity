@@ -72,6 +72,9 @@ pub(super) struct KeyState {
     // Whether Control is currently held, tracked from FlagsChanged like Shift.
     // Surfaced as a held modifier (a story fast-forwards while it is down).
     pub(super) control_down: bool,
+    // Whether Option/Alt is currently held, tracked from FlagsChanged like
+    // Control. Surfaced as a held modifier (the editor's orbit drag).
+    pub(super) alt_down: bool,
     // Set by capture_cursor(); the next mouse-motion event after capture
     // has its delta discarded so queued pre-capture events (which were
     // produced before CGAssociateMouseAndMouseCursorPosition(0) took
@@ -473,6 +476,7 @@ impl MtlContext {
             hud_toggle: self.keys.hud_toggle_pulse,
             escape: self.keys.escape_pulse,
             ctrl: self.keys.control_down,
+            alt: self.keys.alt_down,
             captured_key: self.keys.captured_key,
             typed_char: self.keys.typed_char,
         };
@@ -528,6 +532,9 @@ impl MtlContext {
                     // reads it each frame); track it like Shift but drive no
                     // gameplay binding.
                     self.keys.control_down = flags.contains(NSEventModifierFlags::Control);
+                    // Option/Alt is tracked the same way; like Control it
+                    // drives no gameplay binding.
+                    self.keys.alt_down = flags.contains(NSEventModifierFlags::Option);
                 }
                 NSEventType::MouseMoved | NSEventType::LeftMouseDragged => {
                     if self.cursor_captured {

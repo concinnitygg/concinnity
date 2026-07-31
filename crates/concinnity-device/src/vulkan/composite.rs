@@ -80,9 +80,18 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             );
             // Post-process tunables (bloom intensity, exposure, vignette) plus
             // the scene-transition fade.
+            // Non-zero only for the G-buffer channel views, which take the
+            // fragment's visualization branch; Lit / Unlit / Wireframe all
+            // composite the scene.
             let composite = CompositeParams {
                 post: self.post_process,
                 fade: self.scene_fade,
+                view_mode: if self.view_mode.is_gbuffer_channel() {
+                    self.view_mode as u32
+                } else {
+                    0
+                },
+                far: self.view_far,
             };
             device.cmd_push_constants(
                 *cmd,

@@ -4505,17 +4505,29 @@ fn gizmo_mode_keys_switch_unless_typing() {
     key(&mut h, crate::assets::Key::T);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
 
-    // F toggles the fly camera through the same guard.
+    // Shift+F toggles the fly camera through the same guard; plain F frames
+    // the selection (a no-op with nothing selected) and leaves fly alone.
+    let shift_f = |h: &mut EditorHook| {
+        let mut world = world_with_input(FrameInput {
+            viewport: [1280.0, 720.0],
+            captured_key: Some(crate::assets::Key::F),
+            shift: true,
+            ..Default::default()
+        });
+        h.tick(&mut world);
+    };
     key(&mut h, crate::assets::Key::F);
-    assert!(h.fly, "F starts the fly camera");
-    key(&mut h, crate::assets::Key::F);
-    assert!(!h.fly, "F again stops it");
+    assert!(!h.fly, "plain F frames instead of flying");
+    shift_f(&mut h);
+    assert!(h.fly, "Shift+F starts the fly camera");
+    shift_f(&mut h);
+    assert!(!h.fly, "Shift+F again stops it");
 
     // A focused text field keeps the keys for typing.
     h.story_focus = true;
     key(&mut h, crate::assets::Key::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
-    key(&mut h, crate::assets::Key::F);
+    shift_f(&mut h);
     assert!(!h.fly, "typing keeps F");
 }
 
@@ -7212,4 +7224,80 @@ fn ctrl_click_toggles_a_card_breakpoint() {
     h.ctrl_held = false;
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
     assert!(h.behavior_row.is_some());
+}
+
+// H adds to the manual hide set, Shift+H isolates without mutating it, and
+// Ctrl+H clears both; the per-name test composes them (manual wins).
+#[test]
+fn hide_isolate_and_unhide_compose() {
+    let mut h = hook(vec![entry("a", "Sprite"), entry("b", "Sprite")]);
+    h.selection.replace("a".to_string());
+    h.hide_selected();
+    assert!(h.hidden_assets.contains("a"));
+
+    h.selection.replace("b".to_string());
+    h.toggle_isolate();
+    assert!(h.isolate.is_some());
+    assert!(h.name_hidden("a"), "manual hide survives isolate");
+    assert!(!h.name_hidden("b"), "the isolated selection stays visible");
+
+    h.toggle_isolate();
+    assert!(h.isolate.is_none());
+    assert!(
+        h.name_hidden("a"),
+        "leaving isolate restores the manual set"
+    );
+    assert!(!h.name_hidden("b"));
+
+    h.unhide_all();
+    assert!(h.hidden_assets.is_empty() && h.isolate.is_none());
+}
+
+// Display-menu rows act in place (mode radio, flag toggle) and a click away
+// below the bar dismisses the menu.
+#[test]
+fn display_menu_rows_set_mode_and_flags() {
+    let mut h = hook(Vec::new());
+    h.display_menu_open = true;
+    let vp = [1280.0_f32, 720.0];
+    let click_row = |h: &mut EditorHook, row: view_menu::MenuRow| {
+        let i = view_menu::rows().iter().position(|r| *r == row).unwrap();
+        let r = view_menu::row_rect(vp[0], i);
+        let input = FrameInput {
+            mouse_x: r[0] + 2.0,
+            mouse_y: r[1] + 2.0,
+            ..Default::default()
+        };
+        assert!(
+            h.route_display_menu_click(&input, vp),
+            "menu consumes the press"
+        );
+    };
+
+    click_row(
+        &mut h,
+        view_menu::MenuRow::Mode(view_menu::ViewMode::Wireframe),
+    );
+    assert_eq!(h.view_mode, view_menu::ViewMode::Wireframe);
+    assert!(h.display_menu_open, "a mode pick keeps the menu up");
+
+    let fog = view_menu::ShowFlags::FOG;
+    click_row(&mut h, view_menu::MenuRow::Flag(fog, "Fog"));
+    assert!(!h.show_flags.contains(fog));
+    click_row(&mut h, view_menu::MenuRow::Flag(fog, "Fog"));
+    assert!(h.show_flags.contains(fog));
+
+    click_row(&mut h, view_menu::MenuRow::Billboards);
+    assert!(!h.show_billboards);
+
+    // A press away from the menu (below the bar) dismisses and consumes.
+    let away = FrameInput {
+        mouse_x: 20.0,
+        mouse_y: 300.0,
+        ..Default::default()
+    };
+    assert!(h.route_display_menu_click(&away, vp));
+    assert!(!h.display_menu_open);
+    // Closed: presses route normally again.
+    assert!(!h.route_display_menu_click(&away, vp));
 }

@@ -23,6 +23,10 @@ pub struct RenderInput {
     // `captured_key`. Wired on Metal; DirectX / Vulkan set it from their key
     // callbacks.
     pub ctrl: bool,
+    // True while the Option/Alt key is held. A UI modifier (the editor's orbit
+    // drag); not gated by menu state, like `ctrl`. Wired on Metal; DirectX /
+    // Vulkan set it from their key callbacks.
+    pub alt: bool,
     // Accumulated mouse delta since the last take_input() call.
     pub mouse_dx: f32,
     pub mouse_dy: f32,

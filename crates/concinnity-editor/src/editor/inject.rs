@@ -133,6 +133,13 @@ pub(crate) fn editor_hud(world: &mut World) {
     for id in super::create_menu::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
+    // The Display menu floats over the panels the same way.
+    for id in super::view_menu::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in super::view_menu::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
     inject_top_bar(world, font);
 }
 
@@ -188,6 +195,7 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     for (id, rect) in [
         (hud::SAVE_BUTTON, bar.save),
         (hud::VIEW_BUTTON, bar.view),
+        (hud::DISPLAY_BUTTON, bar.display),
         (hud::UNDO_BUTTON, bar.undo),
         (hud::REDO_BUTTON, bar.redo),
         (hud::PLAY_BUTTON, bar.play),
@@ -198,6 +206,12 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     }
     world.add_component(centered_label(hud::SAVE_LABEL, "Save", bar.save, font));
     world.add_component(centered_label(hud::VIEW_LABEL, "View", bar.view, font));
+    world.add_component(centered_label(
+        hud::DISPLAY_LABEL,
+        "Display",
+        bar.display,
+        font,
+    ));
     world.add_component(centered_label(hud::UNDO_LABEL, "Undo", bar.undo, font));
     world.add_component(centered_label(hud::REDO_LABEL, "Redo", bar.redo, font));
     world.add_component(centered_label(hud::PLAY_LABEL, "Play", bar.play, font));

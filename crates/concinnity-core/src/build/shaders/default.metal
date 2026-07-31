@@ -111,6 +111,9 @@ struct ViewUniforms {
     // runtime when no EnvironmentMap is bound; the fragment shader uses this
     // as the IBL "enabled" flag and falls back to a flat ambient placeholder.
     float prefilter_mip_count;
+    // 1.0 while the unlit view mode is active: shade_surface returns the base
+    // color before lighting.
+    float shade_mode;
 };
 
 // Reflection-probe parallax box (buffer(6)). Matches metal::uniforms::ProbeUniforms.
@@ -1100,6 +1103,11 @@ static float4 shade_surface(
     }
     // Break up visible tiling on large surfaces (no-op when strength is 0).
     albedo *= macro_variation_factor(in.world_pos, macro_variation);
+
+    // Unlit view mode: the surface's base color, no lighting.
+    if (view.shade_mode > 0.5) {
+        return float4(albedo, 1.0);
+    }
 
     // Packed roughness/metalness map overrides the scalar PBR inputs per-texel
     // when bound (G = roughness, B = metalness). The R channel is reserved and

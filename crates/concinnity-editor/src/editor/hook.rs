@@ -59,6 +59,7 @@ use super::templates::{self, TemplatesAction};
 use super::variables;
 use super::variables_panel::{self, VariablesAction, VariablesView};
 use super::view::{self, ViewAction};
+use super::view_menu;
 use super::widget::{self, point_in};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
@@ -67,15 +68,19 @@ use super::asset_list::ListRow;
 use super::billboards;
 use super::create_menu;
 use super::cursor;
+use super::framing;
 use super::gizmo;
 use super::group_transform;
 use super::highlight;
 use super::history::History;
 use super::marquee;
+use super::orbit;
 use super::resize;
 use super::seeded_content;
 use super::selection::Selection;
+use super::session_store;
 use super::sim;
+use super::visibility;
 use crate::app::state::App;
 use crate::assets::FrameInput;
 use crate::debug_hook::DebugHook;
@@ -229,6 +234,9 @@ pub(crate) struct EditorHook {
     // Neither touches the authored entries.
     hidden_assets: std::collections::BTreeSet<String>,
     locked_assets: std::collections::BTreeSet<String>,
+    // An active isolate (`hook/hide.rs`): the names kept visible, hiding
+    // everything else. Composes with (and never mutates) `hidden_assets`.
+    isolate: Option<std::collections::BTreeSet<String>>,
     // Shift state sampled from this frame's input, for the panel presses that
     // resolve without direct input access (the Assets tree's additive select).
     shift_held: bool,
@@ -274,6 +282,12 @@ pub(crate) struct EditorHook {
     health: HealthState,
     // Whether the View panel itself is shown (the top-bar View button toggles it).
     view_open: bool,
+    // The Display menu (`hook/view_menu_drive.rs`): open state, the viewport
+    // view mode, the show flags, and the editor-side billboard-icons toggle.
+    display_menu_open: bool,
+    view_mode: view_menu::ViewMode,
+    show_flags: view_menu::ShowFlags,
+    show_billboards: bool,
     // The type of the open add / edit form; `None` means the form panel is
     // closed.
     selected_type: Option<String>,
@@ -310,6 +324,9 @@ pub(crate) struct EditorHook {
     selection: Selection,
     pick_last: Option<pick::PickLast>,
     marquee: Option<marquee_drag::MarqueeDrag>,
+    // An in-flight Alt+drag tumble around the selection
+    // (`hook/orbit_drive.rs`), if any.
+    orbit: Option<orbit_drive::OrbitDrag>,
     // The gizmo's edit mode (T/R/S keys) and an active drag
     // (`hook/gizmo_drag.rs`), if any.
     gizmo_mode: gizmo::GizmoMode,
@@ -323,6 +340,11 @@ pub(crate) struct EditorHook {
     // its integration steps against.
     fly: bool,
     fly_clock: Option<std::time::Instant>,
+    // An in-flight framing / bookmark camera glide (`hook/glide_drive.rs`).
+    glide: Option<glide_drive::CameraGlide>,
+    // Saved camera poses (`hook/bookmarks.rs`), loaded from the per-project
+    // session store and persisted on save.
+    bookmarks: [Option<framing::CameraPose>; session_store::BOOKMARK_SLOTS],
     // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
     // the panel still sits at its default anchor. Always clamped fully on screen
     // before use.
@@ -453,6 +475,7 @@ mod behavior_asset;
 mod behavior_edit;
 mod behavior_keys;
 mod billboard_drive;
+mod bookmarks;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
 mod console_edit;
@@ -466,17 +489,22 @@ mod editing;
 mod edits;
 mod fly;
 mod gizmo_drag;
+mod glide_drive;
+mod hide;
 mod import_edit;
 mod layout;
 mod marquee_drag;
+mod orbit_drive;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 pub(super) mod panels;
 mod routing;
+mod select_edit;
 mod sim_control;
 mod trace_drive;
+mod view_menu_drive;
 // Named to avoid colliding with the `use super::story` module import.
 mod story_edit;
 // Named to avoid colliding with the `use super::variables_panel` import.
@@ -486,6 +514,11 @@ mod variables_edit;
 
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
+        let bookmarks = session_store::load(&session_store::default_path())
+            .worlds
+            .get(&session_store::world_key(&world_path))
+            .map(|w| w.bookmarks)
+            .unwrap_or_default();
         Self {
             world_path,
             history: History::default(),
@@ -552,6 +585,7 @@ impl EditorHook {
             ctrl_held: false,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
+            isolate: None,
             shift_held: false,
             panel_open: false,
             tree_groups: Vec::new(),
@@ -573,6 +607,10 @@ impl EditorHook {
             health_open: false,
             health: HealthState::new(),
             view_open: false,
+            display_menu_open: false,
+            view_mode: view_menu::ViewMode::default(),
+            show_flags: view_menu::ShowFlags::default(),
+            show_billboards: true,
             selected_type: None,
             form_target: FormTarget::New,
             form_fields: Vec::new(),
@@ -586,12 +624,15 @@ impl EditorHook {
             selection: Selection::default(),
             pick_last: None,
             marquee: None,
+            orbit: None,
             gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
             snap: snap::SnapSettings::default(),
             align_to_surface: false,
             fly: false,
             fly_clock: None,
+            glide: None,
+            bookmarks,
             positions: [None; PANEL_COUNT],
             sizes: [None; PANEL_COUNT],
             drag: None,
@@ -697,11 +738,20 @@ impl DebugHook for EditorHook {
                 self.sim.pause();
                 self.fly = false;
                 self.fly_clock = None;
+                self.glide = None;
+                self.orbit = None;
                 self.create_menu = None;
+                self.display_menu_open = false;
             }
             // The fly camera integrates before any routing: while it is on
             // the cursor is captured, so no click or HUD press can arrive.
-            self.drive_fly(input, world);
+            // An in-flight glide owns the camera instead; deliberate fly
+            // input cancels it (see `drive_glide`).
+            if self.glide.is_some() {
+                self.drive_glide(input, world);
+            } else {
+                self.drive_fly(input, world);
+            }
             // F1 (an edge pulse) toggles the whole HUD.
             if input.hud_toggle {
                 self.hud_visible = !self.hud_visible;
@@ -725,6 +775,11 @@ impl DebugHook for EditorHook {
                 if self.marquee.is_some() {
                     self.drive_marquee(input, vp, world);
                 }
+                // An in-flight orbit tumble follows the cursor and ends on
+                // release.
+                if self.orbit.is_some() {
+                    self.drive_orbit(input, world);
+                }
                 // A drag-out placement from the Content panel: ghost follow,
                 // cancel, or commit.
                 if self.content_drag.is_some() {
@@ -736,10 +791,16 @@ impl DebugHook for EditorHook {
                     && self.gizmo_drag.is_none()
                     && self.marquee.is_none()
                     && self.content_drag.is_none()
+                    && self.orbit.is_none()
                 {
-                    // An open create menu is modal: it takes the press (a row
-                    // acts, anything else dismisses) before normal routing.
-                    if !self.route_create_menu_click(input, vp) {
+                    // An open Display or create menu is modal: it takes the
+                    // press (a row acts, anything else dismisses) before
+                    // normal routing. An Alt+press over the viewport starts
+                    // an orbit tumble instead of a pick.
+                    let claimed = self.route_display_menu_click(input, vp)
+                        || self.route_create_menu_click(input, vp)
+                        || (input.alt && self.try_begin_orbit(input, vp, world));
+                    if !claimed {
                         self.route_click(input, vp, world);
                     }
                 }
@@ -751,6 +812,7 @@ impl DebugHook for EditorHook {
                     && self.gizmo_drag.is_none()
                     && self.marquee.is_none()
                     && self.content_drag.is_none()
+                    && self.orbit.is_none()
                 {
                     self.open_create_menu(input, vp, world);
                 }
@@ -767,8 +829,30 @@ impl DebugHook for EditorHook {
                         }
                         Some(crate::assets::Key::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
                         Some(crate::assets::Key::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
-                        Some(crate::assets::Key::F) => self.toggle_fly(),
-                        _ => {}
+                        // F frames the selection; Shift+F keeps the old fly
+                        // toggle one modifier away.
+                        Some(crate::assets::Key::F) => {
+                            if input.shift {
+                                self.toggle_fly();
+                            } else {
+                                self.frame_selection(input, world);
+                            }
+                        }
+                        // H hides the selection; Shift+H isolates it.
+                        Some(crate::assets::Key::H) => {
+                            if input.shift {
+                                self.toggle_isolate();
+                            } else {
+                                self.hide_selected();
+                            }
+                        }
+                        // 1..9 glide back to a saved camera bookmark.
+                        Some(key) => {
+                            if let Some(slot) = bookmarks::slot_for(key) {
+                                self.recall_bookmark(slot, world);
+                            }
+                        }
+                        None => {}
                     }
                 }
                 // Backtick toggles the console. The flag cleared here is the
@@ -799,7 +883,15 @@ impl DebugHook for EditorHook {
                         Some(crate::assets::Key::Down) => {
                             self.drop_selection_to_floor(world);
                         }
-                        _ => {}
+                        // Ctrl+H makes everything visible again.
+                        Some(crate::assets::Key::H) => self.unhide_all(),
+                        // Ctrl+1..9 save the camera pose to a bookmark.
+                        Some(key) => {
+                            if let Some(slot) = bookmarks::slot_for(key) {
+                                self.save_bookmark(slot, world);
+                            }
+                        }
+                        None => {}
                     }
                 }
                 // The transport shortcuts, live in every state (pausing a
@@ -853,9 +945,15 @@ impl DebugHook for EditorHook {
         // emptied while they are toggled off or the HUD is hidden, which drops
         // the pass from the frame graph entirely.
         world.insert_resource(crate::ecs::WorldLines(self.axis_lines(world)));
-        // Publish the editor-session hidden set (resolved to this world's ids)
-        // so the renderer collapses those objects this frame.
-        world.insert_resource(crate::ecs::EditorHidden(self.hidden_asset_ids()));
+        // Publish the editor-session hidden set (manual hides composed with an
+        // active isolate, resolved to this world's ids) so the renderer
+        // collapses those objects this frame.
+        world.insert_resource(crate::ecs::EditorHidden(self.effective_hidden_ids()));
+        // Publish the viewport view mode + show flags for this frame's draw.
+        world.insert_resource(crate::ecs::ViewOverrides {
+            mode: self.view_mode,
+            show: self.show_flags,
+        });
 
         // Re-anchor + recolour the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());
@@ -906,11 +1004,12 @@ impl DebugHook for EditorHook {
         // selection rings ride the picked assets' projected bounds above
         // them, under the panels (their ids take the default draw layer);
         // the gizmo and the marquee rect draw over both.
-        self.drive_billboards(world, vp, shown);
+        self.drive_billboards(world, vp, shown && self.show_billboards);
         self.drive_highlight(world, vp, shown);
         self.drive_gizmo_draw(world, vp, shown);
         self.drive_marquee_draw(world, shown);
         self.drive_create_menu_draw(world, shown, mouse);
+        self.drive_display_menu_draw(world, vp, shown, mouse);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under

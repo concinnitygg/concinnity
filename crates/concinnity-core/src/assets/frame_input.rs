@@ -30,6 +30,10 @@ pub struct FrameInput {
     /// selection in the editor). Unlike [sprint](#structfield.sprint) it is
     /// not frozen while a menu is open, matching [ctrl](#structfield.ctrl).
     pub shift: bool,
+    /// True while the Alt (Option) key is held. A modifier used by UI (e.g.
+    /// the editor's orbit drag). Not frozen while a menu is open, matching
+    /// [ctrl](#structfield.ctrl).
+    pub alt: bool,
     /// Gamepad left-stick movement vector `[x, y]`: `x` is rightward strafe,
     /// `y` is forward. Radial deadzone applied, magnitude at most 1, so partial
     /// deflection walks slower. `[0.0, 0.0]` with no gamepad; frozen (zeroed)

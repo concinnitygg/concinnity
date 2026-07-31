@@ -1,6 +1,6 @@
 // src/editor/hook/fly.rs
 //
-// EditorHook: the edit-mode fly camera. Toggled with F (or the Preview
+// EditorHook: the edit-mode fly camera. Toggled with Shift+F (or the Preview
 // panel's row); while on, the editor publishes the `FlyCam` resource so
 // InputSystem keeps the navigation keys and mouse deltas live and the backend
 // captures the cursor -- the world stays frozen behind the menu override, and

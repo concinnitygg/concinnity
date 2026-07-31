@@ -543,7 +543,14 @@ impl VkContext {
             // `cn editor` axes), and only once their resources are live: the
             // build is lazy, so a shipped runtime never compiles them.
             lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
+            // Set by the view-mode mask below (occlusion view only).
+            composite_reads_ao: false,
         };
+        // The viewport's view mode + show flags mask the seeded inputs (the
+        // per-frame counterpart of the init-time trims); Lit with every flag
+        // set is the identity, so a shipped runtime is unaffected.
+        let seed_inputs =
+            crate::gfx::render_graph::apply_view(&seed_inputs, self.view_mode, self.view_show);
 
         //  Camera projection + per-frame view state. Computed before the main
         //  render pass begins so the GPU-cull compute dispatch (which Vulkan
@@ -635,7 +642,7 @@ impl VkContext {
             cam_y: cam_pos[1],
             cam_z: cam_pos[2],
             prefilter_mip_count: self.prefilter_mip_count as f32,
-            _ep0: 0.0,
+            shade_mode: self.shade_mode(),
             _ep1: 0.0,
         };
         unsafe {

@@ -39,6 +39,8 @@ pub(crate) const STEP_BUTTON: AssetId = AssetId(ID_BASE + 11);
 pub(crate) const STEP_LABEL: AssetId = AssetId(ID_BASE + 12);
 pub(crate) const STOP_BUTTON: AssetId = AssetId(ID_BASE + 13);
 pub(crate) const STOP_LABEL: AssetId = AssetId(ID_BASE + 14);
+pub(crate) const DISPLAY_BUTTON: AssetId = AssetId(ID_BASE + 15);
+pub(crate) const DISPLAY_LABEL: AssetId = AssetId(ID_BASE + 16);
 
 // Bar + button geometry, in window pixels. The bar spans the window top edge;
 // the chips sit vertically centered at its right end. On macOS the window's
@@ -48,6 +50,7 @@ pub(crate) const BAR_H: f32 = 30.0;
 pub(crate) const BTN_H: f32 = 22.0;
 const SAVE_W: f32 = 64.0;
 const VIEW_W: f32 = 72.0;
+const DISPLAY_W: f32 = 72.0;
 const HISTORY_W: f32 = 56.0;
 const SIM_W: f32 = 56.0;
 const GAP: f32 = 8.0;
@@ -73,6 +76,8 @@ pub(crate) struct HudState {
     pub redo: bool,
     // Is the View panel open (accents the View chip)?
     pub view_open: bool,
+    // Is the Display menu open (accents the Display chip)?
+    pub display_open: bool,
     // Where the simulation transport stands (drives the Play / Stop chips).
     pub sim: SimState,
     // Is the whole HUD shown (F1 toggle)?
@@ -89,6 +94,9 @@ pub(crate) enum HudAction {
     Redo,
     // The View button: open / close the View panel.
     ToggleView,
+    // The Display button: open / close the Display menu (view mode + show
+    // flags).
+    ToggleDisplay,
     // The transport: Play / Pause, advance one frame, and (while a run's
     // state is there to discard) restore the authored state.
     PlayPause,
@@ -106,6 +114,7 @@ pub(crate) enum HudAction {
 pub(crate) struct BarLayout {
     pub save: [f32; 4],
     pub view: [f32; 4],
+    pub display: [f32; 4],
     pub redo: [f32; 4],
     pub undo: [f32; 4],
     pub play: [f32; 4],
@@ -117,7 +126,8 @@ pub(crate) fn layout(vw: f32) -> BarLayout {
     let y = (BAR_H - BTN_H) * 0.5;
     let save = [vw - MARGIN - SAVE_W, y, SAVE_W, BTN_H];
     let view = [save[0] - GAP - VIEW_W, y, VIEW_W, BTN_H];
-    let redo = [view[0] - GAP * 2.0 - HISTORY_W, y, HISTORY_W, BTN_H];
+    let display = [view[0] - GAP - DISPLAY_W, y, DISPLAY_W, BTN_H];
+    let redo = [display[0] - GAP * 2.0 - HISTORY_W, y, HISTORY_W, BTN_H];
     let undo = [redo[0] - GAP - HISTORY_W, y, HISTORY_W, BTN_H];
     let play = [(vw - SIM_W * 3.0 - GAP * 2.0) * 0.5, y, SIM_W, BTN_H];
     let step = [play[0] + SIM_W + GAP, y, SIM_W, BTN_H];
@@ -125,6 +135,7 @@ pub(crate) fn layout(vw: f32) -> BarLayout {
     BarLayout {
         save,
         view,
+        display,
         redo,
         undo,
         play,
@@ -162,6 +173,8 @@ pub(crate) fn hit_test(
         Some(HudAction::Redo)
     } else if point_in(mx, my, bar.view) {
         Some(HudAction::ToggleView)
+    } else if point_in(mx, my, bar.display) {
+        Some(HudAction::ToggleDisplay)
     } else if point_in(mx, my, bar.play) {
         Some(HudAction::PlayPause)
     } else if point_in(mx, my, bar.step) {
@@ -205,6 +218,11 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
         theme::LABEL_DIM
     };
     let view_tint = if state.view_open {
+        theme::ACCENT_TINT
+    } else {
+        theme::BUTTON_TINT
+    };
+    let display_tint = if state.display_open {
         theme::ACCENT_TINT
     } else {
         theme::BUTTON_TINT
@@ -253,6 +271,14 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
         VIEW_BUTTON,
         bar.view,
         view_tint,
+        theme::CONTROL_RADIUS,
+        true,
+    );
+    place_rounded(
+        world,
+        DISPLAY_BUTTON,
+        bar.display,
+        display_tint,
         theme::CONTROL_RADIUS,
         true,
     );
@@ -329,6 +355,14 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     );
     place_label(
         world,
+        DISPLAY_LABEL,
+        centered(bar.display),
+        LABEL_ACTIVE,
+        TextAlign::Center,
+        true,
+    );
+    place_label(
+        world,
         UNDO_LABEL,
         centered(bar.undo),
         step_color(state.undo),
@@ -351,6 +385,7 @@ fn all_sprite_ids() -> Vec<AssetId> {
         BAR_BG,
         SAVE_BUTTON,
         VIEW_BUTTON,
+        DISPLAY_BUTTON,
         UNDO_BUTTON,
         REDO_BUTTON,
         PLAY_BUTTON,
@@ -360,7 +395,14 @@ fn all_sprite_ids() -> Vec<AssetId> {
 }
 fn all_label_ids() -> Vec<AssetId> {
     vec![
-        SAVE_LABEL, VIEW_LABEL, UNDO_LABEL, REDO_LABEL, PLAY_LABEL, STEP_LABEL, STOP_LABEL,
+        SAVE_LABEL,
+        VIEW_LABEL,
+        DISPLAY_LABEL,
+        UNDO_LABEL,
+        REDO_LABEL,
+        PLAY_LABEL,
+        STEP_LABEL,
+        STOP_LABEL,
     ]
 }
 
@@ -430,6 +472,7 @@ mod tests {
             undo: false,
             redo: false,
             view_open: view,
+            display_open: false,
             sim: SimState::Stopped,
             visible,
         }

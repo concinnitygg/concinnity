@@ -19,7 +19,7 @@
 pub(crate) use concinnity_core::gfx::chunk_coord;
 pub use concinnity_core::gfx::{
     anim_graph, auto_exposure, camera, frustum, ik, lines, lod, mesh_payload, mesh_seed, profile,
-    render_types, root_motion, rt_reflections, skinning, ssao, ssgi, ssr,
+    render_types, root_motion, rt_reflections, skinning, ssao, ssgi, ssr, view_modes,
 };
 
 // Render-prep from concinnity-render that the client's own systems consume (the

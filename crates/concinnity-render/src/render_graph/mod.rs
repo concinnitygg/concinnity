@@ -21,6 +21,7 @@ mod compile;
 mod frame;
 mod passes;
 mod types;
+mod view_mask;
 
 pub use alias::{AliasPlan, AliasSlot, plan_aliasing};
 pub use builder::{GraphBuilder, PassBuilder, ResourceVersion};
@@ -32,3 +33,4 @@ pub use types::{
     PixelFormat, ReadStages, ResourceId, ResourceOrigin, ResourceState, TextureDesc, TextureHandle,
     TextureSize, TextureUsage,
 };
+pub use view_mask::apply_view;

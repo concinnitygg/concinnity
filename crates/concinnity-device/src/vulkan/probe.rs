@@ -334,7 +334,8 @@ impl VkContext {
                 cam_y: eye[1],
                 cam_z: eye[2],
                 prefilter_mip_count,
-                _ep0: 0.0,
+                // A probe capture is always lit, whatever the viewport shows.
+                shade_mode: 0.0,
                 _ep1: 0.0,
             };
             // SAFETY: each view UBO was sized for one ViewUniforms.

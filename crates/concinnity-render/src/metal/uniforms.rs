@@ -29,9 +29,13 @@ pub struct ViewUniforms {
     // "no EnvironmentMap bound": the fragment shader uses this as the IBL
     // enable flag and falls back to a flat ambient placeholder.
     pub prefilter_mip_count: f32,
+    // 1.0 while the unlit view mode is active: shade_surface returns the base
+    // color before lighting. Occupies what was pad space, so the offsets in
+    // the user-shader binding contract are unchanged.
+    pub shade_mode: f32,
     // End-padding: MSL rounds struct size up to a multiple of float4x4's 16-byte
     // alignment, so we round explicitly to satisfy Metal validation.
-    pub _end_pad: [f32; 2],
+    pub _end_pad: f32,
 }
 
 // Reflection-probe parallax box, pushed to the fragment shader at buffer(6).
@@ -525,8 +529,9 @@ mod tests {
     #[test]
     fn view_uniforms_layout_matches_msl() {
         // MSL `ViewUniforms` in default.metal: two float4x4, elapsed +
-        // reflections_enabled scalars, packed_float3 cam_pos + prefilter_mip_count.
-        // MSL rounds the struct up to a float4x4 multiple (160): `_end_pad` matches.
+        // reflections_enabled scalars, packed_float3 cam_pos +
+        // prefilter_mip_count + shade_mode. MSL rounds the struct up to a
+        // float4x4 multiple (160): `_end_pad` matches.
         assert_eq!(size_of::<ViewUniforms>(), 160);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
@@ -534,7 +539,8 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, reflections_enabled), 132);
         assert_eq!(offset_of!(ViewUniforms, cam_pos), 136);
         assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(offset_of!(ViewUniforms, _end_pad), 152);
+        assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
+        assert_eq!(offset_of!(ViewUniforms, _end_pad), 156);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

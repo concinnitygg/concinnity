@@ -10,9 +10,14 @@ layout(set = 0, binding = 1) uniform sampler2D bloom_tex;
 // 3D colour-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
 // world declares no ColorLut, so the grade is a no-op at any lut_strength.
 layout(set = 0, binding = 2) uniform sampler3D lut_tex;
+// G-buffer channel sources for the debug view modes. Always bound - a white
+// 1x1 stands in when no G-buffer / no SSAO was built.
+layout(set = 0, binding = 3) uniform sampler2D gbuf_nd_tex;
+layout(set = 0, binding = 4) uniform sampler2D gbuf_rough_tex;
+layout(set = 0, binding = 5) uniform sampler2D ao_tex;
 
 // Composite tunables. Layout matches gfx::render_types::CompositeParams
-// (40 bytes - 10 floats). `hdr_output > 0.5` switches to the EDR path: exposed
+// (48 bytes - 12 words). `hdr_output > 0.5` switches to the EDR path: exposed
 // HDR scene goes out without the ACES + gamma + FXAA + LUT chain. Inside that
 // branch `pq_output` picks the encoding: `<= 0.5` emits scRGB-linear
 // passthrough (Rec.709 primaries, gamma 1.0; the compositor maps `1.0` to SDR
@@ -33,6 +38,11 @@ layout(push_constant) uniform PostBlock {
     float fxaa;
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
+    // G-buffer channel view selector (ViewMode discriminant): 0 composites the
+    // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth.
+    uint view_mode;
+    // Camera far plane, normalizing the depth channel view.
+    float far_plane;
 } post;
 
 // Scene-transition fade as a multiplier: 1 = un-faded, 0 = fully black.
@@ -116,6 +126,27 @@ vec3 grade(vec3 c) {
 }
 
 void main() {
+    // Channel views replace the composited scene with one prepass channel;
+    // the text overlay still draws after in this same pass.
+    if (post.view_mode != 0u) {
+        vec4 nd = texture(gbuf_nd_tex, frag_uv);
+        vec3 cv = vec3(0.0);
+        if (post.view_mode == 3u) {
+            // View-space normal; cleared alpha 0 marks "no geometry".
+            cv = (nd.a > 0.0) ? nd.xyz * 0.5 + 0.5 : vec3(0.0);
+        } else if (post.view_mode == 4u) {
+            cv = vec3(texture(gbuf_rough_tex, frag_uv).r);
+        } else if (post.view_mode == 5u) {
+            cv = vec3(texture(ao_tex, frag_uv).r);
+        } else if (post.view_mode == 6u) {
+            // Linear view depth over far; empty pixels read as the far plane.
+            cv = (nd.a > 0.0) ? vec3(clamp(nd.a / max(post.far_plane, 1e-3), 0.0, 1.0))
+                              : vec3(1.0);
+        }
+        out_color = vec4(cv, 1.0);
+        return;
+    }
+
     vec2 inv_size = 1.0 / vec2(textureSize(hdr_tex, 0));
 
     // HDR EDR output: skip ACES + gamma + FXAA + LUT. Two flavours, picked by

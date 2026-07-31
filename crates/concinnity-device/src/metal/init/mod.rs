@@ -1420,6 +1420,8 @@ impl MtlContext {
             draw_args_scratch: Vec::new(),
             prev_model_scratch: Vec::new(),
             frame_graph_cache: None,
+            view_mode: Default::default(),
+            view_far: 1.0,
             water_pipeline,
             water_pipeline_rt,
             water_pipeline_rt_textured,

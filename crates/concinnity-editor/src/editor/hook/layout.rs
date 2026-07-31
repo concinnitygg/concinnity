@@ -49,11 +49,14 @@ impl EditorHook {
         for id in hud::all_ids() {
             layers.insert(id, TOP_BAR_LAYER);
         }
-        // The create menu is modal while open, so it clears everything --
-        // panels and top bar included (its ids are hidden otherwise).
+        // The create and Display menus are modal while open, so they clear
+        // everything -- panels and top bar included (their ids are hidden
+        // otherwise).
         for id in create_menu::all_sprite_ids()
             .into_iter()
             .chain(create_menu::all_label_ids())
+            .chain(view_menu::all_sprite_ids())
+            .chain(view_menu::all_label_ids())
         {
             layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
         }

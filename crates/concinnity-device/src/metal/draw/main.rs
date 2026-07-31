@@ -96,6 +96,15 @@ impl MtlContext {
         }
     }
 
+    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
+    fn shade_mode(&self) -> f32 {
+        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_main_pass(
@@ -186,6 +195,11 @@ impl MtlContext {
                 .ok_or("failed to get render encoder")?,
             "main pass",
         );
+        // Wireframe view: fill mode is encoder state that indirect commands
+        // inherit, so the one call covers the ICB sub-paths too.
+        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+            encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
+        }
 
         let view_uniforms = ViewUniforms {
             vp,
@@ -194,7 +208,8 @@ impl MtlContext {
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
-            _end_pad: [0.0; 2],
+            shade_mode: self.shade_mode(),
+            _end_pad: 0.0,
         };
 
         // While the world is hidden behind an opaque menu, the pass stops at the
@@ -303,7 +318,9 @@ impl MtlContext {
             reflections_enabled: 0.0,
             cam_pos,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
-            _end_pad: [0.0; 2],
+            // A probe capture is always lit, whatever the viewport shows.
+            shade_mode: 0.0,
+            _end_pad: 0.0,
         };
 
         // Planar / probe re-render: the main camera's cluster grid does not match
@@ -394,6 +411,9 @@ impl MtlContext {
                 .ok_or("failed to get render encoder")?,
             "main2 pass",
         );
+        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+            encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
+        }
 
         let view_uniforms = ViewUniforms {
             vp,
@@ -402,7 +422,8 @@ impl MtlContext {
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
-            _end_pad: [0.0; 2],
+            shade_mode: self.shade_mode(),
+            _end_pad: 0.0,
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.

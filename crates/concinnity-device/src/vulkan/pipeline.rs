@@ -636,7 +636,30 @@ pub(super) fn create_main_pipeline(
     device: &Device,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
+    surface_format: vk::Format,
+) -> Result<vk::Pipeline, String> {
+    create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::FILL)
+}
+
+// The Wireframe view mode's variant of `create_main_pipeline`. Vulkan polygon
+// mode is pipeline state without `VK_EXT_extended_dynamic_state3`, so the mode
+// needs its own pipeline per main-pass path; see [`super::wireframe`]. Requires
+// the `fillModeNonSolid` device feature.
+pub(super) fn create_main_pipeline_wireframe(
+    device: &Device,
+    targets: MeshPipelineTargets<'_>,
+    msaa: vk::SampleCountFlags,
+    surface_format: vk::Format,
+) -> Result<vk::Pipeline, String> {
+    create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::LINE)
+}
+
+fn create_main_pipeline_filled(
+    device: &Device,
+    targets: MeshPipelineTargets<'_>,
+    msaa: vk::SampleCountFlags,
     _surface_format: vk::Format,
+    polygon_mode: vk::PolygonMode,
 ) -> Result<vk::Pipeline, String> {
     let MeshPipelineTargets {
         render_pass,
@@ -675,7 +698,7 @@ pub(super) fn create_main_pipeline(
     let raster = vk::PipelineRasterizationStateCreateInfo::default()
         .depth_clamp_enable(false)
         .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
+        .polygon_mode(polygon_mode)
         .line_width(1.0)
         // Match Metal's default + DirectX (no back-face culling) so meshes
         // with mixed winding (particularly procedural floor / ceiling planes
@@ -849,6 +872,25 @@ pub(super) fn create_skinned_pipeline(
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
 ) -> Result<vk::Pipeline, String> {
+    create_skinned_pipeline_filled(device, targets, msaa, vk::PolygonMode::FILL)
+}
+
+// The Wireframe view mode's variant of `create_skinned_pipeline`; see
+// [`super::wireframe`]. Requires the `fillModeNonSolid` device feature.
+pub(super) fn create_skinned_pipeline_wireframe(
+    device: &Device,
+    targets: MeshPipelineTargets<'_>,
+    msaa: vk::SampleCountFlags,
+) -> Result<vk::Pipeline, String> {
+    create_skinned_pipeline_filled(device, targets, msaa, vk::PolygonMode::LINE)
+}
+
+fn create_skinned_pipeline_filled(
+    device: &Device,
+    targets: MeshPipelineTargets<'_>,
+    msaa: vk::SampleCountFlags,
+    polygon_mode: vk::PolygonMode,
+) -> Result<vk::Pipeline, String> {
     let MeshPipelineTargets {
         render_pass,
         layout,
@@ -886,7 +928,7 @@ pub(super) fn create_skinned_pipeline(
     let raster = vk::PipelineRasterizationStateCreateInfo::default()
         .depth_clamp_enable(false)
         .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
+        .polygon_mode(polygon_mode)
         .line_width(1.0)
         // Match Metal's default + DirectX (no back-face culling) so meshes
         // with mixed winding (particularly procedural floor / ceiling planes

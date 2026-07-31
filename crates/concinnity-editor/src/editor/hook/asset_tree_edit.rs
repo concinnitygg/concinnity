@@ -318,20 +318,4 @@ impl EditorHook {
             self.tree_scroll = row.saturating_sub(1).min(max);
         }
     }
-
-    // The session hide set resolved to this world's dense ids, for the per-frame
-    // `EditorHidden` publish. Names that no longer resolve (a renamed or deleted
-    // asset) simply drop out until they return.
-    pub(super) fn hidden_asset_ids(&self) -> std::collections::BTreeSet<AssetId> {
-        if self.hidden_assets.is_empty() {
-            return std::collections::BTreeSet::new();
-        }
-        let table = crate::ecs::asset_id::name_table();
-        table
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| self.hidden_assets.contains(n.as_str()))
-            .map(|(i, _)| AssetId(i as u32))
-            .collect()
-    }
 }

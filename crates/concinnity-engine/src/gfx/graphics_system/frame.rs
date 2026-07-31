@@ -289,6 +289,12 @@ impl GraphicsSystem {
                 // last tick are in InputState before InputSystem's take_input()
                 // (scheduled right after this system) snapshots and clears it.
                 backend.update_view(final_view);
+                // The editor's view mode + show flags, when published; a
+                // shipped runtime has no resource and renders the lit default.
+                let view = ctx
+                    .resource::<crate::ecs::ViewOverrides>()
+                    .copied()
+                    .unwrap_or_default();
                 match backend.draw_frame(FrameParams {
                     elapsed,
                     fov_y_radians,
@@ -298,6 +304,8 @@ impl GraphicsSystem {
                     text_calls: &overlay.calls,
                     lines: &lines,
                     world_hidden: overlay.world_hidden,
+                    view_mode: view.mode,
+                    show: view.show,
                 }) {
                     Ok(()) => {}
                     Err(e) => {

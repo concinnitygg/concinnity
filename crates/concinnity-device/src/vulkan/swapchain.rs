@@ -757,6 +757,22 @@ impl VkContext {
                 self.color_lut.view,
                 self.composite_sampler,
             );
+            // The view-mode channel sources are resolution-dependent too, so
+            // they follow the rebuilt G-buffer / AO targets.
+            let (nd_view, rough_view) = match self.gbuffer.as_ref() {
+                Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
+                None => (self.ssao_white.view, self.ssao_white.view),
+            };
+            write_composite_channel_set(
+                &self.device,
+                set,
+                nd_view,
+                rough_view,
+                self.transient_pool
+                    .view_for("ao_output", i)
+                    .unwrap_or(self.ssao_white.view),
+                self.composite_sampler,
+            );
         }
 
         // The render-finished semaphores are one-per-swapchain-image; a
@@ -1132,6 +1148,40 @@ pub(super) fn write_composite_set(
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(std::slice::from_ref(&lut_info)),
     ];
+    unsafe { device.update_descriptor_sets(&writes, &[]) };
+}
+
+// Write the composite set's G-buffer channel bindings: normal+depth at 3,
+// roughness at 4, the blurred SSAO occlusion at 5. Only the debug view modes
+// sample them, but the fragment references all three, so every set is bound
+// (the 1x1 white fallback stands in wherever a source does not exist). Split
+// from `write_composite_set` because these three survive the scene-input
+// re-points TAA / FSR / reflections make.
+pub(super) fn write_composite_channel_set(
+    device: &Device,
+    set: vk::DescriptorSet,
+    normal_depth_view: vk::ImageView,
+    roughness_view: vk::ImageView,
+    ao_view: vk::ImageView,
+    sampler: vk::Sampler,
+) {
+    let infos = [normal_depth_view, roughness_view, ao_view].map(|view| {
+        vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view)
+            .sampler(sampler)
+    });
+    let writes: Vec<_> = infos
+        .iter()
+        .enumerate()
+        .map(|(i, info)| {
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(3 + i as u32)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(info))
+        })
+        .collect();
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 

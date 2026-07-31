@@ -32,3 +32,4 @@ pub mod skinning;
 pub mod ssao;
 pub mod ssgi;
 pub mod ssr;
+pub mod view_modes;

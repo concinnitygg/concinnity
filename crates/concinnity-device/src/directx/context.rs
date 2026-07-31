@@ -1115,6 +1115,19 @@ pub struct DxContext {
     // there would tint only the pixels no geometry covers, and would mismatch
     // the colour target's baked D3D12 optimized clear value every frame.
     pub(super) scene_fade: f32,
+    // The frame's viewport view mode, snapped from FrameParams at the top of
+    // draw_frame: the main passes read it for the wireframe pipeline variant
+    // and the unlit shade flag, the composite for its channel visualization.
+    pub(super) view_mode: concinnity_core::gfx::view_modes::ViewMode,
+    // The frame's show flags, snapped alongside `view_mode`; `record_frame`
+    // masks the seeded graph inputs with both.
+    pub(super) view_show: concinnity_core::gfx::view_modes::ShowFlags,
+    // The frame's camera far plane, snapped alongside `view_mode` for the
+    // composite's depth-channel normalization.
+    pub(super) view_far: f32,
+    // Lazily-built wireframe twins of the main-pass pipelines; empty until the
+    // first Wireframe frame. See [`super::wireframe`].
+    pub(super) wireframe: super::wireframe::DxWireframe,
     pub(super) view_matrix: [[f32; 4]; 4],
 
     // Per-frame-slot persistent upload buffers for transient HUD text geometry.
@@ -1294,7 +1307,19 @@ impl DxContext {
             text_calls,
             lines,
             world_hidden,
+            view_mode,
+            show,
         } = params;
+        // Snapped for the passes recorded below (the wireframe pipeline
+        // variant, the unlit shade flag, the composite's channel visualization
+        // + depth normalization) and for the graph-input mask in record_frame.
+        self.view_mode = view_mode;
+        self.view_show = show;
+        self.view_far = far;
+        // D3D12 fill mode is pipeline state, so the wireframe view needs its own
+        // main-pass PSOs; built here on the first wireframe frame so the `&self`
+        // pass encoders can just read them.
+        self.ensure_wireframe_pipelines();
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in PSO
         // from disk-resident source before the frame's passes start using
@@ -1875,6 +1900,15 @@ impl DxContext {
     // that resolve instead of double-counting the forward probe reflection.
     pub(super) fn reflection_resolve_active(&self) -> bool {
         self.rt_reflections_active() || self.ssr.as_ref().and_then(|s| s.resolve.as_ref()).is_some()
+    }
+
+    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
+    pub(super) fn shade_mode(&self) -> f32 {
+        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+            1.0
+        } else {
+            0.0
+        }
     }
 
     // True when glass panes trace a per-pixel RT reflection this frame: RT is live

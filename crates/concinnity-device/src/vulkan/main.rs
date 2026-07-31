@@ -228,7 +228,10 @@ impl VkContext {
         // pipeline below.
         let use_bindless = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
         if use_bindless {
-            let pipeline = self.cull.bindless_pipeline.unwrap();
+            let pipeline = self.wireframe_or(
+                self.cull.bindless_pipeline.unwrap(),
+                self.wireframe.bindless,
+            );
             let layout = self.cull.bindless_pipeline_layout.unwrap();
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
@@ -284,7 +287,11 @@ impl VkContext {
         let legacy_needed = !use_bindless || !self.clone_slot_by_draw_idx.is_empty();
         if legacy_needed {
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.main_pipeline);
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.wireframe_or(self.main_pipeline, self.wireframe.main),
+                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -395,7 +402,11 @@ impl VkContext {
             && !use_bindless
         {
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, inst_pipeline);
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.wireframe_or(inst_pipeline, self.wireframe.instanced),
+                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -511,7 +522,7 @@ impl VkContext {
                     device.cmd_bind_pipeline(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        bindless_pipeline,
+                        self.wireframe_or(bindless_pipeline, self.wireframe.bindless),
                     );
                     device.cmd_bind_descriptor_sets(
                         cmd,
@@ -558,7 +569,11 @@ impl VkContext {
         {
             let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pipeline);
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.wireframe_or(sk_pipeline, self.wireframe.skinned),
+                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -654,6 +669,7 @@ impl VkContext {
         ) else {
             return;
         };
+        let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless);
         if self.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
             return;
         }

@@ -100,6 +100,47 @@ fn create_skinned_pso(
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
 ) -> Result<ID3D12PipelineState, String> {
+    create_skinned_pso_filled(
+        device,
+        root_sig,
+        vs,
+        ps,
+        rtv_format,
+        sample_count,
+        D3D12_FILL_MODE_SOLID,
+    )
+}
+
+// The Wireframe view mode's variant of `create_skinned_pso`; see
+// [`super::wireframe`] for why the mode needs its own PSO per pipeline.
+pub(in crate::directx) fn create_skinned_pso_wireframe(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    vs: &[u8],
+    ps: &[u8],
+    rtv_format: DXGI_FORMAT,
+    sample_count: u32,
+) -> Result<ID3D12PipelineState, String> {
+    create_skinned_pso_filled(
+        device,
+        root_sig,
+        vs,
+        ps,
+        rtv_format,
+        sample_count,
+        D3D12_FILL_MODE_WIREFRAME,
+    )
+}
+
+fn create_skinned_pso_filled(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    vs: &[u8],
+    ps: &[u8],
+    rtv_format: DXGI_FORMAT,
+    sample_count: u32,
+    fill_mode: D3D12_FILL_MODE,
+) -> Result<ID3D12PipelineState, String> {
     let layout = skinned_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         // Borrow the root signature without an AddRef. `pRootSignature` is a
@@ -133,7 +174,7 @@ fn create_skinned_pso(
         },
         SampleMask: u32::MAX,
         RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
+            FillMode: fill_mode,
             CullMode: D3D12_CULL_MODE_NONE,
             FrontCounterClockwise: true.into(),
             DepthClipEnable: true.into(),
@@ -2044,6 +2085,9 @@ impl DxContext {
         if let Some(p) = new_skinned {
             self.skinned.pso = Some(p);
         }
+        // A skinned / instanced pipeline may have come live for the first time
+        // here, so let the next wireframe frame rebuild its twins.
+        self.invalidate_wireframe_pipelines();
         Ok(())
     }
 }

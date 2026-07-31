@@ -377,7 +377,9 @@ pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
 // table at t1 (bloom mip 0), `COMPOSITE_ROOT_CONSTANTS` 32-bit root constants
 // at b0 (`CompositeParams`), a 1-SRV descriptor table at t2 (the 3D
-// colour-grading LUT), and a static linear-clamp sampler at s0. The scene SRV is its own
+// colour-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
+// roughness, and SSAO channels the debug view modes visualize), and a static
+// linear-clamp sampler at s0. The scene SRV is its own
 // table (separate from bloom mip 0) so the runtime can re-point it at the
 // per-frame TAA output without the two needing to be heap-contiguous. Clamp
 // keeps the FXAA neighbour taps from wrapping at screen edges and the LUT taps
@@ -408,6 +410,18 @@ pub(super) fn create_composite_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
+    // The G-buffer channel sources the debug view modes visualize (t3 normal +
+    // depth, t4 roughness, t5 the blurred SSAO occlusion). Each is a separate
+    // non-contiguous heap slot, so each needs its own table. The fragment
+    // references all three statically, so they are bound every frame (the SSAO
+    // white 1x1 stands in when no G-buffer was built).
+    let channel_ranges = [3u32, 4, 5].map(|reg| D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: reg,
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    });
     let params = [
         // [0] Descriptor table: scene SRV (t0)
         D3D12_ROOT_PARAMETER {
@@ -431,10 +445,11 @@ pub(super) fn create_composite_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [2] Root constants: CompositeParams (10 floats: the 9 PostProcessParams
-        // tunables + the scene-transition fade) at b0. The count must cover the
-        // whole struct: constants past `Num32BitValues` read as zero in the
-        // shader, which silently disabled the `fxaa` flag while this was 8.
+        // [2] Root constants: CompositeParams (the 9 PostProcessParams tunables,
+        // the scene-transition fade, and the view-mode + far pair) at b0. The
+        // count must cover the whole struct: constants past `Num32BitValues`
+        // read as zero in the shader, which silently disabled the `fxaa` flag
+        // while this was 8.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -453,6 +468,39 @@ pub(super) fn create_composite_root_signature(
                 DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                     NumDescriptorRanges: 1,
                     pDescriptorRanges: &lut_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [4] G-buffer normal + depth SRV (t3)
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &channel_ranges[0],
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [5] G-buffer roughness SRV (t4)
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &channel_ranges[1],
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [6] Blurred SSAO occlusion SRV (t5)
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &channel_ranges[2],
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,

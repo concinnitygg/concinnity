@@ -259,6 +259,9 @@ impl VkContext {
             .map(|o| vec![IDENTITY4; o.joint_count.max(1)])
             .collect();
 
+        // A skinned pipeline just came live, so let the next wireframe frame
+        // build its twin.
+        self.invalidate_wireframe_pipelines();
         self.skinned.pipeline = Some(skinned_pipeline);
         self.skinned.pipeline_layout = Some(skinned_pipeline_layout);
         self.shadow.skinned_pipeline = skinned_shadow_pipeline;

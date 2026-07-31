@@ -1243,26 +1243,20 @@ impl VkContext {
         let shadow_global_set_layout =
             create_descriptor_set_layout(&device, &super::descriptor_layout::shadow_global_set())?;
         // Composite set (set 0 for composite pass): HDR resolve image at
-        // binding 0, bloom mip 0 at binding 1, the 3D colour LUT at binding 2.
+        // binding 0, bloom mip 0 at binding 1, the 3D colour LUT at binding 2,
+        // then the G-buffer channels the debug view modes visualize (3 =
+        // normal+depth, 4 = roughness, 5 = SSAO occlusion).
         let composite_set_layout = create_descriptor_set_layout(
             &device,
-            &[
-                (
-                    0,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    1,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    2,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-            ],
+            &(0..6)
+                .map(|b| {
+                    (
+                        b,
+                        vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        vk::ShaderStageFlags::FRAGMENT,
+                    )
+                })
+                .collect::<Vec<_>>(),
         )?;
         // Bloom set (set 0 for every bloom pass): the single input image.
         let bloom_set_layout = create_descriptor_set_layout(
@@ -1739,15 +1733,16 @@ impl VkContext {
                 // per-obj(2) + per-frame {shadow + spot shadow + IBL
                 // irradiance + IBL prefilter + SSAO occlusion + the 2 area-light
                 // LTC tables} + per-frame probe cube array (MAX_PROBES) + text
-                // atlas + per-cluster(2) + per-frame composite(3: HDR resolve +
-                // bloom mip 0 + 3D colour LUT) + per-frame bindless texture pool.
+                // atlas + per-cluster(2) + per-frame composite(6: HDR resolve +
+                // bloom mip 0 + 3D colour LUT + the 3 view-mode G-buffer
+                // channels) + per-frame bindless texture pool.
                 .descriptor_count(
                     n_obj * 2
                         + n_frames * 7
                         + n_frames * super::probe_uniforms::MAX_PROBES as u32
                         + n_atlas
                         + n_cluster * 2
-                        + n_frames * 3
+                        + n_frames * 6
                         + bindless_pool_size as u32 * bindless_sets_count,
                 ),
         ];
@@ -3365,6 +3360,27 @@ impl VkContext {
             }
         }
 
+        // Composite G-buffer channel bindings (3/4/5), for the debug view
+        // modes. Written after the re-wire above so they point at the merged
+        // pre-pass's views; the 1x1 white fallback stands in when a world built
+        // no G-buffer / no SSAO.
+        for (i, &set) in composite_sets.iter().enumerate() {
+            let (nd_view, rough_view) = match gbuffer_opt.as_ref() {
+                Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
+                None => (ssao_white.view, ssao_white.view),
+            };
+            write_composite_channel_set(
+                &device,
+                set,
+                nd_view,
+                rough_view,
+                transient_pool
+                    .view_for("ao_output", i)
+                    .unwrap_or(ssao_white.view),
+                composite_sampler,
+            );
+        }
+
         //  Projected decals
         // Pipeline + per-frame uniforms + per-decal albedo sets are always
         // built so runtime `add_decal` works from a world that started
@@ -4062,6 +4078,10 @@ impl VkContext {
             draw_objects,
             clear_color,
             scene_fade: 0.0,
+            view_mode: Default::default(),
+            view_show: Default::default(),
+            view_far: 1.0,
+            wireframe: Default::default(),
             view_matrix: IDENTITY4,
             prefilter_mip_count: env_map.prefilter_mip_count,
             cube_sampler,

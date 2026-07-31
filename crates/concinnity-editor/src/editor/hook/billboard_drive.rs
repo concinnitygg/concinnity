@@ -25,7 +25,7 @@ pub(super) struct BillboardSpot {
 // name -> interned id -> live entity, the same resolve the gizmo uses. The
 // index is built at load, so entries despawned by the start-time drains
 // (Window, GraphicsConfig, Scene, ...) are filtered by liveness.
-fn entity_by_name(world: &World, name: &str) -> Option<crate::ecs::Entity> {
+pub(super) fn entity_by_name(world: &World, name: &str) -> Option<crate::ecs::Entity> {
     let id = crate::ecs::asset_id::name_table()
         .iter()
         .position(|n| n == name)?;
@@ -85,7 +85,7 @@ impl EditorHook {
             .iter()
             .enumerate()
             .filter(|(_, e)| entry_type(e).is_some_and(billboards::eligible))
-            .filter(|(_, e)| !entry_name(e).is_some_and(|n| self.hidden_assets.contains(n)))
+            .filter(|(_, e)| !entry_name(e).is_some_and(|n| self.name_hidden(n)))
             .filter_map(|(i, e)| {
                 let entity = entity_by_name(world, entry_name(e)?)?;
                 let p = world.get::<Transform>(entity)?.position;
@@ -203,6 +203,10 @@ impl EditorHook {
         vp: [f32; 2],
         world: &mut World,
     ) -> bool {
+        // Hidden icons (the Display menu's billboard toggle) take no clicks.
+        if !self.show_billboards {
+            return false;
+        }
         let mouse = [input.mouse_x, input.mouse_y];
         let spots: Vec<BillboardSpot> = self
             .billboard_spots(world, vp)

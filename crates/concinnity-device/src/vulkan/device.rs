@@ -257,6 +257,10 @@ pub(super) fn create_logical_device(
         .sampler_anisotropy(base_supported.sampler_anisotropy != 0)
         // BC1/BC3/BC5/BC7 sampling for KTX2 / DDS block-compressed textures.
         .texture_compression_bc(base_supported.texture_compression_bc != 0)
+        // `VK_POLYGON_MODE_LINE` for the wireframe view mode's main-pass
+        // pipeline variants. Inert (and the mode falls back to solid fill) on a
+        // device without it.
+        .fill_mode_non_solid(base_supported.fill_mode_non_solid != 0)
         .shader_int16(base_supported.shader_int16 != 0)
         .shader_storage_image_write_without_format(
             base_supported.shader_storage_image_write_without_format != 0,

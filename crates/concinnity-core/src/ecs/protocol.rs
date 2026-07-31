@@ -189,6 +189,16 @@ pub struct FlyCam(pub bool);
 #[derive(Debug, Clone, Default)]
 pub struct EditorHidden(pub alloc::collections::BTreeSet<AssetId>);
 
+// The viewport's view mode + show flags, published per frame by the editor.
+// GraphicsSystem forwards it to the backend's FrameParams: the mode selects
+// what the composite presents, the flags skip feature passes for the frame.
+// Absent outside the editor, which reads as the lit default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ViewOverrides {
+    pub mode: crate::gfx::view_modes::ViewMode,
+    pub show: crate::gfx::view_modes::ShowFlags,
+}
+
 // One pickable entity in the [PickIndex]: its asset id and current world-space
 // AABB. Ray-tested by the editor with `gfx::pick::ray_aabb`.
 #[derive(Debug, Clone, Copy)]

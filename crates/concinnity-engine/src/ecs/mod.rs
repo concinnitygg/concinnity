@@ -35,7 +35,7 @@ pub use concinnity_core::ecs::{
     CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
     FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
     OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
-    TraceRequest, TraceStep, TraceVal, TransientSaves, WorldLines,
+    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are

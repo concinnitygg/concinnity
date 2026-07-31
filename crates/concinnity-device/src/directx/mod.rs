@@ -37,6 +37,7 @@ mod screenshot;
 mod texture;
 mod transient_pool;
 mod upload_ring;
+mod wireframe;
 mod world_shaders;
 
 pub use context::DxContext;

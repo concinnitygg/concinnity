@@ -1437,6 +1437,19 @@ pub struct VkContext {
     // cannot reset an in-flight fade, and kept out of `clear_color` so it fades
     // the whole image, not just the pixels no geometry covers.
     pub(super) scene_fade: f32,
+    // The frame's viewport view mode, snapped from FrameParams at the top of
+    // draw_frame: the main passes read it for the wireframe pipeline variant
+    // and the unlit shade flag, the composite for its channel visualization.
+    pub(super) view_mode: concinnity_core::gfx::view_modes::ViewMode,
+    // The frame's show flags, snapped alongside `view_mode`; the graph-input
+    // seeding in draw.rs masks with both.
+    pub(super) view_show: concinnity_core::gfx::view_modes::ShowFlags,
+    // The frame's camera far plane, snapped alongside `view_mode` for the
+    // composite's depth-channel normalization.
+    pub(super) view_far: f32,
+    // Lazily-built wireframe twins of the main-pass pipelines; empty until the
+    // first Wireframe frame. See [`super::wireframe`].
+    pub(super) wireframe: super::wireframe::VkWireframe,
     pub(super) view_matrix: [[f32; 4]; 4],
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = no
     // EnvironmentMap declared; the fragment shader uses this as the IBL
@@ -1582,7 +1595,18 @@ impl VkContext {
             text_calls,
             lines,
             world_hidden,
+            view_mode,
+            show,
         } = params;
+        // Snapped for the passes recorded below (the wireframe pipeline
+        // variant, the unlit shade flag, the composite's channel visualization
+        // + depth normalization) and for the graph-input mask in record_frame.
+        self.view_mode = view_mode;
+        self.view_show = show;
+        self.view_far = far;
+        // Vulkan polygon mode is pipeline state, so the wireframe view needs its
+        // own main-pass pipelines; built here on the first wireframe frame.
+        self.ensure_wireframe_pipelines();
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in
         // pipeline from disk-resident source before this frame's passes
@@ -1926,6 +1950,15 @@ impl VkContext {
         if !self.always_draw_member[slot] {
             self.always_draw.push(slot as u32);
             self.always_draw_member[slot] = true;
+        }
+    }
+
+    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
+    pub(super) fn shade_mode(&self) -> f32 {
+        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+            1.0
+        } else {
+            0.0
         }
     }
 
@@ -2307,6 +2340,7 @@ impl Drop for VkContext {
         unsafe { device.destroy_sampler(self.cube_sampler, None) };
 
         // Pipelines.
+        self.wireframe.destroy(device);
         unsafe { device.destroy_pipeline(self.main_pipeline, None) };
         if let Some(p) = self.text_pipeline {
             unsafe { device.destroy_pipeline(p, None) };

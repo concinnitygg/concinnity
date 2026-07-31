@@ -55,6 +55,11 @@ struct CompositeUniforms {
     float fxaa;
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
+    // G-buffer channel view selector (ViewMode discriminant): 0 composites the
+    // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth.
+    uint view_mode;
+    // Camera far plane, normalizing the depth channel view.
+    float far;
 };
 
 // SDR reference white in cd/m² (nits). BT.2408 recommends 203 nits as the
@@ -116,10 +121,34 @@ fragment float4 post_fragment_main(
     texture2d<float> hdr [[texture(0)]],
     texture2d<float> bloom [[texture(1)]],
     texture3d<float> lut [[texture(2)]],
+    // G-buffer channels + SSAO output, bound (and sampled) only while a
+    // channel view is active.
+    texture2d<float> gbuf_nd [[texture(3)]],
+    texture2d<float> gbuf_rough [[texture(4)]],
+    texture2d<float> ao_tex [[texture(5)]],
     sampler smp [[sampler(0)]],
     constant CompositeUniforms& post [[buffer(0)]]
 ) {
     float2 uv = in.uv;
+    // Channel views replace the composited scene with one prepass channel;
+    // the text overlay still draws after in this same pass.
+    if (post.view_mode != 0u) {
+        float4 nd = gbuf_nd.sample(smp, uv);
+        float3 c = float3(0.0);
+        if (post.view_mode == 3u) {
+            // View-space normal; cleared alpha 0 marks "no geometry".
+            c = (nd.a > 0.0) ? nd.xyz * 0.5 + 0.5 : float3(0.0);
+        } else if (post.view_mode == 4u) {
+            c = float3(gbuf_rough.sample(smp, uv).r);
+        } else if (post.view_mode == 5u) {
+            c = float3(ao_tex.sample(smp, uv).r);
+        } else if (post.view_mode == 6u) {
+            // Linear view depth over far; empty pixels read as the far plane.
+            c = (nd.a > 0.0) ? float3(saturate(nd.a / max(post.far, 1e-3)))
+                             : float3(1.0);
+        }
+        return float4(c, 1.0);
+    }
     float2 tex_size = float2(hdr.get_width(), hdr.get_height());
     float2 inv_size = 1.0 / tex_size;
     float bi = post.bloom_intensity;

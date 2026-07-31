@@ -46,7 +46,9 @@ cbuffer ViewBlock : register(b1)
     float cam_z;
     // Number of mip levels in the bound IBL prefilter cube. 0 disables IBL.
     float prefilter_mip_count;
-    float _ep0;
+    // 1.0 while the unlit view mode is active: the surface returns its base
+    // color before lighting.
+    float shade_mode;
     float _ep1;
 }
 
@@ -510,6 +512,12 @@ float4 main(PsIn p) : SV_TARGET
         discard;
     }
     float3 albedo = albedo_samp.rgb * p.color * tint;
+
+    // Unlit view mode: the surface's base color, no lighting.
+    if (shade_mode > 0.5)
+    {
+        return float4(albedo, 1.0);
+    }
 
     // Per-material emissive texture carries the colour (the scalar factor is a
     // uniform strength when a map is bound). Slot 0 is the "no map" sentinel.

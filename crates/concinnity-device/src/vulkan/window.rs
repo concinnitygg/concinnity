@@ -599,6 +599,15 @@ impl GlfwWindow {
                     self.input.hud_toggle = true;
                 }
                 glfw::WindowEvent::Key(key, _, action, _) => {
+                    // Held Alt modifier (the editor's Alt+drag orbit). GLFW
+                    // delivers both Alt keys as ordinary key events and
+                    // `key_from_glfw` maps neither, so track it here rather than
+                    // through the key map.
+                    if matches!(key, glfw::Key::LeftAlt | glfw::Key::RightAlt)
+                        && action != glfw::Action::Repeat
+                    {
+                        self.input.alt = action == glfw::Action::Press;
+                    }
                     // Decode through the runtime key map (GLFW delivers Shift as
                     // Left/Right Shift key events, so it is handled like any other
                     // key -- no separate modifier path, matching DirectX).

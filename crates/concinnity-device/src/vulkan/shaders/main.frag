@@ -17,7 +17,10 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
     float _pad0;
     float cam_x; float cam_y; float cam_z;
     // prefilter_mip_count = number of mip levels in the IBL prefilter cube. 0 = IBL off.
-    float prefilter_mip_count; float _ep0; float _ep1;
+    float prefilter_mip_count;
+    // 1.0 while the unlit view mode is active: the surface returns its base
+    // color before lighting.
+    float shade_mode; float _ep1;
 } view;
 
 // std140 LightUniforms: two vec4s per light keeps each light at 32 bytes,
@@ -459,6 +462,12 @@ void main() {
     // Sample albedo and apply vertex color + tint.
     vec4 albedo_samp = texture(albedo_tex, frag_uv);
     vec3 albedo = albedo_samp.rgb * frag_color * push.tint;
+
+    // Unlit view mode: the surface's base color, no lighting.
+    if (view.shade_mode > 0.5) {
+        out_color = vec4(albedo, 1.0);
+        return;
+    }
 
     // Reconstruct normal from normal map.
     vec3 norm_samp = decode_normal_map(texture(normal_tex, frag_uv).rg);

@@ -271,6 +271,12 @@ mod tests {
         for id in super::super::create_menu::all_label_ids() {
             claim(id, "create menu labels".to_string());
         }
+        for id in super::super::view_menu::all_sprite_ids() {
+            claim(id, "display menu sprites".to_string());
+        }
+        for id in super::super::view_menu::all_label_ids() {
+            claim(id, "display menu labels".to_string());
+        }
         for key in PanelKey::ALL {
             let p = panel(key);
             for id in p.sprite_ids() {

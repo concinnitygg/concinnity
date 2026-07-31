@@ -1001,7 +1001,8 @@ impl VkContext {
                 cam_y: m.eye[1],
                 cam_z: m.eye[2],
                 prefilter_mip_count,
-                _ep0: 0.0,
+                // A mirror render is always lit, whatever the viewport shows.
+                shade_mode: 0.0,
                 _ep1: 0.0,
             };
             let ring = slot * set.frames + frame_idx;

@@ -93,6 +93,9 @@ fn compose_frame_input(
         // Not gated by `gameplay`: the editor's additive selection needs the
         // modifier while it holds the cursor. `raw.sprint` is the Shift key.
         shift: raw.sprint,
+        // Not gated by `gameplay`: the editor's orbit drag needs the modifier
+        // while it holds the cursor, like `shift`.
+        alt: raw.alt,
         // Not gated by `gameplay`: the rebind captures work while the
         // settings menu is open (the camera is what freezes behind it).
         captured_key: raw.captured_key,

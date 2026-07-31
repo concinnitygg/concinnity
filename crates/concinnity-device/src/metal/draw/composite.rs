@@ -56,6 +56,13 @@ impl MtlContext {
         );
 
         post_encoder.setRenderPipelineState(&self.post_pipeline_state);
+        // A G-buffer channel view swaps the fragment onto its visualization
+        // branch; Lit / Unlit / Wireframe all take the normal scene path.
+        let channel_view = if self.view_mode.is_gbuffer_channel() {
+            self.view_mode as u32
+        } else {
+            0
+        };
         unsafe {
             post_encoder.setFragmentTexture_atIndex(Some(scene_color.as_ref()), 0);
             // Bloom mip 0 at texture(1). Always bound so the binding resolves;
@@ -64,12 +71,34 @@ impl MtlContext {
             // 3D colour-grading LUT at texture(2). Always bound -- an identity
             // LUT stands in when the world declares no ColorLut.
             post_encoder.setFragmentTexture_atIndex(Some(self.color_lut.as_ref()), 2);
+            // The channel sources at texture(3..5), bound only while a channel
+            // view will sample them. The SSAO white 1x1 stands in when a
+            // G-buffer was never built.
+            if channel_view != 0 {
+                let nd = self
+                    .gbuffer
+                    .targets
+                    .as_ref()
+                    .map(|t| t.normal_depth.as_ref())
+                    .unwrap_or_else(|| self.ssao.white.as_ref());
+                let rough = self
+                    .gbuffer
+                    .targets
+                    .as_ref()
+                    .map(|t| t.roughness.as_ref())
+                    .unwrap_or_else(|| self.ssao.white.as_ref());
+                post_encoder.setFragmentTexture_atIndex(Some(nd), 3);
+                post_encoder.setFragmentTexture_atIndex(Some(rough), 4);
+                post_encoder.setFragmentTexture_atIndex(Some(self.ao_output_texture()), 5);
+            }
             post_encoder.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
             // Post-process tunables (bloom intensity) plus the scene-transition
             // fade at buffer(0).
             let composite = crate::gfx::render_types::CompositeParams {
                 post: self.post_process,
                 fade: self.scene_fade,
+                view_mode: channel_view,
+                far: self.view_far,
             };
             post_encoder.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&composite).cast(),

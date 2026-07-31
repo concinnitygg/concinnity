@@ -41,6 +41,9 @@ pub struct DxCompositeArgs {
     width: u32,
     height: u32,
     frame_idx: usize,
+    // The `ViewMode` discriminant when the frame visualizes a G-buffer channel,
+    // 0 otherwise (Lit / Unlit / Wireframe all composite the scene).
+    channel_view: u32,
 }
 
 // The composite + text orchestration lives once in `gfx::fullscreen`; this impl
@@ -100,6 +103,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             let composite = CompositeParams {
                 post: self.post_process,
                 fade: self.scene_fade,
+                view_mode: args.channel_view,
+                far: self.view_far,
             };
             cmd.SetGraphicsRoot32BitConstants(
                 2,
@@ -109,6 +114,17 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             );
             // Root param [3]: 3D colour-grading LUT SRV (t2).
             cmd.SetGraphicsRootDescriptorTable(3, self.color_lut.srv_gpu);
+            // Root params [4..6]: the G-buffer channel sources the debug view
+            // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO). The
+            // fragment references all three statically, so they are bound on
+            // every frame, channel view or not.
+            let (nd_srv, rough_srv) = match self.gbuffer.as_ref() {
+                Some(g) => (g.normal_depth_srv_gpu, g.roughness_srv_gpu),
+                None => (self.ssao.white_srv_gpu, self.ssao.white_srv_gpu),
+            };
+            cmd.SetGraphicsRootDescriptorTable(4, nd_srv);
+            cmd.SetGraphicsRootDescriptorTable(5, rough_srv);
+            cmd.SetGraphicsRootDescriptorTable(6, self.ssao_ao_srv_gpu());
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -265,6 +281,11 @@ impl DxContext {
             width,
             height,
             frame_idx,
+            channel_view: if self.view_mode.is_gbuffer_channel() {
+                self.view_mode as u32
+            } else {
+                0
+            },
         };
         crate::gfx::fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
     }

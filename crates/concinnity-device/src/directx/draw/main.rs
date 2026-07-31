@@ -315,7 +315,10 @@ impl DxContext {
             // by the time we get here `indirect_cmd_buffers[frame_idx]`
             // is filled with this frame's ExecuteIndirect commands.
 
-            let bindless_pso = self.cull.main_bindless_pso.as_ref().unwrap();
+            let bindless_pso = self.wireframe_or(
+                self.cull.main_bindless_pso.as_ref().unwrap(),
+                self.wireframe.bindless.as_ref(),
+            );
             let bindless_root = self.cull.main_bindless_root_sig.as_ref().unwrap();
             let cull_sig = self.cull.cull_command_signature.as_ref().unwrap();
             let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
@@ -403,7 +406,9 @@ impl DxContext {
         let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
         if legacy_needed {
             unsafe {
-                cmd.SetPipelineState(&self.main_pso);
+                cmd.SetPipelineState(
+                    self.wireframe_or(&self.main_pso, self.wireframe.main.as_ref()),
+                );
                 cmd.SetGraphicsRootSignature(&self.main_root_sig);
                 cmd.SetGraphicsRootConstantBufferView(1, view_gva);
                 cmd.SetGraphicsRootConstantBufferView(2, light_gva);
@@ -489,7 +494,9 @@ impl DxContext {
             && !use_bindless
         {
             unsafe {
-                cmd.SetPipelineState(inst_pso);
+                cmd.SetPipelineState(
+                    self.wireframe_or(inst_pso, self.wireframe.instanced.as_ref()),
+                );
                 cmd.SetGraphicsRootSignature(inst_root_sig);
 
                 // Re-bind the per-frame CBVs since we switched root sig.
@@ -587,6 +594,8 @@ impl DxContext {
                 self.skinned.deformed_vbvs.get(frame_idx),
             ) {
                 let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
+                let bindless_pso =
+                    self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
                 let object_gva =
                     unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
                 unsafe {
@@ -652,7 +661,9 @@ impl DxContext {
             && !self.skinned.draw_objects.is_empty()
         {
             unsafe {
-                cmd.SetPipelineState(skinned_pso);
+                cmd.SetPipelineState(
+                    self.wireframe_or(skinned_pso, self.wireframe.skinned.as_ref()),
+                );
                 cmd.SetGraphicsRootSignature(skinned_root_sig);
                 cmd.IASetPrimitiveTopology(
                     windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -842,6 +853,7 @@ impl DxContext {
             self.cull.indirect_cmd_buffers_2.get(frame_idx),
         ) && self.cull_count() > 0
         {
+            let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
             let object_gva =
                 unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
             unsafe {

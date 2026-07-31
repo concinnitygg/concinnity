@@ -31,7 +31,10 @@ pub struct ViewUniforms {
     pub cam_z: f32,
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = IBL off.
     pub prefilter_mip_count: f32,
-    pub _ep0: f32,
+    // 1.0 while the unlit view mode is active: the main fragment stage returns
+    // the surface base color before lighting. Repurposed pad space, so the
+    // struct size is unchanged.
+    pub shade_mode: f32,
     pub _ep1: f32,
 }
 
@@ -233,7 +236,7 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, cam_y), 140);
         assert_eq!(offset_of!(ViewUniforms, cam_z), 144);
         assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(offset_of!(ViewUniforms, _ep0), 152);
+        assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
         assert_eq!(offset_of!(ViewUniforms, _ep1), 156);
     }
 

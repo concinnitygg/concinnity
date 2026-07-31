@@ -28,7 +28,7 @@ pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
     FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
     OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
-    TraceRequest, TraceStep, TraceVal, TransientSaves, WorldLines,
+    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

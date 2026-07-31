@@ -471,6 +471,9 @@ impl VkContext {
             }
             self.cull.bindless_pipeline = Some(new_pipeline);
         }
+        // The wireframe twins were built from the pre-reload shaders; drop them
+        // so the next wireframe frame rebuilds against these.
+        self.invalidate_wireframe_pipelines();
         if let Some(new_pipeline) = cull_pipeline {
             if let Some(old) = self.cull.cull_pipeline.take() {
                 unsafe { device.destroy_pipeline(old, None) };
@@ -673,6 +676,7 @@ impl VkContext {
             }
             self.skinned.pipeline = Some(p);
         }
+        self.invalidate_wireframe_pipelines();
         Ok(())
     }
 }
