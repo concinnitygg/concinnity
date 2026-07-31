@@ -46,6 +46,8 @@ pub(super) struct KeyState {
     // Unlike the pulse it persists across frames, so a UI drag (slider) can
     // track the cursor for the whole press. NOT cleared by take_input().
     pub(super) left_button_down: bool,
+    // Pulse: set on right-mouse-down when cursor is free; cleared by take_input().
+    pub(super) right_click_pulse: bool,
     // Pulse: set on F1 key-down; cleared by take_input().
     pub(super) hud_toggle_pulse: bool,
     // Pulse: set on Escape key-down when the cursor is not captured;
@@ -467,6 +469,7 @@ impl MtlContext {
             left_click: self.keys.left_click_pulse,
             // Held state: read but not cleared here (cleared on LeftMouseUp).
             left_button_down: self.keys.left_button_down,
+            right_click: self.keys.right_click_pulse,
             hud_toggle: self.keys.hud_toggle_pulse,
             escape: self.keys.escape_pulse,
             ctrl: self.keys.control_down,
@@ -479,6 +482,7 @@ impl MtlContext {
         self.keys.mouse_dy = 0.0;
         self.keys.scroll_delta = 0.0;
         self.keys.left_click_pulse = false;
+        self.keys.right_click_pulse = false;
         self.keys.hud_toggle_pulse = false;
         self.keys.escape_pulse = false;
         self.keys.captured_key = None;
@@ -560,6 +564,14 @@ impl MtlContext {
                             self.keys.left_click_pulse = true;
                             self.keys.left_button_down = true;
                         }
+                    }
+                    ns_app.sendEvent(&event);
+                }
+                NSEventType::RightMouseDown => {
+                    // A right press is only a UI signal (context menus); it never
+                    // captures or recaptures the cursor, unlike LeftMouseDown.
+                    if !self.cursor_captured {
+                        self.keys.right_click_pulse = true;
                     }
                     ns_app.sendEvent(&event);
                 }

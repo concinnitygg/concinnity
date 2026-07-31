@@ -16,6 +16,7 @@ mod billboards;
 mod console;
 mod console_panel;
 mod content_panel;
+mod create_menu;
 mod cursor;
 mod file_dialog;
 mod filter;
@@ -160,6 +161,15 @@ fn boot_world(app: &mut App, world_path: &str, world_exists: bool) -> std::io::R
                 format!("failed to load compiled world data: {e:?}"),
             )
         })?;
+        // The blobs carry only interned ids; a boot without an in-process cook
+        // has an empty name table, which kills name-keyed picking until the
+        // first edit. Restore it from the lock the build wrote. Best effort: a
+        // missing lock only means the pre-existing degraded behavior.
+        match crate::authoring::name_table::prime_from_lock_file() {
+            Ok(n) if n > 0 => tracing::info!("editor: primed {n} asset names from the build lock"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("editor: could not prime asset names: {e}"),
+        }
     }
 
     // Fall back to an in-memory seed when nothing renderable was loaded, so a

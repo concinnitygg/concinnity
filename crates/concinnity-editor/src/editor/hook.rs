@@ -65,6 +65,7 @@ use super::widget::{self, point_in};
 use super::asset_list;
 use super::asset_list::ListRow;
 use super::billboards;
+use super::create_menu;
 use super::cursor;
 use super::gizmo;
 use super::group_transform;
@@ -260,6 +261,8 @@ pub(crate) struct EditorHook {
     content_type: usize,
     content_search_focus: bool,
     content_drag: Option<content_drag::ContentDrag>,
+    // The right-click "Create here" menu (`hook/create_menu_drive.rs`), if open.
+    create_menu: Option<create_menu_drive::CreateMenu>,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -452,6 +455,8 @@ mod browse;
 mod console_edit;
 mod content_drag;
 mod content_edit;
+// Named to avoid colliding with the `use super::create_menu` module import.
+mod create_menu_drive;
 mod drop_floor;
 mod duplicate;
 mod editing;
@@ -560,6 +565,7 @@ impl EditorHook {
             content_type: 0,
             content_search_focus: false,
             content_drag: None,
+            create_menu: None,
             preview_open: true,
             health_open: false,
             health: HealthState::new(),
@@ -681,11 +687,13 @@ impl DebugHook for EditorHook {
             self.shift_held = input.shift;
             self.ctrl_held = input.ctrl;
             // Escape hands the cursor back to the editor: a running world
-            // pauses mid-state, and the fly camera exits.
+            // pauses mid-state, the fly camera exits, and the create menu
+            // dismisses.
             if input.escape {
                 self.sim.pause();
                 self.fly = false;
                 self.fly_clock = None;
+                self.create_menu = None;
             }
             // The fly camera integrates before any routing: while it is on
             // the cursor is captured, so no click or HUD press can arrive.
@@ -725,7 +733,22 @@ impl DebugHook for EditorHook {
                     && self.marquee.is_none()
                     && self.content_drag.is_none()
                 {
-                    self.route_click(input, vp, world);
+                    // An open create menu is modal: it takes the press (a row
+                    // acts, anything else dismisses) before normal routing.
+                    if !self.route_create_menu_click(input, vp) {
+                        self.route_click(input, vp, world);
+                    }
+                }
+                // An unclaimed viewport right press opens the create menu at
+                // the cursor, under the same not-mid-gesture guards.
+                if input.right_click
+                    && self.drag.is_none()
+                    && self.resize.is_none()
+                    && self.gizmo_drag.is_none()
+                    && self.marquee.is_none()
+                    && self.content_drag.is_none()
+                {
+                    self.open_create_menu(input, vp, world);
                 }
                 // T / R / S pick the gizmo's mode (translate / rotate /
                 // scale), under the same guards as the history shortcuts.
@@ -883,6 +906,7 @@ impl DebugHook for EditorHook {
         self.drive_highlight(world, vp, shown);
         self.drive_gizmo_draw(world, vp, shown);
         self.drive_marquee_draw(world, shown);
+        self.drive_create_menu_draw(world, shown, mouse);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under

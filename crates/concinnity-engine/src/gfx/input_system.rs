@@ -79,6 +79,9 @@ fn compose_frame_input(
         mouse_y: raw.mouse_y,
         left_click: raw.left_click,
         left_button_down: raw.left_button_down,
+        // Not gated by `gameplay` either: like `left_click`, the press stays
+        // false at the backend while the cursor is captured.
+        right_click: raw.right_click,
         viewport: [0.0, 0.0],
         hud_toggle: raw.hud_toggle,
         // Start mirrors Escape (pause / back), so like `raw.escape` it stays
@@ -320,6 +323,21 @@ mod tests {
         // precedes Start in declaration order, so it is the captured button.
         assert_eq!(input.captured_button, Some(GamepadMap::DEFAULT.jump));
         assert!(input.escape);
+    }
+
+    #[test]
+    fn mouse_clicks_pass_the_menu_gate() {
+        // Both click pulses serve UI, so neither freezes behind a menu: the
+        // backend already withholds them while the cursor is captured.
+        let raw = RenderInput {
+            left_click: true,
+            right_click: true,
+            ..Default::default()
+        };
+        let pad = pad_snapshot(&[]);
+        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
+        assert!(input.left_click);
+        assert!(input.right_click);
     }
 
     #[test]

@@ -125,6 +125,14 @@ pub(crate) fn editor_hud(world: &mut World) {
             world.add_component(text_field(id, placeholder, font));
         }
     }
+    // The right-click create menu floats over the panels (its per-frame layer
+    // also pins it above them while open).
+    for id in super::create_menu::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in super::create_menu::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
     inject_top_bar(world, font);
 }
 

@@ -77,6 +77,29 @@ pub fn name_table() -> Vec<String> {
     INTERNER.with(|i| i.borrow().names.clone())
 }
 
+// Install a recorded (id, name) table into an EMPTY interner, so a process
+// that loads prebuilt blobs (the editor booting without an in-process cook)
+// resolves names to the ids the build baked. Ids may be sparse; unrecorded
+// slots hold an empty name, which no authored asset can carry. Returns false
+// (and changes nothing) when the interner already holds names -- an in-process
+// cook has primed it authoritatively.
+pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
+    ensure_name_resolver();
+    INTERNER.with(|i| {
+        let mut interner = i.borrow_mut();
+        if !interner.names.is_empty() {
+            return false;
+        }
+        let len = pairs.iter().map(|(id, _)| id + 1).max().unwrap_or(0) as usize;
+        interner.names = vec![String::new(); len];
+        for (id, name) in pairs {
+            interner.names[*id as usize] = name.clone();
+            interner.map.insert(name.clone(), *id);
+        }
+        true
+    })
+}
+
 // Pre-intern a batch of names in order so identity ids are dense and follow
 // world.jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
@@ -110,6 +133,24 @@ mod tests {
         reset_interner();
         intern_all(&["a", "b", "c"]);
         assert_eq!(name_table(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn prime_installs_a_sparse_table_and_yields_to_a_cook() {
+        reset_interner();
+        // Sparse ids (1 is unrecorded) land at their exact slots.
+        assert!(prime_name_table(&[
+            (0, "floor".to_string()),
+            (2, "lamp".to_string())
+        ]));
+        assert_eq!(intern("floor"), AssetId(0));
+        assert_eq!(intern("lamp"), AssetId(2));
+        assert_eq!(name_table()[1], "", "unrecorded slot stays blank");
+        // A fresh name appends past the recorded table, never into a gap.
+        assert_eq!(intern("new"), AssetId(3));
+        // A populated interner is authoritative; priming over it is refused.
+        assert!(!prime_name_table(&[(0, "other".to_string())]));
+        assert_eq!(intern("floor"), AssetId(0));
     }
 
     // Integration: a name string deserializes to a dense id through the resolver

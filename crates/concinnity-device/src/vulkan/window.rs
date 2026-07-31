@@ -658,6 +658,15 @@ impl GlfwWindow {
                     self.input.left_button_down = true;
                 }
                 glfw::WindowEvent::MouseButton(
+                    glfw::MouseButton::Button2,
+                    glfw::Action::Press,
+                    _,
+                ) if !self.cursor_captured => {
+                    // A right press is only a UI signal (context menus); it never
+                    // begins a drag or recaptures the cursor. Mirrors metal / win32.
+                    self.input.right_click = true;
+                }
+                glfw::WindowEvent::MouseButton(
                     glfw::MouseButton::Button1,
                     glfw::Action::Release,
                     _,
@@ -702,6 +711,7 @@ impl GlfwWindow {
         self.input.interact = false;
         self.input.jump = false;
         self.input.left_click = false;
+        self.input.right_click = false;
         self.input.hud_toggle = false;
         self.input.escape = false;
         self.input.captured_key = None;

@@ -82,6 +82,10 @@ pub struct FrameInput {
     /// Unlike `left_click` this stays true across frames until release, so a
     /// UI drag (e.g. a slider) can track the cursor for its whole duration.
     pub left_button_down: bool,
+    /// True for exactly one frame when the right mouse button is pressed
+    /// while the cursor is not captured. Used for contextual UI (e.g. a
+    /// create-at-cursor menu); it never captures the cursor.
+    pub right_click: bool,
     /// Live logical viewport size in pixels `[width, height]`. Used to map
     /// overlay (Screen-owned) UI between its fixed reference resolution and the
     /// window, so menus scale with the window and the cursor still hit-tests

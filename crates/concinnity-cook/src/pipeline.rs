@@ -439,6 +439,9 @@ pub fn build_compiled(
             let asset = &assets[*asset_idx];
             crate::blob::LockedResource {
                 name: asset.name.clone(),
+                // Already interned by the declaration-order pass above, so
+                // this is a lookup of the id the build assigned.
+                id: Some(asset_id::intern(&asset.name).0),
                 kind: rt.as_str().to_string(),
                 handle: *handle,
                 args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),

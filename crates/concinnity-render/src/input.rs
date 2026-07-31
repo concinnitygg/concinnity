@@ -39,6 +39,10 @@ pub struct RenderInput {
     // True while the left mouse button is held (cursor not captured). Persists
     // across frames until release so a UI drag can track the cursor.
     pub left_button_down: bool,
+    // True for exactly one frame when the right mouse button is pressed
+    // while the cursor is not captured. Wired on Metal; DirectX / Vulkan set
+    // it from their mouse callbacks.
+    pub right_click: bool,
     // True for exactly one frame when the HUD-toggle key is pressed (F1).
     pub hud_toggle: bool,
     // True for exactly one frame when Escape is pressed while the cursor is

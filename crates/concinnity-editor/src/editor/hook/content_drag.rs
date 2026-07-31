@@ -33,8 +33,13 @@ pub(super) struct ContentDrag {
 }
 
 // The world entry a dropped asset creates at `pos`, `None` for a type that
-// does not place (Material assigns instead; the rest only browse).
-fn placement_args(asset_type: &str, name: &str, pos: [f32; 3]) -> Option<serde_json::Value> {
+// does not place (Material assigns instead; the rest only browse). Shared with
+// the create menu's Prefab-instance rows.
+pub(super) fn placement_args(
+    asset_type: &str,
+    name: &str,
+    pos: [f32; 3],
+) -> Option<serde_json::Value> {
     let field = match asset_type {
         "Mesh" | "ProceduralMesh" => "mesh",
         "Model" => "model",
@@ -117,8 +122,9 @@ impl EditorHook {
 
     // The landing position under the cursor: the nearest pick-index surface,
     // else the ground plane (else a fixed distance along the ray), grid
-    // snapped per axis when move snapping applies.
-    fn drop_point(
+    // snapped per axis when move snapping applies. Shared with the create
+    // menu, which captures it at open time.
+    pub(super) fn drop_point(
         &self,
         world: &World,
         vp: [f32; 2],

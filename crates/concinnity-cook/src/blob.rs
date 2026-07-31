@@ -64,6 +64,11 @@ pub struct BlobLock {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockedAsset {
     pub name: String,
+    // The dense interned id the build assigned this name. Lets a process that
+    // loads the prebuilt blobs (the editor booting without an in-process cook)
+    // rebuild the name table exactly as the build interned it.
+    #[serde(default)]
+    pub id: Option<u32>,
     pub kind: String,
     pub discriminant: u8,
     // sha-256 of the asset's serialized args_bytes
@@ -99,6 +104,10 @@ pub struct LockedShadow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedResource {
     pub name: String,
+    // The dense interned id the build assigned this name (the same id space
+    // as `LockedAsset.id`; `handle` is the per-kind index).
+    #[serde(default)]
+    pub id: Option<u32>,
     pub kind: String,
     pub handle: u32,
     // sha-256 of the asset's authored args JSON
@@ -258,6 +267,7 @@ pub fn write_lock(
         .iter()
         .map(|(name, def)| LockedAsset {
             name: name.to_string(),
+            id: def.name.map(|n| n.0),
             kind: format!("{:?}", def.kind),
             discriminant: def.discriminant,
             args_hash: checksum(&def.args_bytes),
@@ -487,6 +497,7 @@ mod tests {
         let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];
         let resources = vec![LockedResource {
             name: "clip".to_string(),
+            id: Some(2),
             kind: "AudioClip".to_string(),
             handle: 2,
             args_hash: "ff".to_string(),
@@ -682,6 +693,7 @@ mod tests {
             assets: vec![],
             resources: vec![LockedResource {
                 name: "clip".to_string(),
+                id: Some(0),
                 kind: "AudioClip".to_string(),
                 handle: 0,
                 args_hash: "00".to_string(),

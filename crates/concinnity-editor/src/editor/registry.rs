@@ -265,6 +265,12 @@ mod tests {
             "gizmo mode label".to_string(),
         );
         claim(super::super::cursor::CURSOR, "editor cursor".to_string());
+        for id in super::super::create_menu::all_sprite_ids() {
+            claim(id, "create menu sprites".to_string());
+        }
+        for id in super::super::create_menu::all_label_ids() {
+            claim(id, "create menu labels".to_string());
+        }
         for key in PanelKey::ALL {
             let p = panel(key);
             for id in p.sprite_ids() {

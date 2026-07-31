@@ -22,6 +22,7 @@ pub(crate) struct MouseSnapshot {
     pub y: f32,
     pub left_click: bool,
     pub left_button_down: bool,
+    pub right_click: bool,
     pub scroll_delta: f32,
 }
 
@@ -160,6 +161,7 @@ impl KeyState {
             y: mouse_y,
             left_click,
             left_button_down,
+            right_click,
             scroll_delta,
         } = mouse;
         let s = InputState {
@@ -177,6 +179,7 @@ impl KeyState {
             mouse_y,
             left_click,
             left_button_down,
+            right_click,
             hud_toggle: self.hud_toggle_pending,
             escape: self.escape_pending,
             // Held Control modifier (VK_CONTROL), tracked across key-down/up; a
@@ -290,6 +293,7 @@ mod tests {
             y: 0.0,
             left_click: false,
             left_button_down: false,
+            right_click: false,
             scroll_delta: 0.0,
         })
     }

@@ -61,6 +61,9 @@ pub(crate) struct WindowState {
     // unlike `left_click_pending` it persists across take_input() so a drag can
     // track the cursor. Mirrors the Metal `left_button_down` signal.
     pub(crate) left_button_down: bool,
+    // Set on WM_RBUTTONDOWN with the cursor free; a one-shot cleared by
+    // take_input(). Mirrors the Metal `right_click_pulse` signal.
+    pub(crate) right_click_pending: bool,
     // Accumulated vertical scroll-wheel delta since the last take_input(), in
     // scroll_delta units (WM_MOUSEWHEEL notches scaled via
     // `wheel_notches_to_scroll_delta`). Reset each take_input().
@@ -521,6 +524,14 @@ unsafe extern "system" fn wnd_proc(
                 }
                 LRESULT(0)
             }
+            WM_RBUTTONDOWN => {
+                // A right press is only a UI signal (context menus); it never
+                // captures or recaptures the cursor, unlike WM_LBUTTONDOWN.
+                if !state.cursor_captured {
+                    state.right_click_pending = true;
+                }
+                LRESULT(0)
+            }
             WM_LBUTTONUP => {
                 // End any held-button (drag) gesture. Always cleared, even if the
                 // press began while captured, so the flag can never stick across a
@@ -563,6 +574,7 @@ fn fresh_window_state(hwnd: HWND, width: i32, height: i32, title_bar: bool) -> B
         mouse_y: 0.0,
         left_click_pending: false,
         left_button_down: false,
+        right_click_pending: false,
         scroll_delta: 0.0,
         cursor_captured: false,
         recapture_on_click: false,
@@ -752,10 +764,12 @@ pub(crate) fn take_input_snapshot(state: &mut WindowState) -> crate::gfx::input:
     let my = state.mouse_y;
     let lc = state.left_click_pending;
     let lbd = state.left_button_down;
+    let rc = state.right_click_pending;
     let scroll = state.scroll_delta;
     state.mouse_dx = 0.0;
     state.mouse_dy = 0.0;
     state.left_click_pending = false;
+    state.right_click_pending = false;
     state.scroll_delta = 0.0;
     state.key.take(MouseSnapshot {
         dx,
@@ -764,6 +778,7 @@ pub(crate) fn take_input_snapshot(state: &mut WindowState) -> crate::gfx::input:
         y: my,
         left_click: lc,
         left_button_down: lbd,
+        right_click: rc,
         scroll_delta: scroll,
     })
 }
