@@ -28,8 +28,31 @@ pub(super) struct ContentDrag {
     pub asset_type: String,
     anchor: [f32; 2],
     moved: bool,
-    // The landing position while the cursor is over the viewport.
-    pose: Option<[f32; 3]>,
+    // The landing pose while the cursor is over the viewport.
+    pose: Option<DropPose>,
+}
+
+// A drop's landing pose: the surface point, the outward normal of the struck
+// AABB face ([0,1,0] for the ground fallback), and the rotation the placed
+// entry carries when align-to-surface is on (identity otherwise).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct DropPose {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub rotation_deg: [f32; 3],
+}
+
+// The rotation carrying local +Y onto an axis-aligned face normal, in the
+// engine's YXZ Euler convention ([pitch, yaw, roll] degrees).
+pub(super) fn align_rotation(axis: usize, sign: f32) -> [f32; 3] {
+    match (axis, sign > 0.0) {
+        (0, true) => [0.0, 0.0, -90.0],
+        (0, false) => [0.0, 0.0, 90.0],
+        (1, true) => [0.0, 0.0, 0.0],
+        (1, false) => [180.0, 0.0, 0.0],
+        (2, true) => [90.0, 0.0, 0.0],
+        _ => [-90.0, 0.0, 0.0],
+    }
 }
 
 // The world entry a dropped asset creates at `pos`, `None` for a type that
@@ -91,7 +114,7 @@ impl EditorHook {
                 None => return,
             };
             let pose = (moved && !over_panel)
-                .then(|| self.drop_point(world, vp, mouse, input.ctrl))
+                .then(|| self.drop_pose(world, vp, mouse, input.ctrl))
                 .flatten();
             if let Some(drag) = &mut self.content_drag {
                 drag.pose = pose;
@@ -101,17 +124,28 @@ impl EditorHook {
         let Some(drag) = self.content_drag.take() else {
             return;
         };
-        let Some(pos) = drag.pose else {
+        let Some(pose) = drag.pose else {
             return;
         };
         if drag.asset_type == "Material" {
             self.assign_material_under_cursor(world, vp, mouse, &drag.name);
             return;
         }
-        let Some(args) = placement_args(&drag.asset_type, &drag.name, pos.map(gizmo_drag::round3))
-        else {
+        let Some(mut args) = placement_args(
+            &drag.asset_type,
+            &drag.name,
+            pose.position.map(gizmo_drag::round3),
+        ) else {
             return;
         };
+        if pose.rotation_deg != [0.0; 3]
+            && let Some(obj) = args.as_object_mut()
+        {
+            obj.insert(
+                "rotation_deg".to_string(),
+                serde_json::json!(pose.rotation_deg),
+            );
+        }
         let name = self.unique_from(&drag.name);
         self.entries.push(serde_json::json!({
             "name": name, "type": "Prop", "args": args
@@ -120,10 +154,8 @@ impl EditorHook {
         self.selection.replace(name);
     }
 
-    // The landing position under the cursor: the nearest pick-index surface,
-    // else the ground plane (else a fixed distance along the ray), grid
-    // snapped per axis when move snapping applies. Shared with the create
-    // menu, which captures it at open time.
+    // The landing position under the cursor. Shared with the create menu,
+    // which captures it at open time (and never orients to the surface).
     pub(super) fn drop_point(
         &self,
         world: &World,
@@ -131,14 +163,28 @@ impl EditorHook {
         mouse: [f32; 2],
         ctrl: bool,
     ) -> Option<[f32; 3]> {
+        self.drop_pose(world, vp, mouse, ctrl).map(|p| p.position)
+    }
+
+    // The landing pose under the cursor: the nearest pick-index surface (its
+    // entered face is the landing normal), else the ground plane (else a
+    // fixed distance along the ray). Grid snapped per axis when move snapping
+    // applies; the rotation follows the face only when align-to-surface is on.
+    fn drop_pose(
+        &self,
+        world: &World,
+        vp: [f32; 2],
+        mouse: [f32; 2],
+        ctrl: bool,
+    ) -> Option<DropPose> {
         let ray = pick::camera_ray(world, vp, mouse)?;
-        let hit_t = world
+        let hit = world
             .resource::<crate::ecs::PickIndex>()
             .into_iter()
             .flat_map(|index| index.entries.iter())
-            .filter_map(|e| concinnity_core::gfx::pick::ray_aabb(&ray, e.bb_min, e.bb_max))
-            .min_by(f32::total_cmp);
-        let t = hit_t.unwrap_or_else(|| {
+            .filter_map(|e| concinnity_core::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
+            .min_by(|a, b| a.t.total_cmp(&b.t));
+        let t = hit.map(|f| f.t).unwrap_or_else(|| {
             // The ground plane y = 0, when the ray descends toward it.
             if ray.dir[1] < -1e-4 && ray.origin[1] > 0.0 {
                 -ray.origin[1] / ray.dir[1]
@@ -146,15 +192,30 @@ impl EditorHook {
                 FREE_DROP_DISTANCE
             }
         });
-        let mut pos = [
+        let mut position = [
             ray.origin[0] + ray.dir[0] * t,
             ray.origin[1] + ray.dir[1] * t,
             ray.origin[2] + ray.dir[2] * t,
         ];
         if let Some(step) = self.snap.translate.active_step(ctrl) {
-            pos = pos.map(|v| snap::snap_step(v, step));
+            position = position.map(|v| snap::snap_step(v, step));
         }
-        Some(pos)
+        let mut normal = [0.0, 1.0, 0.0];
+        let mut rotation_deg = [0.0; 3];
+        // A zero sign is a degenerate face (the ray started inside a box):
+        // no landing normal to align to.
+        if let Some(face) = hit.filter(|f| f.sign != 0.0) {
+            normal = [0.0; 3];
+            normal[face.axis] = face.sign;
+            if self.align_to_surface {
+                rotation_deg = align_rotation(face.axis, face.sign);
+            }
+        }
+        Some(DropPose {
+            position,
+            normal,
+            rotation_deg,
+        })
     }
 
     // Assign the dragged Material to the Prop entry under the cursor.
@@ -225,24 +286,29 @@ impl EditorHook {
     }
 
     // Whether a ghost is showing this frame (the drag left the panel and has
-    // a landing point); the trigger outline stands down while it does.
-    pub(super) fn content_ghost_pose(&self) -> Option<[f32; 3]> {
+    // a landing pose); the trigger outline stands down while it does.
+    pub(super) fn content_ghost_pose(&self) -> Option<DropPose> {
         self.content_drag.as_ref().and_then(|d| d.pose)
     }
 
     // Draw the ghost through the shared outline pool.
     pub(super) fn drive_content_ghost(&self, world: &mut World, vp: [f32; 2]) {
-        let Some(pos) = self.content_ghost_pose() else {
+        let Some(pose) = self.content_ghost_pose() else {
             return;
         };
         let Some(cam) = world.query::<Camera3D>().next() else {
             return;
         };
         let (view, fov) = (cam.view_matrix, cam.fov_y_degrees.to_radians());
-        // Rest the ghost box on the landing point rather than centering it.
+        // Rest the ghost box on the landing point along its normal rather
+        // than centering it, and orient it like the commit would.
         let transform = Transform {
-            position: [pos[0], pos[1] + GHOST_HALF[1], pos[2]],
-            rotation_deg: [0.0; 3],
+            position: [
+                pose.position[0] + pose.normal[0] * GHOST_HALF[0],
+                pose.position[1] + pose.normal[1] * GHOST_HALF[1],
+                pose.position[2] + pose.normal[2] * GHOST_HALF[2],
+            ],
+            rotation_deg: pose.rotation_deg,
             scale: [1.0; 3],
         };
         let tint = super::super::theme::ACCENT_TINT;

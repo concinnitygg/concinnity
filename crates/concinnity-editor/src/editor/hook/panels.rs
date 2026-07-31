@@ -306,6 +306,10 @@ impl Panel for PreviewPanel {
                 hook.snap.rotate.cycle(&snap::ROTATE_STEPS);
                 true
             }
+            Some(PreviewAction::ToggleAlign) => {
+                hook.align_to_surface = !hook.align_to_surface;
+                true
+            }
             Some(PreviewAction::DropToFloor) => {
                 hook.drop_selection_to_floor(world);
                 true
@@ -323,6 +327,7 @@ impl Panel for PreviewPanel {
                 fly: hook.fly,
                 axes: hook.axes_visible,
                 snap: hook.snap,
+                align: hook.align_to_surface,
             },
             mouse,
         );

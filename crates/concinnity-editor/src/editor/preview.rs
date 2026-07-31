@@ -30,13 +30,14 @@ pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
 pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
 
 const PREVIEW_W: f32 = 232.0;
-// The capture row, the fly row, the world-axes row, the two snap rows, and
-// the drop-to-floor action row.
-const ROWS: usize = 6;
+// The capture row, the fly row, the world-axes row, the two snap rows, the
+// align-to-surface row, and the drop-to-floor action row.
+const ROWS: usize = 7;
 // The snap rows' indices: their clicks split into toggle vs step-cycle.
 const SNAP_MOVE_ROW: usize = 3;
 const SNAP_ROTATE_ROW: usize = 4;
-const DROP_FLOOR_ROW: usize = 5;
+const ALIGN_ROW: usize = 5;
+const DROP_FLOOR_ROW: usize = 6;
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -69,6 +70,8 @@ pub(crate) enum PreviewAction {
     CycleSnapMoveStep,
     ToggleSnapRotate,
     CycleSnapRotateStep,
+    // The align row: orient drag-out drops to the struck surface's normal.
+    ToggleAlign,
     // The action row: drop the selection onto the surface below it.
     DropToFloor,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
@@ -98,6 +101,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
                 PreviewAction::ToggleSnapRotate
             });
         }
+        Some(ALIGN_ROW) => return Some(PreviewAction::ToggleAlign),
         Some(DROP_FLOOR_ROW) => return Some(PreviewAction::DropToFloor),
         Some(_) | None => {}
     }
@@ -111,6 +115,7 @@ pub(crate) struct PreviewState {
     pub fly: bool,
     pub axes: bool,
     pub snap: SnapSettings,
+    pub align: bool,
 }
 
 // Position + show the panel at origin `o`, colouring each checkbox by state.
@@ -123,6 +128,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
             .with_value(format!("{} m", state.snap.translate.step)),
         Row::checkbox("Snap rotate", state.snap.rotate.enabled)
             .with_value(format!("{} deg", state.snap.rotate.step)),
+        Row::checkbox("Align drop to surface", state.align),
         Row::label("Drop to floor (Ctrl+Down)"),
     ];
     list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
@@ -230,6 +236,7 @@ mod tests {
                 fly: false,
                 axes: false,
                 snap: SnapSettings::default(),
+                align: false,
             },
             [0.0, 0.0],
         );
@@ -257,6 +264,7 @@ mod tests {
             fly: false,
             axes: false,
             snap: SnapSettings::default(),
+            align: false,
         };
         apply(&mut world, o, off_state, [0.0, 0.0]);
         let title = world
@@ -296,6 +304,7 @@ mod tests {
                 fly: true,
                 axes: true,
                 snap: SnapSettings::default(),
+                align: false,
             },
             [0.0, 0.0],
         );

@@ -53,6 +53,15 @@ fn camera_basis() -> ([f32; 3], [f32; 3], [f32; 3]) {
     (right, up, fwd)
 }
 
+/// One shaded piece of a multi-part render: a triangle mesh and the color it
+/// shades with. Parts share one camera framing and one z-buffer, so they
+/// occlude each other like a composed model.
+pub struct MeshPart<'a> {
+    pub verts: &'a [Vertex],
+    pub indices: &'a [u16],
+    pub color: [f32; 3],
+}
+
 /// Shade `verts`/`indices` into a `size` x `size` RGBA8 image: orthographic
 /// three-quarter view auto-framed to the mesh bounds, z-buffered, smooth
 /// N·L + ambient shading of `base_color`, transparent background. An empty or
@@ -63,24 +72,41 @@ pub fn shade_mesh(
     size: u32,
     base_color: [f32; 3],
 ) -> RasterImage {
+    shade_parts(
+        &[MeshPart {
+            verts,
+            indices,
+            color: base_color,
+        }],
+        size,
+    )
+}
+
+/// [shade_mesh](#method.shade_mesh) over several parts at once, framed to
+/// their combined bounds (a Model's sub-meshes, each with its material color).
+pub fn shade_parts(parts: &[MeshPart], size: u32) -> RasterImage {
     let mut img = RasterImage {
         width: size,
         height: size,
         rgba: vec![0u8; (size * size * 4) as usize],
     };
-    if size == 0 || verts.is_empty() || indices.len() < 3 {
+    let mut positions = parts.iter().flat_map(|p| p.verts.iter().map(|v| v.pos));
+    let Some(first) = positions.next() else {
+        return img;
+    };
+    if size == 0 || parts.iter().all(|p| p.indices.len() < 3) {
         return img;
     }
     let (right, up, fwd) = camera_basis();
 
-    // Project every vertex into the camera basis about the bounds center, then
-    // fit the projected extent to the image.
-    let mut min = verts[0].pos;
-    let mut max = verts[0].pos;
-    for v in verts {
+    // Frame the combined bounds, then project each part into the shared
+    // camera basis about that center.
+    let mut min = first;
+    let mut max = first;
+    for pos in positions {
         for a in 0..3 {
-            min[a] = min[a].min(v.pos[a]);
-            max[a] = max[a].max(v.pos[a]);
+            min[a] = min[a].min(pos[a]);
+            max[a] = max[a].max(pos[a]);
         }
     }
     let center = [
@@ -88,47 +114,57 @@ pub fn shade_mesh(
         (min[1] + max[1]) * 0.5,
         (min[2] + max[2]) * 0.5,
     ];
-    let projected: Vec<[f32; 3]> = verts
+    let project = |v: &Vertex| {
+        let p = [
+            v.pos[0] - center[0],
+            v.pos[1] - center[1],
+            v.pos[2] - center[2],
+        ];
+        [dot(p, right), dot(p, up), dot(p, fwd)]
+    };
+    let extent = parts
         .iter()
+        .flat_map(|p| p.verts.iter())
         .map(|v| {
-            let p = [
-                v.pos[0] - center[0],
-                v.pos[1] - center[1],
-                v.pos[2] - center[2],
-            ];
-            [dot(p, right), dot(p, up), dot(p, fwd)]
+            let p = project(v);
+            p[0].abs().max(p[1].abs())
         })
-        .collect();
-    let extent = projected
-        .iter()
-        .map(|p| p[0].abs().max(p[1].abs()))
         .fold(0.0f32, f32::max);
     if extent <= 0.0 || !extent.is_finite() {
         return img;
     }
     let half = size as f32 * 0.5;
     let scale = half * FIT / extent;
-    // Image coordinates: x right, y down.
-    let screen: Vec<[f32; 3]> = projected
-        .iter()
-        .map(|p| [half + p[0] * scale, half - p[1] * scale, p[2]])
-        .collect();
-
     let light = normalize(LIGHT_DIR);
     let mut depth = vec![f32::NEG_INFINITY; (size * size) as usize];
-    for tri in indices.chunks_exact(3) {
-        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-        if i0 >= screen.len() || i1 >= screen.len() || i2 >= screen.len() {
-            continue;
+    for part in parts {
+        // Image coordinates: x right, y down.
+        let screen: Vec<[f32; 3]> = part
+            .verts
+            .iter()
+            .map(|v| {
+                let p = project(v);
+                [half + p[0] * scale, half - p[1] * scale, p[2]]
+            })
+            .collect();
+        for tri in part.indices.chunks_exact(3) {
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            if i0 >= screen.len() || i1 >= screen.len() || i2 >= screen.len() {
+                continue;
+            }
+            fill_triangle(
+                &mut img,
+                &mut depth,
+                [screen[i0], screen[i1], screen[i2]],
+                [
+                    part.verts[i0].normal,
+                    part.verts[i1].normal,
+                    part.verts[i2].normal,
+                ],
+                light,
+                part.color,
+            );
         }
-        fill_triangle(
-            &mut img,
-            &mut depth,
-            [screen[i0], screen[i1], screen[i2]],
-            [verts[i0].normal, verts[i1].normal, verts[i2].normal],
-            light,
-            base_color,
-        );
     }
     img
 }
@@ -331,6 +367,58 @@ mod tests {
         let a = shade_mesh(&verts, &indices, 48, [0.5, 0.6, 0.7]);
         let b = shade_mesh(&verts, &indices, 48, [0.5, 0.6, 0.7]);
         assert_eq!(a.rgba, b.rgba);
+    }
+
+    #[test]
+    fn parts_share_one_frame_and_depth_buffer() {
+        // A big far green quad behind a small near red quad, fully overlapped
+        // in the image. Both colors must show (the shared framing covers
+        // both), and swapping the part order must not change a pixel: the
+        // shared z-buffer decides the overlap, not paint order.
+        let (mut far, far_idx) = quad([0.0, 0.0, 1.0]);
+        let (mut near, near_idx) = quad([0.0, 0.0, 1.0]);
+        for v in &mut far {
+            v.pos[0] *= 4.0;
+            v.pos[1] *= 4.0;
+        }
+        for v in &mut near {
+            v.pos[0] *= 0.5;
+            v.pos[1] *= 0.5;
+            for (p, d) in v.pos.iter_mut().zip(VIEW_DIR) {
+                *p -= d * 2.0;
+            }
+        }
+        let parts = |a: bool| {
+            let far_part = MeshPart {
+                verts: &far,
+                indices: &far_idx,
+                color: [0.0, 1.0, 0.0],
+            };
+            let near_part = MeshPart {
+                verts: &near,
+                indices: &near_idx,
+                color: [1.0, 0.0, 0.0],
+            };
+            if a {
+                [far_part, near_part]
+            } else {
+                [near_part, far_part]
+            }
+        };
+        let img = shade_parts(&parts(true), 64);
+        let count = |channel: usize| {
+            img.rgba
+                .chunks_exact(4)
+                .filter(|p| p[3] > 0 && p[channel] > p[(channel + 1) % 3].max(p[(channel + 2) % 3]))
+                .count()
+        };
+        assert!(count(0) > 0, "the near red part shows");
+        assert!(count(1) > 0, "the far green part shows");
+        // The near quad projects inside the far quad's footprint, so if paint
+        // order (not depth) decided, swapping the parts would repaint the
+        // overlap green.
+        let swapped = shade_parts(&parts(false), 64);
+        assert_eq!(img.rgba, swapped.rgba, "depth decides, not paint order");
     }
 
     #[test]

@@ -316,6 +316,9 @@ pub(crate) struct EditorHook {
     gizmo_drag: Option<gizmo_drag::GizmoDrag>,
     // Grid / angle snapping for gizmo drags (Preview panel rows + /snap).
     snap: snap::SnapSettings,
+    // Whether a drag-out placement orients the drop to the struck surface's
+    // face normal (Preview panel row). Session state, off by default.
+    align_to_surface: bool,
     // The edit-mode fly camera (`hook/fly.rs`): on/off and the frame clock
     // its integration steps against.
     fly: bool,
@@ -586,6 +589,7 @@ impl EditorHook {
             gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
             snap: snap::SnapSettings::default(),
+            align_to_surface: false,
             fly: false,
             fly_clock: None,
             positions: [None; PANEL_COUNT],

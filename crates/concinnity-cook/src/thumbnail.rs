@@ -70,6 +70,8 @@ pub fn bake_thumbnails_in(dir: &Path, result: &PipelineResult) -> std::io::Resul
         index.push((name.to_string(), key));
     }
 
+    // Surface colors by material handle, feeding model sub-mesh shading.
+    let mut material_colors: HashMap<u32, [f32; 3]> = HashMap::new();
     for (record, name) in records_of(result, ResourceKind::Material) {
         let Ok(mat) = postcard::from_bytes::<crate::assets::Material>(&record.data_bytes) else {
             report.skipped += 1;
@@ -84,6 +86,7 @@ pub fn bake_thumbnails_in(dir: &Path, result: &PipelineResult) -> std::io::Resul
             albedo[1] * mat.tint[1],
             albedo[2] * mat.tint[2],
         ];
+        material_colors.insert(record.handle, tinted);
         let img = raster::shade_sphere(THUMB_SIZE, tinted, mat.roughness, mat.metallic);
         // The visual inputs are the key: the baked record plus the sampled
         // albedo average, so retexturing re-bakes.
@@ -110,6 +113,8 @@ pub fn bake_thumbnails_in(dir: &Path, result: &PipelineResult) -> std::io::Resul
         index.push((name.to_string(), key));
     }
 
+    bake_models(dir, result, &material_colors, &mut index, &mut report)?;
+
     for (record, name) in records_of(result, ResourceKind::EnvironmentMap) {
         let Some(bytes) = payload_of(result, record) else {
             report.skipped += 1;
@@ -126,6 +131,94 @@ pub fn bake_thumbnails_in(dir: &Path, result: &PipelineResult) -> std::io::Resul
 
     write_index(dir, &index)?;
     Ok(report)
+}
+
+// Compose each Model def's sub-meshes into one render, each part shaded with
+// its material's surface color. Sub-mesh payloads resolve by unified
+// mesh-source handle: resource-stream Mesh records lead the space; component
+// mesh sources (ProceduralMesh) resolve through `mesh_component_names` to
+// their def's payload.
+fn bake_models(
+    dir: &Path,
+    result: &PipelineResult,
+    material_colors: &HashMap<u32, [f32; 3]>,
+    index: &mut Vec<(String, String)>,
+    report: &mut ThumbReport,
+) -> std::io::Result<()> {
+    let mut mesh_payloads: HashMap<u32, &[u8]> = HashMap::new();
+    for (record, _) in records_of(result, ResourceKind::Mesh) {
+        if let Some(bytes) = payload_of(result, record) {
+            mesh_payloads.insert(record.handle, bytes);
+        }
+    }
+    for (handle, name) in &result.mesh_component_names {
+        let bytes = result
+            .names
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| def_payload_of(result, &result.defs[i]));
+        if let Some(bytes) = bytes {
+            mesh_payloads.insert(*handle, bytes);
+        }
+    }
+    let Some(model_disc) = crate::registry::ComponentType::parse("Model").map(|t| t.discriminant())
+    else {
+        return Ok(());
+    };
+    for (def, name) in result.defs.iter().zip(result.names.iter()) {
+        if def.discriminant != model_disc {
+            continue;
+        }
+        let Ok(model) = postcard::from_bytes::<crate::assets::Model>(&def.args_bytes) else {
+            report.skipped += 1;
+            continue;
+        };
+        let mut key_inputs: Vec<Vec<u8>> = vec![b"model".to_vec()];
+        let mut decoded = Vec::new();
+        for sub in &model.meshes {
+            let Some(bytes) = sub.mesh.and_then(|h| mesh_payloads.get(&h.0).copied()) else {
+                continue;
+            };
+            let Ok((verts, indices, _)) =
+                concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes)
+            else {
+                continue;
+            };
+            let color = sub
+                .material
+                .and_then(|m| material_colors.get(&m.0).copied())
+                .unwrap_or(MESH_COLOR);
+            key_inputs.push(hash_bytes(bytes));
+            key_inputs.push(color.iter().flat_map(|c| c.to_le_bytes()).collect());
+            decoded.push((verts, indices, color));
+        }
+        if decoded.is_empty() {
+            report.skipped += 1;
+            continue;
+        }
+        let parts: Vec<raster::MeshPart> = decoded
+            .iter()
+            .map(|(verts, indices, color)| raster::MeshPart {
+                verts,
+                indices,
+                color: *color,
+            })
+            .collect();
+        let img = raster::shade_parts(&parts, THUMB_SIZE);
+        let inputs: Vec<&[u8]> = key_inputs.iter().map(|v| v.as_slice()).collect();
+        let key = key_of(&inputs);
+        write_png(dir, &key, img.width, img.height, &img.rgba, report)?;
+        index.push((name.clone(), key));
+    }
+    Ok(())
+}
+
+// The payload bytes a component def's locator points at.
+fn def_payload_of<'a>(
+    result: &'a PipelineResult,
+    def: &concinnity_blob::BlobAssetDef,
+) -> Option<&'a [u8]> {
+    slice_payload(&result.payloads, def.payload.as_ref()?)
 }
 
 // The records of one kind, paired with their lock names (resource_locks is
@@ -148,8 +241,14 @@ fn payload_of<'a>(
     result: &'a PipelineResult,
     record: &concinnity_blob::ResourceRecord,
 ) -> Option<&'a [u8]> {
-    let loc = record.payload.as_ref()?;
-    let blob = result.payloads.get(loc.blob_index as usize)?;
+    slice_payload(&result.payloads, record.payload.as_ref()?)
+}
+
+fn slice_payload<'a>(
+    payloads: &'a [Vec<u8>],
+    loc: &concinnity_blob::PayloadLocator,
+) -> Option<&'a [u8]> {
+    let blob = payloads.get(loc.blob_index as usize)?;
     let start = usize::try_from(loc.offset).ok()?;
     let end = start.checked_add(usize::try_from(loc.len).ok()?)?;
     blob.get(start..end)
@@ -321,6 +420,7 @@ mod tests {
             resources: Vec::new(),
             scene_groups: Vec::new(),
             mesh_bounds: Vec::new(),
+            mesh_component_names: Vec::new(),
             payloads: Vec::new(),
             cache_hits: 0,
             cache_misses: 0,
@@ -407,6 +507,94 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.path().join("index.json")).unwrap())
                 .unwrap();
         assert!(index["plaster"].is_string());
+    }
+
+    #[test]
+    fn model_thumbnails_compose_resource_and_component_sub_meshes() {
+        let dir = tempfile::tempdir().unwrap();
+        // A resource-stream mesh (handle 0) and a component-compiled mesh
+        // (ProceduralMesh, unified handle 1) both feed the model.
+        let mut result = textured_meshed_result();
+        let ball =
+            crate::geometry::compile_mesh_payload(&serde_json::json!({ "generator": "sphere" }))
+                .unwrap();
+        let ball_off = result.payloads[0].len() as u64;
+        let ball_len = ball.len() as u64;
+        result.payloads[0].extend_from_slice(&ball);
+        let mat = crate::assets::Material {
+            tint: [0.2, 0.9, 0.2],
+            ..Default::default()
+        };
+        result.resources.push(ResourceRecord {
+            resource_kind: ResourceKind::Material as u8,
+            handle: 0,
+            payload: None,
+            data_bytes: postcard::to_allocvec(&mat).unwrap(),
+        });
+        result.resource_locks.push(lock("green", "Material"));
+
+        let model_disc = crate::registry::ComponentType::parse("Model")
+            .unwrap()
+            .discriminant();
+        let model = crate::assets::Model {
+            meshes: vec![
+                crate::assets::SubMeshRef {
+                    mesh: Some(crate::ecs::MeshHandle(0)),
+                    material: Some(crate::ecs::MaterialHandle(0)),
+                },
+                crate::assets::SubMeshRef {
+                    mesh: Some(crate::ecs::MeshHandle(1)),
+                    material: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let def = |disc: u8, args_bytes: Vec<u8>, payload| concinnity_blob::BlobAssetDef {
+            name: None,
+            kind: concinnity_blob::AssetKind::Component,
+            discriminant: disc,
+            args_bytes,
+            payload,
+        };
+        result.defs = vec![
+            def(model_disc, postcard::to_allocvec(&model).unwrap(), None),
+            // The ProceduralMesh def carrying unified handle 1's payload.
+            def(
+                model_disc.wrapping_add(1),
+                Vec::new(),
+                Some(PayloadLocator {
+                    blob_index: 0,
+                    offset: ball_off,
+                    len: ball_len,
+                }),
+            ),
+        ];
+        result.names = vec!["crate_model".to_string(), "proc_ball".to_string()];
+        result.mesh_component_names = vec![(1, "proc_ball".to_string())];
+
+        let report = bake_thumbnails_in(dir.path(), &result).unwrap();
+        // Texture + mesh + material + model.
+        assert_eq!(report.baked, 4, "{report:?}");
+        let index: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join("index.json")).unwrap())
+                .unwrap();
+        let key = index["crate_model"].as_str().expect("model indexed");
+        assert!(dir.path().join(format!("{key}.png")).exists());
+
+        // A model whose sub-meshes all fail to resolve is skipped, not fatal.
+        let mut broken = result;
+        let orphan = crate::assets::Model {
+            meshes: vec![crate::assets::SubMeshRef {
+                mesh: Some(crate::ecs::MeshHandle(99)),
+                material: None,
+            }],
+            ..Default::default()
+        };
+        broken.defs[0].args_bytes = postcard::to_allocvec(&orphan).unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let report = bake_thumbnails_in(dir2.path(), &broken).unwrap();
+        assert_eq!(report.baked, 3);
+        assert_eq!(report.skipped, 1);
     }
 
     #[test]

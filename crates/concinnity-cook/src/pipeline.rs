@@ -142,6 +142,12 @@ pub struct PipelineResult {
     pub scene_groups: Vec<concinnity_blob::SceneGroup>,
     // Baked AABB + counts per static mesh payload, by mesh-source handle.
     pub mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
+    // Unified mesh-source handle -> asset name for mesh payloads compiled as
+    // component defs (ProceduralMesh and friends). Resource-stream Mesh
+    // handles lead the space and resolve through `resources`; these resolve
+    // through `names`/`defs`. Consumed by the thumbnail baker to compose a
+    // Model's sub-meshes.
+    pub mesh_component_names: Vec<(u32, String)>,
     pub payloads: Vec<Vec<u8>>,
     // Compiled-asset payloads served from the build cache this run.
     pub cache_hits: usize,
@@ -462,6 +468,7 @@ pub fn build_compiled(
         resources: compiled.resources,
         scene_groups: compiled.scene_groups,
         mesh_bounds: compiled.mesh_bounds,
+        mesh_component_names: compiled.mesh_component_names,
         payloads: compiled.blobs,
         cache_hits: compiled.cache_hits,
         cache_misses: compiled.cache_misses,
@@ -1299,6 +1306,7 @@ struct PendingResource {
 struct CompiledOutput {
     scene_groups: Vec<concinnity_blob::SceneGroup>,
     mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
+    mesh_component_names: Vec<(u32, String)>,
     blobs: Vec<Vec<u8>>,
     resources: Vec<ResourceRecord>,
     cache_hits: usize,
@@ -1544,6 +1552,7 @@ fn compile_and_pack_payloads(
             mesh_bounds.push(record);
         }
     }
+    let mut mesh_component_names: Vec<(u32, String)> = Vec::new();
     for (idx, bytes) in &pending {
         let asset = &assets[named_src[*idx]];
         if !crate::resource_handles::is_mesh_source(&asset.asset_type, &asset.args) {
@@ -1552,9 +1561,15 @@ fn compile_and_pack_payloads(
         let id = asset_id::intern(&asset.name);
         if let Some(handle) =
             mesh_source_handles.get(crate::resource_handles::ResourceKind::Mesh, id)
-            && let Some(record) = mesh_bounds_record(handle, bytes)
         {
-            mesh_bounds.push(record);
+            // Handle -> asset name for mesh payloads riding component defs,
+            // so a consumer can find any sub-mesh payload by unified handle
+            // (resource-stream Mesh handles lead the space and resolve
+            // through the resource records instead).
+            mesh_component_names.push((handle, asset.name.clone()));
+            if let Some(record) = mesh_bounds_record(handle, bytes) {
+                mesh_bounds.push(record);
+            }
         }
     }
     mesh_bounds.sort_unstable_by_key(|r| r.handle);
@@ -1583,6 +1598,7 @@ fn compile_and_pack_payloads(
         return Ok(CompiledOutput {
             scene_groups,
             mesh_bounds,
+            mesh_component_names,
             blobs: vec![Vec::new()],
             resources: Vec::new(),
             cache_hits: 0,
@@ -1642,6 +1658,7 @@ fn compile_and_pack_payloads(
     Ok(CompiledOutput {
         scene_groups,
         mesh_bounds,
+        mesh_component_names,
         blobs: packer.finish(),
         resources,
         cache_hits,
@@ -2198,6 +2215,7 @@ mod tests {
             resources: Vec::new(),
             scene_groups: Vec::new(),
             mesh_bounds: Vec::new(),
+            mesh_component_names: Vec::new(),
             payloads: vec![vec![1, 2, 3]],
             cache_hits: 0,
             cache_misses: 0,

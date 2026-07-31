@@ -3876,7 +3876,10 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     let pose = h
         .content_ghost_pose()
         .expect("the ghost has a landing point");
-    assert!(pose[1].abs() < 1e-3, "landed on the ground top: {pose:?}");
+    assert!(
+        pose.position[1].abs() < 1e-3,
+        "landed on the ground top: {pose:?}"
+    );
 
     // Release commits one entry through the shared path.
     set_input(&mut world, drag_input([640.0, 500.0], false));
@@ -3894,6 +3897,101 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     assert!(h.dirty);
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before, "one undo removes the placement");
+}
+
+// The align table really carries local +Y onto each AABB face normal under
+// the engine's Euler convention: the model matrix's +Y column must equal the
+// normal the face reports.
+#[test]
+fn align_rotation_maps_up_onto_every_face_normal() {
+    for (axis, sign) in [
+        (0, 1.0f32),
+        (0, -1.0),
+        (1, 1.0),
+        (1, -1.0),
+        (2, 1.0),
+        (2, -1.0),
+    ] {
+        let rotation_deg = super::content_drag::align_rotation(axis, sign);
+        let m = crate::assets::Transform {
+            position: [0.0; 3],
+            rotation_deg,
+            scale: [1.0; 3],
+        }
+        .model_matrix();
+        // Column 1 is the rotated local +Y (column-major storage).
+        let up = [m[1][0], m[1][1], m[1][2]];
+        let mut normal = [0.0f32; 3];
+        normal[axis] = sign;
+        for c in 0..3 {
+            assert!(
+                (up[c] - normal[c]).abs() < 1e-5,
+                "axis {axis} sign {sign}: +Y maps to {up:?}, want {normal:?}"
+            );
+        }
+    }
+}
+
+// With align-to-surface on, dropping against a box side orients the placed
+// prop to that face: a straight-on hit of the +Z face carries +Y onto +Z.
+#[test]
+fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
+    crate::ecs::asset_id::reset_interner();
+    let wall = crate::ecs::asset_id::intern("wall");
+    let mut world = pick_world([0.0; 3], vec![(wall, [-2.0, -2.0, -6.0], [2.0, 2.0, -4.0])]);
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "demo_ball", "type": "ProceduralMesh",
+            "args": { "generator": "sphere" }
+        }),
+        serde_json::json!({
+            "name": "wall", "type": "Prop",
+            "args": { "mesh": "demo_ball", "position": [0.0, 0.0, -5.0] }
+        }),
+    ]);
+    h.content_open = true;
+    h.align_to_surface = true;
+    h.tree_stale = true;
+    h.refresh_tree_if_needed();
+
+    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
+    let cell = crate::editor::content_panel::cell_rect(o, 0);
+    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
+    let before = h.entries.len();
+
+    // Straight down the camera axis into the box's near +Z face.
+    set_input(&mut world, drag_input([640.0, 360.0], true));
+    h.tick(&mut world);
+    let pose = h.content_ghost_pose().expect("ghost up");
+    assert_eq!(pose.normal, [0.0, 0.0, 1.0], "the +Z face was struck");
+    assert_eq!(pose.rotation_deg, [90.0, 0.0, 0.0]);
+
+    set_input(&mut world, drag_input([640.0, 360.0], false));
+    h.tick(&mut world);
+    let placed = &h.entries[before];
+    assert_eq!(
+        placed["args"]["rotation_deg"],
+        serde_json::json!([90.0, 0.0, 0.0]),
+        "{placed}"
+    );
+    assert!(
+        (placed["args"]["position"][2].as_f64().unwrap() - (-4.0)).abs() < 1e-3,
+        "landed on the face: {placed}"
+    );
+
+    // With the toggle off the same drop stays axis-aligned.
+    h.undo(&mut world);
+    h.align_to_surface = false;
+    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
+    set_input(&mut world, drag_input([640.0, 360.0], true));
+    h.tick(&mut world);
+    set_input(&mut world, drag_input([640.0, 360.0], false));
+    h.tick(&mut world);
+    let placed = &h.entries[before];
+    assert!(
+        placed["args"].get("rotation_deg").is_none(),
+        "no rotation written while align is off: {placed}"
+    );
 }
 
 // A press that never travels past the slop is just the selecting click.
